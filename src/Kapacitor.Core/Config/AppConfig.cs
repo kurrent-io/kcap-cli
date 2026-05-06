@@ -45,6 +45,40 @@ public static class AppConfig {
 
     public static string RepoRoot => GetGitRepoRoot() ?? Environment.CurrentDirectory;
 
+    /// <summary>
+    /// Resolve server URL using only the active profile (or KAPACITOR_PROFILE /
+    /// KAPACITOR_URL / --server-url overrides). Skips repo discovery and git
+    /// remote matching — used by the daemon, which is not bound to a working
+    /// directory.
+    /// </summary>
+    public static async Task<string?> ResolveActiveProfile(string[] args) {
+        var idx          = Array.IndexOf(args, "--server-url");
+        var cliServerUrl = (idx >= 0 && idx + 1 < args.Length) ? args[idx + 1] : null;
+        var envUrl       = Environment.GetEnvironmentVariable("KAPACITOR_URL");
+        var envProfile   = Environment.GetEnvironmentVariable("KAPACITOR_PROFILE");
+
+        var config   = await LoadProfileConfig();
+        var resolver = new ProfileResolver(
+            config,
+            cliServerUrl,
+            envUrl,
+            envProfile,
+            repoConfig: null,
+            repoRemoteUrls: [],
+            repoPath: null
+        );
+
+        var resolved = resolver.Resolve();
+        ResolvedProfile   = resolved;
+        ResolvedServerUrl = resolved.ServerUrl;
+
+        if (resolved.Warning is not null) {
+            await Console.Error.WriteLineAsync($"Warning: {resolved.Warning}");
+        }
+
+        return resolved.ServerUrl;
+    }
+
     public static async Task<string?> ResolveServerUrl(string[] args) {
         var idx          = Array.IndexOf(args, "--server-url");
         var cliServerUrl = (idx >= 0 && idx + 1 < args.Length) ? args[idx + 1] : null;
@@ -218,20 +252,39 @@ public static class AppConfig {
         if (!File.Exists(ConfigPath))
             return new() { Profiles = new() { ["default"] = new() } };
 
+        string json;
+
         try {
-            var json   = await File.ReadAllTextAsync(ConfigPath);
-            var result = ConfigMigration.MigrateIfNeeded(json);
-
-            if (result.ShouldPersist) {
-                await SaveProfileConfig(result.Config);
-            }
-
-            return result.Config;
-        } catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException) {
+            json = await File.ReadAllTextAsync(ConfigPath);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             await Console.Error.WriteLineAsync($"Warning: could not read config at {ConfigPath}: {ex.Message}");
 
             return new() { Profiles = new() { ["default"] = new() } };
         }
+
+        ConfigMigration.MigrationResult result;
+
+        try {
+            result = ConfigMigration.MigrateIfNeeded(json);
+        } catch (JsonException ex) {
+            await Console.Error.WriteLineAsync($"Warning: invalid config at {ConfigPath}: {ex.Message}");
+
+            return new() { Profiles = new() { ["default"] = new() } };
+        }
+
+        // Persist a v1→v2 migration when possible, but never drop the in-memory
+        // migrated config if the write fails (e.g. read-only volume). Losing the
+        // server URL here previously caused `ServerUrl is required` at daemon
+        // startup despite the on-disk config being intact.
+        if (result.ShouldPersist) {
+            try {
+                await SaveProfileConfig(result.Config);
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                await Console.Error.WriteLineAsync($"Warning: could not persist migrated config at {ConfigPath}: {ex.Message}");
+            }
+        }
+
+        return result.Config;
     }
 
     public static async Task SaveProfileConfig(ProfileConfig config) {
