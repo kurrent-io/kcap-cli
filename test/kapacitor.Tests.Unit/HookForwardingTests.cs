@@ -203,6 +203,22 @@ public class SessionStartAdditionalContextTests : IDisposable {
     }
 
     [Test]
+    public async Task SessionStart_EmitsNothing_WhenTopClustersIsObject() {
+        var malformed = JsonNode.Parse("""{ "top_clusters": { "category": "x" } }""");
+        var result    = SessionGuidelinesEmitter.BuildAdditionalContext(malformed, disabled: false);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task SessionStart_EmitsNothing_WhenResponseNodeIsArray() {
+        var arrayRoot = JsonNode.Parse("""[ { "top_clusters": [] } ]""");
+        var result    = SessionGuidelinesEmitter.BuildAdditionalContext(arrayRoot, disabled: false);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
     public async Task SessionStart_SkipsEntries_WithBlankText() {
         var emission = SessionGuidelinesEmitter.BuildAdditionalContext(
             """

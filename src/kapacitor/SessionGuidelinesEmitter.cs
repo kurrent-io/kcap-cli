@@ -38,10 +38,8 @@ static class SessionGuidelinesEmitter {
     /// </summary>
     public static string? BuildAdditionalContext(JsonNode? responseNode, bool disabled) {
         if (disabled) return null;
-
-        var topClusters = responseNode?["top_clusters"]?.AsArray();
-
-        if (topClusters is not { Count: > 0 }) return null;
+        if (responseNode is not JsonObject obj) return null;
+        if (obj["top_clusters"] is not JsonArray topClusters || topClusters.Count == 0) return null;
 
         var lines = new List<string>(topClusters.Count);
 
