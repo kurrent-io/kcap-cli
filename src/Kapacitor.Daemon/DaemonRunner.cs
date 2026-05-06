@@ -14,15 +14,17 @@ public static partial class DaemonRunner {
         string? logFile = null;
         var     config  = new DaemonConfig();
 
-        // Resolve server URL from AppConfig
-        var serverUrl = AppConfig.ResolvedServerUrl;
+        // Resolve server URL + active profile. The CLI does this in its own
+        // Program.cs, but the daemon is a separate process so its statics start
+        // empty. Skips repo discovery (the daemon isn't bound to a working dir);
+        // honors --server-url, KAPACITOR_URL, KAPACITOR_PROFILE.
+        await AppConfig.ResolveActiveProfile(args);
+        config.ServerUrl = AppConfig.ResolvedServerUrl ?? "";
 
         // CLI arg overrides for daemon-specific settings — parse before host builder
         for (var i = 0; i < args.Length - 1; i++) {
             switch (args[i]) {
                 case "--name": config.Name = args[++i]; break;
-                case "--server":
-                case "--server-url": config.ServerUrl = args[++i]; break;
                 case "--log-file": logFile = args[++i]; break;
                 case "--max-agents" when int.TryParse(args[i + 1], out var n) && n >= 1:
                     config.MaxConcurrentAgents = n;
@@ -53,18 +55,17 @@ public static partial class DaemonRunner {
             );
         }
 
-        // If server URL wasn't set by CLI arg, use resolved URL
-        if (string.IsNullOrEmpty(config.ServerUrl) && serverUrl is not null) {
-            config.ServerUrl = serverUrl;
-        }
+        // Daemon settings from the active profile, with env overrides
+        var profileDaemon = AppConfig.ResolvedProfile?.Profile?.Daemon;
 
-        // Env var overrides
-        if (Environment.GetEnvironmentVariable("KAPACITOR_URL") is { } envUrl && string.IsNullOrEmpty(config.ServerUrl)) {
-            config.ServerUrl = envUrl;
-        }
+        if (string.IsNullOrEmpty(config.Name) && !string.IsNullOrEmpty(profileDaemon?.Name))
+            config.Name = profileDaemon.Name;
 
-        if (Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_NAME") is { } name) {
-            config.Name = name;
+        if (config.MaxConcurrentAgents == 5 && profileDaemon is { MaxAgents: var mx and not 5 })
+            config.MaxConcurrentAgents = mx;
+
+        if (Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_NAME") is { } envName) {
+            config.Name = envName;
         }
 
         if (Environment.GetEnvironmentVariable("KAPACITOR_MAX_AGENTS") is { } maxAgents) {
@@ -72,17 +73,6 @@ public static partial class DaemonRunner {
                 config.MaxConcurrentAgents = n;
             else
                 await Console.Error.WriteLineAsync($"Warning: ignoring invalid KAPACITOR_MAX_AGENTS={maxAgents}");
-        }
-
-        // Also load daemon settings from config file
-        var appConfig = await AppConfig.Load();
-
-        if (appConfig?.Daemon is { } daemonSettings) {
-            if (string.IsNullOrEmpty(config.Name) && !string.IsNullOrEmpty(daemonSettings.Name))
-                config.Name = daemonSettings.Name;
-
-            if (config.MaxConcurrentAgents == 5 && daemonSettings.MaxAgents != 5)
-                config.MaxConcurrentAgents = daemonSettings.MaxAgents;
         }
 
         // Fall back to OS username, then machine name, then a static default
