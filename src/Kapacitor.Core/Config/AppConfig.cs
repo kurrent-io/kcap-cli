@@ -252,20 +252,39 @@ public static class AppConfig {
         if (!File.Exists(ConfigPath))
             return new() { Profiles = new() { ["default"] = new() } };
 
+        string json;
+
         try {
-            var json   = await File.ReadAllTextAsync(ConfigPath);
-            var result = ConfigMigration.MigrateIfNeeded(json);
-
-            if (result.ShouldPersist) {
-                await SaveProfileConfig(result.Config);
-            }
-
-            return result.Config;
-        } catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException) {
+            json = await File.ReadAllTextAsync(ConfigPath);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             await Console.Error.WriteLineAsync($"Warning: could not read config at {ConfigPath}: {ex.Message}");
 
             return new() { Profiles = new() { ["default"] = new() } };
         }
+
+        ConfigMigration.MigrationResult result;
+
+        try {
+            result = ConfigMigration.MigrateIfNeeded(json);
+        } catch (JsonException ex) {
+            await Console.Error.WriteLineAsync($"Warning: invalid config at {ConfigPath}: {ex.Message}");
+
+            return new() { Profiles = new() { ["default"] = new() } };
+        }
+
+        // Persist a v1→v2 migration when possible, but never drop the in-memory
+        // migrated config if the write fails (e.g. read-only volume). Losing the
+        // server URL here previously caused `ServerUrl is required` at daemon
+        // startup despite the on-disk config being intact.
+        if (result.ShouldPersist) {
+            try {
+                await SaveProfileConfig(result.Config);
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                await Console.Error.WriteLineAsync($"Warning: could not persist migrated config at {ConfigPath}: {ex.Message}");
+            }
+        }
+
+        return result.Config;
     }
 
     public static async Task SaveProfileConfig(ProfileConfig config) {
