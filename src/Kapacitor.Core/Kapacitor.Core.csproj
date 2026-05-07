@@ -21,6 +21,13 @@
         <!-- Used when referenced as a submodule from the server repo -->
         <InternalsVisibleTo Include="Kurrent.Capacitor.TestHelpers" />
         <InternalsVisibleTo Include="Kurrent.Capacitor.Tests" />
+        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.Agents" />
+        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.Auth" />
+        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.Chat" />
+        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.Evals" />
+        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.Ingest" />
+        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.Notify" />
+        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.Read" />
         <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.UI" />
     </ItemGroup>
 </Project>
