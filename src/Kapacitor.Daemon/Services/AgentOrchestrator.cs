@@ -493,10 +493,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // is the one that lands, a user-initiated stop is still recorded as
                 // "agent_stopped" rather than "agent_exited".
                 try {
-                    var generateWhatsDone = await _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
+                    var result = await _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
 
-                    if (generateWhatsDone && agent.SessionId is not null) {
-                        SpawnWhatsDoneGenerator(agent.SessionId);
+                    // The daemon doesn't track sessionId on its own (only agentId), so
+                    // the server returns it in the result. Spawn what's-done locally
+                    // when the server says yes.
+                    if (result.GenerateWhatsDone && result.SessionId is not null) {
+                        SpawnWhatsDoneGenerator(result.SessionId);
                     }
                 } catch (Exception ex) {
                     LogEndSessionFailed(ex, agent.Id);
@@ -539,8 +542,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // session-end hook (drains transcript, writes SessionEnded + summary,
             // optionally schedules what's-done). Falls through to SIGTERM/SIGKILL
             // below if claude doesn't exit in time.
+            //
+            // Claude CLI requires the slash-command text and the Enter key to arrive
+            // as separate PTY writes (with a small delay between them) — sending them
+            // in a single write makes Claude treat the carriage return as part of the
+            // command buffer instead of a submit. HandleSendInput uses the same split
+            // pattern; matching it here makes the graceful path actually fire.
             try {
-                await agent.Process.WriteAsync("/exit\r");
+                await agent.Process.WriteAsync("/exit");
+                await Task.Delay(50);
+                await agent.Process.WriteAsync("\r");
                 await agent.Process.WaitForExitAsync(GracefulExitWait);
             } catch (Exception ex) {
                 LogGracefulExitFailed(ex, agentId);
@@ -556,13 +567,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // Tell the server to end the session. Idempotent server-side: if claude
             // did fire session-end during the graceful window, this is a no-op
-            // (returns false and the CLI's session-end handler already spawned the
-            // what's-done generator on its end).
+            // (returns GenerateWhatsDone=false and the CLI's session-end handler
+            // already spawned the what's-done generator on its end).
             try {
-                var generateWhatsDone = await _server.EndAgentSessionAsync(agentId, agent.PendingEndReason);
+                var result = await _server.EndAgentSessionAsync(agentId, agent.PendingEndReason);
 
-                if (generateWhatsDone && agent.SessionId is not null) {
-                    SpawnWhatsDoneGenerator(agent.SessionId);
+                if (result.GenerateWhatsDone && result.SessionId is not null) {
+                    SpawnWhatsDoneGenerator(result.SessionId);
                 }
             } catch (Exception ex) {
                 LogEndSessionFailed(ex, agentId);

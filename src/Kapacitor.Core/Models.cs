@@ -470,6 +470,7 @@ record RepoEntry {
 [JsonSerializable(typeof(AgentRunStopped))]
 [JsonSerializable(typeof(AgentRunHeartbeat))]
 [JsonSerializable(typeof(PermissionDecision))]
+[JsonSerializable(typeof(EndAgentSessionResult))]
 [JsonSerializable(typeof(int))]
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(string[]))]
@@ -742,3 +743,17 @@ record AgentRunStopped(
 record AgentRunHeartbeat(
         string? SessionId
     );
+
+/// <summary>
+/// Returned by the server's <c>EndAgentSession</c> SignalR hub method. Mirrors the
+/// server-side record of the same name. SessionId is surfaced because the daemon
+/// only knows agentId — it can't spawn <c>kapacitor generate-whats-done</c> without
+/// the sessionId, which the server resolves via FindAgentSessionIdAsync.
+/// </summary>
+public record EndAgentSessionResult {
+    [JsonPropertyName("generate_whats_done")]
+    public bool GenerateWhatsDone { get; init; }
+
+    [JsonPropertyName("session_id")]
+    public string? SessionId { get; init; }
+}

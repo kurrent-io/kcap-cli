@@ -235,11 +235,14 @@ internal partial class ServerConnection : IAsyncDisposable {
     /// handler is idempotent — if SessionEnded was already written (e.g. claude did
     /// fire session-end first), this call is a no-op.
     ///
-    /// Returns <c>true</c> when the daemon should spawn the what's-done generator
-    /// (matches the <c>generate_whats_done</c> flag from <c>/hooks/session-end</c>).
+    /// The result carries the resolved <c>SessionId</c> (the daemon only knows
+    /// agentId; the server resolves the link) plus a <c>GenerateWhatsDone</c> flag.
+    /// When the flag is true and SessionId is non-null, the daemon should spawn
+    /// <c>kapacitor generate-whats-done {sessionId}</c> locally — matching the
+    /// behaviour of the CLI session-end handler for the local-claude case.
     /// </summary>
-    public virtual Task<bool> EndAgentSessionAsync(string agentId, string reason)
-        => _hub.InvokeAsync<bool>("EndAgentSession", agentId, reason, cancellationToken: _ct);
+    public virtual Task<EndAgentSessionResult> EndAgentSessionAsync(string agentId, string reason)
+        => _hub.InvokeAsync<EndAgentSessionResult>("EndAgentSession", agentId, reason, cancellationToken: _ct);
 
     /// <summary>
     /// Forwards a hosted-agent permission request to the server's <c>RequestPermission</c>
