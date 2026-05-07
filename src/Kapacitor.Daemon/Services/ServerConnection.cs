@@ -234,9 +234,12 @@ internal partial class ServerConnection : IAsyncDisposable {
     /// guaranteed to fire its own <c>session-end</c> hook on SIGTERM. The server-side
     /// handler is idempotent — if SessionEnded was already written (e.g. claude did
     /// fire session-end first), this call is a no-op.
+    ///
+    /// Returns <c>true</c> when the daemon should spawn the what's-done generator
+    /// (matches the <c>generate_whats_done</c> flag from <c>/hooks/session-end</c>).
     /// </summary>
-    public virtual Task EndAgentSessionAsync(string agentId, string reason)
-        => _hub.InvokeAsync("EndAgentSession", agentId, reason, cancellationToken: _ct);
+    public virtual Task<bool> EndAgentSessionAsync(string agentId, string reason)
+        => _hub.InvokeAsync<bool>("EndAgentSession", agentId, reason, cancellationToken: _ct);
 
     /// <summary>
     /// Forwards a hosted-agent permission request to the server's <c>RequestPermission</c>

@@ -493,7 +493,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // is the one that lands, a user-initiated stop is still recorded as
                 // "agent_stopped" rather than "agent_exited".
                 try {
-                    await _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
+                    var generateWhatsDone = await _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
+
+                    if (generateWhatsDone && agent.SessionId is not null) {
+                        SpawnWhatsDoneGenerator(agent.SessionId);
+                    }
                 } catch (Exception ex) {
                     LogEndSessionFailed(ex, agent.Id);
                 }
@@ -551,9 +555,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
 
             // Tell the server to end the session. Idempotent server-side: if claude
-            // did fire session-end during the graceful window, this is a no-op.
+            // did fire session-end during the graceful window, this is a no-op
+            // (returns false and the CLI's session-end handler already spawned the
+            // what's-done generator on its end).
             try {
-                await _server.EndAgentSessionAsync(agentId, agent.PendingEndReason);
+                var generateWhatsDone = await _server.EndAgentSessionAsync(agentId, agent.PendingEndReason);
+
+                if (generateWhatsDone && agent.SessionId is not null) {
+                    SpawnWhatsDoneGenerator(agent.SessionId);
+                }
             } catch (Exception ex) {
                 LogEndSessionFailed(ex, agentId);
             }
@@ -564,6 +574,50 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             await agent.Process.TerminateAsync(TimeSpan.FromSeconds(10));
         } catch (Exception ex) {
             LogStopError(ex, agentId);
+        }
+    }
+
+    /// <summary>
+    /// Spawns <c>kapacitor generate-whats-done {sessionId}</c> as a detached process.
+    /// Used when the daemon-driven session-end path supplants claude's own session-end
+    /// hook — claude normally spawns this generator from its CLI session-end handler,
+    /// but when claude crashed or was killed before firing session-end the daemon has
+    /// to do it instead. Best-effort: failure is logged but doesn't block other
+    /// cleanup, and a missing kapacitor binary just means no what's-done summary.
+    /// </summary>
+    void SpawnWhatsDoneGenerator(string sessionId) {
+        try {
+            var psi = new ProcessStartInfo(_config.KapacitorPath) {
+                RedirectStandardOutput = true,
+                RedirectStandardInput  = true,
+                RedirectStandardError  = true,
+                UseShellExecute        = false,
+                CreateNoWindow         = true,
+                Environment = {
+                    ["KAPACITOR_URL"] = _config.ServerUrl
+                }
+            };
+            psi.ArgumentList.Add("generate-whats-done");
+            psi.ArgumentList.Add(sessionId);
+
+            using var proc = Process.Start(psi);
+
+            if (proc is null) {
+                LogWhatsDoneSpawnFailed(null, sessionId);
+
+                return;
+            }
+
+            // Detach: close redirected streams so we don't hold pipes for the child's
+            // lifetime. The child runs to completion on its own and posts its result
+            // to the server.
+            proc.StandardInput.Close();
+            proc.StandardOutput.Close();
+            proc.StandardError.Close();
+
+            LogWhatsDoneSpawned(sessionId, proc.Id);
+        } catch (Exception ex) {
+            LogWhatsDoneSpawnFailed(ex, sessionId);
         }
     }
 
@@ -1167,6 +1221,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to end session for agent {AgentId} (server may not record SessionEnded)")]
     partial void LogEndSessionFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Spawned what's-done generator for session {SessionId} (PID {Pid})")]
+    partial void LogWhatsDoneSpawned(string sessionId, int pid);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to spawn what's-done generator for session {SessionId}")]
+    partial void LogWhatsDoneSpawnFailed(Exception? ex, string sessionId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Daemon heartbeat failed")]
     partial void LogHeartbeatFailed(Exception ex);
