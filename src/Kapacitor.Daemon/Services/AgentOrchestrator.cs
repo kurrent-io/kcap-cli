@@ -475,6 +475,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 LogAgentExited(agent.Id, exitCode);
 
+                // Tell the server to end the AgentSession. Claude doesn't reliably fire
+                // its own session-end hook on SIGTERM/exit, so without this call the
+                // session would stay "active" forever in the read model. Server-side is
+                // idempotent — if claude did fire session-end first, this is a no-op.
+                try {
+                    await _server.EndAgentSessionAsync(agent.Id, "agent_exited");
+                } catch (Exception ex) {
+                    LogEndSessionFailed(ex, agent.Id);
+                }
+
                 // Clean up worktree and unregister from server
                 await CleanupAgentAsync(agent.Id);
             } catch (Exception ex) {
@@ -482,6 +492,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
         }
     }
+
+    /// <summary>
+    /// Initial wait after sending /exit to give claude a chance to flush its session-end
+    /// hook (which writes SessionEnded plus the what's-done summary). 15s covers a typical
+    /// session-end POST + watcher drain on a healthy connection.
+    /// </summary>
+    static readonly TimeSpan GracefulExitWait = TimeSpan.FromSeconds(15);
 
     async Task HandleStopAgent(string agentId) {
         if (!_agents.TryGetValue(agentId, out var agent)) {
@@ -497,7 +514,26 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             _            = _server.AgentStatusChangedAsync(agentId, "Completed", agent.SessionId);
             _            = _server.AppendAgentRunEventAsync(agentId, new AgentRunStopped("user", null));
 
-            // Cancel the read loop, then terminate the process.
+            // Try a graceful shutdown first: send /exit so claude can fire its own
+            // session-end hook (drains transcript, writes SessionEnded + summary,
+            // optionally schedules what's-done). Falls through to SIGTERM/SIGKILL
+            // below if claude doesn't exit in time.
+            try {
+                await agent.Process.WriteAsync("/exit\r");
+                await agent.Process.WaitForExitAsync(GracefulExitWait);
+            } catch (Exception ex) {
+                LogGracefulExitFailed(ex, agentId);
+            }
+
+            // Tell the server to end the session. Idempotent server-side: if claude
+            // did fire session-end during the graceful window, this is a no-op.
+            try {
+                await _server.EndAgentSessionAsync(agentId, "agent_stopped");
+            } catch (Exception ex) {
+                LogEndSessionFailed(ex, agentId);
+            }
+
+            // Cancel the read loop, then terminate the process if it didn't exit gracefully.
             // The read loop's finally block will handle CleanupAgentAsync.
             await agent.ReadCts.CancelAsync();
             await agent.Process.TerminateAsync(TimeSpan.FromSeconds(10));
@@ -1097,6 +1133,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Error stopping agent {AgentId}")]
     partial void LogStopError(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Graceful /exit failed for agent {AgentId}; falling back to SIGTERM")]
+    partial void LogGracefulExitFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to end session for agent {AgentId} (server may not record SessionEnded)")]
+    partial void LogEndSessionFailed(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Daemon heartbeat failed")]
     partial void LogHeartbeatFailed(Exception ex);
