@@ -423,6 +423,9 @@ static partial class WatchCommand {
                 : null;
 
             try {
+                // Arg count must match `CapacitorHub.SendTranscriptBatch` exactly —
+                // SignalR's protocol layer does a strict arity match and does NOT
+                // auto-supply defaults for missing args (PR #576 / v0.4.0 incident).
                 await hubConnection.InvokeAsync(
                     "SendTranscriptBatch",
                     sessionId,
@@ -430,6 +433,7 @@ static partial class WatchCommand {
                     newLines.ToArray(),
                     newLineNumbers.ToArray(),
                     repoJson,
+                    "claude",
                     ct
                 );
 
