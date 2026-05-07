@@ -229,6 +229,22 @@ internal partial class ServerConnection : IAsyncDisposable {
         => _hub.InvokeAsync("LaunchFailed", new LaunchFailed(agentId, reason), cancellationToken: _ct);
 
     /// <summary>
+    /// Tells the server to end the AgentSession for a daemon-hosted agent. Used when
+    /// the daemon stops or observes a hosted claude exiting, since claude isn't
+    /// guaranteed to fire its own <c>session-end</c> hook on SIGTERM. The server-side
+    /// handler is idempotent — if SessionEnded was already written (e.g. claude did
+    /// fire session-end first), this call is a no-op.
+    ///
+    /// The result carries the resolved <c>SessionId</c> (the daemon only knows
+    /// agentId; the server resolves the link) plus a <c>GenerateWhatsDone</c> flag.
+    /// When the flag is true and SessionId is non-null, the daemon should spawn
+    /// <c>kapacitor generate-whats-done {sessionId}</c> locally — matching the
+    /// behaviour of the CLI session-end handler for the local-claude case.
+    /// </summary>
+    public virtual Task<EndAgentSessionResult> EndAgentSessionAsync(string agentId, string reason)
+        => _hub.InvokeAsync<EndAgentSessionResult>("EndAgentSession", agentId, reason, cancellationToken: _ct);
+
+    /// <summary>
     /// Forwards a hosted-agent permission request to the server's <c>RequestPermission</c>
     /// hub method and returns the user's decision. Runs over the persistent SignalR
     /// connection so the long-poll isn't subject to the Cloudflare HTTP-request timeout

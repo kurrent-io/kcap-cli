@@ -14,6 +14,15 @@ public class DaemonConfig {
 
     public string ClaudePath { get; set; } = "claude";
 
+    /// <summary>
+    /// Path to the kapacitor CLI binary. Used by the daemon to spawn auxiliary
+    /// processes (e.g. <c>generate-whats-done</c>) when claude didn't fire its
+    /// own session-end hook. Defaults to "kapacitor" — resolved via PATH, which
+    /// works for npm installs that place both <c>kapacitor</c> and
+    /// <c>kapacitor-daemon</c> in <c>node_modules/.bin</c>.
+    /// </summary>
+    public string KapacitorPath { get; set; } = "kapacitor";
+
     public List<string> Validate() {
         var errors = new List<string>();
 
