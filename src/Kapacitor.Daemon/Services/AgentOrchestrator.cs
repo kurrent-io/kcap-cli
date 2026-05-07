@@ -30,6 +30,15 @@ public record AgentInstance(
 
     /// <summary>Temp MCP config path written for hosted PR reviews; deleted on cleanup.</summary>
     public string? McpConfigPath { get; set; }
+
+    /// <summary>
+    /// Reason string sent to the server when ending the AgentSession. Defaults to
+    /// "agent_exited" (claude exited on its own); HandleStopAgent flips it to
+    /// "agent_stopped" so a user-initiated stop is still attributed correctly even
+    /// if HandleStopAgent's own EndAgentSessionAsync call fails and the read-loop's
+    /// finally-block call is the only one that lands.
+    /// </summary>
+    public string PendingEndReason { get; set; } = "agent_exited";
 }
 
 /// <summary>Ring buffer that keeps the last 2 MB of terminal output.</summary>
@@ -479,8 +488,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // its own session-end hook on SIGTERM/exit, so without this call the
                 // session would stay "active" forever in the read model. Server-side is
                 // idempotent — if claude did fire session-end first, this is a no-op.
+                // Reason is read from agent.PendingEndReason so that if HandleStopAgent's
+                // own call failed (transient SignalR error) and this finally-block call
+                // is the one that lands, a user-initiated stop is still recorded as
+                // "agent_stopped" rather than "agent_exited".
                 try {
-                    await _server.EndAgentSessionAsync(agent.Id, "agent_exited");
+                    await _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
                 } catch (Exception ex) {
                     LogEndSessionFailed(ex, agent.Id);
                 }
@@ -511,8 +524,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Set status BEFORE cancelling ReadCts so the read loop's finally
             // block sees "Completed" and skips its own status change / event append.
             agent.Status = "Completed";
-            _            = _server.AgentStatusChangedAsync(agentId, "Completed", agent.SessionId);
-            _            = _server.AppendAgentRunEventAsync(agentId, new AgentRunStopped("user", null));
+            // Mark this as a user-initiated stop so the read-loop's finally-block
+            // EndAgentSessionAsync call uses "agent_stopped" if it ends up being
+            // the only successful call (e.g., transient SignalR failure here).
+            agent.PendingEndReason = "agent_stopped";
+            _                      = _server.AgentStatusChangedAsync(agentId, "Completed", agent.SessionId);
+            _                      = _server.AppendAgentRunEventAsync(agentId, new AgentRunStopped("user", null));
 
             // Try a graceful shutdown first: send /exit so claude can fire its own
             // session-end hook (drains transcript, writes SessionEnded + summary,
@@ -525,10 +542,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 LogGracefulExitFailed(ex, agentId);
             }
 
+            // PTY WaitForExitAsync(timeout) returns silently when the timeout elapses,
+            // so a graceful-exit *timeout* doesn't throw. Check HasExited explicitly
+            // so we can tell from logs whether the graceful path is actually working
+            // in production or if claude is consistently being SIGTERMed instead.
+            if (!agent.Process.HasExited) {
+                LogGracefulExitTimedOut(agentId, GracefulExitWait.TotalSeconds);
+            }
+
             // Tell the server to end the session. Idempotent server-side: if claude
             // did fire session-end during the graceful window, this is a no-op.
             try {
-                await _server.EndAgentSessionAsync(agentId, "agent_stopped");
+                await _server.EndAgentSessionAsync(agentId, agent.PendingEndReason);
             } catch (Exception ex) {
                 LogEndSessionFailed(ex, agentId);
             }
@@ -1136,6 +1161,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Graceful /exit failed for agent {AgentId}; falling back to SIGTERM")]
     partial void LogGracefulExitFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Graceful /exit window of {Seconds}s elapsed for agent {AgentId} without claude exiting; falling back to SIGTERM")]
+    partial void LogGracefulExitTimedOut(string agentId, double seconds);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to end session for agent {AgentId} (server may not record SessionEnded)")]
     partial void LogEndSessionFailed(Exception ex, string agentId);
