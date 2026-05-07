@@ -209,10 +209,15 @@ static partial class WatchCommand {
             await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, CancellationToken.None);
         }
 
-        // Signal drain complete to server
+        // Signal drain complete to server.
+        // cts.Token is already cancelled by the time we reach here (that's the path
+        // that exits the main loop), so passing it would throw OperationCanceledException
+        // before the call lands. Use a fresh short-lived token so the server actually
+        // hears the drain-complete signal and can release StopAndDrainAsync waiters.
         try {
             if (hubConnection.State == HubConnectionState.Connected) {
-                await hubConnection.InvokeAsync("WatcherDrainComplete", sessionId, agentId, cancellationToken: cts.Token);
+                using var drainCompleteCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await hubConnection.InvokeAsync("WatcherDrainComplete", sessionId, agentId, cancellationToken: drainCompleteCts.Token);
                 Log("Drain complete signaled to server");
             }
         } catch (Exception ex) {

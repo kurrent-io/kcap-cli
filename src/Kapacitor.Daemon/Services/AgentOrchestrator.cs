@@ -30,6 +30,15 @@ public record AgentInstance(
 
     /// <summary>Temp MCP config path written for hosted PR reviews; deleted on cleanup.</summary>
     public string? McpConfigPath { get; set; }
+
+    /// <summary>
+    /// Reason string sent to the server when ending the AgentSession. Defaults to
+    /// "agent_exited" (claude exited on its own); HandleStopAgent flips it to
+    /// "agent_stopped" so a user-initiated stop is still attributed correctly even
+    /// if HandleStopAgent's own EndAgentSessionAsync call fails and the read-loop's
+    /// finally-block call is the only one that lands.
+    /// </summary>
+    public string PendingEndReason { get; set; } = "agent_exited";
 }
 
 /// <summary>Ring buffer that keeps the last 2 MB of terminal output.</summary>
@@ -475,6 +484,27 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 LogAgentExited(agent.Id, exitCode);
 
+                // Tell the server to end the AgentSession. Claude doesn't reliably fire
+                // its own session-end hook on SIGTERM/exit, so without this call the
+                // session would stay "active" forever in the read model. Server-side is
+                // idempotent — if claude did fire session-end first, this is a no-op.
+                // Reason is read from agent.PendingEndReason so that if HandleStopAgent's
+                // own call failed (transient SignalR error) and this finally-block call
+                // is the one that lands, a user-initiated stop is still recorded as
+                // "agent_stopped" rather than "agent_exited".
+                try {
+                    var result = await _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
+
+                    // The daemon doesn't track sessionId on its own (only agentId), so
+                    // the server returns it in the result. Spawn what's-done locally
+                    // when the server says yes.
+                    if (result.GenerateWhatsDone && result.SessionId is not null) {
+                        SpawnWhatsDoneGenerator(result.SessionId);
+                    }
+                } catch (Exception ex) {
+                    LogEndSessionFailed(ex, agent.Id);
+                }
+
                 // Clean up worktree and unregister from server
                 await CleanupAgentAsync(agent.Id);
             } catch (Exception ex) {
@@ -482,6 +512,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
         }
     }
+
+    /// <summary>
+    /// Initial wait after sending /exit to give claude a chance to flush its session-end
+    /// hook (which writes SessionEnded plus the what's-done summary). 15s covers a typical
+    /// session-end POST + watcher drain on a healthy connection.
+    /// </summary>
+    static readonly TimeSpan GracefulExitWait = TimeSpan.FromSeconds(15);
 
     async Task HandleStopAgent(string agentId) {
         if (!_agents.TryGetValue(agentId, out var agent)) {
@@ -494,15 +531,104 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Set status BEFORE cancelling ReadCts so the read loop's finally
             // block sees "Completed" and skips its own status change / event append.
             agent.Status = "Completed";
-            _            = _server.AgentStatusChangedAsync(agentId, "Completed", agent.SessionId);
-            _            = _server.AppendAgentRunEventAsync(agentId, new AgentRunStopped("user", null));
+            // Mark this as a user-initiated stop so the read-loop's finally-block
+            // EndAgentSessionAsync call uses "agent_stopped" if it ends up being
+            // the only successful call (e.g., transient SignalR failure here).
+            agent.PendingEndReason = "agent_stopped";
+            _                      = _server.AgentStatusChangedAsync(agentId, "Completed", agent.SessionId);
+            _                      = _server.AppendAgentRunEventAsync(agentId, new AgentRunStopped("user", null));
 
-            // Cancel the read loop, then terminate the process.
+            // Try a graceful shutdown first: send /exit so claude can fire its own
+            // session-end hook (drains transcript, writes SessionEnded + summary,
+            // optionally schedules what's-done). Falls through to SIGTERM/SIGKILL
+            // below if claude doesn't exit in time.
+            //
+            // Claude CLI requires the slash-command text and the Enter key to arrive
+            // as separate PTY writes (with a small delay between them) — sending them
+            // in a single write makes Claude treat the carriage return as part of the
+            // command buffer instead of a submit. HandleSendInput uses the same split
+            // pattern; matching it here makes the graceful path actually fire.
+            try {
+                await agent.Process.WriteAsync("/exit");
+                await Task.Delay(50);
+                await agent.Process.WriteAsync("\r");
+                await agent.Process.WaitForExitAsync(GracefulExitWait);
+            } catch (Exception ex) {
+                LogGracefulExitFailed(ex, agentId);
+            }
+
+            // PTY WaitForExitAsync(timeout) returns silently when the timeout elapses,
+            // so a graceful-exit *timeout* doesn't throw. Check HasExited explicitly
+            // so we can tell from logs whether the graceful path is actually working
+            // in production or if claude is consistently being SIGTERMed instead.
+            if (!agent.Process.HasExited) {
+                LogGracefulExitTimedOut(agentId, GracefulExitWait.TotalSeconds);
+            }
+
+            // Tell the server to end the session. Idempotent server-side: if claude
+            // did fire session-end during the graceful window, this is a no-op
+            // (returns GenerateWhatsDone=false and the CLI's session-end handler
+            // already spawned the what's-done generator on its end).
+            try {
+                var result = await _server.EndAgentSessionAsync(agentId, agent.PendingEndReason);
+
+                if (result.GenerateWhatsDone && result.SessionId is not null) {
+                    SpawnWhatsDoneGenerator(result.SessionId);
+                }
+            } catch (Exception ex) {
+                LogEndSessionFailed(ex, agentId);
+            }
+
+            // Cancel the read loop, then terminate the process if it didn't exit gracefully.
             // The read loop's finally block will handle CleanupAgentAsync.
             await agent.ReadCts.CancelAsync();
             await agent.Process.TerminateAsync(TimeSpan.FromSeconds(10));
         } catch (Exception ex) {
             LogStopError(ex, agentId);
+        }
+    }
+
+    /// <summary>
+    /// Spawns <c>kapacitor generate-whats-done {sessionId}</c> as a detached process.
+    /// Used when the daemon-driven session-end path supplants claude's own session-end
+    /// hook — claude normally spawns this generator from its CLI session-end handler,
+    /// but when claude crashed or was killed before firing session-end the daemon has
+    /// to do it instead. Best-effort: failure is logged but doesn't block other
+    /// cleanup, and a missing kapacitor binary just means no what's-done summary.
+    /// </summary>
+    void SpawnWhatsDoneGenerator(string sessionId) {
+        try {
+            var psi = new ProcessStartInfo(_config.KapacitorPath) {
+                RedirectStandardOutput = true,
+                RedirectStandardInput  = true,
+                RedirectStandardError  = true,
+                UseShellExecute        = false,
+                CreateNoWindow         = true,
+                Environment = {
+                    ["KAPACITOR_URL"] = _config.ServerUrl
+                }
+            };
+            psi.ArgumentList.Add("generate-whats-done");
+            psi.ArgumentList.Add(sessionId);
+
+            using var proc = Process.Start(psi);
+
+            if (proc is null) {
+                LogWhatsDoneSpawnFailed(null, sessionId);
+
+                return;
+            }
+
+            // Detach: close redirected streams so we don't hold pipes for the child's
+            // lifetime. The child runs to completion on its own and posts its result
+            // to the server.
+            proc.StandardInput.Close();
+            proc.StandardOutput.Close();
+            proc.StandardError.Close();
+
+            LogWhatsDoneSpawned(sessionId, proc.Id);
+        } catch (Exception ex) {
+            LogWhatsDoneSpawnFailed(ex, sessionId);
         }
     }
 
@@ -1097,6 +1223,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Error stopping agent {AgentId}")]
     partial void LogStopError(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Graceful /exit failed for agent {AgentId}; falling back to SIGTERM")]
+    partial void LogGracefulExitFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Graceful /exit window of {Seconds}s elapsed for agent {AgentId} without claude exiting; falling back to SIGTERM")]
+    partial void LogGracefulExitTimedOut(string agentId, double seconds);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to end session for agent {AgentId} (server may not record SessionEnded)")]
+    partial void LogEndSessionFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Spawned what's-done generator for session {SessionId} (PID {Pid})")]
+    partial void LogWhatsDoneSpawned(string sessionId, int pid);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to spawn what's-done generator for session {SessionId}")]
+    partial void LogWhatsDoneSpawnFailed(Exception? ex, string sessionId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Daemon heartbeat failed")]
     partial void LogHeartbeatFailed(Exception ex);
