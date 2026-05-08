@@ -13,6 +13,9 @@ public class CodexHistoryTests {
         var path = Path.GetTempFileName();
 
         try {
+            // No turn_context here — the fallback path uses model_provider as
+            // the model name. (When turn_context is present, the real model
+            // overrides this — see ExtractCodexSessionMetadata_prefers_turn_context_model.)
             await File.WriteAllLinesAsync(path, [
                 """{"timestamp":"2026-05-07T15:51:46.684Z","type":"session_meta","payload":{"id":"019e0322-05fc-7570-be65-75719c3ea861","timestamp":"2026-05-07T15:50:21.989Z","cwd":"/Users/alexey/dev/temp/Kurrent.Capacitor","originator":"codex-tui","cli_version":"0.128.0","model_provider":"openai","git":{"commit_hash":"abc","branch":"main","repository_url":"https://github.com/owner/repo"}}}""",
                 """{"timestamp":"2026-05-07T15:51:46.686Z","type":"event_msg","payload":{"type":"task_started"}}""",
@@ -26,6 +29,49 @@ public class CodexHistoryTests {
             await Assert.That(meta.FirstTimestamp).IsNotNull();
             await Assert.That(meta.FirstTimestamp!.Value).IsEqualTo(DateTimeOffset.Parse("2026-05-07T15:50:21.989Z"));
             await Assert.That(meta.Slug).IsNull();
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task ExtractCodexSessionMetadata_prefers_turn_context_model_over_model_provider() {
+        // AI-194 (CLI half): session_meta only carries model_provider ("openai"),
+        // not the actual model. The real model name lives on turn_context.payload.model
+        // (e.g. "gpt-5.5"). Prefer that over the provider so the session card and
+        // details show "gpt-5.5" instead of "openai".
+        var path = Path.GetTempFileName();
+
+        try {
+            await File.WriteAllLinesAsync(path, [
+                """{"timestamp":"2026-05-07T15:51:46.684Z","type":"session_meta","payload":{"id":"019e0322-05fc-7570-be65-75719c3ea861","timestamp":"2026-05-07T15:50:21.989Z","cwd":"/x","model_provider":"openai"}}""",
+                """{"timestamp":"2026-05-07T15:51:46.700Z","type":"event_msg","payload":{"type":"task_started"}}""",
+                """{"timestamp":"2026-05-07T15:51:46.750Z","type":"turn_context","payload":{"turn_id":"abc","cwd":"/x","model":"gpt-5.5"}}""",
+            ]);
+
+            var meta = HistoryCommand.ExtractCodexSessionMetadata(path);
+
+            await Assert.That(meta.Model).IsEqualTo("gpt-5.5");
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task ExtractCodexSessionMetadata_falls_back_to_model_provider_when_no_turn_context() {
+        // Defensive: if a rollout has session_meta but never reaches a turn_context
+        // (e.g. interrupted before the first turn), keep the legacy model_provider
+        // fallback so the model field isn't blank.
+        var path = Path.GetTempFileName();
+
+        try {
+            await File.WriteAllLinesAsync(path, [
+                """{"type":"session_meta","payload":{"id":"x","cwd":"/x","model_provider":"openai"}}""",
+            ]);
+
+            var meta = HistoryCommand.ExtractCodexSessionMetadata(path);
+
+            await Assert.That(meta.Model).IsEqualTo("openai");
         } finally {
             File.Delete(path);
         }

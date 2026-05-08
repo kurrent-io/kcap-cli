@@ -815,23 +815,31 @@ static class HistoryCommand {
 
     /// <summary>
     /// Codex-shape variant of <see cref="ExtractSessionMetadata"/>. Reads the first
-    /// <c>session_meta</c> line and pulls cwd, model_provider (mapped to
-    /// <see cref="SessionMetadata.Model"/>), and the inner timestamp (when codex
-    /// started, not when the envelope was written). Codex rollouts have no slug,
-    /// so <see cref="SessionMetadata.Slug"/> stays null.
+    /// <c>session_meta</c> line and pulls cwd, the inner timestamp (when codex
+    /// started, not when the envelope was written), and the model. Codex rollouts
+    /// have no slug, so <see cref="SessionMetadata.Slug"/> stays null.
+    ///
+    /// Model resolution: <c>turn_context.payload.model</c> (the real model name,
+    /// e.g. <c>gpt-5.5</c>) is preferred when present; falls back to
+    /// <c>session_meta.payload.model_provider</c> (e.g. <c>openai</c>) when the
+    /// rollout never reaches its first turn. The first turn_context typically
+    /// arrives within the first few lines, but we scan generously in case
+    /// future Codex versions interleave more preludes.
     /// </summary>
     internal static SessionMetadata ExtractCodexSessionMetadata(string filePath) {
-        var meta = new SessionMetadata();
+        const int MaxLines = 50;
+
+        var meta             = new SessionMetadata();
+        var sessionMetaFound = false;
+        var turnModelFound   = false;
 
         try {
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var reader = new StreamReader(stream);
 
-            // Codex always emits session_meta as the first non-empty line — but read up
-            // to 5 lines for resilience against future preludes.
             var linesChecked = 0;
 
-            while (reader.ReadLine() is { } line && linesChecked < 5) {
+            while (reader.ReadLine() is { } line && linesChecked < MaxLines) {
                 linesChecked++;
 
                 if (string.IsNullOrWhiteSpace(line)) continue;
@@ -840,22 +848,29 @@ static class HistoryCommand {
                     using var doc  = JsonDocument.Parse(line);
                     var       root = doc.RootElement;
 
-                    if (root.Str("type") != "session_meta") continue;
+                    var type = root.Str("type");
 
-                    var payload = root.Obj("payload");
+                    if (!sessionMetaFound && type == "session_meta") {
+                        if (root.Obj("payload") is not { } payload) continue;
 
-                    if (payload is null) continue;
+                        meta.Cwd       = payload.Str("cwd");
+                        meta.Model     = payload.Str("model_provider");
+                        meta.SessionId = payload.Str("id");
 
-                    meta.Cwd       = payload.Value.Str("cwd");
-                    meta.Model     = payload.Value.Str("model_provider");
-                    meta.SessionId = payload.Value.Str("id");
+                        if (payload.Str("timestamp") is { } tsStr
+                         && DateTimeOffset.TryParse(tsStr, out var ts)) {
+                            meta.FirstTimestamp = ts;
+                        }
 
-                    if (payload.Value.Str("timestamp") is { } tsStr
-                     && DateTimeOffset.TryParse(tsStr, out var ts)) {
-                        meta.FirstTimestamp = ts;
+                        sessionMetaFound = true;
+                    } else if (!turnModelFound && type == "turn_context") {
+                        if (root.Obj("payload")?.Str("model") is { Length: > 0 } turnModel) {
+                            meta.Model     = turnModel;
+                            turnModelFound = true;
+                        }
                     }
 
-                    break;
+                    if (sessionMetaFound && turnModelFound) break;
                 } catch (JsonException) { }
             }
         } catch {
