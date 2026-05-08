@@ -14,6 +14,13 @@ static class SessionImporter {
     /// events interleaved at the position where each agent first appears in
     /// <c>progress</c> / <c>agent_progress</c> entries.
     /// </summary>
+    /// <param name="vendor">
+    /// "claude" (default) or "codex". Stamped on every <see cref="TranscriptBatch"/>
+    /// so the server's <c>INormalizerSelector</c> picks the matching normalizer.
+    /// Codex rollouts have no <c>subagents/</c> sibling directory and no
+    /// agent-progress markers, so the agent walk is short-circuited when
+    /// <paramref name="vendor"/> is <c>"codex"</c>.
+    /// </param>
     internal static async Task<ImportResult> ImportSessionAsync(
             HttpClient                 httpClient,
             string                     baseUrl,
@@ -21,16 +28,23 @@ static class SessionImporter {
             string                     sessionId,
             SessionMetadata            metadata,
             string?                    encodedCwd,
-            IProgress<ImportProgress>? progress = null
+            IProgress<ImportProgress>? progress = null,
+            string                     vendor   = "claude"
         ) {
         if (!File.Exists(transcriptPath))
             return new(sessionId, [], 0);
 
         var cwd = metadata.Cwd ?? (encodedCwd is not null ? DecodeCwdFromDirName(encodedCwd) : null) ?? "";
 
-        // Discover all agent transcripts on disk
-        var agentTranscripts = DiscoverAgentTranscripts(transcriptPath);
-        var agentMap         = new Dictionary<string, string>(StringComparer.Ordinal); // agentId → path
+        // Codex rollouts don't ship a subagents/ sibling directory and don't carry
+        // agent-progress markers in-band, so the entire agent walk is skipped — we
+        // stream the rollout straight through the batch loop with vendor="codex".
+        var isCodex = vendor == "codex";
+
+        var agentTranscripts = isCodex
+            ? []
+            : DiscoverAgentTranscripts(transcriptPath);
+        var agentMap = new Dictionary<string, string>(StringComparer.Ordinal); // agentId → path
 
         foreach (var (agentId, agentPath) in agentTranscripts) {
             agentMap[agentId] = agentPath;
@@ -40,7 +54,17 @@ static class SessionImporter {
         // referenced — via agent_progress, an async_launched tool_result, or a
         // foreground toolUseResult.agentId (for interleave position) — plus the real
         // subagent_type from the parent Task-tool invocation (for canonical fidelity).
-        var (agentFirstLine, agentTypes) = ScanAgentLifecycle(transcriptPath);
+        Dictionary<string, int>     agentFirstLine;
+        Dictionary<string, string?> agentTypes;
+
+        if (isCodex) {
+            agentFirstLine = new Dictionary<string, int>(StringComparer.Ordinal);
+            agentTypes     = new Dictionary<string, string?>(StringComparer.Ordinal);
+        } else {
+            var scan = ScanAgentLifecycle(transcriptPath);
+            agentFirstLine = scan.FirstLineByAgent;
+            agentTypes     = scan.AgentTypeByAgent;
+        }
 
         // Track which agents were sent inline
         var sentAgents = new HashSet<string>(StringComparer.Ordinal);
@@ -65,7 +89,7 @@ static class SessionImporter {
                 if (firstLine == lineIndex && !sentAgents.Contains(agentId) && agentMap.TryGetValue(agentId, out var agentPath)) {
                     // Flush the current batch before inserting agent lifecycle
                     if (batchLines.Count > 0) {
-                        await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId: null, batchLines, batchLineNumbers);
+                        await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId: null, batchLines, batchLineNumbers, vendor);
                         var flushed = batchLines.Count;
                         totalSent += flushed;
                         progress?.Report(new BatchFlushed(AgentId: null, flushed));
@@ -89,7 +113,7 @@ static class SessionImporter {
             lineIndex++;
 
             if (batchLines.Count >= batchSize) {
-                await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId: null, batchLines, batchLineNumbers);
+                await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId: null, batchLines, batchLineNumbers, vendor);
                 var flushed = batchLines.Count;
                 totalSent += flushed;
                 progress?.Report(new BatchFlushed(AgentId: null, flushed));
@@ -100,7 +124,7 @@ static class SessionImporter {
 
         // Flush remaining main transcript lines
         if (batchLines.Count > 0) {
-            await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId: null, batchLines, batchLineNumbers);
+            await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId: null, batchLines, batchLineNumbers, vendor);
             var flushed = batchLines.Count;
             totalSent += flushed;
             progress?.Report(new BatchFlushed(AgentId: null, flushed));
@@ -431,6 +455,10 @@ static class SessionImporter {
     /// <summary>
     /// Send transcript lines in batches of 100 for a given file (main or agent).
     /// </summary>
+    /// <param name="vendor">
+    /// "claude" (default) or "codex" — stamped on the outgoing
+    /// <see cref="TranscriptBatch"/> so the server picks the matching normalizer.
+    /// </param>
     internal static async Task<int> SendTranscriptBatches(
             HttpClient                 httpClient,
             string                     baseUrl,
@@ -438,7 +466,8 @@ static class SessionImporter {
             string                     filePath,
             string?                    agentId,
             int                        startLine,
-            IProgress<ImportProgress>? progress = null
+            IProgress<ImportProgress>? progress = null,
+            string                     vendor   = "claude"
         ) {
         if (!File.Exists(filePath)) return 0;
 
@@ -467,7 +496,7 @@ static class SessionImporter {
             lineIndex++;
 
             if (batchLines.Count >= batchSize) {
-                await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers);
+                await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers, vendor);
                 var flushed = batchLines.Count;
                 totalSent += flushed;
                 progress?.Report(new BatchFlushed(agentId, flushed));
@@ -477,7 +506,7 @@ static class SessionImporter {
         }
 
         if (batchLines.Count > 0) {
-            await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers);
+            await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers, vendor);
             var flushed = batchLines.Count;
             totalSent += flushed;
             progress?.Report(new BatchFlushed(agentId, flushed));
@@ -492,13 +521,17 @@ static class SessionImporter {
             string       sessionId,
             string?      agentId,
             List<string> lines,
-            List<int>    lineNumbers
+            List<int>    lineNumbers,
+            string       vendor
         ) {
         var batch = new TranscriptBatch {
             SessionId   = sessionId,
             AgentId     = agentId,
             Lines       = [.. lines],
-            LineNumbers = [.. lineNumbers]
+            LineNumbers = [.. lineNumbers],
+            // Default vendor "claude" stays absent on the wire to match older servers; the
+            // explicit "codex" tag is what flips the server to CodexNormalizer.
+            Vendor = vendor == "claude" ? null : vendor
         };
 
         var       json    = JsonSerializer.Serialize(batch, KapacitorJsonContext.Default.TranscriptBatch);
