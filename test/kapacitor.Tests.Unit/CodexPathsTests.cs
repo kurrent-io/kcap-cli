@@ -63,6 +63,25 @@ public class CodexPathsTests {
     }
 
     [Test]
+    public async Task Discover_leaves_EncodedCwd_empty_so_decode_returns_null() {
+        var root = TempRoot();
+
+        try {
+            CreateRollout(root, "2026/05/07", "rollout-2026-05-07T17-50-21-019e0322-05fc-7570-be65-75719c3ea861");
+
+            var result = CodexPaths.Discover(root);
+
+            await Assert.That(result.Count).IsEqualTo(1);
+            // The day folder name ("07") would be a misleading non-empty cwd encoding.
+            // Empty makes SessionImporter.DecodeCwdFromDirName return null so callers
+            // skip repo detection on metadata-extraction failure.
+            await Assert.That(result[0].EncodedCwd).IsEqualTo("");
+        } finally {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Test]
     public async Task ExtractSessionIdFromFileName_returns_null_for_non_rollout_pattern() {
         var sid = CodexPaths.ExtractSessionIdFromFileName("/tmp/random.jsonl");
         await Assert.That(sid).IsNull();

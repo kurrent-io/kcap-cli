@@ -1361,6 +1361,24 @@ static class HistoryCommand {
             };
         }
 
+        // Codex rollouts carry the session id in two places — the trailing UUID in the
+        // filename (which the rest of the pipeline trusts as the canonical id used for
+        // probe URLs and hook payloads) and `session_meta.payload.id`. Validate they
+        // agree so a renamed/copied file can't import under the wrong server session.
+        if (isCodex && meta.SessionId is { } innerId
+         && Guid.TryParse(innerId, out var innerGuid)
+         && innerGuid.ToString("N") != sessionId) {
+            return new() {
+                SessionId        = sessionId,
+                FilePath         = filePath,
+                EncodedCwd       = encodedCwd,
+                Meta             = meta,
+                Status           = ClassificationStatus.ProbeError,
+                Vendor           = vendor,
+                ProbeErrorReason = "codex session id mismatch (filename vs session_meta.payload.id)",
+            };
+        }
+
         // Probe the server BEFORE scanning the file. On re-runs the probe returns
         // 204 (AlreadyLoaded) quickly and we never need to read the transcript.
         ClassificationStatus status;

@@ -30,11 +30,14 @@ static class CodexPaths {
 
                         if (sid is null) continue;
 
-                        // Codex rollouts have no project-hashed parent dir, so synthesise an EncodedCwd
-                        // from the day path. The session_meta line is the source of truth for cwd —
-                        // this fallback only matters if metadata extraction fails.
-                        var encoded = Path.GetFileName(day.Path);
-                        results.Add((sid, jsonl, encoded));
+                        // EncodedCwd is left empty: Codex rollouts have no project-hashed parent
+                        // dir, and the day name (e.g. "07") is NOT a Claude-style hyphen-encoded
+                        // absolute path. Returning a non-empty value would cause
+                        // SessionImporter.DecodeCwdFromDirName to feed a relative-looking string
+                        // into RepositoryDetection.DetectRepositoryAsync if session_meta parsing
+                        // fails — empty makes the decoder return null so the caller skips the
+                        // probe entirely.
+                        results.Add((sid, jsonl, ""));
                     }
                 }
             }

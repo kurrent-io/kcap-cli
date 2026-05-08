@@ -1,6 +1,9 @@
 using System.Text.Json;
 using kapacitor;
 using kapacitor.Commands;
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+using WireMock.Server;
 
 namespace kapacitor.Tests.Unit;
 
@@ -137,6 +140,88 @@ public class CodexHistoryTests {
         var json = JsonSerializer.Serialize(batch, KapacitorJsonContext.Default.TranscriptBatch);
 
         await Assert.That(json.Contains("\"vendor\"")).IsFalse();
+    }
+
+    [Test]
+    public async Task ClassifyAsync_returns_ProbeError_when_codex_filename_uuid_disagrees_with_session_meta_id() {
+        using var server = WireMockServer.Start();
+        // Stub /last-line in case the short-circuit ever regresses — the test should
+        // fail loudly rather than time out on a real network call.
+        server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+
+        var dir = Directory.CreateTempSubdirectory("codex-id-mismatch").FullName;
+
+        try {
+            var path = Path.Combine(dir, "rollout.jsonl");
+            // Filename-derived sessionId we'll pass in: 019e0322...c3ea861 (dashless).
+            // Inner payload.id is a different UUID — the validator must catch this.
+            await File.WriteAllLinesAsync(path, [
+                """{"type":"session_meta","payload":{"id":"00000000-0000-0000-0000-000000000001","cwd":"/x"}}""",
+            ]);
+
+            var transcripts = new List<(string SessionId, string FilePath, string EncodedCwd)> {
+                ("019e032205fc7570be6575719c3ea861", path, "")
+            };
+
+            using var client = new HttpClient();
+
+            var result = await HistoryCommand.ClassifyAsync(
+                client,
+                server.Url!,
+                transcripts,
+                minLines: 0,
+                excludedRepos: null,
+                CancellationToken.None,
+                vendor: "codex"
+            );
+
+            await Assert.That(result.Count).IsEqualTo(1);
+            await Assert.That(result[0].Status).IsEqualTo(HistoryCommand.ClassificationStatus.ProbeError);
+            await Assert.That(result[0].ProbeErrorReason).IsNotNull();
+            await Assert.That(result[0].ProbeErrorReason!).Contains("session id mismatch");
+        } finally {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Test]
+    public async Task ClassifyAsync_accepts_codex_session_when_filename_and_session_meta_id_match() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+
+        var dir = Directory.CreateTempSubdirectory("codex-id-match").FullName;
+
+        try {
+            var path = Path.Combine(dir, "rollout.jsonl");
+            // Filename uuid (dashless) and session_meta payload.id (dashed) refer to
+            // the same GUID — validator must let this through to the server probe.
+            await File.WriteAllLinesAsync(path, [
+                """{"type":"session_meta","payload":{"id":"019e0322-05fc-7570-be65-75719c3ea861","cwd":"/x"}}""",
+            ]);
+
+            var transcripts = new List<(string SessionId, string FilePath, string EncodedCwd)> {
+                ("019e032205fc7570be6575719c3ea861", path, "")
+            };
+
+            using var client = new HttpClient();
+
+            var result = await HistoryCommand.ClassifyAsync(
+                client,
+                server.Url!,
+                transcripts,
+                minLines: 0,
+                excludedRepos: null,
+                CancellationToken.None,
+                vendor: "codex"
+            );
+
+            await Assert.That(result.Count).IsEqualTo(1);
+            await Assert.That(result[0].Status).IsEqualTo(HistoryCommand.ClassificationStatus.New);
+        } finally {
+            Directory.Delete(dir, true);
+        }
     }
 
     [Test]
