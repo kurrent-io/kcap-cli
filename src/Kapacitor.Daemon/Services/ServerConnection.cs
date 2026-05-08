@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 
 namespace kapacitor.Daemon.Services;
 
-internal partial class ServerConnection : IAsyncDisposable {
+internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort {
     readonly HubConnection             _hub;
     readonly DaemonConfig              _config;
     readonly ILogger<ServerConnection> _logger;
@@ -203,8 +203,34 @@ internal partial class ServerConnection : IAsyncDisposable {
 
     public event Action? OnReconnectedCallback;
 
-    public Task SendHeartbeatAsync()
-        => _hub.SendAsync("DaemonHeartbeat", cancellationToken: _ct);
+    /// <summary>
+    /// Round-trip liveness probe (AI-566). Calls <c>DaemonPing</c> on the server
+    /// and returns whether this connection is still the registered daemon for
+    /// its <c>(owner, name)</c> slot. <c>false</c> means the slot was displaced
+    /// — usually by an auto-reconnect Register from a different conn id —
+    /// and the daemon should re-register so the orchestrator's view is
+    /// repaired. <c>virtual</c> so unit tests can override without spinning
+    /// up a real SignalR client.
+    /// </summary>
+    public virtual Task<bool> PingAsync(CancellationToken ct)
+        => _hub.InvokeAsync<bool>("DaemonPing", cancellationToken: ct);
+
+    /// <summary>
+    /// Re-runs <c>DaemonConnect</c> on the existing hub connection. Used by
+    /// the heartbeat loop when the server reports it doesn't recognise this
+    /// connection as a daemon (slot displaced or never registered).
+    /// </summary>
+    public virtual Task ReRegisterAsync() => RegisterDaemon();
+
+    /// <summary>
+    /// Stops the underlying hub. <see cref="OnClosed"/> fires and calls
+    /// <see cref="ConnectWithRetryAsync"/>, which establishes a fresh
+    /// transport and a new server-side conn id, then re-registers via
+    /// <see cref="RegisterDaemon"/>. Used when the heartbeat ping times out
+    /// or throws — the WebSocket is hung and only a fresh connection
+    /// recovers it.
+    /// </summary>
+    public virtual Task ForceReconnectAsync() => _hub.StopAsync(_ct);
 
     public async Task UpdateRepoPathsAsync() {
         try {

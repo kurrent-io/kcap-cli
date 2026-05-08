@@ -75,7 +75,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly LocalPermissionBridge                       _permissionBridge;
     readonly ILogger<AgentOrchestrator>                  _logger;
     readonly PeriodicTimer                               _heartbeatTimer  = new(TimeSpan.FromSeconds(30));
-    readonly PeriodicTimer                               _daemonHeartbeat = new(TimeSpan.FromMinutes(1));
+    // AI-79: heartbeat tightened from 60 s SendAsync to 15 s round-trip Ping.
+    // Server's default ClientTimeoutInterval is 30 s, and the staging incident
+    // showed daemons holding a displaced slot for nearly a minute before
+    // anyone noticed; 15 s puts us comfortably under both.
+    readonly PeriodicTimer                               _daemonHeartbeat = new(TimeSpan.FromSeconds(15));
+    static readonly TimeSpan                             _pingDeadline    = TimeSpan.FromSeconds(10);
     readonly CancellationTokenSource                     _shutdownCts     = new();
 
     public AgentOrchestrator(
@@ -813,11 +818,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task RunDaemonHeartbeatLoopAsync(CancellationToken ct) {
+        var loop = new DaemonHeartbeatLoop(_server, _pingDeadline, _logger);
+
         while (await _daemonHeartbeat.WaitForNextTickAsync(ct)) {
+            // Defence in depth: TickAsync is intentionally total, but we
+            // run as an unobserved background Task — guarding here keeps
+            // the loop alive even if a future change accidentally lets an
+            // exception escape the tick.
             try {
-                await _server.SendHeartbeatAsync();
+                await loop.TickAsync(ct);
+            } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                return;
             } catch (Exception ex) {
-                LogHeartbeatFailed(ex);
+                _logger.LogWarning(ex, "Heartbeat tick faulted — continuing loop");
             }
         }
     }
@@ -1238,9 +1251,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to spawn what's-done generator for session {SessionId}")]
     partial void LogWhatsDoneSpawnFailed(Exception? ex, string sessionId);
-
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Daemon heartbeat failed")]
-    partial void LogHeartbeatFailed(Exception ex);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to persist repo path for agent {AgentId}")]
     partial void LogRepoPathPersistFailed(Exception ex, string agentId);
