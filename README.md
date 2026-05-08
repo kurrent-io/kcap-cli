@@ -50,10 +50,11 @@ kapacitor setup --server-url https://capacitor.example.com --default-visibility 
 ### 3. Import existing sessions (optional)
 
 ```bash
-kapacitor history    # discovers and uploads local Claude Code transcripts
+kapacitor history            # discovers and uploads local Claude Code transcripts
+kapacitor history --codex    # imports Codex rollouts from ~/.codex/sessions
 ```
 
-This backfills your past sessions from `~/.claude/projects/` so they appear in the dashboard. It's idempotent — safe to run multiple times.
+This backfills your past sessions from `~/.claude/projects/` (or `~/.codex/sessions` with `--codex`) so they appear in the dashboard. It's idempotent — safe to run multiple times.
 
 ### 4. Open the dashboard
 
@@ -148,12 +149,14 @@ Launches a Claude Code session equipped with MCP tools that query the implementa
 Backfill older sessions from local transcript files:
 
 ```bash
-kapacitor history                                  # all sessions
+kapacitor history                                  # all Claude sessions
+kapacitor history --codex                          # Codex rollouts from ~/.codex/sessions
 kapacitor history --cwd /path/to/project           # from a specific directory
 kapacitor history --session abc123                  # single session
+kapacitor history --since 2026-01-01               # only sessions on or after this date
 ```
 
-This discovers Claude Code transcript files at `~/.claude/projects/`, checks each against the server, and loads any that are missing or incomplete. The command is idempotent and resumable.
+This discovers Claude Code transcript files at `~/.claude/projects/` (or Codex rollouts at `~/.codex/sessions` with `--codex`), checks each against the server, and loads any that are missing or incomplete. The command is idempotent and resumable.
 
 ### Agent daemon
 
