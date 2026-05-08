@@ -109,6 +109,47 @@ public class CodexHistoryTests {
     }
 
     [Test]
+    public async Task ExtractCodexTitleContext_skips_AGENTS_md_repo_context_prelude() {
+        var path = Path.GetTempFileName();
+
+        try {
+            // Reproduces the shape Codex emits when AGENTS.md auto-injection fires —
+            // a role:"user" message whose input_text starts with the literal AGENTS.md
+            // header. Picking this as the title context produces a title for the repo
+            // overview, not the actual work request that follows.
+            await File.WriteAllLinesAsync(path, [
+                """{"type":"session_meta","payload":{"id":"x","cwd":"/x"}}""",
+                """{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /Users/alexey/dev/eventuous/eventuous\n\n<INSTRUCTIONS>\n# Eventuous - AI Agent Context\n..."}]}}""",
+                """{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Review this PR https://github.com/Eventuous/eventuous/pull/502"}]}}""",
+            ]);
+
+            var (userText, _) = TitleGenerator.ExtractCodexTitleContext(path);
+
+            await Assert.That(userText).IsEqualTo("Review this PR https://github.com/Eventuous/eventuous/pull/502");
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task ExtractCodexTitleContext_skips_turn_aborted_prelude() {
+        var path = Path.GetTempFileName();
+
+        try {
+            await File.WriteAllLinesAsync(path, [
+                """{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<turn_aborted>\nThe user interrupted the previous turn..."}]}}""",
+                """{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"skip the tests. CI ran fine"}]}}""",
+            ]);
+
+            var (userText, _) = TitleGenerator.ExtractCodexTitleContext(path);
+
+            await Assert.That(userText).IsEqualTo("skip the tests. CI ran fine");
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
     public async Task ExtractCodexTitleContext_returns_null_user_when_only_environment_context_present() {
         var path = Path.GetTempFileName();
 

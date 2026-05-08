@@ -234,9 +234,11 @@ static partial class TitleGenerator {
                     if (userText is null && role == "user") {
                         var text = ExtractCodexBlockText(payload.Value, "input_text");
 
-                        // Skip the env context block — it's injected by codex on every session
-                        // and would produce a useless title.
-                        if (text is not null && !text.StartsWith("<environment_context>", StringComparison.Ordinal)) {
+                        // Skip codex-injected wrappers that surface as role:"user" messages
+                        // before (or interleaved with) real user prompts. Without these
+                        // skips, titles get generated from the repo's AGENTS.md content or
+                        // an interrupt notice instead of the actual work request.
+                        if (text is not null && !IsCodexInjectedUserPrelude(text)) {
                             userText = text;
                         }
                     } else if (assistantText is null && role == "assistant") {
@@ -256,6 +258,23 @@ static partial class TitleGenerator {
 
         return (userText, assistantText);
     }
+
+    /// <summary>
+    /// Detects role:"user" payload bodies that codex synthesises around the real
+    /// conversation — none of which represent a user prompt and all of which would
+    /// otherwise dominate the title context window. Observed on real rollouts:
+    /// <list type="bullet">
+    ///   <item><c>&lt;environment_context&gt;...</c> — every session gets one.</item>
+    ///   <item><c># AGENTS.md instructions for &lt;path&gt;...</c> — repo context auto-injected
+    ///   when an AGENTS.md is found anywhere up the cwd tree.</item>
+    ///   <item><c>&lt;turn_aborted&gt;...</c> — emitted when the user interrupts a turn,
+    ///   which can land before a follow-up prompt in the same session.</item>
+    /// </list>
+    /// </summary>
+    static bool IsCodexInjectedUserPrelude(string text) =>
+        text.StartsWith("<environment_context>",     StringComparison.Ordinal)
+     || text.StartsWith("# AGENTS.md instructions",  StringComparison.Ordinal)
+     || text.StartsWith("<turn_aborted>",            StringComparison.Ordinal);
 
     static string? ExtractCodexBlockText(JsonElement payload, string blockType) {
         if (payload.Arr("content") is not { } content) return null;
