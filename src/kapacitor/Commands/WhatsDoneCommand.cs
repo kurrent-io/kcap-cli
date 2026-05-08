@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace kapacitor.Commands;
 
 static class WhatsDoneCommand {
-    public static async Task<int> HandleGenerateWhatsDone(string baseUrl, string sessionId) {
+    public static async Task<int> HandleGenerateWhatsDone(string baseUrl, string sessionId, string vendor = "claude") {
         // Redirect output to log file (same pattern as WatchCommand)
         var logDir = PathHelpers.ConfigPath("logs");
         Directory.CreateDirectory(logDir);
@@ -14,7 +14,7 @@ static class WhatsDoneCommand {
         Console.SetError(logWriter);
 
         try {
-            return await GenerateForSessionAsync(baseUrl, sessionId, Log);
+            return await GenerateForSessionAsync(baseUrl, sessionId, Log, vendor);
         } finally {
             await logWriter.DisposeAsync();
         }
@@ -24,7 +24,8 @@ static class WhatsDoneCommand {
     /// Core what's-done generation logic, callable without Console redirection.
     /// Uses the provided <paramref name="log"/> callback for diagnostics.
     /// </summary>
-    public static async Task<int> GenerateForSessionAsync(string baseUrl, string sessionId, Action<string> log) {
+    /// <param name="vendor">"claude" (default) or "codex" — picks the headless CLI runner.</param>
+    public static async Task<int> GenerateForSessionAsync(string baseUrl, string sessionId, Action<string> log, string vendor = "claude") {
         log($"Generating what's-done summary for session {sessionId}");
 
         using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
@@ -63,16 +64,20 @@ static class WhatsDoneCommand {
             return 1;
         }
 
-        // 2. Call claude -p to generate the summary
-        log("Calling claude to generate summary...");
+        // 2. Call the headless CLI for the matching vendor to generate the summary.
+        // Codex-vendor sessions go through `codex exec` so the summary model
+        // matches the one that actually produced the work.
+        log($"Calling {vendor} to generate summary...");
         log($"Recap text: {recapText.Length} chars");
 
         var prompt = EmbeddedResources.Load("prompt-whats-done.txt") + recapText;
 
-        var result = await ClaudeCliRunner.RunAsync(prompt, TimeSpan.FromSeconds(90), log);
+        var result = vendor == "codex"
+            ? await CodexCliRunner.RunAsync(prompt, TimeSpan.FromSeconds(90), log)
+            : await ClaudeCliRunner.RunAsync(prompt, TimeSpan.FromSeconds(90), log);
 
         if (result is null) {
-            log("Claude returned empty or failed");
+            log($"{vendor} returned empty or failed");
 
             return 1;
         }

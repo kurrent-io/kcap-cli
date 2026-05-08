@@ -126,6 +126,10 @@ static class HistoryCommand {
         public required SessionMetadata      Meta       { get; init; }
         public required ClassificationStatus Status     { get; init; }
 
+        /// <summary>"claude" (default) or "codex" — picks the matching metadata extractor,
+        /// title extractor, session-start hook shape, and TranscriptBatch.Vendor tag.</summary>
+        public string Vendor { get; init; } = "claude";
+
         /// <summary>Only populated when Status == Partial.</summary>
         public int ResumeFromLine { get; init; }
 
@@ -172,21 +176,42 @@ static class HistoryCommand {
             bool RequestedSummaries
         );
 
-    public static async Task<int> HandleHistory(string baseUrl, string? filterCwd, string? filterSession = null, int minLines = 15, bool generateSummaries = false) {
+    public static async Task<int> HandleHistory(
+            string     baseUrl,
+            string?    filterCwd,
+            string?    filterSession    = null,
+            int        minLines         = 15,
+            bool       generateSummaries = false,
+            bool       codex            = false,
+            DateOnly?  since            = null
+        ) {
         using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
         var       display    = HistoryDisplay.Create();
+        var       vendor     = codex ? "codex" : "claude";
 
         // --- Discover ---
         display.BeginPhase("Discovering");
-        var projectsDir = ClaudePaths.Projects;
+        List<(string SessionId, string FilePath, string EncodedCwd)> transcriptFiles;
 
-        if (!Directory.Exists(projectsDir)) {
-            display.Line("No Claude Code projects directory found.");
+        if (codex) {
+            if (!Directory.Exists(CodexPaths.Sessions)) {
+                display.Line("No Codex sessions directory found.");
 
-            return 0;
+                return 0;
+            }
+
+            transcriptFiles = CodexPaths.Discover(since: since);
+        } else {
+            var projectsDir = ClaudePaths.Projects;
+
+            if (!Directory.Exists(projectsDir)) {
+                display.Line("No Claude Code projects directory found.");
+
+                return 0;
+            }
+
+            transcriptFiles = DiscoverTranscripts(projectsDir);
         }
-
-        var transcriptFiles = DiscoverTranscripts(projectsDir);
 
         if (transcriptFiles.Count == 0) {
             display.Line("No transcript files found.");
@@ -210,7 +235,7 @@ static class HistoryCommand {
 
             transcriptFiles = [
                 .. transcriptFiles.Where(t => {
-                        var cwd = ExtractCwdFromTranscript(t.FilePath);
+                        var cwd = ExtractCwdFromTranscript(t.FilePath, codex);
 
                         return cwd?.TrimEnd('/').Equals(normalizedFilter, StringComparison.Ordinal) == true;
                     }
@@ -219,7 +244,7 @@ static class HistoryCommand {
         }
 
         var projectCount = transcriptFiles.Select(t => t.EncodedCwd).Distinct().Count();
-        display.Line($"Found {transcriptFiles.Count} session{(transcriptFiles.Count == 1 ? "" : "s")} in {projectCount} project{(projectCount == 1 ? "" : "s")}");
+        display.Line($"Found {transcriptFiles.Count} {vendor} session{(transcriptFiles.Count == 1 ? "" : "s")} in {projectCount} project{(projectCount == 1 ? "" : "s")}");
 
         // --- Classify (parallel probes) ---
         var                         excludedRepos = (await AppConfig.Load())?.ExcludedRepos;
@@ -241,6 +266,7 @@ static class HistoryCommand {
                             minLines,
                             excludedRepos,
                             CancellationToken.None,
+                            vendor,
                             onProbed: () => bar.Increment(1)
                         );
                         tmp.AddRange(results);
@@ -249,7 +275,25 @@ static class HistoryCommand {
             classifications = tmp;
         } else {
             display.Line($"Probing {transcriptFiles.Count} sessions...");
-            classifications = await ClassifyAsync(httpClient, baseUrl, transcriptFiles, minLines, excludedRepos, CancellationToken.None);
+            classifications = await ClassifyAsync(httpClient, baseUrl, transcriptFiles, minLines, excludedRepos, CancellationToken.None, vendor);
+        }
+
+        // --- --since filter (Claude path only — Codex pruned at discovery) ---
+        if (since is { } sinceCutoff && !codex) {
+            var cutoff = sinceCutoff.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+
+            classifications = [
+                .. classifications.Where(c => {
+                        var ts = c.Meta.FirstTimestamp?.UtcDateTime;
+
+                        if (ts is null) {
+                            try { ts = File.GetLastWriteTimeUtc(c.FilePath); } catch { return true; }
+                        }
+
+                        return ts >= cutoff;
+                    }
+                )
+            ];
         }
 
         // --- Resolve excluded-repo prompts (TTY only; non-TTY auto-skips) ---
@@ -348,7 +392,7 @@ static class HistoryCommand {
                 );
             },
             OnTitleTaskReady = t => {
-                var (sid, fp, _) = t;
+                var (sid, fp, _, vnd) = t;
                 Interlocked.Increment(ref titleTaskCount);
 
                 backgroundTasks.Add(
@@ -356,7 +400,7 @@ static class HistoryCommand {
                             await concurrencyLimit.WaitAsync();
 
                             try {
-                                var result = await GenerateTitleForImportAsync(httpClient, baseUrl, sid, fp);
+                                var result = await GenerateTitleForImportAsync(httpClient, baseUrl, sid, fp, vnd);
 
                                 switch (result) {
                                     case TitleResult.Generated: Interlocked.Increment(ref titlesGenerated); break;
@@ -377,13 +421,14 @@ static class HistoryCommand {
 
                 Interlocked.Increment(ref summaryTaskCount);
                 var sid = t.SessionId;
+                var vnd = t.Vendor;
 
                 backgroundTasks.Add(
                     Task.Run(async () => {
                             await concurrencyLimit.WaitAsync();
 
                             try {
-                                var rc = await WhatsDoneCommand.GenerateForSessionAsync(baseUrl, sid, _ => { });
+                                var rc = await WhatsDoneCommand.GenerateForSessionAsync(baseUrl, sid, _ => { }, vnd);
 
                                 if (rc == 0) Interlocked.Increment(ref summariesGenerated);
                                 else {
@@ -733,7 +778,7 @@ static class HistoryCommand {
         return null;
     }
 
-    static string? ExtractCwdFromTranscript(string filePath) {
+    static string? ExtractCwdFromTranscript(string filePath, bool codex = false) {
         try {
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var reader = new StreamReader(stream);
@@ -750,9 +795,110 @@ static class HistoryCommand {
                 try {
                     var doc = JsonDocument.Parse(line);
 
-                    if (doc.RootElement.Str("cwd") is { } cwd) {
+                    // Codex stores cwd inside a session_meta envelope; Claude stores it
+                    // at the JSONL root.
+                    var cwd = codex
+                        ? doc.RootElement.Obj("payload")?.Str("cwd")
+                        : doc.RootElement.Str("cwd");
+
+                    if (cwd is { }) {
                         return cwd;
                     }
+                } catch (JsonException) { }
+            }
+        } catch {
+            // Best effort
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Codex-shape variant of <see cref="ExtractSessionMetadata"/>. Reads the first
+    /// <c>session_meta</c> line and pulls cwd, model_provider (mapped to
+    /// <see cref="SessionMetadata.Model"/>), and the inner timestamp (when codex
+    /// started, not when the envelope was written). Codex rollouts have no slug,
+    /// so <see cref="SessionMetadata.Slug"/> stays null.
+    /// </summary>
+    internal static SessionMetadata ExtractCodexSessionMetadata(string filePath) {
+        var meta = new SessionMetadata();
+
+        try {
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+
+            // Codex always emits session_meta as the first non-empty line — but read up
+            // to 5 lines for resilience against future preludes.
+            var linesChecked = 0;
+
+            while (reader.ReadLine() is { } line && linesChecked < 5) {
+                linesChecked++;
+
+                if (string.IsNullOrWhiteSpace(line)) continue;
+
+                try {
+                    using var doc  = JsonDocument.Parse(line);
+                    var       root = doc.RootElement;
+
+                    if (root.Str("type") != "session_meta") continue;
+
+                    var payload = root.Obj("payload");
+
+                    if (payload is null) continue;
+
+                    meta.Cwd       = payload.Value.Str("cwd");
+                    meta.Model     = payload.Value.Str("model_provider");
+                    meta.SessionId = payload.Value.Str("id");
+
+                    if (payload.Value.Str("timestamp") is { } tsStr
+                     && DateTimeOffset.TryParse(tsStr, out var ts)) {
+                        meta.FirstTimestamp = ts;
+                    }
+
+                    break;
+                } catch (JsonException) { }
+            }
+        } catch {
+            // Best effort
+        }
+
+        return meta;
+    }
+
+    internal sealed record CodexGitInfo(string? RemoteUrl, string? Branch, string? CommitHash);
+
+    /// <summary>
+    /// Extract the optional <c>git</c> block from the first <c>session_meta</c> line
+    /// of a Codex rollout (commit_hash, branch, repository_url). Returns null when
+    /// there's no git block — codex omits it for sessions started outside a repo.
+    /// </summary>
+    internal static CodexGitInfo? ExtractCodexGitInfo(string filePath) {
+        try {
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+
+            var linesChecked = 0;
+
+            while (reader.ReadLine() is { } line && linesChecked < 5) {
+                linesChecked++;
+
+                if (string.IsNullOrWhiteSpace(line)) continue;
+
+                try {
+                    using var doc  = JsonDocument.Parse(line);
+                    var       root = doc.RootElement;
+
+                    if (root.Str("type") != "session_meta") continue;
+
+                    var git = root.Obj("payload")?.Obj("git");
+
+                    if (git is null) return null;
+
+                    return new CodexGitInfo(
+                        RemoteUrl: git.Value.Str("repository_url"),
+                        Branch: git.Value.Str("branch"),
+                        CommitHash: git.Value.Str("commit_hash")
+                    );
                 } catch (JsonException) { }
             }
         } catch {
@@ -825,15 +971,17 @@ static class HistoryCommand {
     static string NormalizeGuid(string value) =>
         Guid.TryParse(value, out var guid) ? guid.ToString("N") : value;
 
-    static async Task<TitleResult> GenerateTitleForImportAsync(HttpClient httpClient, string baseUrl, string sessionId, string filePath) {
+    static async Task<TitleResult> GenerateTitleForImportAsync(HttpClient httpClient, string baseUrl, string sessionId, string filePath, string vendor) {
         try {
-            var (userText, assistantText) = TitleGenerator.ExtractTitleContext(filePath);
+            var (userText, assistantText) = vendor == "codex"
+                ? TitleGenerator.ExtractCodexTitleContext(filePath)
+                : TitleGenerator.ExtractTitleContext(filePath);
 
             if (userText is null) {
                 return TitleResult.Skipped;
             }
 
-            var result = await TitleGenerator.GenerateAsync(userText, assistantText, _ => { });
+            var result = await TitleGenerator.GenerateAsync(userText, assistantText, _ => { }, vendor);
 
             if (result is null) {
                 return TitleResult.Skipped;
@@ -884,7 +1032,7 @@ static class HistoryCommand {
         // slot, classification, outcome (Loaded|Resumed), linesSent
 
         /// <summary>Fired when a successfully-imported session is ready for title generation.</summary>
-        public required Action<(string SessionId, string FilePath, string? PreviousSessionId)> OnTitleTaskReady { get; init; }
+        public required Action<(string SessionId, string FilePath, string? PreviousSessionId, string Vendor)> OnTitleTaskReady { get; init; }
 
         /// <summary>
         /// Fired when a session's session-end hook returned, signalling that the
@@ -892,7 +1040,7 @@ static class HistoryCommand {
         /// Renamed from the previous `OnSessionEnded` to disambiguate from the
         /// slot-aware lifecycle event above.
         /// </summary>
-        public required Action<(string SessionId, bool GenerateWhatsDone)> OnBackgroundWorkReady { get; init; }
+        public required Action<(string SessionId, bool GenerateWhatsDone, string Vendor)> OnBackgroundWorkReady { get; init; }
     }
 
     /// <summary>
@@ -996,7 +1144,8 @@ static class HistoryCommand {
                     session.FilePath,
                     agentId: null,
                     startLine: session.ResumeFromLine,
-                    progress: perSessionProgress
+                    progress: perSessionProgress,
+                    vendor: session.Vendor
                 );
 
                 return (SessionImportOutcome.Resumed, linesSent);
@@ -1028,19 +1177,36 @@ static class HistoryCommand {
         if (meta.FirstTimestamp is not null) startHook["started_at"]                = meta.FirstTimestamp.Value.ToString("O");
         if (session.PreviousSessionId is not null) startHook["previous_session_id"] = session.PreviousSessionId;
         if (meta.Slug is not null) startHook["slug"]                                = meta.Slug;
+        if (session.Vendor != "claude") startHook["vendor"]                         = session.Vendor;
+
+        // Codex sessions carry a `git` block on session_meta — prefer it over a fresh
+        // RepositoryDetection probe (which reads the live git config and might disagree
+        // with what was true when the rollout was recorded). Detection still runs as a
+        // fallback for fields the rollout omits (user_name / user_email).
+        var codexRepo = session.Vendor == "codex" ? ExtractCodexGitInfo(session.FilePath) : null;
 
         if (cwd is not null) {
             var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
 
-            if (repo is not null) {
-                var repoNode                                           = new System.Text.Json.Nodes.JsonObject();
-                if (repo.UserName is not null) repoNode["user_name"]   = repo.UserName;
-                if (repo.UserEmail is not null) repoNode["user_email"] = repo.UserEmail;
-                if (repo.RemoteUrl is not null) repoNode["remote_url"] = repo.RemoteUrl;
-                if (repo.Owner is not null) repoNode["owner"]          = repo.Owner;
-                if (repo.RepoName is not null) repoNode["repo_name"]   = repo.RepoName;
-                if (repo.Branch is not null) repoNode["branch"]        = repo.Branch;
-                startHook["repository"] = repoNode;
+            if (repo is not null || codexRepo is not null) {
+                var repoNode = new System.Text.Json.Nodes.JsonObject();
+
+                if (repo?.UserName is not null) repoNode["user_name"]   = repo.UserName;
+                if (repo?.UserEmail is not null) repoNode["user_email"] = repo.UserEmail;
+
+                var remoteUrl = codexRepo?.RemoteUrl ?? repo?.RemoteUrl;
+                if (remoteUrl is not null) repoNode["remote_url"] = remoteUrl;
+
+                var (codexOwner, codexRepoName) = GitUrlParser.ParseRemoteUrl(codexRepo?.RemoteUrl);
+                var owner    = codexOwner    ?? repo?.Owner;
+                var repoName = codexRepoName ?? repo?.RepoName;
+                var branch   = codexRepo?.Branch ?? repo?.Branch;
+
+                if (owner is not null) repoNode["owner"]        = owner;
+                if (repoName is not null) repoNode["repo_name"] = repoName;
+                if (branch is not null) repoNode["branch"]      = branch;
+
+                if (repoNode.Count > 0) startHook["repository"] = repoNode;
             }
         }
 
@@ -1069,7 +1235,8 @@ static class HistoryCommand {
                 session.SessionId,
                 meta,
                 session.EncodedCwd,
-                perSessionProgress
+                perSessionProgress,
+                session.Vendor
             );
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
@@ -1109,8 +1276,8 @@ static class HistoryCommand {
             /* best effort */
         }
 
-        events.OnTitleTaskReady((session.SessionId, session.FilePath, session.PreviousSessionId));
-        events.OnBackgroundWorkReady((session.SessionId, generateWhatsDone));
+        events.OnTitleTaskReady((session.SessionId, session.FilePath, session.PreviousSessionId, session.Vendor));
+        events.OnBackgroundWorkReady((session.SessionId, generateWhatsDone, session.Vendor));
 
         return (SessionImportOutcome.Loaded, importResult.LinesSent);
     }
@@ -1131,13 +1298,14 @@ static class HistoryCommand {
             int                                                          minLines,
             string[]?                                                    excludedRepos,
             CancellationToken                                            ct,
+            string                                                       vendor   = "claude",
             Action?                                                      onProbed = null
         ) {
         using var probeGate = new SemaphoreSlim(8);
         var       tasks     = new List<Task<SessionClassification>>(transcripts.Count);
 
         foreach (var (sessionId, filePath, encodedCwd) in transcripts) {
-            tasks.Add(ClassifyOneAsync(httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, probeGate, onProbed, ct));
+            tasks.Add(ClassifyOneAsync(httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, probeGate, vendor, onProbed, ct));
         }
 
         var results = await Task.WhenAll(tasks);
@@ -1154,11 +1322,12 @@ static class HistoryCommand {
             int               minLines,
             string[]?         excludedRepos,
             SemaphoreSlim     probeGate,
+            string            vendor,
             Action?           onProbed,
             CancellationToken ct
         ) {
         try {
-            return await ClassifyOneCoreAsync(httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, probeGate, ct);
+            return await ClassifyOneCoreAsync(httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, probeGate, vendor, ct);
         } finally {
             onProbed?.Invoke();
         }
@@ -1173,18 +1342,40 @@ static class HistoryCommand {
             int               minLines,
             string[]?         excludedRepos,
             SemaphoreSlim     probeGate,
+            string            vendor,
             CancellationToken ct
         ) {
-        var meta = ExtractSessionMetadata(filePath);
+        var isCodex = vendor == "codex";
+        var meta    = isCodex ? ExtractCodexSessionMetadata(filePath) : ExtractSessionMetadata(filePath);
 
         // Short-circuit: kapacitor's own sub-sessions (title / what's-done) never get imported.
-        if (TitleGenerator.IsKapacitorSubSession(filePath)) {
+        // Codex rollouts have no analog, so the check is Claude-only.
+        if (!isCodex && TitleGenerator.IsKapacitorSubSession(filePath)) {
             return new() {
                 SessionId  = sessionId,
                 FilePath   = filePath,
                 EncodedCwd = encodedCwd,
                 Meta       = meta,
                 Status     = ClassificationStatus.InternalSubSession,
+                Vendor     = vendor,
+            };
+        }
+
+        // Codex rollouts carry the session id in two places — the trailing UUID in the
+        // filename (which the rest of the pipeline trusts as the canonical id used for
+        // probe URLs and hook payloads) and `session_meta.payload.id`. Validate they
+        // agree so a renamed/copied file can't import under the wrong server session.
+        if (isCodex && meta.SessionId is { } innerId
+         && Guid.TryParse(innerId, out var innerGuid)
+         && innerGuid.ToString("N") != sessionId) {
+            return new() {
+                SessionId        = sessionId,
+                FilePath         = filePath,
+                EncodedCwd       = encodedCwd,
+                Meta             = meta,
+                Status           = ClassificationStatus.ProbeError,
+                Vendor           = vendor,
+                ProbeErrorReason = "codex session id mismatch (filename vs session_meta.payload.id)",
             };
         }
 
@@ -1257,6 +1448,7 @@ static class HistoryCommand {
                         Meta       = meta,
                         Status     = ClassificationStatus.TooShort,
                         TotalLines = observedLines,
+                        Vendor     = vendor,
                     };
                 }
 
@@ -1301,6 +1493,7 @@ static class HistoryCommand {
             ResumeFromLine   = resumeFromLine,
             ProbeErrorReason = probeErrorReason,
             ExcludedRepoKey  = excludedRepoKey,
+            Vendor           = vendor,
         };
     }
 
