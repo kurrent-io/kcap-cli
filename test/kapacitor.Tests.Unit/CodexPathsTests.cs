@@ -41,7 +41,9 @@ public class CodexPathsTests {
             var result = CodexPaths.Discover(root, since: new DateOnly(2026, 5, 1));
 
             await Assert.That(result.Count).IsEqualTo(2);
-            await Assert.That(result.Any(r => r.FilePath.Contains("/03/03/"))).IsFalse();
+            // Normalise to forward slashes so the assertion works regardless of platform
+            // path separator (Windows would otherwise produce \03\03\ here).
+            await Assert.That(result.Any(r => r.FilePath.Replace('\\', '/').Contains("/03/03/"))).IsFalse();
         } finally {
             Directory.Delete(root, true);
         }

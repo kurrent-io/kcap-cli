@@ -9,10 +9,12 @@ static class CodexPaths {
     /// Walk <c>~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl</c>, optionally pruning
     /// directories below <paramref name="since"/>. Returns one entry per rollout
     /// with the session id parsed from the filename suffix
-    /// (<c>rollout-&lt;ISO-ts&gt;-&lt;uuid&gt;.jsonl</c>) and a synthesised
-    /// EncodedCwd matching Claude's <c>/</c>→<c>-</c> encoding so callers that
-    /// share the Claude path's plumbing (<see cref="kapacitor.Commands.SessionImporter.DecodeCwdFromDirName"/>)
-    /// keep working without a special case.
+    /// (<c>rollout-&lt;ISO-ts&gt;-&lt;uuid&gt;.jsonl</c>) and an always-empty
+    /// EncodedCwd — the day folder name (e.g. <c>"07"</c>) is NOT a Claude-style
+    /// hyphen-encoded absolute path, so feeding it to
+    /// <see cref="kapacitor.Commands.SessionImporter.DecodeCwdFromDirName"/> would
+    /// produce a misleading relative cwd if <c>session_meta</c> parsing fails.
+    /// Empty makes the decoder return null and callers degrade to "no cwd" cleanly.
     /// </summary>
     /// <param name="sessionsDir">Override of the <c>~/.codex/sessions</c> root, primarily for tests.</param>
     /// <param name="since">Inclusive lower bound — files in date directories before this are skipped.</param>

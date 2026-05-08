@@ -98,7 +98,7 @@ Defaults to null → omitted by the serializer → server treats as `"claude"` (
 - `src/Kapacitor.Core/Models.cs` — add `Vendor` field to `TranscriptBatch`.
 - `src/kapacitor/Commands/HistoryCommand.cs`:
   - `HandleHistory(...)` gains `bool codex` and `DateOnly? since`.
-  - `DiscoverCodexRollouts(string sessionsDir, DateOnly? since)` (sibling to `DiscoverTranscripts`) — returns `(SessionId, FilePath, EncodedCwd)` tuples like the Claude path. `EncodedCwd` is synthesised from the session_meta cwd by mirroring Claude's `/`→`-` encoding so `DecodeCwdFromDirName` round-trips.
+  - `DiscoverCodexRollouts(string sessionsDir, DateOnly? since)` (sibling to `DiscoverTranscripts`) — returns `(SessionId, FilePath, EncodedCwd)` tuples like the Claude path. `EncodedCwd` is left empty for Codex: the day folder name isn't a Claude-style hyphen-encoded path, and an empty string makes `DecodeCwdFromDirName` return null so callers skip cwd-dependent work cleanly when `session_meta` parsing fails.
   - `ExtractCodexSessionMetadata(filePath)` — pulls cwd, model_provider, first timestamp, git block from the first `session_meta` line.
   - Vendor threads through `ImportSingleSessionAsync` (only impacts the session-start hook and the batch POSTs).
 - `src/kapacitor/Commands/SessionImporter.cs`:
