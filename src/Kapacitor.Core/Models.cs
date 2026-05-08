@@ -19,6 +19,14 @@ record TranscriptBatch {
 
     [JsonPropertyName("repository")]
     public RepositoryPayload? Repository { get; init; }
+
+    // Routes the server's INormalizerSelector to CodexNormalizer when "codex".
+    // Null/absent → server treats the batch as Claude (default). Omitted on the
+    // wire when null so older servers (pre-#576) keep deserialising the batch
+    // unchanged — the server-side record had no vendor field before that PR.
+    [JsonPropertyName("vendor")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Vendor { get; init; }
 }
 
 record ErrorEntry(

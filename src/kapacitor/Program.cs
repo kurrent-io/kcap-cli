@@ -170,13 +170,14 @@ switch (command) {
         );
     }
     case "generate-whats-done" when args.Length < 2:
-        Console.Error.WriteLine("Usage: kapacitor generate-whats-done <sessionId>");
+        Console.Error.WriteLine("Usage: kapacitor generate-whats-done <sessionId> [--codex]");
 
         return 1;
     case "generate-whats-done": {
         var wdSessionId = args[1].Replace("-", "");
+        var wdVendor    = args.Contains("--codex") ? "codex" : "claude";
 
-        return await WhatsDoneCommand.HandleGenerateWhatsDone(baseUrl!, wdSessionId);
+        return await WhatsDoneCommand.HandleGenerateWhatsDone(baseUrl!, wdSessionId, wdVendor);
     }
     case "login": {
         if (args.Contains("--discover")) {
@@ -377,10 +378,12 @@ switch (command) {
         return 0;
     }
     case "history": {
-        string? filterCwd     = null;
-        string? filterSession = null;
-        var     minLines      = 15;
-        var     cwdArgIdx     = Array.IndexOf(args, "--cwd");
+        string?   filterCwd     = null;
+        string?   filterSession = null;
+        var       minLines      = 15;
+        DateOnly? since         = null;
+        var       codex         = args.Contains("--codex");
+        var       cwdArgIdx     = Array.IndexOf(args, "--cwd");
 
         if (cwdArgIdx >= 0 && cwdArgIdx + 1 < args.Length) {
             filterCwd = args[cwdArgIdx + 1];
@@ -398,9 +401,21 @@ switch (command) {
             minLines = parsed;
         }
 
+        var sinceIdx = Array.IndexOf(args, "--since");
+
+        if (sinceIdx >= 0 && sinceIdx + 1 < args.Length) {
+            if (!DateOnly.TryParseExact(args[sinceIdx + 1], "yyyy-MM-dd", out var parsedSince)) {
+                Console.Error.WriteLine("--since must be YYYY-MM-DD");
+
+                return 1;
+            }
+
+            since = parsedSince;
+        }
+
         var generateSummaries = args.Contains("--generate-summaries");
 
-        return await HistoryCommand.HandleHistory(baseUrl!, filterCwd, filterSession, minLines, generateSummaries);
+        return await HistoryCommand.HandleHistory(baseUrl!, filterCwd, filterSession, minLines, generateSummaries, codex, since);
     }
     case "watch" when args.Length < 3:
         Console.Error.WriteLine("Usage: kapacitor watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>]");

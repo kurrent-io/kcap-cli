@@ -50,12 +50,27 @@ static partial class TitleGenerator {
     }
 
     /// <summary>
-    /// Generates a title by calling Claude CLI. Returns the cleaned title string, or null on failure
-    /// (including when the model produced a refusal rather than a title).
+    /// Generates a title by calling the headless CLI for the matching vendor —
+    /// <c>claude -p</c> for Claude sessions, <c>codex exec</c> for Codex sessions.
+    /// Returns the cleaned title string, or null on failure (including when the
+    /// model produced a refusal rather than a title).
     /// </summary>
-    internal static async Task<ClaudeCliResult?> GenerateAsync(string userText, string? assistantText, Action<string> log) {
+    internal static async Task<ClaudeCliResult?> GenerateAsync(
+            string         userText,
+            string?        assistantText,
+            Action<string> log,
+            string         vendor = "claude"
+        ) {
         var prompt = BuildPrompt(userText, assistantText);
-        var result = await ClaudeCliRunner.RunAsync(prompt, TimeSpan.FromSeconds(15), log);
+
+        // Codex sessions go through `codex exec` so a user with only Codex
+        // installed can still backfill — and so the title model matches the
+        // vendor that produced the work being summarised. Codex's --output-
+        // last-message gives us a single text response with no token usage,
+        // mirroring ClaudeCliResult's shape with zeros for the metric fields.
+        var result = vendor == "codex"
+            ? await CodexCliRunner.RunAsync(prompt, TimeSpan.FromSeconds(30), log)
+            : await ClaudeCliRunner.RunAsync(prompt, TimeSpan.FromSeconds(15), log);
 
         if (result is null) {
             return null;
@@ -180,6 +195,78 @@ static partial class TitleGenerator {
         }
 
         return (userText, assistantText);
+    }
+
+    /// <summary>
+    /// Codex-shape variant of <see cref="ExtractTitleContext"/>. Reads the rollout looking for
+    /// the first user-authored <c>response_item</c> (skipping the synthetic
+    /// <c>&lt;environment_context&gt;</c> block) and the first assistant <c>response_item</c>
+    /// with an <c>output_text</c> block.
+    /// </summary>
+    internal static (string? UserText, string? AssistantText) ExtractCodexTitleContext(string filePath) {
+        string? userText      = null;
+        string? assistantText = null;
+
+        try {
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+
+            var linesChecked = 0;
+
+            while (reader.ReadLine() is { } line && linesChecked < 200) {
+                linesChecked++;
+
+                if (string.IsNullOrWhiteSpace(line)) continue;
+
+                try {
+                    using var doc  = JsonDocument.Parse(line);
+                    var       root = doc.RootElement;
+
+                    // Codex wraps every event under a top-level "type" + "payload" envelope.
+                    if (root.Str("type") != "response_item") continue;
+
+                    var payload = root.Obj("payload");
+
+                    if (payload?.Str("type") != "message") continue;
+
+                    var role = payload.Value.Str("role");
+
+                    if (userText is null && role == "user") {
+                        var text = ExtractCodexBlockText(payload.Value, "input_text");
+
+                        // Skip the env context block — it's injected by codex on every session
+                        // and would produce a useless title.
+                        if (text is not null && !text.StartsWith("<environment_context>", StringComparison.Ordinal)) {
+                            userText = text;
+                        }
+                    } else if (assistantText is null && role == "assistant") {
+                        var text = ExtractCodexBlockText(payload.Value, "output_text");
+
+                        if (text is not null) {
+                            assistantText = text.Length > 300 ? text[..300] : text;
+                        }
+                    }
+
+                    if (userText is not null && assistantText is not null) break;
+                } catch (JsonException) { }
+            }
+        } catch {
+            // Best effort
+        }
+
+        return (userText, assistantText);
+    }
+
+    static string? ExtractCodexBlockText(JsonElement payload, string blockType) {
+        if (payload.Arr("content") is not { } content) return null;
+
+        foreach (var block in content.EnumerateArray()) {
+            if (block.Str("type") == blockType && block.Str("text") is { } text && !string.IsNullOrEmpty(text)) {
+                return text;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
