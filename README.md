@@ -163,8 +163,10 @@ The agent daemon connects to the Capacitor server and runs Claude Code agents in
 kapacitor agent start              # start in foreground
 kapacitor agent start -d           # start in background (daemonize)
 kapacitor agent status             # check if daemon is running
-kapacitor agent stop               # stop the background daemon
+kapacitor agent stop               # stop the daemon (foreground or background)
 ```
+
+`agent start` refuses to launch a second daemon when one is already alive, regardless of mode. Run `kapacitor agent stop` to terminate the existing one first. Two concurrent daemons under the same identity used to silently take down each other's hosted agents on the server.
 
 ### Repository paths
 
