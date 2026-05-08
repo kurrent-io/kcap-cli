@@ -83,7 +83,20 @@ public static class AgentCommands {
 
             return process.ExitCode;
         } finally {
-            try { File.Delete(PidPath); } catch { /* best-effort */ }
+            // Only delete the PID file if it still points at us. A concurrent
+            // legitimate `kapacitor agent start` that ran after our daemon
+            // exited (passing the guard because IsOurDaemon returned false on
+            // our exiting PID) would have rewritten the file to its own PID;
+            // an unconditional delete here would orphan that daemon's PID
+            // file and re-open the duplicate-daemon hole this guard is meant
+            // to close.
+            try {
+                if (ReadPidFile() is { } current && current.Pid == process.Id) {
+                    File.Delete(PidPath);
+                }
+            } catch {
+                /* best-effort */
+            }
         }
     }
 

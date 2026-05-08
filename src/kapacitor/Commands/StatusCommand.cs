@@ -46,9 +46,16 @@ public static class StatusCommand {
         var pidPath = PathHelpers.ConfigPath("agent.pid");
 
         if (File.Exists(pidPath)) {
-            var pidStr = (await File.ReadAllTextAsync(pidPath)).Trim();
+            // The PID file is one or two lines: PID, optionally followed by
+            // process StartTicks (UTC ticks of Process.StartTime). Parse only
+            // the first non-empty line as the PID — naively passing the whole
+            // contents to int.TryParse fails on the two-line format and
+            // mis-reports a running daemon as "invalid PID file".
+            var firstLine = (await File.ReadAllTextAsync(pidPath))
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault();
 
-            if (int.TryParse(pidStr, out var pid)) {
+            if (int.TryParse(firstLine, out var pid)) {
                 try {
                     System.Diagnostics.Process.GetProcessById(pid);
                     await Console.Out.WriteLineAsync($"running (PID {pid})");
