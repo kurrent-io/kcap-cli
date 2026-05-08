@@ -203,11 +203,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     public event Action? OnReconnectedCallback;
 
-    public Task SendHeartbeatAsync()
-        => _hub.SendAsync("DaemonHeartbeat", cancellationToken: _ct);
-
     /// <summary>
-    /// Round-trip liveness probe (AI-79). Calls <c>DaemonPing</c> on the server
+    /// Round-trip liveness probe (AI-566). Calls <c>DaemonPing</c> on the server
     /// and returns whether this connection is still the registered daemon for
     /// its <c>(owner, name)</c> slot. <c>false</c> means the slot was displaced
     /// — usually by an auto-reconnect Register from a different conn id —

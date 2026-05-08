@@ -22,7 +22,9 @@ namespace kapacitor.Tests.Unit;
 /// </summary>
 public class DaemonHeartbeatLoopTests {
     sealed class FakePort : IDaemonHeartbeatPort {
-        public Func<CancellationToken, Task<bool>>? PingHandler { get; set; }
+        public Func<CancellationToken, Task<bool>>? PingHandler              { get; set; }
+        public Func<Task>?                          ReRegisterHandler        { get; set; }
+        public Func<Task>?                          ForceReconnectHandler    { get; set; }
         public int                                  ReRegisterCalls;
         public int                                  ForceReconnectCalls;
 
@@ -32,13 +34,13 @@ public class DaemonHeartbeatLoopTests {
         public Task ReRegisterAsync() {
             ReRegisterCalls++;
 
-            return Task.CompletedTask;
+            return ReRegisterHandler is null ? Task.CompletedTask : ReRegisterHandler();
         }
 
         public Task ForceReconnectAsync() {
             ForceReconnectCalls++;
 
-            return Task.CompletedTask;
+            return ForceReconnectHandler is null ? Task.CompletedTask : ForceReconnectHandler();
         }
     }
 
@@ -97,6 +99,44 @@ public class DaemonHeartbeatLoopTests {
         await loop.TickAsync(CancellationToken.None);
 
         await Assert.That(port.ReRegisterCalls).IsEqualTo(0);
+        await Assert.That(port.ForceReconnectCalls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Tick_ForceReconnectThrows_DoesNotRethrow() {
+        // Qodo finding: ForceReconnectAsync ultimately calls _hub.StopAsync,
+        // which can throw (invalid state, transient SignalR cancellation).
+        // The heartbeat loop runs as an unobserved background Task — if
+        // TickAsync rethrows, the loop dies and the daemon stops probing
+        // for liveness forever. TickAsync must be total.
+        var port = new FakePort {
+            PingHandler           = _ => Task.FromException<bool>(new InvalidOperationException("hub closed")),
+            ForceReconnectHandler = () => Task.FromException(new InvalidOperationException("StopAsync from invalid state"))
+        };
+        var loop = CreateLoop(port);
+
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(port.ForceReconnectCalls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Tick_ReRegisterAndForceReconnectBothThrow_DoesNotRethrow() {
+        // Same reliability concern as Tick_ForceReconnectThrows: the
+        // displaced-slot recovery path is also a SignalR call that can
+        // throw transiently. ReRegister throwing escalates to the outer
+        // catch, which calls ForceReconnect; if BOTH fail the tick still
+        // must not fault the unobserved loop.
+        var port = new FakePort {
+            PingHandler           = _ => Task.FromResult(false),
+            ReRegisterHandler     = () => Task.FromException(new InvalidOperationException("InvokeAsync during reconnect")),
+            ForceReconnectHandler = () => Task.FromException(new InvalidOperationException("StopAsync from invalid state"))
+        };
+        var loop = CreateLoop(port);
+
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(port.ReRegisterCalls).IsEqualTo(1);
         await Assert.That(port.ForceReconnectCalls).IsEqualTo(1);
     }
 

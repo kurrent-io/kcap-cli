@@ -821,7 +821,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var loop = new DaemonHeartbeatLoop(_server, _pingDeadline, _logger);
 
         while (await _daemonHeartbeat.WaitForNextTickAsync(ct)) {
-            await loop.TickAsync(ct);
+            // Defence in depth: TickAsync is intentionally total, but we
+            // run as an unobserved background Task — guarding here keeps
+            // the loop alive even if a future change accidentally lets an
+            // exception escape the tick.
+            try {
+                await loop.TickAsync(ct);
+            } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                return;
+            } catch (Exception ex) {
+                _logger.LogWarning(ex, "Heartbeat tick faulted — continuing loop");
+            }
         }
     }
 
