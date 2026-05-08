@@ -4,7 +4,7 @@ Usage: kapacitor agent <subcommand>
 
 Subcommands:
   start [-d]              Start the agent daemon (foreground, or -d for background)
-  stop                    Stop the background agent daemon
+  stop                    Stop the agent daemon (foreground or background)
   status                  Show agent daemon status
   logs                    Show recent daemon log output
 
@@ -14,3 +14,9 @@ Options for start:
   --max-agents <n>        Max concurrent agents (default: 5)
   --log-file <path>       Log to file instead of console
   -d, --detach            Run in background (logs to file automatically)
+
+Notes:
+  start refuses to launch if another kapacitor-daemon is already running
+  (whether started in foreground or background mode). Use `kapacitor agent stop`
+  to terminate the existing one first. Multiple concurrent daemons under the
+  same identity were taking down each other's hosted agents on the server.

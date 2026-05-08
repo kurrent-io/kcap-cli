@@ -32,6 +32,19 @@ public static class AgentCommands {
     }
 
     static async Task<int> StartForegroundAsync(string[] args) {
+        // Refuse to start when an existing kapacitor-daemon is alive — even in
+        // foreground mode. Without this guard, a second `kapacitor agent start`
+        // (run by mistake, by an automation, by a parallel terminal) would
+        // happily connect to the server and call DaemonConnect with an empty
+        // live_agents list, which used to mass-fail every hosted agent owned
+        // by the original daemon (AI-78). The detached path has had this
+        // guard since day one; foreground was the only hole.
+        if (ReadPidFile() is { } existing && IsOurDaemon(existing.Pid, existing.StartTicks)) {
+            await Console.Error.WriteLineAsync($"Agent daemon already running (PID {existing.Pid}). Use `kapacitor agent stop` first.");
+
+            return 1;
+        }
+
         var daemonPath = ResolveDaemonBinary();
 
         if (daemonPath is null) {
@@ -58,9 +71,20 @@ public static class AgentCommands {
             return 1;
         }
 
-        await process.WaitForExitAsync();
+        // Write the PID file so the guard above (and `kapacitor agent stop` /
+        // `agent status`) sees the foreground daemon too. Best-effort cleanup
+        // on exit; if the parent dies hard, IsOurDaemon's StartTime check
+        // handles the recycled-PID case so a stale file doesn't lock anyone
+        // out.
+        WritePidFile(process);
 
-        return process.ExitCode;
+        try {
+            await process.WaitForExitAsync();
+
+            return process.ExitCode;
+        } finally {
+            try { File.Delete(PidPath); } catch { /* best-effort */ }
+        }
     }
 
     static int StartDetached(string[] args) {
