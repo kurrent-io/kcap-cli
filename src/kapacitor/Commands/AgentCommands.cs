@@ -3,8 +3,9 @@ using System.Diagnostics;
 namespace kapacitor.Commands;
 
 public static class AgentCommands {
-    static readonly string PidPath = PathHelpers.ConfigPath("agent.pid");
-    static readonly string LogPath = PathHelpers.ConfigPath("agent.log");
+    static readonly string PidPath  = PathHelpers.ConfigPath("agent.pid");
+    static readonly string LogPath  = PathHelpers.ConfigPath("agent.log");
+    static readonly string LockPath = PathHelpers.ConfigPath("agent.start.lock");
 
     public static async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
@@ -31,7 +32,64 @@ public static class AgentCommands {
         return detached ? StartDetached(args) : await StartForegroundAsync(args);
     }
 
+    /// <summary>
+    /// Open <c>agent.start.lock</c> with <c>FileShare.None</c>, giving the
+    /// caller exclusive access for as long as the returned stream is held.
+    /// Returns null if another process already holds the lock — i.e. another
+    /// <c>kapacitor agent start</c> is mid-flight (its check + spawn +
+    /// WritePidFile window) or a foreground daemon is currently running.
+    ///
+    /// This is the OS-level barrier the PID-file guard alone can't provide:
+    /// without it, two starts launched concurrently can both observe an
+    /// absent / stale PID file and both spawn a daemon before either writes.
+    /// On POSIX .NET maps <c>FileShare.None</c> to <c>flock(LOCK_EX)</c>;
+    /// on Windows it's a native sharing-mode constraint. Both are
+    /// per-open-handle, so closing the stream releases the lock — including
+    /// when the parent process is SIGKILL'd.
+    /// </summary>
+    static FileStream? TryAcquireStartLock() {
+        try {
+            Directory.CreateDirectory(Path.GetDirectoryName(LockPath)!);
+
+            return new FileStream(LockPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
+        } catch (IOException) {
+            return null;
+        }
+    }
+
     static async Task<int> StartForegroundAsync(string[] args) {
+        // Take the exclusive start lock BEFORE the PID-file stale-check —
+        // otherwise two concurrent `kapacitor agent start` invocations can
+        // both observe no live daemon, both spawn, and only one's PID ends
+        // up in the file. We hold this lock for the foreground daemon's
+        // entire lifetime so any further start (foreground or detached)
+        // refuses immediately rather than racing through.
+        var startLock = TryAcquireStartLock();
+
+        if (startLock is null) {
+            await Console.Error.WriteLineAsync("Another `kapacitor agent start` is already in progress or holds the daemon lock. Run `kapacitor agent stop` first or wait for the other start to complete.");
+
+            return 1;
+        }
+
+        try {
+            // Defence in depth: the lock prevents a concurrent start from
+            // racing past us, but a stale PID file from a prior cleanly-exited
+            // daemon (or one whose parent was SIGKILL'd) can still be lying
+            // around. IsOurDaemon's StartTime check rejects recycled PIDs.
+            if (ReadPidFile() is { } existing && IsOurDaemon(existing.Pid, existing.StartTicks)) {
+                await Console.Error.WriteLineAsync($"Agent daemon already running (PID {existing.Pid}). Use `kapacitor agent stop` first.");
+
+                return 1;
+            }
+
+            return await SpawnForegroundAsync(args);
+        } finally {
+            startLock.Dispose();
+        }
+    }
+
+    static async Task<int> SpawnForegroundAsync(string[] args) {
         var daemonPath = ResolveDaemonBinary();
 
         if (daemonPath is null) {
@@ -58,12 +116,51 @@ public static class AgentCommands {
             return 1;
         }
 
-        await process.WaitForExitAsync();
+        // Write the PID file so the guard above (and `kapacitor agent stop` /
+        // `agent status`) sees the foreground daemon too. Best-effort cleanup
+        // on exit; if the parent dies hard, IsOurDaemon's StartTime check
+        // handles the recycled-PID case so a stale file doesn't lock anyone
+        // out.
+        WritePidFile(process);
 
-        return process.ExitCode;
+        try {
+            await process.WaitForExitAsync();
+
+            return process.ExitCode;
+        } finally {
+            // Only delete the PID file if it still points at us. A concurrent
+            // legitimate `kapacitor agent start` that ran after our daemon
+            // exited (passing the guard because IsOurDaemon returned false on
+            // our exiting PID) would have rewritten the file to its own PID;
+            // an unconditional delete here would orphan that daemon's PID
+            // file and re-open the duplicate-daemon hole this guard is meant
+            // to close.
+            try {
+                if (ReadPidFile() is { } current && current.Pid == process.Id) {
+                    File.Delete(PidPath);
+                }
+            } catch {
+                /* best-effort */
+            }
+        }
     }
 
     static int StartDetached(string[] args) {
+        // Hold the start lock just for the check + spawn + WritePidFile
+        // window. We can't keep it past method return because the parent
+        // process is about to exit, leaving the daemon detached. Once the
+        // PID file is written, subsequent starts will see it via the
+        // existing stale-check path.
+        var startLock = TryAcquireStartLock();
+
+        if (startLock is null) {
+            Console.Error.WriteLine("Another `kapacitor agent start` is already in progress or holds the daemon lock. Run `kapacitor agent stop` first or wait for the other start to complete.");
+
+            return 1;
+        }
+
+        using var _ = startLock;
+
         if (ReadPidFile() is { } existing && IsOurDaemon(existing.Pid, existing.StartTicks)) {
             Console.Error.WriteLine($"Agent daemon already running (PID {existing.Pid}). Use `kapacitor agent stop` first.");
 
