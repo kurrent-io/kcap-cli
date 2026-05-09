@@ -14,8 +14,9 @@ public class CodexHistoryTests {
 
         try {
             // No turn_context here — the fallback path uses model_provider as
-            // the model name. (When turn_context is present, the real model
-            // overrides this — see ExtractCodexSessionMetadata_prefers_turn_context_model.)
+            // the model name. When turn_context is present, the real model
+            // overrides this (see
+            // ExtractCodexSessionMetadata_prefers_turn_context_model_over_model_provider).
             await File.WriteAllLinesAsync(path, [
                 """{"timestamp":"2026-05-07T15:51:46.684Z","type":"session_meta","payload":{"id":"019e0322-05fc-7570-be65-75719c3ea861","timestamp":"2026-05-07T15:50:21.989Z","cwd":"/Users/alexey/dev/temp/Kurrent.Capacitor","originator":"codex-tui","cli_version":"0.128.0","model_provider":"openai","git":{"commit_hash":"abc","branch":"main","repository_url":"https://github.com/owner/repo"}}}""",
                 """{"timestamp":"2026-05-07T15:51:46.686Z","type":"event_msg","payload":{"type":"task_started"}}""",
@@ -52,6 +53,30 @@ public class CodexHistoryTests {
             var meta = HistoryCommand.ExtractCodexSessionMetadata(path);
 
             await Assert.That(meta.Model).IsEqualTo("gpt-5.5");
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task ExtractCodexSessionMetadata_ignores_turn_context_before_session_meta() {
+        // Qodo regression (#52): the docstring resolves the model from the first
+        // turn_context AFTER session_meta. If the rollout header is truncated or
+        // corrupt and a turn_context appears without a session_meta, its model
+        // should NOT be picked up — meta.Model stays null so callers treat the
+        // rollout as malformed instead of silently importing it with a model
+        // pulled from an unexpected line.
+        var path = Path.GetTempFileName();
+
+        try {
+            await File.WriteAllLinesAsync(path, [
+                """{"type":"turn_context","payload":{"turn_id":"abc","cwd":"/x","model":"gpt-5.5"}}""",
+                """{"type":"event_msg","payload":{"type":"task_started"}}""",
+            ]);
+
+            var meta = HistoryCommand.ExtractCodexSessionMetadata(path);
+
+            await Assert.That(meta.Model).IsNull();
         } finally {
             File.Delete(path);
         }

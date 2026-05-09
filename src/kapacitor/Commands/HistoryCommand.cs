@@ -863,7 +863,11 @@ static class HistoryCommand {
                         }
 
                         sessionMetaFound = true;
-                    } else if (!turnModelFound && type == "turn_context") {
+                    } else if (sessionMetaFound && !turnModelFound && type == "turn_context") {
+                        // Only honor turn_context AFTER session_meta — a turn_context
+                        // that appears before the header (truncated/corrupt rollout) is
+                        // unreliable and would otherwise stamp a model name onto an
+                        // otherwise-empty meta.
                         if (root.Obj("payload")?.Str("model") is { Length: > 0 } turnModel) {
                             meta.Model     = turnModel;
                             turnModelFound = true;
