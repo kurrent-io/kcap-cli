@@ -191,3 +191,17 @@ public class CountFileLinesTests {
     public async Task MissingFile_ReturnsZero() =>
         await Assert.That(Commands.WatchCommand.CountFileLines("/tmp/nonexistent_" + Guid.NewGuid())).IsEqualTo(0);
 }
+
+public class WatchCommandTests {
+    [Test]
+    public async Task RunWatch_signature_accepts_vendor_arg() {
+        // We can't run a real watcher in a unit test (it'd open SignalR). The
+        // hook round-trip integration test exercises the wire path; this guards
+        // the signature.
+        var method      = typeof(Commands.WatchCommand).GetMethod(nameof(Commands.WatchCommand.RunWatch))!;
+        var vendorParam = method.GetParameters().FirstOrDefault(p => p.Name == "vendor");
+        await Assert.That(vendorParam).IsNotNull();
+        await Assert.That(vendorParam!.HasDefaultValue).IsTrue();
+        await Assert.That(vendorParam.DefaultValue).IsEqualTo("claude");
+    }
+}

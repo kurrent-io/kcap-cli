@@ -418,7 +418,7 @@ switch (command) {
         return await HistoryCommand.HandleHistory(baseUrl!, filterCwd, filterSession, minLines, generateSummaries, codex, since);
     }
     case "watch" when args.Length < 3:
-        Console.Error.WriteLine("Usage: kapacitor watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>]");
+        Console.Error.WriteLine("Usage: kapacitor watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex]");
 
         return 1;
     case "watch": {
@@ -447,7 +447,12 @@ switch (command) {
             parentPid = ppid;
         }
 
-        return await WatchCommand.RunWatch(baseUrl!, watchSessionId, watchPath, watchAgentId, watchCwd, watchSkipTitle, parentPid);
+        var watchVendor = GetArg(args, "--vendor") ?? "claude";
+
+        return await WatchCommand.RunWatch(
+            baseUrl!, watchSessionId, watchPath, watchAgentId, watchCwd,
+            watchSkipTitle, parentPid, watchVendor
+        );
     }
     case "permission-request":
         return await PermissionRequestCommand.Handle(baseUrl!);
