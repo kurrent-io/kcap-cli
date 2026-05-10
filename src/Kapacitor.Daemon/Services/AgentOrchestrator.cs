@@ -451,16 +451,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 var status = agent.Process.HasExited
                     ? exitCode is null or 0 ? "Completed" : "Failed"
                     : "Failed";
-                var isEarlyExit = DateTime.UtcNow - agent.CreatedAt < EarlyExitWindow;
 
                 if (agent.Status is not "Completed" and not "Failed") {
-                    // If the process died shortly after spawn, treat it as a launch
-                    // failure regardless of exit code. A process that exits within
-                    // EarlyExitWindow never established a session, so even exit code 0
-                    // means something went wrong (e.g., CLI config error, auth issue).
-                    // We use elapsed time rather than status because the first output
-                    // chunk flips status to "Running" before the process exits.
-                    if (isEarlyExit) {
+                    // A startup failure means the process exited before establishing
+                    // a real interactive session (CLI config error, auth issue, immediate
+                    // crash). A real session keeps producing output throughout its
+                    // lifetime, so the gap between CreatedAt and LastOutputAt is the
+                    // discriminator: tiny gap → startup failure; sustained → real session.
+                    //
+                    // We avoid agent.Status because the first output chunk flips it to
+                    // "Running" — a one-line error banner triggers that flip too. We
+                    // also avoid wall-clock since spawn: a user who types /exit shortly
+                    // after starting produces a short-but-real session that must not be
+                    // flagged as a launch failure (AI-572).
+                    if (IsStartupFailure(agent.CreatedAt, agent.LastOutputAt)) {
                         var output = ExtractTerminalText(agent.OutputBuffer);
 
                         var reason = !string.IsNullOrWhiteSpace(output)
@@ -787,9 +791,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
-    static readonly TimeSpan              StartupTimeout   = TimeSpan.FromSeconds(90);
-    static readonly TimeSpan              EarlyExitWindow  = TimeSpan.FromSeconds(30);
-    static readonly JsonSerializerOptions IndentedJsonOpts = new() { WriteIndented = true };
+    static readonly TimeSpan              StartupTimeout     = TimeSpan.FromSeconds(90);
+    static readonly TimeSpan              MinSessionLifespan = TimeSpan.FromSeconds(2);
+    static readonly JsonSerializerOptions IndentedJsonOpts   = new() { WriteIndented = true };
+
+    /// <summary>
+    /// True when the gap between agent spawn and its last output chunk is too
+    /// short for an interactive session to have happened. A startup failure
+    /// typically prints an error and quits within milliseconds; a real session
+    /// keeps producing output for at least <see cref="MinSessionLifespan"/>.
+    /// </summary>
+    internal static bool IsStartupFailure(DateTime createdAt, DateTime lastOutputAt)
+        => lastOutputAt - createdAt < MinSessionLifespan;
 
     // Serializes writes to shared JSON config files (~/.claude.json and per-worktree
     // settings.local.json) across concurrent agent launches. Atomic rename prevents
