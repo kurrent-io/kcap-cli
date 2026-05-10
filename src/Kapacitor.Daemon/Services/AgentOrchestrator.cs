@@ -22,11 +22,12 @@ public record AgentInstance(
         WorktreeInfo            Worktree,
         CancellationTokenSource ReadCts
     ) {
-    public string?              SessionId     { get; set; }
-    public string               Status        { get; set; } = "Starting";
-    public DateTime             CreatedAt     { get; }      = DateTime.UtcNow;
-    public DateTime             LastOutputAt  { get; set; } = DateTime.UtcNow;
-    public TerminalOutputBuffer OutputBuffer  { get; }      = new();
+    public string?              SessionId         { get; set; }
+    public string               Status            { get; set; } = "Starting";
+    public DateTime             CreatedAt         { get; }      = DateTime.UtcNow;
+    public DateTime             LastOutputAt      { get; set; } = DateTime.UtcNow;
+    public bool                 HasReceivedOutput { get; set; }
+    public TerminalOutputBuffer OutputBuffer      { get; }      = new();
 
     /// <summary>Temp MCP config path written for hosted PR reviews; deleted on cleanup.</summary>
     public string? McpConfigPath { get; set; }
@@ -425,7 +426,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task ReadAgentOutputAsync(AgentInstance agent) {
         try {
             await foreach (var data in agent.Process.ReadOutputAsync(agent.ReadCts.Token)) {
-                agent.LastOutputAt = DateTime.UtcNow;
+                agent.LastOutputAt      = DateTime.UtcNow;
+                agent.HasReceivedOutput = true;
 
                 if (agent.Status == "Starting") {
                     agent.Status = "Running";
@@ -463,8 +465,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // "Running" — a one-line error banner triggers that flip too. We
                     // also avoid wall-clock since spawn: a user who types /exit shortly
                     // after starting produces a short-but-real session that must not be
-                    // flagged as a launch failure (AI-572).
-                    if (IsStartupFailure(agent.CreatedAt, agent.LastOutputAt)) {
+                    // flagged as a launch failure (AI-572). HasReceivedOutput guards
+                    // against a no-output process whose CreatedAt/LastOutputAt
+                    // initializers happened to straddle a long pause.
+                    if (IsStartupFailure(agent.CreatedAt, agent.LastOutputAt, agent.HasReceivedOutput)) {
                         var output = ExtractTerminalText(agent.OutputBuffer);
 
                         var reason = !string.IsNullOrWhiteSpace(output)
@@ -796,13 +800,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     static readonly JsonSerializerOptions IndentedJsonOpts   = new() { WriteIndented = true };
 
     /// <summary>
-    /// True when the gap between agent spawn and its last output chunk is too
-    /// short for an interactive session to have happened. A startup failure
-    /// typically prints an error and quits within milliseconds; a real session
-    /// keeps producing output for at least <see cref="MinSessionLifespan"/>.
+    /// True when the agent process exited before establishing a real interactive
+    /// session. We require both that output was actually received (the read loop
+    /// observed at least one chunk) AND that the gap between spawn and the last
+    /// output is at least <see cref="MinSessionLifespan"/>. The
+    /// <paramref name="hasReceivedOutput"/> guard prevents a no-output process
+    /// from being misclassified when the <c>CreatedAt</c> and <c>LastOutputAt</c>
+    /// field initializers happen to straddle a long pause.
     /// </summary>
-    internal static bool IsStartupFailure(DateTime createdAt, DateTime lastOutputAt)
-        => lastOutputAt - createdAt < MinSessionLifespan;
+    internal static bool IsStartupFailure(DateTime createdAt, DateTime lastOutputAt, bool hasReceivedOutput)
+        => !hasReceivedOutput || lastOutputAt - createdAt < MinSessionLifespan;
 
     // Serializes writes to shared JSON config files (~/.claude.json and per-worktree
     // settings.local.json) across concurrent agent launches. Atomic rename prevents

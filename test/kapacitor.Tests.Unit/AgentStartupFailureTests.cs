@@ -16,9 +16,28 @@ public class AgentStartupFailureTests {
 
     [Test]
     public async Task NoOutputEverReceived_IsStartupFailure() {
-        // LastOutputAt defaults to construction time, so it equals CreatedAt
-        // when no output ever arrives. That gap of zero is below the threshold.
-        var result = AgentOrchestrator.IsStartupFailure(SpawnedAt, SpawnedAt);
+        // hasReceivedOutput=false short-circuits to true regardless of timestamps.
+        var result = AgentOrchestrator.IsStartupFailure(
+            SpawnedAt,
+            SpawnedAt,
+            hasReceivedOutput: false
+        );
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task NoOutputButLongPauseBetweenInitializers_IsStillStartupFailure() {
+        // AgentInstance initializes CreatedAt and LastOutputAt with two separate
+        // DateTime.UtcNow calls. A GC pause / VM stall between them can make
+        // LastOutputAt - CreatedAt exceed MinSessionLifespan even though the
+        // read loop never observed any output. The hasReceivedOutput guard
+        // makes the timestamps untrusted in that case.
+        var result = AgentOrchestrator.IsStartupFailure(
+            SpawnedAt,
+            SpawnedAt.AddSeconds(10),
+            hasReceivedOutput: false
+        );
 
         await Assert.That(result).IsTrue();
     }
@@ -29,7 +48,8 @@ public class AgentStartupFailureTests {
         // Output flowed for ~200ms — well below the threshold.
         var result = AgentOrchestrator.IsStartupFailure(
             SpawnedAt,
-            SpawnedAt.AddMilliseconds(200)
+            SpawnedAt.AddMilliseconds(200),
+            hasReceivedOutput: true
         );
 
         await Assert.That(result).IsTrue();
@@ -42,7 +62,8 @@ public class AgentStartupFailureTests {
         // Output flowed throughout, so the spawn → last-output gap is large.
         var result = AgentOrchestrator.IsStartupFailure(
             SpawnedAt,
-            SpawnedAt.AddSeconds(27)
+            SpawnedAt.AddSeconds(27),
+            hasReceivedOutput: true
         );
 
         await Assert.That(result).IsFalse();
@@ -52,7 +73,8 @@ public class AgentStartupFailureTests {
     public async Task LongSessionEndedNormally_IsNotStartupFailure() {
         var result = AgentOrchestrator.IsStartupFailure(
             SpawnedAt,
-            SpawnedAt.AddMinutes(15)
+            SpawnedAt.AddMinutes(15),
+            hasReceivedOutput: true
         );
 
         await Assert.That(result).IsFalse();
@@ -66,7 +88,8 @@ public class AgentStartupFailureTests {
         // it does not call LaunchFailedAsync.
         var result = AgentOrchestrator.IsStartupFailure(
             SpawnedAt,
-            SpawnedAt.AddSeconds(60)
+            SpawnedAt.AddSeconds(60),
+            hasReceivedOutput: true
         );
 
         await Assert.That(result).IsFalse();
