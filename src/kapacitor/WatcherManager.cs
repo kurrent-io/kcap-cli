@@ -230,7 +230,13 @@ static class WatcherManager {
         }
     }
 
-    public static async Task InlineDrainAsync(string baseUrl, string sessionId, string transcriptPath, string? agentId) {
+    public static async Task InlineDrainAsync(
+            string  baseUrl,
+            string  sessionId,
+            string  transcriptPath,
+            string? agentId,
+            string  vendor = "claude"
+        ) {
         try {
             using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
 
@@ -291,7 +297,8 @@ static class WatcherManager {
                 SessionId   = sessionId,
                 AgentId     = agentId,
                 Lines       = [..newLines],
-                LineNumbers = [..newLineNumbers]
+                LineNumbers = [..newLineNumbers],
+                Vendor      = vendor == "claude" ? null : vendor
             };
 
             var       batchJson = JsonSerializer.Serialize(batch, KapacitorJsonContext.Default.TranscriptBatch);
