@@ -504,6 +504,8 @@ switch (command) {
 
         return 0;
     }
+    case "codex-hook":
+        return await CodexHookCommand.Handle(baseUrl!, Console.In);
 }
 
 if (!hookCommands.Contains(command)) {
