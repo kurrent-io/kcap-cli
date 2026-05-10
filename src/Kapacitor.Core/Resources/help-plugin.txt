@@ -1,10 +1,17 @@
-kapacitor plugin — Manage the Claude Code plugin
+kapacitor plugin — Manage hooks for Claude Code and Codex CLI
 
 Usage: kapacitor plugin <subcommand> [options]
 
 Subcommands:
-  install             Register the plugin in Claude Code settings
-  remove              Remove the plugin from Claude Code settings
+  install             Register the plugin / hooks
+  remove              Remove the plugin / hooks
 
 Options:
   --project           Apply to current project only (default: user-wide)
+  --codex             Target Codex CLI (~/.codex/hooks.json) instead of Claude Code
+
+Examples:
+  kapacitor plugin install                  # Install Claude Code plugin (user)
+  kapacitor plugin install --codex          # Install Codex hooks (~/.codex/hooks.json)
+  kapacitor plugin install --project --codex  # Install Codex hooks in <repo>/.codex/hooks.json
+  kapacitor plugin remove --codex           # Remove Codex hooks
