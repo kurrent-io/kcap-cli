@@ -82,20 +82,25 @@ public class CodexHookCommandTests : IDisposable {
             }
             """;
 
+        var originalOut = Console.Out;
         var stdoutWriter = new StringWriter();
-        Console.SetOut(stdoutWriter);
+        try {
+            Console.SetOut(stdoutWriter);
 
-        var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+            var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
 
-        await Assert.That(exit).IsEqualTo(0);
-        var stdout = stdoutWriter.ToString();
-        var doc    = JsonDocument.Parse(stdout);
-        await Assert.That(doc.RootElement
-            .GetProperty("hookSpecificOutput")
-            .GetProperty("decision")
-            .GetProperty("behavior")
-            .GetString())
-            .IsEqualTo("allow");
+            await Assert.That(exit).IsEqualTo(0);
+            var stdout = stdoutWriter.ToString();
+            var doc    = JsonDocument.Parse(stdout);
+            await Assert.That(doc.RootElement
+                .GetProperty("hookSpecificOutput")
+                .GetProperty("decision")
+                .GetProperty("behavior")
+                .GetString())
+                .IsEqualTo("allow");
+        } finally {
+            Console.SetOut(originalOut);
+        }
     }
 
     [Test]
