@@ -15,7 +15,8 @@ static partial class WatchCommand {
             string? agentId,
             string? cwd,
             bool    skipTitle = false,
-            int?    parentPid = null
+            int?    parentPid = null,
+            string  vendor    = "claude"
         ) {
         // Redirect all output to a log file so we don't hold parent's pipe FDs open
         var logDir = PathHelpers.ConfigPath("logs");
@@ -187,7 +188,7 @@ static partial class WatchCommand {
                     state.LastRepoDetection = DateTimeOffset.UtcNow;
                 }
 
-                await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, cts.Token);
+                await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, cts.Token);
 
                 try {
                     await Task.Delay(TimeSpan.FromSeconds(1), cts.Token);
@@ -206,7 +207,7 @@ static partial class WatchCommand {
             Log($"Session below threshold ({state.BufferedLines.Count}/{WatchState.TranscriptThreshold} lines), skipping final drain");
         } else {
             Log("Draining remaining lines...");
-            await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, CancellationToken.None);
+            await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, CancellationToken.None);
         }
 
         // Signal drain complete to server.
@@ -241,6 +242,7 @@ static partial class WatchCommand {
             string            transcriptPath,
             string?           agentId,
             WatchState        state,
+            string            vendor,
             CancellationToken ct
         ) {
         try {
@@ -433,7 +435,7 @@ static partial class WatchCommand {
                     newLines.ToArray(),
                     newLineNumbers.ToArray(),
                     repoJson,
-                    "claude",
+                    vendor,
                     ct
                 );
 

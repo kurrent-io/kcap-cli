@@ -101,6 +101,44 @@ public class InlineDrainTests : IDisposable {
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    [Test]
+    public async Task PostsCorrectBatch_with_codex_vendor_when_specified() {
+        const string sessionId = "test-session-codex-drain";
+
+        _server.Given(Request.Create().WithPath($"/api/sessions/{sessionId}/last-line").UsingGet())
+            .RespondWith(
+                Response.Create()
+                    .WithStatusCode(200)
+                    .WithHeader("Content-Type", "application/json")
+                    .WithBody("""{"last_line_number": -1}""")
+            );
+
+        _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+
+        var dir            = Path.Combine(Path.GetTempPath(), $"kapacitor_test_{Guid.NewGuid():N}");
+        var transcriptPath = Path.Combine(dir, "rollout.jsonl");
+        Directory.CreateDirectory(dir);
+
+        try {
+            await File.WriteAllTextAsync(
+                transcriptPath,
+                """{"timestamp":"2026-05-07T15:50:21.989Z","type":"session_meta","payload":{}}""" + "\n"
+            );
+
+            await WatcherManager.InlineDrainAsync(_server.Url!, sessionId, transcriptPath, agentId: null, vendor: "codex");
+
+            var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/transcript").UsingPost());
+
+            await Assert.That(requests.Count).IsEqualTo(1);
+
+            var root = JsonDocument.Parse(requests[0].RequestMessage.Body!).RootElement;
+            await Assert.That(root.GetProperty("vendor").GetString()).IsEqualTo("codex");
+        } finally {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }
 
 public class SessionStartAdditionalContextTests : IDisposable {

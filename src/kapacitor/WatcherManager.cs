@@ -13,6 +13,41 @@ static class WatcherManager {
 
     static string GetPidFilePath(string key) => Path.Combine(GetWatcherDir(), $"{key}.pid");
 
+    internal static string BuildSpawnArgs(
+            string  key,
+            string  transcriptPath,
+            string? agentId,
+            string? sessionIdOverride,
+            string? cwd,
+            bool    skipTitle,
+            int?    parentPid,
+            string  vendor
+        ) {
+        var sessionId = sessionIdOverride ?? key;
+
+        var arguments = agentId is not null
+            ? $"watch {sessionId} \"{transcriptPath}\" --agent-id {agentId}"
+            : $"watch {key} \"{transcriptPath}\"";
+
+        if (cwd is not null) {
+            arguments += $" --cwd \"{cwd}\"";
+        }
+
+        if (skipTitle) {
+            arguments += " --skip-title";
+        }
+
+        if (parentPid is { } ppid && ppid > 1) {
+            arguments += $" --parent-pid {ppid}";
+        }
+
+        if (vendor != "claude") {
+            arguments += $" --vendor \"{vendor}\"";
+        }
+
+        return arguments;
+    }
+
     public static async Task SpawnWatcher(
             string  baseUrl,
             string  key,
@@ -20,33 +55,16 @@ static class WatcherManager {
             string? agentId,
             string? sessionIdOverride = null,
             string? cwd               = null,
-            bool    skipTitle         = false
+            bool    skipTitle         = false,
+            string  vendor            = "claude"
         ) {
         try {
             var watcherDir = GetWatcherDir();
             Directory.CreateDirectory(watcherDir);
 
-            // Resolve kapacitor binary path (same as current process)
             var kapacitorPath = Environment.ProcessPath ?? "kapacitor";
-            var sessionId     = sessionIdOverride       ?? key;
-
-            var arguments = agentId is not null
-                ? $"watch {sessionId} \"{transcriptPath}\" --agent-id {agentId}"
-                : $"watch {key} \"{transcriptPath}\"";
-
-            if (cwd is not null) {
-                arguments += $" --cwd \"{cwd}\"";
-            }
-
-            if (skipTitle) {
-                arguments += " --skip-title";
-            }
-
-            // Pass the spawning hook's parent PID (claude) so the watcher can self-terminate
-            // if claude dies without firing session-end. Best-effort — skip if lookup fails.
-            if (ProcessHelpers.GetParentPid() is { } parentPid && parentPid > 1) {
-                arguments += $" --parent-pid {parentPid}";
-            }
+            var parentPid     = ProcessHelpers.GetParentPid();
+            var arguments     = BuildSpawnArgs(key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, parentPid, vendor);
 
             var psi = new ProcessStartInfo(kapacitorPath, arguments) {
                 RedirectStandardOutput = true,
@@ -65,8 +83,6 @@ static class WatcherManager {
                 return;
             }
 
-            // Close redirected streams from parent side so the child doesn't
-            // hold the hook process's pipe FDs open (which would block Claude Code)
             process.StandardInput.Close();
             process.StandardOutput.Close();
             process.StandardError.Close();
@@ -167,15 +183,15 @@ static class WatcherManager {
             string? agentId,
             string? sessionIdOverride = null,
             string? cwd               = null,
-            bool    skipTitle         = false
+            bool    skipTitle         = false,
+            string  vendor            = "claude"
         ) {
         if (IsWatcherAlive(key)) {
             return;
         }
 
-        // Watcher is dead or missing — respawn
         await Console.Out.WriteLineAsync($"Watcher {key} not running, respawning...");
-        await SpawnWatcher(baseUrl, key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle);
+        await SpawnWatcher(baseUrl, key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, vendor);
     }
 
     public static void SpawnWhatsDoneGenerator(string baseUrl, string sessionId) {
@@ -214,7 +230,13 @@ static class WatcherManager {
         }
     }
 
-    public static async Task InlineDrainAsync(string baseUrl, string sessionId, string transcriptPath, string? agentId) {
+    public static async Task InlineDrainAsync(
+            string  baseUrl,
+            string  sessionId,
+            string  transcriptPath,
+            string? agentId,
+            string  vendor = "claude"
+        ) {
         try {
             using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
 
@@ -275,7 +297,8 @@ static class WatcherManager {
                 SessionId   = sessionId,
                 AgentId     = agentId,
                 Lines       = [..newLines],
-                LineNumbers = [..newLineNumbers]
+                LineNumbers = [..newLineNumbers],
+                Vendor      = vendor == "claude" ? null : vendor
             };
 
             var       batchJson = JsonSerializer.Serialize(batch, KapacitorJsonContext.Default.TranscriptBatch);

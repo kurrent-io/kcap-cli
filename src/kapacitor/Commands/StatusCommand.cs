@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using kapacitor.Auth;
 
 namespace kapacitor.Commands;
@@ -37,8 +38,22 @@ public static class StatusCommand {
         } else {
             var rawTokens = await TokenStore.LoadAsync();
 
-            await Console.Out.WriteLineAsync(rawTokens is not null ? $"{rawTokens.GitHubUsername} ({rawTokens.Provider}) ✗ token expired" : "not authenticated (run: kapacitor login)");
+            await Console.Out.WriteLineAsync(rawTokens is not null
+                ? $"{rawTokens.GitHubUsername} ({rawTokens.Provider}) ✗ token expired"
+                : "not authenticated (run: kapacitor login)");
         }
+
+        // Hooks
+        await Console.Out.WriteAsync("  Hooks:   ");
+
+        var claudeInstalled = IsClaudePluginInstalled(ClaudePaths.UserSettings);
+        var codexInstalled  = IsCodexHooksInstalled(CodexPaths.UserHooksJson);
+
+        var parts = new List<string>();
+        parts.Add(claudeInstalled ? "Claude ✓" : "Claude ✗");
+        parts.Add(codexInstalled ? "Codex ✓" : "Codex ✗");
+
+        await Console.Out.WriteLineAsync(string.Join("  ", parts));
 
         // Agent
         Console.Write("  Agent:   ");
@@ -70,5 +85,45 @@ public static class StatusCommand {
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// True iff <paramref name="settingsPath"/> exists and has
+    /// <c>enabledPlugins["kapacitor@kapacitor"] == true</c>.
+    /// </summary>
+    public static bool IsClaudePluginInstalled(string settingsPath) {
+        try {
+            if (!File.Exists(settingsPath)) return false;
+            if (JsonNode.Parse(File.ReadAllText(settingsPath)) is not JsonObject root) return false;
+            if (root["enabledPlugins"] is not JsonObject enabled) return false;
+
+            return enabled["kapacitor@kapacitor"]?.GetValue<bool>() == true;
+        } catch {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// True iff <paramref name="hooksPath"/> exists and any hook entry under any
+    /// event references the <c>kapacitor codex-hook</c> command.
+    /// </summary>
+    public static bool IsCodexHooksInstalled(string hooksPath) {
+        try {
+            if (!File.Exists(hooksPath)) return false;
+            if (JsonNode.Parse(File.ReadAllText(hooksPath)) is not JsonObject root) return false;
+            if (root["hooks"] is not JsonObject hooks) return false;
+
+            foreach (var (_, value) in hooks) {
+                if (value is not JsonArray entries) continue;
+
+                if (entries.Any(entry => PluginCommand.EntryReferencesKapacitorCodexHook(entry))) {
+                    return true;
+                }
+            }
+
+            return false;
+        } catch {
+            return false;
+        }
     }
 }

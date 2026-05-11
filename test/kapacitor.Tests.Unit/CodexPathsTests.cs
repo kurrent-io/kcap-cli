@@ -108,4 +108,10 @@ public class CodexPathsTests {
         Directory.CreateDirectory(dir);
         File.WriteAllText(Path.Combine(dir, fileNameStem + ".jsonl"), "{}");
     }
+
+    [Test]
+    public async Task UserHooksJson_resolves_under_home_codex() {
+        var expected = Path.Combine(PathHelpers.HomeDirectory, ".codex", "hooks.json");
+        await Assert.That(CodexPaths.UserHooksJson).IsEqualTo(expected);
+    }
 }
