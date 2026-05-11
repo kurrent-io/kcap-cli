@@ -33,7 +33,7 @@ static class CodexHookCommand {
 
         if (node is null) return 0;
 
-        var eventName = node["hook_event_name"]?.GetValue<string>();
+        var eventName = TryGetString(node, "hook_event_name");
 
         if (string.IsNullOrWhiteSpace(eventName)) return 0;
 
@@ -68,9 +68,9 @@ static class CodexHookCommand {
         if (exit != 0) return exit;
 
         var enrichedNode = JsonNode.Parse(enriched);
-        var sessionId    = enrichedNode?["session_id"]?.GetValue<string>();
-        var transcript   = enrichedNode?["transcript_path"]?.GetValue<string>();
-        var cwd          = enrichedNode?["cwd"]?.GetValue<string>();
+        var sessionId    = TryGetString(enrichedNode, "session_id");
+        var transcript   = TryGetString(enrichedNode, "transcript_path");
+        var cwd          = TryGetString(enrichedNode, "cwd");
 
         if (sessionId is not null && transcript is not null) {
             await WatcherManager.EnsureWatcherRunning(
@@ -84,8 +84,8 @@ static class CodexHookCommand {
     }
 
     static async Task<int> HandleStop(string baseUrl, JsonNode node) {
-        var sessionId  = node["session_id"]?.GetValue<string>();
-        var transcript = node["transcript_path"]?.GetValue<string>();
+        var sessionId  = TryGetString(node, "session_id");
+        var transcript = TryGetString(node, "transcript_path");
 
         // Codex Stop is the closest analog to Claude's session-end (Codex has
         // no separate session-end hook — see AI-67 spike). Kill the watcher
@@ -142,10 +142,22 @@ static class CodexHookCommand {
     }
 
     static void NormalizeGuidField(JsonNode node, string fieldName) {
-        var value = node[fieldName]?.GetValue<string>();
+        var value = TryGetString(node, fieldName);
 
         if (value is not null && value.Contains('-')) {
             node[fieldName] = value.Replace("-", "");
         }
+    }
+
+    /// <summary>
+    /// Safely extracts a string from <paramref name="node"/>[<paramref name="fieldName"/>].
+    /// Returns null (instead of throwing) when the field is absent, null, or not a string.
+    /// </summary>
+    static string? TryGetString(JsonNode? node, string fieldName) {
+        if (node?[fieldName] is JsonValue v && v.TryGetValue<string>(out var s)) {
+            return s;
+        }
+
+        return null;
     }
 }

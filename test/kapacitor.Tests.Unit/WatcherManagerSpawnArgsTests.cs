@@ -21,7 +21,19 @@ public class WatcherManagerSpawnArgsTests {
             cwd: null, skipTitle: false, parentPid: null, vendor: "codex"
         );
 
-        await Assert.That(args).Contains("--vendor codex");
+        // Fix #4: vendor must be quoted the same way transcriptPath/cwd are.
+        await Assert.That(args).Contains("--vendor \"codex\"");
+    }
+
+    [Test]
+    public async Task BuildSpawnArgs_vendor_with_spaces_is_quoted() {
+        var args = WatcherManager.BuildSpawnArgs(
+            key: "abc", transcriptPath: "/tmp/t.jsonl",
+            agentId: null, sessionIdOverride: null,
+            cwd: null, skipTitle: false, parentPid: null, vendor: "my vendor"
+        );
+
+        await Assert.That(args).Contains("--vendor \"my vendor\"");
     }
 
     [Test]

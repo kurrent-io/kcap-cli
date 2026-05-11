@@ -97,6 +97,78 @@ public class PluginCommandCodexTests {
         }
     }
 
+    // Fix #2: non-string `command` field should not throw — treated as non-match.
+
+    [Test]
+    public async Task InstallCodexHooks_tolerates_numeric_command_field_in_existing_entry() {
+        using var tmp  = new TempDir();
+        var       path = Path.Combine(tmp.Path, "hooks.json");
+
+        // Entry whose inner hook has `command: 42` (a number, not a string).
+        await File.WriteAllTextAsync(path, """
+            {
+              "hooks": {
+                "SessionStart": [
+                  { "hooks": [{ "type": "command", "command": 42, "timeout": 5 }] }
+                ]
+              }
+            }
+            """);
+
+        // Should not throw and should return true.
+        var ok = PluginCommand.InstallCodexHooks(path);
+        await Assert.That(ok).IsTrue();
+
+        // The malformed entry (non-string command) must be preserved as a
+        // non-kapacitor entry, and the kapacitor entry must also appear.
+        var root         = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+        var sessionStart = root["hooks"]!["SessionStart"]!.AsArray();
+        await Assert.That(sessionStart.Count).IsEqualTo(2); // preserved + kapacitor
+    }
+
+    [Test]
+    public async Task RemoveCodexHooks_tolerates_numeric_command_field_in_existing_entry() {
+        using var tmp  = new TempDir();
+        var       path = Path.Combine(tmp.Path, "hooks.json");
+
+        // Mix: a malformed entry (number command) and a real kapacitor entry.
+        await File.WriteAllTextAsync(path, """
+            {
+              "hooks": {
+                "SessionStart": [
+                  { "hooks": [{ "type": "command", "command": 42, "timeout": 5 }] },
+                  { "hooks": [{ "type": "command", "command": "kapacitor codex-hook", "timeout": 30 }] }
+                ]
+              }
+            }
+            """);
+
+        var ok = PluginCommand.RemoveCodexHooks(path);
+        await Assert.That(ok).IsTrue();
+
+        // Malformed entry must be preserved; kapacitor entry removed.
+        var root         = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+        var sessionStart = root["hooks"]!["SessionStart"]!.AsArray();
+        await Assert.That(sessionStart.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task EntryReferencesKapacitorCodexHook_returns_false_for_numeric_command() {
+        var entry = JsonNode.Parse("""{"hooks":[{"type":"command","command":42}]}""");
+        await Assert.That(PluginCommand.EntryReferencesKapacitorCodexHook(entry)).IsFalse();
+    }
+
+    [Test]
+    public async Task EntryReferencesKapacitorCodexHook_returns_true_for_matching_string_command() {
+        var entry = JsonNode.Parse("""{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}""");
+        await Assert.That(PluginCommand.EntryReferencesKapacitorCodexHook(entry)).IsTrue();
+    }
+
+    [Test]
+    public async Task EntryReferencesKapacitorCodexHook_returns_false_for_null() {
+        await Assert.That(PluginCommand.EntryReferencesKapacitorCodexHook(null)).IsFalse();
+    }
+
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),

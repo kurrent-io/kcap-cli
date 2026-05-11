@@ -116,14 +116,8 @@ public static class StatusCommand {
             foreach (var (_, value) in hooks) {
                 if (value is not JsonArray entries) continue;
 
-                foreach (var entry in entries) {
-                    if (entry?["hooks"] is not JsonArray inner) continue;
-
-                    foreach (var hook in inner) {
-                        if (hook?["command"]?.GetValue<string>()?.Contains("kapacitor codex-hook") == true) {
-                            return true;
-                        }
-                    }
+                if (entries.Any(entry => PluginCommand.EntryReferencesKapacitorCodexHook(entry))) {
+                    return true;
                 }
             }
 

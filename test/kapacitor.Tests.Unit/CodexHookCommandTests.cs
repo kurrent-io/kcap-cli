@@ -153,4 +153,31 @@ public class CodexHookCommandTests : IDisposable {
 
         await Assert.That(exit).IsEqualTo(0);
     }
+
+    // Fix #3: non-string hook_event_name (e.g. a number) must not crash — return 0 silently.
+    [Test]
+    public async Task Hook_event_name_as_number_returns_zero_without_crash() {
+        var payload = """{"hook_event_name": 99, "session_id": "abc", "transcript_path": "/tmp/r.jsonl"}""";
+
+        var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(_server.LogEntries.Count()).IsEqualTo(0);
+    }
+
+    // Fix #3: non-string session_id in a Stop payload must not crash.
+    [Test]
+    public async Task Stop_with_numeric_session_id_returns_zero_without_crash() {
+        var payload = """{"hook_event_name": "Stop", "session_id": 12345, "transcript_path": "/tmp/r.jsonl"}""";
+
+        // No server stub needed — session_id is null after safe extraction,
+        // so KillWatcher is skipped and PostHookAsync is not called (no baseUrl stub).
+        // But we DO need a stub for the post so it doesn't fail due to unreachable.
+        _server.Given(Request.Create().WithPath("/hooks/session-end/codex").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+
+        var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+
+        await Assert.That(exit).IsEqualTo(0);
+    }
 }

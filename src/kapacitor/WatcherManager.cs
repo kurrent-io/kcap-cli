@@ -42,7 +42,7 @@ static class WatcherManager {
         }
 
         if (vendor != "claude") {
-            arguments += $" --vendor {vendor}";
+            arguments += $" --vendor \"{vendor}\"";
         }
 
         return arguments;

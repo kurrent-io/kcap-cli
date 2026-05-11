@@ -79,6 +79,26 @@ public class StatusCommandHooksTests {
         await Assert.That(StatusCommand.IsCodexHooksInstalled(path)).IsFalse();
     }
 
+    // Fix #2: non-string command field should not throw — treated as not-installed.
+    [Test]
+    public async Task DetectsCodexHooks_returns_false_for_numeric_command_field() {
+        using var tmp  = new TempDir();
+        var       path = Path.Combine(tmp.Path, "hooks.json");
+
+        await File.WriteAllTextAsync(path, """
+            {
+              "hooks": {
+                "SessionStart": [
+                  { "hooks": [{ "type": "command", "command": 42, "timeout": 5 }] }
+                ]
+              }
+            }
+            """);
+
+        // Must not throw; numeric command is not a kapacitor entry.
+        await Assert.That(StatusCommand.IsCodexHooksInstalled(path)).IsFalse();
+    }
+
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),

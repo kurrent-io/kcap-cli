@@ -216,10 +216,7 @@ public static class PluginCommand {
                 foreach (var entry in entries) {
                     if (entry is null) continue;
 
-                    var hasKapacitorCommand = entry["hooks"] is JsonArray inner && inner.Any(h =>
-                        h?["command"]?.GetValue<string>()?.Contains("kapacitor codex-hook") == true);
-
-                    if (!hasKapacitorCommand) {
+                    if (!EntryReferencesKapacitorCodexHook(entry)) {
                         preserved.Add(entry.DeepClone());
                     }
                 }
@@ -259,10 +256,7 @@ public static class PluginCommand {
                 foreach (var entry in entries) {
                     if (entry is null) continue;
 
-                    var hasKapacitorCommand = entry["hooks"] is JsonArray inner && inner.Any(h =>
-                        h?["command"]?.GetValue<string>()?.Contains("kapacitor codex-hook") == true);
-
-                    if (hasKapacitorCommand) {
+                    if (EntryReferencesKapacitorCodexHook(entry)) {
                         changed = true;
                     } else {
                         preserved.Add(entry.DeepClone());
@@ -280,6 +274,23 @@ public static class PluginCommand {
         } catch {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Returns true iff <paramref name="entry"/> is a JsonObject that has a
+    /// <c>hooks</c> JsonArray containing at least one JsonObject whose
+    /// <c>command</c> string contains <c>kapacitor codex-hook</c>.
+    /// Any non-conformant node shape is treated as a non-match (returns false)
+    /// instead of throwing.
+    /// </summary>
+    internal static bool EntryReferencesKapacitorCodexHook(JsonNode? entry) {
+        if (entry is not JsonObject entryObj) return false;
+        if (entryObj["hooks"] is not JsonArray inner) return false;
+
+        return inner.OfType<JsonObject>().Any(h =>
+            h["command"] is JsonValue v
+            && v.TryGetValue<string>(out var cmd)
+            && cmd.Contains("kapacitor codex-hook"));
     }
 
     static int PrintUsage() {
