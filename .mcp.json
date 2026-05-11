@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "linear-server": {
-      "type": "sse",
-      "url": "https://mcp.linear.app/sse"
-    }
-  }
-}
