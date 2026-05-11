@@ -42,8 +42,8 @@ Session:
   review <pr>                      Launch Claude with PR review context
 
 Plugin:
-  plugin install [--project]       Register the Claude Code plugin
-  plugin remove [--project]        Remove the Claude Code plugin
+  plugin install [--project] [--codex]   Register hooks (Claude or --codex for Codex)
+  plugin remove  [--project] [--codex]   Remove hooks (Claude or --codex for Codex)
 
 Maintenance:
   update                           Check for and install updates
@@ -53,6 +53,7 @@ Maintenance:
 
 Hook Commands (internal — used by Claude Code plugin):
 {hookCommands}
+  codex-hook                       Codex hooks dispatcher (single binary, branches on hook_event_name)
 
 Environment:
   KAPACITOR_URL              Server URL (overrides config file)
