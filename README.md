@@ -246,7 +246,8 @@ kapacitor config set excluded_repos "myorg/secret-project,personal/diary"
 ```bash
 kapacitor status         # server health check
 kapacitor whoami         # show current authenticated user
-kapacitor login          # authenticate via OAuth
+kapacitor login          # authenticate via OAuth (browser flow by default)
+kapacitor login --device # force device-code flow (use in SSH / headless envs)
 kapacitor update         # check for CLI updates
 kapacitor logout         # delete stored tokens
 ```

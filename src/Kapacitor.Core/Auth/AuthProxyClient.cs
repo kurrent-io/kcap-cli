@@ -4,17 +4,16 @@ using System.Net.Http.Json;
 namespace kapacitor.Auth;
 
 public interface IAuthProxyClient {
-    Task<string?>         GetGitHubClientIdAsync(string proxyUrl);
-    Task<DiscoveryResult> DiscoverTenantsAsync(string proxyUrl, string githubAccessToken);
+    Task<ProxyConfigResponse?> GetConfigAsync(string proxyUrl);
+    Task<DiscoveryResult>      DiscoverTenantsAsync(string proxyUrl, string githubAccessToken);
 }
 
 public class AuthProxyClient(HttpClient http) : IAuthProxyClient {
-    public async Task<string?> GetGitHubClientIdAsync(string proxyUrl) {
+    public async Task<ProxyConfigResponse?> GetConfigAsync(string proxyUrl) {
         try {
             using var response = await http.GetAsync($"{proxyUrl}/config");
             if (!response.IsSuccessStatusCode) return null;
-            var body = await response.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.ProxyConfigResponse);
-            return body?.GitHubClientId;
+            return await response.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.ProxyConfigResponse);
         } catch (Exception e) when (e is HttpRequestException or OperationCanceledException) {
             return null;
         }
