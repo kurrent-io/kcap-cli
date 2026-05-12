@@ -100,6 +100,38 @@ public class OAuthFlowTests {
     }
 
     [Test]
+    public async Task IsValidExchangeUrl_accepts_https_url() {
+        await Assert.That(OAuthLoginFlow.IsValidExchangeUrl("https://auth.example/auth/github/code-exchange")).IsTrue();
+    }
+
+    [Test]
+    public async Task IsValidExchangeUrl_accepts_http_url() {
+        await Assert.That(OAuthLoginFlow.IsValidExchangeUrl("http://localhost:8080/exchange")).IsTrue();
+    }
+
+    [Test]
+    public async Task IsValidExchangeUrl_rejects_null() {
+        await Assert.That(OAuthLoginFlow.IsValidExchangeUrl(null)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsValidExchangeUrl_rejects_empty_and_whitespace() {
+        await Assert.That(OAuthLoginFlow.IsValidExchangeUrl("")).IsFalse();
+        await Assert.That(OAuthLoginFlow.IsValidExchangeUrl("   ")).IsFalse();
+    }
+
+    [Test]
+    public async Task IsValidExchangeUrl_rejects_relative_path() {
+        await Assert.That(OAuthLoginFlow.IsValidExchangeUrl("/auth/exchange")).IsFalse();
+    }
+
+    [Test]
+    public async Task IsValidExchangeUrl_rejects_non_http_scheme() {
+        await Assert.That(OAuthLoginFlow.IsValidExchangeUrl("javascript:alert(1)")).IsFalse();
+        await Assert.That(OAuthLoginFlow.IsValidExchangeUrl("file:///etc/passwd")).IsFalse();
+    }
+
+    [Test]
     public async Task ChooseGitHubFlow_returns_browser_when_interactive_and_server_supports_it() {
         var choice = OAuthLoginFlow.ChooseGitHubFlow(forceDevice: false, isHeadless: false, hasExchangeUrl: true);
         await Assert.That(choice).IsEqualTo(GitHubFlow.Browser);

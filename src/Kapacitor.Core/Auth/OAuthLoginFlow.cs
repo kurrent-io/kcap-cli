@@ -212,8 +212,14 @@ public static class OAuthLoginFlow {
             RedirectUri  = redirectUri
         };
 
-        var tokenResponse = await http.PostAsJsonAsync(
-            codeExchangeUrl, exchangeRequest, KapacitorJsonContext.Default.GitHubCodeExchangeRequest);
+        HttpResponseMessage tokenResponse;
+        try {
+            tokenResponse = await http.PostAsJsonAsync(
+                codeExchangeUrl, exchangeRequest, KapacitorJsonContext.Default.GitHubCodeExchangeRequest);
+        } catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or UriFormatException or InvalidOperationException) {
+            Console.Error.WriteLine($"Could not reach the code-exchange endpoint at {codeExchangeUrl}: {ex.Message}");
+            return null;
+        }
 
         if (!tokenResponse.IsSuccessStatusCode) {
             Console.Error.WriteLine($"Error exchanging code: {await tokenResponse.Content.ReadAsStringAsync()}");
@@ -388,7 +394,7 @@ public static class OAuthLoginFlow {
 
     internal static async Task<string?> AcquireGitHubTokenAsync(string clientId, string? codeExchangeUrl, bool forceDevice) {
         var headless = HeadlessEnvironment.IsHeadless();
-        var choice   = ChooseGitHubFlow(forceDevice, headless, hasExchangeUrl: !string.IsNullOrWhiteSpace(codeExchangeUrl));
+        var choice   = ChooseGitHubFlow(forceDevice, headless, hasExchangeUrl: IsValidExchangeUrl(codeExchangeUrl));
 
         if (choice == GitHubFlow.Browser) {
             try {
@@ -521,6 +527,13 @@ public static class OAuthLoginFlow {
     }
 
     internal readonly record struct CallbackResult(string? Code, string? Error);
+
+    // The server-supplied code-exchange URL must be a fully-qualified http(s) URI before
+    // we trust it. An empty string, whitespace, relative path, or javascript:/file: URL
+    // is treated as "no browser flow available" and the dispatcher falls back to device flow.
+    internal static bool IsValidExchangeUrl(string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var parsed)
+        && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps);
 
     internal static string BuildGitHubAuthorizeUrl(
             string clientId, string redirectUri, string state, string codeChallenge) =>
