@@ -73,19 +73,25 @@ public class OAuthFlowTests {
 
     [Test]
     public async Task ChooseGitHubFlow_returns_device_when_forced() {
-        var choice = OAuthLoginFlow.ChooseGitHubFlow(forceDevice: true, isHeadless: false);
+        var choice = OAuthLoginFlow.ChooseGitHubFlow(forceDevice: true, isHeadless: false, hasExchangeUrl: true);
         await Assert.That(choice).IsEqualTo(GitHubFlow.Device);
     }
 
     [Test]
     public async Task ChooseGitHubFlow_returns_device_when_headless() {
-        var choice = OAuthLoginFlow.ChooseGitHubFlow(forceDevice: false, isHeadless: true);
+        var choice = OAuthLoginFlow.ChooseGitHubFlow(forceDevice: false, isHeadless: true, hasExchangeUrl: true);
         await Assert.That(choice).IsEqualTo(GitHubFlow.Device);
     }
 
     [Test]
-    public async Task ChooseGitHubFlow_returns_browser_when_interactive() {
-        var choice = OAuthLoginFlow.ChooseGitHubFlow(forceDevice: false, isHeadless: false);
+    public async Task ChooseGitHubFlow_returns_device_when_no_exchange_url() {
+        var choice = OAuthLoginFlow.ChooseGitHubFlow(forceDevice: false, isHeadless: false, hasExchangeUrl: false);
+        await Assert.That(choice).IsEqualTo(GitHubFlow.Device);
+    }
+
+    [Test]
+    public async Task ChooseGitHubFlow_returns_browser_when_interactive_and_server_supports_it() {
+        var choice = OAuthLoginFlow.ChooseGitHubFlow(forceDevice: false, isHeadless: false, hasExchangeUrl: true);
         await Assert.That(choice).IsEqualTo(GitHubFlow.Browser);
     }
 }

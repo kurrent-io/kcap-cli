@@ -861,15 +861,16 @@ async Task<int> HandleDiscoverLoginAsync(bool forceDevice) {
     using var http  = new HttpClient();
     var proxyClient = new AuthProxyClient(http);
 
-    var clientId = await proxyClient.GetGitHubClientIdAsync(AuthProxyEndpoint.Url);
+    var proxyConfig = await proxyClient.GetConfigAsync(AuthProxyEndpoint.Url);
 
-    if (clientId is null) {
+    if (proxyConfig is null || string.IsNullOrEmpty(proxyConfig.GitHubClientId)) {
         await Console.Error.WriteLineAsync("Cannot reach the Kurrent auth service.");
 
         return 1;
     }
 
-    var ghToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(clientId, forceDevice);
+    var ghToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(
+        proxyConfig.GitHubClientId, proxyConfig.GitHubCodeExchangeUrl, forceDevice);
     if (ghToken is null) return 1;
 
     var discovery = new TenantDiscovery(proxyClient, new SpectreTenantPicker());

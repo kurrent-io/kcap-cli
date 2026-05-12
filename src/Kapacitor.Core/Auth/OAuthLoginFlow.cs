@@ -50,8 +50,8 @@ public static class OAuthLoginFlow {
         };
     }
 
-    internal static GitHubFlow ChooseGitHubFlow(bool forceDevice, bool isHeadless)
-        => forceDevice || isHeadless ? GitHubFlow.Device : GitHubFlow.Browser;
+    internal static GitHubFlow ChooseGitHubFlow(bool forceDevice, bool isHeadless, bool hasExchangeUrl)
+        => forceDevice || isHeadless || !hasExchangeUrl ? GitHubFlow.Device : GitHubFlow.Browser;
 
     static int HandleNoneLogin() {
         Console.Out.WriteLine("Server has no authentication configured — login not required.");
@@ -143,12 +143,14 @@ public static class OAuthLoginFlow {
     /// <summary>
     /// Runs GitHub authorization-code-with-PKCE flow against a localhost loopback
     /// listener. Opens the system browser to GitHub's authorize page; on callback,
-    /// verifies CSRF state and exchanges code+verifier for an access token.
+    /// verifies CSRF state and POSTs the code+verifier to <paramref name="codeExchangeUrl"/>
+    /// on the Capacitor server. The server adds its GitHub App client_secret and forwards
+    /// to GitHub's token endpoint (which GitHub Apps require, even with PKCE).
     /// Returns the token on success, or <c>null</c> on user cancel, state mismatch,
     /// or upstream error. Throws if the loopback port can't be bound — the caller
     /// uses that signal to fall back to device flow.
     /// </summary>
-    public static async Task<string?> RunGitHubBrowserFlowAsync(string clientId, TimeSpan? timeout = null) {
+    public static async Task<string?> RunGitHubBrowserFlowAsync(string clientId, string codeExchangeUrl, TimeSpan? timeout = null) {
         var verifier  = GenerateCodeVerifier();
         var challenge = GenerateCodeChallenge(verifier);
         var state     = GenerateCodeVerifier(); // reuse the random source — same entropy is fine
@@ -202,16 +204,15 @@ public static class OAuthLoginFlow {
         }
 
         using var http = new HttpClient();
-        http.DefaultRequestHeaders.Accept.Add(new("application/json"));
 
-        var tokenResponse = await http.PostAsync(
-            "https://github.com/login/oauth/access_token",
-            new FormUrlEncodedContent(new Dictionary<string, string> {
-                ["client_id"]     = clientId,
-                ["code"]          = callback.Code,
-                ["redirect_uri"]  = redirectUri,
-                ["code_verifier"] = verifier
-            }));
+        var exchangeRequest = new GitHubCodeExchangeRequest {
+            Code         = callback.Code,
+            CodeVerifier = verifier,
+            RedirectUri  = redirectUri
+        };
+
+        var tokenResponse = await http.PostAsJsonAsync(
+            codeExchangeUrl, exchangeRequest, KapacitorJsonContext.Default.GitHubCodeExchangeRequest);
 
         if (!tokenResponse.IsSuccessStatusCode) {
             Console.Error.WriteLine($"Error exchanging code: {await tokenResponse.Content.ReadAsStringAsync()}");
@@ -370,19 +371,19 @@ public static class OAuthLoginFlow {
     }
 
     static async Task<int> HandleGitHubLogin(string serverUrl, AuthDiscoveryResponse config, bool forceDevice) {
-        var accessToken = await AcquireGitHubTokenAsync(config.GithubClientId!, forceDevice);
+        var accessToken = await AcquireGitHubTokenAsync(config.GithubClientId!, config.GithubCodeExchangeUrl, forceDevice);
         if (accessToken is null) return 1;
 
         return await ExchangeAndSaveAsync(serverUrl, accessToken, config.Provider);
     }
 
-    internal static async Task<string?> AcquireGitHubTokenAsync(string clientId, bool forceDevice) {
+    internal static async Task<string?> AcquireGitHubTokenAsync(string clientId, string? codeExchangeUrl, bool forceDevice) {
         var headless = HeadlessEnvironment.IsHeadless();
-        var choice   = ChooseGitHubFlow(forceDevice, headless);
+        var choice   = ChooseGitHubFlow(forceDevice, headless, hasExchangeUrl: codeExchangeUrl is not null);
 
         if (choice == GitHubFlow.Browser) {
             try {
-                var token = await RunGitHubBrowserFlowAsync(clientId);
+                var token = await RunGitHubBrowserFlowAsync(clientId, codeExchangeUrl!);
                 if (token is not null) return token;
                 // Browser flow ran but user cancelled / state mismatch — don't silently fall back.
                 return null;

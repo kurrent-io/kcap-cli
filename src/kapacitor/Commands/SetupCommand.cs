@@ -235,14 +235,15 @@ public static class SetupCommand {
         using var http  = new HttpClient();
         var proxyClient = new AuthProxyClient(http);
 
-        var clientId = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Contacting auth service…",
-            async _ => await proxyClient.GetGitHubClientIdAsync(AuthProxyEndpoint.Url));
-        if (clientId is null) {
+        var proxyConfig = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Contacting auth service…",
+            async _ => await proxyClient.GetConfigAsync(AuthProxyEndpoint.Url));
+        if (proxyConfig is null || string.IsNullOrEmpty(proxyConfig.GitHubClientId)) {
             AnsiConsole.MarkupLine("  [red]✗[/] Cannot reach the Kurrent auth service. Retry later, or pass --server-url <url>.");
             return null;
         }
 
-        var ghToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(clientId, forceDevice);
+        var ghToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(
+            proxyConfig.GitHubClientId, proxyConfig.GitHubCodeExchangeUrl, forceDevice);
         if (ghToken is null) return null;
 
         var discovery = new TenantDiscovery(proxyClient, new SpectreTenantPicker());
