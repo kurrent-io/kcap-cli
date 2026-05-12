@@ -34,7 +34,13 @@ public static class Clipboard {
             if (p is null) return false;
             p.StandardInput.Write(stdin);
             p.StandardInput.Close();
-            p.WaitForExit(2000);
+
+            // Bound the wait so a hung helper (e.g. an X server prompting for auth) can't
+            // wedge the login flow; kill on timeout to avoid leaking child processes.
+            if (!p.WaitForExit(2000)) {
+                try { p.Kill(); } catch { /* best-effort */ }
+                return false;
+            }
             return p.ExitCode == 0;
         } catch {
             return false;

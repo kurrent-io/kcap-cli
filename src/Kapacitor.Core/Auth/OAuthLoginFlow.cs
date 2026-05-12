@@ -535,6 +535,7 @@ public static class OAuthLoginFlow {
             }
         }
 
+        if (state is null)            return new(null, "missing_state");
         if (state != expectedState)   return new(null, "state_mismatch");
         if (error is not null)        return new(null, error);
         return string.IsNullOrEmpty(code) ? new(null, "missing_code") : new(code, null);
