@@ -356,6 +356,41 @@ public static class OAuthLoginFlow {
         return 0;
     }
 
+    internal readonly record struct CallbackResult(string? Code, string? Error);
+
+    internal static string BuildGitHubAuthorizeUrl(
+            string clientId, string redirectUri, string state, string codeChallenge) =>
+        "https://github.com/login/oauth/authorize?"             +
+        $"client_id={Uri.EscapeDataString(clientId)}"           +
+        $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"    +
+        $"&state={Uri.EscapeDataString(state)}"                 +
+        $"&scope={Uri.EscapeDataString("read:user read:org")}"  +
+        $"&code_challenge={Uri.EscapeDataString(codeChallenge)}"+
+        "&code_challenge_method=S256"                           +
+        "&response_type=code";
+
+    internal static CallbackResult ParseCallback(string queryString, string expectedState) {
+        var qs    = queryString.TrimStart('?');
+        var parts = qs.Split('&', StringSplitOptions.RemoveEmptyEntries);
+        string? code = null, state = null, error = null;
+
+        foreach (var part in parts) {
+            var eq = part.IndexOf('=');
+            if (eq < 0) continue;
+            var key = part[..eq];
+            var val = Uri.UnescapeDataString(part[(eq + 1)..]);
+            switch (key) {
+                case "code":  code  = val; break;
+                case "state": state = val; break;
+                case "error": error = val; break;
+            }
+        }
+
+        if (error is not null)        return new(null, error);
+        if (state != expectedState)   return new(null, "state_mismatch");
+        return string.IsNullOrEmpty(code) ? new(null, "missing_code") : new(code, null);
+    }
+
     static string GenerateCodeVerifier() {
         var bytes = RandomNumberGenerator.GetBytes(32);
 
