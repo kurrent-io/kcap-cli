@@ -77,6 +77,25 @@ public class LoginDiscoverTests {
     }
 
     [Test]
+    public async Task Installation_message_extracted_from_not_installed_error() {
+        var msg = OAuthLoginFlow.TryParseInstallationMessage(
+            """{"error":"The Kurrent Capacitor GitHub App is not installed on your organization."}""");
+
+        await Assert.That(msg).IsEqualTo("The Kurrent Capacitor GitHub App is not installed on your organization.");
+    }
+
+    [Test]
+    public async Task Installation_message_null_for_unrelated_error() {
+        await Assert.That(OAuthLoginFlow.TryParseInstallationMessage("""{"error":"invalid_token"}""")).IsNull();
+    }
+
+    [Test]
+    public async Task Installation_message_null_for_non_json_body() {
+        await Assert.That(OAuthLoginFlow.TryParseInstallationMessage("Unauthorized")).IsNull();
+        await Assert.That(OAuthLoginFlow.TryParseInstallationMessage("")).IsNull();
+    }
+
+    [Test]
     public async Task Exchange_writes_independent_tokens_for_multiple_profiles() {
         using var acmeTenant    = WireMock.Server.WireMockServer.Start();
         using var contosoTenant = WireMock.Server.WireMockServer.Start();

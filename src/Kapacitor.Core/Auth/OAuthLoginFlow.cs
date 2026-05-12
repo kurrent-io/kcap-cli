@@ -146,7 +146,7 @@ public static class OAuthLoginFlow {
         );
 
         if (!exchangeResponse.IsSuccessStatusCode) {
-            Console.Error.WriteLine($"Error exchanging token: {await exchangeResponse.Content.ReadAsStringAsync()}");
+            WriteExchangeError(await exchangeResponse.Content.ReadAsStringAsync(), profile: null);
 
             return 1;
         }
@@ -190,7 +190,7 @@ public static class OAuthLoginFlow {
         );
 
         if (!exchangeResponse.IsSuccessStatusCode) {
-            Console.Error.WriteLine($"Error exchanging token for profile '{profile}': {await exchangeResponse.Content.ReadAsStringAsync()}");
+            WriteExchangeError(await exchangeResponse.Content.ReadAsStringAsync(), profile);
 
             return 1;
         }
@@ -205,6 +205,54 @@ public static class OAuthLoginFlow {
         });
 
         return 0;
+    }
+
+    /// <summary>
+    /// Prints the server's <c>/auth/token</c> error to stderr. When the server reports that
+    /// the Capacitor GitHub App isn't installed on the user's org, appends a troubleshooting
+    /// checklist — the most common cause is the device-flow consent being completed under a
+    /// different GitHub account than the one with org membership.
+    /// </summary>
+    static void WriteExchangeError(string body, string? profile) {
+        var prefix = profile is null
+            ? "Error exchanging token"
+            : $"Error exchanging token for profile '{profile}'";
+
+        var serverMessage = TryParseInstallationMessage(body);
+
+        if (serverMessage is null) {
+            Console.Error.WriteLine($"{prefix}: {body}");
+
+            return;
+        }
+
+        Console.Error.WriteLine($"{prefix}: {serverMessage}");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("This usually means the Capacitor GitHub App isn't visible to your GitHub user.");
+        Console.Error.WriteLine("Common fixes:");
+        Console.Error.WriteLine("  1. Authorize as the right GitHub account. The device-flow page authorizes");
+        Console.Error.WriteLine("     whoever is signed in to your browser — sign in to https://github.com as");
+        Console.Error.WriteLine("     your org user, then re-run `kapacitor setup ...`.");
+        Console.Error.WriteLine("  2. If your org enforces SAML SSO, authorize SSO for the App at");
+        Console.Error.WriteLine("     https://github.com/settings/apps/authorizations.");
+        Console.Error.WriteLine("  3. Revoke a stale prior authorization at the same URL and retry.");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("If the App was never installed on your org, an org admin must install it.");
+    }
+
+    internal static string? TryParseInstallationMessage(string body) {
+        if (string.IsNullOrWhiteSpace(body)) return null;
+
+        try {
+            var parsed = JsonSerializer.Deserialize(body, KapacitorJsonContext.Default.AuthErrorResponse);
+            var msg    = parsed?.Error;
+
+            return msg is not null && msg.Contains("not installed", StringComparison.OrdinalIgnoreCase)
+                ? msg
+                : null;
+        } catch (JsonException) {
+            return null;
+        }
     }
 
     static async Task<int> HandleGitHubLogin(string serverUrl, AuthDiscoveryResponse config) {

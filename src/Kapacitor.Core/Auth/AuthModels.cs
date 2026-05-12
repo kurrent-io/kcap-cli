@@ -41,6 +41,12 @@ public record TokenExchangeResponse {
     public string Username { get; init; } = "";
 }
 
+// POST /auth/token error body (any failing status)
+public record AuthErrorResponse {
+    [JsonPropertyName("error")]
+    public string? Error { get; init; }
+}
+
 // GitHub Device Flow: POST https://github.com/login/device/code
 public record GitHubDeviceCodeResponse {
     [JsonPropertyName("device_code")]
