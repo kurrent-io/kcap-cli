@@ -92,9 +92,11 @@ public static class OAuthLoginFlow {
         var device   = (await deviceResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.GitHubDeviceCodeResponse))!;
         var interval = device.Interval;
 
+        var copied = Clipboard.TryCopy(device.UserCode);
+
         await Console.Out.WriteLineAsync();
-        await Console.Out.WriteLineAsync($"  Enter code: {device.UserCode}");
-        await Console.Out.WriteLineAsync($"  at: {device.VerificationUri}");
+        await Console.Out.WriteLineAsync($"  Code: {device.UserCode}{(copied ? "  (copied to clipboard)" : "")}");
+        await Console.Out.WriteLineAsync($"  Open: {device.VerificationUri}");
         await Console.Out.WriteLineAsync();
 
         try {
