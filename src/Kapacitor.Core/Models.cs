@@ -439,6 +439,7 @@ record RepoEntry {
 [JsonSerializable(typeof(Auth.AuthDiscoveryResponse))]
 [JsonSerializable(typeof(Auth.TokenExchangeRequest))]
 [JsonSerializable(typeof(Auth.TokenExchangeResponse))]
+[JsonSerializable(typeof(Auth.AuthErrorResponse))]
 [JsonSerializable(typeof(Auth.RefreshTokenRequest))]
 [JsonSerializable(typeof(Auth.GitHubDeviceCodeResponse))]
 [JsonSerializable(typeof(Auth.GitHubTokenResponse))]
