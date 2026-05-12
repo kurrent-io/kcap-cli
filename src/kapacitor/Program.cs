@@ -180,8 +180,10 @@ switch (command) {
         return await WhatsDoneCommand.HandleGenerateWhatsDone(baseUrl!, wdSessionId, wdVendor);
     }
     case "login": {
+        var forceDevice = args.Contains("--device");
+
         if (args.Contains("--discover")) {
-            return await HandleDiscoverLoginAsync();
+            return await HandleDiscoverLoginAsync(forceDevice);
         }
 
         if (baseUrl is null) {
@@ -190,7 +192,7 @@ switch (command) {
             return 1;
         }
 
-        return await OAuthLoginFlow.LoginWithDiscoveryAsync(baseUrl);
+        return await OAuthLoginFlow.LoginWithDiscoveryAsync(baseUrl, forceDevice);
     }
     case "logout": {
         await TokenStore.DeleteAsync();
@@ -855,19 +857,20 @@ void NormalizeGuidField(JsonNode node, string fieldName) {
     }
 }
 
-async Task<int> HandleDiscoverLoginAsync() {
+async Task<int> HandleDiscoverLoginAsync(bool forceDevice) {
     using var http  = new HttpClient();
     var proxyClient = new AuthProxyClient(http);
 
-    var clientId = await proxyClient.GetGitHubClientIdAsync(AuthProxyEndpoint.Url);
+    var proxyConfig = await proxyClient.GetConfigAsync(AuthProxyEndpoint.Url);
 
-    if (clientId is null) {
+    if (proxyConfig is null || string.IsNullOrEmpty(proxyConfig.GitHubClientId)) {
         await Console.Error.WriteLineAsync("Cannot reach the Kurrent auth service.");
 
         return 1;
     }
 
-    var ghToken = await OAuthLoginFlow.RunDeviceFlowAsync(clientId);
+    var ghToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(
+        proxyConfig.GitHubClientId, proxyConfig.GitHubCodeExchangeUrl, forceDevice);
     if (ghToken is null) return 1;
 
     var discovery = new TenantDiscovery(proxyClient, new SpectreTenantPicker());

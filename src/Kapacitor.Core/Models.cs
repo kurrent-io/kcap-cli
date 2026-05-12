@@ -443,6 +443,7 @@ record RepoEntry {
 [JsonSerializable(typeof(Auth.RefreshTokenRequest))]
 [JsonSerializable(typeof(Auth.GitHubDeviceCodeResponse))]
 [JsonSerializable(typeof(Auth.GitHubTokenResponse))]
+[JsonSerializable(typeof(Auth.GitHubCodeExchangeRequest))]
 [JsonSerializable(typeof(Auth.Auth0TokenResponse))]
 [JsonSerializable(typeof(Auth.Auth0IdTokenClaims))]
 [JsonSerializable(typeof(Auth.ProxyConfigResponse))]

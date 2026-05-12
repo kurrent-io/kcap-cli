@@ -14,8 +14,13 @@ public static class AuthProvider {
     public const string None      = "None";
 }
 
+public enum GitHubFlow { Browser, Device }
+
 public static class OAuthLoginFlow {
-    public static async Task<int> LoginWithDiscoveryAsync(string serverUrl) {
+    public static Task<int> LoginWithDiscoveryAsync(string serverUrl)
+        => LoginWithDiscoveryAsync(serverUrl, forceDevice: false);
+
+    public static async Task<int> LoginWithDiscoveryAsync(string serverUrl, bool forceDevice) {
         // ReSharper disable once ShortLivedHttpClient
         using var http = new HttpClient();
 
@@ -39,11 +44,14 @@ public static class OAuthLoginFlow {
 
         return config.Provider switch {
             AuthProvider.None      => HandleNoneLogin(),
-            AuthProvider.GitHubApp => await HandleGitHubLogin(serverUrl, config),
+            AuthProvider.GitHubApp => await HandleGitHubLogin(serverUrl, config, forceDevice),
             AuthProvider.Auth0     => await HandleAuth0Login(config),
             _                      => HandleUnknownProvider(config.Provider)
         };
     }
+
+    internal static GitHubFlow ChooseGitHubFlow(bool forceDevice, bool isHeadless, bool hasExchangeUrl)
+        => forceDevice || isHeadless || !hasExchangeUrl ? GitHubFlow.Device : GitHubFlow.Browser;
 
     static int HandleNoneLogin() {
         Console.Out.WriteLine("Server has no authentication configured — login not required.");
@@ -84,9 +92,11 @@ public static class OAuthLoginFlow {
         var device   = (await deviceResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.GitHubDeviceCodeResponse))!;
         var interval = device.Interval;
 
+        var copied = Clipboard.TryCopy(device.UserCode);
+
         await Console.Out.WriteLineAsync();
-        await Console.Out.WriteLineAsync($"  Enter code: {device.UserCode}");
-        await Console.Out.WriteLineAsync($"  at: {device.VerificationUri}");
+        await Console.Out.WriteLineAsync($"  Code: {device.UserCode}{(copied ? "  (copied to clipboard)" : "")}");
+        await Console.Out.WriteLineAsync($"  Open: {device.VerificationUri}");
         await Console.Out.WriteLineAsync();
 
         try {
@@ -128,6 +138,126 @@ public static class OAuthLoginFlow {
                     return null;
             }
         }
+    }
+
+    /// <summary>
+    /// Runs GitHub authorization-code-with-PKCE flow against a localhost loopback
+    /// listener. Opens the system browser to GitHub's authorize page; on callback,
+    /// verifies CSRF state and POSTs the code+verifier to <paramref name="codeExchangeUrl"/>
+    /// on the Capacitor server. The server adds its GitHub App client_secret and forwards
+    /// to GitHub's token endpoint (which GitHub Apps require, even with PKCE).
+    /// Returns the token on success, or <c>null</c> on user cancel, state mismatch,
+    /// or upstream error. Throws if the loopback port can't be bound — the caller
+    /// uses that signal to fall back to device flow.
+    /// </summary>
+    public static async Task<string?> RunGitHubBrowserFlowAsync(string clientId, string codeExchangeUrl, TimeSpan? timeout = null) {
+        var verifier  = GenerateCodeVerifier();
+        var challenge = GenerateCodeChallenge(verifier);
+        var state     = GenerateCodeVerifier(); // reuse the random source — same entropy is fine
+
+        var port        = GetAvailablePort();
+        var redirectUri = $"http://127.0.0.1:{port}/callback";
+
+        using var listener = new HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+
+        var authUrl = BuildGitHubAuthorizeUrl(clientId, redirectUri, state, challenge);
+
+        await Console.Out.WriteLineAsync("Opening browser for GitHub authentication...");
+        await Console.Out.WriteLineAsync($"  If the browser doesn't open, visit: {authUrl}");
+
+        try {
+            Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
+        } catch {
+            /* Browser open is best-effort — user can still copy the URL */
+        }
+
+        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromMinutes(5));
+
+        HttpListenerContext context;
+        while (true) {
+            Task<HttpListenerContext> getContext = listener.GetContextAsync();
+            try {
+                context = await getContext.WaitAsync(cts.Token);
+            } catch (OperationCanceledException) {
+                listener.Stop();
+                _ = getContext.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                Console.Error.WriteLine("Timed out waiting for authorization. Re-run `kapacitor login` to try again.");
+                return null;
+            }
+
+            if (context.Request.Url?.AbsolutePath == "/callback") break;
+
+            // Ignore favicon and other browser-issued requests that aren't our callback.
+            context.Response.StatusCode = 404;
+            context.Response.Close();
+        }
+
+        var callback = ParseCallback(context.Request.Url?.Query ?? "", state);
+        await RespondCallbackAsync(context, callback);
+        listener.Stop();
+
+        if (callback.Code is null) {
+            Console.Error.WriteLine($"Authorization failed: {callback.Error}");
+            return null;
+        }
+
+        using var http = new HttpClient();
+        http.DefaultRequestHeaders.Accept.Add(new("application/json"));
+
+        var exchangeRequest = new GitHubCodeExchangeRequest {
+            Code         = callback.Code,
+            CodeVerifier = verifier,
+            RedirectUri  = redirectUri
+        };
+
+        HttpResponseMessage tokenResponse;
+        try {
+            tokenResponse = await http.PostAsJsonAsync(
+                codeExchangeUrl, exchangeRequest, KapacitorJsonContext.Default.GitHubCodeExchangeRequest);
+        } catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or UriFormatException or InvalidOperationException) {
+            Console.Error.WriteLine($"Could not reach the code-exchange endpoint at {codeExchangeUrl}: {ex.Message}");
+            return null;
+        }
+
+        if (!tokenResponse.IsSuccessStatusCode) {
+            Console.Error.WriteLine($"Error exchanging code: {await tokenResponse.Content.ReadAsStringAsync()}");
+            return null;
+        }
+
+        GitHubTokenResponse? tokenResult;
+        try {
+            tokenResult = await tokenResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.GitHubTokenResponse);
+        } catch (JsonException ex) {
+            var raw = await tokenResponse.Content.ReadAsStringAsync();
+            Console.Error.WriteLine($"Code-exchange response was not valid JSON ({ex.Message}): {raw}");
+            return null;
+        }
+
+        if (tokenResult?.AccessToken is null) {
+            Console.Error.WriteLine($"Error: {tokenResult?.Error ?? "no access_token in response"}");
+            return null;
+        }
+
+        await Console.Out.WriteLineAsync("Authorization complete.");
+        return tokenResult.AccessToken;
+    }
+
+    static async Task RespondCallbackAsync(HttpListenerContext ctx, CallbackResult callback) {
+        var (status, message) = callback.Code is not null
+            ? ("Authentication successful!",  "You can close this window and return to the terminal.")
+            : ($"Authentication failed: {callback.Error}", "Return to the terminal for details.");
+
+        var html = $"<html><body style='font-family:system-ui;max-width:480px;margin:80px auto;text-align:center'>"
+                 + $"<h2>{System.Net.WebUtility.HtmlEncode(status)}</h2>"
+                 + $"<p>{System.Net.WebUtility.HtmlEncode(message)}</p></body></html>";
+
+        var buffer = Encoding.UTF8.GetBytes(html);
+        ctx.Response.ContentType     = "text/html";
+        ctx.Response.ContentLength64 = buffer.Length;
+        await ctx.Response.OutputStream.WriteAsync(buffer);
+        ctx.Response.Close();
     }
 
     public static async Task<int> ExchangeAndSaveAsync(string serverUrl, string githubAccessToken, string provider) {
@@ -255,11 +385,31 @@ public static class OAuthLoginFlow {
         }
     }
 
-    static async Task<int> HandleGitHubLogin(string serverUrl, AuthDiscoveryResponse config) {
-        var accessToken = await RunDeviceFlowAsync(config.GithubClientId!);
+    static async Task<int> HandleGitHubLogin(string serverUrl, AuthDiscoveryResponse config, bool forceDevice) {
+        var accessToken = await AcquireGitHubTokenAsync(config.GithubClientId!, config.GithubCodeExchangeUrl, forceDevice);
         if (accessToken is null) return 1;
 
         return await ExchangeAndSaveAsync(serverUrl, accessToken, config.Provider);
+    }
+
+    internal static async Task<string?> AcquireGitHubTokenAsync(string clientId, string? codeExchangeUrl, bool forceDevice) {
+        var headless = HeadlessEnvironment.IsHeadless();
+        var choice   = ChooseGitHubFlow(forceDevice, headless, hasExchangeUrl: IsValidExchangeUrl(codeExchangeUrl));
+
+        if (choice == GitHubFlow.Browser) {
+            try {
+                var token = await RunGitHubBrowserFlowAsync(clientId, codeExchangeUrl!);
+                if (token is not null) return token;
+                // Browser flow ran but user cancelled / state mismatch — don't silently fall back.
+                return null;
+            } catch (HttpListenerException ex) {
+                Console.Error.WriteLine($"Could not bind loopback listener ({ex.Message}); falling back to device flow.");
+            } catch (PlatformNotSupportedException ex) {
+                Console.Error.WriteLine($"Loopback listener not supported on this platform ({ex.Message}); falling back to device flow.");
+            }
+        }
+
+        return await RunDeviceFlowAsync(clientId);
     }
 
     static async Task<int> HandleAuth0Login(AuthDiscoveryResponse config) {
@@ -272,10 +422,11 @@ public static class OAuthLoginFlow {
     static async Task<int> LoginAsync(string auth0Domain, string clientId, string audience) {
         var verifier    = GenerateCodeVerifier();
         var challenge   = GenerateCodeChallenge(verifier);
+        var state       = GenerateCodeVerifier();
         var port        = GetAvailablePort();
         var redirectUri = $"http://localhost:{port}/callback";
 
-        var listener = new HttpListener();
+        using var listener = new HttpListener();
         listener.Prefixes.Add($"http://localhost:{port}/");
         listener.Start();
 
@@ -284,13 +435,32 @@ public static class OAuthLoginFlow {
             $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"                    +
             $"&scope={Uri.EscapeDataString("openid profile email offline_access")}" +
             $"&audience={Uri.EscapeDataString(audience)}"                           +
+            $"&state={Uri.EscapeDataString(state)}"                                 +
             $"&code_challenge={challenge}&code_challenge_method=S256";
 
         await Console.Out.WriteLineAsync("Opening browser for authentication...");
-        Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
+        await Console.Out.WriteLineAsync($"  If the browser doesn't open, visit: {authUrl}");
+
+        try {
+            Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
+        } catch {
+            /* Browser open is best-effort — user can still copy the URL */
+        }
 
         var context = await listener.GetContextAsync();
         var code    = context.Request.QueryString["code"];
+        var returnedState = context.Request.QueryString["state"];
+        if (returnedState != state) {
+            Console.Error.WriteLine("Error: state mismatch — possible CSRF. Aborting.");
+            const string errHtml = "<html><body><h2>Authentication failed</h2><p>State mismatch — possible CSRF. Return to the terminal.</p></body></html>";
+            var errBuf = Encoding.UTF8.GetBytes(errHtml);
+            context.Response.ContentType     = "text/html";
+            context.Response.ContentLength64 = errBuf.Length;
+            await context.Response.OutputStream.WriteAsync(errBuf);
+            context.Response.Close();
+            listener.Stop();
+            return 1;
+        }
 
         const string html = "<html><body><h2>Authentication successful!</h2><p>You can close this window.</p></body></html>";
 
@@ -354,6 +524,49 @@ public static class OAuthLoginFlow {
         await Console.Out.WriteLineAsync($"Logged in as {username}");
 
         return 0;
+    }
+
+    internal readonly record struct CallbackResult(string? Code, string? Error);
+
+    // The server-supplied code-exchange URL must be a fully-qualified http(s) URI before
+    // we trust it. An empty string, whitespace, relative path, or javascript:/file: URL
+    // is treated as "no browser flow available" and the dispatcher falls back to device flow.
+    internal static bool IsValidExchangeUrl(string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var parsed)
+        && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps);
+
+    internal static string BuildGitHubAuthorizeUrl(
+            string clientId, string redirectUri, string state, string codeChallenge) =>
+        "https://github.com/login/oauth/authorize?"             +
+        $"client_id={Uri.EscapeDataString(clientId)}"           +
+        $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"    +
+        $"&state={Uri.EscapeDataString(state)}"                 +
+        $"&scope={Uri.EscapeDataString("read:user read:org")}"  +
+        $"&code_challenge={Uri.EscapeDataString(codeChallenge)}"+
+        "&code_challenge_method=S256"                           +
+        "&response_type=code";
+
+    internal static CallbackResult ParseCallback(string queryString, string expectedState) {
+        var qs    = queryString.TrimStart('?');
+        var parts = qs.Split('&', StringSplitOptions.RemoveEmptyEntries);
+        string? code = null, state = null, error = null;
+
+        foreach (var part in parts) {
+            var eq = part.IndexOf('=');
+            if (eq < 0) continue;
+            var key = part[..eq];
+            var val = Uri.UnescapeDataString(part[(eq + 1)..]);
+            switch (key) {
+                case "code":  code  = val; break;
+                case "state": state = val; break;
+                case "error": error = val; break;
+            }
+        }
+
+        if (state is null)            return new(null, "missing_state");
+        if (state != expectedState)   return new(null, "state_mismatch");
+        if (error is not null)        return new(null, error);
+        return string.IsNullOrEmpty(code) ? new(null, "missing_code") : new(code, null);
     }
 
     static string GenerateCodeVerifier() {

@@ -21,6 +21,25 @@ public record AuthDiscoveryResponse {
 
     [JsonPropertyName("token_exchange_url")]
     public string? TokenExchangeUrl { get; init; }
+
+    // Server-mediated GitHub code-exchange endpoint. Required for the localhost
+    // browser flow because GitHub Apps need client_secret on POST /login/oauth/access_token,
+    // and the CLI can't ship a secret. When null, the CLI uses device flow.
+    [JsonPropertyName("github_code_exchange_url")]
+    public string? GithubCodeExchangeUrl { get; init; }
+}
+
+// POST {github_code_exchange_url} — CLI → server. Server adds client_id + client_secret
+// and forwards to https://github.com/login/oauth/access_token.
+public record GitHubCodeExchangeRequest {
+    [JsonPropertyName("code")]
+    public required string Code { get; init; }
+
+    [JsonPropertyName("code_verifier")]
+    public required string CodeVerifier { get; init; }
+
+    [JsonPropertyName("redirect_uri")]
+    public required string RedirectUri { get; init; }
 }
 
 // POST /auth/token request
@@ -100,7 +119,12 @@ public record RefreshTokenRequest {
 
 // Auth proxy: GET /config
 public sealed record ProxyConfigResponse {
-    [JsonPropertyName("github_client_id")] public string GitHubClientId { get; init; } = "";
+    [JsonPropertyName("github_client_id")]         public string  GitHubClientId        { get; init; } = "";
+
+    // Proxy-mediated GitHub code-exchange endpoint. When null, --discover falls back
+    // to device flow because the CLI can't talk to GitHub's token endpoint directly
+    // for a GitHub App without client_secret.
+    [JsonPropertyName("github_code_exchange_url")] public string? GitHubCodeExchangeUrl { get; init; }
 }
 
 // Auth proxy: POST /discover-tenants response item

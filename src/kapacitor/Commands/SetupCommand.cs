@@ -11,6 +11,7 @@ public static class SetupCommand {
     public static async Task<int> HandleAsync(string[] args) {
         var serverUrlArg = GetArg(args, "--server-url");
         var noPrompt     = args.Contains("--no-prompt");
+        var forceDevice  = args.Contains("--device");
 
         AnsiConsole.Write(new Rule("[bold green]Welcome to Kapacitor[/]").Centered());
 
@@ -54,7 +55,7 @@ public static class SetupCommand {
             await Console.Error.WriteLineAsync("  --server-url is required with --no-prompt");
             return 1;
         } else {
-            var discovered = await RunDiscoveryAsync();
+            var discovered = await RunDiscoveryAsync(forceDevice);
             if (discovered is null) return 1;
             (serverUrl, preAuthToken, provider) = discovered.Value;
         }
@@ -76,7 +77,7 @@ public static class SetupCommand {
             var tokens = await TokenStore.LoadAsync();
             AnsiConsole.MarkupLine($"  [green]✓[/] Logged in as [cyan]{Markup.Escape(tokens?.GitHubUsername ?? "?")}[/]");
         } else {
-            var loginResult = await OAuthLoginFlow.LoginWithDiscoveryAsync(serverUrl);
+            var loginResult = await OAuthLoginFlow.LoginWithDiscoveryAsync(serverUrl, forceDevice);
 
             if (loginResult != 0) {
                 await Console.Error.WriteLineAsync("  Login failed.");
@@ -228,20 +229,21 @@ public static class SetupCommand {
         return 0;
     }
 
-    static async Task<(string ServerUrl, string PreAuthToken, string Provider)?> RunDiscoveryAsync() {
+    static async Task<(string ServerUrl, string PreAuthToken, string Provider)?> RunDiscoveryAsync(bool forceDevice) {
         AnsiConsole.MarkupLine($"  Proxy: [dim]{Markup.Escape(AuthProxyEndpoint.Url)}[/]");
 
         using var http  = new HttpClient();
         var proxyClient = new AuthProxyClient(http);
 
-        var clientId = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Contacting auth service…",
-            async _ => await proxyClient.GetGitHubClientIdAsync(AuthProxyEndpoint.Url));
-        if (clientId is null) {
+        var proxyConfig = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Contacting auth service…",
+            async _ => await proxyClient.GetConfigAsync(AuthProxyEndpoint.Url));
+        if (proxyConfig is null || string.IsNullOrEmpty(proxyConfig.GitHubClientId)) {
             AnsiConsole.MarkupLine("  [red]✗[/] Cannot reach the Kurrent auth service. Retry later, or pass --server-url <url>.");
             return null;
         }
 
-        var ghToken = await OAuthLoginFlow.RunDeviceFlowAsync(clientId);
+        var ghToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(
+            proxyConfig.GitHubClientId, proxyConfig.GitHubCodeExchangeUrl, forceDevice);
         if (ghToken is null) return null;
 
         var discovery = new TenantDiscovery(proxyClient, new SpectreTenantPicker());

@@ -7,7 +7,7 @@ namespace kapacitor.Tests.Unit;
 
 public class AuthProxyClientTests {
     [Test]
-    public async Task GetGitHubClientIdAsync_returns_id_on_200() {
+    public async Task GetConfigAsync_returns_client_id_only_when_exchange_url_absent() {
         using var server = WireMockServer.Start();
 
         server.Given(Request.Create().WithPath("/config").UsingGet())
@@ -21,20 +21,44 @@ public class AuthProxyClientTests {
         using var http   = new HttpClient();
         var       client = new AuthProxyClient(http);
 
-        var id = await client.GetGitHubClientIdAsync(server.Urls[0]);
+        var config = await client.GetConfigAsync(server.Urls[0]);
 
-        await Assert.That(id).IsEqualTo("Iv1.abc");
+        await Assert.That(config).IsNotNull();
+        await Assert.That(config!.GitHubClientId).IsEqualTo("Iv1.abc");
+        await Assert.That(config.GitHubCodeExchangeUrl).IsNull();
     }
 
     [Test]
-    public async Task GetGitHubClientIdAsync_returns_null_on_proxy_unreachable() {
+    public async Task GetConfigAsync_returns_exchange_url_when_present() {
+        using var server = WireMockServer.Start();
+
+        server.Given(Request.Create().WithPath("/config").UsingGet())
+            .RespondWith(
+                Response.Create()
+                    .WithStatusCode(200)
+                    .WithBody("""{"github_client_id":"Iv1.abc","github_code_exchange_url":"https://auth.example/auth/github/code-exchange"}""")
+                    .WithHeader("Content-Type", "application/json")
+            );
+
+        using var http   = new HttpClient();
+        var       client = new AuthProxyClient(http);
+
+        var config = await client.GetConfigAsync(server.Urls[0]);
+
+        await Assert.That(config).IsNotNull();
+        await Assert.That(config!.GitHubClientId).IsEqualTo("Iv1.abc");
+        await Assert.That(config.GitHubCodeExchangeUrl).IsEqualTo("https://auth.example/auth/github/code-exchange");
+    }
+
+    [Test]
+    public async Task GetConfigAsync_returns_null_on_proxy_unreachable() {
         using var http = new HttpClient();
         http.Timeout = TimeSpan.FromMilliseconds(200);
         var client = new AuthProxyClient(http);
 
-        var id = await client.GetGitHubClientIdAsync("http://127.0.0.1:1");
+        var config = await client.GetConfigAsync("http://127.0.0.1:1");
 
-        await Assert.That(id).IsNull();
+        await Assert.That(config).IsNull();
     }
 
     [Test]
