@@ -52,6 +52,16 @@ public class OAuthFlowTests {
     }
 
     [Test]
+    public async Task Callback_parser_rejects_error_without_valid_state() {
+        var result = OAuthLoginFlow.ParseCallback(
+            queryString:  "?error=access_denied",
+            expectedState:"expected");
+
+        await Assert.That(result.Code).IsNull();
+        await Assert.That(result.Error).IsEqualTo("state_mismatch");
+    }
+
+    [Test]
     public async Task Callback_parser_rejects_missing_code() {
         var result = OAuthLoginFlow.ParseCallback(
             queryString:  "?state=expected",

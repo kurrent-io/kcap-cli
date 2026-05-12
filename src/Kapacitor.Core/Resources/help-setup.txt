@@ -7,3 +7,5 @@ Options:
   --daemon-name <name>        Daemon name (skip prompt)
   --default-visibility <vis>  Default visibility: private, org_public, public
   --no-prompt                 Non-interactive mode (requires --server-url)
+  --device                    Force GitHub Device Flow during the login step
+                              (use in SSH / headless envs)
