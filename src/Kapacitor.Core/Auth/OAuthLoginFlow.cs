@@ -204,6 +204,7 @@ public static class OAuthLoginFlow {
         }
 
         using var http = new HttpClient();
+        http.DefaultRequestHeaders.Accept.Add(new("application/json"));
 
         var exchangeRequest = new GitHubCodeExchangeRequest {
             Code         = callback.Code,
@@ -219,9 +220,17 @@ public static class OAuthLoginFlow {
             return null;
         }
 
-        var tokenResult = (await tokenResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.GitHubTokenResponse))!;
-        if (tokenResult.AccessToken is null) {
-            Console.Error.WriteLine($"Error: {tokenResult.Error ?? "no access_token in response"}");
+        GitHubTokenResponse? tokenResult;
+        try {
+            tokenResult = await tokenResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.GitHubTokenResponse);
+        } catch (JsonException ex) {
+            var raw = await tokenResponse.Content.ReadAsStringAsync();
+            Console.Error.WriteLine($"Code-exchange response was not valid JSON ({ex.Message}): {raw}");
+            return null;
+        }
+
+        if (tokenResult?.AccessToken is null) {
+            Console.Error.WriteLine($"Error: {tokenResult?.Error ?? "no access_token in response"}");
             return null;
         }
 
@@ -379,7 +388,7 @@ public static class OAuthLoginFlow {
 
     internal static async Task<string?> AcquireGitHubTokenAsync(string clientId, string? codeExchangeUrl, bool forceDevice) {
         var headless = HeadlessEnvironment.IsHeadless();
-        var choice   = ChooseGitHubFlow(forceDevice, headless, hasExchangeUrl: codeExchangeUrl is not null);
+        var choice   = ChooseGitHubFlow(forceDevice, headless, hasExchangeUrl: !string.IsNullOrWhiteSpace(codeExchangeUrl));
 
         if (choice == GitHubFlow.Browser) {
             try {
@@ -424,7 +433,13 @@ public static class OAuthLoginFlow {
             $"&code_challenge={challenge}&code_challenge_method=S256";
 
         await Console.Out.WriteLineAsync("Opening browser for authentication...");
-        Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
+        await Console.Out.WriteLineAsync($"  If the browser doesn't open, visit: {authUrl}");
+
+        try {
+            Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
+        } catch {
+            /* Browser open is best-effort — user can still copy the URL */
+        }
 
         var context = await listener.GetContextAsync();
         var code    = context.Request.QueryString["code"];
