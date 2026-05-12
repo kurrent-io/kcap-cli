@@ -164,11 +164,22 @@ public static class OAuthLoginFlow {
         using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromMinutes(5));
 
         HttpListenerContext context;
-        try {
-            context = await listener.GetContextAsync().WaitAsync(cts.Token);
-        } catch (OperationCanceledException) {
-            Console.Error.WriteLine("Timed out waiting for authorization. Re-run `kapacitor login` to try again.");
-            return null;
+        while (true) {
+            Task<HttpListenerContext> getContext = listener.GetContextAsync();
+            try {
+                context = await getContext.WaitAsync(cts.Token);
+            } catch (OperationCanceledException) {
+                listener.Stop();
+                _ = getContext.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                Console.Error.WriteLine("Timed out waiting for authorization. Re-run `kapacitor login` to try again.");
+                return null;
+            }
+
+            if (context.Request.Url?.AbsolutePath == "/callback") break;
+
+            // Ignore favicon and other browser-issued requests that aren't our callback.
+            context.Response.StatusCode = 404;
+            context.Response.Close();
         }
 
         var callback = ParseCallback(context.Request.Url?.Query ?? "", state);
