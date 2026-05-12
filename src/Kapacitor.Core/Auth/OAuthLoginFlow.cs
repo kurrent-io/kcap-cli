@@ -130,6 +130,100 @@ public static class OAuthLoginFlow {
         }
     }
 
+    /// <summary>
+    /// Runs GitHub authorization-code-with-PKCE flow against a localhost loopback
+    /// listener. Opens the system browser to GitHub's authorize page; on callback,
+    /// verifies CSRF state and exchanges code+verifier for an access token.
+    /// Returns the token on success, or <c>null</c> on user cancel, state mismatch,
+    /// or upstream error. Throws if the loopback port can't be bound — the caller
+    /// uses that signal to fall back to device flow.
+    /// </summary>
+    public static async Task<string?> RunGitHubBrowserFlowAsync(string clientId, TimeSpan? timeout = null) {
+        var verifier  = GenerateCodeVerifier();
+        var challenge = GenerateCodeChallenge(verifier);
+        var state     = GenerateCodeVerifier(); // reuse the random source — same entropy is fine
+
+        var port        = GetAvailablePort();
+        var redirectUri = $"http://127.0.0.1:{port}/callback";
+
+        using var listener = new HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+
+        var authUrl = BuildGitHubAuthorizeUrl(clientId, redirectUri, state, challenge);
+
+        await Console.Out.WriteLineAsync("Opening browser for GitHub authentication...");
+        await Console.Out.WriteLineAsync($"  If the browser doesn't open, visit: {authUrl}");
+
+        try {
+            Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
+        } catch {
+            /* Browser open is best-effort — user can still copy the URL */
+        }
+
+        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromMinutes(5));
+
+        HttpListenerContext context;
+        try {
+            context = await listener.GetContextAsync().WaitAsync(cts.Token);
+        } catch (OperationCanceledException) {
+            Console.Error.WriteLine("Timed out waiting for authorization. Re-run `kapacitor login` to try again.");
+            return null;
+        }
+
+        var callback = ParseCallback(context.Request.Url?.Query ?? "", state);
+        await RespondCallbackAsync(context, callback);
+        listener.Stop();
+
+        if (callback.Code is null) {
+            Console.Error.WriteLine($"Authorization failed: {callback.Error}");
+            return null;
+        }
+
+        using var http = new HttpClient();
+        http.DefaultRequestHeaders.Accept.Add(new("application/json"));
+
+        var tokenResponse = await http.PostAsync(
+            "https://github.com/login/oauth/access_token",
+            new FormUrlEncodedContent(new Dictionary<string, string> {
+                ["client_id"]     = clientId,
+                ["code"]          = callback.Code,
+                ["redirect_uri"]  = redirectUri,
+                ["code_verifier"] = verifier,
+                ["grant_type"]    = "authorization_code"
+            }));
+
+        if (!tokenResponse.IsSuccessStatusCode) {
+            Console.Error.WriteLine($"Error exchanging code: {await tokenResponse.Content.ReadAsStringAsync()}");
+            return null;
+        }
+
+        var tokenResult = (await tokenResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.GitHubTokenResponse))!;
+        if (tokenResult.AccessToken is null) {
+            Console.Error.WriteLine($"Error: {tokenResult.Error ?? "no access_token in response"}");
+            return null;
+        }
+
+        await Console.Out.WriteLineAsync("Authorization complete.");
+        return tokenResult.AccessToken;
+    }
+
+    static async Task RespondCallbackAsync(HttpListenerContext ctx, CallbackResult callback) {
+        var (status, message) = callback.Code is not null
+            ? ("Authentication successful!",  "You can close this window and return to the terminal.")
+            : ($"Authentication failed: {callback.Error}", "Return to the terminal for details.");
+
+        var html = $"<html><body style='font-family:system-ui;max-width:480px;margin:80px auto;text-align:center'>"
+                 + $"<h2>{System.Net.WebUtility.HtmlEncode(status)}</h2>"
+                 + $"<p>{System.Net.WebUtility.HtmlEncode(message)}</p></body></html>";
+
+        var buffer = Encoding.UTF8.GetBytes(html);
+        ctx.Response.ContentType     = "text/html";
+        ctx.Response.ContentLength64 = buffer.Length;
+        await ctx.Response.OutputStream.WriteAsync(buffer);
+        ctx.Response.Close();
+    }
+
     public static async Task<int> ExchangeAndSaveAsync(string serverUrl, string githubAccessToken, string provider) {
         if (provider is not AuthProvider.GitHubApp and not AuthProvider.Auth0) {
             Console.Error.WriteLine($"Error: unknown auth provider '{provider}'");
