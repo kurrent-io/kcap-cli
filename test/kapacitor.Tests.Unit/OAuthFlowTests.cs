@@ -60,4 +60,22 @@ public class OAuthFlowTests {
         await Assert.That(result.Code).IsNull();
         await Assert.That(result.Error).IsEqualTo("missing_code");
     }
+
+    [Test]
+    public async Task ChooseGitHubFlow_returns_device_when_forced() {
+        var choice = OAuthLoginFlow.ChooseGitHubFlow(forceDevice: true, isHeadless: false);
+        await Assert.That(choice).IsEqualTo(GitHubFlow.Device);
+    }
+
+    [Test]
+    public async Task ChooseGitHubFlow_returns_device_when_headless() {
+        var choice = OAuthLoginFlow.ChooseGitHubFlow(forceDevice: false, isHeadless: true);
+        await Assert.That(choice).IsEqualTo(GitHubFlow.Device);
+    }
+
+    [Test]
+    public async Task ChooseGitHubFlow_returns_browser_when_interactive() {
+        var choice = OAuthLoginFlow.ChooseGitHubFlow(forceDevice: false, isHeadless: false);
+        await Assert.That(choice).IsEqualTo(GitHubFlow.Browser);
+    }
 }

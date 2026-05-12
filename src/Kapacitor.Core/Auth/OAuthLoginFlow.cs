@@ -14,8 +14,13 @@ public static class AuthProvider {
     public const string None      = "None";
 }
 
+public enum GitHubFlow { Browser, Device }
+
 public static class OAuthLoginFlow {
-    public static async Task<int> LoginWithDiscoveryAsync(string serverUrl) {
+    public static Task<int> LoginWithDiscoveryAsync(string serverUrl)
+        => LoginWithDiscoveryAsync(serverUrl, forceDevice: false);
+
+    public static async Task<int> LoginWithDiscoveryAsync(string serverUrl, bool forceDevice) {
         // ReSharper disable once ShortLivedHttpClient
         using var http = new HttpClient();
 
@@ -39,11 +44,14 @@ public static class OAuthLoginFlow {
 
         return config.Provider switch {
             AuthProvider.None      => HandleNoneLogin(),
-            AuthProvider.GitHubApp => await HandleGitHubLogin(serverUrl, config),
+            AuthProvider.GitHubApp => await HandleGitHubLogin(serverUrl, config, forceDevice),
             AuthProvider.Auth0     => await HandleAuth0Login(config),
             _                      => HandleUnknownProvider(config.Provider)
         };
     }
+
+    internal static GitHubFlow ChooseGitHubFlow(bool forceDevice, bool isHeadless)
+        => forceDevice || isHeadless ? GitHubFlow.Device : GitHubFlow.Browser;
 
     static int HandleNoneLogin() {
         Console.Out.WriteLine("Server has no authentication configured — login not required.");
@@ -360,11 +368,31 @@ public static class OAuthLoginFlow {
         }
     }
 
-    static async Task<int> HandleGitHubLogin(string serverUrl, AuthDiscoveryResponse config) {
-        var accessToken = await RunDeviceFlowAsync(config.GithubClientId!);
+    static async Task<int> HandleGitHubLogin(string serverUrl, AuthDiscoveryResponse config, bool forceDevice) {
+        var accessToken = await AcquireGitHubTokenAsync(config.GithubClientId!, forceDevice);
         if (accessToken is null) return 1;
 
         return await ExchangeAndSaveAsync(serverUrl, accessToken, config.Provider);
+    }
+
+    internal static async Task<string?> AcquireGitHubTokenAsync(string clientId, bool forceDevice) {
+        var headless = HeadlessEnvironment.IsHeadless();
+        var choice   = ChooseGitHubFlow(forceDevice, headless);
+
+        if (choice == GitHubFlow.Browser) {
+            try {
+                var token = await RunGitHubBrowserFlowAsync(clientId);
+                if (token is not null) return token;
+                // Browser flow ran but user cancelled / state mismatch — don't silently fall back.
+                return null;
+            } catch (HttpListenerException ex) {
+                Console.Error.WriteLine($"Could not bind loopback listener ({ex.Message}); falling back to device flow.");
+            } catch (PlatformNotSupportedException ex) {
+                Console.Error.WriteLine($"Loopback listener not supported on this platform ({ex.Message}); falling back to device flow.");
+            }
+        }
+
+        return await RunDeviceFlowAsync(clientId);
     }
 
     static async Task<int> HandleAuth0Login(AuthDiscoveryResponse config) {
