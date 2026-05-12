@@ -407,6 +407,7 @@ public static class OAuthLoginFlow {
     static async Task<int> LoginAsync(string auth0Domain, string clientId, string audience) {
         var verifier    = GenerateCodeVerifier();
         var challenge   = GenerateCodeChallenge(verifier);
+        var state       = GenerateCodeVerifier();
         var port        = GetAvailablePort();
         var redirectUri = $"http://localhost:{port}/callback";
 
@@ -419,6 +420,7 @@ public static class OAuthLoginFlow {
             $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"                    +
             $"&scope={Uri.EscapeDataString("openid profile email offline_access")}" +
             $"&audience={Uri.EscapeDataString(audience)}"                           +
+            $"&state={Uri.EscapeDataString(state)}"                                 +
             $"&code_challenge={challenge}&code_challenge_method=S256";
 
         await Console.Out.WriteLineAsync("Opening browser for authentication...");
@@ -426,6 +428,12 @@ public static class OAuthLoginFlow {
 
         var context = await listener.GetContextAsync();
         var code    = context.Request.QueryString["code"];
+        var returnedState = context.Request.QueryString["state"];
+        if (returnedState != state) {
+            Console.Error.WriteLine("Error: state mismatch — possible CSRF. Aborting.");
+            listener.Stop();
+            return 1;
+        }
 
         const string html = "<html><body><h2>Authentication successful!</h2><p>You can close this window.</p></body></html>";
 
