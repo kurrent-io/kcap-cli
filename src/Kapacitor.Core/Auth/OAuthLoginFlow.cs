@@ -210,8 +210,7 @@ public static class OAuthLoginFlow {
                 ["client_id"]     = clientId,
                 ["code"]          = callback.Code,
                 ["redirect_uri"]  = redirectUri,
-                ["code_verifier"] = verifier,
-                ["grant_type"]    = "authorization_code"
+                ["code_verifier"] = verifier
             }));
 
         if (!tokenResponse.IsSuccessStatusCode) {
@@ -411,7 +410,7 @@ public static class OAuthLoginFlow {
         var port        = GetAvailablePort();
         var redirectUri = $"http://localhost:{port}/callback";
 
-        var listener = new HttpListener();
+        using var listener = new HttpListener();
         listener.Prefixes.Add($"http://localhost:{port}/");
         listener.Start();
 
@@ -431,6 +430,12 @@ public static class OAuthLoginFlow {
         var returnedState = context.Request.QueryString["state"];
         if (returnedState != state) {
             Console.Error.WriteLine("Error: state mismatch — possible CSRF. Aborting.");
+            const string errHtml = "<html><body><h2>Authentication failed</h2><p>State mismatch — possible CSRF. Return to the terminal.</p></body></html>";
+            var errBuf = Encoding.UTF8.GetBytes(errHtml);
+            context.Response.ContentType     = "text/html";
+            context.Response.ContentLength64 = errBuf.Length;
+            await context.Response.OutputStream.WriteAsync(errBuf);
+            context.Response.Close();
             listener.Stop();
             return 1;
         }
