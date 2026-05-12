@@ -39,7 +39,7 @@ public static class StatusCommand {
             var rawTokens = await TokenStore.LoadAsync();
 
             await Console.Out.WriteLineAsync(rawTokens is not null
-                ? $"{rawTokens.GitHubUsername} ({rawTokens.Provider}) ✗ token expired"
+                ? $"{rawTokens.GitHubUsername} ({rawTokens.Provider}) ✗ token expired (run: kapacitor login)"
                 : "not authenticated (run: kapacitor login)");
         }
 
