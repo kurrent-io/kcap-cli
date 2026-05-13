@@ -50,13 +50,14 @@ kapacitor setup --server-url https://capacitor.example.com --default-visibility 
 ### 3. Import existing sessions (optional)
 
 ```bash
-kapacitor history --org              # all sessions from your active profile's org
-kapacitor history --codex --org      # same, but from Codex rollouts (~/.codex/sessions)
+kapacitor history --org                          # sessions for the org bound to your active profile
+kapacitor history --repo EventStore/kapacitor    # sessions for one specific repo
+kapacitor history --codex --org                  # same, but from Codex rollouts (~/.codex/sessions)
 ```
 
 This backfills your past sessions from `~/.claude/projects/` (or `~/.codex/sessions` with `--codex`) so they appear in the dashboard. It's idempotent — safe to run multiple times.
 
-You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
+You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org` uses the active profile name as the GitHub org login — it works out of the box when the profile was created by `kapacitor setup` (which names it after the picked tenant), and errors otherwise. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
 ### 4. Open the dashboard
 
@@ -152,12 +153,14 @@ Backfill older sessions from local transcript files. The command requires an exp
 
 ```bash
 kapacitor history --all                            # every discovered session
-kapacitor history --org                            # only your active profile's org
-kapacitor history --repo EventStore/kapacitor      # one specific repo
-kapacitor history --repo .                         # the repo at the current cwd
+kapacitor history --org                            # sessions whose repo owner matches your active profile name
+kapacitor history --repo EventStore/kapacitor      # one specific repo (owner/name)
+kapacitor history --repo .                         # the repo at the current cwd (must be a git repo with an origin remote)
 ```
 
 Run `kapacitor history` with no scope on an interactive terminal to get a picker. Each run shows a confirmation summary (scope, matched count, repo samples, visibility) before uploading anything.
+
+`--org` is a shortcut: it takes the active profile *name* and uses it as a GitHub org login to filter on. `kapacitor setup` names the profile after the picked tenant, so `--org` works out of the box for tenant-bound profiles; on the `default` profile, or a manually-named profile like `work`, use `--repo <owner/name>` instead (or run `kapacitor setup` to bind a profile to your org).
 
 Additional flags:
 
