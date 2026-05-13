@@ -2,6 +2,7 @@ using Spectre.Console;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using kapacitor.Config;
 
@@ -629,6 +630,12 @@ static class HistoryCommand {
             }
         } else {
             importResult = new(0, 0, 0);
+        }
+
+        // --- --private: mark all imported sessions owner-only ---
+        if (forcePrivate && !importedSessionIds.IsEmpty) {
+            display.BeginPhase("Marking imported sessions private");
+            await SetVisibilityNoneForAll(httpClient, baseUrl, [.. importedSessionIds]);
         }
 
         // --- Background phase (titles / summaries) ---
@@ -1621,6 +1628,32 @@ static class HistoryCommand {
             // transcript as "not too short" so the caller proceeds to probe/import
             // rather than silently classifying it as TooShort and skipping forever.
             return threshold;
+        }
+    }
+
+    /// <summary>
+    /// PUT visibility=none for every imported session id. Failures are logged
+    /// inline (one line per session) but never throw — the import already
+    /// succeeded; users can re-run `kapacitor hide` for any that failed.
+    /// </summary>
+    internal static async Task SetVisibilityNoneForAll(
+        HttpClient            httpClient,
+        string                baseUrl,
+        IReadOnlyList<string> sessionIds) {
+        foreach (var sessionId in sessionIds) {
+            var payload = new JsonObject { ["visibility"] = "none" };
+            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            try {
+                using var resp = await httpClient.PutWithRetryAsync(
+                    $"{baseUrl}/api/sessions/{sessionId}/visibility", content);
+                if (!resp.IsSuccessStatusCode) {
+                    await Console.Error.WriteLineAsync(
+                        $"  ! visibility=none failed for {sessionId}: HTTP {(int)resp.StatusCode}");
+                }
+            } catch (Exception ex) {
+                await Console.Error.WriteLineAsync(
+                    $"  ! visibility=none failed for {sessionId}: {ex.Message}");
+            }
         }
     }
 }
