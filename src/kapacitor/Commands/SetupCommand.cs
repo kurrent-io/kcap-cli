@@ -40,12 +40,20 @@ public static class SetupCommand {
         string  provider;
 
         if (serverUrlArg is not null) {
-            serverUrl = AppConfig.NormalizeUrl(serverUrlArg);
+            var normalized = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Checking server…",
+                async _ => await ServerUrlNormalizer.NormalizeAsync(
+                    serverUrlArg, skipProbe: false, CancellationToken.None));
+
+            if (normalized.Warning is not null) {
+                AnsiConsole.MarkupLine($"  [red]✗[/] Cannot reach server: {Markup.Escape(normalized.Warning)}");
+                return 1;
+            }
+
+            serverUrl = normalized.Url;
             await Console.Out.WriteLineAsync($"  Server URL: {serverUrl}");
 
             try {
-                provider = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Checking server…",
-                    async _ => await HttpClientExtensions.DiscoverProviderAsync(serverUrl));
+                provider = await HttpClientExtensions.DiscoverProviderAsync(serverUrl);
                 AnsiConsole.MarkupLine($"  [green]✓[/] Reachable · auth provider: [cyan]{Markup.Escape(provider)}[/]");
             } catch (Exception ex) {
                 AnsiConsole.MarkupLine($"  [red]✗[/] Cannot reach server: {Markup.Escape(ex.Message)}");
