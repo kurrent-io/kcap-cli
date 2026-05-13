@@ -10,6 +10,17 @@ public class SessionImporterProgressTests : IDisposable {
 
     public void Dispose() => _server.Stop();
 
+    /// <summary>
+    /// Synchronous IProgress&lt;T&gt;: appends to the callback in the calling
+    /// thread, unlike <see cref="Progress{T}"/> which marshals via the captured
+    /// SynchronizationContext and required a 50ms sleep after each test's
+    /// await — flaky on Linux CI where the marshalling sometimes slipped past
+    /// the deadline.
+    /// </summary>
+    sealed class SyncProgress<T>(Action<T> onReport) : IProgress<T> {
+        public void Report(T value) => onReport(value);
+    }
+
     [Test]
     public async Task SendTranscriptBatches_fires_BatchFlushed_per_100_lines() {
         _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
@@ -23,7 +34,7 @@ public class SessionImporterProgressTests : IDisposable {
             ));
 
             var events = new List<ImportProgress>();
-            var progress = new Progress<ImportProgress>(events.Add);
+            var progress = new SyncProgress<ImportProgress>(events.Add);
 
             using var client = new HttpClient();
             var totalSent = await SessionImporter.SendTranscriptBatches(
@@ -32,9 +43,6 @@ public class SessionImporterProgressTests : IDisposable {
             );
 
             await Assert.That(totalSent).IsEqualTo(250);
-
-            // Progress<T> marshals via SynchronizationContext; give it a tick
-            await Task.Delay(50);
 
             var flushes = events.OfType<BatchFlushed>().ToList();
             await Assert.That(flushes.Count).IsEqualTo(3);
@@ -79,7 +87,7 @@ public class SessionImporterProgressTests : IDisposable {
             ]);
 
             var events   = new List<ImportProgress>();
-            var progress = new Progress<ImportProgress>(events.Add);
+            var progress = new SyncProgress<ImportProgress>(events.Add);
 
             using var client = new HttpClient();
             var result = await SessionImporter.ImportSessionAsync(
@@ -87,8 +95,6 @@ public class SessionImporterProgressTests : IDisposable {
                 new SessionMetadata { Cwd = "/x" }, encodedCwd: null,
                 progress: progress
             );
-
-            await Task.Delay(50);
 
             await Assert.That(result.AgentIds).Contains(agentId);
 
