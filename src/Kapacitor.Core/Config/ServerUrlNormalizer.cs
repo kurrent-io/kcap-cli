@@ -82,7 +82,16 @@ public static class ServerUrlNormalizer {
         return new(fallback, $"could not reach {trimmed} on https or http. Saved as {fallback}. Verify with 'kapacitor config show'.");
     }
 
-    // Placeholder — real implementation added in Task 3.
-    static Task<bool> HttpProbeAsync(string url, TimeSpan timeout, CancellationToken ct) =>
-        Task.FromResult(false);
+    static async Task<bool> HttpProbeAsync(string url, TimeSpan timeout, CancellationToken ct) {
+        using var http = new HttpClient { Timeout = timeout };
+
+        try {
+            using var resp = await http.GetAsync($"{url}/auth/config", ct);
+            // Any HTTP response means the server is reachable. We do not require
+            // 200 — older servers without /auth/config still count as "up".
+            return true;
+        } catch {
+            return false;
+        }
+    }
 }
