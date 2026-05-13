@@ -47,6 +47,18 @@ For non-interactive environments:
 kapacitor setup --server-url https://capacitor.example.com --default-visibility org_public --no-prompt
 ```
 
+#### Also using Codex CLI?
+
+`setup` installs Claude Code hooks only. If you also use Codex CLI and want those sessions captured too, install the Codex hook surface separately:
+
+```bash
+kapacitor plugin install --codex            # user-wide  (~/.codex/hooks.json)
+kapacitor plugin install --codex --project  # this repo only (<repo>/.codex/hooks.json)
+kapacitor plugin remove --codex             # uninstall
+```
+
+`kapacitor status` reports installation state for both the Claude Code and Codex hook surfaces, so you can verify each is wired up.
+
 ### 3. Import existing sessions (optional)
 
 ```bash
@@ -62,7 +74,7 @@ Open the server URL in your browser. The dashboard shows repositories, sessions,
 
 ## What it records
 
-Once set up, Capacitor runs silently in the background. Every Claude Code session is captured automatically via hooks:
+Once set up, Capacitor runs silently in the background. Every Claude Code (and Codex CLI, if you installed those hooks) session is captured automatically:
 
 - **Session lifecycle** — start, end, interruptions, context compaction
 - **Transcript data** — streamed in real time via a background watcher process over SignalR
