@@ -50,11 +50,14 @@ kapacitor setup --server-url https://capacitor.example.com --default-visibility 
 ### 3. Import existing sessions (optional)
 
 ```bash
-kapacitor history            # discovers and uploads local Claude Code transcripts
-kapacitor history --codex    # imports Codex rollouts from ~/.codex/sessions
+kapacitor history --org                          # sessions for the org bound to your active profile
+kapacitor history --repo owner/repo              # sessions for one specific repo
+kapacitor history --codex --org                  # same, but from Codex rollouts (~/.codex/sessions)
 ```
 
 This backfills your past sessions from `~/.claude/projects/` (or `~/.codex/sessions` with `--codex`) so they appear in the dashboard. It's idempotent — safe to run multiple times.
+
+You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org` uses the active profile name as the GitHub org login — it works out of the box when the profile was created by `kapacitor setup` (which names it after the picked tenant), and errors otherwise. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
 ### 4. Open the dashboard
 
@@ -146,17 +149,31 @@ Launches a Claude Code session equipped with MCP tools that query the implementa
 
 ### Loading historical sessions
 
-Backfill older sessions from local transcript files:
+Backfill older sessions from local transcript files. The command requires an explicit scope so personal/private repos aren't uploaded by accident:
 
 ```bash
-kapacitor history                                  # all Claude sessions
-kapacitor history --codex                          # Codex rollouts from ~/.codex/sessions
-kapacitor history --cwd /path/to/project           # from a specific directory
-kapacitor history --session abc123                  # single session
-kapacitor history --since 2026-01-01               # only sessions on or after this date
+kapacitor history --all                            # every discovered session
+kapacitor history --org                            # sessions whose repo owner matches your active profile name
+kapacitor history --repo owner/repo                # one specific repo
+kapacitor history --repo .                         # the repo at the current cwd (must be a git repo with an origin remote)
 ```
 
-This discovers Claude Code transcript files at `~/.claude/projects/` (or Codex rollouts at `~/.codex/sessions` with `--codex`), checks each against the server, and loads any that are missing or incomplete. The command is idempotent and resumable.
+Run `kapacitor history` with no scope on an interactive terminal to get a picker. Each run shows a confirmation summary (scope, matched count, repo samples, visibility) before uploading anything.
+
+`--org` is a shortcut: it takes the active profile *name* and uses it as a GitHub org login to filter on. `kapacitor setup` names the profile after the picked tenant, so `--org` works out of the box for tenant-bound profiles; on the `default` profile, or a manually-named profile like `work`, use `--repo <owner/name>` instead (or run `kapacitor setup` to bind a profile to your org).
+
+Additional flags:
+
+```bash
+kapacitor history --org --yes                      # skip the confirmation prompt
+kapacitor history --org --private                  # mark every imported session as Only Visible to You
+kapacitor history --codex --org                    # Codex rollouts from ~/.codex/sessions
+kapacitor history --org --since 2026-01-01         # only sessions on or after this date
+kapacitor history --org --cwd /path/to/project     # filter by working directory
+kapacitor history --org --session abc123           # single session
+```
+
+Non-interactive runs (no TTY, e.g. CI) must pass both a scope flag and `--yes`. The command is idempotent and resumable — re-running with the same scope only uploads what's missing or incomplete.
 
 ### Agent daemon
 
