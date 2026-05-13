@@ -30,11 +30,16 @@ public static class ServerUrlNormalizer {
         input.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
 
     static string ExtractHost(string input) {
-        // Strip path
-        var pathStart = input.IndexOf('/');
+        // Strip path. For bracketed IPv6 the '/' separator only appears after ']'.
+        var bracketEnd = input.StartsWith('[') ? input.IndexOf(']') : -1;
+        var searchFrom = bracketEnd > 0 ? bracketEnd + 1 : 0;
+        var pathStart = input.IndexOf('/', searchFrom);
         var hostAndPort = pathStart >= 0 ? input[..pathStart] : input;
 
-        // IPv6 literal (contains "::") — no port to strip in the bare-host form.
+        // Bracketed IPv6 literal: "[::1]" or "[::1]:5108" → "::1".
+        if (bracketEnd > 0) return hostAndPort[1..bracketEnd];
+
+        // Bare IPv6 (contains "::"): no port stripping — colons are part of the host.
         if (hostAndPort.Contains("::")) return hostAndPort;
 
         // Strip port — but only the last ":N" if N is digits.

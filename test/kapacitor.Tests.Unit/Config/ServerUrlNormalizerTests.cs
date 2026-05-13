@@ -9,6 +9,8 @@ public class ServerUrlNormalizerLoopbackTests {
     [Arguments("127.0.0.1", "http://127.0.0.1")]
     [Arguments("127.0.0.1:8080", "http://127.0.0.1:8080")]
     [Arguments("::1", "http://::1")]
+    [Arguments("[::1]", "http://[::1]")]
+    [Arguments("[::1]:5108", "http://[::1]:5108")]
     [Arguments("host.docker.internal", "http://host.docker.internal")]
     [Arguments("host.docker.internal:5108", "http://host.docker.internal:5108")]
     public async Task Loopback_HostsGetHttp(string input, string expected) {
