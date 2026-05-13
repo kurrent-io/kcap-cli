@@ -90,6 +90,8 @@ public static class ServerUrlNormalizer {
             // Any HTTP response means the server is reachable. We do not require
             // 200 — older servers without /auth/config still count as "up".
             return true;
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
         } catch {
             return false;
         }
