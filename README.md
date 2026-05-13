@@ -51,7 +51,7 @@ kapacitor setup --server-url https://capacitor.example.com --default-visibility 
 
 ```bash
 kapacitor history --org                          # sessions for the org bound to your active profile
-kapacitor history --repo EventStore/kapacitor    # sessions for one specific repo
+kapacitor history --repo owner/repo              # sessions for one specific repo
 kapacitor history --codex --org                  # same, but from Codex rollouts (~/.codex/sessions)
 ```
 
@@ -154,7 +154,7 @@ Backfill older sessions from local transcript files. The command requires an exp
 ```bash
 kapacitor history --all                            # every discovered session
 kapacitor history --org                            # sessions whose repo owner matches your active profile name
-kapacitor history --repo EventStore/kapacitor      # one specific repo (owner/name)
+kapacitor history --repo owner/repo                # one specific repo
 kapacitor history --repo .                         # the repo at the current cwd (must be a git repo with an origin remote)
 ```
 
