@@ -417,7 +417,40 @@ switch (command) {
 
         var generateSummaries = args.Contains("--generate-summaries");
 
-        return await HistoryCommand.HandleHistory(baseUrl!, filterCwd, filterSession, minLines, generateSummaries, codex, since);
+        // --- Scope resolution (AI-613) ---
+        var profileConfig = await AppConfig.LoadProfileConfig();
+        var activeProfile = string.IsNullOrEmpty(profileConfig.ActiveProfile) ? "default" : profileConfig.ActiveProfile;
+
+        var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(Environment.CurrentDirectory);
+        (string Owner, string Name)? currentRepo = currentRepoDetected is { Owner: { } o, RepoName: { } n }
+            ? (o, n)
+            : null;
+
+        var flags = ImportScopeArgs.ParseFlags(args);
+        var resolveResult = ImportScopeArgs.Resolve(new(
+            Flags:         flags,
+            ActiveProfile: activeProfile,
+            IsInteractive: !Console.IsInputRedirected && !Console.IsOutputRedirected,
+            CurrentRepo:   currentRepo));
+
+        if (resolveResult.Error is not null) {
+            Console.Error.WriteLine(resolveResult.Error);
+            return 1;
+        }
+
+        return await HistoryCommand.HandleHistory(
+            baseUrl!,
+            filterCwd,
+            filterSession,
+            minLines,
+            generateSummaries,
+            codex,
+            since,
+            scope:            resolveResult.Scope,     // null => HandleHistory runs picker
+            skipConfirmation: resolveResult.Yes,
+            forcePrivate:     resolveResult.Private,
+            activeProfile:    activeProfile,
+            currentRepo:      currentRepo);
     }
     case "watch" when args.Length < 3:
         Console.Error.WriteLine("Usage: kapacitor watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex]");

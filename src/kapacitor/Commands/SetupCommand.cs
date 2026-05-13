@@ -225,6 +225,7 @@ public static class SetupCommand {
 
         AnsiConsole.Write(grid);
         AnsiConsole.MarkupLine("\n[dim]Optional:[/] start the agent daemon with [cyan]kapacitor agent start -d[/]");
+        AnsiConsole.MarkupLine("[dim]Optional:[/] import past sessions with [cyan]kapacitor history --org[/]");
 
         return 0;
     }
