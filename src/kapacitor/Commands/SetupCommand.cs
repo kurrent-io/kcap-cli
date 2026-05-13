@@ -44,14 +44,18 @@ public static class SetupCommand {
                 async _ => await ServerUrlNormalizer.NormalizeAsync(
                     serverUrlArg, skipProbe: false, CancellationToken.None));
 
-            if (normalized.Warning is not null) {
-                AnsiConsole.MarkupLine($"  [red]✗[/] Cannot reach server: {Markup.Escape(serverUrlArg)}");
+            if (!normalized.Reachable) {
+                AnsiConsole.MarkupLine($"  [red]✗[/] Cannot reach server: {Markup.Escape(normalized.Warning ?? serverUrlArg)}");
                 AnsiConsole.MarkupLine("  [dim]Check the URL is correct and the server is running.[/]");
                 return 1;
             }
 
             serverUrl = normalized.Url;
             await Console.Out.WriteLineAsync($"  Server URL: {serverUrl}");
+
+            // Reachable, but with an informational warning (e.g. https→http downgrade).
+            if (normalized.Warning is not null)
+                AnsiConsole.MarkupLine($"  [yellow]![/] {Markup.Escape(normalized.Warning)}");
 
             try {
                 provider = await HttpClientExtensions.DiscoverProviderAsync(serverUrl);
