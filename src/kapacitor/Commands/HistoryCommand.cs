@@ -2,6 +2,7 @@ using Spectre.Console;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using kapacitor.Config;
 
@@ -177,13 +178,18 @@ static class HistoryCommand {
         );
 
     public static async Task<int> HandleHistory(
-            string     baseUrl,
-            string?    filterCwd,
-            string?    filterSession    = null,
-            int        minLines         = 15,
-            bool       generateSummaries = false,
-            bool       codex            = false,
-            DateOnly?  since            = null
+            string       baseUrl,
+            string?      filterCwd,
+            string?      filterSession     = null,
+            int          minLines          = 15,
+            bool         generateSummaries = false,
+            bool         codex             = false,
+            DateOnly?    since             = null,
+            ImportScope? scope             = null,
+            bool         skipConfirmation  = false,
+            bool         forcePrivate      = false,
+            string       activeProfile     = "default",
+            (string Owner, string Name)? currentRepo = null
         ) {
         using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
         var       display    = HistoryDisplay.Create();
@@ -246,8 +252,87 @@ static class HistoryCommand {
         var projectCount = transcriptFiles.Select(t => t.EncodedCwd).Distinct().Count();
         display.Line($"Found {transcriptFiles.Count} {vendor} session{(transcriptFiles.Count == 1 ? "" : "s")} in {projectCount} project{(projectCount == 1 ? "" : "s")}");
 
+        var kapacitorConfig = await AppConfig.Load();
+
+        // --- Scope: pre-detect repos for the filter and (if needed) the picker ---
+        async ValueTask<(string? Owner, string? Name)> ResolveRepoAsync(
+            (string SessionId, string FilePath, string EncodedCwd) t,
+            CancellationToken                                       ctInner) {
+            var cwd = ExtractCwdFromTranscript(t.FilePath, codex);
+            if (cwd is null) return (null, null);
+            var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
+            return (repo?.Owner, repo?.RepoName);
+        }
+
+        // If we landed without a resolved scope, run the picker. The picker needs
+        // the set of distinct repos to drive its "specific repository" sub-picker,
+        // so detect ahead of time and reuse the results in the filter pass.
+        // Hoist the cache outside the if/else so sampleRepos can reuse it.
+        Dictionary<string, (string Owner, string Name)?>? resolved = null;
+
+        if (scope is null) {
+            resolved = new(StringComparer.Ordinal);
+            foreach (var t in transcriptFiles) {
+                var (o, n) = await ResolveRepoAsync(t, CancellationToken.None);
+                resolved[t.SessionId] = (o is not null && n is not null) ? (o, n) : null;
+            }
+            var distinct = resolved.Values
+                .Where(v => v is not null)
+                .Select(v => v!.Value)
+                .ToList();
+
+            scope = HistoryScopePrompt.RunPicker(activeProfile, currentRepo, distinct);
+            if (scope is null) {
+                // RunPicker has already printed the specific reason (e.g. "Active profile
+                // has no org" or "No repositories detected in discovered sessions") via
+                // AnsiConsole. Don't tack on a misleading "cancelled" message.
+                return 1;
+            }
+
+            // Reuse the cached lookup in the filter pass below.
+            transcriptFiles = await HistoryScopeFilter.Apply(
+                transcriptFiles,
+                scope,
+                (t, _) => new ValueTask<(string?, string?)>(
+                    resolved.TryGetValue(t.SessionId, out var v) && v is { } x ? (x.Owner, x.Name) : (null, null)));
+        } else {
+            transcriptFiles = await HistoryScopeFilter.Apply(transcriptFiles, scope, ResolveRepoAsync);
+        }
+
+        if (transcriptFiles.Count == 0) {
+            display.Line("No sessions match the selected scope.");
+            return 0;
+        }
+
+        // --- Confirmation ---
+        var sampleRepos = new List<string>();
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var t in transcriptFiles) {
+                string? o;
+                string? n;
+                if (resolved is not null && resolved.TryGetValue(t.SessionId, out var cached)) {
+                    (o, n) = cached is { } x ? (x.Owner, x.Name) : (null, null);
+                } else {
+                    (o, n) = await ResolveRepoAsync(t, CancellationToken.None);
+                }
+                if (o is null || n is null) continue;
+                if (seen.Add($"{o}/{n}")) sampleRepos.Add($"{o}/{n}");
+            }
+        }
+
+        var visibilityDesc = forcePrivate
+            ? "private (--private)"
+            : $"{kapacitorConfig?.DefaultVisibility ?? "org_public"} (from profile)";
+
+        if (!HistoryScopePrompt.PromptConfirm(
+                scope, transcriptFiles.Count, sampleRepos, visibilityDesc, skipConfirmation)) {
+            await Console.Error.WriteLineAsync("Import cancelled.");
+            return 0;
+        }
+
         // --- Classify (parallel probes) ---
-        var                         excludedRepos = (await AppConfig.Load())?.ExcludedRepos;
+        var                         excludedRepos = kapacitorConfig?.ExcludedRepos;
         List<SessionClassification> classifications;
 
         if (display.Tty) {
@@ -369,6 +454,7 @@ static class HistoryCommand {
         var       summariesFailed    = 0;
         var       titleFailures      = new System.Collections.Concurrent.ConcurrentBag<(string SessionId, string Reason)>();
         var       summaryFailures    = new System.Collections.Concurrent.ConcurrentBag<(string SessionId, string Reason)>();
+        var       importedSessionIds = new System.Collections.Concurrent.ConcurrentBag<string>();
 
         var events = new ChainWorkerEvents {
             OnSessionStarted  = (_, _) => { },    // non-TTY: session start is silent; TTY overrides below
@@ -382,6 +468,7 @@ static class HistoryCommand {
                 $"[red]✗[/] Skipping [cyan]{Markup.Escape(sid)}[/] [{Markup.Escape(reason)}]"
             ),
             OnSessionEnded = (_, c, outcome, lines) => {
+                importedSessionIds.Add(c.SessionId);
                 var verb = outcome == SessionImportOutcome.Resumed
                     ? $"resuming from line {c.ResumeFromLine}"
                     : "new";
@@ -500,7 +587,8 @@ static class HistoryCommand {
                                         );
                                     }
                                 },
-                                OnSessionEnded = (slot, _, _, _) => {
+                                OnSessionEnded = (slot, c, _, _) => {
+                                    importedSessionIds.Add(c.SessionId);
                                     // Description stays on the just-finished session until
                                     // the next OnSessionStarted swaps it. We only flip the
                                     // stripe off here so a slot that drains (queue empty)
@@ -546,6 +634,12 @@ static class HistoryCommand {
             }
         } else {
             importResult = new(0, 0, 0);
+        }
+
+        // --- --private: mark all imported sessions owner-only ---
+        if (forcePrivate && !importedSessionIds.IsEmpty) {
+            display.BeginPhase("Marking imported sessions private");
+            await SetVisibilityNoneForAll(httpClient, baseUrl, [.. importedSessionIds]);
         }
 
         // --- Background phase (titles / summaries) ---
@@ -1538,6 +1632,32 @@ static class HistoryCommand {
             // transcript as "not too short" so the caller proceeds to probe/import
             // rather than silently classifying it as TooShort and skipping forever.
             return threshold;
+        }
+    }
+
+    /// <summary>
+    /// PUT visibility=none for every imported session id. Failures are logged
+    /// inline (one line per session) but never throw — the import already
+    /// succeeded; users can re-run `kapacitor hide` for any that failed.
+    /// </summary>
+    internal static async Task SetVisibilityNoneForAll(
+        HttpClient            httpClient,
+        string                baseUrl,
+        IReadOnlyList<string> sessionIds) {
+        foreach (var sessionId in sessionIds) {
+            var payload = new JsonObject { ["visibility"] = "none" };
+            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            try {
+                using var resp = await httpClient.PutWithRetryAsync(
+                    $"{baseUrl}/api/sessions/{sessionId}/visibility", content);
+                if (!resp.IsSuccessStatusCode) {
+                    await Console.Error.WriteLineAsync(
+                        $"  ! visibility=none failed for {sessionId}: HTTP {(int)resp.StatusCode}");
+                }
+            } catch (Exception ex) {
+                await Console.Error.WriteLineAsync(
+                    $"  ! visibility=none failed for {sessionId}: {ex.Message}");
+            }
         }
     }
 }
