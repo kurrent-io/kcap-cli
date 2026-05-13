@@ -45,7 +45,8 @@ public static class SetupCommand {
                     serverUrlArg, skipProbe: false, CancellationToken.None));
 
             if (normalized.Warning is not null) {
-                AnsiConsole.MarkupLine($"  [red]✗[/] Cannot reach server: {Markup.Escape(normalized.Warning)}");
+                AnsiConsole.MarkupLine($"  [red]✗[/] Cannot reach server: {Markup.Escape(serverUrlArg)}");
+                AnsiConsole.MarkupLine("  [dim]Check the URL is correct and the server is running.[/]");
                 return 1;
             }
 
