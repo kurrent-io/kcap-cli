@@ -57,7 +57,9 @@ kapacitor plugin install --codex --project  # this repo only (<repo>/.codex/hook
 kapacitor plugin remove --codex             # uninstall
 ```
 
-`kapacitor status` reports installation state for both the Claude Code and Codex hook surfaces, so you can verify each is wired up.
+After a `--project` install, Codex won't actually run the hooks until you trust the directory: run `codex` once in the repo and accept the trust prompt.
+
+`kapacitor status` reports installation state for the user-wide Claude Code and Codex hook surfaces — it does not currently detect `--project` installs. For a `--project` install, check that `<repo>/.claude/settings.local.json` or `<repo>/.codex/hooks.json` exists and contains kapacitor entries.
 
 ### 3. Import existing sessions (optional)
 
