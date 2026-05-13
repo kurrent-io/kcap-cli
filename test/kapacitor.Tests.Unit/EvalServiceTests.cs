@@ -666,4 +666,55 @@ public class EvalServiceTests {
         await Assert.That(facts[0].FactHash).IsNull();
         await Assert.That(facts[0].RetainerGitHubId).IsNull();
     }
+
+    // ── BuildFactsUsedSnapshot ─────────────────────────────────────────────
+
+    [Test]
+    public async Task BuildFactsUsedSnapshot_flattens_per_category_pool_and_filters_unattributed() {
+        var pool = new Dictionary<string, List<JudgeFact>> {
+            ["safety"] = [
+                new JudgeFact {
+                    Category         = "safety",
+                    FactHash         = "h-A",
+                    Fact             = "fact-A",
+                    RetainerGitHubId = 7,
+                    SourceSessionId  = "src",
+                    SourceEvalRunId  = "rA",
+                    RetainedAt       = DateTimeOffset.Parse("2026-05-01T00:00:00Z")
+                },
+                // Old-server row — no fact_hash; must be filtered out.
+                new JudgeFact {
+                    Category         = "safety",
+                    Fact             = "fact-B-no-hash",
+                    SourceSessionId  = "src",
+                    SourceEvalRunId  = "rB",
+                    RetainedAt       = DateTimeOffset.Parse("2026-05-02T00:00:00Z")
+                }
+            ],
+            ["plan_adherence"] = [
+                new JudgeFact {
+                    Category         = "plan_adherence",
+                    FactHash         = "h-C",
+                    Fact             = "fact-C",
+                    RetainerGitHubId = 8,
+                    SourceSessionId  = "src",
+                    SourceEvalRunId  = "rC",
+                    RetainedAt       = DateTimeOffset.Parse("2026-05-03T00:00:00Z")
+                }
+            ]
+        };
+
+        var snapshot = EvalService.BuildFactsUsedSnapshot(pool);
+
+        await Assert.That(snapshot.Count).IsEqualTo(2);
+        await Assert.That(snapshot.Any(s => s.FactHash == "h-A" && s.Category == "safety")).IsTrue();
+        await Assert.That(snapshot.Any(s => s.FactHash == "h-C" && s.Category == "plan_adherence")).IsTrue();
+        await Assert.That(snapshot.All(s => s.Fact != "fact-B-no-hash")).IsTrue();
+    }
+
+    [Test]
+    public async Task BuildFactsUsedSnapshot_returns_empty_for_empty_pool() {
+        var snapshot = EvalService.BuildFactsUsedSnapshot(new Dictionary<string, List<JudgeFact>>());
+        await Assert.That(snapshot.Count).IsEqualTo(0);
+    }
 }
