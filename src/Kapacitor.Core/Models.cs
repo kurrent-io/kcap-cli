@@ -339,8 +339,43 @@ record JudgeFact {
     [JsonPropertyName("category")]
     public required string Category { get; init; }
 
+    // Nullable for backward compat with older servers that don't return this field.
+    [JsonPropertyName("fact_hash")]
+    public string? FactHash { get; init; }
+
     [JsonPropertyName("fact")]
     public required string Fact { get; init; }
+
+    // Nullable for backward compat with older servers that don't return this field.
+    [JsonPropertyName("retainer_github_id")]
+    public long? RetainerGitHubId { get; init; }
+
+    [JsonPropertyName("source_session_id")]
+    public required string SourceSessionId { get; init; }
+
+    [JsonPropertyName("source_eval_run_id")]
+    public required string SourceEvalRunId { get; init; }
+
+    [JsonPropertyName("retained_at")]
+    public required DateTimeOffset RetainedAt { get; init; }
+}
+
+// Snapshot of a judge fact at eval time. Sent in the facts_used field of
+// SessionEvalCompletedPayload so the server can persist which facts were
+// in scope when the eval ran, even if the live judge_facts pool is later
+// modified (muted, deleted, replaced).
+record EvalFactSnapshotPayload {
+    [JsonPropertyName("category")]
+    public required string Category { get; init; }
+
+    [JsonPropertyName("fact_hash")]
+    public required string FactHash { get; init; }
+
+    [JsonPropertyName("fact")]
+    public required string Fact { get; init; }
+
+    [JsonPropertyName("retainer_github_id")]
+    public required long RetainerGitHubId { get; init; }
 
     [JsonPropertyName("source_session_id")]
     public required string SourceSessionId { get; init; }
@@ -371,6 +406,9 @@ record SessionEvalCompletedPayload {
 
     [JsonPropertyName("retrospective")]
     public EvalRetrospective? Retrospective { get; init; }
+
+    [JsonPropertyName("facts_used")]
+    public List<EvalFactSnapshotPayload> FactsUsed { get; init; } = [];
 }
 
 enum HistorySessionStatus { New, Partial, AlreadyLoaded }
@@ -429,6 +467,8 @@ record RepoEntry {
 [JsonSerializable(typeof(SessionEvalCompletedPayload))]
 [JsonSerializable(typeof(JudgeFactPayload))]
 [JsonSerializable(typeof(List<JudgeFact>))]
+[JsonSerializable(typeof(EvalFactSnapshotPayload))]
+[JsonSerializable(typeof(List<EvalFactSnapshotPayload>))]
 [JsonSerializable(typeof(List<ErrorEntry>))]
 [JsonSerializable(typeof(RepositoryPayload))]
 [JsonSerializable(typeof(GitCacheEntry))]
