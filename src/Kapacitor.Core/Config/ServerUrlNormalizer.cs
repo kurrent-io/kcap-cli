@@ -6,7 +6,17 @@ namespace kapacitor.Config;
 /// not silently land on disk.
 /// </summary>
 public static class ServerUrlNormalizer {
-    public record Result(string Url, string? Warning);
+    /// <summary>
+    /// Outcome of normalizing a user-supplied server URL.
+    /// </summary>
+    /// <param name="Url">The URL to persist.</param>
+    /// <param name="Warning">Caller-agnostic diagnostic. Null when nothing notable happened.</param>
+    /// <param name="Reachable">
+    /// <c>false</c> only when probing failed on every attempted scheme. Save-path callers
+    /// typically save anyway and print the warning; interactive setup uses this as the
+    /// strict reachability gate.
+    /// </param>
+    public record Result(string Url, string? Warning, bool Reachable = true);
 
     static readonly string[] LoopbackHosts = ["localhost", "127.0.0.1", "::1", "host.docker.internal"];
 
@@ -56,7 +66,8 @@ public static class ServerUrlNormalizer {
     /// Resolves a server URL the user just supplied: applies the loopback default
     /// for scheme-less input and probes the result (or both schemes) via
     /// <c>GET /auth/config</c>. Never throws — on probe failure, returns the
-    /// loopback-default URL with a warning so the caller can decide what to do.
+    /// loopback-default URL with <c>Reachable = false</c> so the caller can decide
+    /// what to do.
     /// </summary>
     public static async Task<Result> NormalizeAsync(
         string                                                  input,
@@ -72,7 +83,7 @@ public static class ServerUrlNormalizer {
         if (HasScheme(trimmed)) {
             return await probe(trimmed, ProbeTimeout, ct)
                 ? new(trimmed, null)
-                : new(trimmed, $"could not reach {trimmed}. Saved anyway. Verify with 'kapacitor config show'.");
+                : new(trimmed, $"could not reach {trimmed}", Reachable: false);
         }
 
         var httpsCandidate = $"https://{trimmed}";
@@ -80,11 +91,18 @@ public static class ServerUrlNormalizer {
             return new(httpsCandidate, null);
 
         var httpCandidate = $"http://{trimmed}";
-        if (await probe(httpCandidate, ProbeTimeout, ct))
-            return new(httpCandidate, null);
+        if (await probe(httpCandidate, ProbeTimeout, ct)) {
+            // Loopback hosts default to http anyway, so the "downgrade" is expected.
+            // For everything else, warn so the user notices they're now on insecure HTTP.
+            var host       = ExtractHost(trimmed);
+            var isLoopback = LoopbackHosts.Contains(host, StringComparer.OrdinalIgnoreCase);
+            return isLoopback
+                ? new(httpCandidate, null)
+                : new(httpCandidate, $"https probe failed; saved as {httpCandidate}");
+        }
 
         var fallback = WithLoopbackDefault(trimmed);
-        return new(fallback, $"could not reach {trimmed} on https or http. Saved as {fallback}. Verify with 'kapacitor config show'.");
+        return new(fallback, $"could not reach {trimmed} on https or http", Reachable: false);
     }
 
     static async Task<bool> HttpProbeAsync(string url, TimeSpan timeout, CancellationToken ct) {

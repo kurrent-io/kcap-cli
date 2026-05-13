@@ -73,6 +73,19 @@ public class ServerUrlNormalizerOrchestrationTests {
         await Assert.That(result.Url).IsEqualTo("https://staging.kapacitor.ai");
         await Assert.That(result.Warning).IsNotNull();
         await Assert.That(result.Warning!).Contains("could not reach");
+        await Assert.That(result.Reachable).IsFalse();
+    }
+
+    [Test]
+    public async Task SchemeMissing_HttpsFails_HttpSucceeds_NonLoopback_WarnsAboutDowngrade() {
+        var result = await ServerUrlNormalizer.NormalizeAsync(
+            "staging.kapacitor.ai", skipProbe: false, CancellationToken.None,
+            (u, _, _) => Task.FromResult(u.StartsWith("http://")));
+
+        await Assert.That(result.Url).IsEqualTo("http://staging.kapacitor.ai");
+        await Assert.That(result.Warning).IsNotNull();
+        await Assert.That(result.Warning!).Contains("https probe failed");
+        await Assert.That(result.Reachable).IsTrue();
     }
 
     [Test]
@@ -110,6 +123,7 @@ public class ServerUrlNormalizerOrchestrationTests {
         await Assert.That(result.Url).IsEqualTo("https://staging.kapacitor.ai");
         await Assert.That(result.Warning).IsNotNull();
         await Assert.That(result.Warning!).Contains("could not reach");
+        await Assert.That(result.Reachable).IsFalse();
     }
 
     [Test]
