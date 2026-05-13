@@ -24,13 +24,15 @@ public static class ProfileCommand {
 
     static async Task<int> HandleAdd(string configPath, string[] args) {
         if (args.Length < 3) {
-            await Console.Error.WriteLineAsync("Usage: kapacitor profile add <name> --server-url <url> [--remote <pattern>]...");
+            await Console.Error.WriteLineAsync(
+                "Usage: kapacitor profile add <name> --server-url <url> [--remote <pattern>]... [--no-probe]");
 
             return 1;
         }
 
         var name      = args[2];
         var serverUrl = GetArg(args, "--server-url");
+        var skipProbe = args.Contains("--no-probe");
 
         if (serverUrl is null) {
             await Console.Error.WriteLineAsync("--server-url is required");
@@ -45,10 +47,10 @@ public static class ProfileCommand {
                 remotes.Add(args[++i]);
         }
 
-        return await AddProfile(configPath, name, serverUrl, remotes.ToArray());
+        return await AddProfile(configPath, name, serverUrl, remotes.ToArray(), skipProbe);
     }
 
-    internal static async Task<int> AddProfile(string configPath, string name, string serverUrl, string[] remotes) {
+    internal static async Task<int> AddProfile(string configPath, string name, string serverUrl, string[] remotes, bool skipProbe = true) {
         var config = await LoadConfig(configPath);
 
         if (config.Profiles.ContainsKey(name)) {
@@ -57,9 +59,15 @@ public static class ProfileCommand {
             return 1;
         }
 
+        var normalized = await ServerUrlNormalizer.NormalizeAsync(
+            serverUrl, skipProbe, CancellationToken.None);
+
+        if (normalized.Warning is not null)
+            await Console.Error.WriteLineAsync($"Warning: {normalized.Warning}");
+
         var profiles = new Dictionary<string, Profile>(config.Profiles) {
             [name] = new() {
-                ServerUrl = AppConfig.NormalizeUrl(serverUrl),
+                ServerUrl = normalized.Url,
                 Remotes   = remotes
             }
         };
@@ -178,10 +186,13 @@ public static class ProfileCommand {
     static async Task<int> PrintUsage() {
         await Console.Error.WriteLineAsync("Usage: kapacitor profile <add|list|remove|show>");
         await Console.Error.WriteLineAsync();
-        await Console.Error.WriteLineAsync("  add <name> --server-url <url> [--remote <pattern>]...");
+        await Console.Error.WriteLineAsync("  add <name> --server-url <url> [--remote <pattern>]... [--no-probe]");
         await Console.Error.WriteLineAsync("  list                          Show all profiles");
         await Console.Error.WriteLineAsync("  remove <name>                 Remove a profile");
         await Console.Error.WriteLineAsync("  show [name]                   Show profile details");
+        await Console.Error.WriteLineAsync();
+        await Console.Error.WriteLineAsync("Flags:");
+        await Console.Error.WriteLineAsync("  --no-probe                    Skip the reachability check when adding a profile");
 
         return 1;
     }

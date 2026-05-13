@@ -252,6 +252,20 @@ kapacitor update         # check for CLI updates
 kapacitor logout         # delete stored tokens
 ```
 
+## Upgrading from v1
+
+The v1 config format stored `server_url` as a bare host name without a
+scheme. If `kapacitor` crashes with `An invalid request URI was provided`
+after upgrading, your config still has the old format. Fix it with one
+command:
+
+    kapacitor config set server_url https://your-server.example.com
+
+Or remove the config file and re-run setup:
+
+    rm ~/.config/kapacitor/config.json
+    kapacitor setup
+
 ## License
 
 [Kurrent License v1](LICENSE)

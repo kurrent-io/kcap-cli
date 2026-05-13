@@ -12,10 +12,11 @@ public static class ConfigCommand {
         }
 
         var subcommand = args[1];
+        var skipProbe  = args.Contains("--no-probe");
 
         return subcommand switch {
             "show"                      => await Show(),
-            "set" when args.Length >= 4 => await Set(args[2], args[3]),
+            "set" when args.Length >= 4 => await Set(args[2], args[3], skipProbe),
             "set"                       => SetUsage(),
             _                           => UnknownSubcommand(subcommand)
         };
@@ -31,7 +32,17 @@ public static class ConfigCommand {
         return 0;
     }
 
-    static async Task<int> Set(string key, string value) {
+    static async Task<int> Set(string key, string value, bool skipProbe) {
+        if (key == "server_url") {
+            var result = await ServerUrlNormalizer.NormalizeAsync(
+                value, skipProbe, CancellationToken.None);
+
+            if (result.Warning is not null)
+                await Console.Error.WriteLineAsync($"Warning: {result.Warning}");
+
+            value = result.Url;
+        }
+
         var profileConfig = await AppConfig.LoadProfileConfig();
         var profileName   = profileConfig.ActiveProfile;
         var profile       = profileConfig.Profiles.GetValueOrDefault(profileName) ?? new Profile();
@@ -67,7 +78,7 @@ public static class ConfigCommand {
         };
 
     static int SetUsage() {
-        Console.Error.WriteLine("Usage: kapacitor config set <key> <value>");
+        Console.Error.WriteLine("Usage: kapacitor config set <key> <value> [--no-probe]");
         Console.Error.WriteLine();
         Console.Error.WriteLine("Keys:");
         Console.Error.WriteLine("  server_url                  Server URL");
@@ -77,6 +88,9 @@ public static class ConfigCommand {
         Console.Error.WriteLine("  default_visibility          Default session visibility (private, org_public, public)");
         Console.Error.WriteLine("  disable_session_guidelines  Skip injecting recurring-lessons context at SessionStart (true/false)");
         Console.Error.WriteLine("  excluded_repos              Excluded repos, comma-separated (owner/repo,owner/repo)");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("Flags:");
+        Console.Error.WriteLine("  --no-probe                  Skip the reachability check when setting server_url");
 
         return 1;
     }
