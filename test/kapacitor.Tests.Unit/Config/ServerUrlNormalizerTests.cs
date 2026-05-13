@@ -34,3 +34,89 @@ public class ServerUrlNormalizerLoopbackTests {
         await Assert.That(result).IsEqualTo(expected);
     }
 }
+
+public class ServerUrlNormalizerOrchestrationTests {
+    static Func<string, TimeSpan, CancellationToken, Task<bool>> Probe(Func<string, bool> reachable) =>
+        (url, _, _) => Task.FromResult(reachable(url));
+
+    [Test]
+    public async Task SkipProbe_ReturnsLoopbackDefault_NoWarning_NoProbeCalls() {
+        var probeCalls = 0;
+        var probe = Probe(u => { probeCalls++; return true; });
+
+        var result = await ServerUrlNormalizer.NormalizeAsync(
+            "staging.kapacitor.ai", skipProbe: true, CancellationToken.None, probe);
+
+        await Assert.That(result.Url).IsEqualTo("https://staging.kapacitor.ai");
+        await Assert.That(result.Warning).IsNull();
+        await Assert.That(probeCalls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SchemePresent_ProbeSucceeds_NoWarning() {
+        var result = await ServerUrlNormalizer.NormalizeAsync(
+            "https://staging.kapacitor.ai/", skipProbe: false, CancellationToken.None,
+            Probe(_ => true));
+
+        await Assert.That(result.Url).IsEqualTo("https://staging.kapacitor.ai");
+        await Assert.That(result.Warning).IsNull();
+    }
+
+    [Test]
+    public async Task SchemePresent_ProbeFails_Warns() {
+        var result = await ServerUrlNormalizer.NormalizeAsync(
+            "https://staging.kapacitor.ai", skipProbe: false, CancellationToken.None,
+            Probe(_ => false));
+
+        await Assert.That(result.Url).IsEqualTo("https://staging.kapacitor.ai");
+        await Assert.That(result.Warning).IsNotNull();
+        await Assert.That(result.Warning!).Contains("could not reach");
+    }
+
+    [Test]
+    public async Task SchemeMissing_HttpsSucceeds_UsesHttps() {
+        var probedUrls = new List<string>();
+        var result = await ServerUrlNormalizer.NormalizeAsync(
+            "staging.kapacitor.ai", skipProbe: false, CancellationToken.None,
+            (u, _, _) => { probedUrls.Add(u); return Task.FromResult(u.StartsWith("https://")); });
+
+        await Assert.That(result.Url).IsEqualTo("https://staging.kapacitor.ai");
+        await Assert.That(result.Warning).IsNull();
+        await Assert.That(probedUrls[0]).IsEqualTo("https://staging.kapacitor.ai");
+    }
+
+    [Test]
+    public async Task SchemeMissing_HttpsFails_HttpSucceeds_UsesHttp() {
+        var probedUrls = new List<string>();
+        var result = await ServerUrlNormalizer.NormalizeAsync(
+            "localhost:5108", skipProbe: false, CancellationToken.None,
+            (u, _, _) => { probedUrls.Add(u); return Task.FromResult(u.StartsWith("http://")); });
+
+        await Assert.That(result.Url).IsEqualTo("http://localhost:5108");
+        await Assert.That(result.Warning).IsNull();
+        await Assert.That(probedUrls.Count).IsEqualTo(2);
+        await Assert.That(probedUrls[0]).StartsWith("https://");
+        await Assert.That(probedUrls[1]).StartsWith("http://");
+    }
+
+    [Test]
+    public async Task SchemeMissing_BothFail_FallsBackToLoopbackDefault_Warns() {
+        var result = await ServerUrlNormalizer.NormalizeAsync(
+            "staging.kapacitor.ai", skipProbe: false, CancellationToken.None,
+            Probe(_ => false));
+
+        await Assert.That(result.Url).IsEqualTo("https://staging.kapacitor.ai");
+        await Assert.That(result.Warning).IsNotNull();
+        await Assert.That(result.Warning!).Contains("could not reach");
+    }
+
+    [Test]
+    public async Task SchemeMissing_BothFail_Loopback_UsesHttpFallback() {
+        var result = await ServerUrlNormalizer.NormalizeAsync(
+            "localhost:5108", skipProbe: false, CancellationToken.None,
+            Probe(_ => false));
+
+        await Assert.That(result.Url).IsEqualTo("http://localhost:5108");
+        await Assert.That(result.Warning).IsNotNull();
+    }
+}

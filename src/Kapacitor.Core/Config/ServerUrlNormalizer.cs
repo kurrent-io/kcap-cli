@@ -44,4 +44,45 @@ public static class ServerUrlNormalizer {
 
         return hostAndPort;
     }
+
+    static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// Resolves a server URL the user just supplied: applies the loopback default
+    /// for scheme-less input and probes the result (or both schemes) via
+    /// <c>GET /auth/config</c>. Never throws — on probe failure, returns the
+    /// loopback-default URL with a warning so the caller can decide what to do.
+    /// </summary>
+    public static async Task<Result> NormalizeAsync(
+        string                                                  input,
+        bool                                                    skipProbe,
+        CancellationToken                                       ct,
+        Func<string, TimeSpan, CancellationToken, Task<bool>>?  probe = null) {
+
+        probe ??= HttpProbeAsync;
+        var trimmed = input.TrimEnd('/');
+
+        if (skipProbe) return new(WithLoopbackDefault(trimmed), null);
+
+        if (HasScheme(trimmed)) {
+            return await probe(trimmed, ProbeTimeout, ct)
+                ? new(trimmed, null)
+                : new(trimmed, $"could not reach {trimmed}. Saved anyway. Verify with 'kapacitor config show'.");
+        }
+
+        var httpsCandidate = $"https://{trimmed}";
+        if (await probe(httpsCandidate, ProbeTimeout, ct))
+            return new(httpsCandidate, null);
+
+        var httpCandidate = $"http://{trimmed}";
+        if (await probe(httpCandidate, ProbeTimeout, ct))
+            return new(httpCandidate, null);
+
+        var fallback = WithLoopbackDefault(trimmed);
+        return new(fallback, $"could not reach {trimmed} on https or http. Saved as {fallback}. Verify with 'kapacitor config show'.");
+    }
+
+    // Placeholder — real implementation added in Task 3.
+    static Task<bool> HttpProbeAsync(string url, TimeSpan timeout, CancellationToken ct) =>
+        Task.FromResult(false);
 }
