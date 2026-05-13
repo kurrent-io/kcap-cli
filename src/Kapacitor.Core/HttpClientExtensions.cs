@@ -48,6 +48,11 @@ static class HttpClientExtensions {
             return cachedProvider;
         }
 
+        // Hooks call this BEFORE any *WithRetryAsync, so a legacy scheme-less
+        // server_url would crash here first if we did not guard. Fail fast with
+        // the same actionable message the retry guards print.
+        EnsureAbsolute(baseUrl);
+
         using var http = new HttpClient();
 
         try {
