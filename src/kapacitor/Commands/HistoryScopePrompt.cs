@@ -1,4 +1,5 @@
 using System.Text;
+using Spectre.Console;
 
 namespace kapacitor.Commands;
 
@@ -63,5 +64,74 @@ public static partial class HistoryScopePrompt {
         sb.AppendLine($"  repos:   {repoLine}");
         sb.Append   ($"  visibility: {visibilityDescription}");
         return sb.ToString();
+    }
+}
+
+public static partial class HistoryScopePrompt {
+    /// <summary>
+    /// Run the top-level scope picker. Returns the resolved scope, or null
+    /// when the user picks "specific repository" but the sub-picker has no
+    /// options (no current repo + no detected repos).
+    /// </summary>
+    public static ImportScope? RunPicker(
+        string                                     activeProfile,
+        (string Owner, string Name)?               currentRepo,
+        IReadOnlyList<(string Owner, string Name)> discoveredRepos) {
+        var choice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("What would you like to import?")
+                .AddChoices("all", "org", "repo")
+                .UseConverter(c => c switch {
+                    "all"  => "Everything",
+                    "org"  => $"Org repos only ({activeProfile})",
+                    "repo" => "Specific repository",
+                    _      => c,
+                }));
+
+        if (choice == "all")  return new ImportScope.All();
+        if (choice == "org") {
+            if (string.IsNullOrEmpty(activeProfile) || activeProfile == "default") {
+                AnsiConsole.MarkupLine("[red]Active profile has no org. Run `kapacitor setup`.[/]");
+                return null;
+            }
+            return new ImportScope.Org(activeProfile);
+        }
+
+        var repoChoices = BuildRepoChoices(currentRepo, discoveredRepos);
+        if (repoChoices.Length == 0) {
+            AnsiConsole.MarkupLine("[red]No repositories detected in discovered sessions.[/]");
+            return null;
+        }
+
+        var picked = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Which repository?")
+                .PageSize(15)
+                .AddChoices(repoChoices));
+
+        // Strip the trailing " (current)" marker before splitting on '/'.
+        var clean = picked.EndsWith(" (current)") ? picked[..^" (current)".Length] : picked;
+        var parts = clean.Split('/');
+        return new ImportScope.Repo(parts[0], parts[1]);
+    }
+
+    /// <summary>
+    /// Print the summary block to stderr (visible even when stdout is
+    /// redirected) and prompt y/N if <paramref name="skip"/> is false.
+    /// Returns true to proceed with the import.
+    /// </summary>
+    public static bool PromptConfirm(
+        ImportScope            scope,
+        int                    matchedCount,
+        IReadOnlyList<string>  repoSamples,
+        string                 visibilityDescription,
+        bool                   skip) {
+        var summary = FormatSummary(scope, matchedCount, repoSamples, visibilityDescription);
+        Console.Error.WriteLine(summary);
+
+        if (skip) return true;
+
+        return AnsiConsole.Prompt(
+            new ConfirmationPrompt("Continue?") { DefaultValue = false });
     }
 }
