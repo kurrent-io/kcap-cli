@@ -46,4 +46,14 @@ public class ConfigCommandTests {
 
         await Assert.That(updated.UpdateCheck).IsFalse();
     }
+
+    [Test]
+    public async Task ApplySet_ServerUrl_StoresValueVerbatim() {
+        // ApplySet itself stays pure — normalization happens in Set, not here.
+        var profile = new Profile();
+
+        var updated = ConfigCommand.ApplySet(profile, "server_url", "https://example.com");
+
+        await Assert.That(updated.ServerUrl).IsEqualTo("https://example.com");
+    }
 }

@@ -71,6 +71,32 @@ public class ProfileCommandTests {
     }
 
     [Test]
+    public async Task AddProfile_SchemeLessInput_AddsHttpsAndStoresNormalizedUrl() {
+        using var tmp = new TempDir();
+        var configPath = Path.Combine(tmp.Path, "config.json");
+
+        var initial = new ProfileConfig {
+            Profiles = new() {
+                ["default"] = new() { ServerUrl = "https://default.com" }
+            }
+        };
+        await File.WriteAllTextAsync(configPath,
+            JsonSerializer.Serialize(initial, ProfileConfigJsonContextIndented.Default.ProfileConfig));
+
+        // skipProbe defaults to true → no network, falls back to loopback heuristic.
+        var result = await ProfileCommand.AddProfile(
+            configPath, "contoso", "contoso.kapacitor.io", remotes: []);
+
+        await Assert.That(result).IsEqualTo(0);
+
+        var saved = JsonSerializer.Deserialize(
+            await File.ReadAllTextAsync(configPath),
+            ProfileConfigJsonContextIndented.Default.ProfileConfig)!;
+
+        await Assert.That(saved.Profiles["contoso"].ServerUrl).IsEqualTo("https://contoso.kapacitor.io");
+    }
+
+    [Test]
     public async Task RemoveProfile_CannotRemoveDefault() {
         using var tmp = new TempDir();
         var configPath = Path.Combine(tmp.Path, "config.json");
