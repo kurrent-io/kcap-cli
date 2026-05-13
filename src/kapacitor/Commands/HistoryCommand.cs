@@ -283,7 +283,9 @@ static class HistoryCommand {
 
             scope = HistoryScopePrompt.RunPicker(activeProfile, currentRepo, distinct);
             if (scope is null) {
-                await Console.Error.WriteLineAsync("Scope selection cancelled.");
+                // RunPicker has already printed the specific reason (e.g. "Active profile
+                // has no org" or "No repositories detected in discovered sessions") via
+                // AnsiConsole. Don't tack on a misleading "cancelled" message.
                 return 1;
             }
 
