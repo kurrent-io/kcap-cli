@@ -252,6 +252,8 @@ static class HistoryCommand {
         var projectCount = transcriptFiles.Select(t => t.EncodedCwd).Distinct().Count();
         display.Line($"Found {transcriptFiles.Count} {vendor} session{(transcriptFiles.Count == 1 ? "" : "s")} in {projectCount} project{(projectCount == 1 ? "" : "s")}");
 
+        var kapacitorConfig = await AppConfig.Load();
+
         // --- Scope: pre-detect repos for the filter and (if needed) the picker ---
         async ValueTask<(string? Owner, string? Name)> ResolveRepoAsync(
             (string SessionId, string FilePath, string EncodedCwd) t,
@@ -319,7 +321,7 @@ static class HistoryCommand {
 
         var visibilityDesc = forcePrivate
             ? "private (--private)"
-            : $"{(await AppConfig.Load())?.DefaultVisibility ?? "org_public"} (from profile)";
+            : $"{kapacitorConfig?.DefaultVisibility ?? "org_public"} (from profile)";
 
         if (!HistoryScopePrompt.PromptConfirm(
                 scope, transcriptFiles.Count, sampleRepos, visibilityDesc, skipConfirmation)) {
@@ -328,7 +330,7 @@ static class HistoryCommand {
         }
 
         // --- Classify (parallel probes) ---
-        var                         excludedRepos = (await AppConfig.Load())?.ExcludedRepos;
+        var                         excludedRepos = kapacitorConfig?.ExcludedRepos;
         List<SessionClassification> classifications;
 
         if (display.Tty) {

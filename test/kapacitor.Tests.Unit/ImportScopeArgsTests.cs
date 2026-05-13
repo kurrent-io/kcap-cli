@@ -162,7 +162,7 @@ public class ImportScopeArgsTests {
     }
 
     [Test]
-    public async Task Resolve_returns_NeedsPicker_when_no_flag_and_interactive() {
+    public async Task Resolve_returns_null_scope_and_null_error_when_no_flag_and_interactive() {
         var input = new ImportScopeArgs.ResolveInput(
             Flags: new(All: false, Org: false, RepoArg: null, Yes: false, Private: false),
             ActiveProfile: "EventStore",
@@ -173,7 +173,6 @@ public class ImportScopeArgsTests {
 
         await Assert.That(r.Scope).IsNull();
         await Assert.That(r.Error).IsNull();
-        await Assert.That(r.NeedsPicker).IsTrue();
     }
 
     [Test]
@@ -187,7 +186,6 @@ public class ImportScopeArgsTests {
         var r = ImportScopeArgs.Resolve(input);
 
         await Assert.That(r.Scope).IsNull();
-        await Assert.That(r.NeedsPicker).IsFalse();
         await Assert.That(r.Error!).Contains("--all, --org, or --repo");
     }
 

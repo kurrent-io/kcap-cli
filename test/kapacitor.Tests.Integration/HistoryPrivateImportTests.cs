@@ -26,17 +26,20 @@ public class HistoryPrivateImportTests : IDisposable {
             _server.Url!,
             ["sess1", "sess2", "sess3"]);
 
-        var calls = _server.LogEntries
+        var requests = _server.LogEntries
             .Where(e => e.RequestMessage.Method == "PUT")
-            .Select(e => e.RequestMessage.Path)
-            .OrderBy(p => p)
+            .OrderBy(e => e.RequestMessage.Path)
             .ToArray();
 
-        await Assert.That(calls).IsEquivalentTo(new[] {
+        await Assert.That(requests.Select(r => r.RequestMessage.Path).ToArray()).IsEquivalentTo(new[] {
             "/api/sessions/sess1/visibility",
             "/api/sessions/sess2/visibility",
             "/api/sessions/sess3/visibility",
         });
+
+        foreach (var r in requests) {
+            await Assert.That(r.RequestMessage.Body).IsEqualTo("""{"visibility":"none"}""");
+        }
     }
 
     [Test]
