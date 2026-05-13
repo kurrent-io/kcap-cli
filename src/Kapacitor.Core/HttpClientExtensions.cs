@@ -77,28 +77,60 @@ static class HttpClientExtensions {
         "Check https://github.com/kurrent-io/claude-remember#setup for instructions." +
         "\rError connecting to: ";
 
+    internal const string SchemeMissingHint =
+        "server_url is missing a scheme. Run: kapacitor config set server_url https://<host>";
+
+    /// <summary>
+    /// Pure test seam for <see cref="EnsureAbsolute"/>. Returns <c>true</c> only
+    /// for absolute http/https URLs.
+    /// </summary>
+    public static bool IsAcceptableUrl(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+        (uri.Scheme == "http" || uri.Scheme == "https");
+
+    /// <summary>
+    /// Fails fast with an actionable message if <paramref name="url"/> is not
+    /// an absolute http/https URL. Called by every <c>*WithRetryAsync</c>
+    /// extension so a legacy scheme-less config produces a clean exit instead
+    /// of an unhandled <see cref="InvalidOperationException"/> from
+    /// <see cref="HttpClient.PrepareRequestMessage"/>.
+    /// </summary>
+    static void EnsureAbsolute(string url) {
+        if (IsAcceptableUrl(url)) return;
+        Console.Error.WriteLine(SchemeMissingHint);
+        Environment.Exit(2);
+    }
+
     extension(HttpClient client) {
         public Task<HttpResponseMessage> PostWithRetryAsync(
                 string            url,
                 HttpContent       content,
                 TimeSpan?         timeout = null,
                 CancellationToken ct      = default
-            )
-            => SendWithRetryAsync(() => client.PostAsync(url, content, ct), timeout ?? DefaultTimeout, ct);
+            ) {
+            EnsureAbsolute(url);
+            return SendWithRetryAsync(() => client.PostAsync(url, content, ct), timeout ?? DefaultTimeout, ct);
+        }
 
-        public Task<HttpResponseMessage> GetWithRetryAsync(string url, TimeSpan? timeout = null, CancellationToken ct = default)
-            => SendWithRetryAsync(() => client.GetAsync(url, ct), timeout ?? DefaultTimeout, ct);
+        public Task<HttpResponseMessage> GetWithRetryAsync(string url, TimeSpan? timeout = null, CancellationToken ct = default) {
+            EnsureAbsolute(url);
+            return SendWithRetryAsync(() => client.GetAsync(url, ct), timeout ?? DefaultTimeout, ct);
+        }
 
         public Task<HttpResponseMessage> PutWithRetryAsync(
                 string            url,
                 HttpContent       content,
                 TimeSpan?         timeout = null,
                 CancellationToken ct      = default
-            )
-            => SendWithRetryAsync(() => client.PutAsync(url, content, ct), timeout ?? DefaultTimeout, ct);
+            ) {
+            EnsureAbsolute(url);
+            return SendWithRetryAsync(() => client.PutAsync(url, content, ct), timeout ?? DefaultTimeout, ct);
+        }
 
-        public Task<HttpResponseMessage> DeleteWithRetryAsync(string url, TimeSpan? timeout = null, CancellationToken ct = default)
-            => SendWithRetryAsync(() => client.DeleteAsync(url, ct), timeout ?? DefaultTimeout, ct);
+        public Task<HttpResponseMessage> DeleteWithRetryAsync(string url, TimeSpan? timeout = null, CancellationToken ct = default) {
+            EnsureAbsolute(url);
+            return SendWithRetryAsync(() => client.DeleteAsync(url, ct), timeout ?? DefaultTimeout, ct);
+        }
     }
 
     /// <summary>
