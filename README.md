@@ -196,13 +196,20 @@ Non-interactive runs (no TTY, e.g. CI) must pass both a scope flag and `--yes`. 
 The agent daemon connects to the Capacitor server and runs Claude Code agents in isolated git worktrees, controlled from the dashboard.
 
 ```bash
-kapacitor agent start              # start in foreground
-kapacitor agent start -d           # start in background (daemonize)
-kapacitor agent status             # check if daemon is running
-kapacitor agent stop               # stop the daemon (foreground or background)
+kapacitor agent start                   # start in foreground (defaults --name to your OS username)
+kapacitor agent start -d                # start in background (daemonize)
+kapacitor agent start --name laptop -d  # run multiple daemons on the same machine by giving each a unique name
+kapacitor agent status                  # list all running daemons
+kapacitor agent status --name laptop    # show status of a specific daemon
+kapacitor agent stop --name laptop      # stop just that one
+kapacitor agent stop --yes              # stop all running daemons unattended (otherwise prompts on multi)
+kapacitor agent doctor                  # diagnose lock-file state for every daemon name
+kapacitor agent doctor --clean          # also remove stale lock/pid files (held entries are never touched)
 ```
 
-`agent start` refuses to launch a second daemon when one is already alive, regardless of mode. Run `kapacitor agent stop` to terminate the existing one first. Two concurrent daemons under the same identity used to silently take down each other's hosted agents on the server.
+Each daemon process holds an exclusive `flock` on `~/.config/kapacitor/agents/<name>.lock` for its entire lifetime. The kernel releases the lock automatically when the daemon exits (including `SIGKILL` or power-off), so leftover lock files on disk are never a blocker — only a live process holding the kernel-level lock can prevent another daemon from acquiring the same name.
+
+Two daemons with **different** `--name` values can run side-by-side. Two daemons under the **same name** on the same machine collide on the flock and the second one exits with code 2. Even if that guard is bypassed somehow, the server rejects the second daemon's `DaemonConnect` with a typed error and the second daemon exits with code 3 — no more silent slot-displacement oscillation.
 
 ### Repository paths
 

@@ -55,36 +55,75 @@ public static class StatusCommand {
 
         await Console.Out.WriteLineAsync(string.Join("  ", parts));
 
-        // Agent
+        // Agent — AI-630: read per-name PID files under
+        // ~/.config/kapacitor/agents/ instead of the pre-AI-630 singleton
+        // at ~/.config/kapacitor/agent.pid. The top-level `kapacitor status`
+        // must agree with `kapacitor agent status`; previously this
+        // command kept saying "not running" while `agent status` reported
+        // a healthy daemon because new daemons no longer write the legacy
+        // singleton.
         Console.Write("  Agent:   ");
+        await WriteAgentStatusAsync();
 
-        var pidPath = PathHelpers.ConfigPath("agent.pid");
+        return 0;
+    }
 
-        if (File.Exists(pidPath)) {
-            // The PID file is one or two lines: PID, optionally followed by
-            // process StartTicks (UTC ticks of Process.StartTime). Parse only
-            // the first non-empty line as the PID — naively passing the whole
-            // contents to int.TryParse fails on the two-line format and
-            // mis-reports a running daemon as "invalid PID file".
-            var firstLine = (await File.ReadAllTextAsync(pidPath))
+    static async Task WriteAgentStatusAsync() {
+        if (!Directory.Exists(AgentLockPaths.Directory)) {
+            await Console.Out.WriteLineAsync("not running");
+            return;
+        }
+
+        var pidFiles = Directory.EnumerateFiles(AgentLockPaths.Directory, "*.pid")
+            .OrderBy(f => f)
+            .ToList();
+
+        if (pidFiles.Count == 0) {
+            await Console.Out.WriteLineAsync("not running");
+            return;
+        }
+
+        var entries = new List<(string Name, int Pid, bool Alive)>(pidFiles.Count);
+
+        foreach (var pidFile in pidFiles) {
+            var name = Path.GetFileNameWithoutExtension(pidFile);
+            if (string.IsNullOrEmpty(name)) continue;
+
+            var firstLine = (await File.ReadAllTextAsync(pidFile))
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .FirstOrDefault();
 
-            if (int.TryParse(firstLine, out var pid)) {
-                try {
-                    System.Diagnostics.Process.GetProcessById(pid);
-                    await Console.Out.WriteLineAsync($"running (PID {pid})");
-                } catch (ArgumentException) {
-                    await Console.Out.WriteLineAsync("not running (stale PID file)");
-                }
-            } else {
-                await Console.Out.WriteLineAsync("unknown (invalid PID file)");
+            if (!int.TryParse(firstLine, out var pid)) continue;
+
+            var alive = false;
+            try {
+                System.Diagnostics.Process.GetProcessById(pid);
+                alive = true;
+            } catch (ArgumentException) {
+                // process gone; treated as stale below
             }
-        } else {
-            await Console.Out.WriteLineAsync("not running");
+
+            entries.Add((name, pid, alive));
         }
 
-        return 0;
+        var live = entries.Where(e => e.Alive).ToList();
+
+        if (live.Count == 0) {
+            await Console.Out.WriteLineAsync(
+                entries.Count == 0
+                    ? "not running"
+                    : "not running (stale PID files; `kapacitor agent doctor --clean` to remove)"
+            );
+            return;
+        }
+
+        if (live.Count == 1) {
+            await Console.Out.WriteLineAsync($"running — {live[0].Name} (PID {live[0].Pid})");
+            return;
+        }
+
+        var summary = string.Join(", ", live.Select(e => $"{e.Name} (PID {e.Pid})"));
+        await Console.Out.WriteLineAsync($"running ({live.Count}) — {summary}");
     }
 
     /// <summary>

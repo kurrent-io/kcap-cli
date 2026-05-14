@@ -120,6 +120,28 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     volatile bool     _disposed;
     Task?             _eventProcessorTask;
 
+    /// <summary>
+    /// Sentinel prefix the server (<c>DaemonRegistry.NameInUseErrorCode</c>)
+    /// embeds in the <see cref="Microsoft.AspNetCore.SignalR.HubException"/>
+    /// message when <c>DaemonConnect</c> is rejected because another live
+    /// daemon already holds the <c>(owner, name)</c> slot. The daemon parses
+    /// this prefix and exits with code 3 instead of force-reconnecting in a
+    /// loop with the incumbent — see <see cref="OnNameInUse"/>.
+    /// </summary>
+    public const string NameInUseErrorCode = "DAEMON_NAME_IN_USE";
+
+    /// <summary>
+    /// Fires when the server rejected <c>DaemonConnect</c> with the
+    /// <see cref="NameInUseErrorCode"/> prefix. <c>DaemonRunner</c>
+    /// subscribes and signals host shutdown so the binary exits with
+    /// code 3 rather than oscillating with the incumbent daemon.
+    /// </summary>
+    public event Action<string>? OnNameInUse;
+
+    static bool IsNameInUse(Exception ex) =>
+        ex is Microsoft.AspNetCore.SignalR.HubException he
+        && he.Message.StartsWith(NameInUseErrorCode, StringComparison.Ordinal);
+
     public async Task ConnectAsync(CancellationToken ct) {
         _ct                 = ct;
         _eventProcessorTask = ProcessEventQueueAsync(ct);
@@ -139,6 +161,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
                 return;
             } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                throw;
+            } catch (Exception ex) when (IsNameInUse(ex)) {
+                // AI-630: server explicitly rejected this daemon because
+                // another live daemon owns the (owner, name) slot. Don't
+                // retry — retrying would just thrash the incumbent.
+                // RegisterDaemon already fired OnNameInUse before re-throwing
+                // here; we just need to propagate so DaemonRunner exits
+                // with code 3 instead of looping forever.
                 throw;
             } catch (Exception ex) {
                 var delay = delays[Math.Min(attempt, delays.Length - 1)];
@@ -163,6 +193,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             OnReconnectedCallback?.Invoke();
         } catch (OperationCanceledException) when (_ct.IsCancellationRequested) {
             // Shutting down, ignore
+        } catch (Exception ex2) when (IsNameInUse(ex2)) {
+            // ConnectWithRetryAsync already fired OnNameInUse via
+            // RegisterDaemon and propagated. The host's shutdown handler
+            // will tear everything down; swallow here so OnClosed (an
+            // unobserved Task) doesn't crash the process.
         }
     }
 
@@ -171,11 +206,26 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         var repoPaths = await MergeRepoPathsAsync();
         var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
 
-        await _hub.InvokeAsync(
-            "DaemonConnect",
-            new DaemonConnect(_config.Name, platform, repoPaths, _config.MaxConcurrentAgents, liveIds),
-            cancellationToken: _ct
-        );
+        try {
+            await _hub.InvokeAsync(
+                "DaemonConnect",
+                new DaemonConnect(
+                    _config.Name, platform, repoPaths, _config.MaxConcurrentAgents, liveIds,
+                    _config.InstanceId, _config.Version
+                ),
+                cancellationToken: _ct
+            );
+        } catch (Exception ex) when (IsNameInUse(ex)) {
+            // AI-630: server refused our (owner, name) slot because another
+            // live daemon owns it. Surface to DaemonRunner before re-throwing
+            // so the host can shut down cleanly; the heartbeat loop's
+            // SafeReRegisterAsync filters this exception out so we don't
+            // escalate to a pointless force-reconnect.
+            LogNameInUse(_config.Name, ex.Message);
+            OnNameInUse?.Invoke(ex.Message);
+
+            throw;
+        }
     }
 
     async Task<string[]> MergeRepoPathsAsync() {
@@ -413,6 +463,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _httpClient?.Dispose();
         await _hub.DisposeAsync();
     }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Daemon name '{Name}' is already in use by another live daemon on this account. Server rejected DaemonConnect: {Reason}")]
+    partial void LogNameInUse(string name, string reason);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Connecting to {Url}...")]
     partial void LogConnecting(string url);
