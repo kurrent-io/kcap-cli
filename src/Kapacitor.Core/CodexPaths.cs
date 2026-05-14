@@ -1,9 +1,9 @@
 namespace kapacitor;
 
 static class CodexPaths {
-    public static string Home          { get; } = Path.Combine(PathHelpers.HomeDirectory, ".codex");
-    public static string Sessions      { get; } = Path.Combine(Path.Combine(PathHelpers.HomeDirectory, ".codex"), "sessions");
-    public static string UserHooksJson { get; } = Path.Combine(Path.Combine(PathHelpers.HomeDirectory, ".codex"), "hooks.json");
+    public static string Home          => Path.Combine(PathHelpers.HomeDirectory, ".codex");
+    public static string Sessions      => Path.Combine(Home, "sessions");
+    public static string UserHooksJson => Path.Combine(Home, "hooks.json");
 
     /// <summary>
     /// Walk <c>~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl</c>, optionally pruning
