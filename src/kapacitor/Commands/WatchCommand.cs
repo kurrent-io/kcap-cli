@@ -295,7 +295,7 @@ static partial class WatchCommand {
                                 continue;
                             }
 
-                            var userText = TryExtractUserText(scanLine);
+                            var userText = TryExtractUserText(scanLine, vendor);
 
                             if (userText is null) {
                                 continue;
@@ -316,7 +316,7 @@ static partial class WatchCommand {
 
                 // Also check new lines (normal path)
                 if (state.FirstUserText is null && newLines.Count > 0) {
-                    foreach (var userText in newLines.Select(TryExtractUserText).OfType<string>()) {
+                    foreach (var userText in newLines.Select(line => TryExtractUserText(line, vendor)).OfType<string>()) {
                         SetFirstUserText(state, userText);
 
                         if (state.FirstUserText is not null) {
@@ -340,12 +340,12 @@ static partial class WatchCommand {
             // Count events and capture assistant context for LLM title generation
             if (state is { TitleGenerated: false } && agentId is null && newLines.Count > 0) {
                 foreach (var line in newLines) {
-                    if (IsEvent(line)) {
+                    if (IsEvent(line, vendor)) {
                         state.EventCount++;
                     }
 
                     if (state.FirstAssistantText is null) {
-                        var assistantText = TryExtractAssistantText(line);
+                        var assistantText = TryExtractAssistantText(line, vendor);
 
                         if (assistantText is not null) {
                             state.FirstAssistantText = assistantText.Length > 300 ? assistantText[..300] : assistantText;
@@ -364,7 +364,7 @@ static partial class WatchCommand {
                 Log($"Triggering LLM title generation (attempt {state.TitleAttempts + 1}/5, events: {state.EventCount})");
                 state.TitleInFlight = true;
                 state.TitleAttempts++;
-                _ = GenerateTitleAsync(hubConnection, sessionId, state);
+                _ = GenerateTitleAsync(hubConnection, sessionId, state, vendor);
             }
 
             switch (agentId) {
@@ -487,7 +487,12 @@ static partial class WatchCommand {
         state.FirstUserText = userText;
     }
 
-    static string? TryExtractAssistantText(string line) {
+    internal static string? TryExtractAssistantText(string line, string vendor = "claude") =>
+        vendor == "codex"
+            ? TryExtractCodexAssistantText(line)
+            : TryExtractClaudeAssistantText(line);
+
+    static string? TryExtractClaudeAssistantText(string line) {
         try {
             using var doc  = JsonDocument.Parse(line);
             var       root = doc.RootElement;
@@ -516,10 +521,39 @@ static partial class WatchCommand {
         return null;
     }
 
-    static bool IsEvent(string line) {
+    static string? TryExtractCodexAssistantText(string line) {
         try {
             using var doc  = JsonDocument.Parse(line);
             var       root = doc.RootElement;
+
+            if (root.Str("type") != "response_item") return null;
+
+            var payload = root.Obj("payload");
+
+            if (payload?.Str("type") != "message" || payload.Value.Str("role") != "assistant") return null;
+
+            return ExtractCodexBlockText(payload.Value, "output_text")?.Trim() is { Length: > 0 } text ? text : null;
+        } catch {
+            return null;
+        }
+    }
+
+    internal static bool IsEvent(string line, string vendor = "claude") {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (vendor == "codex") {
+                // Codex rolls everything into a top-level response_item envelope;
+                // a "message" payload (user or assistant) is the analog of Claude's
+                // user/assistant event for title-threshold purposes.
+                if (root.Str("type") != "response_item") return false;
+
+                var payload = root.Obj("payload");
+
+                return payload?.Str("type") == "message"
+                 && payload.Value.Str("role") is "user" or "assistant";
+            }
 
             return root.Str("type") is "user" or "assistant";
         } catch {
@@ -527,7 +561,12 @@ static partial class WatchCommand {
         }
     }
 
-    internal static string? TryExtractUserText(string line) {
+    internal static string? TryExtractUserText(string line, string vendor = "claude") =>
+        vendor == "codex"
+            ? TryExtractCodexUserText(line)
+            : TryExtractClaudeUserText(line);
+
+    static string? TryExtractClaudeUserText(string line) {
         try {
             using var doc  = JsonDocument.Parse(line);
             var       root = doc.RootElement;
@@ -566,6 +605,51 @@ static partial class WatchCommand {
         return null;
     }
 
+    static string? TryExtractCodexUserText(string line) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Str("type") != "response_item") return null;
+
+            var payload = root.Obj("payload");
+
+            if (payload?.Str("type") != "message" || payload.Value.Str("role") != "user") return null;
+
+            var text = ExtractCodexBlockText(payload.Value, "input_text");
+
+            // Skip codex-injected wrappers (environment_context, AGENTS.md, turn_aborted).
+            // These role:"user" payloads precede the real prompt and would otherwise be
+            // used as the title context. The same prelude list lives in TitleGenerator
+            // for the offline import path.
+            return text is null || IsCodexInjectedUserPrelude(text) ? null : text;
+        } catch (Exception ex) {
+            if (!parseErrorLogged) {
+                parseErrorLogged = true;
+                Log($"TryExtractUserText (codex) parse error (further errors suppressed): {ex.Message}");
+            }
+        }
+
+        return null;
+    }
+
+    static string? ExtractCodexBlockText(JsonElement payload, string blockType) {
+        if (payload.Arr("content") is not { } content) return null;
+
+        foreach (var block in content.EnumerateArray()) {
+            if (block.Str("type") == blockType && block.Str("text") is { Length: > 0 } text) {
+                return text;
+            }
+        }
+
+        return null;
+    }
+
+    static bool IsCodexInjectedUserPrelude(string text) =>
+        text.StartsWith("<environment_context>",    StringComparison.Ordinal)
+     || text.StartsWith("# AGENTS.md instructions", StringComparison.Ordinal)
+     || text.StartsWith("<turn_aborted>",           StringComparison.Ordinal);
+
     /// <summary>
     /// Strips XML-like system instruction blocks from user text so they don't pollute title generation.
     /// Removes content between tags like &lt;system_instructions&gt;, &lt;system-reminder&gt;, etc.
@@ -585,9 +669,9 @@ static partial class WatchCommand {
 
     static readonly Regex SystemInstructionsRegex = SystemInstructionsRx();
 
-    static async Task GenerateTitleAsync(HubConnection hubConnection, string sessionId, WatchState state) {
+    static async Task GenerateTitleAsync(HubConnection hubConnection, string sessionId, WatchState state, string vendor) {
         try {
-            var result = await TitleGenerator.GenerateAsync(state.FirstUserText!, state.FirstAssistantText, Log);
+            var result = await TitleGenerator.GenerateAsync(state.FirstUserText!, state.FirstAssistantText, Log, vendor);
 
             if (result is null) {
                 Log($"Title generation attempt {state.TitleAttempts}/5 returned no usable result (CLI failure, refusal-like output, or empty title)");
