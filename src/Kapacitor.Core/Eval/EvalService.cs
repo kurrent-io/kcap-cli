@@ -124,7 +124,6 @@ internal static class EvalService {
         string                                       SessionId,
         string                                       TraceJson,
         EvalContextResult                            ContextResult,
-        IReadOnlyDictionary<string, List<JudgeFact>> KnownFactsByCategory,
         string                                       PromptTemplate,
         string                                       ToolsPromptTemplate,
         IReadOnlyList<EvalQuestionDto>               Questions,
@@ -282,22 +281,19 @@ internal static class EvalService {
         // "stable" trends). FactsUsed snapshots persist as empty for new
         // evals; the read-side projection + UI panel stay in place so
         // historical eval audit views keep working.
-        IReadOnlyDictionary<string, List<JudgeFact>> knownFactsByCategory =
-            new Dictionary<string, List<JudgeFact>>();
-        var promptTemplate       = EmbeddedResources.Load("prompt-eval-question.txt");
-        var toolsPromptTemplate  = EmbeddedResources.Load("prompt-eval-question-tools.txt");
+        var promptTemplate      = EmbeddedResources.Load("prompt-eval-question.txt");
+        var toolsPromptTemplate = EmbeddedResources.Load("prompt-eval-question-tools.txt");
 
         return new EvalContext(
-            EvalRunId:            evalRunId,
-            EncodedSessionId:     encodedSessionId,
-            SessionId:            context.SessionId,
-            TraceJson:            traceJson,
-            ContextResult:        context,
-            KnownFactsByCategory: knownFactsByCategory,
-            PromptTemplate:       promptTemplate,
-            ToolsPromptTemplate:  toolsPromptTemplate,
-            Questions:            questions,
-            Model:                model
+            EvalRunId:           evalRunId,
+            EncodedSessionId:    encodedSessionId,
+            SessionId:           context.SessionId,
+            TraceJson:           traceJson,
+            ContextResult:       context,
+            PromptTemplate:      promptTemplate,
+            ToolsPromptTemplate: toolsPromptTemplate,
+            Questions:           questions,
+            Model:               model
         );
     }
 
@@ -464,15 +460,14 @@ internal static class EvalService {
         // won't match (latent for UUID sessions, visible for
         // meta-session slugs — see DEV-1484 final review).
         var retrospective = await RunRetrospectiveAsync(
-            evalRunId:            ctx.EvalRunId,
-            sessionId:            ctx.SessionId,
-            model:                model,
-            baseUrl:              baseUrl,
-            aggregate:            aggregate,
-            verdicts:             verdicts,
-            knownFactsByCategory: ctx.KnownFactsByCategory,
-            observer:             observer,
-            ct:                   ct
+            evalRunId: ctx.EvalRunId,
+            sessionId: ctx.SessionId,
+            model:     model,
+            baseUrl:   baseUrl,
+            aggregate: aggregate,
+            verdicts:  verdicts,
+            observer:  observer,
+            ct:        ct
         );
         aggregate = aggregate with { Retrospective = retrospective };
 
@@ -843,15 +838,14 @@ internal static class EvalService {
     /// cancellation still cancels the eval run.
     /// </summary>
     static async Task<EvalRetrospective?> RunRetrospectiveAsync(
-            string                                      evalRunId,
-            string                                      sessionId,
-            string                                      model,
-            string                                      baseUrl,
-            SessionEvalCompletedPayload                 aggregate,
-            IReadOnlyList<EvalQuestionVerdict>          verdicts,
-            IReadOnlyDictionary<string, List<JudgeFact>> knownFactsByCategory,
-            IEvalObserver                               observer,
-            CancellationToken                           ct
+            string                             evalRunId,
+            string                             sessionId,
+            string                             model,
+            string                             baseUrl,
+            SessionEvalCompletedPayload        aggregate,
+            IReadOnlyList<EvalQuestionVerdict> verdicts,
+            IEvalObserver                      observer,
+            CancellationToken                  ct
         ) {
         // Check cancellation before emitting OnRetrospectiveStarted so a
         // shutdown between the per-question loop and retrospective doesn't
@@ -864,8 +858,8 @@ internal static class EvalService {
         var verdictsJson = JsonSerializer.Serialize(verdicts, KapacitorJsonContext.Default.IReadOnlyListEvalQuestionVerdict);
 
         // Soft-drop of {KNOWN_PATTERNS}: template no longer has the
-        // placeholder; pass empty for the now-inert parameter.
-        _ = knownFactsByCategory;
+        // placeholder, so the retrospective prompt builder receives an
+        // empty knownPatterns string and the replace becomes a no-op.
         var prompt = BuildRetrospectivePrompt(sessionMeta, verdictsJson, knownPatterns: "");
 
         // DEV-1484: instead of embedding the compacted trace (which blew
