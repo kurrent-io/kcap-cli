@@ -527,13 +527,16 @@ public class EvalServiceTests {
 
         // DEV-1484: {TRACE_JSON} was dropped — the trace is no longer
         // embedded, the judge pulls session data via MCP tools instead.
+        // KNOWN_PATTERNS soft-dropped: placeholder removed from the
+        // template; passing a value is now inert, and the rendered prompt
+        // does not contain the facts block at all.
         await Assert.That(prompt).DoesNotContain("{SESSION_META}");
         await Assert.That(prompt).DoesNotContain("{VERDICTS_JSON}");
         await Assert.That(prompt).DoesNotContain("{KNOWN_PATTERNS}");
         await Assert.That(prompt).DoesNotContain("{TRACE_JSON}");
         await Assert.That(prompt).Contains(meta);
         await Assert.That(prompt).Contains(verdicts);
-        await Assert.That(prompt).Contains(facts);
+        await Assert.That(prompt).DoesNotContain(facts);
     }
 
     // ── Truncate (log-safe sanitisation) ────────────────────────────────────
@@ -585,7 +588,8 @@ public class EvalServiceTests {
         await Assert.That(tpl).Contains("{CATEGORY}");
         await Assert.That(tpl).Contains("{QUESTION_ID}");
         await Assert.That(tpl).Contains("{QUESTION_TEXT}");
-        await Assert.That(tpl).Contains("{KNOWN_PATTERNS}");
+        // KNOWN_PATTERNS soft-dropped: placeholder is no longer in the template.
+        await Assert.That(tpl).DoesNotContain("{KNOWN_PATTERNS}");
         await Assert.That(tpl).DoesNotContain("{TRACE_JSON}");
     }
 

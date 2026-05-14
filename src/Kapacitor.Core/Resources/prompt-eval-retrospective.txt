@@ -8,9 +8,6 @@ You MUST ground every point in the verdicts below OR in evidence pulled via the 
 # Per-question verdicts
 {VERDICTS_JSON}
 
-# Known patterns (retained from prior evals in this repo, by category)
-{KNOWN_PATTERNS}
-
 # Investigating the session
 
 Use these MCP tools to pull session details on demand — the trace is NOT embedded in this prompt:
@@ -25,7 +22,7 @@ Use these MCP tools to pull session details on demand — the trace is NOT embed
 Budget: at most 6 tool calls. Prefer summary → search → targeted fetch over paging the full trace. Don't call `get_transcript` unless summary + search + recap left a specific question unanswered.
 
 # Task
-Produce a structured retrospective that calls out what went well, what went poorly, and concrete CLAUDE.md-style suggestions the user can apply to their next session in this project. Reference the known patterns where relevant.
+Produce a structured retrospective that calls out what went well, what went poorly, and concrete CLAUDE.md-style suggestions the user can apply to their next session in this project.
 
 Respond with exactly this JSON shape — no prose outside the JSON, no markdown code fences, no comments, no extra fields:
 {
@@ -42,5 +39,4 @@ Guidance:
 - Good suggestion: "Before any `rm -rf`, require the agent to echo the expanded path and ask for confirmation."
 - Bad suggestion:  "Be more careful with destructive commands."
 - If there is genuinely nothing worth suggesting, return an empty `suggestions` array. Do not pad.
-- Only reference a known pattern when the session actually shows (or fails to show) the same behaviour. Do not punish this run for a pattern unrelated to what you see.
 - Emit only the four fields above. Do not include a `notes`, `metadata`, or any other top-level field.
