@@ -24,7 +24,7 @@ internal sealed partial class ClaudeLauncher(
             var destClaudeDir   = Path.Combine(ctx.Worktree.Path, ".claude");
 
             if (Directory.Exists(sourceClaudeDir)) {
-                OverlayDirectory(sourceClaudeDir, destClaudeDir);
+                FileSystemOverlay.OverlayDirectory(sourceClaudeDir, destClaudeDir);
             }
 
             SymlinkClaudeProjectDir(ctx.SourceRepoPath, ctx.Worktree.Path);
@@ -150,28 +150,6 @@ internal sealed partial class ClaudeLauncher(
         Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
 
         File.WriteAllText(settingsPath, rootObj.ToJsonString(IndentedJsonOpts));
-    }
-
-    /// <summary>
-    /// Copies files from <paramref name="source"/> into <paramref name="dest"/>,
-    /// creating directories as needed but never overwriting existing files.
-    /// This preserves git-tracked files while adding gitignored local settings.
-    /// </summary>
-    static void OverlayDirectory(string source, string dest) {
-        Directory.CreateDirectory(dest);
-
-        foreach (var file in Directory.GetFiles(source)) {
-            var destFile = Path.Combine(dest, Path.GetFileName(file));
-
-            if (!File.Exists(destFile)) {
-                File.Copy(file, destFile);
-            }
-        }
-
-        foreach (var dir in Directory.GetDirectories(source)) {
-            var destDir = Path.Combine(dest, Path.GetFileName(dir));
-            OverlayDirectory(dir, destDir);
-        }
     }
 
     /// <summary>
