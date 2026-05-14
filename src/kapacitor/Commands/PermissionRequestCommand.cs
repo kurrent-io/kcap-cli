@@ -72,7 +72,13 @@ static class PermissionRequestCommand {
         var raw = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
         if (string.IsNullOrEmpty(raw)) return false;
 
-        if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || !uri.IsLoopback) {
+        if (DaemonBridgeUrl.TryParseLoopback(raw, out daemonUrl)) {
+            return true;
+        }
+
+        // Provide helpful error message if validation failed
+        if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri)) {
+            // Malformed URI
             Console.Error.WriteLine($"[kapacitor] Ignoring non-loopback KAPACITOR_DAEMON_URL: {raw}");
             return false;
         }
@@ -82,9 +88,9 @@ static class PermissionRequestCommand {
             return false;
         }
 
-        // Trim trailing slash so the appended "/permission-request" produces a clean URL.
-        daemonUrl = raw.TrimEnd('/');
-        return true;
+        // URI is valid but host is not 127.0.0.1
+        Console.Error.WriteLine($"[kapacitor] Ignoring non-loopback KAPACITOR_DAEMON_URL: {raw}");
+        return false;
     }
 
     static async Task<int> PostAsync(string url, JsonObject payload, bool authenticated) {
