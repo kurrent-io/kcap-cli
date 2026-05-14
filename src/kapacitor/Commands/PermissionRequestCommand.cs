@@ -76,19 +76,6 @@ static class PermissionRequestCommand {
             return true;
         }
 
-        // Provide helpful error message if validation failed
-        if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri)) {
-            // Malformed URI
-            Console.Error.WriteLine($"[kapacitor] Ignoring non-loopback KAPACITOR_DAEMON_URL: {raw}");
-            return false;
-        }
-
-        if (uri.Scheme != Uri.UriSchemeHttp) {
-            Console.Error.WriteLine($"[kapacitor] Ignoring non-http KAPACITOR_DAEMON_URL scheme: {uri.Scheme}");
-            return false;
-        }
-
-        // URI is valid but host is not 127.0.0.1
         Console.Error.WriteLine($"[kapacitor] Ignoring non-loopback KAPACITOR_DAEMON_URL: {raw}");
         return false;
     }
