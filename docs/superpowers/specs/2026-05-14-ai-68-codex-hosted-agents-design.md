@@ -139,8 +139,10 @@ Server files touched (paths relative to `kapacitor-server` repo root):
   - **`src/Kurrent.Capacitor.Shared/Components/PermissionRequestCard.razor:26`** — hide `Always Allow` and `Update Input` buttons when `PendingPermission.Vendor == "codex"`; show only `Allow` / `Deny`.
   - **`src/Kurrent.Capacitor.Shared/Components/Chat/AgentChatView.razor:62`** — the active-chat input renders `Yes, always` for permission elicitations; hide it when `AgentChatContext.CurrentPermission.Vendor == "codex"`.
   - **`src/Kurrent.Capacitor.Core/Chat/ElicitationOption.cs:13`** — the "always" option is Claude-only. The option list construction site (wherever `AgentChatContext` builds the elicitation options from a `PendingPermission`) filters the always-variant when vendor is codex.
-- **`InterruptIssued` event / `PendingPermission` record / SignalR `PermissionRequested` payload** — all three need a `Vendor` field. The daemon's `LocalPermissionBridge` already extracts vendor from the URL segment (§6.1); the server reads it from the V2 hub call and stamps it on the persisted row, the read-model record, and the dashboard push.
-- **`AgentChatContext`** — exposes vendor on the current permission state so the chat view's conditional rendering can read it.
+- **SignalR `PermissionRequested` broadcast** — same SignalR-arity trap as `RequestPermission` (clients today subscribe with five args at `SessionHookHandlers.cs:1083` / `RemoteAgentService.cs:27`). Adding a sixth `vendor` argument silently breaks old UI / mobile clients that haven't been upgraded. **Keep the existing `PermissionRequested(...)` broadcast unchanged** and **add a new `PermissionRequestedV2(...)` broadcast that includes `vendor`**, fired on the same hub on the same events. The server dual-broadcasts (one event each) for the duration of the rollout — old clients consume V1 and assume `vendor = "claude"` as default; new clients prefer V2 and ignore V1.
+- **`InterruptIssued`** lives in the external `Kurrent.Agent.Schema` package (referenced from `Kurrent.Capacitor.Core.csproj:24`) and is not editable from this repo. Vendor is carried as a **Capacitor-owned extension field** on `ClaudeCodePermissionExtension` (today at `ClaudeCodeExtensions.cs:107`), which is the existing pattern for Capacitor-specific data riding on schema-typed events. Daemon hook handlers populate the extension; server projection persists it; the dashboard reads it through the same `PendingPermission` field.
+- **`PendingPermission` record** (today in `ElicitationOption.cs`) — add `Vendor` field, populated server-side from the `ClaudeCodePermissionExtension` payload above.
+- **`AgentChatContext`** (today at `AgentChatContext.cs:28`) — exposes scalar permission fields. Add `PermissionVendor` (matching the existing flat shape — no nested `CurrentPermission` object) so the chat view's conditional rendering has a single property to bind against.
 - **AgentRunStarted read model** — server-side projection of `AgentRunStarted` adds a `Vendor` column / property. Used by the dashboard to render a vendor badge on the agent card. Migration path is whatever the server uses for additive read-model fields (existing rows backfill to `"claude"` since they predate Codex).
 
 Ordering for paired PR rollout (staging):
@@ -156,11 +158,14 @@ Server-side test coverage paired with the rollout:
 - `RequestPermission_old_method_persists_vendor_claude` — regression for old-daemon compatibility (call the four-arg method via a real `HubConnection.InvokeAsync` wire test, assert the persisted row carries `vendor = "claude"`).
 - `RequestPermissionV2_persists_explicit_vendor` — happy path for the new daemon, with parametrised cases for both `"claude"` and `"codex"`.
 - `Old_daemon_simulator_calls_four_arg_method_and_receives_decision_unchanged` — pure-wire test simulating the `RemoteAgentService.cs:142` call shape, ensuring no SignalR arity-mismatch error.
+- `PermissionRequested_old_event_still_fires_with_five_args` — regression for old clients (subscribe via SignalR with five-arg signature, assert the event still fires on the same hub events as today).
+- `PermissionRequestedV2_fires_with_vendor_arg` — new clients subscribe with six args and receive vendor.
+- `Server_dual_broadcasts_old_and_new_event_on_same_trigger` — single permission request fires both `PermissionRequested` (V1, no vendor) and `PermissionRequestedV2` (with vendor); old + new clients both receive their respective shape.
+- `ClaudeCodePermissionExtension_carries_vendor_field` — the extension model serialises and deserialises the new `Vendor` field round-trip (mirrors any existing `ClaudeCodeExtensions` test pattern).
 - `LaunchAgentCommand_deserialises_with_default_vendor_claude_when_field_absent`.
 - `PermissionRequestCard_hides_always_allow_when_vendor_is_codex`.
 - `PermissionRequestCard_renders_all_actions_when_vendor_is_claude` (regression).
-- `AgentChatView_hides_yes_always_option_for_codex_vendor`.
-- `ElicitationOption_factory_omits_always_variant_when_vendor_is_codex`.
+- `AgentChatView_hides_yes_always_option_when_pending_permission_vendor_is_codex` — the "Yes, always" control is hardcoded in `AgentChatView`; this is a Razor-render test, not an `ElicitationOption` unit test.
 
 ## 4. `IHostedAgentLauncher` interface and impls
 
@@ -184,8 +189,16 @@ internal interface IHostedAgentLauncher {
     ///   • Pre-trust the worktree path in the vendor's config file
     ///   • Write any vendor-specific config (MCP, etc.)
     ///   • Merge dialog-selected tools into vendor-specific permission shape
-    /// Best-effort: implementations swallow filesystem errors and log; they do
-    /// NOT throw, so launch never blocks on a settings-overlay glitch.
+    ///   • Run fail-fast preflight checks (e.g. required CLI hooks installed)
+    /// Two failure modes are supported and the orchestrator distinguishes them:
+    ///   • Filesystem / parse errors are swallowed inside the launcher with a
+    ///     warning log so a settings-overlay glitch never blocks launch.
+    ///   • Typed preflight exceptions (e.g. CodexHooksNotInstalledException)
+    ///     propagate out and the orchestrator converts them into LaunchFailed
+    ///     with the exception's user-facing message. Use these sparingly — only
+    ///     for conditions where letting the launch continue would yield a
+    ///     broken agent the user couldn't diagnose.
+    /// See §5.4 for the wrapper shape and catch ordering.
     /// </summary>
     void Prepare(LauncherContext ctx);
 
@@ -727,14 +740,14 @@ Detail covered in §3.5. Server-side files touched (paths relative to `kapacitor
 
 - `src/Kurrent.Capacitor/Agents/DaemonCommands.cs` — `Vendor` on the server-side mirror of `LaunchAgentCommand`, defaulted to `"claude"` for old-daemon JSON-deserialisation compatibility; controller-boundary validation
 - `src/Kurrent.Capacitor/Sessions/CapacitorHub.cs` — accept vendor on `LaunchAgent`; **keep the four-arg `RequestPermission` unchanged** (persists `vendor = "claude"`); **add new five-arg `RequestPermissionV2`** that persists explicit vendor on the permission-request row
+- `src/Kurrent.Capacitor/Sessions/SessionHookHandlers.cs:1083` — **keep the five-arg `PermissionRequested` broadcast unchanged** (back-compat for old UI / mobile clients); **add a sibling six-arg `PermissionRequestedV2` broadcast** that includes vendor. Both events fire on the same trigger for the duration of the rollout. Populate vendor from the new `ClaudeCodePermissionExtension.Vendor` extension field.
+- `src/Kurrent.Capacitor.Core/Services/RemoteAgentService.cs:27` — subscribe to `PermissionRequestedV2` alongside the existing `PermissionRequested` subscription. New code path consumes V2; the old subscription stays for now so an external client running an older `RemoteAgentService` build doesn't break.
+- `src/Kurrent.Capacitor.Core/ClaudeCodeExtensions.cs:107` — add a `Vendor` field to `ClaudeCodePermissionExtension`. This is the Capacitor-owned carrier for vendor (the underlying `InterruptIssued` schema event lives in the external `Kurrent.Agent.Schema` package and is not editable here)
+- `src/Kurrent.Capacitor.Core/Chat/ElicitationOption.cs:3` — add `Vendor` to `PendingPermission`
+- `src/Kurrent.Capacitor.Core/Models/AgentChatContext.cs:28` — add `PermissionVendor` scalar field (matches the existing flat shape; not a nested object)
 - `src/Kurrent.Capacitor.Shared/Components/Agents/LaunchAgentDialog.razor` — vendor selector (default `"claude"`)
 - `src/Kurrent.Capacitor.Shared/Components/PermissionRequestCard.razor:26` — hide `Always Allow` and `Update Input` when `PendingPermission.Vendor == "codex"`
-- `src/Kurrent.Capacitor.Shared/Components/Chat/AgentChatView.razor:62` — hide `Yes, always` for codex-vendor permission elicitations
-- `src/Kurrent.Capacitor.Core/Chat/ElicitationOption.cs:13` — option-list factory omits the always-variant when vendor is codex
-- `AgentChatContext` — surfaces `CurrentPermission.Vendor` for chat view conditionals
-- `PendingPermission` read-model record — add `Vendor` field
-- SignalR `PermissionRequested` push payload — add `Vendor` field
-- `InterruptIssued` event — add `Vendor` field
+- `src/Kurrent.Capacitor.Shared/Components/Chat/AgentChatView.razor:62` — read `AgentChatContext.PermissionVendor`; hide the hardcoded `Yes, always` control for codex vendor
 - `AgentRunStarted` read-model projection — add `Vendor` column/property; existing rows backfill to `"claude"`
 
 **Server-side tests**
@@ -742,11 +755,14 @@ Detail covered in §3.5. Server-side files touched (paths relative to `kapacitor
 - `RequestPermission_old_method_persists_vendor_claude` — wire-level test via real `HubConnection.InvokeAsync` calling the four-arg method, asserts persisted row has `vendor = "claude"` (matches the pattern of `SendTranscriptBatchWireTests.cs:15`)
 - `RequestPermissionV2_persists_explicit_vendor` — parametrised over `"claude"` / `"codex"`
 - `Old_daemon_simulator_invokes_four_arg_method_and_receives_decision` — pure wire test using a SignalR client harness that emits the `RemoteAgentService.cs:142` shape (four positional args, no `vendor`) and asserts no arity-mismatch error
+- `PermissionRequested_old_event_still_fires_with_five_args` — old client subscribes via SignalR with five-arg handler, asserts the event still fires on the same hub events as today
+- `PermissionRequestedV2_fires_with_vendor_arg` — new client subscribes with six args, receives vendor
+- `Server_dual_broadcasts_old_and_new_event_on_same_trigger`
+- `ClaudeCodePermissionExtension_carries_vendor_field`
 - `LaunchAgentCommand_deserialises_with_default_vendor_claude_when_field_absent`
 - `PermissionRequestCard_hides_always_allow_when_vendor_is_codex`
 - `PermissionRequestCard_renders_all_actions_when_vendor_is_claude` (regression)
-- `AgentChatView_hides_yes_always_option_for_codex_vendor`
-- `ElicitationOption_factory_omits_always_variant_when_vendor_is_codex`
+- `AgentChatView_hides_yes_always_option_when_pending_permission_vendor_is_codex`
 
 Tracked in the same Linear issue (AI-68); shipped as a paired PR per the §3.5 rollout ordering (server first).
 
