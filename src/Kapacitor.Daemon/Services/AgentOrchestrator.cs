@@ -65,16 +65,17 @@ public class TerminalOutputBuffer {
 }
 
 internal partial class AgentOrchestrator : IAsyncDisposable {
-    readonly ConcurrentDictionary<string, AgentInstance> _agents = new();
-    readonly DaemonConfig                                _config;
-    readonly ServerConnection                            _server;
-    readonly WorktreeManager                             _worktreeManager;
-    readonly RepoMatcher                                 _repoMatcher;
-    readonly IPtyProcessFactory                          _ptyFactory;
-    readonly IHttpClientFactory                          _httpClientFactory;
-    readonly LocalPermissionBridge                       _permissionBridge;
-    readonly ILogger<AgentOrchestrator>                  _logger;
-    readonly PeriodicTimer                               _heartbeatTimer  = new(TimeSpan.FromSeconds(30));
+    readonly ConcurrentDictionary<string, AgentInstance>       _agents = new();
+    readonly DaemonConfig                                      _config;
+    readonly ServerConnection                                  _server;
+    readonly WorktreeManager                                   _worktreeManager;
+    readonly RepoMatcher                                       _repoMatcher;
+    readonly IPtyProcessFactory                                _ptyFactory;
+    readonly IHttpClientFactory                                _httpClientFactory;
+    readonly LocalPermissionBridge                             _permissionBridge;
+    readonly IReadOnlyDictionary<string, IHostedAgentLauncher> _launchers;
+    readonly ILogger<AgentOrchestrator>                        _logger;
+    readonly PeriodicTimer                                     _heartbeatTimer  = new(TimeSpan.FromSeconds(30));
     // AI-79: heartbeat tightened from 60 s SendAsync to 15 s round-trip Ping.
     // Server's default ClientTimeoutInterval is 30 s, and the staging incident
     // showed daemons holding a displaced slot for nearly a minute before
@@ -84,14 +85,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly CancellationTokenSource                     _shutdownCts     = new();
 
     public AgentOrchestrator(
-            DaemonConfig               config,
-            ServerConnection           server,
-            WorktreeManager            worktreeManager,
-            RepoMatcher                repoMatcher,
-            IPtyProcessFactory         ptyFactory,
-            IHttpClientFactory         httpClientFactory,
-            LocalPermissionBridge      permissionBridge,
-            ILogger<AgentOrchestrator> logger
+            DaemonConfig                                       config,
+            ServerConnection                                   server,
+            WorktreeManager                                    worktreeManager,
+            RepoMatcher                                        repoMatcher,
+            IPtyProcessFactory                                 ptyFactory,
+            IHttpClientFactory                                 httpClientFactory,
+            LocalPermissionBridge                              permissionBridge,
+            IReadOnlyDictionary<string, IHostedAgentLauncher>  launchers,
+            ILogger<AgentOrchestrator>                         logger
         ) {
         _config            = config;
         _server            = server;
@@ -100,6 +102,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _ptyFactory        = ptyFactory;
         _httpClientFactory = httpClientFactory;
         _permissionBridge  = permissionBridge;
+        _launchers         = launchers;
         _logger            = logger;
 
         // Wire up server commands
@@ -136,6 +139,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (cmd.Vendor is not ("claude" or "codex")) {
             await _server.LaunchFailedAsync(cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
+            return;
+        }
+
+        if (!_launchers.TryGetValue(cmd.Vendor, out var launcher)) {
+            await _server.LaunchFailedAsync(cmd.AgentId, $"No launcher registered for vendor: {cmd.Vendor}");
+            return;
+        }
+
+        if (isReview && cmd.Vendor == "codex") {
+            await _server.LaunchFailedAsync(cmd.AgentId, "PR review for Codex is not yet supported");
             return;
         }
 
@@ -210,10 +223,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             worktree = await _worktreeManager.CreateAsync(repoPath, baseRef: baseRef);
 
-            // TODO Task 14: dispatch through launcher.Prepare(ctx)
-            // Originally: OverlayDirectory + SymlinkClaudeProjectDir + WriteMcpConfig +
-            // TrustWorktreeInClaudeConfig + MergeToolPermissions. Moved to ClaudeLauncher.
-
             // Download attachments into worktree (best-effort)
             if (attachmentIds is { Length: > 0 }) {
                 try {
@@ -228,9 +237,35 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
 
-            // TODO Task 14: dispatch through launcher.BuildArgs(ctx)
-            // Originally: review-vs-default arg construction. Moved to ClaudeLauncher.BuildArgs.
-            var args = new List<string>();
+            var launcherCtx = new LauncherContext(
+                AgentId: agentId,
+                SourceRepoPath: repoPath,
+                Worktree: worktree,
+                Prompt: prompt,
+                Model: model,
+                Effort: effort,
+                Tools: tools,
+                IsReview: isReview,
+                Review: cmd.Review,
+                ReviewLaunch: isReview && cmd.Review is { } reviewArgs
+                    ? await ReviewLaunchBuilder.BuildAsync(_config.ServerUrl ?? "", reviewArgs.Owner, reviewArgs.Repo, reviewArgs.PrNumber)
+                    : null
+            );
+
+            try {
+                launcher.Prepare(launcherCtx);
+            } catch (CodexHooksNotInstalledException ex) {
+                await _server.LaunchFailedAsync(agentId, ex.Message);
+                // Still need to clean up the worktree before returning
+                try { await WorktreeManager.RemoveAsync(worktree); } catch { /* best-effort */ }
+                return;
+            } catch (Exception ex) {
+                LogPrepareSoftFailure(ex, agentId);
+            }
+
+            var launchArgs = launcher.BuildArgs(launcherCtx);
+            var args       = launchArgs.Args;
+            mcpConfigPath  = launchArgs.McpConfigPath;
 
             var env = new Dictionary<string, string> {
                 ["KAPACITOR_RENDERED_AGENT"] = "1",
@@ -253,9 +288,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 env["KAPACITOR_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
             }
 
-            var process = _ptyFactory.Spawn(_config.ClaudePath, args.ToArray(), worktree.Path, env);
+            var process = _ptyFactory.Spawn(launcher.CliPath, args, worktree.Path, env);
 
-            LogAgentSpawned(agentId, process.Pid, worktree.Path, _config.ClaudePath);
+            LogAgentSpawned(agentId, process.Pid, worktree.Path, launcher.CliPath);
 
             var cts   = new CancellationTokenSource();
             var agent = new AgentInstance(agentId, prompt, model, effort, repoPath, cmd.Vendor, process, worktree, cts) {
@@ -287,20 +322,27 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         } catch (Exception ex) {
             LogLaunchFailed(ex, agentId);
 
-            // Clean up worktree if it was created but agent didn't start
             if (worktree != null) {
-                // TODO Task 14: launcher.Cleanup(agent) — remove symlink via launcher
-                // try { RemoveClaudeProjectSymlink(worktree.Path); } catch { /* best-effort */ }
+                if (_launchers.TryGetValue(cmd.Vendor, out var launcherForCleanup)) {
+                    try {
+                        // Build a transient AgentInstance with a no-op PTY just so launcher.Cleanup
+                        // can run its symlink/mcp-config teardown without a live agent.
+                        var transient = new AgentInstance(
+                            agentId, prompt, model, effort, repoPath, cmd.Vendor,
+                            NoopPtyProcess.Instance, worktree, new CancellationTokenSource()
+                        ) {
+                            McpConfigPath = mcpConfigPath
+                        };
+                        launcherForCleanup.Cleanup(transient);
+                    } catch (Exception cleanupEx) {
+                        LogCleanupStepFailed(cleanupEx, "launcher.Cleanup (failed-launch)", agentId);
+                    }
+                }
 
                 try { await WorktreeManager.RemoveAsync(worktree); } catch {
                     /* best-effort */
                 }
             }
-
-            // TODO Task 14: launcher.Cleanup(agent) — remove mcp config via launcher
-            // if (mcpConfigPath is not null) {
-            //     try { File.Delete(mcpConfigPath); } catch { /* best-effort */ }
-            // }
 
             await _server.LaunchFailedAsync(agentId, ex.Message);
         }
@@ -785,15 +827,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Each cleanup step is best-effort so later steps still run
         try { await agent.Process.DisposeAsync(); } catch (Exception ex) { LogCleanupStepFailed(ex, "disposing process", agentId); }
 
-        // TODO Task 14: launcher.Cleanup(agent)
-        // try { RemoveClaudeProjectSymlink(agent.Worktree.Path); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing symlink", agentId); }
+        if (_launchers.TryGetValue(agent.Vendor, out var launcher)) {
+            try { launcher.Cleanup(agent); } catch (Exception ex) { LogCleanupStepFailed(ex, "launcher.Cleanup", agentId); }
+        }
 
         try { await WorktreeManager.RemoveAsync(agent.Worktree); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
-
-        // TODO Task 14: launcher.Cleanup(agent)
-        // if (agent.McpConfigPath is not null) {
-        //     try { File.Delete(agent.McpConfigPath); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing mcp config", agentId); }
-        // }
 
         try { await _server.AgentUnregisteredAsync(agentId); } catch (Exception ex) { LogCleanupStepFailed(ex, "unregistering", agentId); }
     }
@@ -885,6 +923,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error {Step} for agent {AgentId}")]
     partial void LogCleanupStepFailed(Exception ex, string step, string agentId);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Launcher Prepare soft-failure for agent {AgentId} (continuing)")]
+    partial void LogPrepareSoftFailure(Exception ex, string agentId);
+
     [LoggerMessage(Level = LogLevel.Error, Message = "Failed to launch agent {AgentId}")]
     partial void LogLaunchFailed(Exception ex, string agentId);
 
@@ -914,4 +955,43 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [GeneratedRegex(@"\x1B\[[0-9;]*[A-Za-z]|\x1B\].*?\x07|\x1B[()][AB012]|\x1B\[[\?]?[0-9;]*[hlm]")]
     private static partial Regex StripAnsiRegex();
+
+    /// <summary>
+    /// Method exposed for unit tests so they can drive <see cref="HandleLaunchAgent"/>
+    /// without going through SignalR. Keeps the private handler private to everyone else.
+    /// </summary>
+    internal Task HandleLaunchAgentForTest(LaunchAgentCommand cmd) => HandleLaunchAgent(cmd);
+}
+
+/// <summary>
+/// Stand-in <see cref="IPtyProcess"/> for failed-launch cleanup paths where we
+/// need an <see cref="AgentInstance"/> to satisfy <c>launcher.Cleanup</c> but no
+/// live PTY ever existed. All members are no-ops; the launcher only reads
+/// <see cref="AgentInstance.Worktree"/> and <see cref="AgentInstance.McpConfigPath"/>.
+/// </summary>
+internal sealed class NoopPtyProcess : IPtyProcess {
+    public static readonly NoopPtyProcess Instance = new();
+    NoopPtyProcess() { }
+
+    public int  Pid       => 0;
+    public bool HasExited => true;
+    public int? ExitCode  => 0;
+
+    public ValueTask DisposeAsync() => default;
+
+    public Task WaitForExitAsync(TimeSpan? timeout = null) => Task.CompletedTask;
+    public Task TerminateAsync(TimeSpan?  timeout = null) => Task.CompletedTask;
+
+#pragma warning disable CS1998
+    public async IAsyncEnumerable<byte[]> ReadOutputAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default
+        ) {
+        yield break;
+    }
+#pragma warning restore CS1998
+
+    public Task WriteAsync(string input) => Task.CompletedTask;
+    public Task WriteAsync(byte[] data)  => Task.CompletedTask;
+    public void Resize(ushort cols, ushort rows) { }
+    public void SendInterrupt() { }
 }
