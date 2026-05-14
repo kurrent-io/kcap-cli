@@ -33,7 +33,8 @@ public class LaunchAgentCommandWireFormatTests {
             Effort:        null,
             RepoPath:      "/tmp/repo",
             Tools:         null,
-            AttachmentIds: null
+            AttachmentIds: null,
+            Vendor:        "claude"
         );
 
         var wire   = JsonSerializer.Serialize(cmd, ServerWireOptions);
@@ -53,6 +54,7 @@ public class LaunchAgentCommandWireFormatTests {
             RepoPath:      "/tmp/repo",
             Tools:         null,
             AttachmentIds: null,
+            Vendor:        "claude",
             Kind:          LaunchKind.Review,
             Review:        new ReviewLaunchInfo("kurrent-io", "kapacitor", 42)
         );
@@ -77,11 +79,31 @@ public class LaunchAgentCommandWireFormatTests {
             RepoPath:      "/r",
             Tools:         null,
             AttachmentIds: null,
+            Vendor:        "claude",
             Kind:          LaunchKind.Review
         );
 
         var wire = JsonSerializer.Serialize(cmd, ServerWireOptions);
 
         await Assert.That(wire).Contains("\"kind\":\"review\"");
+    }
+
+    [Test]
+    public async Task Vendor_field_round_trips_through_json_serializer() {
+        var cmd = new LaunchAgentCommand(
+            AgentId:       "agent-1",
+            Prompt:        null,
+            Model:         "claude-sonnet-4-6",
+            Effort:        null,
+            RepoPath:      "/tmp/repo",
+            Tools:         null,
+            AttachmentIds: null,
+            Vendor:        "codex"
+        );
+
+        var json = JsonSerializer.Serialize(cmd, KapacitorJsonContext.Default.LaunchAgentCommand);
+        var back = JsonSerializer.Deserialize<LaunchAgentCommand>(json, KapacitorJsonContext.Default.LaunchAgentCommand);
+
+        await Assert.That(back.Vendor).IsEqualTo("codex");
     }
 }

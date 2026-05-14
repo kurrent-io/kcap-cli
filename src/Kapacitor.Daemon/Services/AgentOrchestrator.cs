@@ -134,6 +134,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var attachmentIds = cmd.AttachmentIds;
         var isReview      = cmd.Kind == LaunchKind.Review;
 
+        if (cmd.Vendor is not ("claude" or "codex")) {
+            await _server.LaunchFailedAsync(cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
+            return;
+        }
+
         WorktreeInfo? worktree      = null;
         string?       mcpConfigPath = null;
 
