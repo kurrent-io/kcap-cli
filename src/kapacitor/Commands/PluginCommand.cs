@@ -160,7 +160,11 @@ public static class PluginCommand {
             if (InstallCodexSkills(skillsSource, CodexPaths.UserSkillsDir)) {
                 await Console.Out.WriteLineAsync($"Codex skills installed (user: {CodexPaths.UserSkillsDir})");
             } else {
+                // Hooks succeeded but skills failed — `--codex` is a hooks AND
+                // skills contract, so surface the partial failure via exit code
+                // so callers (CI, scripts) can detect it.
                 await Console.Error.WriteLineAsync("Could not install Codex skills.");
+                return 1;
             }
         }
 
@@ -354,8 +358,10 @@ public static class PluginCommand {
             try {
                 Directory.Delete(dst, recursive: true);
                 changed = true;
-            } catch {
-                // best effort
+            } catch (Exception ex) {
+                // Log so the user knows a skill is stuck. Exit code stays 0 for
+                // parity with RemoveCodexHooks, which also degrades gracefully.
+                Console.Error.WriteLine($"Could not remove Codex skill '{name}': {ex.Message}");
             }
         }
 
