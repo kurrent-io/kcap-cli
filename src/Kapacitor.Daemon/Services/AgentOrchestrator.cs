@@ -16,6 +16,7 @@ public record AgentInstance(
         string                  Model,
         string?                 Effort,
         string                  RepoPath,
+        string                  Vendor,
         IPtyProcess             Process,
         WorktreeInfo            Worktree,
         CancellationTokenSource ReadCts
@@ -257,7 +258,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             LogAgentSpawned(agentId, process.Pid, worktree.Path, _config.ClaudePath);
 
             var cts   = new CancellationTokenSource();
-            var agent = new AgentInstance(agentId, prompt, model, effort, repoPath, process, worktree, cts) {
+            var agent = new AgentInstance(agentId, prompt, model, effort, repoPath, cmd.Vendor, process, worktree, cts) {
                 McpConfigPath = mcpConfigPath
             };
             _agents[agentId] = agent;
