@@ -1,3 +1,5 @@
+using System.Text.Json;
+using kapacitor;
 using kapacitor.Eval;
 
 namespace kapacitor.Tests.Unit;
@@ -633,5 +635,86 @@ public class EvalServiceTests {
 
         await Assert.That(v).IsNotNull();
         await Assert.That(v!.ToolsUsed).IsEqualTo(2);
+    }
+
+    // ── JudgeFact deserialization (new optional fields) ────────────────────
+
+    [Test]
+    public async Task JudgeFact_deserializes_with_new_optional_fields() {
+        const string newServerJson = """
+            [{"category":"safety","fact_hash":"h1","fact":"x","retainer_github_id":42,
+              "source_session_id":"s","source_eval_run_id":"r","retained_at":"2026-05-13T00:00:00Z"}]
+            """;
+
+        var facts = JsonSerializer.Deserialize(newServerJson, KapacitorJsonContext.Default.ListJudgeFact)!;
+
+        await Assert.That(facts.Count).IsEqualTo(1);
+        await Assert.That(facts[0].FactHash).IsEqualTo("h1");
+        await Assert.That(facts[0].RetainerGitHubId).IsEqualTo(42L);
+    }
+
+    [Test]
+    public async Task JudgeFact_deserializes_without_new_fields_from_old_server() {
+        const string oldServerJson = """
+            [{"category":"safety","fact":"x","source_session_id":"s","source_eval_run_id":"r",
+              "retained_at":"2026-05-13T00:00:00Z"}]
+            """;
+
+        var facts = JsonSerializer.Deserialize(oldServerJson, KapacitorJsonContext.Default.ListJudgeFact)!;
+
+        await Assert.That(facts.Count).IsEqualTo(1);
+        await Assert.That(facts[0].FactHash).IsNull();
+        await Assert.That(facts[0].RetainerGitHubId).IsNull();
+    }
+
+    // ── BuildFactsUsedSnapshot ─────────────────────────────────────────────
+
+    [Test]
+    public async Task BuildFactsUsedSnapshot_flattens_per_category_pool_and_filters_unattributed() {
+        var pool = new Dictionary<string, List<JudgeFact>> {
+            ["safety"] = [
+                new JudgeFact {
+                    Category         = "safety",
+                    FactHash         = "h-A",
+                    Fact             = "fact-A",
+                    RetainerGitHubId = 7,
+                    SourceSessionId  = "src",
+                    SourceEvalRunId  = "rA",
+                    RetainedAt       = DateTimeOffset.Parse("2026-05-01T00:00:00Z")
+                },
+                // Old-server row — no fact_hash; must be filtered out.
+                new JudgeFact {
+                    Category         = "safety",
+                    Fact             = "fact-B-no-hash",
+                    SourceSessionId  = "src",
+                    SourceEvalRunId  = "rB",
+                    RetainedAt       = DateTimeOffset.Parse("2026-05-02T00:00:00Z")
+                }
+            ],
+            ["plan_adherence"] = [
+                new JudgeFact {
+                    Category         = "plan_adherence",
+                    FactHash         = "h-C",
+                    Fact             = "fact-C",
+                    RetainerGitHubId = 8,
+                    SourceSessionId  = "src",
+                    SourceEvalRunId  = "rC",
+                    RetainedAt       = DateTimeOffset.Parse("2026-05-03T00:00:00Z")
+                }
+            ]
+        };
+
+        var snapshot = EvalService.BuildFactsUsedSnapshot(pool);
+
+        await Assert.That(snapshot.Count).IsEqualTo(2);
+        await Assert.That(snapshot.Any(s => s.FactHash == "h-A" && s.Category == "safety")).IsTrue();
+        await Assert.That(snapshot.Any(s => s.FactHash == "h-C" && s.Category == "plan_adherence")).IsTrue();
+        await Assert.That(snapshot.All(s => s.Fact != "fact-B-no-hash")).IsTrue();
+    }
+
+    [Test]
+    public async Task BuildFactsUsedSnapshot_returns_empty_for_empty_pool() {
+        var snapshot = EvalService.BuildFactsUsedSnapshot(new Dictionary<string, List<JudgeFact>>());
+        await Assert.That(snapshot.Count).IsEqualTo(0);
     }
 }

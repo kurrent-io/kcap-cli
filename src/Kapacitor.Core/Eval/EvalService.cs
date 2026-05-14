@@ -435,6 +435,8 @@ internal static class EvalService {
         // 4. Aggregate per-category + overall scores.
         var aggregate = Aggregate(verdicts, ctx.EvalRunId, model, ctx.Questions);
 
+        aggregate = aggregate with { FactsUsed = BuildFactsUsedSnapshot(ctx.KnownFactsByCategory) };
+
         // 5. Synthesise a retrospective from the per-question verdicts. Non-fatal:
         //    the verdicts are the persistence contract, a failed synthesis
         //    just leaves Retrospective=null on the payload.
@@ -706,6 +708,32 @@ internal static class EvalService {
 
         return text.Trim();
     }
+
+    // ── Facts-used snapshot ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds the <see cref="EvalFactSnapshotPayload"/> list from the
+    /// per-category pool the runner fetched. Rows without a
+    /// <c>FactHash</c> or <c>RetainerGitHubId</c> come from an older server
+    /// that doesn't return those fields yet — they're filtered out so we only
+    /// snapshot facts that can be fully attributed.
+    /// </summary>
+    internal static List<EvalFactSnapshotPayload> BuildFactsUsedSnapshot(
+            IReadOnlyDictionary<string, List<JudgeFact>> knownFactsByCategory
+        ) =>
+        knownFactsByCategory
+            .SelectMany(kv => kv.Value
+                .Where(f => f.FactHash is not null && f.RetainerGitHubId is not null)
+                .Select(f => new EvalFactSnapshotPayload {
+                    Category         = kv.Key,
+                    FactHash         = f.FactHash!,
+                    Fact             = f.Fact,
+                    RetainerGitHubId = f.RetainerGitHubId!.Value,
+                    SourceSessionId  = f.SourceSessionId,
+                    SourceEvalRunId  = f.SourceEvalRunId,
+                    RetainedAt       = f.RetainedAt
+                }))
+            .ToList();
 
     /// <summary>
     /// Prepares untrusted model or subprocess output for embedding in a
