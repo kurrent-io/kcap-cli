@@ -124,7 +124,6 @@ internal static class EvalService {
         string                                       SessionId,
         string                                       TraceJson,
         EvalContextResult                            ContextResult,
-        IReadOnlyDictionary<string, List<JudgeFact>> KnownFactsByCategory,
         string                                       PromptTemplate,
         string                                       ToolsPromptTemplate,
         IReadOnlyList<EvalQuestionDto>               Questions,
@@ -274,22 +273,27 @@ internal static class EvalService {
             context.Compaction.BytesSaved
         );
 
-        // 2. Fetch retained judge facts per category to inject as known patterns.
-        var knownFactsByCategory = await FetchAllJudgeFactsAsync(httpClient, baseUrl, encodedSessionId, questions, observer, ct);
-        var promptTemplate       = EmbeddedResources.Load("prompt-eval-question.txt");
-        var toolsPromptTemplate  = EmbeddedResources.Load("prompt-eval-question-tools.txt");
+        // Retained judge facts are no longer injected into per-question or
+        // retrospective prompts — telling the judge "we already know about X"
+        // suppresses re-reporting, which silently stops the cluster
+        // occurrence_count signal from growing on recurring patterns
+        // (manifests as overflowed prompts on large fact pools and as falsely
+        // "stable" trends). FactsUsed snapshots persist as empty for new
+        // evals; the read-side projection + UI panel stay in place so
+        // historical eval audit views keep working.
+        var promptTemplate      = EmbeddedResources.Load("prompt-eval-question.txt");
+        var toolsPromptTemplate = EmbeddedResources.Load("prompt-eval-question-tools.txt");
 
         return new EvalContext(
-            EvalRunId:            evalRunId,
-            EncodedSessionId:     encodedSessionId,
-            SessionId:            context.SessionId,
-            TraceJson:            traceJson,
-            ContextResult:        context,
-            KnownFactsByCategory: knownFactsByCategory,
-            PromptTemplate:       promptTemplate,
-            ToolsPromptTemplate:  toolsPromptTemplate,
-            Questions:            questions,
-            Model:                model
+            EvalRunId:           evalRunId,
+            EncodedSessionId:    encodedSessionId,
+            SessionId:           context.SessionId,
+            TraceJson:           traceJson,
+            ContextResult:       context,
+            PromptTemplate:      promptTemplate,
+            ToolsPromptTemplate: toolsPromptTemplate,
+            Questions:           questions,
+            Model:               model
         );
     }
 
@@ -309,7 +313,11 @@ internal static class EvalService {
         ct.ThrowIfCancellationRequested();
         observer.OnQuestionStarted(index, total, question.Category, question.Id);
 
-        var patterns = FormatKnownPatterns(ctx.KnownFactsByCategory.GetValueOrDefault(question.Category, []));
+        // Soft-drop of {KNOWN_PATTERNS}: the prompt templates no longer carry
+        // the placeholder, so the value here is inert — passed as empty string
+        // for parameter-signature compatibility with BuildQuestionPrompt /
+        // BuildToolsQuestionPrompt callers (still public API).
+        const string patterns = "";
 
         // Capture ClaudeCliRunner diagnostics (exit code, stdout preview)
         // so a null result gets reported with *why* it was null — those
@@ -435,7 +443,10 @@ internal static class EvalService {
         // 4. Aggregate per-category + overall scores.
         var aggregate = Aggregate(verdicts, ctx.EvalRunId, model, ctx.Questions);
 
-        aggregate = aggregate with { FactsUsed = BuildFactsUsedSnapshot(ctx.KnownFactsByCategory) };
+        // FactsUsed stays empty: nothing was injected into the judge prompt,
+        // so there's nothing to snapshot. The event field + projection table
+        // are kept to preserve historical audit data on older evals.
+        aggregate = aggregate with { FactsUsed = [] };
 
         // 5. Synthesise a retrospective from the per-question verdicts. Non-fatal:
         //    the verdicts are the persistence contract, a failed synthesis
@@ -449,15 +460,14 @@ internal static class EvalService {
         // won't match (latent for UUID sessions, visible for
         // meta-session slugs — see DEV-1484 final review).
         var retrospective = await RunRetrospectiveAsync(
-            evalRunId:            ctx.EvalRunId,
-            sessionId:            ctx.SessionId,
-            model:                model,
-            baseUrl:              baseUrl,
-            aggregate:            aggregate,
-            verdicts:             verdicts,
-            knownFactsByCategory: ctx.KnownFactsByCategory,
-            observer:             observer,
-            ct:                   ct
+            evalRunId: ctx.EvalRunId,
+            sessionId: ctx.SessionId,
+            model:     model,
+            baseUrl:   baseUrl,
+            aggregate: aggregate,
+            verdicts:  verdicts,
+            observer:  observer,
+            ct:        ct
         );
         aggregate = aggregate with { Retrospective = retrospective };
 
@@ -828,15 +838,14 @@ internal static class EvalService {
     /// cancellation still cancels the eval run.
     /// </summary>
     static async Task<EvalRetrospective?> RunRetrospectiveAsync(
-            string                                      evalRunId,
-            string                                      sessionId,
-            string                                      model,
-            string                                      baseUrl,
-            SessionEvalCompletedPayload                 aggregate,
-            IReadOnlyList<EvalQuestionVerdict>          verdicts,
-            IReadOnlyDictionary<string, List<JudgeFact>> knownFactsByCategory,
-            IEvalObserver                               observer,
-            CancellationToken                           ct
+            string                             evalRunId,
+            string                             sessionId,
+            string                             model,
+            string                             baseUrl,
+            SessionEvalCompletedPayload        aggregate,
+            IReadOnlyList<EvalQuestionVerdict> verdicts,
+            IEvalObserver                      observer,
+            CancellationToken                  ct
         ) {
         // Check cancellation before emitting OnRetrospectiveStarted so a
         // shutdown between the per-question loop and retrospective doesn't
@@ -845,10 +854,13 @@ internal static class EvalService {
 
         observer.OnRetrospectiveStarted();
 
-        var sessionMeta   = $"session-id: {sessionId}\nrun-id: {evalRunId}\nmodel: {model}\noverall-score: {aggregate.OverallScore}/5";
-        var verdictsJson  = JsonSerializer.Serialize(verdicts, KapacitorJsonContext.Default.IReadOnlyListEvalQuestionVerdict);
-        var knownPatterns = FormatKnownPatternsAllCategories(knownFactsByCategory);
-        var prompt        = BuildRetrospectivePrompt(sessionMeta, verdictsJson, knownPatterns);
+        var sessionMeta  = $"session-id: {sessionId}\nrun-id: {evalRunId}\nmodel: {model}\noverall-score: {aggregate.OverallScore}/5";
+        var verdictsJson = JsonSerializer.Serialize(verdicts, KapacitorJsonContext.Default.IReadOnlyListEvalQuestionVerdict);
+
+        // Soft-drop of {KNOWN_PATTERNS}: template no longer has the
+        // placeholder, so the retrospective prompt builder receives an
+        // empty knownPatterns string and the replace becomes a no-op.
+        var prompt = BuildRetrospectivePrompt(sessionMeta, verdictsJson, knownPatterns: "");
 
         // DEV-1484: instead of embedding the compacted trace (which blew
         // past Sonnet's 200K-token window on real sessions), launch a
@@ -914,63 +926,7 @@ internal static class EvalService {
         }
     }
 
-    /// <summary>
-    /// Formats retained facts across all categories as a bulleted block for
-    /// the retrospective prompt's <c>{KNOWN_PATTERNS}</c> placeholder.
-    /// Produces an explicit empty-state string when nothing has been retained
-    /// yet so the prompt section doesn't read as a broken substitution.
-    /// </summary>
-    static string FormatKnownPatternsAllCategories(IReadOnlyDictionary<string, List<JudgeFact>> facts) {
-        if (facts.Count == 0 || facts.Values.All(v => v.Count == 0)) {
-            return "(no patterns retained from prior evals in this repo)";
-        }
-
-        var sb = new StringBuilder();
-        foreach (var (category, list) in facts.OrderBy(kv => kv.Key)) {
-            if (list.Count == 0) continue;
-            sb.AppendLine($"{category}:");
-            foreach (var fact in list) sb.AppendLine($"- {fact.Fact}");
-            sb.AppendLine();
-        }
-
-        return sb.ToString().TrimEnd();
-    }
-
     // ── Judge-facts HTTP ───────────────────────────────────────────────────
-
-    static async Task<Dictionary<string, List<JudgeFact>>> FetchAllJudgeFactsAsync(
-            HttpClient                     httpClient,
-            string                         baseUrl,
-            string                         encodedSessionId,
-            IReadOnlyList<EvalQuestionDto> questions,
-            IEvalObserver                  observer,
-            CancellationToken              ct
-        ) {
-        var result = new Dictionary<string, List<JudgeFact>>();
-
-        foreach (var category in questions.Select(q => q.Category).Distinct(StringComparer.Ordinal)) {
-            try {
-                using var resp = await httpClient.GetWithRetryAsync(
-                    $"{baseUrl}/api/sessions/{encodedSessionId}/judge-facts?category={Uri.EscapeDataString(category)}",
-                    ct: ct
-                );
-                if (!resp.IsSuccessStatusCode) {
-                    observer.OnInfo($"Failed to fetch judge facts for {category}: HTTP {(int)resp.StatusCode}");
-
-                    continue;
-                }
-
-                var json = await resp.Content.ReadAsStringAsync(ct);
-                var list = JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.ListJudgeFact) ?? [];
-                result[category] = list;
-                observer.OnInfo($"Loaded {list.Count} retained facts for category {category}");
-            } catch (HttpRequestException ex) {
-                observer.OnInfo($"Could not load judge facts for {category}: {ex.Message}");
-            }
-        }
-
-        return result;
-    }
 
     static async Task<bool> PostJudgeFactAsync(
             HttpClient        httpClient,

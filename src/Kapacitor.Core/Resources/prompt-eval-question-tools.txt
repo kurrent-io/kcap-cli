@@ -20,12 +20,6 @@ Use these MCP tools to pull session details on demand:
 
 Budget: at most 6 tool calls. Prefer summary → search → targeted fetch over paging the full trace. If the summary already answers the question, don't call additional tools.
 
-## Known patterns for this project
-
-Retained facts observed by past evaluators on sessions in this same repository for this category. Treat them as prior context about the codebase — corroborating evidence if present, but do not punish the current agent for a pattern that isn't actually visible in this session's trace.
-
-{KNOWN_PATTERNS}
-
 ## Question
 
 Category: `{CATEGORY}`
