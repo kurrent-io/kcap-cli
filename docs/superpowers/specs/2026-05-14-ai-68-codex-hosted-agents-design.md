@@ -75,14 +75,16 @@ public readonly record struct LaunchAgentCommand(
         string             RepoPath,
         string[]?          Tools,
         string[]?          AttachmentIds,
+        string             Vendor,              // NEW — required, no default. Forces every
+                                                // call site to be explicit; no default that
+                                                // pretends the field is optional.
         LaunchKind         Kind    = LaunchKind.Default,
         ReviewLaunchInfo?  Review  = null,
-        string?            BaseRef = null,
-        string             Vendor  = "claude"   // NEW — required on wire; the default exists for
-                                                // C# call-site ergonomics. Server always sends
-                                                // explicit vendor.
+        string?            BaseRef = null
     );
 ```
+
+(Required positional moves before optional positionals for C# language requirements.)
 
 Daemon validates at the top of `HandleLaunchAgent`:
 
@@ -126,46 +128,35 @@ public string CodexPath  { get; set; } = "codex";   // NEW
 
 ### 3.5 Server-side wire-contract changes (kapacitor-server repo)
 
-AI-68 spans both repos. Daemon-side changes are not independently shippable — without server-side propagation, no user can ever request `vendor: codex` from the dashboard. The server PR lands paired with this one; this section documents the wire contract this design assumes the server will honour, so daemon and server can be implemented in parallel.
+AI-68 spans both repos. Daemon-side changes are not independently shippable — without server-side propagation, no user can ever request `vendor: codex` from the dashboard. The server PR lands paired with this one.
 
-**SignalR arity constraint (important).** `SendTranscriptBatchWireTests.cs:15` and `RemoteAgentService.cs:142` document explicitly: SignalR's `HubConnection.InvokeAsync` dispatches by exact arity, not by named parameters, and does NOT backfill optional values when an old caller invokes a new method signature. Adding an optional fifth parameter to an existing hub method silently breaks old daemons. The only safe pattern for adding fields to an existing hub method in this repo is **a new method name**.
+**No back-compat layers.** Staging is the only environment, and the deployment is fully controlled — server, daemon, and clients are upgraded together as part of this Linear issue. Old-client / old-daemon compatibility shims (V2 hub methods, dual broadcasts, nullable defaults that pretend a required field is optional) are intentionally not in scope: they would carry rollout-window complexity for a window that does not exist in practice. SignalR arity changes are coordinated by shipping all three components in lockstep.
 
 Server files touched (paths relative to `kapacitor-server` repo root):
 
-- **`src/Kurrent.Capacitor/Agents/DaemonCommands.cs`** — the server-side mirror of `LaunchAgentCommand`. Add the `string Vendor` field, defaulted to `"claude"` for SignalR JSON-deserialisation compatibility with older daemons that do not send the field. Reject unknown values at the controller boundary so an invalid value never reaches the daemon.
-- **`src/Kurrent.Capacitor/Sessions/CapacitorHub.cs`** — the `LaunchAgent` hub method (and any HTTP entry point that ultimately produces a `DaemonCommands.LaunchAgent`) accepts vendor from the request DTO and forwards it through. **Keep the existing four-arg `RequestPermission(sessionId, toolName, toolInput, suggestions)` hub method unchanged** so older daemons continue working. **Add a new five-arg hub method `RequestPermissionV2(sessionId, toolName, toolInput, suggestions, vendor)`** that persists vendor on the permission-request row. The old method, when invoked, persists `vendor = "claude"` so older daemons keep behaving exactly as today.
-- **`src/Kurrent.Capacitor.Shared/Components/Agents/LaunchAgentDialog.razor`** — vendor selector in the launch dialog (radio buttons or dropdown — UX choice). Default `"claude"`. The selection populates the new field on the launch DTO.
-- **Permission UI surfaces** — three places need vendor awareness, all driven by adding `Vendor` to the `PendingPermission` read-model record and to the SignalR `PermissionRequested` payload pushed to the dashboard:
+- **`src/Kurrent.Capacitor/Agents/DaemonCommands.cs`** — the server-side mirror of `LaunchAgentCommand`. Add the required `string Vendor` field (no default). Reject unknown values at the controller boundary so an invalid value never reaches the daemon.
+- **`src/Kurrent.Capacitor/Sessions/CapacitorHub.cs`** — the `LaunchAgent` hub method accepts vendor from the request DTO and forwards it through. **`RequestPermission` becomes five-arg** (`sessionId, toolName, toolInput, suggestions, vendor`). No V2 alias. Server persists vendor on the permission-request row.
+- **`src/Kurrent.Capacitor/Sessions/SessionHookHandlers.cs:1083`** — **`PermissionRequested` broadcast becomes six-arg** (existing fields plus `vendor`). No V2 alias.
+- **`src/Kurrent.Capacitor.Core/Services/RemoteAgentService.cs:27`** — subscription updates to six-arg `PermissionRequested` handler shape.
+- **`src/Kurrent.Capacitor.Shared/Components/Agents/LaunchAgentDialog.razor`** — vendor selector in the launch dialog (radio buttons or dropdown — UX choice). Default `"claude"`. The selection populates the required `Vendor` field on the launch DTO.
+- **Permission UI surfaces** — three places need vendor awareness, all driven by `Vendor` on `PendingPermission` and on the SignalR `PermissionRequested` payload:
   - **`src/Kurrent.Capacitor.Shared/Components/PermissionRequestCard.razor:26`** — hide `Always Allow` and `Update Input` buttons when `PendingPermission.Vendor == "codex"`; show only `Allow` / `Deny`.
-  - **`src/Kurrent.Capacitor.Shared/Components/Chat/AgentChatView.razor:62`** — the active-chat input renders `Yes, always` for permission elicitations; hide it when `AgentChatContext.CurrentPermission.Vendor == "codex"`.
-  - **`src/Kurrent.Capacitor.Core/Chat/ElicitationOption.cs:13`** — the "always" option is Claude-only. The option list construction site (wherever `AgentChatContext` builds the elicitation options from a `PendingPermission`) filters the always-variant when vendor is codex.
-- **SignalR `PermissionRequested` broadcast** — same SignalR-arity trap as `RequestPermission` (clients today subscribe with five args at `SessionHookHandlers.cs:1083` / `RemoteAgentService.cs:27`). Adding a sixth `vendor` argument silently breaks old UI / mobile clients that haven't been upgraded. **Keep the existing `PermissionRequested(...)` broadcast unchanged** and **add a new `PermissionRequestedV2(...)` broadcast that includes `vendor`**, fired on the same hub on the same events. The server dual-broadcasts (one event each) for the duration of the rollout — old clients consume V1 and assume `vendor = "claude"` as default; new clients prefer V2 and ignore V1.
-- **`InterruptIssued`** lives in the external `Kurrent.Agent.Schema` package (referenced from `Kurrent.Capacitor.Core.csproj:24`) and is not editable from this repo. Vendor is carried as a **Capacitor-owned extension field** on `ClaudeCodePermissionExtension` (today at `ClaudeCodeExtensions.cs:107`), which is the existing pattern for Capacitor-specific data riding on schema-typed events. Daemon hook handlers populate the extension; server projection persists it; the dashboard reads it through the same `PendingPermission` field.
-- **`PendingPermission` record** (today in `ElicitationOption.cs`) — add `Vendor` field, populated server-side from the `ClaudeCodePermissionExtension` payload above.
-- **`AgentChatContext`** (today at `AgentChatContext.cs:28`) — exposes scalar permission fields. Add `PermissionVendor` (matching the existing flat shape — no nested `CurrentPermission` object) so the chat view's conditional rendering has a single property to bind against.
-- **AgentRunStarted read model** — server-side projection of `AgentRunStarted` adds a `Vendor` column / property. Used by the dashboard to render a vendor badge on the agent card. Migration path is whatever the server uses for additive read-model fields (existing rows backfill to `"claude"` since they predate Codex).
+  - **`src/Kurrent.Capacitor.Shared/Components/Chat/AgentChatView.razor:62`** — the active-chat input has a hardcoded `Yes, always` control for permission elicitations; hide it when `AgentChatContext.PermissionVendor == "codex"` (Razor-render conditional, not an option-factory change).
+  - **`src/Kurrent.Capacitor.Core/Chat/ElicitationOption.cs:3`** — add `Vendor` field to `PendingPermission` (this file owns the record).
+- **`InterruptIssued`** lives in the external `Kurrent.Agent.Schema` package (referenced from `Kurrent.Capacitor.Core.csproj:24`) and is not editable from this repo. Vendor is carried as a **Capacitor-owned extension field** on `ClaudeCodePermissionExtension` (today at `ClaudeCodeExtensions.cs:107`). Daemon hook handlers populate the extension; server projection persists it; the dashboard reads it through `PendingPermission.Vendor`.
+- **`AgentChatContext`** (today at `AgentChatContext.cs:28`) — exposes scalar permission fields. Add `PermissionVendor` (matching the existing flat shape — no nested `CurrentPermission` object).
+- **AgentRunStarted read model** — projection adds `Vendor`. Existing rows backfill to `"claude"` since they predate Codex.
 
-Ordering for paired PR rollout (staging):
+Server-side test coverage:
 
-1. Land the server PR first. The new `RequestPermissionV2` exists alongside the old `RequestPermission`. The DTO `Vendor` field defaults to `"claude"`. Existing daemons keep invoking the old four-arg method and keep working unchanged. Dashboard still defaults to `"claude"` for every launch, so user-visible behaviour is identical to today.
-2. Land the daemon PR. Newer daemons invoke `RequestPermissionV2`, sending an explicit vendor. Newer daemons connected to an old server would fail (no V2 method) — the rollout order avoids that window.
-3. Flip the dashboard's launch dialog to expose the vendor selector. Until this step, hosted Codex remains gated behind the server-side feature even though both ends support it.
-
-The reverse order (daemon first) is **not** safe because newer daemons depend on `RequestPermissionV2` existing on the server. Server-first is the only correct order for this PR pair.
-
-Server-side test coverage paired with the rollout:
-
-- `RequestPermission_old_method_persists_vendor_claude` — regression for old-daemon compatibility (call the four-arg method via a real `HubConnection.InvokeAsync` wire test, assert the persisted row carries `vendor = "claude"`).
-- `RequestPermissionV2_persists_explicit_vendor` — happy path for the new daemon, with parametrised cases for both `"claude"` and `"codex"`.
-- `Old_daemon_simulator_calls_four_arg_method_and_receives_decision_unchanged` — pure-wire test simulating the `RemoteAgentService.cs:142` call shape, ensuring no SignalR arity-mismatch error.
-- `PermissionRequested_old_event_still_fires_with_five_args` — regression for old clients (subscribe via SignalR with five-arg signature, assert the event still fires on the same hub events as today).
-- `PermissionRequestedV2_fires_with_vendor_arg` — new clients subscribe with six args and receive vendor.
-- `Server_dual_broadcasts_old_and_new_event_on_same_trigger` — single permission request fires both `PermissionRequested` (V1, no vendor) and `PermissionRequestedV2` (with vendor); old + new clients both receive their respective shape.
-- `ClaudeCodePermissionExtension_carries_vendor_field` — the extension model serialises and deserialises the new `Vendor` field round-trip (mirrors any existing `ClaudeCodeExtensions` test pattern).
-- `LaunchAgentCommand_deserialises_with_default_vendor_claude_when_field_absent`.
+- `RequestPermission_five_arg_call_persists_explicit_vendor` — parametrised over `"claude"` / `"codex"`.
+- `PermissionRequested_six_arg_broadcast_includes_vendor` — subscribe with the new six-arg shape; assert vendor present.
+- `LaunchAgentCommand_round_trips_required_vendor_field` — wire-shape regression for the DTO.
+- `LaunchAgentCommand_rejects_unknown_vendor_at_controller_boundary`.
+- `ClaudeCodePermissionExtension_carries_vendor_field` — round-trip on the extension model.
 - `PermissionRequestCard_hides_always_allow_when_vendor_is_codex`.
 - `PermissionRequestCard_renders_all_actions_when_vendor_is_claude` (regression).
-- `AgentChatView_hides_yes_always_option_when_pending_permission_vendor_is_codex` — the "Yes, always" control is hardcoded in `AgentChatView`; this is a Razor-render test, not an `ElicitationOption` unit test.
+- `AgentChatView_hides_yes_always_option_when_pending_permission_vendor_is_codex` — Razor-render test on the hardcoded markup.
 
 ## 4. `IHostedAgentLauncher` interface and impls
 
@@ -443,7 +434,7 @@ Path expected: `/{token}/{vendor}/permission-request`. The handler asserts vendo
 
 ### 6.2 Server SignalR call
 
-The bridge today invokes `server.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, ct)`. With cross-repo scope (§3.5), the daemon-side wrapper `ServerConnection.RequestPermissionAsync` gains a `string vendor` parameter and **invokes the new `RequestPermissionV2` hub method** (the four-arg `RequestPermission` is kept server-side only for old-daemon compatibility). New signature:
+The bridge today invokes `server.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, ct)`. With cross-repo scope (§3.5), the daemon-side wrapper `ServerConnection.RequestPermissionAsync` gains a required `string vendor` parameter and the hub method `RequestPermission` is bumped to five args server-side (no V2 alias). New signature:
 
 ```csharp
 public async Task<PermissionDecision> RequestPermissionAsync(
@@ -455,13 +446,13 @@ public async Task<PermissionDecision> RequestPermissionAsync(
         CancellationToken ct = default
     ) =>
     await _hub.InvokeAsync<PermissionDecision>(
-        "RequestPermissionV2",
+        "RequestPermission",
         sessionId, toolName, toolInput, suggestions, vendor,
         ct
     );
 ```
 
-The daemon-side bridge always passes vendor (derived from the URL segment, validated in §6.1). Old daemons running unmodified code continue to call the four-arg `RequestPermission` hub method, which the server preserves for compatibility.
+The daemon-side bridge always passes vendor (derived from the URL segment, validated in §6.1).
 
 **Bridge test (`LocalPermissionBridgeTests`):** `Codex_path_invokes_server_with_vendor_codex` — drives a POST to `/{token}/codex/permission-request`, captures the `ServerConnection.RequestPermissionAsync` invocation via a test double, asserts the `vendor` parameter is `"codex"`. Paired test: `Claude_path_invokes_server_with_vendor_claude`.
 
@@ -696,7 +687,7 @@ No CLAUDE.md changes — existing "README sync" and AOT verification rules alrea
 - `src/Kapacitor.Daemon/DaemonConfig.cs` — `CodexPath`
 - `src/Kapacitor.Daemon/Services/AgentOrchestrator.cs` — extract per-vendor blocks; route via `IHostedAgentLauncher`; vendor validation; `AgentInstance.Vendor`; failed-launch cleanup through launcher
 - `src/Kapacitor.Daemon/Services/LocalPermissionBridge.cs` — URL split, vendor-shaped response builders, pass vendor to `RequestPermissionAsync`
-- `src/Kapacitor.Daemon/Services/ServerConnection.cs` — `RequestPermissionAsync` signature gains `string vendor`; invokes the five-arg server overload
+- `src/Kapacitor.Daemon/Services/ServerConnection.cs` — `RequestPermissionAsync` signature gains required `string vendor`; invokes the five-arg server hub method
 - `src/kapacitor/Commands/CodexHookCommand.cs` — `PermissionRequest` bridge branch (fail-closed, loopback validation)
 - `src/kapacitor/Commands/PermissionRequestCommand.cs` — **update post target to `daemonUrl + "/claude/permission-request"`** (line 63 today). Also extract loopback-validation helper for reuse by the Codex bridge bounce.
 - `src/kapacitor/Commands/PluginCommand.cs` — delegate `EntryReferencesKapacitorCodexHook` + `CodexHookEvents` to the new `Kapacitor.Core/CodexHooksParser.cs` (parser move, see Create list)
@@ -738,13 +729,13 @@ Detail covered in §3.5. Server-side files touched (paths relative to `kapacitor
 
 **Modify**
 
-- `src/Kurrent.Capacitor/Agents/DaemonCommands.cs` — `Vendor` on the server-side mirror of `LaunchAgentCommand`, defaulted to `"claude"` for old-daemon JSON-deserialisation compatibility; controller-boundary validation
-- `src/Kurrent.Capacitor/Sessions/CapacitorHub.cs` — accept vendor on `LaunchAgent`; **keep the four-arg `RequestPermission` unchanged** (persists `vendor = "claude"`); **add new five-arg `RequestPermissionV2`** that persists explicit vendor on the permission-request row
-- `src/Kurrent.Capacitor/Sessions/SessionHookHandlers.cs:1083` — **keep the five-arg `PermissionRequested` broadcast unchanged** (back-compat for old UI / mobile clients); **add a sibling six-arg `PermissionRequestedV2` broadcast** that includes vendor. Both events fire on the same trigger for the duration of the rollout. Populate vendor from the new `ClaudeCodePermissionExtension.Vendor` extension field.
-- `src/Kurrent.Capacitor.Core/Services/RemoteAgentService.cs:27` — subscribe to `PermissionRequestedV2` alongside the existing `PermissionRequested` subscription. New code path consumes V2; the old subscription stays for now so an external client running an older `RemoteAgentService` build doesn't break.
-- `src/Kurrent.Capacitor.Core/ClaudeCodeExtensions.cs:107` — add a `Vendor` field to `ClaudeCodePermissionExtension`. This is the Capacitor-owned carrier for vendor (the underlying `InterruptIssued` schema event lives in the external `Kurrent.Agent.Schema` package and is not editable here)
+- `src/Kurrent.Capacitor/Agents/DaemonCommands.cs` — required `Vendor` field on the server-side mirror of `LaunchAgentCommand` (no default); controller-boundary validation
+- `src/Kurrent.Capacitor/Sessions/CapacitorHub.cs` — accept vendor on `LaunchAgent`; bump `RequestPermission` to five args including `vendor`; persist vendor on the permission-request row
+- `src/Kurrent.Capacitor/Sessions/SessionHookHandlers.cs:1083` — bump `PermissionRequested` broadcast to six args including vendor; populate from `ClaudeCodePermissionExtension.Vendor`
+- `src/Kurrent.Capacitor.Core/Services/RemoteAgentService.cs:27` — subscription handler updated to the new six-arg `PermissionRequested` shape
+- `src/Kurrent.Capacitor.Core/ClaudeCodeExtensions.cs:107` — add `Vendor` to `ClaudeCodePermissionExtension` (Capacitor-owned carrier; the underlying `InterruptIssued` schema event lives in the external `Kurrent.Agent.Schema` package and is not editable here)
 - `src/Kurrent.Capacitor.Core/Chat/ElicitationOption.cs:3` — add `Vendor` to `PendingPermission`
-- `src/Kurrent.Capacitor.Core/Models/AgentChatContext.cs:28` — add `PermissionVendor` scalar field (matches the existing flat shape; not a nested object)
+- `src/Kurrent.Capacitor.Core/Models/AgentChatContext.cs:28` — add `PermissionVendor` scalar field (flat shape, no nested object)
 - `src/Kurrent.Capacitor.Shared/Components/Agents/LaunchAgentDialog.razor` — vendor selector (default `"claude"`)
 - `src/Kurrent.Capacitor.Shared/Components/PermissionRequestCard.razor:26` — hide `Always Allow` and `Update Input` when `PendingPermission.Vendor == "codex"`
 - `src/Kurrent.Capacitor.Shared/Components/Chat/AgentChatView.razor:62` — read `AgentChatContext.PermissionVendor`; hide the hardcoded `Yes, always` control for codex vendor
@@ -752,19 +743,16 @@ Detail covered in §3.5. Server-side files touched (paths relative to `kapacitor
 
 **Server-side tests**
 
-- `RequestPermission_old_method_persists_vendor_claude` — wire-level test via real `HubConnection.InvokeAsync` calling the four-arg method, asserts persisted row has `vendor = "claude"` (matches the pattern of `SendTranscriptBatchWireTests.cs:15`)
-- `RequestPermissionV2_persists_explicit_vendor` — parametrised over `"claude"` / `"codex"`
-- `Old_daemon_simulator_invokes_four_arg_method_and_receives_decision` — pure wire test using a SignalR client harness that emits the `RemoteAgentService.cs:142` shape (four positional args, no `vendor`) and asserts no arity-mismatch error
-- `PermissionRequested_old_event_still_fires_with_five_args` — old client subscribes via SignalR with five-arg handler, asserts the event still fires on the same hub events as today
-- `PermissionRequestedV2_fires_with_vendor_arg` — new client subscribes with six args, receives vendor
-- `Server_dual_broadcasts_old_and_new_event_on_same_trigger`
+- `RequestPermission_five_arg_call_persists_explicit_vendor` — parametrised over `"claude"` / `"codex"`
+- `PermissionRequested_six_arg_broadcast_includes_vendor`
+- `LaunchAgentCommand_round_trips_required_vendor_field`
+- `LaunchAgentCommand_rejects_unknown_vendor_at_controller_boundary`
 - `ClaudeCodePermissionExtension_carries_vendor_field`
-- `LaunchAgentCommand_deserialises_with_default_vendor_claude_when_field_absent`
 - `PermissionRequestCard_hides_always_allow_when_vendor_is_codex`
 - `PermissionRequestCard_renders_all_actions_when_vendor_is_claude` (regression)
 - `AgentChatView_hides_yes_always_option_when_pending_permission_vendor_is_codex`
 
-Tracked in the same Linear issue (AI-68); shipped as a paired PR per the §3.5 rollout ordering (server first).
+Tracked in the same Linear issue (AI-68); shipped as a paired PR. Server, daemon, and clients upgrade together — there is no rollout window because staging is single-controlled.
 
 ## 11. Out of scope
 
