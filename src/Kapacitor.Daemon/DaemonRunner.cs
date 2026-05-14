@@ -1,3 +1,4 @@
+using System.Reflection;
 using kapacitor.Config;
 using kapacitor.Daemon.Pty;
 using kapacitor.Daemon.Services;
@@ -10,6 +11,17 @@ namespace kapacitor.Daemon;
 public static partial class DaemonRunner {
     public static readonly string LogPath = PathHelpers.ConfigPath("agent.log");
 
+    /// <summary>
+    /// Daemon binary version from <c>[AssemblyInformationalVersion]</c>,
+    /// baked at build time by MSBuild's git-info integration. Surfaces on
+    /// <c>DaemonConnect</c> so the server's <c>Daemon connected:</c> log
+    /// line and <c>DaemonInfo</c> can show "v0.4.11+sha.abc1234".
+    /// </summary>
+    public static string ResolveDaemonVersion() =>
+        typeof(DaemonRunner).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "unknown";
+
     public static async Task<int> RunAsync(string[] args) {
         string? logFile = null;
         var     config  = new DaemonConfig();
@@ -21,10 +33,11 @@ public static partial class DaemonRunner {
         await AppConfig.ResolveActiveProfile(args);
         config.ServerUrl = AppConfig.ResolvedServerUrl ?? "";
 
-        // CLI arg overrides for daemon-specific settings — parse before host builder
+        // CLI arg overrides for daemon-specific settings — parse before host builder.
+        // --name is consumed below by DaemonNameResolver (shared with the CLI
+        // supervisor), so we don't parse it here.
         for (var i = 0; i < args.Length - 1; i++) {
             switch (args[i]) {
-                case "--name": config.Name = args[++i]; break;
                 case "--log-file": logFile = args[++i]; break;
                 case "--max-agents" when int.TryParse(args[i + 1], out var n) && n >= 1:
                     config.MaxConcurrentAgents = n;
@@ -58,15 +71,8 @@ public static partial class DaemonRunner {
         // Daemon settings from the active profile, with env overrides
         var profileDaemon = AppConfig.ResolvedProfile?.Profile?.Daemon;
 
-        if (string.IsNullOrEmpty(config.Name) && !string.IsNullOrEmpty(profileDaemon?.Name))
-            config.Name = profileDaemon.Name;
-
         if (config.MaxConcurrentAgents == 5 && profileDaemon is { MaxAgents: var mx and not 5 })
             config.MaxConcurrentAgents = mx;
-
-        if (Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_NAME") is { } envName) {
-            config.Name = envName;
-        }
 
         if (Environment.GetEnvironmentVariable("KAPACITOR_MAX_AGENTS") is { } maxAgents) {
             if (int.TryParse(maxAgents, out var n) && n >= 1)
@@ -75,15 +81,17 @@ public static partial class DaemonRunner {
                 await Console.Error.WriteLineAsync($"Warning: ignoring invalid KAPACITOR_MAX_AGENTS={maxAgents}");
         }
 
-        // Fall back to OS username, then machine name, then a static default
-        if (string.IsNullOrEmpty(config.Name)) {
-            var userName = Environment.UserName;
-
-            config.Name = !string.IsNullOrEmpty(userName)
-                ? userName.ToLowerInvariant()
-                : !string.IsNullOrEmpty(Environment.MachineName)
-                    ? Environment.MachineName.ToLowerInvariant()
-                    : "daemon";
+        // Shared name resolution with the CLI supervisor — the CLI's
+        // AgentCommands and the daemon binary must agree on the name so
+        // the per-name PID file the CLI inspects is the one the daemon
+        // writes via DaemonLock. Resolve throws on `--name <missing value>`
+        // / `--name <next-is-flag>`; refuse to start in that case rather
+        // than silently defaulting to the OS username.
+        try {
+            config.Name = DaemonNameResolver.Resolve(args, profileDaemon?.Name);
+        } catch (ArgumentException ex) {
+            await Console.Error.WriteLineAsync(ex.Message);
+            return 1;
         }
 
         var errors = config.Validate();
@@ -98,7 +106,33 @@ public static partial class DaemonRunner {
             return 1;
         }
 
+        // One-shot migration from the pre-AI-630 singleton layout to per-name
+        // files. Runs before lock acquisition so a foreground daemon under
+        // the old layout doesn't get duplicated by a new daemon writing to
+        // the new path. Idempotent — no-op after the first successful run.
+        AgentLockMigration.MigrateLegacyFiles(config.Name);
+
+        // Acquire the per-name flock that prevents another daemon from
+        // running under the same name on this machine. The lock content is
+        // a fresh instance id that we'll also send over DaemonConnect so
+        // the server can refuse a second daemon claiming the same
+        // (owner, name) slot (AI-630).
+        var daemonLock = DaemonLock.TryAcquire(config.Name);
+
+        if (daemonLock is null) {
+            await Console.Error.WriteLineAsync(
+                $"Another kapacitor-daemon is already running under the name '{config.Name}' on this machine. "
+                + $"Either stop it (`kapacitor agent stop --name {config.Name}`) or start this one with a different `--name`."
+            );
+
+            return 2;
+        }
+
+        config.InstanceId = daemonLock.InstanceId;
+        config.Version    = ResolveDaemonVersion();
+
         builder.Services.AddSingleton(config);
+        builder.Services.AddSingleton(daemonLock);
         builder.Services.AddSingleton<ServerConnection>();
 
         // Local HTTP bridge that fronts the server's permission flow. Registered as a
@@ -130,13 +164,36 @@ public static partial class DaemonRunner {
         var lifetime   = host.Services.GetRequiredService<IHostApplicationLifetime>();
         var connection = host.Services.GetRequiredService<ServerConnection>();
 
+        // AI-630: if the server rejects our DaemonConnect because another
+        // live daemon owns the (owner, name) slot, signal host shutdown
+        // and remember to return exit code 3 instead of 0. Subscribe
+        // before ConnectAsync so the initial-connect path is covered.
+        var nameInUse = false;
+
+        connection.OnNameInUse += _ => {
+            nameInUse = true;
+            lifetime.StopApplication();
+        };
+
         // Start hosted services (LocalPermissionBridge in particular) BEFORE the SignalR
         // connection comes up. Otherwise an early LaunchAgent message can arrive while
         // BaseUrl is still null and the spawned Claude falls back to the HTTPS path —
         // exactly what this bridge is meant to avoid.
         await host.StartAsync(lifetime.ApplicationStopping);
 
-        await connection.ConnectAsync(lifetime.ApplicationStopping);
+        try {
+            await connection.ConnectAsync(lifetime.ApplicationStopping);
+        } catch (Exception ex) when (nameInUse) {
+            // ConnectAsync's initial-connect path threw because of
+            // NameInUse. OnNameInUse already fired and set our flag; the
+            // host hasn't started its main loop yet, so just clean up
+            // and exit cleanly with code 3.
+            _ = ex;
+            daemonLock.Dispose();
+            await host.StopAsync();
+
+            return 3;
+        }
 
         var worktreeManager = host.Services.GetRequiredService<WorktreeManager>();
         await worktreeManager.CleanupOrphanedAsync();
@@ -155,12 +212,17 @@ public static partial class DaemonRunner {
             // internally for ApplicationStopping and returns cleanly.
             await host.WaitForShutdownAsync();
         } finally {
+            daemonLock.Dispose();
             await orchestrator.DisposeAsync();
             await connection.DisposeAsync();
             await host.StopAsync();
         }
 
-        return 0;
+        // AI-630: if the daemon was shut down because the server told us
+        // our (owner, name) slot is contested mid-run (heartbeat-triggered
+        // path), exit with code 3 so wrappers (systemd, npm, CI) can tell
+        // this apart from a normal Ctrl+C exit.
+        return nameInUse ? 3 : 0;
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "kapacitor agent '{Name}' starting, connecting to {ServerUrl}")]

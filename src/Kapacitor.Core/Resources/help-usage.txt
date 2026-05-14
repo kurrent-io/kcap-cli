@@ -21,9 +21,10 @@ Configuration:
   config set <key> <value>         Update a config value
 
 Agent Daemon:
-  agent start [-d]                 Start agent daemon (foreground, or -d for background; refuses if one is already running)
-  agent stop                       Stop the agent daemon (foreground or background)
-  agent status                     Show agent daemon status
+  agent start [-d] [--name N]      Start agent daemon (foreground, or -d for background; refuses on duplicate name)
+  agent stop [--name N] [--yes]    Stop a daemon (prompts on multi unless --yes)
+  agent status [--name N]          Show agent daemon status (lists all when --name omitted)
+  agent doctor [--clean]           Diagnose lock-file state, optionally clean stale entries
   repos                            List known repos (sorted by last used)
   repos add <path>                 Add a repo path (supports "." for cwd)
   repos remove <path>              Remove a repo path
@@ -58,4 +59,4 @@ Hook Commands (internal — used by Claude Code plugin):
 Environment:
   KAPACITOR_URL              Server URL (overrides config file)
   KAPACITOR_SESSION_ID       Session ID (set automatically by SessionStart hook)
-  KAPACITOR_DAEMON_NAME      Daemon name (overrides config file)
+  KAPACITOR_DAEMON_NAME      Daemon name (overrides profile; superseded by --name)

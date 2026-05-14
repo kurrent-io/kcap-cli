@@ -4,19 +4,38 @@ Usage: kapacitor agent <subcommand>
 
 Subcommands:
   start [-d]              Start the agent daemon (foreground, or -d for background)
-  stop                    Stop the agent daemon (foreground or background)
-  status                  Show agent daemon status
+  stop [--name N] [--yes] Stop a running agent daemon (prompts on multi unless --yes)
+  status [--name N]       Show agent daemon status (lists all when --name omitted)
   logs                    Show recent daemon log output
+  doctor [--clean]        Diagnose lock-file state, optionally clean stale entries
 
 Options for start:
-  --name <name>           Daemon name
+  --name <name>           Daemon name (defaults to OS username)
   --server-url <url>      Server URL
   --max-agents <n>        Max concurrent agents (default: 5)
   --log-file <path>       Log to file instead of console
   -d, --detach            Run in background (logs to file automatically)
 
+Options for stop:
+  --name <name>           Stop just the named daemon. Without it, all daemons
+                          are listed and the command asks for confirmation
+                          before stopping them (unless --yes is passed).
+  --yes, -y               Unattended mode: stop all running daemons without
+                          prompting. Useful in cleanup scripts.
+
+Options for doctor:
+  --clean                 Remove stale entries (lock files whose holder is
+                          gone). Held entries are never touched. Without
+                          --clean, doctor reports state without modifying.
+
 Notes:
-  start refuses to launch if another kapacitor-daemon is already running
-  (whether started in foreground or background mode). Use `kapacitor agent stop`
-  to terminate the existing one first. Multiple concurrent daemons under the
-  same identity were taking down each other's hosted agents on the server.
+  Each daemon holds an exclusive flock on ~/.config/kapacitor/agents/<name>.lock
+  for its entire lifetime. The kernel releases the lock automatically on
+  process exit (including SIGKILL or power-off), so stale lock files on disk
+  are never a blocker — only a live process holding the kernel-level lock
+  can prevent another daemon from acquiring the same name.
+
+  Two daemons with different --name values can run side-by-side. Two daemons
+  under the same name on the same machine collide on the flock and the
+  second one exits with code 2. If they somehow both connect to the server
+  anyway, the server-side check rejects the second one with exit code 3.

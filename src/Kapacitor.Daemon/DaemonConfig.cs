@@ -6,6 +6,24 @@ public class DaemonConfig {
     public string[] AllowedRepoPaths    { get; set; } = [];
     public int      MaxConcurrentAgents { get; set; } = 5;
 
+    /// <summary>
+    /// Per-process GUID generated at startup, also written to the daemon's
+    /// flock-file content. Sent over <c>DaemonConnect</c> so the server
+    /// (AI-630) can tell "same daemon reconnecting" from "different daemon
+    /// claiming the same name". Set in <c>DaemonRunner.RunAsync</c> once
+    /// the lock has been acquired; <c>null</c> in tests that bypass lock
+    /// acquisition.
+    /// </summary>
+    public string? InstanceId { get; set; }
+
+    /// <summary>
+    /// Daemon binary version (<c>AssemblyInformationalVersion</c>). Sent
+    /// over <c>DaemonConnect</c> and surfaced on the server's
+    /// <c>Daemon connected:</c> log line + <c>DaemonInfo</c>. Set in
+    /// <c>DaemonRunner.RunAsync</c>.
+    /// </summary>
+    public string? Version { get; set; }
+
     public string WorktreeRoot { get; set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ".capacitor",
