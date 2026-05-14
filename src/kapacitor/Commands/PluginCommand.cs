@@ -6,15 +6,6 @@ namespace kapacitor.Commands;
 public static class PluginCommand {
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
-    static readonly string[] CodexHookEvents = [
-        "SessionStart",
-        "UserPromptSubmit",
-        "PreToolUse",
-        "PostToolUse",
-        "PermissionRequest",
-        "Stop"
-    ];
-
     const string CodexHookCommand = "kapacitor codex-hook";
 
     public static async Task<int> HandleAsync(string[] args) {
@@ -195,7 +186,7 @@ public static class PluginCommand {
                 root["hooks"] = hooks;
             }
 
-            foreach (var evt in CodexHookEvents) {
+            foreach (var evt in CodexHooksParser.CodexHookEvents) {
                 var kapacitorEntry = new JsonObject {
                     ["hooks"] = new JsonArray(
                         new JsonObject {
@@ -216,7 +207,7 @@ public static class PluginCommand {
                 foreach (var entry in entries) {
                     if (entry is null) continue;
 
-                    if (!EntryReferencesKapacitorCodexHook(entry)) {
+                    if (!CodexHooksParser.EntryReferencesKapacitorCodexHook(entry)) {
                         preserved.Add(entry.DeepClone());
                     }
                 }
@@ -248,7 +239,7 @@ public static class PluginCommand {
 
             var changed = false;
 
-            foreach (var evt in CodexHookEvents) {
+            foreach (var evt in CodexHooksParser.CodexHookEvents) {
                 if (hooks[evt] is not JsonArray entries) continue;
 
                 var preserved = new JsonArray();
@@ -256,7 +247,7 @@ public static class PluginCommand {
                 foreach (var entry in entries) {
                     if (entry is null) continue;
 
-                    if (EntryReferencesKapacitorCodexHook(entry)) {
+                    if (CodexHooksParser.EntryReferencesKapacitorCodexHook(entry)) {
                         changed = true;
                     } else {
                         preserved.Add(entry.DeepClone());
@@ -274,23 +265,6 @@ public static class PluginCommand {
         } catch {
             return false;
         }
-    }
-
-    /// <summary>
-    /// Returns true iff <paramref name="entry"/> is a JsonObject that has a
-    /// <c>hooks</c> JsonArray containing at least one JsonObject whose
-    /// <c>command</c> string contains <c>kapacitor codex-hook</c>.
-    /// Any non-conformant node shape is treated as a non-match (returns false)
-    /// instead of throwing.
-    /// </summary>
-    internal static bool EntryReferencesKapacitorCodexHook(JsonNode? entry) {
-        if (entry is not JsonObject entryObj) return false;
-        if (entryObj["hooks"] is not JsonArray inner) return false;
-
-        return inner.OfType<JsonObject>().Any(h =>
-            h["command"] is JsonValue v
-            && v.TryGetValue<string>(out var cmd)
-            && cmd.Contains("kapacitor codex-hook"));
     }
 
     static int PrintUsage() {

@@ -155,18 +155,18 @@ public class PluginCommandCodexTests {
     [Test]
     public async Task EntryReferencesKapacitorCodexHook_returns_false_for_numeric_command() {
         var entry = JsonNode.Parse("""{"hooks":[{"type":"command","command":42}]}""");
-        await Assert.That(PluginCommand.EntryReferencesKapacitorCodexHook(entry)).IsFalse();
+        await Assert.That(CodexHooksParser.EntryReferencesKapacitorCodexHook(entry)).IsFalse();
     }
 
     [Test]
     public async Task EntryReferencesKapacitorCodexHook_returns_true_for_matching_string_command() {
         var entry = JsonNode.Parse("""{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}""");
-        await Assert.That(PluginCommand.EntryReferencesKapacitorCodexHook(entry)).IsTrue();
+        await Assert.That(CodexHooksParser.EntryReferencesKapacitorCodexHook(entry)).IsTrue();
     }
 
     [Test]
     public async Task EntryReferencesKapacitorCodexHook_returns_false_for_null() {
-        await Assert.That(PluginCommand.EntryReferencesKapacitorCodexHook(null)).IsFalse();
+        await Assert.That(CodexHooksParser.EntryReferencesKapacitorCodexHook(null)).IsFalse();
     }
 
     sealed class TempDir : IDisposable {
