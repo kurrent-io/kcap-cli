@@ -12,6 +12,7 @@
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="TUnit" />
+        <PackageReference Include="Tomlyn" />
         <PackageReference Include="WireMock.Net" />
         <PackageReference Include="NSubstitute" />
     </ItemGroup>
