@@ -9,8 +9,8 @@ namespace kapacitor.Tests.Unit;
 
 // Tests modify the HOME env var; they must not run in parallel with each other
 // (or with any other test that reads CodexPaths.Home) so that the scoped HOME is stable.
+[NotInParallel("HomeEnvVarMutation")]
 public class CodexConfigWriterTests {
-    const string ParallelKey = nameof(CodexConfigWriterTests);
 
     static (DirectoryInfo Dir, string? OriginalHome) ScopedHome() {
         var tmp = Directory.CreateTempSubdirectory("kapacitor-codexconfig-test-");
@@ -27,7 +27,7 @@ public class CodexConfigWriterTests {
     static TomlTable ReadToml(string path) =>
         TomlSerializer.Deserialize<TomlTable>(File.ReadAllText(path))!;
 
-    [Test, NotInParallel(ParallelKey)]
+    [Test]
     public async Task Writes_initial_projects_table_when_config_toml_missing() {
         var (tmp, original) = ScopedHome();
         try {
@@ -44,7 +44,7 @@ public class CodexConfigWriterTests {
         } finally { RestoreHome(original, tmp); }
     }
 
-    [Test, NotInParallel(ParallelKey)]
+    [Test]
     public async Task Writes_to_fresh_home_creates_codex_directory() {
         var (tmp, original) = ScopedHome();
         // Explicitly NOT pre-creating .codex
@@ -57,7 +57,7 @@ public class CodexConfigWriterTests {
         } finally { RestoreHome(original, tmp); }
     }
 
-    [Test, NotInParallel(ParallelKey)]
+    [Test]
     public async Task Adds_entry_to_existing_config_preserving_other_tables() {
         var (tmp, original) = ScopedHome();
         try {
@@ -85,7 +85,7 @@ public class CodexConfigWriterTests {
         } finally { RestoreHome(original, tmp); }
     }
 
-    [Test, NotInParallel(ParallelKey)]
+    [Test]
     public async Task Updates_trust_level_if_present_but_not_trusted() {
         var (tmp, original) = ScopedHome();
         try {
@@ -103,7 +103,7 @@ public class CodexConfigWriterTests {
         } finally { RestoreHome(original, tmp); }
     }
 
-    [Test, NotInParallel(ParallelKey)]
+    [Test]
     public async Task No_op_when_trust_level_already_trusted() {
         var (tmp, original) = ScopedHome();
         try {
@@ -122,7 +122,7 @@ public class CodexConfigWriterTests {
         } finally { RestoreHome(original, tmp); }
     }
 
-    [Test, NotInParallel(ParallelKey)]
+    [Test]
     public async Task Atomic_rename_leaves_no_tmp_files() {
         var (tmp, original) = ScopedHome();
         try {
@@ -135,7 +135,7 @@ public class CodexConfigWriterTests {
         } finally { RestoreHome(original, tmp); }
     }
 
-    [Test, NotInParallel(ParallelKey)]
+    [Test]
     public async Task Concurrent_writers_serialise_safely() {
         var (tmp, original) = ScopedHome();
         try {
@@ -154,7 +154,7 @@ public class CodexConfigWriterTests {
         } finally { RestoreHome(original, tmp); }
     }
 
-    [Test, NotInParallel(ParallelKey)]
+    [Test]
     public async Task Malformed_existing_config_is_skipped_not_overwritten() {
         var (tmp, original) = ScopedHome();
         try {

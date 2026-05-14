@@ -3,6 +3,7 @@ using TUnit.Assertions.Extensions;
 
 namespace kapacitor.Tests.Unit;
 
+[NotInParallel("HomeEnvVarMutation")]
 public class CodexPathsHomeIsolationTests {
     [Test]
     public async Task Home_reflects_current_HOME_env_var() {
