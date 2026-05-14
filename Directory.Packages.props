@@ -1,0 +1,14 @@
+<Project>
+    <PropertyGroup>
+        <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    </PropertyGroup>
+    <ItemGroup>
+        <PackageVersion Include="IdentityModel.OidcClient" Version="6.0.0" />
+        <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.0" />
+        <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
+        <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.0" />
+        <PackageVersion Include="MinVer" Version="7.0.0" />
+        <PackageVersion Include="Spectre.Console" Version="0.49.1" />
+        <PackageVersion Include="Tomlyn" Version="2.4.0" />
+    </ItemGroup>
+</Project>
