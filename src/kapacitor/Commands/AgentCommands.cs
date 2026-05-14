@@ -191,6 +191,28 @@ public static class AgentCommands {
         // Close stdin so the child doesn't wait for input
         process.StandardInput.Close();
 
+        // AI-630: the daemon binary acquires its own per-name flock at
+        // startup and exits with code 2 if another live daemon already
+        // holds it (the race we couldn't catch via the PID-file guard
+        // alone, e.g. when the previous daemon's PID file got wiped but
+        // the process is still alive). Without this short readiness wait
+        // we'd happily write a stale PID file and tell the user the
+        // detached daemon is running when it actually just exited. The
+        // flock acquisition happens *very* early in DaemonRunner.RunAsync
+        // (before SignalR connect), so 1.5s is more than enough to catch
+        // an immediate exit without making the success path feel sluggish.
+        if (process.WaitForExit(1500)) {
+            Console.Error.WriteLine(
+                $"Agent daemon '{name}' failed to start (exit code {process.ExitCode}). "
+                + $"Check `kapacitor agent doctor` to see whether the name is held by another process."
+            );
+
+            // Translate the daemon's flock-conflict exit code straight
+            // through so wrappers / CI can distinguish "name in use" from
+            // a generic spawn failure.
+            return process.ExitCode == 0 ? 1 : process.ExitCode;
+        }
+
         WritePidFile(name, process);
 
         Console.Out.WriteLine($"Agent daemon '{name}' started (PID {process.Id})");
@@ -309,11 +331,12 @@ public static class AgentCommands {
     // ── doctor ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Lists every <c>agents/&lt;name&gt;.lock</c> entry, attempts a
-    /// non-destructive <c>flock</c> acquire on each to classify it as held
-    /// (another process owns the lock) or stale (file lying around with no
-    /// holder), and prints the holding PID + instance id prefix for each.
-    /// With <c>--clean</c> removes the stale entries.
+    /// Lists every per-name daemon entry on disk — both <c>*.lock</c> and
+    /// <c>*.pid</c> files. For each, attempts a non-destructive
+    /// <c>flock</c> acquire to classify the entry as HELD (a live daemon
+    /// owns the path) or STALE (file lying around with no holder, or
+    /// orphan PID with no corresponding lock). With <c>--clean</c> removes
+    /// the stale entries (held ones are never touched).
     /// </summary>
     static async Task<int> DoctorAsync(string[] args) {
         var clean = args.Contains("--clean");
@@ -336,33 +359,49 @@ public static class AgentCommands {
             var lockPath = AgentLockPaths.LockPath(name);
             var pidPath  = AgentLockPaths.PidPath(name);
 
+            var hasLock = File.Exists(lockPath);
+            var hasPid  = File.Exists(pidPath);
+
             string? instanceId = null;
-            try { instanceId = File.ReadAllText(lockPath).Trim().Split('\n', 2)[0]; }
-            catch { /* best-effort */ }
+            if (hasLock) {
+                try { instanceId = File.ReadAllText(lockPath).Trim().Split('\n', 2)[0]; }
+                catch { /* best-effort */ }
+            }
 
             var instancePrefix = instanceId is { Length: >= 8 } ? instanceId[..8] : instanceId ?? "(unknown)";
 
-            // Try to acquire the lock non-destructively. If we succeed,
-            // the lock was stale (no live holder). Drop the FileStream
-            // immediately to release.
+            // Probing the lock requires the file to exist. An orphan PID
+            // file (no .lock alongside) is reported as STALE — there's no
+            // live daemon if the flock isn't held by anyone, and a daemon
+            // that's running would always own a .lock too.
             FileStream? probe = null;
 
-            try {
-                probe = new FileStream(lockPath, FileMode.Open, FileAccess.Read, FileShare.None);
-            } catch (IOException) {
-                // Lock is held by a live process, OR the file went away
-                // between EnumerateNames and our open. Either way: treat
-                // as held — we only down-classify to stale when probe
-                // succeeds (which means we DID get the lock cleanly).
+            if (hasLock) {
+                try {
+                    probe = new FileStream(lockPath, FileMode.Open, FileAccess.Read, FileShare.None);
+                } catch (IOException) {
+                    // Lock is held by a live process, OR the file went away
+                    // between EnumerateNames and our open. Either way: treat
+                    // as held — we only down-classify to stale when probe
+                    // succeeds (which means we DID get the lock cleanly).
+                }
             }
 
-            if (probe is null) {
+            if (probe is null && hasLock) {
                 heldCount++;
                 var pidEntry = ReadPidFile(name);
                 var alive    = pidEntry is { } e && IsOurDaemon(e.Pid, e.StartTicks);
                 var pidStr   = pidEntry is { } e2 ? e2.Pid.ToString() : "?";
                 var aliveStr = alive ? $"PID {pidStr}" : pidEntry is null ? "(no pid file)" : "(stale pid)";
                 await Console.Out.WriteLineAsync($"  {name,-20}  HELD     instance={instancePrefix}  {aliveStr}");
+            } else if (probe is null) {
+                // No .lock file at all but a .pid is present — orphan.
+                staleCount++;
+                await Console.Out.WriteLineAsync($"  {name,-20}  STALE    instance=(none)   (orphan pid file, no lock)");
+
+                if (clean) {
+                    try { File.Delete(pidPath); } catch { /* best-effort */ }
+                }
             } else {
                 probe.Dispose();
                 staleCount++;

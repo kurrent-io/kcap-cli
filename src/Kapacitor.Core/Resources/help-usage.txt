@@ -59,4 +59,4 @@ Hook Commands (internal — used by Claude Code plugin):
 Environment:
   KAPACITOR_URL              Server URL (overrides config file)
   KAPACITOR_SESSION_ID       Session ID (set automatically by SessionStart hook)
-  KAPACITOR_DAEMON_NAME      Daemon name (overrides config file)
+  KAPACITOR_DAEMON_NAME      Daemon name (overrides profile; superseded by --name)

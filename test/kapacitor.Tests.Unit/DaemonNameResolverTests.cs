@@ -50,15 +50,16 @@ public class DaemonNameResolverTests {
     }
 
     [Test]
-    public async Task Resolve_EnvVarAlsoOverridesArg() {
-        // Documented quirk inherited from the pre-AI-630 DaemonRunner.RunAsync
-        // ordering: env var trumps everything so shell scripts can fan out
-        // multiple daemons without rewriting argv.
+    public async Task Resolve_NameArgOverridesEnvVar() {
+        // AI-630 fix: pre-AI-630 DaemonRunner had the env var trump --name,
+        // which inverted the usual CLI convention (explicit flag is the
+        // strongest signal). The new precedence puts --name first so the
+        // user's explicit choice always wins.
         Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_NAME", "from-env");
 
         try {
             var name = DaemonNameResolver.Resolve(["--name", "from-arg"], profileName: "from-profile");
-            await Assert.That(name).IsEqualTo("from-env");
+            await Assert.That(name).IsEqualTo("from-arg");
         } finally {
             Reset();
         }

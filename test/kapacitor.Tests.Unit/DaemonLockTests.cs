@@ -111,6 +111,61 @@ public class DaemonLockTests {
         }
     }
 
+    /// <summary>
+    /// AI-630 review fix: <see cref="DaemonLock.Dispose"/> must not delete the
+    /// lock file on disk. If it did, a daemon B that acquired the path between
+    /// our flock release and the unlink would have its inode unlinked under
+    /// it, and a daemon C could then create a fresh file and acquire a SECOND
+    /// independent flock at the same path — reopening the duplicate-name hole.
+    /// </summary>
+    [Test]
+    public async Task Dispose_DoesNotDeleteLockFile() {
+        var dir = CreateScratchDir();
+
+        try {
+            var l = DaemonLock.TryAcquire("alpha")!;
+            var lockPath = AgentLockPaths.LockPath("alpha");
+
+            await Assert.That(File.Exists(lockPath)).IsTrue();
+
+            l.Dispose();
+
+            await Assert.That(File.Exists(lockPath)).IsTrue();
+        } finally {
+            Restore();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// AI-630 review fix: when a successor daemon has already overwritten
+    /// the PID file with its own PID, the disposing daemon must not delete
+    /// it — that would orphan the successor's entry and `agent stop` would
+    /// no longer find the live daemon.
+    /// </summary>
+    [Test]
+    public async Task Dispose_DoesNotDeletePidFile_IfItPointsToSomeoneElsesPid() {
+        var dir = CreateScratchDir();
+
+        try {
+            var l = DaemonLock.TryAcquire("alpha")!;
+            var pidPath = AgentLockPaths.PidPath("alpha");
+
+            // Simulate a successor process that won the race after our
+            // flock release and rewrote the PID file. We pick a PID that
+            // is definitely not us.
+            File.WriteAllText(pidPath, "99999\n637999999999999999");
+
+            l.Dispose();
+
+            await Assert.That(File.Exists(pidPath)).IsTrue();
+            await Assert.That(File.ReadAllText(pidPath)).StartsWith("99999");
+        } finally {
+            Restore();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Test]
     public async Task TryAcquire_AfterStaleLockFileLeftBehind_StillAcquires() {
         var dir = CreateScratchDir();

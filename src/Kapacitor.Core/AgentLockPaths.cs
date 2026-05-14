@@ -79,16 +79,23 @@ public static partial class AgentLockPaths {
     public static void EnsureDirectory() => System.IO.Directory.CreateDirectory(Directory);
 
     /// <summary>
-    /// Returns the daemon names visible on disk (one per <c>*.lock</c> file).
-    /// Used by <c>agent stop</c> (no <c>--name</c>) to enumerate candidates and
-    /// by <c>agent doctor</c> to classify held vs stale entries.
+    /// Returns the daemon names visible on disk — the union of names
+    /// derived from <c>*.lock</c> and <c>*.pid</c> files. Used by
+    /// <c>agent doctor</c> to classify held vs stale entries; covers
+    /// orphan PID files that have no matching lock (e.g. a pre-AI-630
+    /// daemon whose migration ran for the PID file but not the start
+    /// lock, or a stop that removed the lock but left the PID behind).
     /// </summary>
     public static IReadOnlyList<string> EnumerateNames() {
         if (!System.IO.Directory.Exists(Directory)) return [];
 
+        var fromLocks = System.IO.Directory.EnumerateFiles(Directory, "*.lock")
+            .Select(Path.GetFileNameWithoutExtension);
+        var fromPids  = System.IO.Directory.EnumerateFiles(Directory, "*.pid")
+            .Select(Path.GetFileNameWithoutExtension);
+
         return [
-            .. System.IO.Directory.EnumerateFiles(Directory, "*.lock")
-                .Select(Path.GetFileNameWithoutExtension)
+            .. fromLocks.Concat(fromPids)
                 .Where(n => !string.IsNullOrEmpty(n))
                 .Select(n => n!)
                 .Distinct()

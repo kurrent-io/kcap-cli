@@ -102,8 +102,40 @@ internal sealed class DaemonLock : IDisposable {
 
         // Releasing the FileStream releases the kernel-level flock. After
         // that, a follow-up start with the same name can acquire cleanly.
-        try { _stream.Dispose(); }    catch { /* best-effort */ }
-        try { File.Delete(_pidPath); } catch { /* best-effort */ }
-        try { File.Delete(_lockPath); } catch { /* best-effort */ }
+        try { _stream.Dispose(); } catch { /* best-effort */ }
+
+        // Do NOT delete the lock file. The kernel flock is what enforces
+        // exclusion; file presence on disk is irrelevant. Deleting it here
+        // races against another daemon that may already have acquired the
+        // path between our Dispose() and the unlink: our `File.Delete`
+        // would unlink the inode they're holding open, and a third daemon
+        // could then create a brand-new `<name>.lock` at the same path
+        // and acquire a SECOND independent flock — defeating the whole
+        // AI-630 guard. `kapacitor agent doctor --clean` removes truly
+        // stale files.
+        //
+        // Delete the PID file only if it still points to our own PID. A
+        // legitimate successor daemon that ran while we were disposing
+        // would have already rewritten the file to its own PID, and an
+        // unconditional Delete here would orphan their entry.
+        try {
+            if (PidFileMatchesCurrentProcess(_pidPath)) File.Delete(_pidPath);
+        } catch { /* best-effort */ }
+    }
+
+    static bool PidFileMatchesCurrentProcess(string pidPath) {
+        try {
+            if (!File.Exists(pidPath)) return false;
+
+            var line = File.ReadAllText(pidPath)
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault();
+
+            return line is not null
+                && int.TryParse(line, out var pid)
+                && pid == Process.GetCurrentProcess().Id;
+        } catch {
+            return false;
+        }
     }
 }

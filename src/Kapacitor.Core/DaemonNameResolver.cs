@@ -3,19 +3,26 @@ namespace kapacitor;
 /// <summary>
 /// Shared resolution of the agent daemon's name. Lives in Kapacitor.Core
 /// so the CLI supervisor and the daemon binary agree on which name the
-/// per-name lock / PID files belong to. The precedence below matches the
-/// order historically used by <c>DaemonRunner.RunAsync</c>:
+/// per-name lock / PID files belong to. Precedence — first non-empty
+/// source wins:
 ///
 /// <list type="number">
-/// <item><c>--name &lt;value&gt;</c> on the command line</item>
+/// <item><c>--name &lt;value&gt;</c> on the command line — the most
+///     explicit signal, takes priority over everything else.</item>
+/// <item><c>KAPACITOR_DAEMON_NAME</c> environment variable — useful for
+///     shell scripts that fan out multiple daemons without rewriting
+///     argv (e.g. <c>direnv</c> per shell).</item>
 /// <item><c>profile.daemon.name</c> from the active profile (resolved
-///     via <c>AppConfig.ResolveActiveProfile</c>)</item>
-/// <item><c>KAPACITOR_DAEMON_NAME</c> environment variable (overrides
-///     the profile)</item>
-/// <item>OS username, lowercased</item>
-/// <item>Machine name, lowercased</item>
-/// <item>The literal string <c>"daemon"</c></item>
+///     via <c>AppConfig.ResolveActiveProfile</c>).</item>
+/// <item>OS username, lowercased.</item>
+/// <item>Machine name, lowercased.</item>
+/// <item>The literal string <c>"daemon"</c>.</item>
 /// </list>
+///
+/// <para>Note: pre-AI-630 <c>DaemonRunner.RunAsync</c> had the env var
+/// unconditionally override <c>--name</c>. That was an unintentional
+/// inversion of the usual CLI convention (explicit flag wins). AI-630
+/// fixes it so <c>--name</c> is the strongest signal as users expect.</para>
 /// </summary>
 public static class DaemonNameResolver {
     /// <summary>
@@ -26,34 +33,21 @@ public static class DaemonNameResolver {
     /// resolved name; never null or empty.
     /// </summary>
     public static string Resolve(string[] args, string? profileName = null) {
-        string? name = null;
-
         for (var i = 0; i < args.Length - 1; i++) {
-            if (args[i] == "--name") {
-                name = args[i + 1];
-
-                break;
-            }
+            if (args[i] == "--name" && !string.IsNullOrEmpty(args[i + 1]))
+                return args[i + 1];
         }
 
-        if (string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(profileName))
-            name = profileName;
-
-        // Env var overrides the profile (matches the historical
-        // DaemonRunner.RunAsync ordering — added for shell scripts that
-        // want to fan out daemons without rewriting the profile file).
         if (Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_NAME") is { Length: > 0 } envName)
-            name = envName;
+            return envName;
 
-        if (string.IsNullOrEmpty(name)) {
-            var userName = Environment.UserName;
-            name = !string.IsNullOrEmpty(userName)
-                ? userName.ToLowerInvariant()
-                : !string.IsNullOrEmpty(Environment.MachineName)
-                    ? Environment.MachineName.ToLowerInvariant()
-                    : "daemon";
-        }
+        if (!string.IsNullOrEmpty(profileName))
+            return profileName;
 
-        return name;
+        var userName = Environment.UserName;
+        if (!string.IsNullOrEmpty(userName)) return userName.ToLowerInvariant();
+
+        var machine = Environment.MachineName;
+        return !string.IsNullOrEmpty(machine) ? machine.ToLowerInvariant() : "daemon";
     }
 }
