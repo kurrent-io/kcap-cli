@@ -226,8 +226,14 @@ public static class AgentCommands {
     // ── stop ────────────────────────────────────────────────────────────────
 
     static async Task<int> StopAsync(string[] args) {
-        var name = ExtractFlagValue(args, "--name");
-        var yes  = args.Contains("--yes") || args.Contains("-y");
+        string? name;
+        try {
+            name = ExtractFlagValue(args, "--name");
+        } catch (ArgumentException ex) {
+            await Console.Error.WriteLineAsync(ex.Message);
+            return 1;
+        }
+        var yes = args.Contains("--yes") || args.Contains("-y");
 
         if (name is not null) return StopByName(name);
 
@@ -300,7 +306,13 @@ public static class AgentCommands {
     // ── status ──────────────────────────────────────────────────────────────
 
     static async Task<int> Status(string[] args) {
-        var explicitName = ExtractFlagValue(args, "--name");
+        string? explicitName;
+        try {
+            explicitName = ExtractFlagValue(args, "--name");
+        } catch (ArgumentException ex) {
+            await Console.Error.WriteLineAsync(ex.Message);
+            return 1;
+        }
 
         var names = explicitName is not null ? [explicitName] : EnumerateRunningNames();
 
@@ -519,9 +531,32 @@ public static class AgentCommands {
         ];
     }
 
+    /// <summary>
+    /// Returns the value of <c>--flag &lt;value&gt;</c> from <paramref name="args"/>,
+    /// or <c>null</c> if the flag isn't present.
+    ///
+    /// <para>Throws <see cref="ArgumentException"/> if the flag is present but
+    /// the following token is missing or itself looks like another flag
+    /// (starts with <c>-</c>). The strict-value check protects destructive
+    /// commands like <c>agent stop --yes --name</c> — without it, a missing
+    /// value would silently fall through to the no-<c>--name</c> enumeration
+    /// path and (with <c>--yes</c>) skip the multi-daemon prompt, stopping
+    /// every daemon the user owns. Surfacing the bad invocation forces the
+    /// user to fix their command line before anything destructive happens.</para>
+    /// </summary>
     static string? ExtractFlagValue(string[] args, string flag) {
-        for (var i = 0; i < args.Length - 1; i++) {
-            if (args[i] == flag) return args[i + 1];
+        for (var i = 0; i < args.Length; i++) {
+            if (args[i] != flag) continue;
+
+            if (i + 1 >= args.Length || string.IsNullOrEmpty(args[i + 1]) || args[i + 1].StartsWith('-')) {
+                var got = i + 1 < args.Length ? $"'{args[i + 1]}'" : "<end of args>";
+                throw new ArgumentException(
+                    $"{flag} requires a value (got {got}). " +
+                    "Pass a value (e.g. --name laptop) or omit the flag entirely."
+                );
+            }
+
+            return args[i + 1];
         }
 
         return null;

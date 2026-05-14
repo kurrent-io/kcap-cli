@@ -79,4 +79,31 @@ public class DaemonNameResolverTests {
             Reset();
         }
     }
+
+    [Test]
+    public async Task Resolve_Throws_WhenNameFlagHasNoValue() {
+        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_NAME", null);
+
+        try {
+            var ex = Assert.Throws<ArgumentException>(() => DaemonNameResolver.Resolve(["--name"]));
+            await Assert.That(ex.Message).Contains("--name requires a value");
+        } finally {
+            Reset();
+        }
+    }
+
+    [Test]
+    public async Task Resolve_Throws_WhenNameFlagValueLooksLikeAnotherFlag() {
+        // Defends against `agent stop --name --yes` (which would otherwise
+        // try to stop a daemon literally named "--yes") and the more
+        // dangerous `agent stop --yes --name` chain — see PR 67 review.
+        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_NAME", null);
+
+        try {
+            var ex = Assert.Throws<ArgumentException>(() => DaemonNameResolver.Resolve(["--name", "--yes"]));
+            await Assert.That(ex.Message).Contains("--name requires a value");
+        } finally {
+            Reset();
+        }
+    }
 }

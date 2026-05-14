@@ -84,8 +84,15 @@ public static partial class DaemonRunner {
         // Shared name resolution with the CLI supervisor — the CLI's
         // AgentCommands and the daemon binary must agree on the name so
         // the per-name PID file the CLI inspects is the one the daemon
-        // writes via DaemonLock.
-        config.Name = DaemonNameResolver.Resolve(args, profileDaemon?.Name);
+        // writes via DaemonLock. Resolve throws on `--name <missing value>`
+        // / `--name <next-is-flag>`; refuse to start in that case rather
+        // than silently defaulting to the OS username.
+        try {
+            config.Name = DaemonNameResolver.Resolve(args, profileDaemon?.Name);
+        } catch (ArgumentException ex) {
+            await Console.Error.WriteLineAsync(ex.Message);
+            return 1;
+        }
 
         var errors = config.Validate();
 

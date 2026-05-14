@@ -33,9 +33,26 @@ public static class DaemonNameResolver {
     /// resolved name; never null or empty.
     /// </summary>
     public static string Resolve(string[] args, string? profileName = null) {
-        for (var i = 0; i < args.Length - 1; i++) {
-            if (args[i] == "--name" && !string.IsNullOrEmpty(args[i + 1]))
-                return args[i + 1];
+        // --name is strict: if present, the next token must exist and not
+        // look like another flag. Silently falling back to env/profile/OS
+        // username when the user typed `--name` with no value would mask
+        // typos and (combined with --yes in CLI command paths) could turn
+        // `agent stop --yes --name` into "stop every daemon I own". The
+        // CLI catches this ArgumentException and surfaces it as a clean
+        // non-zero exit; the daemon binary likewise refuses to start so
+        // a bad systemd unit / npm script invocation fails loudly.
+        for (var i = 0; i < args.Length; i++) {
+            if (args[i] != "--name") continue;
+
+            if (i + 1 >= args.Length || string.IsNullOrEmpty(args[i + 1]) || args[i + 1].StartsWith('-')) {
+                var got = i + 1 < args.Length ? $"'{args[i + 1]}'" : "<end of args>";
+                throw new ArgumentException(
+                    $"--name requires a value (got {got}). " +
+                    "Pass a value (e.g. --name laptop) or omit the flag entirely."
+                );
+            }
+
+            return args[i + 1];
         }
 
         if (Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_NAME") is { Length: > 0 } envName)
