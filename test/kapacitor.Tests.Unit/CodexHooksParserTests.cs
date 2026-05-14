@@ -49,8 +49,14 @@ public class CodexHooksParserTests {
 
     [Test]
     public async Task CodexHookEvents_lists_all_six_events_in_canonical_order() {
-        await Assert.That(CodexHooksParser.CodexHookEvents).IsEquivalentTo(
-            new[] { "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop" }
-        );
+        var expected = new[] {
+            "SessionStart", "UserPromptSubmit", "PreToolUse",
+            "PostToolUse", "PermissionRequest", "Stop"
+        };
+
+        await Assert.That(CodexHooksParser.CodexHookEvents.Length).IsEqualTo(expected.Length);
+        for (var i = 0; i < expected.Length; i++) {
+            await Assert.That(CodexHooksParser.CodexHookEvents[i]).IsEqualTo(expected[i]);
+        }
     }
 }
