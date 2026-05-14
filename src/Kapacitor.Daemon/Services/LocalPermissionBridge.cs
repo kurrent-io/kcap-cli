@@ -186,7 +186,7 @@ internal sealed partial class LocalPermissionBridge(
             PermissionDecision decision;
 
             try {
-                decision = await server.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, ct);
+                decision = await server.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, "claude", ct);
             } catch (Exception ex) {
                 LogRequestPermissionFailed(logger, ex, sessionId);
                 decision = new PermissionDecision("deny", null, null);

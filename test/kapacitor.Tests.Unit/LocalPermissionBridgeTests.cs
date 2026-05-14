@@ -277,7 +277,8 @@ sealed class FakeServerConnection : ServerConnection {
             string?           toolName,
             JsonElement?      toolInput,
             JsonElement?      suggestions,
-            CancellationToken ct
+            string            vendor,
+            CancellationToken ct = default
         ) {
         Calls.Add(new Call(sessionId, toolName, toolInput, suggestions));
 

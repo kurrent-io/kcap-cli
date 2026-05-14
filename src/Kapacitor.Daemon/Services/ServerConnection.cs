@@ -285,7 +285,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             string?           toolName,
             JsonElement?      toolInput,
             JsonElement?      suggestions,
-            CancellationToken ct
+            string            vendor,
+            CancellationToken ct = default
         ) =>
         _hub.InvokeAsync<PermissionDecision>(
             "RequestPermission",
@@ -293,7 +294,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             toolName,
             toolInput,
             suggestions,
-            cancellationToken: ct
+            vendor,
+            ct
         );
 
     public Task SendTerminalOutputAsync(string agentId, string base64Data)
