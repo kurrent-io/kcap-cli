@@ -24,12 +24,6 @@ Subagent activity (if any) carries `agent_id` / `agent_type`. Same-timestamp eve
 {TRACE_JSON}
 ```
 
-## Known patterns for this project
-
-Retained facts observed by past evaluators on sessions in this same repository for this category. Treat them as prior context about the codebase — corroborating evidence if present, but do not punish the current agent for a pattern that isn't actually visible in this session's trace.
-
-{KNOWN_PATTERNS}
-
 ## Question
 
 Category: `{CATEGORY}`
@@ -73,7 +67,7 @@ Retained facts are **project-level** — they are shared across every evaluator 
 - ❌ "This question scored 3" (not a pattern about the codebase)
 - ❌ A restatement of the finding for this question
 
-If nothing is worth generalizing to the whole project, emit `"retain_fact": null`. Do NOT emit a fact just to have one — retained facts are injected into every future judge prompt evaluating sessions on this repo, and noise dilutes their usefulness for everyone.
+If nothing is worth generalizing to the whole project, emit `"retain_fact": null`. Do NOT emit a fact just to have one — retained facts feed downstream surfaces (cross-session trends, SessionStart guideline injection, the curation queue), and noise dilutes their usefulness for everyone.
 
 ## Scoring
 
