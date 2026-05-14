@@ -124,6 +124,25 @@ public string CodexPath  { get; set; } = "codex";   // NEW
 
 `KapacitorPath` is unchanged — what's-done generation is vendor-neutral.
 
+### 3.5 Server-side wire-contract changes (kapacitor-server repo)
+
+AI-68 spans both repos. Daemon-side changes are not independently shippable — without server-side propagation, no user can ever request `vendor: codex` from the dashboard. The server PR lands paired with this one; this section documents the wire contract this design assumes the server will honour, so daemon and server can be implemented in parallel.
+
+Server files touched (paths relative to `kapacitor-server` repo root):
+
+- **`src/Kurrent.Capacitor/Agents/DaemonCommands.cs`** — the server-side mirror of `LaunchAgentCommand`. Add the required `string Vendor` field with the same `"claude" | "codex"` validation. Reject unknown vendors at the controller boundary so an invalid value never reaches the daemon.
+- **`src/Kurrent.Capacitor/Sessions/CapacitorHub.cs`** — the `LaunchAgent` hub method (and any HTTP entry point that ultimately produces a `DaemonCommands.LaunchAgent`) accepts vendor from the request DTO and forwards it through. The `RequestPermission` hub method (called by `LocalPermissionBridge`) gains a `string vendor` parameter; the server persists it on the permission-request row so the dashboard can render vendor-appropriate prompts.
+- **`src/Kurrent.Capacitor.Shared/Components/Agents/LaunchAgentDialog.razor`** — vendor selector in the launch dialog (radio buttons or dropdown — UX choice). Default `"claude"`. The selection populates the new field on the launch DTO.
+- **AgentRunStarted read model** — server-side projection of `AgentRunStarted` adds a `Vendor` column / property. Used by the dashboard to render a vendor badge on the agent card. Migration path is whatever the server uses for additive read-model fields (existing rows backfill to `"claude"` since they predate Codex).
+
+Ordering for paired PR rollout (staging):
+
+1. Land the server PR first. It teaches the server about `vendor`, but the dashboard still defaults to `"claude"` for every launch, so behaviour is identical to today.
+2. Land the daemon PR. Newer daemons handle both vendors; older daemons receiving an explicit `vendor: "claude"` from the new server keep working unchanged.
+3. Flip the dashboard's launch dialog to expose the vendor selector. Until this step, hosted Codex remains gated behind the server-side feature even though both ends support it.
+
+The reverse order (daemon first) is also safe — newer daemons connected to older servers default to Claude on construction (the C# `Vendor = "claude"` default), so older servers that send no `vendor` field see no behavioural change.
+
 ## 4. `IHostedAgentLauncher` interface and impls
 
 A single internal interface in `kapacitor.Daemon.Services`. The surface is the smallest possible — only the vendor-specific bits.
@@ -195,10 +214,13 @@ Pulls in (verbatim, no behavior change) from `AgentOrchestrator.cs`:
 
 `Prepare(ctx)`:
 
-- `OverlayDirectory(source/.codex, worktree/.codex)` — lifted to a shared static helper.
-- `CodexConfigWriter.TrustWorktree(ctx.Worktree.Path, logger)` — adds `[projects."<abs-worktree>"] trust_level = "trusted"` to `~/.codex/config.toml`. Details in section 5.
+- **Hook preflight (THROWS on failure).** Read `~/.codex/hooks.json` and confirm that `SessionStart`, `Stop`, and `PermissionRequest` each have at least one entry whose `command` contains `kapacitor codex-hook` (reuse the predicate `PluginCommand.EntryReferencesKapacitorCodexHook`). If any of the three critical events lacks a kapacitor entry, throw a `CodexHooksNotInstalledException` carrying an actionable message: `"Codex hooks not installed. Run `kapacitor plugin install --codex` and try again."`. The orchestrator catches this exception and emits a `LaunchFailed` with the message — no PTY spawn, no worktree leakage. This guards against silent breakage where the agent runs but session linking, watcher startup, and the permission round-trip are all dead. Unlike the filesystem-overlay best-effort branches below, this is a fail-fast preflight: the rest of the launch is meaningless without working hooks.
+- `OverlayDirectory(source/.codex, worktree/.codex)` — lifted to a shared static helper. Best-effort.
+- `CodexConfigWriter.TrustWorktree(ctx.Worktree.Path, logger)` — adds `[projects."<abs-worktree>"] trust_level = "trusted"` to `~/.codex/config.toml`. Best-effort. Details in section 5.
 - No MCP file write (Codex reads MCP from `~/.codex/config.toml`).
 - No tool-permission merge in v1. If `Tools` is non-empty, log at Debug so we notice if the UI starts passing them for Codex.
+
+Auto-installing hooks is intentionally out of scope: the user has not opted into the daemon mutating their global `~/.codex/hooks.json` just by clicking "launch". The actionable error keeps the user in control.
 
 `BuildArgs(ctx)`:
 
@@ -221,14 +243,16 @@ Review launches: out of scope for v1 — orchestrator fails the launch with `"PR
 `AgentOrchestrator` becomes vendor-neutral:
 
 - Constructor takes `IReadOnlyDictionary<string, IHostedAgentLauncher>` injected by the composition root.
+- `AgentInstance` gains a `string Vendor` field, set at construction from the resolved launcher. This makes vendor lookup trivial in both cleanup paths below.
 - `HandleLaunchAgent`:
   - Validate `cmd.Vendor`.
   - Look up `_launchers[cmd.Vendor]`.
   - Do the common prep (worktree create, attachment download, vendor-agnostic env vars).
-  - Call `launcher.Prepare(ctx)` (best-effort try/catch with vendor-aware log).
+  - Call `launcher.Prepare(ctx)` — `CodexHooksNotInstalledException` (§4.3 preflight) propagates out as a `LaunchFailed` and aborts; filesystem-overlay errors are caught with a vendor-aware warning log and launch continues.
   - Call `launcher.BuildArgs(ctx)`.
-  - Spawn PTY with `launcher.CliPath` + args + env.
-- `CleanupAgentAsync` calls `launcher.Cleanup(agent)` instead of the inlined Claude-symlink call.
+  - Spawn PTY with `launcher.CliPath` + args + env. Store `Vendor` on the resulting `AgentInstance`.
+- `CleanupAgentAsync` resolves the launcher via `_launchers[agent.Vendor]` and calls `launcher.Cleanup(agent)`. No inlined `RemoveClaudeProjectSymlink` call.
+- **Failed-launch cleanup path** (today at `AgentOrchestrator.cs:361`): the catch-block currently calls `RemoveClaudeProjectSymlink` and `WorktreeManager.RemoveAsync` directly. Updated path: build a synthetic `AgentInstance` (or extract a thin `LaunchedAgentTeardown` helper that takes the launcher + worktree) and dispatch through `launcher.Cleanup` so a failed-after-prepare Codex launch can't leak Claude-specific cleanup. The mcp-config-path cleanup at line 372 also moves into the launcher's responsibility (Claude has one; Codex returns `null`).
 - Env vars (`KAPACITOR_RENDERED_AGENT`, `KAPACITOR_AGENT_ID`, `KAPACITOR_URL`, `KAPACITOR_DAEMON_URL`) stay in the orchestrator.
 
 ### 4.5 Composition root
@@ -268,6 +292,19 @@ After adding the dep, the implementation step **must** run `dotnet publish -c Re
 
 The model is intentionally narrow — we read the root as `TomlTable` (Tomlyn's dynamic dict) and only mutate the `projects` subtable. Every other root key (`model`, `[mcp_servers.*]`, `[plugins."..."]`, `[marketplaces.*]`, ad-hoc user keys) is preserved through round-trip — but Tomlyn does **not** preserve user comments or original formatting. We accept that loss in exchange for AOT-safe parsing.
 
+**`CodexPaths.Home` becomes computed (not init-once).** Today `CodexPaths.cs:3` initialises `Home` once via field-initializer, which caches the resolved path at first-touch. Tests that scope `HOME` after any caller initialises `CodexPaths` will silently hit the real `~/.codex`. Change to:
+
+```csharp
+// Before
+public static string Home { get; } = Path.Combine(PathHelpers.HomeDirectory, ".codex");
+// After
+public static string Home => Path.Combine(PathHelpers.HomeDirectory, ".codex");
+```
+
+`PathHelpers.HomeDirectory` already honours `HOME`/`USERPROFILE` overrides, so this gives tests full isolation and costs one extra `Path.Combine` per call (negligible). The same change applies to `CodexPaths.Sessions` and `CodexPaths.UserHooksJson` — all three are switched to expression-bodied properties.
+
+The writer itself ensures the parent directory exists before atomic write so first-time Codex users (who have never run `codex` and therefore have no `~/.codex/` at all) still get pre-trusted:
+
 ```csharp
 internal static partial class CodexConfigWriter {
     static readonly Lock _writeLock = new();
@@ -306,6 +343,9 @@ internal static partial class CodexConfigWriter {
             entry["trust_level"] = "trusted";
 
             try {
+                // First-time users have no ~/.codex; create it before the atomic rename
+                // so they get pre-trusted on the first hosted-Codex launch.
+                Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
                 WriteTomlAtomic(configPath, root);
             } catch (Exception ex) {
                 logger.LogWarning(ex, "Failed to write {Path}; pre-trust not persisted", configPath);
@@ -345,9 +385,7 @@ Path expected: `/{token}/{vendor}/permission-request`. The handler asserts vendo
 
 ### 6.2 Server SignalR call
 
-The bridge invokes `server.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, ct)`. v1 plan: add a `string vendor` parameter to the hub method and store it on the permission-request row, so the dashboard can render vendor-appropriate prompts without joining back to the agent run.
-
-Fallback if the server-side change is too entangled for the same Linear issue: omit the vendor parameter — the server already knows vendor via `AgentRunStarted`. Decision noted; the daemon-side bridge can pass vendor regardless.
+The bridge invokes `server.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, ct)`. With cross-repo scope (§3.5), the hub method gains a `string vendor` parameter and the server persists it on the permission-request row so the dashboard can render vendor-appropriate prompts without joining back to the agent run. The daemon-side bridge always passes vendor (derived from the URL segment, validated in §6.1).
 
 ### 6.3 Vendor-shaped responses
 
@@ -400,27 +438,36 @@ User-launched Codex sessions:
 - POST to `{baseUrl}/hooks/permission-request/codex` (informational).
 - Print `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}` to stdout and return 0.
 
-### 7.3 Bridge branch (new)
+### 7.3 Bridge branch (new) — **fail closed**
 
 Daemon-launched (hosted) Codex sessions:
 
-- POST `node.ToJsonString()` to `{daemonUrl}/codex/permission-request`.
+- **Loopback validation first.** Reject any `KAPACITOR_DAEMON_URL` that isn't `http://127.0.0.1:<port>/<token>` (loopback host, `http` scheme). The existing Claude path validates this at `PermissionRequestCommand.cs:70`; extract that helper into a shared static (e.g. `DaemonBridgeUrl.TryParseLoopback`) and call it from both Claude and Codex paths. On a non-loopback or non-http URL: emit `{behavior:"deny"}` to stdout and exit nonzero. We don't want unauthenticated permission payloads leaving the loopback interface even on a misconfigured machine.
+- POST `node.ToJsonString()` to `{daemonUrl}/codex/permission-request`. Content-Type `application/json`.
 - The HTTP call blocks until the user decides on the dashboard. Timeout is intentionally infinite on the CLI side; the daemon owns the lifetime.
 - On success: write the bridge's response body verbatim to stdout, return 0.
 - **Skip** the server-side informational POST in this branch. The daemon's SignalR `RequestPermission` call already records the request server-side.
-- On error (connection refused / 500 / cancellation): fall back to the allow-stub so the agent does not hang. Log to stderr.
+- **On HTTP failure (5xx, non-2xx, connection refused, cancellation, parse error): emit `{behavior:"deny"}` to stdout and exit nonzero.** This matches Claude's two-layer fail-closed behaviour:
+  - Bridge SignalR-failure path returns `deny` (today at `LocalPermissionBridge.cs:188`).
+  - CLI HTTP-failure path returns nonzero (today at `PermissionRequestCommand.cs:102`).
+  Allow-stub is **only** for the no-daemon branch (§7.2). The hosted-agent path never falls back to allow — that would silently disable approvals exactly when the local permission bridge is broken.
 
 ```csharp
 static async Task<int> HandlePermissionRequestViaBridge(string daemonUrl, JsonNode node) {
+    if (!DaemonBridgeUrl.TryParseLoopback(daemonUrl, out var baseUrl)) {
+        Console.Error.WriteLine($"[kapacitor] codex-hook permission-request: KAPACITOR_DAEMON_URL must be http loopback, got: {daemonUrl}");
+        return EmitDenyAndExitNonzero();
+    }
+
     using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
 
     try {
         using var content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
-        using var resp = await client.PostAsync($"{daemonUrl}/codex/permission-request", content);
+        using var resp = await client.PostAsync($"{baseUrl}/codex/permission-request", content);
 
         if (!resp.IsSuccessStatusCode) {
             Console.Error.WriteLine($"[kapacitor] codex-hook permission-request bridge: HTTP {(int)resp.StatusCode}");
-            return EmitAllowStub();
+            return EmitDenyAndExitNonzero();
         }
 
         var body = await resp.Content.ReadAsStringAsync();
@@ -428,20 +475,23 @@ static async Task<int> HandlePermissionRequestViaBridge(string daemonUrl, JsonNo
         return 0;
     } catch (Exception ex) {
         Console.Error.WriteLine($"[kapacitor] codex-hook permission-request bridge error: {ex.Message}");
-        return EmitAllowStub();
+        return EmitDenyAndExitNonzero();
     }
 }
 
-static int EmitAllowStub() {
+static int EmitDenyAndExitNonzero() {
     var response = new JsonObject {
         ["hookSpecificOutput"] = new JsonObject {
             ["hookEventName"] = "PermissionRequest",
-            ["decision"]      = new JsonObject { ["behavior"] = "allow" }
+            ["decision"]      = new JsonObject { ["behavior"] = "deny" }
         }
     };
     Console.Write(response.ToJsonString());
-    return 0;
+    return 1;
 }
+
+// User-launched (§7.2) keeps emitting the allow stub on its own dedicated path.
+// Hosted Codex never reuses that helper.
 ```
 
 ## 8. Tests
@@ -454,9 +504,10 @@ static int EmitAllowStub() {
 
 ### 8.2 `CodexConfigWriterTests` (new)
 
-Uses a scoped `HOME` so the real `~/.codex/config.toml` is untouched.
+Uses a scoped `HOME` so the real `~/.codex/config.toml` is untouched. The switch of `CodexPaths.Home` to a computed property (§5.2) makes `HOME` overrides take effect mid-test reliably.
 
 - `Writes_initial_projects_table_when_config_toml_missing`
+- `Writes_to_fresh_home_creates_codex_directory` — `HOME` points to a temp dir with NO `.codex/` subdir; assert `~/.codex/config.toml` is created and contains the trust entry
 - `Adds_entry_to_existing_config_preserving_other_tables`
 - `Updates_trust_level_if_present_but_not_trusted`
 - `No_op_when_trust_level_already_trusted`
@@ -474,10 +525,12 @@ Uses a scoped `HOME` so the real `~/.codex/config.toml` is untouched.
 
 ### 8.4 `CodexHookCommandTests` (extend)
 
-- `PermissionRequest_with_daemon_url_set_posts_to_bridge_and_forwards_response_to_stdout`
-- `PermissionRequest_with_daemon_url_falls_back_to_allow_on_500`
-- `PermissionRequest_with_daemon_url_falls_back_to_allow_on_connection_refused`
-- `PermissionRequest_without_daemon_url_still_uses_legacy_stub`
+- `PermissionRequest_with_daemon_url_set_posts_to_bridge_and_forwards_response_to_stdout` — exit code 0, body matches WireMock response
+- `PermissionRequest_with_daemon_url_emits_deny_and_exits_nonzero_on_500` — fail-closed parity check
+- `PermissionRequest_with_daemon_url_emits_deny_and_exits_nonzero_on_connection_refused`
+- `PermissionRequest_with_non_loopback_daemon_url_emits_deny_and_exits_nonzero_without_posting` — security guard. Point `KAPACITOR_DAEMON_URL` at `http://example.com/token`; WireMock observes NO outbound traffic
+- `PermissionRequest_with_https_daemon_url_emits_deny_and_exits_nonzero_without_posting` — same guard, https variant
+- `PermissionRequest_without_daemon_url_still_uses_legacy_stub` — user-launched path stays allow+0
 - `PermissionRequest_with_daemon_url_does_not_double_post_to_server_hooks_endpoint`
 
 ### 8.5 `AgentOrchestratorVendorTests` (new)
@@ -488,7 +541,9 @@ Uses a scoped `HOME` so the real `~/.codex/config.toml` is untouched.
 - `Launch_with_vendor_codex_calls_codex_launcher`
 - `Launch_with_unknown_vendor_emits_launch_failed_and_does_not_spawn_pty`
 - `Launch_review_kind_with_vendor_codex_emits_launch_failed`
-- `Cleanup_calls_vendor_specific_cleanup_method`
+- `Cleanup_calls_vendor_specific_cleanup_method` — `AgentInstance.Vendor` is set; cleanup dispatches through the correct launcher
+- `Failed_launch_after_prepare_calls_codex_launcher_cleanup_not_claude` — regression for the orchestrator's catch block (today line 361). Spawn-throws scenario with vendor=codex; assert ClaudeLauncher's cleanup spy is never invoked
+- `Codex_hooks_not_installed_exception_during_prepare_yields_actionable_launch_failed` — preflight (§4.3) emits the LaunchFailed with the install-instructions message; no PTY spawn
 
 ### 8.6 `CodexLauncherTests` (new)
 
@@ -498,9 +553,14 @@ Uses a scoped `HOME` so the real `~/.codex/config.toml` is untouched.
 - `BuildArgs_omits_effort_when_null_or_auto`
 - `BuildArgs_appends_prompt_after_double_dash_when_present`
 - `BuildArgs_emits_no_alt_screen_flag`
+- `Prepare_throws_when_hooks_json_missing` — preflight; assert thrown exception type is `CodexHooksNotInstalledException` and message contains `kapacitor plugin install --codex`
+- `Prepare_throws_when_hooks_json_missing_session_start_entry`
+- `Prepare_throws_when_hooks_json_missing_stop_entry`
+- `Prepare_throws_when_hooks_json_missing_permission_request_entry`
+- `Prepare_succeeds_when_hooks_json_has_all_three_critical_events`
 - `Prepare_overlays_codex_settings_dir_from_source_repo`
 - `Prepare_invokes_codex_config_writer_with_worktree_path`
-- `Prepare_logs_and_swallows_filesystem_errors`
+- `Prepare_logs_and_swallows_filesystem_errors` — only filesystem errors are swallowed; preflight failures still throw
 
 ### 8.7 Integration test placeholder
 
@@ -533,11 +593,18 @@ No CLAUDE.md changes — existing "README sync" and AOT verification rules alrea
 
 **Modify**
 
+### 10.1 CLI / daemon repo (this repo)
+
+**Modify**
+
 - `src/Kapacitor.Core/Models.cs` — `Vendor` on `LaunchAgentCommand` + `AgentRunStarted`; `JsonSerializerContext` entries
+- `src/Kapacitor.Core/CodexPaths.cs` — convert `Home`/`Sessions`/`UserHooksJson` from init-once to computed properties (§5.2)
 - `src/Kapacitor.Daemon/DaemonConfig.cs` — `CodexPath`
-- `src/Kapacitor.Daemon/Services/AgentOrchestrator.cs` — extract per-vendor blocks; route via `IHostedAgentLauncher`; vendor validation
-- `src/Kapacitor.Daemon/Services/LocalPermissionBridge.cs` — URL split, vendor-shaped response builders
-- `src/kapacitor/Commands/CodexHookCommand.cs` — `PermissionRequest` bridge branch
+- `src/Kapacitor.Daemon/Services/AgentOrchestrator.cs` — extract per-vendor blocks; route via `IHostedAgentLauncher`; vendor validation; `AgentInstance.Vendor`; failed-launch cleanup through launcher
+- `src/Kapacitor.Daemon/Services/LocalPermissionBridge.cs` — URL split, vendor-shaped response builders, pass vendor to `RequestPermissionAsync`
+- `src/Kapacitor.Daemon/Services/ServerConnection.cs` — `RequestPermissionAsync` signature gains `string vendor`
+- `src/kapacitor/Commands/CodexHookCommand.cs` — `PermissionRequest` bridge branch (fail-closed, loopback validation)
+- `src/kapacitor/Commands/PermissionRequestCommand.cs` — extract loopback-validation helper for reuse by the Codex bridge bounce
 - `src/kapacitor/Program.cs` — register `ClaudeLauncher` + `CodexLauncher` and the vendor-keyed dictionary
 - `Directory.Packages.props` — add `Tomlyn` package version
 - `src/Kapacitor.Daemon/Kapacitor.Daemon.csproj` — reference `Tomlyn`
@@ -553,6 +620,8 @@ No CLAUDE.md changes — existing "README sync" and AOT verification rules alrea
 - `src/Kapacitor.Daemon/Services/ClaudeLauncher.cs`
 - `src/Kapacitor.Daemon/Services/CodexLauncher.cs`
 - `src/Kapacitor.Daemon/Services/CodexConfigWriter.cs`
+- `src/Kapacitor.Daemon/Services/CodexHooksNotInstalledException.cs` (or inline into `CodexLauncher.cs` — implementation choice)
+- `src/kapacitor/Commands/DaemonBridgeUrl.cs` — shared loopback-validation helper (extracted from `PermissionRequestCommand`)
 - `test/kapacitor.Tests.Unit/CodexConfigWriterTests.cs`
 - `test/kapacitor.Tests.Unit/AgentOrchestratorVendorTests.cs`
 - `test/kapacitor.Tests.Unit/CodexLauncherTests.cs`
@@ -561,10 +630,21 @@ No CLAUDE.md changes — existing "README sync" and AOT verification rules alrea
 **No change**
 
 - `src/Kapacitor.Core/CodexCliRunner.cs` (already complete)
-- `src/Kapacitor.Core/CodexPaths.cs` (already complete)
 - `src/Kapacitor.Daemon/Pty/*` (vendor-neutral on macOS/Linux)
 - `src/Kapacitor.Daemon/Services/EvalRunner.cs` (vendor-neutral via existing `CodexCliRunner` integration)
 - Session→agent late binding (already vendor-neutral)
+
+### 10.2 Server repo (kapacitor-server)
+
+Detail covered in §3.5. Server-side files touched (paths relative to `kapacitor-server` repo root):
+
+- `src/Kurrent.Capacitor/Agents/DaemonCommands.cs` — `Vendor` on the server-side mirror of `LaunchAgentCommand`; controller-boundary validation
+- `src/Kurrent.Capacitor/Sessions/CapacitorHub.cs` — accept vendor on `LaunchAgent`; `RequestPermission` gains `string vendor` parameter and persists it on the permission-request row
+- `src/Kurrent.Capacitor.Shared/Components/Agents/LaunchAgentDialog.razor` — vendor selector (default `"claude"`)
+- `AgentRunStarted` read-model projection — add `Vendor` column/property; existing rows backfill to `"claude"`
+- Server-side tests covering vendor wire-shape round-trip and dialog selection
+
+Tracked in the same Linear issue (AI-68); shipped as a paired PR per the §3.5 rollout ordering.
 
 ## 11. Out of scope
 
