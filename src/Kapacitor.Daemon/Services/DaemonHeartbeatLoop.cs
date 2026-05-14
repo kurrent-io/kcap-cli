@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 
 namespace kapacitor.Daemon.Services;
@@ -61,6 +62,13 @@ internal sealed class DaemonHeartbeatLoop(IDaemonHeartbeatPort port, TimeSpan pi
     async Task SafeReRegisterAsync() {
         try {
             await port.ReRegisterAsync();
+        } catch (HubException ex) when (ex.Message.StartsWith(ServerConnection.NameInUseErrorCode, StringComparison.Ordinal)) {
+            // AI-630: the server explicitly told us our (owner, name) slot
+            // is held by another live daemon. Force-reconnecting would just
+            // re-trigger the same rejection. ServerConnection already fired
+            // OnNameInUse — DaemonRunner has called lifetime.StopApplication()
+            // and the outer loop will exit on its next WaitForNextTickAsync.
+            // No-op here so we don't escalate.
         } catch (Exception ex) {
             // Re-register itself failed. Escalate to a full reconnect — if
             // SignalR's InvokeAsync rejected, the transport is likely in
