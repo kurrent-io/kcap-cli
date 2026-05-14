@@ -783,7 +783,8 @@ record AgentRunStarted(
         string? Model,
         string? Effort,
         string? RepoPath,
-        string? WorktreePath
+        string? WorktreePath,
+        string  Vendor
     );
 
 record AgentRunStopped(

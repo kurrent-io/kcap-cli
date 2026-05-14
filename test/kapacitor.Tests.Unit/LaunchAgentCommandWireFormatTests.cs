@@ -106,4 +106,20 @@ public class LaunchAgentCommandWireFormatTests {
 
         await Assert.That(back.Vendor).IsEqualTo("codex");
     }
+
+    [Test]
+    public async Task AgentRunStarted_vendor_serialises_into_json_body() {
+        var evt = new AgentRunStarted(
+            Prompt: "do a thing",
+            Model: "claude-sonnet-4-6",
+            Effort: null,
+            RepoPath: "/tmp/repo",
+            WorktreePath: "/tmp/wt",
+            Vendor: "codex"
+        );
+
+        var json = JsonSerializer.Serialize(evt, KapacitorJsonContext.Default.AgentRunStarted);
+        await Assert.That(json).Contains("codex");
+        await Assert.That(json.ToLowerInvariant()).Contains("\"vendor\"");
+    }
 }

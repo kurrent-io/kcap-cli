@@ -132,6 +132,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var repoPath      = cmd.RepoPath;
         var tools         = cmd.Tools;
         var attachmentIds = cmd.AttachmentIds;
+        var vendor        = cmd.Vendor;
         var isReview      = cmd.Kind == LaunchKind.Review;
 
         if (cmd.Vendor is not ("claude" or "codex")) {
@@ -344,7 +345,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             _ = _server.AppendAgentRunEventAsync(
                 agentId,
-                new AgentRunStarted(prompt, model, effort, repoPath, worktree.Path)
+                new AgentRunStarted(prompt, model, effort, repoPath, worktree.Path, vendor)
             );
 
             // Persist repo path and notify server so launch dialog updates
