@@ -61,7 +61,7 @@ static class PermissionRequestCommand {
         // auth, so an accidentally / maliciously set non-loopback value would leak the
         // hook payload (tool name, raw tool input) to an arbitrary endpoint.
         if (TryGetLoopbackDaemonUrl(out var daemonUrl)) {
-            return await PostAsync(daemonUrl + "/permission-request", payload, authenticated: false);
+            return await PostAsync(daemonUrl + "/claude/permission-request", payload, authenticated: false);
         }
 
         return await PostAsync(baseUrl + "/hooks/permission-request", payload, authenticated: true);
