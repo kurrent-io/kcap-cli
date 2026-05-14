@@ -57,7 +57,9 @@ kapacitor plugin install --codex --project  # this repo only (<repo>/.codex/hook
 kapacitor plugin remove --codex             # uninstall
 ```
 
-After a `--project` install, Codex won't actually run the hooks until you trust the directory: run `codex` once in the repo and accept the trust prompt.
+`--codex` also installs two Codex skills into `~/.codex/skills/` — `kapacitor-recap` and `kapacitor-errors` — so the Codex CLI can pull repo session summaries and tool-error reports on demand. Codex sessions don't auto-populate `KAPACITOR_SESSION_ID`, so the recap skill leads with `kapacitor recap --repo` and falls back to explicit session IDs. The `validate-plan` skill is Claude Code–only (no Codex plan mode equivalent).
+
+After a `--project` install, Codex won't actually run the hooks until you trust the directory: run `codex` once in the repo and accept the trust prompt. Skills are always installed user-wide regardless of `--project`.
 
 `kapacitor status` reports installation state for the user-wide Claude Code and Codex hook surfaces — it does not currently detect `--project` installs. For a `--project` install, check that `<repo>/.claude/settings.local.json` or `<repo>/.codex/hooks.json` exists and contains kapacitor entries.
 
