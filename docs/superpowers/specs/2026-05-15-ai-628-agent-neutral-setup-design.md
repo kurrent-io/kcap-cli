@@ -52,13 +52,13 @@ public static class AgentDetector {
 
 Implementation:
 
-- Read `Environment.GetEnvironmentVariable("PATH")`, split on `Path.PathSeparator`.
+- Read `Environment.GetEnvironmentVariable("PATH")`. If null or empty, return `false` (no paths to search). Otherwise split on `Path.PathSeparator`; empty entries from a leading/trailing/consecutive separator are skipped.
 - Build the `extensions` list:
   - On Windows (`OperatingSystem.IsWindows()`), parse `PATHEXT` (fall back to `".EXE;.CMD;.BAT"` if unset), split on `;`, prune empties.
   - On Unix, a single empty string.
 - Build the `isExecutable` predicate:
   - On Windows: `File.Exists` — the `PATHEXT` filter already gates on executable extensions.
-  - On Unix: `path => File.Exists(path) && (File.GetUnixFileMode(path) & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0`. The bitmask-then-non-zero check is **any-execute** (matches shell `PATH` resolution: a 0700 binary owned by the current user is detected; `HasFlag(A|B|C)` would have required all three execute bits and would have missed 0700). On AOT/.NET 10, `File.GetUnixFileMode` is in the BCL.
+  - On Unix: `path => File.Exists(path) && (File.GetUnixFileMode(path) & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0`. This is an **intentional "any execute bit set" heuristic**, not a true `access(X_OK)` check — the latter depends on the current process's effective UID/GID matching the file's owner/group permission class and would require P/Invoke. The heuristic is correct in the common case (binaries on `PATH` typically have UGO=`x` or at least UG=`x`) and the rare false positive (a binary with only `--x---x--x` and an unrelated owner) degrades to the same end state as a binary that's broken at runtime: the user discovers it the first time they invoke the agent, and that's their environment problem to solve. Compared to the old `HasFlag(A|B|C)` (which required *all three* execute bits and would have missed a 0700 user binary), this is a strict improvement. On .NET 7+/AOT, `File.GetUnixFileMode` is in the BCL.
 - The pure internal overload then iterates `(dir, ext)` pairs, builds `Path.Combine(dir, name + ext)`, and returns `true` on the first `isExecutable(path) == true`.
 - No subprocess. No reflection. AOT-clean.
 
@@ -216,7 +216,33 @@ The standalone `plugin install --codex` path also gains the same "run /hooks ins
 - "Windows-shaped" inputs: `extensions` is the fallback `[".EXE", ".CMD", ".BAT"]` when env unset (covered by a separate one-line test of the public overload's fallback construction logic; skipped on non-Windows hosts to avoid asserting on real env behaviour).
 - PATH list contains an empty entry → handled without throwing, that entry skipped.
 
-**Unix executable-bit assertion** — separate test, marked `[OS=Unix]` (skipped on Windows hosts): create a temp file, `chmod 0700`, call the production `IsInstalled(name)`; create a second temp file `chmod 0644`, assert not detected. This is the only test that touches a real filesystem and exercises the real `isExecutable` predicate; it guards against regression on the "any of UGO execute bits is enough" rule.
+**Unix executable-bit assertion** — separate test, Unix-only (TUnit `[SkipOnOS(OSPlatform.Windows)]`), marked `[NotInParallel]` because it mutates the process-wide `PATH` env var:
+
+```csharp
+[Test, NotInParallel, SkipOnOS(OSPlatform.Windows)]
+public async Task IsInstalled_unix_requires_any_execute_bit() {
+    var tempDir = Directory.CreateTempSubdirectory();
+    var exec    = Path.Combine(tempDir.FullName, "agentprobe-exec");
+    var nonExec = Path.Combine(tempDir.FullName, "agentprobe-nonexec");
+
+    await File.WriteAllTextAsync(exec, "#!/bin/sh\nexit 0\n");
+    await File.WriteAllTextAsync(nonExec, "not executable");
+    File.SetUnixFileMode(exec,    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute); // 0700
+    File.SetUnixFileMode(nonExec, UnixFileMode.UserRead | UnixFileMode.UserWrite);                            // 0600
+
+    var originalPath = Environment.GetEnvironmentVariable("PATH");
+    Environment.SetEnvironmentVariable("PATH", tempDir.FullName);
+    try {
+        await Assert.That(AgentDetector.IsInstalled("agentprobe-exec")).IsTrue();
+        await Assert.That(AgentDetector.IsInstalled("agentprobe-nonexec")).IsFalse();
+    } finally {
+        Environment.SetEnvironmentVariable("PATH", originalPath);
+        tempDir.Delete(recursive: true);
+    }
+}
+```
+
+This is the one test that touches a real filesystem and exercises the real `isExecutable` predicate. It overwrites `PATH` to *only* the temp dir so detection sees the test files and nothing else. The `try/finally` restores the original value; `[NotInParallel]` prevents concurrent tests from observing the swapped `PATH`. It guards against regression on the "any of UGO execute bits is enough" rule and the `PATH=null/empty → false` guard (a separate one-line test sets `PATH=""` and asserts `IsInstalled("anything")` is false).
 
 **`CodingAgentsStep` unit tests** (inject fake `Installers` recording arguments and returning scripted bools; inject `Func<string,bool> prompt` and `Action<string> writeLine` sinks; no AnsiConsole, no real filesystem):
 
