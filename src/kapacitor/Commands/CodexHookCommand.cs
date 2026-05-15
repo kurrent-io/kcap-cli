@@ -13,7 +13,10 @@ namespace kapacitor.Commands;
 /// Wire contract (Codex event → server route):
 ///   SessionStart      → POST /hooks/session-start/codex
 ///   Stop              → POST /hooks/session-end/codex (Codex has no separate session-end hook)
-///   PermissionRequest → POST /hooks/permission-request/codex (informational; CLI returns local stub)
+///   PermissionRequest → POST /hooks/permission-record (fire-and-forget; CLI emits no decision so
+///                       Codex's normal in-CLI approval prompt takes over). The hosted-agent branch
+///                       (KAPACITOR_DAEMON_URL set) lands in AI-68 and will bounce through the
+///                       daemon's LocalPermissionBridge to wait on the user's UI decision.
 ///   UserPromptSubmit  → swallowed (v1 — neither vendor consumes them)
 ///   PreToolUse        → swallowed
 ///   PostToolUse       → swallowed
@@ -150,19 +153,40 @@ static class CodexHookCommand {
     }
 
     static async Task<int> HandlePermissionRequest(string baseUrl, JsonNode node) {
-        // v1 stub — record the event server-side and return a default allow
-        // so recording-only sessions don't block. Full daemon-bridge
-        // translation lands in AI-68 with hosted Codex agents.
-        await PostHookAsync(baseUrl, "permission-request/codex", node.ToJsonString());
+        // Terminal Codex sessions can't answer a Capacitor UI prompt, so we
+        // record the event server-side (best-effort) and emit no decision —
+        // Codex falls back to its built-in in-CLI approval flow and the user
+        // answers there.
+        //
+        // Do NOT post to /hooks/permission-request/{vendor} — that route runs
+        // RunPermissionFlow which long-polls up to 10 hours waiting for a
+        // hosted-agent UI decision. With Codex's 30 s hook timeout, the hook
+        // process is killed long before the server returns (AI-636).
+        //
+        // The hosted-agent branch (KAPACITOR_DAEMON_URL set) is intentionally
+        // not wired here — it lands with the rest of the hosted-Codex stack
+        // in AI-68 so the wire shape, daemon bridge, and tests change together.
+        // Single 2 s deadline covers BOTH the /auth/config discovery inside
+        // CreateAuthenticatedClientAsync and the /hooks/permission-record POST.
+        // Without bounding discovery too, a server that accepts the TCP
+        // connection but stalls on /auth/config can burn the full HttpClient
+        // default (100 s) before we even start the POST, blowing past Codex's
+        // 30 s hook timeout. Passing baseUrl also keeps discovery targeted at
+        // the server we're about to POST to, not the
+        // AppConfig.ResolvedServerUrl / KAPACITOR_URL / localhost:5108 fallback.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try {
+            using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, cts.Token);
+            using var content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
+            using var _       = await client.PostAsync($"{baseUrl}/hooks/permission-record", content, cts.Token);
+        } catch {
+            // Best-effort — recording must never block Codex's approval prompt.
+        }
 
-        var response = new JsonObject {
-            ["hookSpecificOutput"] = new JsonObject {
-                ["hookEventName"] = "PermissionRequest",
-                ["decision"] = new JsonObject { ["behavior"] = "allow" }
-            }
-        };
-
-        Console.Write(response.ToJsonString());
+        // Empty hookSpecificOutput → Codex treats it as "no decision" and runs
+        // its normal approval flow. See
+        // codex-rs/hooks/src/events/permission_request.rs in openai/codex.
+        Console.Write("{}");
         return 0;
     }
 

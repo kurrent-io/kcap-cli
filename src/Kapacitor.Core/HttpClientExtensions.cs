@@ -14,11 +14,11 @@ static class HttpClientExtensions {
     /// All CLI commands that call the Capacitor server should use this
     /// instead of <c>new HttpClient()</c>.
     /// </summary>
-    public static async Task<HttpClient> CreateAuthenticatedClientAsync(string? baseUrl = null) {
+    public static async Task<HttpClient> CreateAuthenticatedClientAsync(string? baseUrl = null, CancellationToken ct = default) {
         var client = new HttpClient();
 
         baseUrl ??= AppConfig.ResolvedServerUrl ?? Environment.GetEnvironmentVariable("KAPACITOR_URL") ?? "http://localhost:5108";
-        var provider = await DiscoverProviderAsync(baseUrl);
+        var provider = await DiscoverProviderAsync(baseUrl, ct);
 
         if (provider == "None") {
             return client; // No auth needed
@@ -43,7 +43,7 @@ static class HttpClientExtensions {
 
     static string? cachedProvider;
 
-    public static async Task<string> DiscoverProviderAsync(string baseUrl) {
+    public static async Task<string> DiscoverProviderAsync(string baseUrl, CancellationToken ct = default) {
         if (cachedProvider is not null) {
             return cachedProvider;
         }
@@ -56,17 +56,20 @@ static class HttpClientExtensions {
         using var http = new HttpClient();
 
         try {
-            var response = await http.GetAsync($"{baseUrl}/auth/config");
+            var response = await http.GetAsync($"{baseUrl}/auth/config", ct);
 
             if (response.IsSuccessStatusCode) {
-                var config   = await response.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.AuthDiscoveryResponse);
+                var config   = await response.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.AuthDiscoveryResponse, ct);
                 var provider = config?.Provider ?? "None";
                 cachedProvider = provider; // Only cache successful discovery
 
                 return provider;
             }
         } catch {
-            // Server unreachable — don't cache, try tokens as fallback
+            // Server unreachable — don't cache, try tokens as fallback.
+            // Catches both HttpRequestException (connection failures) and
+            // OperationCanceledException (caller's CT fired — fall through to
+            // local-token fallback rather than bubbling the cancellation).
         }
 
         // Fallback: try existing tokens (don't cache — allow re-discovery next time)
