@@ -49,7 +49,7 @@ kapacitor setup --server-url https://capacitor.example.com --default-visibility 
 
 #### Also using Codex CLI?
 
-`setup` installs Claude Code hooks only. If you also use Codex CLI and want those sessions captured too, install the Codex hook surface separately:
+`setup` installs Claude Code hooks only. If you also use Codex CLI — either for local sessions or for hosting agents via the daemon — install the Codex hook surface separately:
 
 ```bash
 kapacitor plugin install --codex            # user-wide  (~/.codex/hooks.json)
@@ -191,7 +191,7 @@ Non-interactive runs (no TTY, e.g. CI) must pass both a scope flag and `--yes`. 
 
 ### Agent daemon
 
-The agent daemon connects to the Capacitor server and runs Claude Code agents in isolated git worktrees, controlled from the dashboard.
+The agent daemon connects to the Capacitor server and runs Claude Code agents in isolated git worktrees, controlled from the dashboard. The daemon supports hosted Claude and Codex agents on macOS and Linux — choose the vendor from the dashboard's launch dialog.
 
 ```bash
 kapacitor agent start              # start in foreground
@@ -201,6 +201,28 @@ kapacitor agent stop               # stop the daemon (foreground or background)
 ```
 
 `agent start` refuses to launch a second daemon when one is already alive, regardless of mode. Run `kapacitor agent stop` to terminate the existing one first. Two concurrent daemons under the same identity used to silently take down each other's hosted agents on the server.
+
+#### Hosted Codex agents
+
+To launch hosted Codex agents from the dashboard, the Codex hook surface must be installed first:
+
+```bash
+kapacitor plugin install --codex            # user scope (~/.codex/hooks.json)
+kapacitor plugin install --codex --project  # project scope (<repo>/.codex/hooks.json)
+```
+
+The daemon starts Codex with `--sandbox workspace-write` and `--ask-for-approval on-request`. This lets Codex edit files in the agent's worktree but escalates sensitive operations (e.g. network calls, shell commands outside the worktree) through the daemon's permission bridge to the dashboard.
+
+PR review for hosted Codex agents is not yet supported (tracked in AI-632). The sandbox and approval-mode selectors in the launch dialog are also planned as a follow-up (AI-633).
+
+#### Daemon config settings
+
+The daemon reads its configuration from `~/.config/kapacitor/daemon.json`. Relevant settings:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ClaudePath` | `"claude"` | Path to the Claude CLI binary. Resolved via `PATH` unless set to an absolute path. |
+| `CodexPath` | `"codex"` | Path to the Codex CLI binary. Resolved via `PATH` unless set to an absolute path. |
 
 ### Repository paths
 
