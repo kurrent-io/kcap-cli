@@ -8,7 +8,7 @@ public class CodingAgentsStepTests {
     public async Task Claude_detected_and_accepted_calls_installer_with_settings_path() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false, LegacyProjectScope: false);
+        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
         var paths    = TestPaths();
         var detected = new DetectedAgents(Claude: true, Codex: false);
 
@@ -24,7 +24,7 @@ public class CodingAgentsStepTests {
     public async Task Claude_detected_and_declined_skips_installer() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false, LegacyProjectScope: false);
+        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
         var detected = new DetectedAgents(Claude: true, Codex: false);
 
         var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
@@ -40,7 +40,7 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var promptCount = 0;
-        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false, LegacyProjectScope: false);
+        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
         var detected = new DetectedAgents(Claude: false, Codex: false);
 
         var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
@@ -56,7 +56,7 @@ public class CodingAgentsStepTests {
     public async Task Claude_installer_failure_emits_warning_and_returns_false() {
         var sink     = new Sink();
         var calls    = new InstallerCalls { ClaudeReturns = false };
-        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false, LegacyProjectScope: false);
+        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
         var detected = new DetectedAgents(Claude: true, Codex: false);
 
         var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
@@ -71,7 +71,7 @@ public class CodingAgentsStepTests {
     public async Task Codex_detected_and_accepted_installs_hooks_and_prints_trust_hint() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false, LegacyProjectScope: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
         var detected = new DetectedAgents(Claude: false, Codex: true);
 
         var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
@@ -87,7 +87,7 @@ public class CodingAgentsStepTests {
     public async Task Codex_detected_and_declined_skips_installer_and_trust_hint() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false, LegacyProjectScope: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
         var detected = new DetectedAgents(Claude: false, Codex: true);
 
         var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
@@ -102,7 +102,7 @@ public class CodingAgentsStepTests {
     public async Task Codex_not_detected_skips_prompt_and_emits_skip_line() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false, LegacyProjectScope: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
         var detected = new DetectedAgents(Claude: false, Codex: false);
 
         var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
@@ -117,7 +117,7 @@ public class CodingAgentsStepTests {
     public async Task Codex_hooks_installer_failure_emits_warning_and_skips_trust_hint() {
         var sink     = new Sink();
         var calls    = new InstallerCalls { CodexHooksReturns = false };
-        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false, LegacyProjectScope: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
         var detected = new DetectedAgents(Claude: false, Codex: true);
 
         var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
@@ -133,7 +133,7 @@ public class CodingAgentsStepTests {
     public async Task Codex_skills_installed_when_hooks_succeed_and_plugin_dir_present() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false, LegacyProjectScope: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
         var detected = new DetectedAgents(Claude: false, Codex: true);
 
         var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
@@ -148,7 +148,7 @@ public class CodingAgentsStepTests {
     public async Task Codex_skills_not_attempted_when_hooks_fail() {
         var sink     = new Sink();
         var calls    = new InstallerCalls { CodexHooksReturns = false };
-        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false, LegacyProjectScope: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
         var detected = new DetectedAgents(Claude: false, Codex: true);
 
         var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
@@ -162,7 +162,7 @@ public class CodingAgentsStepTests {
     public async Task Codex_skills_failure_still_keeps_trust_hint() {
         var sink     = new Sink();
         var calls    = new InstallerCalls { CodexSkillsReturns = false };
-        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false, LegacyProjectScope: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
         var detected = new DetectedAgents(Claude: false, Codex: true);
 
         var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
@@ -178,7 +178,7 @@ public class CodingAgentsStepTests {
     public async Task Plugin_dir_null_skips_claude_install_but_keeps_codex_hooks() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: false, SkipCodex: false, NoPrompt: false, LegacyProjectScope: false);
+        var options  = new Options(SkipClaude: false, SkipCodex: false, NoPrompt: false);
         var detected = new DetectedAgents(Claude: true, Codex: true);
         var paths    = TestPaths() with { PluginDir = null };
 
@@ -199,7 +199,7 @@ public class CodingAgentsStepTests {
     public async Task Neither_detected_emits_warning_and_no_installer_calls() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: false, SkipCodex: false, NoPrompt: false, LegacyProjectScope: false);
+        var options  = new Options(SkipClaude: false, SkipCodex: false, NoPrompt: false);
         var detected = new DetectedAgents(Claude: false, Codex: false);
 
         var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
@@ -212,6 +212,25 @@ public class CodingAgentsStepTests {
         await Assert.That(calls.CodexHooksCalled).IsFalse();
         await Assert.That(calls.CodexSkillsCalled).IsFalse();
         await Assert.That(sink.Lines).Contains(l => l.Contains("No supported agent CLI detected"));
+    }
+
+    [Test]
+    public async Task Project_scope_claude_path_is_passed_through_to_installer() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: true, Codex: false);
+        // Caller (SetupCommand) selects the project-scope path when --plugin-scope project
+        // is in effect. The step's contract is to honour whatever ClaudeSettingsPath it's given.
+        var paths    = TestPaths() with {
+            ClaudeSettingsPath = "/repo/.claude/settings.local.json"
+        };
+
+        var result = await RunAsync(options, detected, paths, calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.ClaudeInstalled).IsTrue();
+        await Assert.That(calls.ClaudeArgs).IsEqualTo(("/repo/.claude/settings.local.json", paths.PluginDir!));
     }
 
     static Paths TestPaths() => new(

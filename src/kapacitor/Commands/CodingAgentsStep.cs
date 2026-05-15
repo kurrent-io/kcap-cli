@@ -6,7 +6,7 @@ namespace kapacitor.Commands;
 /// can drive every branch without touching ~/.claude, ~/.codex, or AnsiConsole.
 /// </summary>
 internal static class CodingAgentsStep {
-    internal record Options(bool SkipClaude, bool SkipCodex, bool NoPrompt, bool LegacyProjectScope);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool NoPrompt);
     internal record DetectedAgents(bool Claude, bool Codex);
     internal record Paths(
         string ClaudeSettingsPath,

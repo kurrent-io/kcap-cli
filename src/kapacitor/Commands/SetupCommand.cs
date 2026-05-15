@@ -154,10 +154,9 @@ public static class SetupCommand {
             : ClaudePaths.UserSettings;
 
         var stepOptions = new CodingAgentsStep.Options(
-            SkipClaude:         skipClaude,
-            SkipCodex:          skipCodexFlag,
-            NoPrompt:           noPrompt,
-            LegacyProjectScope: legacyProjectScope);
+            SkipClaude: skipClaude,
+            SkipCodex:  skipCodexFlag,
+            NoPrompt:   noPrompt);
 
         var stepPaths = new CodingAgentsStep.Paths(
             ClaudeSettingsPath: claudeSettingsPath,
