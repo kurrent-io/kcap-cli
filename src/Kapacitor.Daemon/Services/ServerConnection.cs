@@ -282,7 +282,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// </summary>
     public virtual Task ForceReconnectAsync() => _hub.StopAsync(_ct);
 
-    public async Task UpdateRepoPathsAsync() {
+    public virtual async Task UpdateRepoPathsAsync() {
         try {
             var repoPaths = await MergeRepoPathsAsync();
             await _hub.InvokeAsync("DaemonUpdateRepoPaths", repoPaths, cancellationToken: _ct);
@@ -292,16 +292,16 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     // Outgoing messages to server
-    public Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath)
+    public virtual Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath)
         => _hub.InvokeAsync("AgentRegistered", new AgentRegistered(agentId, prompt, model, effort, repoPath), cancellationToken: _ct);
 
-    public Task AgentStatusChangedAsync(string agentId, string status, string? sessionId)
+    public virtual Task AgentStatusChangedAsync(string agentId, string status, string? sessionId)
         => _hub.InvokeAsync("AgentStatusChanged", new AgentStatusChanged(agentId, status, sessionId), cancellationToken: _ct);
 
-    public Task AgentUnregisteredAsync(string agentId)
+    public virtual Task AgentUnregisteredAsync(string agentId)
         => _hub.InvokeAsync("AgentUnregistered", new AgentUnregistered(agentId), cancellationToken: _ct);
 
-    public Task LaunchFailedAsync(string agentId, string reason)
+    public virtual Task LaunchFailedAsync(string agentId, string reason)
         => _hub.InvokeAsync("LaunchFailed", new LaunchFailed(agentId, reason), cancellationToken: _ct);
 
     /// <summary>
@@ -335,7 +335,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             string?           toolName,
             JsonElement?      toolInput,
             JsonElement?      suggestions,
-            CancellationToken ct
+            string            vendor,
+            CancellationToken ct = default
         ) =>
         _hub.InvokeAsync<PermissionDecision>(
             "RequestPermission",
@@ -343,10 +344,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             toolName,
             toolInput,
             suggestions,
-            cancellationToken: ct
+            vendor,
+            ct
         );
 
-    public Task SendTerminalOutputAsync(string agentId, string base64Data)
+    public virtual Task SendTerminalOutputAsync(string agentId, string base64Data)
         => _hub.SendAsync("SendTerminalOutput", new TerminalOutput(agentId, base64Data), cancellationToken: _ct);
 
     // ── Eval progress events (DEV-1440) ────────────────────────────────────
@@ -380,7 +382,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public Task EvalRetrospectiveFailedAsync(string sessionId, string evalRunId, string reason)
         => _hub.SendAsync("EvalRetrospectiveFailed", new EvalRetrospectiveFailed(sessionId, evalRunId, reason), cancellationToken: _ct);
 
-    public Task AppendAgentRunEventAsync(string agentId, object evt) {
+    public virtual Task AppendAgentRunEventAsync(string agentId, object evt) {
         _eventChannel.Writer.TryWrite(new PendingEvent(agentId, evt));
 
         return Task.CompletedTask;

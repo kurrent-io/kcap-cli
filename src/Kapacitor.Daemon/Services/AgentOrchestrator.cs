@@ -1,8 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using kapacitor.Auth;
 using kapacitor.Commands;
@@ -18,6 +16,7 @@ public record AgentInstance(
         string                  Model,
         string?                 Effort,
         string                  RepoPath,
+        string                  Vendor,
         IPtyProcess             Process,
         WorktreeInfo            Worktree,
         CancellationTokenSource ReadCts
@@ -66,16 +65,17 @@ public class TerminalOutputBuffer {
 }
 
 internal partial class AgentOrchestrator : IAsyncDisposable {
-    readonly ConcurrentDictionary<string, AgentInstance> _agents = new();
-    readonly DaemonConfig                                _config;
-    readonly ServerConnection                            _server;
-    readonly WorktreeManager                             _worktreeManager;
-    readonly RepoMatcher                                 _repoMatcher;
-    readonly IPtyProcessFactory                          _ptyFactory;
-    readonly IHttpClientFactory                          _httpClientFactory;
-    readonly LocalPermissionBridge                       _permissionBridge;
-    readonly ILogger<AgentOrchestrator>                  _logger;
-    readonly PeriodicTimer                               _heartbeatTimer  = new(TimeSpan.FromSeconds(30));
+    readonly ConcurrentDictionary<string, AgentInstance>       _agents = new();
+    readonly DaemonConfig                                      _config;
+    readonly ServerConnection                                  _server;
+    readonly WorktreeManager                                   _worktreeManager;
+    readonly RepoMatcher                                       _repoMatcher;
+    readonly IPtyProcessFactory                                _ptyFactory;
+    readonly IHttpClientFactory                                _httpClientFactory;
+    readonly LocalPermissionBridge                             _permissionBridge;
+    readonly IReadOnlyDictionary<string, IHostedAgentLauncher> _launchers;
+    readonly ILogger<AgentOrchestrator>                        _logger;
+    readonly PeriodicTimer                                     _heartbeatTimer  = new(TimeSpan.FromSeconds(30));
     // AI-79: heartbeat tightened from 60 s SendAsync to 15 s round-trip Ping.
     // Server's default ClientTimeoutInterval is 30 s, and the staging incident
     // showed daemons holding a displaced slot for nearly a minute before
@@ -85,14 +85,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly CancellationTokenSource                     _shutdownCts     = new();
 
     public AgentOrchestrator(
-            DaemonConfig               config,
-            ServerConnection           server,
-            WorktreeManager            worktreeManager,
-            RepoMatcher                repoMatcher,
-            IPtyProcessFactory         ptyFactory,
-            IHttpClientFactory         httpClientFactory,
-            LocalPermissionBridge      permissionBridge,
-            ILogger<AgentOrchestrator> logger
+            DaemonConfig                                       config,
+            ServerConnection                                   server,
+            WorktreeManager                                    worktreeManager,
+            RepoMatcher                                        repoMatcher,
+            IPtyProcessFactory                                 ptyFactory,
+            IHttpClientFactory                                 httpClientFactory,
+            LocalPermissionBridge                              permissionBridge,
+            IReadOnlyDictionary<string, IHostedAgentLauncher>  launchers,
+            ILogger<AgentOrchestrator>                         logger
         ) {
         _config            = config;
         _server            = server;
@@ -101,6 +102,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _ptyFactory        = ptyFactory;
         _httpClientFactory = httpClientFactory;
         _permissionBridge  = permissionBridge;
+        _launchers         = launchers;
         _logger            = logger;
 
         // Wire up server commands
@@ -132,7 +134,23 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var repoPath      = cmd.RepoPath;
         var tools         = cmd.Tools;
         var attachmentIds = cmd.AttachmentIds;
+        var vendor        = cmd.Vendor;
         var isReview      = cmd.Kind == LaunchKind.Review;
+
+        if (cmd.Vendor is not ("claude" or "codex")) {
+            await _server.LaunchFailedAsync(cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
+            return;
+        }
+
+        if (!_launchers.TryGetValue(cmd.Vendor, out var launcher)) {
+            await _server.LaunchFailedAsync(cmd.AgentId, $"No launcher registered for vendor: {cmd.Vendor}");
+            return;
+        }
+
+        if (isReview && cmd.Vendor == "codex") {
+            await _server.LaunchFailedAsync(cmd.AgentId, "PR review for Codex is not yet supported");
+            return;
+        }
 
         WorktreeInfo? worktree      = null;
         string?       mcpConfigPath = null;
@@ -205,57 +223,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             worktree = await _worktreeManager.CreateAsync(repoPath, baseRef: baseRef);
 
-            // Overlay .claude/ local settings from source repo into worktree.
-            // git worktree add creates tracked files (e.g. skills/), but gitignored
-            // local files (.local.md, settings.local.json, MCP configs) are missing.
-            // We merge them in without overwriting tracked files.
-            // Best-effort: filesystem errors here should not block agent launch.
-            try {
-                var sourceClaudeDir = Path.Combine(repoPath, ".claude");
-                var destClaudeDir   = Path.Combine(worktree.Path, ".claude");
-
-                if (Directory.Exists(sourceClaudeDir)) {
-                    OverlayDirectory(sourceClaudeDir, destClaudeDir);
-                }
-
-                // Symlink ~/.claude/projects/{worktree-path} → ~/.claude/projects/{source-path}
-                // so that project-level permissions and settings carry over.
-                SymlinkClaudeProjectDir(repoPath, worktree.Path);
-            } catch (Exception ex) {
-                LogOverlayFailed(ex, agentId);
-            }
-
-            // Write .mcp.json into the worktree so Claude discovers MCP servers.
-            // Claude stores per-project MCP configs in ~/.claude.json keyed by the
-            // literal CWD path, so worktrees don't inherit them. Writing a repo-level
-            // .mcp.json is the simplest way to propagate them.
-            try {
-                WriteMcpConfig(repoPath, worktree.Path);
-            } catch (Exception ex) {
-                LogMcpConfigFailed(ex, agentId);
-            }
-
-            // Pre-trust the worktree path in ~/.claude.json. Without this, claude
-            // blocks on the "Do you trust the files in this folder?" dialog for any
-            // new cwd — and since the daemon drives claude over a PTY with no
-            // interactive user, it would hang forever.
-            try {
-                TrustWorktreeInClaudeConfig(worktree.Path);
-            } catch (Exception ex) {
-                LogTrustWorktreeFailed(ex, agentId);
-            }
-
-            // Merge dialog-selected tools into the worktree's settings.local.json
-            // instead of using --allowedTools (which overrides project permissions).
-            // Best-effort: filesystem/JSON errors should not block agent launch.
-            try {
-                if (tools is { Length: > 0 }) {
-                    MergeToolPermissions(worktree.Path, tools);
-                }
-            } catch (Exception ex) {
-                LogToolPermissionsFailed(ex, agentId);
-            }
-
             // Download attachments into worktree (best-effort)
             if (attachmentIds is { Length: > 0 }) {
                 try {
@@ -270,38 +237,35 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
 
-            // Build claude CLI args
-            var args = new List<string>();
+            var launcherCtx = new LauncherContext(
+                AgentId: agentId,
+                SourceRepoPath: repoPath,
+                Worktree: worktree,
+                Prompt: prompt,
+                Model: model,
+                Effort: effort,
+                Tools: tools,
+                IsReview: isReview,
+                Review: cmd.Review,
+                ReviewLaunch: isReview && cmd.Review is { } reviewArgs
+                    ? await ReviewLaunchBuilder.BuildAsync(_config.ServerUrl ?? "", reviewArgs.Owner, reviewArgs.Repo, reviewArgs.PrNumber)
+                    : null
+            );
 
-            if (isReview && cmd.Review is { } reviewArgs) {
-                var launch = await ReviewLaunchBuilder.BuildAsync(_config.ServerUrl ?? "", reviewArgs.Owner, reviewArgs.Repo, reviewArgs.PrNumber);
-                mcpConfigPath = launch.McpConfigPath;
-
-                args.Add("--mcp-config");
-                args.Add(launch.McpConfigPath);
-                args.Add("--system-prompt");
-                args.Add(launch.SystemPrompt);
-
-                if (!string.IsNullOrEmpty(model)) {
-                    args.Add("--model");
-                    args.Add(model);
-                }
-            } else {
-                if (!string.IsNullOrEmpty(effort)) {
-                    args.Add("--effort");
-                    args.Add(effort);
-                }
-
-                if (!string.IsNullOrEmpty(model)) {
-                    args.Add("--model");
-                    args.Add(model);
-                }
-
-                if (!string.IsNullOrEmpty(prompt)) {
-                    args.Add("--");
-                    args.Add(prompt);
-                }
+            try {
+                launcher.Prepare(launcherCtx);
+            } catch (CodexHooksNotInstalledException ex) {
+                await _server.LaunchFailedAsync(agentId, ex.Message);
+                // Still need to clean up the worktree before returning
+                try { await WorktreeManager.RemoveAsync(worktree); } catch { /* best-effort */ }
+                return;
+            } catch (Exception ex) {
+                LogPrepareSoftFailure(ex, agentId);
             }
+
+            var launchArgs = launcher.BuildArgs(launcherCtx);
+            var args       = launchArgs.Args;
+            mcpConfigPath  = launchArgs.McpConfigPath;
 
             var env = new Dictionary<string, string> {
                 ["KAPACITOR_RENDERED_AGENT"] = "1",
@@ -324,12 +288,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 env["KAPACITOR_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
             }
 
-            var process = _ptyFactory.Spawn(_config.ClaudePath, args.ToArray(), worktree.Path, env);
+            var process = _ptyFactory.Spawn(launcher.CliPath, args, worktree.Path, env);
 
-            LogAgentSpawned(agentId, process.Pid, worktree.Path, _config.ClaudePath);
+            LogAgentSpawned(agentId, process.Pid, worktree.Path, launcher.CliPath);
 
             var cts   = new CancellationTokenSource();
-            var agent = new AgentInstance(agentId, prompt, model, effort, repoPath, process, worktree, cts) {
+            var agent = new AgentInstance(agentId, prompt, model, effort, repoPath, cmd.Vendor, process, worktree, cts) {
                 McpConfigPath = mcpConfigPath
             };
             _agents[agentId] = agent;
@@ -339,7 +303,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             _ = _server.AppendAgentRunEventAsync(
                 agentId,
-                new AgentRunStarted(prompt, model, effort, repoPath, worktree.Path)
+                new AgentRunStarted(prompt, model, effort, repoPath, worktree.Path, vendor)
             );
 
             // Persist repo path and notify server so launch dialog updates
@@ -358,19 +322,24 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         } catch (Exception ex) {
             LogLaunchFailed(ex, agentId);
 
-            // Clean up worktree if it was created but agent didn't start
             if (worktree != null) {
-                try { RemoveClaudeProjectSymlink(worktree.Path); } catch {
-                    /* best-effort */
+                if (_launchers.TryGetValue(cmd.Vendor, out var launcherForCleanup)) {
+                    try {
+                        // Build a transient AgentInstance with a no-op PTY just so launcher.Cleanup
+                        // can run its symlink/mcp-config teardown without a live agent.
+                        var transient = new AgentInstance(
+                            agentId, prompt, model, effort, repoPath, cmd.Vendor,
+                            NoopPtyProcess.Instance, worktree, new CancellationTokenSource()
+                        ) {
+                            McpConfigPath = mcpConfigPath
+                        };
+                        launcherForCleanup.Cleanup(transient);
+                    } catch (Exception cleanupEx) {
+                        LogCleanupStepFailed(cleanupEx, "launcher.Cleanup (failed-launch)", agentId);
+                    }
                 }
 
                 try { await WorktreeManager.RemoveAsync(worktree); } catch {
-                    /* best-effort */
-                }
-            }
-
-            if (mcpConfigPath is not null) {
-                try { File.Delete(mcpConfigPath); } catch {
                     /* best-effort */
                 }
             }
@@ -795,9 +764,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
-    static readonly TimeSpan              StartupTimeout     = TimeSpan.FromSeconds(90);
-    static readonly TimeSpan              MinSessionLifespan = TimeSpan.FromSeconds(2);
-    static readonly JsonSerializerOptions IndentedJsonOpts   = new() { WriteIndented = true };
+    static readonly TimeSpan StartupTimeout     = TimeSpan.FromSeconds(90);
+    static readonly TimeSpan MinSessionLifespan = TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// True when the agent process exited before establishing a real interactive
@@ -811,10 +779,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal static bool IsStartupFailure(DateTime createdAt, DateTime lastOutputAt, bool hasReceivedOutput)
         => !hasReceivedOutput || lastOutputAt - createdAt < MinSessionLifespan;
 
-    // Serializes writes to shared JSON config files (~/.claude.json and per-worktree
-    // settings.local.json) across concurrent agent launches. Atomic rename prevents
-    // partial writes from ever being visible.
-    static readonly Lock            TrustWriteLock    = new();
     static readonly HashSet<string> ValidEffortLevels = ["low", "medium", "high", "max"];
 
     async Task RunHeartbeatLoopAsync(CancellationToken ct) {
@@ -863,13 +827,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Each cleanup step is best-effort so later steps still run
         try { await agent.Process.DisposeAsync(); } catch (Exception ex) { LogCleanupStepFailed(ex, "disposing process", agentId); }
 
-        try { RemoveClaudeProjectSymlink(agent.Worktree.Path); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing symlink", agentId); }
+        if (_launchers.TryGetValue(agent.Vendor, out var launcher)) {
+            try { launcher.Cleanup(agent); } catch (Exception ex) { LogCleanupStepFailed(ex, "launcher.Cleanup", agentId); }
+        }
 
         try { await WorktreeManager.RemoveAsync(agent.Worktree); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
-
-        if (agent.McpConfigPath is not null) {
-            try { File.Delete(agent.McpConfigPath); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing mcp config", agentId); }
-        }
 
         try { await _server.AgentUnregisteredAsync(agentId); } catch (Exception ex) { LogCleanupStepFailed(ex, "unregistering", agentId); }
     }
@@ -892,281 +854,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         _heartbeatTimer.Dispose();
         _daemonHeartbeat.Dispose();
-    }
-
-    /// <summary>
-    /// Merges dialog-selected tool names into the worktree's .claude/settings.local.json
-    /// permissions.allow array. Existing granular rules (e.g. "Bash(git:*)") are preserved;
-    /// dialog selections add broad tool-level entries (e.g. "Bash").
-    /// </summary>
-    internal static void MergeToolPermissions(string worktreePath, string[] tools) {
-        var settingsPath = Path.Combine(worktreePath, ".claude", "settings.local.json");
-
-        JsonNode? root = null;
-
-        if (File.Exists(settingsPath)) {
-            try {
-                root = JsonNode.Parse(File.ReadAllText(settingsPath));
-            } catch {
-                // Malformed JSON — start fresh
-            }
-        }
-
-        if (root is not JsonObject rootObj) {
-            rootObj = [];
-        }
-
-        if (rootObj["permissions"] is not JsonObject permissions) {
-            permissions            = [];
-            rootObj["permissions"] = permissions;
-        }
-
-        if (permissions["allow"] is not JsonArray allow) {
-            allow                = [];
-            permissions["allow"] = allow;
-        }
-
-        var existing = new HashSet<string>(
-            allow.Select(n => (n as JsonValue)?.TryGetValue<string>(out var s) == true ? s : null)
-                .Where(s => s != null)!
-        );
-
-        foreach (var tool in tools) {
-            if (!existing.Contains(tool)) {
-                allow.Add((JsonNode)JsonValue.Create(tool)!);
-                existing.Add(tool);
-            }
-        }
-
-        Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
-
-        File.WriteAllText(settingsPath, rootObj.ToJsonString(IndentedJsonOpts));
-    }
-
-    /// <summary>
-    /// Copies files from <paramref name="source"/> into <paramref name="dest"/>,
-    /// creating directories as needed but never overwriting existing files.
-    /// This preserves git-tracked files while adding gitignored local settings.
-    /// </summary>
-    static void OverlayDirectory(string source, string dest) {
-        Directory.CreateDirectory(dest);
-
-        foreach (var file in Directory.GetFiles(source)) {
-            var destFile = Path.Combine(dest, Path.GetFileName(file));
-
-            if (!File.Exists(destFile)) {
-                File.Copy(file, destFile);
-            }
-        }
-
-        foreach (var dir in Directory.GetDirectories(source)) {
-            var destDir = Path.Combine(dest, Path.GetFileName(dir));
-            OverlayDirectory(dir, destDir);
-        }
-    }
-
-    /// <summary>
-    /// Creates a symlink at ~/.claude/projects/{worktree-path-hash} pointing to
-    /// ~/.claude/projects/{source-path-hash} so project-level permissions, settings,
-    /// and memory are shared with the hosted agent.
-    /// </summary>
-    static void SymlinkClaudeProjectDir(string sourceRepoPath, string worktreePath) {
-        if (!Directory.Exists(ClaudePaths.Projects)) {
-            return;
-        }
-
-        var sourceProjDir = ClaudePaths.ProjectDir(sourceRepoPath);
-
-        if (!Directory.Exists(sourceProjDir)) {
-            return;
-        }
-
-        var worktreeProjDir = ClaudePaths.ProjectDir(worktreePath);
-
-        // Don't clobber an existing directory or symlink
-        if (Path.Exists(worktreeProjDir)) {
-            return;
-        }
-
-        Directory.CreateSymbolicLink(worktreeProjDir, sourceProjDir);
-    }
-
-    /// <summary>
-    /// Removes the ~/.claude/projects/{worktree-path-hash} symlink if it exists.
-    /// Only removes symlinks, never real directories.
-    /// </summary>
-    static void RemoveClaudeProjectSymlink(string worktreePath) {
-        var info = new DirectoryInfo(ClaudePaths.ProjectDir(worktreePath));
-
-        if (info is { Exists: true, LinkTarget: not null }) {
-            info.Delete();
-        }
-    }
-
-    static void TrustWorktreeInClaudeConfig(string worktreePath) {
-        // Serialize against concurrent agent launches. ~/.claude.json is shared
-        // across the whole user and {worktree}/.claude/settings.local.json is
-        // touched by MergeToolPermissions on the same path; interleaved reads and
-        // writes could drop updates or write truncated JSON.
-        lock (TrustWriteLock) {
-            // Workspace trust (the "Do you trust the files in this folder?" dialog)
-            // is stored globally in ~/.claude.json under projects[path]. On a fresh
-            // machine the file may not exist yet — create a minimal object so trust
-            // is always persisted.
-            var claudeJsonPath = Path.Combine(PathHelpers.HomeDirectory, ".claude.json");
-            var root           = LoadJsonObject(claudeJsonPath);
-
-            if (root["projects"] is not JsonObject projects) {
-                projects         = [];
-                root["projects"] = projects;
-            }
-
-            if (projects[worktreePath] is not JsonObject entry) {
-                entry                  = [];
-                projects[worktreePath] = entry;
-            }
-
-            var alreadyTrusted = entry["hasTrustDialogAccepted"] is JsonValue v && v.TryGetValue<bool>(out var b) && b;
-
-            if (!alreadyTrusted) {
-                entry["hasTrustDialogAccepted"] = true;
-                WriteJsonAtomic(claudeJsonPath, root);
-            }
-
-            // MCP server approval (the "New MCP server found in .mcp.json" dialog)
-            // is stored per-project in {worktree}/.claude/settings.local.json, NOT in
-            // ~/.claude.json. Claude requires BOTH fields: the blanket flag AND each
-            // server listed by name (the blanket flag alone still shows a per-server
-            // discovery prompt on first encounter).
-            var serverNames = ReadMcpJsonServerNames(worktreePath);
-
-            if (serverNames.Count == 0) return;
-
-            var settingsDir  = Path.Combine(worktreePath, ".claude");
-            var settingsPath = Path.Combine(settingsDir, "settings.local.json");
-
-            Directory.CreateDirectory(settingsDir);
-
-            var settings = LoadJsonObject(settingsPath);
-            var sDirty   = false;
-
-            var allEnabled = settings["enableAllProjectMcpServers"] is JsonValue ev
-             && ev.TryGetValue<bool>(out var eb)
-             && eb;
-
-            if (!allEnabled) {
-                settings["enableAllProjectMcpServers"] = true;
-                sDirty                                 = true;
-            }
-
-            var known = new HashSet<string>();
-
-            if (settings["enabledMcpjsonServers"] is JsonArray arr) {
-                foreach (var item in arr) {
-                    if (item is JsonValue jv && jv.TryGetValue<string>(out var s)) {
-                        known.Add(s);
-                    }
-                }
-            }
-
-            if (serverNames.Any(known.Add)) {
-                // Rebuild the array via JSON parsing to avoid AOT issues with
-                // JsonArray.Add(string) / JsonValue.Create<string>.
-                var json = "[" + string.Join(",", known.Select(n => $"\"{JsonEncodedText.Encode(n)}\"")) + "]";
-                settings["enabledMcpjsonServers"] = JsonNode.Parse(json);
-                sDirty                            = true;
-            }
-
-            if (sDirty) {
-                WriteJsonAtomic(settingsPath, settings);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Loads a JSON object from disk, tolerating missing files and non-object roots
-    /// by returning a fresh <see cref="JsonObject"/>. Ensures pre-trust logic never
-    /// throws on an unexpected config shape and reintroduces the launch hang.
-    /// </summary>
-    static JsonObject LoadJsonObject(string path) {
-        if (!File.Exists(path)) return new JsonObject();
-
-        try {
-            return JsonNode.Parse(File.ReadAllText(path)) as JsonObject ?? new JsonObject();
-        } catch {
-            return new JsonObject();
-        }
-    }
-
-    /// <summary>
-    /// Writes JSON to <paramref name="path"/> via a sibling temp file + atomic
-    /// rename (POSIX <c>rename(2)</c> / Win32 <c>MoveFileEx</c> with replace).
-    /// A crash or concurrent reader never sees a truncated file — either the
-    /// previous contents or the new contents, never a partial write.
-    /// </summary>
-    static void WriteJsonAtomic(string path, JsonNode root) {
-        var tmp = path + ".tmp-" + Environment.ProcessId + "-" + Guid.NewGuid().ToString("N");
-        File.WriteAllText(tmp, root.ToJsonString(IndentedJsonOpts));
-
-        try {
-            File.Move(tmp, path, overwrite: true);
-        } catch {
-            try { File.Delete(tmp); } catch {
-                /* best-effort */
-            }
-
-            throw;
-        }
-    }
-
-    static List<string> ReadMcpJsonServerNames(string worktreePath) {
-        var mcpJsonPath = Path.Combine(worktreePath, ".mcp.json");
-
-        if (!File.Exists(mcpJsonPath)) return [];
-
-        try {
-            var parsed  = JsonNode.Parse(File.ReadAllText(mcpJsonPath));
-            var servers = parsed?["mcpServers"]?.AsObject();
-
-            return servers is null ? [] : [..servers.Select(kv => kv.Key)];
-        } catch {
-            return [];
-        }
-    }
-
-    static void WriteMcpConfig(string sourceRepoPath, string worktreePath) {
-        var claudeJsonPath = Path.Combine(PathHelpers.HomeDirectory, ".claude.json");
-
-        if (!File.Exists(claudeJsonPath)) return;
-
-        var root    = JsonNode.Parse(File.ReadAllText(claudeJsonPath));
-        var servers = root?["projects"]?[sourceRepoPath]?["mcpServers"]?.AsObject();
-
-        if (servers is null || servers.Count == 0) return;
-
-        var mcpJsonPath = Path.Combine(worktreePath, ".mcp.json");
-
-        // Read existing .mcp.json if present (e.g. committed to git)
-        JsonObject merged;
-
-        if (File.Exists(mcpJsonPath)) {
-            var existing = JsonNode.Parse(File.ReadAllText(mcpJsonPath));
-            merged = existing?["mcpServers"]?.AsObject() ?? new JsonObject();
-        } else {
-            merged = new JsonObject();
-        }
-
-        // Add servers from ~/.claude.json (don't overwrite repo-committed ones)
-        foreach (var (name, value) in servers) {
-            if (!merged.ContainsKey(name) && value is not null) {
-                var clone = value.DeepClone().AsObject();
-                clone.Remove("env");
-                merged[name] = clone;
-            }
-        }
-
-        var wrapper = new JsonObject { ["mcpServers"] = merged };
-        File.WriteAllText(mcpJsonPath, wrapper.ToJsonString(IndentedJsonOpts));
     }
 
     /// <summary>
@@ -1209,18 +896,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Information, Message = "Stopping agent {AgentId}")]
     partial void LogStopping(string agentId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to overlay .claude settings for agent {AgentId} (continuing)")]
-    partial void LogOverlayFailed(Exception ex, string agentId);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to merge tool permissions for agent {AgentId} (continuing)")]
-    partial void LogToolPermissionsFailed(Exception ex, string agentId);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to write .mcp.json for agent {AgentId} (continuing)")]
-    partial void LogMcpConfigFailed(Exception ex, string agentId);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to pre-trust worktree for agent {AgentId} (continuing)")]
-    partial void LogTrustWorktreeFailed(Exception ex, string agentId);
-
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to download launch attachments for agent {AgentId} (continuing)")]
     partial void LogAttachmentDownloadFailed(Exception ex, string agentId);
 
@@ -1247,6 +922,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error {Step} for agent {AgentId}")]
     partial void LogCleanupStepFailed(Exception ex, string step, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Launcher Prepare soft-failure for agent {AgentId} (continuing)")]
+    partial void LogPrepareSoftFailure(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Failed to launch agent {AgentId}")]
     partial void LogLaunchFailed(Exception ex, string agentId);
@@ -1277,4 +955,43 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [GeneratedRegex(@"\x1B\[[0-9;]*[A-Za-z]|\x1B\].*?\x07|\x1B[()][AB012]|\x1B\[[\?]?[0-9;]*[hlm]")]
     private static partial Regex StripAnsiRegex();
+
+    /// <summary>
+    /// Method exposed for unit tests so they can drive <see cref="HandleLaunchAgent"/>
+    /// without going through SignalR. Keeps the private handler private to everyone else.
+    /// </summary>
+    internal Task HandleLaunchAgentForTest(LaunchAgentCommand cmd) => HandleLaunchAgent(cmd);
+}
+
+/// <summary>
+/// Stand-in <see cref="IPtyProcess"/> for failed-launch cleanup paths where we
+/// need an <see cref="AgentInstance"/> to satisfy <c>launcher.Cleanup</c> but no
+/// live PTY ever existed. All members are no-ops; the launcher only reads
+/// <see cref="AgentInstance.Worktree"/> and <see cref="AgentInstance.McpConfigPath"/>.
+/// </summary>
+internal sealed class NoopPtyProcess : IPtyProcess {
+    public static readonly NoopPtyProcess Instance = new();
+    NoopPtyProcess() { }
+
+    public int  Pid       => 0;
+    public bool HasExited => true;
+    public int? ExitCode  => 0;
+
+    public ValueTask DisposeAsync() => default;
+
+    public Task WaitForExitAsync(TimeSpan? timeout = null) => Task.CompletedTask;
+    public Task TerminateAsync(TimeSpan?  timeout = null) => Task.CompletedTask;
+
+#pragma warning disable CS1998
+    public async IAsyncEnumerable<byte[]> ReadOutputAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default
+        ) {
+        yield break;
+    }
+#pragma warning restore CS1998
+
+    public Task WriteAsync(string input) => Task.CompletedTask;
+    public Task WriteAsync(byte[] data)  => Task.CompletedTask;
+    public void Resize(ushort cols, ushort rows) { }
+    public void SendInterrupt() { }
 }

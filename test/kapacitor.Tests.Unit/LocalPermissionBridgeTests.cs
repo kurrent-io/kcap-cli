@@ -52,7 +52,7 @@ public class LocalPermissionBridgeTests {
             await bridge.StartAsync(CancellationToken.None);
 
             var uri      = new Uri(bridge.BaseUrl!);
-            var bogusUrl = $"http://127.0.0.1:{uri.Port}/{new string('0', 32)}/permission-request";
+            var bogusUrl = $"http://127.0.0.1:{uri.Port}/{new string('0', 32)}/claude/permission-request";
 
             using var client   = CreateClient();
             using var response = await client.PostAsync(bogusUrl, JsonContent.Create(new { session_id = "abc" }));
@@ -101,7 +101,7 @@ public class LocalPermissionBridgeTests {
 
             using var client   = CreateClient();
             using var content  = new StringContent("{ this is not json", Encoding.UTF8, "application/json");
-            using var response = await client.PostAsync($"{bridge.BaseUrl}/permission-request", content);
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", content);
 
             await Assert.That((int)response.StatusCode).IsEqualTo(400);
         } finally {
@@ -116,7 +116,7 @@ public class LocalPermissionBridgeTests {
             await bridge.StartAsync(CancellationToken.None);
 
             using var client   = CreateClient();
-            using var response = await client.PostAsync($"{bridge.BaseUrl}/permission-request", JsonContent.Create(new { tool_name = "Bash" }));
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", JsonContent.Create(new { tool_name = "Bash" }));
 
             await Assert.That((int)response.StatusCode).IsEqualTo(400);
         } finally {
@@ -140,7 +140,7 @@ public class LocalPermissionBridgeTests {
                 tool_input             = new { command = "ls" },
                 permission_suggestions = new { reason = "ok" }
             };
-            using var response = await client.PostAsync($"{bridge.BaseUrl}/permission-request", JsonContent.Create(payload));
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", JsonContent.Create(payload));
 
             await Assert.That((int)response.StatusCode).IsEqualTo(200);
             await Assert.That(server.Calls.Count).IsEqualTo(1);
@@ -165,7 +165,7 @@ public class LocalPermissionBridgeTests {
             await bridge.StartAsync(CancellationToken.None);
 
             using var client   = CreateClient();
-            using var response = await client.PostAsync($"{bridge.BaseUrl}/permission-request", JsonContent.Create(new { session_id = "abc" }));
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", JsonContent.Create(new { session_id = "abc" }));
 
             var body = await response.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(body);
@@ -191,7 +191,7 @@ public class LocalPermissionBridgeTests {
             await bridge.StartAsync(CancellationToken.None);
 
             using var client   = CreateClient();
-            using var response = await client.PostAsync($"{bridge.BaseUrl}/permission-request", JsonContent.Create(new { session_id = "abc" }));
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", JsonContent.Create(new { session_id = "abc" }));
 
             var body = await response.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(body);
@@ -214,7 +214,7 @@ public class LocalPermissionBridgeTests {
             await bridge.StartAsync(CancellationToken.None);
 
             using var client   = CreateClient();
-            using var response = await client.PostAsync($"{bridge.BaseUrl}/permission-request", JsonContent.Create(new { session_id = "abc" }));
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", JsonContent.Create(new { session_id = "abc" }));
 
             await Assert.That((int)response.StatusCode).IsEqualTo(200);
 
@@ -251,6 +251,170 @@ public class LocalPermissionBridgeTests {
             await bridge.DisposeAsync();
         }
     }
+
+    // ── Per-vendor routing tests ──────────────────────────────────────────────
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Claude_path_returns_claude_response_shape() {
+        using var apDoc = JsonDocument.Parse("""{"allow":["Bash(*)"]}""");
+        using var uiDoc = JsonDocument.Parse("""{"command":"ls"}""");
+
+        var (bridge, _) = CreateBridge((_, _, _, _, _) =>
+            Task.FromResult(new PermissionDecision("allow", apDoc.RootElement.Clone(), uiDoc.RootElement.Clone()))
+        );
+
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+
+            using var client   = CreateClient();
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", JsonContent.Create(new { session_id = "abc" }));
+
+            await Assert.That((int)response.StatusCode).IsEqualTo(200);
+
+            var body = await response.Content.ReadAsStringAsync();
+            await Assert.That(body.Contains("applyPermissions")).IsTrue();
+            await Assert.That(body.Contains("updatedInput")).IsTrue();
+        } finally {
+            await bridge.DisposeAsync();
+        }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Codex_path_returns_codex_response_shape() {
+        using var apDoc = JsonDocument.Parse("""{"allow":["Bash(*)"]}""");
+        using var uiDoc = JsonDocument.Parse("""{"command":"ls"}""");
+
+        var (bridge, _) = CreateBridge((_, _, _, _, _) =>
+            Task.FromResult(new PermissionDecision("allow", apDoc.RootElement.Clone(), uiDoc.RootElement.Clone()))
+        );
+
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+
+            using var client   = CreateClient();
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/codex/permission-request", JsonContent.Create(new { session_id = "abc" }));
+
+            await Assert.That((int)response.StatusCode).IsEqualTo(200);
+
+            var body = await response.Content.ReadAsStringAsync();
+            using var doc    = JsonDocument.Parse(body);
+            var       decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
+            await Assert.That(decision.GetProperty("behavior").GetString()).IsEqualTo("allow");
+            await Assert.That(body.Contains("applyPermissions")).IsFalse();
+            await Assert.That(body.Contains("updatedInput")).IsFalse();
+        } finally {
+            await bridge.DisposeAsync();
+        }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Legacy_path_without_vendor_returns_404() {
+        var (bridge, _) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+
+            using var client   = CreateClient();
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/permission-request", JsonContent.Create(new { session_id = "abc" }));
+
+            await Assert.That((int)response.StatusCode).IsEqualTo(404);
+        } finally {
+            await bridge.DisposeAsync();
+        }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Unknown_vendor_returns_404() {
+        var (bridge, _) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+
+            using var client   = CreateClient();
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/bogus/permission-request", JsonContent.Create(new { session_id = "abc" }));
+
+            await Assert.That((int)response.StatusCode).IsEqualTo(404);
+        } finally {
+            await bridge.DisposeAsync();
+        }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Codex_path_invokes_server_with_vendor_codex() {
+        var (bridge, server) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+
+            using var client   = CreateClient();
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/codex/permission-request", JsonContent.Create(new { session_id = "abc" }));
+
+            await Assert.That((int)response.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(1);
+            await Assert.That(server.Calls[0].Vendor).IsEqualTo("codex");
+        } finally {
+            await bridge.DisposeAsync();
+        }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Claude_path_invokes_server_with_vendor_claude() {
+        var (bridge, server) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+
+            using var client   = CreateClient();
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", JsonContent.Create(new { session_id = "abc" }));
+
+            await Assert.That((int)response.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(1);
+            await Assert.That(server.Calls[0].Vendor).IsEqualTo("claude");
+        } finally {
+            await bridge.DisposeAsync();
+        }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Codex_path_strips_apply_permissions_from_server_decision() {
+        using var apDoc = JsonDocument.Parse("""{"allow":["Bash(*)"]}""");
+
+        var (bridge, _) = CreateBridge((_, _, _, _, _) =>
+            Task.FromResult(new PermissionDecision("allow", apDoc.RootElement.Clone(), null))
+        );
+
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+
+            using var client   = CreateClient();
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/codex/permission-request", JsonContent.Create(new { session_id = "abc" }));
+
+            await Assert.That((int)response.StatusCode).IsEqualTo(200);
+
+            var body = await response.Content.ReadAsStringAsync();
+            await Assert.That(body.Contains("applyPermissions")).IsFalse();
+        } finally {
+            await bridge.DisposeAsync();
+        }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Claude_cli_hook_post_target_lands_at_new_url() {
+        // Verify that the bridge accepts POSTs at the /{token}/claude/permission-request URL
+        // that the CLI's PermissionRequestCommand now targets (Task 10 migration).
+        var (bridge, server) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+
+            // Simulate the URL that PermissionRequestCommand builds:
+            // {KAPACITOR_DAEMON_URL}/claude/permission-request
+            var targetUrl = $"{bridge.BaseUrl}/claude/permission-request";
+            using var client   = CreateClient();
+            using var response = await client.PostAsync(targetUrl, JsonContent.Create(new { session_id = "abc", tool_name = "Bash" }));
+
+            await Assert.That((int)response.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(1);
+            await Assert.That(server.Calls[0].Vendor).IsEqualTo("claude");
+        } finally {
+            await bridge.DisposeAsync();
+        }
+    }
 }
 
 /// <summary>
@@ -277,14 +441,15 @@ sealed class FakeServerConnection : ServerConnection {
             string?           toolName,
             JsonElement?      toolInput,
             JsonElement?      suggestions,
-            CancellationToken ct
+            string            vendor,
+            CancellationToken ct = default
         ) {
-        Calls.Add(new Call(sessionId, toolName, toolInput, suggestions));
+        Calls.Add(new Call(sessionId, toolName, toolInput, suggestions, vendor));
 
         return _respond is null
             ? Task.FromResult(new PermissionDecision("allow", null, null))
             : _respond(sessionId, toolName, toolInput, suggestions, ct);
     }
 
-    public sealed record Call(string SessionId, string? ToolName, JsonElement? ToolInput, JsonElement? Suggestions);
+    public sealed record Call(string SessionId, string? ToolName, JsonElement? ToolInput, JsonElement? Suggestions, string Vendor);
 }

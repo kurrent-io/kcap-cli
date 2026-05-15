@@ -74,12 +74,24 @@ public static partial class DaemonRunner {
         if (config.MaxConcurrentAgents == 5 && profileDaemon is { MaxAgents: var mx and not 5 })
             config.MaxConcurrentAgents = mx;
 
+        if (!string.IsNullOrEmpty(profileDaemon?.ClaudePath))
+            config.ClaudePath = profileDaemon.ClaudePath;
+
+        if (!string.IsNullOrEmpty(profileDaemon?.CodexPath))
+            config.CodexPath = profileDaemon.CodexPath;
+
         if (Environment.GetEnvironmentVariable("KAPACITOR_MAX_AGENTS") is { } maxAgents) {
             if (int.TryParse(maxAgents, out var n) && n >= 1)
                 config.MaxConcurrentAgents = n;
             else
                 await Console.Error.WriteLineAsync($"Warning: ignoring invalid KAPACITOR_MAX_AGENTS={maxAgents}");
         }
+
+        if (Environment.GetEnvironmentVariable("KAPACITOR_CLAUDE_PATH") is { Length: > 0 } envClaudePath)
+            config.ClaudePath = envClaudePath;
+
+        if (Environment.GetEnvironmentVariable("KAPACITOR_CODEX_PATH") is { Length: > 0 } envCodexPath)
+            config.CodexPath = envCodexPath;
 
         // Shared name resolution with the CLI supervisor — the CLI's
         // AgentCommands and the daemon binary must agree on the name so
@@ -152,6 +164,14 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<RepoMatcher>();
 
         builder.Services.AddHttpClient("Attachments", client => client.BaseAddress = new Uri(config.ServerUrl));
+
+        builder.Services.AddSingleton<IHostedAgentLauncher, ClaudeLauncher>();
+        builder.Services.AddSingleton<IHostedAgentLauncher, CodexLauncher>();
+
+        builder.Services.AddSingleton<IReadOnlyDictionary<string, IHostedAgentLauncher>>(sp =>
+            sp.GetServices<IHostedAgentLauncher>().ToDictionary(l => l.Vendor)
+        );
+
         builder.Services.AddSingleton<AgentOrchestrator>();
         builder.Services.AddSingleton<EvalContextCache>();
         builder.Services.AddSingleton<EvalRunner>();

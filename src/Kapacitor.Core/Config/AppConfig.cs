@@ -27,6 +27,12 @@ public record DaemonSettings {
 
     [JsonPropertyName("max_agents")]
     public int MaxAgents { get; init; } = 5;
+
+    [JsonPropertyName("claude_path")]
+    public string? ClaudePath { get; init; }
+
+    [JsonPropertyName("codex_path")]
+    public string? CodexPath { get; init; }
 }
 
 [JsonSerializable(typeof(KapacitorConfig))]

@@ -36,13 +36,14 @@ public class PermissionRequestCommandTests {
     }
 
     [Test, NotInParallel(nameof(PermissionRequestCommandTests))]
-    public async Task AcceptsLocalhostHttp() {
+    public async Task RejectsLocalhostDnsName() {
+        // We require literal 127.0.0.1 — "localhost" could resolve to non-loopback in a misconfigured env.
         using var _ = new EnvVarScope(EnvVar, "http://localhost:51234/tok");
 
         var ok = PermissionRequestCommand.TryGetLoopbackDaemonUrl(out var url);
 
-        await Assert.That(ok).IsTrue();
-        await Assert.That(url).IsEqualTo("http://localhost:51234/tok");
+        await Assert.That(ok).IsFalse();
+        await Assert.That(url).IsEqualTo("");
     }
 
     [Test, NotInParallel(nameof(PermissionRequestCommandTests))]

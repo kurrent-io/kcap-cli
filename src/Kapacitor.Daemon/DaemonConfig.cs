@@ -31,6 +31,7 @@ public class DaemonConfig {
     );
 
     public string ClaudePath { get; set; } = "claude";
+    public string CodexPath  { get; set; } = "codex";
 
     /// <summary>
     /// Path to the kapacitor CLI binary. Used by the daemon to spawn auxiliary

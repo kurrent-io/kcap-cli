@@ -5,6 +5,6 @@
         <MinVerTagPrefix>v</MinVerTagPrefix>
     </PropertyGroup>
     <ItemGroup>
-        <PackageReference Include="MinVer" Version="7.0.0" PrivateAssets="All" />
+        <PackageReference Include="MinVer" PrivateAssets="All" />
     </ItemGroup>
 </Project>

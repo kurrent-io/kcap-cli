@@ -7,10 +7,10 @@ using WireMock.Server;
 namespace kapacitor.Tests.Unit;
 
 public class CodexHookCommandTests : IDisposable {
-    // Shared NotInParallel group for every test that mutates the global
-    // Console.Out. Without a single shared group, tests using SetOut would run
-    // concurrently against the same process-wide writer and interfere with each
-    // other's stdout capture (nondeterministic failures depending on schedule).
+    // Shared NotInParallel group for every test that mutates global state —
+    // Console.Out and the KAPACITOR_DAEMON_URL env var. Without a single
+    // shared group, parallel tests against the same process-wide writer or
+    // env var corrupt each other's assertions nondeterministically.
     const string ConsoleSerialGroup = nameof(CodexHookCommandTests) + ".Console";
 
     readonly WireMockServer _server = WireMockServer.Start();
@@ -52,7 +52,14 @@ public class CodexHookCommandTests : IDisposable {
         // the watcher spawn.
     }
 
-    [Test, NotInParallel(ConsoleSerialGroup)]
+    // Globally sequential: this test takes ~3m20s and holds Console.Out
+    // captured for the duration. Sharing only ConsoleSerialGroup with other
+    // stdout-mutating tests is enough on a fast machine, but in suite runs
+    // the long capture window plus TUnit's parallel scheduling has been
+    // observed to interleave Console.SetOut from same-group tests, dropping
+    // the captured output. NotInParallel with no group key forces this test
+    // to run on its own.
+    [Test, NotInParallel]
     public async Task Stop_maps_to_session_end_codex_route() {
         _server.Given(Request.Create().WithPath("/hooks/session-end/codex").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
@@ -98,13 +105,20 @@ public class CodexHookCommandTests : IDisposable {
         }
     }
 
-    [Test, NotInParallel(ConsoleSerialGroup)]
+    // Globally sequential alongside Stop_maps_to_session_end_codex_route —
+    // see that test for why ConsoleSerialGroup alone has been observed to
+    // interleave in suite runs and drop captured Console output.
+    [Test, NotInParallel]
     public async Task PermissionRequest_records_event_and_yields_decision_to_codex() {
         // The Codex permission-request hook must not silently auto-allow tool
-        // calls; it records the request server-side via /hooks/permission-record
-        // (the same fire-and-forget endpoint Claude's terminal path uses) and
-        // emits an empty hookSpecificOutput so Codex's normal in-CLI approval
-        // prompt asks the user. Regression for AI-636.
+        // calls; in the stub branch (no KAPACITOR_DAEMON_URL set) it records
+        // the request server-side via /hooks/permission-record (the same
+        // fire-and-forget endpoint Claude's terminal path uses) and emits an
+        // empty hookSpecificOutput so Codex's normal in-CLI approval prompt
+        // asks the user. Regression for AI-636.
+        var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
+        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", null);
+
         _server.Given(Request.Create().WithPath("/hooks/permission-record").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
@@ -137,6 +151,7 @@ public class CodexHookCommandTests : IDisposable {
             await Assert.That(hasDecision).IsFalse();
         } finally {
             Console.SetOut(originalOut);
+            Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
         }
 
         // Recording must land on /hooks/permission-record, not on the
@@ -315,5 +330,168 @@ public class CodexHookCommandTests : IDisposable {
         var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
 
         await Assert.That(exit).IsEqualTo(0);
+    }
+
+    // ---- PermissionRequest daemon-bridge tests ----
+    //
+    // The no-daemon-URL "stub" branch is covered by the AI-636 regression test
+    // PermissionRequest_records_event_and_yields_decision_to_codex above; it
+    // asserts the new record-and-yield contract (no in-CLI decision, fall back
+    // to Codex's own approval prompt). The tests below cover the new
+    // daemon-bridge branch added in AI-68.
+
+    [Test, NotInParallel(ConsoleSerialGroup)]
+    public async Task PermissionRequest_with_daemon_url_set_posts_to_bridge_and_forwards_response_to_stdout() {
+        using var bridge = WireMockServer.Start();
+        var token = "abc123";
+        bridge.Given(Request.Create().WithPath($"/{token}/codex/permission-request").UsingPost())
+              .RespondWith(Response.Create()
+                  .WithStatusCode(200)
+                  .WithBody("""{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"""));
+
+        var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
+        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/{token}");
+
+        var stdoutCapture = new StringWriter();
+        var originalOut   = Console.Out;
+        Console.SetOut(stdoutCapture);
+
+        try {
+            var exit = await CodexHookCommand.Handle("http://server.example",
+                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}"""));
+
+            await Assert.That(exit).IsEqualTo(0);
+            await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"allow\"");
+        } finally {
+            Console.SetOut(originalOut);
+            Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
+        }
+    }
+
+    [Test, NotInParallel(ConsoleSerialGroup)]
+    public async Task PermissionRequest_with_daemon_url_emits_deny_and_exits_nonzero_on_500() {
+        using var bridge = WireMockServer.Start();
+        var token = "abc123";
+        bridge.Given(Request.Create().WithPath($"/{token}/codex/permission-request").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(500));
+
+        var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
+        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/{token}");
+
+        var stdoutCapture = new StringWriter();
+        var originalOut   = Console.Out;
+        Console.SetOut(stdoutCapture);
+
+        try {
+            var exit = await CodexHookCommand.Handle("http://server.example",
+                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}"""));
+
+            await Assert.That(exit).IsEqualTo(1);
+            await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"deny\"");
+        } finally {
+            Console.SetOut(originalOut);
+            Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
+        }
+    }
+
+    [Test, NotInParallel(ConsoleSerialGroup)]
+    public async Task PermissionRequest_with_daemon_url_emits_deny_on_connection_refused() {
+        // Use a deliberately-unreachable port (e.g. 1) so the connection fails immediately.
+        var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
+        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", "http://127.0.0.1:1/abc");
+
+        var stdoutCapture = new StringWriter();
+        var originalOut   = Console.Out;
+        Console.SetOut(stdoutCapture);
+
+        try {
+            var exit = await CodexHookCommand.Handle("http://server.example",
+                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}"""));
+
+            await Assert.That(exit).IsEqualTo(1);
+            await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"deny\"");
+        } finally {
+            Console.SetOut(originalOut);
+            Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
+        }
+    }
+
+    [Test, NotInParallel(ConsoleSerialGroup)]
+    public async Task PermissionRequest_with_non_loopback_daemon_url_emits_deny_without_posting() {
+        using var bridge = WireMockServer.Start();
+        var previousEnv  = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
+        // Non-loopback host should be rejected by DaemonBridgeUrl.TryParseLoopback
+        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", $"http://example.com:{bridge.Ports[0]}/abc");
+
+        var stdoutCapture = new StringWriter();
+        var originalOut   = Console.Out;
+        Console.SetOut(stdoutCapture);
+
+        try {
+            var exit = await CodexHookCommand.Handle("http://server.example",
+                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}"""));
+
+            await Assert.That(exit).IsEqualTo(1);
+            await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"deny\"");
+            await Assert.That(bridge.LogEntries.Count()).IsEqualTo(0);
+        } finally {
+            Console.SetOut(originalOut);
+            Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
+        }
+    }
+
+    [Test, NotInParallel(ConsoleSerialGroup)]
+    public async Task PermissionRequest_with_https_daemon_url_emits_deny_without_posting() {
+        using var bridge = WireMockServer.Start();
+        var previousEnv  = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
+        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", $"https://127.0.0.1:{bridge.Ports[0]}/abc");
+
+        var stdoutCapture = new StringWriter();
+        var originalOut   = Console.Out;
+        Console.SetOut(stdoutCapture);
+
+        try {
+            var exit = await CodexHookCommand.Handle("http://server.example",
+                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}"""));
+
+            await Assert.That(exit).IsEqualTo(1);
+            await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"deny\"");
+            await Assert.That(bridge.LogEntries.Count()).IsEqualTo(0);
+        } finally {
+            Console.SetOut(originalOut);
+            Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
+        }
+    }
+
+    [Test, NotInParallel(ConsoleSerialGroup)]
+    public async Task PermissionRequest_with_daemon_url_does_not_double_post_to_server_hooks_endpoint() {
+        using var bridge = WireMockServer.Start();
+        using var server = WireMockServer.Start();
+        var token = "abc123";
+        bridge.Given(Request.Create().WithPath($"/{token}/codex/permission-request").UsingPost())
+              .RespondWith(Response.Create()
+                  .WithStatusCode(200)
+                  .WithBody("""{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"""));
+
+        server.Given(Request.Create().WithPath("/hooks/permission-request/codex").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(200));
+
+        var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
+        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/{token}");
+
+        var stdoutCapture = new StringWriter();
+        var originalOut   = Console.Out;
+        Console.SetOut(stdoutCapture);
+
+        try {
+            await CodexHookCommand.Handle($"http://127.0.0.1:{server.Ports[0]}",
+                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}"""));
+
+            await Assert.That(server.LogEntries.Count()).IsEqualTo(0); // server NOT touched
+            await Assert.That(bridge.LogEntries.Count()).IsEqualTo(1);
+        } finally {
+            Console.SetOut(originalOut);
+            Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
+        }
     }
 }

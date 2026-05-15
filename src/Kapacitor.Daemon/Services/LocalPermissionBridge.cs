@@ -25,7 +25,7 @@ internal sealed partial class LocalPermissionBridge(
         ILogger<LocalPermissionBridge>  logger
     ) : IHostedService, IAsyncDisposable {
     const int    MaxBindAttempts = 8;
-    const string PathPrefix      = "/permission-request";
+    const string PathSuffix      = "/permission-request";
 
     HttpListener?            _listener;
     Task?                    _acceptLoop;
@@ -129,13 +129,25 @@ internal sealed partial class LocalPermissionBridge(
 
     async Task HandleAsync(HttpListenerContext context, CancellationToken ct) {
         try {
-            // Require token + endpoint match. Token check first (constant-time-ish via string
-            // equality is fine — discovery vector is the env var, not timing). The HttpListener
-            // prefix already filters to /{token}/, but check explicitly so a misconfigured
-            // listener prefix can't quietly admit anything.
+            // Require token + vendor + endpoint match. The HttpListener prefix already filters
+            // to /{token}/, but we check explicitly so a misconfigured prefix can't quietly
+            // admit anything. Token is checked first; vendor determines the response shape.
             var path = context.Request.Url?.AbsolutePath;
 
-            if (path != $"/{_token}{PathPrefix}" || context.Request.HttpMethod != "POST") {
+            if (path is null
+                || !path.StartsWith($"/{_token}/", StringComparison.Ordinal)
+                || !path.EndsWith(PathSuffix, StringComparison.Ordinal)
+                || context.Request.HttpMethod != "POST") {
+                context.Response.StatusCode = 404;
+                context.Response.Close();
+                return;
+            }
+
+            var vendorStart = _token!.Length + 2;  // skip "/{token}/"
+            var vendorEnd   = path.Length - PathSuffix.Length;
+            var vendor      = vendorEnd > vendorStart ? path[vendorStart..vendorEnd] : "";
+
+            if (vendor is not ("claude" or "codex")) {
                 context.Response.StatusCode = 404;
                 context.Response.Close();
                 return;
@@ -186,13 +198,13 @@ internal sealed partial class LocalPermissionBridge(
             PermissionDecision decision;
 
             try {
-                decision = await server.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, ct);
+                decision = await server.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, vendor, ct);
             } catch (Exception ex) {
                 LogRequestPermissionFailed(logger, ex, sessionId);
                 decision = new PermissionDecision("deny", null, null);
             }
 
-            var responseJson = BuildHookResponseJson(decision);
+            var responseJson = BuildHookResponseJson(decision, vendor);
             var bytes        = Encoding.UTF8.GetBytes(responseJson);
 
             context.Response.ContentType   = "application/json";
@@ -221,7 +233,14 @@ internal sealed partial class LocalPermissionBridge(
         return doc.RootElement.Clone();
     }
 
-    static string BuildHookResponseJson(PermissionDecision decision) {
+    static string BuildHookResponseJson(PermissionDecision decision, string vendor) =>
+        vendor switch {
+            "claude" => BuildClaudeResponse(decision),
+            "codex"  => BuildCodexResponse(decision),
+            _        => throw new InvalidOperationException($"Unsupported vendor: {vendor}")
+        };
+
+    static string BuildClaudeResponse(PermissionDecision decision) {
         // Mirrors the server-side BuildHookResponse. Claude expects camelCase keys here
         // (hookSpecificOutput, hookEventName, applyPermissions, updatedInput) — these are
         // outside the server's snake_case JSON convention because Claude defines them.
@@ -234,6 +253,19 @@ internal sealed partial class LocalPermissionBridge(
             ["hookSpecificOutput"] = new JsonObject {
                 ["hookEventName"] = "PermissionRequest",
                 ["decision"]      = decisionNode
+            }
+        };
+
+        return payload.ToJsonString();
+    }
+
+    static string BuildCodexResponse(PermissionDecision decision) {
+        // Codex only consumes behavior — strip applyPermissions and updatedInput so the
+        // response stays valid for Codex's stricter hook schema.
+        var payload = new JsonObject {
+            ["hookSpecificOutput"] = new JsonObject {
+                ["hookEventName"] = "PermissionRequest",
+                ["decision"]      = new JsonObject { ["behavior"] = decision.Behavior }
             }
         };
 

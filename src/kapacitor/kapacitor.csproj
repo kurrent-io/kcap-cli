@@ -31,10 +31,10 @@
         <ProjectReference Include="..\Kapacitor.Core\Kapacitor.Core.csproj" />
     </ItemGroup>
     <ItemGroup>
-        <PackageReference Include="IdentityModel.OidcClient" Version="6.0.0" />
-        <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.*" />
-        <PackageReference Include="Microsoft.Extensions.Http" Version="10.*" />
-        <PackageReference Include="Spectre.Console" Version="0.*" />
+        <PackageReference Include="IdentityModel.OidcClient" />
+        <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+        <PackageReference Include="Microsoft.Extensions.Http" />
+        <PackageReference Include="Spectre.Console" />
     </ItemGroup>
 
     <!-- NativeAOT on macOS needs Homebrew library paths for keg-only packages (openssl, brotli) -->

@@ -155,7 +155,7 @@ public static class StatusCommand {
             foreach (var (_, value) in hooks) {
                 if (value is not JsonArray entries) continue;
 
-                if (entries.Any(entry => PluginCommand.EntryReferencesKapacitorCodexHook(entry))) {
+                if (entries.Any(entry => CodexHooksParser.EntryReferencesKapacitorCodexHook(entry))) {
                     return true;
                 }
             }
