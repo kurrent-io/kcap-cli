@@ -28,4 +28,40 @@ public static class AgentDetector {
 
         return false;
     }
+
+    /// <summary>
+    /// Probes the current process's PATH for <paramref name="binaryName"/>.
+    /// Returns false on a null/empty PATH. On Unix, requires at least one of
+    /// the user/group/other execute bits; on Windows, walks PATHEXT
+    /// (defaulting to .EXE/.CMD/.BAT) and accepts any file that exists.
+    /// </summary>
+    public static bool IsInstalled(string binaryName) {
+        var pathEnv = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrEmpty(pathEnv)) return false;
+
+        var paths      = pathEnv.Split(Path.PathSeparator);
+        var extensions = OperatingSystem.IsWindows() ? GetWindowsExtensions() : [""];
+
+        return IsInstalled(binaryName, paths, extensions, IsExecutable);
+    }
+
+    static string[] GetWindowsExtensions() {
+        var pathExt = Environment.GetEnvironmentVariable("PATHEXT");
+        var raw     = string.IsNullOrEmpty(pathExt) ? ".EXE;.CMD;.BAT" : pathExt;
+
+        return raw.Split(';', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    static bool IsExecutable(string path) {
+        if (!File.Exists(path)) return false;
+        if (OperatingSystem.IsWindows()) return true; // PATHEXT already filtered the candidates
+
+        // Unix: any of UGO execute bits is enough — an intentional heuristic.
+        // True access(X_OK) would require P/Invoke against the effective UID/GID.
+        // The rare false positive (binary with execute bits but unrelated owner)
+        // degrades to the same outcome as a runtime-broken binary.
+        const UnixFileMode anyExecute =
+            UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+        return (File.GetUnixFileMode(path) & anyExecute) != 0;
+    }
 }
