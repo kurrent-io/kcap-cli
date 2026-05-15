@@ -36,9 +36,17 @@ public class CodexHookCommandTests : IDisposable {
         var root = JsonDocument.Parse(requests[0].RequestMessage.Body!).RootElement;
         await Assert.That(root.GetProperty("session_id").GetString()).IsEqualTo("019e032205fc7570be6575719c3ea861");
         await Assert.That(root.GetProperty("home_dir").GetString()).IsNotNull();
+
+        // AI-635: SessionStart also writes Codex's required JSON output to stdout.
+        // We can't reliably capture stdout here because the test path spawns a
+        // real watcher child process via Process.Start, which under TUnit's
+        // Console capture corrupts subsequent stdout reads. The Stop test covers
+        // the identical write pattern (Console.Write(SessionScopedOutputJson)),
+        // and HandleSessionStart writes the same constant in the same way before
+        // the watcher spawn.
     }
 
-    [Test]
+    [Test, NotInParallel(nameof(Stop_maps_to_session_end_codex_route))]
     public async Task Stop_maps_to_session_end_codex_route() {
         _server.Given(Request.Create().WithPath("/hooks/session-end/codex").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
@@ -52,18 +60,36 @@ public class CodexHookCommandTests : IDisposable {
             }
             """;
 
-        var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
-        await Assert.That(exit).IsEqualTo(0);
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+        try {
+            Console.SetOut(stdoutWriter);
 
-        var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
-        await Assert.That(requests.Count).IsEqualTo(1);
+            var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+            await Assert.That(exit).IsEqualTo(0);
 
-        // Confirm Stop is NOT posted to /hooks/stop or /hooks/codex/stop —
-        // this guards the URL-mapping decision against future regressions.
-        var wrong1 = _server.FindLogEntries(Request.Create().WithPath("/hooks/stop").UsingPost());
-        var wrong2 = _server.FindLogEntries(Request.Create().WithPath("/hooks/codex/stop").UsingPost());
-        await Assert.That(wrong1.Count).IsEqualTo(0);
-        await Assert.That(wrong2.Count).IsEqualTo(0);
+            var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
+            await Assert.That(requests.Count).IsEqualTo(1);
+
+            // Confirm Stop is NOT posted to /hooks/stop or /hooks/codex/stop —
+            // this guards the URL-mapping decision against future regressions.
+            var wrong1 = _server.FindLogEntries(Request.Create().WithPath("/hooks/stop").UsingPost());
+            var wrong2 = _server.FindLogEntries(Request.Create().WithPath("/hooks/codex/stop").UsingPost());
+            await Assert.That(wrong1.Count).IsEqualTo(0);
+            await Assert.That(wrong2.Count).IsEqualTo(0);
+
+            // AI-635: Stop must emit a valid JSON object on stdout so Codex's
+            // hook output parser doesn't reject it as "invalid stop hook JSON
+            // output". WatcherManager chatter must not leak onto the same channel.
+            var stdout = stdoutWriter.ToString();
+            var doc    = JsonDocument.Parse(stdout);
+            await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
+            await Assert.That(stdout.Contains("Watcher ")).IsFalse();
+            await Assert.That(stdout.Contains("Inline drain")).IsFalse();
+            await Assert.That(stdout.Contains("Spawned")).IsFalse();
+        } finally {
+            Console.SetOut(originalOut);
+        }
     }
 
     [Test, NotInParallel(nameof(PermissionRequest_returns_default_allow_decision))]

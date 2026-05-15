@@ -19,6 +19,13 @@ namespace kapacitor.Commands;
 ///   PostToolUse       → swallowed
 /// </remarks>
 static class CodexHookCommand {
+    // Codex's Stop and SessionStart hooks parse stdout as the
+    // `stop.command.output` / `session-start.command.output` JSON schema and
+    // reject empty bodies with "hook returned invalid stop hook JSON output".
+    // `continue: true` is the schema default; emitting it explicitly satisfies
+    // the parser without altering behavior. See AI-635.
+    const string SessionScopedOutputJson = """{"continue":true}""";
+
     public static async Task<int> Handle(string baseUrl, TextReader stdin) {
         var body = await stdin.ReadToEndAsync();
 
@@ -67,6 +74,12 @@ static class CodexHookCommand {
         var exit = await PostHookAsync(baseUrl, "session-start/codex", enriched);
         if (exit != 0) return exit;
 
+        // Emit Codex's required JSON output BEFORE spawning the watcher. The
+        // watcher is best-effort and may take time to start; the parent (Codex)
+        // is waiting on stdout, and there's nothing the watcher can contribute
+        // to this response.
+        Console.Write(SessionScopedOutputJson);
+
         var enrichedNode = JsonNode.Parse(enriched);
         var sessionId    = TryGetString(enrichedNode, "session_id");
         var transcript   = TryGetString(enrichedNode, "transcript_path");
@@ -103,7 +116,11 @@ static class CodexHookCommand {
         // Codex's hook event name into Capacitor's canonical hook vocabulary
         // before posting, so the server doesn't have to know about Codex's
         // missing session-end concept.
-        return await PostHookAsync(baseUrl, "session-end/codex", node.ToJsonString());
+        var exit = await PostHookAsync(baseUrl, "session-end/codex", node.ToJsonString());
+        if (exit != 0) return exit;
+
+        Console.Write(SessionScopedOutputJson);
+        return 0;
     }
 
     static async Task<int> HandlePermissionRequest(string baseUrl, JsonNode node) {
