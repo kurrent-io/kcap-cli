@@ -7,6 +7,12 @@ using WireMock.Server;
 namespace kapacitor.Tests.Unit;
 
 public class CodexHookCommandTests : IDisposable {
+    // Shared NotInParallel group for every test that mutates the global
+    // Console.Out. Without a single shared group, tests using SetOut would run
+    // concurrently against the same process-wide writer and interfere with each
+    // other's stdout capture (nondeterministic failures depending on schedule).
+    const string ConsoleSerialGroup = nameof(CodexHookCommandTests) + ".Console";
+
     readonly WireMockServer _server = WireMockServer.Start();
 
     public void Dispose() => _server.Stop();
@@ -46,7 +52,7 @@ public class CodexHookCommandTests : IDisposable {
         // the watcher spawn.
     }
 
-    [Test, NotInParallel(nameof(Stop_maps_to_session_end_codex_route))]
+    [Test, NotInParallel(ConsoleSerialGroup)]
     public async Task Stop_maps_to_session_end_codex_route() {
         _server.Given(Request.Create().WithPath("/hooks/session-end/codex").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
@@ -92,7 +98,7 @@ public class CodexHookCommandTests : IDisposable {
         }
     }
 
-    [Test, NotInParallel(nameof(PermissionRequest_returns_default_allow_decision))]
+    [Test, NotInParallel(ConsoleSerialGroup)]
     public async Task PermissionRequest_returns_default_allow_decision() {
         _server.Given(Request.Create().WithPath("/hooks/permission-request/codex").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
