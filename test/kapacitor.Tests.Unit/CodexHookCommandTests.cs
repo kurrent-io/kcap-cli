@@ -99,8 +99,13 @@ public class CodexHookCommandTests : IDisposable {
     }
 
     [Test, NotInParallel(ConsoleSerialGroup)]
-    public async Task PermissionRequest_returns_default_allow_decision() {
-        _server.Given(Request.Create().WithPath("/hooks/permission-request/codex").UsingPost())
+    public async Task PermissionRequest_records_event_and_yields_decision_to_codex() {
+        // The Codex permission-request hook must not silently auto-allow tool
+        // calls; it records the request server-side via /hooks/permission-record
+        // (the same fire-and-forget endpoint Claude's terminal path uses) and
+        // emits an empty hookSpecificOutput so Codex's normal in-CLI approval
+        // prompt asks the user. Regression for AI-636.
+        _server.Given(Request.Create().WithPath("/hooks/permission-record").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var payload = """
@@ -114,7 +119,7 @@ public class CodexHookCommandTests : IDisposable {
             }
             """;
 
-        var originalOut = Console.Out;
+        var originalOut  = Console.Out;
         var stdoutWriter = new StringWriter();
         try {
             Console.SetOut(stdoutWriter);
@@ -122,17 +127,98 @@ public class CodexHookCommandTests : IDisposable {
             var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
 
             await Assert.That(exit).IsEqualTo(0);
+
+            // stdout must NOT carry a hook decision — Codex falls back to its
+            // own approval prompt when hookSpecificOutput.decision is absent.
             var stdout = stdoutWriter.ToString();
             var doc    = JsonDocument.Parse(stdout);
-            await Assert.That(doc.RootElement
-                .GetProperty("hookSpecificOutput")
-                .GetProperty("decision")
-                .GetProperty("behavior")
-                .GetString())
-                .IsEqualTo("allow");
+            var hasDecision = doc.RootElement.TryGetProperty("hookSpecificOutput", out var hso)
+                && hso.TryGetProperty("decision", out _);
+            await Assert.That(hasDecision).IsFalse();
         } finally {
             Console.SetOut(originalOut);
         }
+
+        // Recording must land on /hooks/permission-record, not on the
+        // long-poll /hooks/permission-request/{vendor} route.
+        var recorded = _server.FindLogEntries(Request.Create().WithPath("/hooks/permission-record").UsingPost());
+        await Assert.That(recorded.Count).IsEqualTo(1);
+
+        var wrong = _server.FindLogEntries(Request.Create().WithPath("/hooks/permission-request/codex").UsingPost());
+        await Assert.That(wrong.Count).IsEqualTo(0);
+    }
+
+    // AI-636: the hook must return well under Codex's 30 s timeout even when
+    // the recording endpoint is slow. We cap the HTTP client at 2 s and
+    // swallow the resulting TaskCanceledException — guard against future
+    // regressions where someone reintroduces an unbounded await.
+    [Test, NotInParallel(ConsoleSerialGroup)]
+    public async Task PermissionRequest_returns_quickly_when_server_is_slow() {
+        _server.Given(Request.Create().WithPath("/hooks/permission-record").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
+
+        var payload = """
+            {
+              "hook_event_name": "PermissionRequest",
+              "session_id": "abc",
+              "transcript_path": "/tmp/r.jsonl",
+              "cwd": "/tmp",
+              "tool_name": "shell",
+              "tool_input": { "command": "ls" }
+            }
+            """;
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+        var sw           = System.Diagnostics.Stopwatch.StartNew();
+        try {
+            Console.SetOut(stdoutWriter);
+            var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+            sw.Stop();
+            await Assert.That(exit).IsEqualTo(0);
+        } finally {
+            Console.SetOut(originalOut);
+        }
+
+        // 2 s HTTP timeout + a generous slack for build/CI jitter.
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
+    }
+
+    // AI-636 / Qodo finding: bounding only the POST left auth discovery
+    // (GET /auth/config) running on HttpClient's 100 s default. Stub
+    // /auth/config slow and assert the hook still returns under 5 s — the
+    // shared 2 s CTS in CodexHookCommand covers discovery too.
+    [Test, NotInParallel("CodexPermissionRequestStdout")]
+    public async Task PermissionRequest_returns_quickly_when_auth_discovery_is_slow() {
+        _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
+        _server.Given(Request.Create().WithPath("/hooks/permission-record").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+
+        var payload = """
+            {
+              "hook_event_name": "PermissionRequest",
+              "session_id": "abc",
+              "transcript_path": "/tmp/r.jsonl",
+              "cwd": "/tmp",
+              "tool_name": "shell",
+              "tool_input": { "command": "ls" }
+            }
+            """;
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+        var sw           = System.Diagnostics.Stopwatch.StartNew();
+        try {
+            Console.SetOut(stdoutWriter);
+            var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+            sw.Stop();
+            await Assert.That(exit).IsEqualTo(0);
+        } finally {
+            Console.SetOut(originalOut);
+        }
+
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }
 
     [Test]
