@@ -39,19 +39,28 @@ API:
 
 ```csharp
 public static class AgentDetector {
-    public static bool IsInstalled(string binaryName);                            // production: reads env
-    internal static bool IsInstalled(string binaryName, IEnumerable<string> paths, // testable seam
-                                     IEnumerable<string> extensions);
+    public static bool IsInstalled(string binaryName);                              // production: reads env + platform
+
+    // Pure, testable seam. No env reads, no OS branches.
+    internal static bool IsInstalled(
+        string binaryName,
+        IEnumerable<string> paths,
+        IEnumerable<string> extensions,
+        Func<string, bool> isExecutable);
 }
 ```
 
 Implementation:
 
 - Read `Environment.GetEnvironmentVariable("PATH")`, split on `Path.PathSeparator`.
-- On Windows (`OperatingSystem.IsWindows()`), read `PATHEXT`; fall back to `".EXE;.CMD;.BAT"` if unset; split on `;`. Empty entries are pruned.
-- On Unix, the extension list is a single empty string.
-- For each `(dir, ext)` pair, check `File.Exists(Path.Combine(dir, name + ext))`. On Unix, additionally require the executable bit via `File.GetUnixFileMode(path).HasFlag(UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)` (any-execute is enough — matches how shells resolve a binary on `PATH`). On Windows the `PATHEXT` filter already restricts to executables, so no permission check. Return `true` on first hit.
-- `File.GetUnixFileMode` is BCL since .NET 7; AOT-clean. No subprocess. No reflection.
+- Build the `extensions` list:
+  - On Windows (`OperatingSystem.IsWindows()`), parse `PATHEXT` (fall back to `".EXE;.CMD;.BAT"` if unset), split on `;`, prune empties.
+  - On Unix, a single empty string.
+- Build the `isExecutable` predicate:
+  - On Windows: `File.Exists` — the `PATHEXT` filter already gates on executable extensions.
+  - On Unix: `path => File.Exists(path) && (File.GetUnixFileMode(path) & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0`. The bitmask-then-non-zero check is **any-execute** (matches shell `PATH` resolution: a 0700 binary owned by the current user is detected; `HasFlag(A|B|C)` would have required all three execute bits and would have missed 0700). On AOT/.NET 10, `File.GetUnixFileMode` is in the BCL.
+- The pure internal overload then iterates `(dir, ext)` pairs, builds `Path.Combine(dir, name + ext)`, and returns `true` on the first `isExecutable(path) == true`.
+- No subprocess. No reflection. AOT-clean.
 
 This is a presence-and-executability probe, not an "actually runs" probe — a binary that's installed but broken (e.g. wrong arch, missing dynamic lib) will pass detection and fail the first time the user invokes it. AI-628 originally suggested `claude --help` / `codex --help`, but the extra correctness isn't worth the subprocess cost: a broken local CLI is the user's problem, not setup's.
 
@@ -136,6 +145,16 @@ Tests pass fakes for `Installers` that record their arguments and return scripte
 - Codex hooks: **still install**. The hooks.json content is the literal string `"kapacitor codex-hook"` plus a timeout — it never references the plugin dir. This preserves the AI-628 goal for Codex-only users even when plugin path resolution fails.
 - Codex skills: cannot install (skills source lives under the plugin dir). Print a warning that skills were skipped but hooks were installed, set `CodexSkillsInstalled = false`.
 
+**Install behaviour when an installer returns `false`:**
+
+| Installer | Returns false → |
+|---|---|
+| `InstallClaudePlugin` | Emit `⚠ Could not update Claude settings file. Install manually inside Claude Code: /plugin install <pluginPath>` (matches existing wording in `SetupCommand.HandleAsync`). `Result.ClaudeInstalled = false`. |
+| `InstallCodexHooks` | Emit `⚠ Could not write Codex hooks file.` `Result.CodexHooksInstalled = false`. **Do not attempt `InstallCodexSkills`** (skills are pointless without hooks). **Do not print the Codex `/hooks` trust hint** (no hooks to trust). |
+| `InstallCodexSkills` | Hooks succeeded but skills failed — emit `⚠ Codex hooks installed but skills could not be copied to ~/.codex/skills`. `Result.CodexSkillsInstalled = false`. The Codex trust hint still prints (hooks are what need trusting). |
+
+These are the only failure modes the installers report, so this table exhausts them.
+
 The `prompt` callback always uses `ConfirmationPrompt` with `DefaultValue = true` in production. Tests inject a callback that records the prompt text and returns scripted answers.
 
 This keeps `SetupCommand` slim and gives tests a way to drive every branch without instantiating `AnsiConsole` or stubbing `Environment.PATH`.
@@ -186,16 +205,18 @@ The standalone `plugin install --codex` path also gains the same "run /hooks ins
 
 ## Testing
 
-**`AgentDetector` unit tests:**
+**`AgentDetector` unit tests** (drive the pure internal overload with synthetic `paths`, `extensions`, and `isExecutable` predicate — these tests run identically on every host OS because the predicate is injected, not derived from `OperatingSystem.IsWindows()`):
 
-- Bare name found in one PATH dir with execute bit (Unix) → detected.
-- Bare name found in one PATH dir without execute bit (Unix) → not detected. Guards against finding a stray text file named `claude` in a PATH dir.
+- Name found in one PATH dir, predicate returns true → detected.
+- Name found in one PATH dir, predicate returns false → not detected. Models a file present but not executable on Unix, or a present file with the wrong extension on Windows.
 - Name not in any PATH dir → not detected.
-- Empty PATH env → not detected.
-- Windows: `claude.cmd` present, `PATHEXT=".EXE;.CMD"` → detected.
-- Windows: bare `claude` file with no extension, `PATHEXT=".EXE;.CMD"` → not detected (matches Windows shell behaviour).
-- Windows: `PATHEXT` unset → fallback `.EXE;.CMD;.BAT` applied.
-- PATH contains an empty entry (`::` on Unix) → handled without throwing.
+- Empty PATH list → not detected.
+- "Windows-shaped" inputs: `extensions = [".EXE", ".CMD"]`, `claude.cmd` exists per predicate → detected.
+- "Windows-shaped" inputs: `extensions = [".EXE", ".CMD"]`, bare `claude` (no extension) per predicate → not detected (matches Windows shell behaviour: `cmd.exe` won't run `claude` without an extension in `PATHEXT`).
+- "Windows-shaped" inputs: `extensions` is the fallback `[".EXE", ".CMD", ".BAT"]` when env unset (covered by a separate one-line test of the public overload's fallback construction logic; skipped on non-Windows hosts to avoid asserting on real env behaviour).
+- PATH list contains an empty entry → handled without throwing, that entry skipped.
+
+**Unix executable-bit assertion** — separate test, marked `[OS=Unix]` (skipped on Windows hosts): create a temp file, `chmod 0700`, call the production `IsInstalled(name)`; create a second temp file `chmod 0644`, assert not detected. This is the only test that touches a real filesystem and exercises the real `isExecutable` predicate; it guards against regression on the "any of UGO execute bits is enough" rule.
 
 **`CodingAgentsStep` unit tests** (inject fake `Installers` recording arguments and returning scripted bools; inject `Func<string,bool> prompt` and `Action<string> writeLine` sinks; no AnsiConsole, no real filesystem):
 
@@ -209,6 +230,12 @@ The standalone `plugin install --codex` path also gains the same "run /hooks ins
 - `--no-prompt` with `--skip-codex-hooks` → Claude installed, Codex installers not called, message distinguishes "skipped by flag" from "not detected".
 - `--plugin-scope skip` legacy mapping → behaves identical to `--skip-claude-hooks`.
 - `--plugin-scope project` legacy mapping → `Options.LegacyProjectScope = true`, Claude installer called with the project-scope settings path (`<cwd>/.claude/settings.local.json`), not the user one.
+
+**Installer-failure unit tests** (each fake installer scripted to return false):
+
+- `InstallClaudePlugin` returns false → Claude warning text emitted, `Result.ClaudeInstalled = false`, Codex installers still attempted independently.
+- `InstallCodexHooks` returns false → Codex hooks warning emitted, `Result.CodexHooksInstalled = false`, `InstallCodexSkills` **not called**, Codex trust hint **not printed**, `Result.CodexSkillsInstalled = false`.
+- `InstallCodexSkills` returns false (hooks succeeded) → skills warning emitted, `Result.CodexSkillsInstalled = false`, **Codex trust hint still printed** (assertion is explicit), `Result.CodexHooksInstalled = true`.
 
 **`PluginCommand.InstallCodex` extension:** add one assertion that the trust-hint line appears in stdout after a successful install.
 
