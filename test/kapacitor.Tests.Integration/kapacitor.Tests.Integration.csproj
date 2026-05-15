@@ -11,7 +11,7 @@
         <ProjectReference Include="../../src/Kapacitor.Daemon/Kapacitor.Daemon.csproj" />
     </ItemGroup>
     <ItemGroup>
-        <PackageReference Include="TUnit" Version="1.18.37" />
-        <PackageReference Include="WireMock.Net" Version="1.7.0" />
+        <PackageReference Include="TUnit" />
+        <PackageReference Include="WireMock.Net" />
     </ItemGroup>
 </Project>

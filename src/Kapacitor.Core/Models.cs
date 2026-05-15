@@ -558,6 +558,7 @@ public readonly record struct LaunchAgentCommand(
         string             RepoPath,
         string[]?          Tools,
         string[]?          AttachmentIds,
+        string             Vendor,
         LaunchKind         Kind    = LaunchKind.Default,
         ReviewLaunchInfo?  Review  = null,
         string?            BaseRef = null
@@ -799,7 +800,8 @@ record AgentRunStarted(
         string? Model,
         string? Effort,
         string? RepoPath,
-        string? WorktreePath
+        string? WorktreePath,
+        string  Vendor
     );
 
 record AgentRunStopped(

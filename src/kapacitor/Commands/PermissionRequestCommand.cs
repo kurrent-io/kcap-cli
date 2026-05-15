@@ -61,7 +61,7 @@ static class PermissionRequestCommand {
         // auth, so an accidentally / maliciously set non-loopback value would leak the
         // hook payload (tool name, raw tool input) to an arbitrary endpoint.
         if (TryGetLoopbackDaemonUrl(out var daemonUrl)) {
-            return await PostAsync(daemonUrl + "/permission-request", payload, authenticated: false);
+            return await PostAsync(daemonUrl + "/claude/permission-request", payload, authenticated: false);
         }
 
         return await PostAsync(baseUrl + "/hooks/permission-request", payload, authenticated: true);
@@ -72,19 +72,12 @@ static class PermissionRequestCommand {
         var raw = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
         if (string.IsNullOrEmpty(raw)) return false;
 
-        if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || !uri.IsLoopback) {
-            Console.Error.WriteLine($"[kapacitor] Ignoring non-loopback KAPACITOR_DAEMON_URL: {raw}");
-            return false;
+        if (DaemonBridgeUrl.TryParseLoopback(raw, out daemonUrl)) {
+            return true;
         }
 
-        if (uri.Scheme != Uri.UriSchemeHttp) {
-            Console.Error.WriteLine($"[kapacitor] Ignoring non-http KAPACITOR_DAEMON_URL scheme: {uri.Scheme}");
-            return false;
-        }
-
-        // Trim trailing slash so the appended "/permission-request" produces a clean URL.
-        daemonUrl = raw.TrimEnd('/');
-        return true;
+        Console.Error.WriteLine($"[kapacitor] Ignoring non-loopback KAPACITOR_DAEMON_URL: {raw}");
+        return false;
     }
 
     static async Task<int> PostAsync(string url, JsonObject payload, bool authenticated) {

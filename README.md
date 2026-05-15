@@ -49,7 +49,7 @@ kapacitor setup --server-url https://capacitor.example.com --default-visibility 
 
 #### Also using Codex CLI?
 
-`setup` installs Claude Code hooks only. If you also use Codex CLI and want those sessions captured too, install the Codex hook surface separately:
+`setup` installs Claude Code hooks only. If you also use Codex CLI — either for local sessions or for hosting agents via the daemon — install the Codex hook surface separately:
 
 ```bash
 kapacitor plugin install --codex            # user-wide  (~/.codex/hooks.json)
@@ -193,7 +193,7 @@ Non-interactive runs (no TTY, e.g. CI) must pass both a scope flag and `--yes`. 
 
 ### Agent daemon
 
-The agent daemon connects to the Capacitor server and runs Claude Code agents in isolated git worktrees, controlled from the dashboard.
+The agent daemon connects to the Capacitor server and runs Claude Code agents in isolated git worktrees, controlled from the dashboard. The daemon supports hosted Claude and Codex agents on macOS and Linux — choose the vendor from the dashboard's launch dialog.
 
 ```bash
 kapacitor agent start                   # start in foreground (defaults --name to your OS username)
@@ -210,6 +210,42 @@ kapacitor agent doctor --clean          # also remove stale lock/pid files (held
 Each daemon process holds an exclusive `flock` on `~/.config/kapacitor/agents/<name>.lock` for its entire lifetime. The kernel releases the lock automatically when the daemon exits (including `SIGKILL` or power-off), so leftover lock files on disk are never a blocker — only a live process holding the kernel-level lock can prevent another daemon from acquiring the same name.
 
 Two daemons with **different** `--name` values can run side-by-side. Two daemons under the **same name** on the same machine collide on the flock and the second one exits with code 2. Even if that guard is bypassed somehow, the server rejects the second daemon's `DaemonConnect` with a typed error and the second daemon exits with code 3 — no more silent slot-displacement oscillation.
+
+#### Hosted Codex agents
+
+To launch hosted Codex agents from the dashboard, the Codex hook surface must be installed first:
+
+```bash
+kapacitor plugin install --codex            # user scope (~/.codex/hooks.json)
+kapacitor plugin install --codex --project  # project scope (<repo>/.codex/hooks.json)
+```
+
+The daemon starts Codex with `--sandbox workspace-write` and `--ask-for-approval on-request`. This lets Codex edit files in the agent's worktree but escalates sensitive operations (e.g. network calls, shell commands outside the worktree) through the daemon's permission bridge to the dashboard.
+
+> **Upgrading from an earlier version of kapacitor?** Re-run `kapacitor plugin install --codex` to refresh your `~/.codex/hooks.json`. Older installs used a 30-second timeout on the `PermissionRequest` hook, which would cause Codex to kill the hook before the dashboard could send back an approval or denial for prompts that take longer than 30 seconds to decide. The current install writes a 24-hour timeout for that event.
+
+PR review for hosted Codex agents is not yet supported (tracked in AI-632). The sandbox and approval-mode selectors in the launch dialog are also planned as a follow-up (AI-633).
+
+#### Daemon config settings
+
+Use `kapacitor config set` to configure the binary paths used by the daemon. The values are stored in the active profile and take effect the next time the daemon starts.
+
+```bash
+kapacitor config set daemon.claude_path /opt/claude/bin/claude
+kapacitor config set daemon.codex_path  /opt/codex/bin/codex
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `daemon.claude_path` | `"claude"` | Path to the Claude CLI binary. Resolved via `PATH` when not an absolute path. |
+| `daemon.codex_path`  | `"codex"`  | Path to the Codex CLI binary. Resolved via `PATH` when not an absolute path. |
+
+You can also override these at runtime with environment variables (take precedence over the profile):
+
+```bash
+KAPACITOR_CLAUDE_PATH=/opt/claude/bin/claude kapacitor daemon
+KAPACITOR_CODEX_PATH=/opt/codex/bin/codex  kapacitor daemon
+```
 
 ### Repository paths
 

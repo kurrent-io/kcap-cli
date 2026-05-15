@@ -6,15 +6,6 @@ namespace kapacitor.Commands;
 public static class PluginCommand {
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
-    static readonly string[] CodexHookEvents = [
-        "SessionStart",
-        "UserPromptSubmit",
-        "PreToolUse",
-        "PostToolUse",
-        "PermissionRequest",
-        "Stop"
-    ];
-
     // Folders inside <plugin>/codex-skills/ that we ship to Codex. Each name is
     // also the target folder under <codex>/skills/, so on remove we can delete
     // them without re-reading the source tree. Add a new skill here when adding
@@ -25,6 +16,12 @@ public static class PluginCommand {
     ];
 
     const string CodexHookCommand = "kapacitor codex-hook";
+
+    // PermissionRequest must wait for the dashboard's decision; the daemon-side
+    // bridge call is intentionally infinite. 86400s = 24h keeps Codex from
+    // killing the hook before the user approves or denies.
+    const int PermissionRequestTimeout = 86400;
+    const int DefaultHookTimeout       = 30;
 
     public static async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
@@ -228,13 +225,14 @@ public static class PluginCommand {
                 root["hooks"] = hooks;
             }
 
-            foreach (var evt in CodexHookEvents) {
+            foreach (var evt in CodexHooksParser.CodexHookEvents) {
+                var timeout        = evt == "PermissionRequest" ? PermissionRequestTimeout : DefaultHookTimeout;
                 var kapacitorEntry = new JsonObject {
                     ["hooks"] = new JsonArray(
                         new JsonObject {
                             ["type"]    = "command",
                             ["command"] = CodexHookCommand,
-                            ["timeout"] = 30
+                            ["timeout"] = timeout
                         }
                     )
                 };
@@ -249,7 +247,7 @@ public static class PluginCommand {
                 foreach (var entry in entries) {
                     if (entry is null) continue;
 
-                    if (!EntryReferencesKapacitorCodexHook(entry)) {
+                    if (!CodexHooksParser.EntryReferencesKapacitorCodexHook(entry)) {
                         preserved.Add(entry.DeepClone());
                     }
                 }
@@ -281,7 +279,7 @@ public static class PluginCommand {
 
             var changed = false;
 
-            foreach (var evt in CodexHookEvents) {
+            foreach (var evt in CodexHooksParser.CodexHookEvents) {
                 if (hooks[evt] is not JsonArray entries) continue;
 
                 var preserved = new JsonArray();
@@ -289,7 +287,7 @@ public static class PluginCommand {
                 foreach (var entry in entries) {
                     if (entry is null) continue;
 
-                    if (EntryReferencesKapacitorCodexHook(entry)) {
+                    if (CodexHooksParser.EntryReferencesKapacitorCodexHook(entry)) {
                         changed = true;
                     } else {
                         preserved.Add(entry.DeepClone());
@@ -380,22 +378,6 @@ public static class PluginCommand {
         }
     }
 
-    /// <summary>
-    /// Returns true iff <paramref name="entry"/> is a JsonObject that has a
-    /// <c>hooks</c> JsonArray containing at least one JsonObject whose
-    /// <c>command</c> string contains <c>kapacitor codex-hook</c>.
-    /// Any non-conformant node shape is treated as a non-match (returns false)
-    /// instead of throwing.
-    /// </summary>
-    internal static bool EntryReferencesKapacitorCodexHook(JsonNode? entry) {
-        if (entry is not JsonObject entryObj) return false;
-        if (entryObj["hooks"] is not JsonArray inner) return false;
-
-        return inner.OfType<JsonObject>().Any(h =>
-            h["command"] is JsonValue v
-            && v.TryGetValue<string>(out var cmd)
-            && cmd.Contains("kapacitor codex-hook"));
-    }
 
     static int PrintUsage() {
         Console.Error.WriteLine("Usage: kapacitor plugin <install|remove> [--project] [--codex]");

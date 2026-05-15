@@ -13,10 +13,11 @@ namespace kapacitor.Commands;
 /// Wire contract (Codex event → server route):
 ///   SessionStart      → POST /hooks/session-start/codex
 ///   Stop              → POST /hooks/session-end/codex (Codex has no separate session-end hook)
-///   PermissionRequest → POST /hooks/permission-record (fire-and-forget; CLI emits no decision so
-///                       Codex's normal in-CLI approval prompt takes over). The hosted-agent branch
-///                       (KAPACITOR_DAEMON_URL set) lands in AI-68 and will bounce through the
-///                       daemon's LocalPermissionBridge to wait on the user's UI decision.
+///   PermissionRequest → in a daemon-launched hosted agent (KAPACITOR_DAEMON_URL set), bounce
+///                       through the daemon's LocalPermissionBridge and wait for the dashboard's
+///                       decision (fail-closed on bridge errors: deny + exit nonzero). Otherwise:
+///                       POST /hooks/permission-record (fire-and-forget; CLI emits no decision so
+///                       Codex's normal in-CLI approval prompt takes over).
 ///   UserPromptSubmit  → swallowed (v1 — neither vendor consumes them)
 ///   PreToolUse        → swallowed
 ///   PostToolUse       → swallowed
@@ -153,6 +154,14 @@ static class CodexHookCommand {
     }
 
     static async Task<int> HandlePermissionRequest(string baseUrl, JsonNode node) {
+        var daemonUrl = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
+
+        return daemonUrl is null
+            ? await HandlePermissionRequestStub(baseUrl, node)
+            : await HandlePermissionRequestViaBridge(daemonUrl, node);
+    }
+
+    static async Task<int> HandlePermissionRequestStub(string baseUrl, JsonNode node) {
         // Terminal Codex sessions can't answer a Capacitor UI prompt, so we
         // record the event server-side (best-effort) and emit no decision —
         // Codex falls back to its built-in in-CLI approval flow and the user
@@ -163,9 +172,6 @@ static class CodexHookCommand {
         // hosted-agent UI decision. With Codex's 30 s hook timeout, the hook
         // process is killed long before the server returns (AI-636).
         //
-        // The hosted-agent branch (KAPACITOR_DAEMON_URL set) is intentionally
-        // not wired here — it lands with the rest of the hosted-Codex stack
-        // in AI-68 so the wire shape, daemon bridge, and tests change together.
         // Single 2 s deadline covers BOTH the /auth/config discovery inside
         // CreateAuthenticatedClientAsync and the /hooks/permission-record POST.
         // Without bounding discovery too, a server that accepts the TCP
@@ -188,6 +194,46 @@ static class CodexHookCommand {
         // codex-rs/hooks/src/events/permission_request.rs in openai/codex.
         Console.Write("{}");
         return 0;
+    }
+
+    static async Task<int> HandlePermissionRequestViaBridge(string daemonUrl, JsonNode node) {
+        if (!DaemonBridgeUrl.TryParseLoopback(daemonUrl, out var bridgeBase)) {
+            Console.Error.WriteLine(
+                $"[kapacitor] codex-hook permission-request: KAPACITOR_DAEMON_URL must be http loopback, got: {daemonUrl}");
+            return EmitDenyAndExitNonzero();
+        }
+
+        using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+
+        try {
+            using var content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp    = await client.PostAsync($"{bridgeBase}/codex/permission-request", content);
+
+            if (!resp.IsSuccessStatusCode) {
+                Console.Error.WriteLine(
+                    $"[kapacitor] codex-hook permission-request bridge: HTTP {(int)resp.StatusCode}");
+                return EmitDenyAndExitNonzero();
+            }
+
+            var body = await resp.Content.ReadAsStringAsync();
+            Console.Write(body);
+            return 0;
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"[kapacitor] codex-hook permission-request bridge error: {ex.Message}");
+            return EmitDenyAndExitNonzero();
+        }
+    }
+
+    static int EmitDenyAndExitNonzero() {
+        var response = new JsonObject {
+            ["hookSpecificOutput"] = new JsonObject {
+                ["hookEventName"] = "PermissionRequest",
+                ["decision"]      = new JsonObject { ["behavior"] = "deny" }
+            }
+        };
+
+        Console.Write(response.ToJsonString());
+        return 1;
     }
 
     static async Task<int> PostHookAsync(string baseUrl, string endpoint, string body) {
