@@ -271,12 +271,12 @@ static partial class TitleGenerator {
     ///   which can land before a follow-up prompt in the same session.</item>
     /// </list>
     /// </summary>
-    static bool IsCodexInjectedUserPrelude(string text) =>
+    internal static bool IsCodexInjectedUserPrelude(string text) =>
         text.StartsWith("<environment_context>",     StringComparison.Ordinal)
      || text.StartsWith("# AGENTS.md instructions",  StringComparison.Ordinal)
      || text.StartsWith("<turn_aborted>",            StringComparison.Ordinal);
 
-    static string? ExtractCodexBlockText(JsonElement payload, string blockType) {
+    internal static string? ExtractCodexBlockText(JsonElement payload, string blockType) {
         if (payload.Arr("content") is not { } content) return null;
 
         foreach (var block in content.EnumerateArray()) {
