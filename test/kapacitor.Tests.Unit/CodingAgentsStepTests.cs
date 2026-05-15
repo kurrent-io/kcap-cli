@@ -174,6 +174,46 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("/hooks") && l.Contains("trust"));
     }
 
+    [Test]
+    public async Task Plugin_dir_null_skips_claude_install_but_keeps_codex_hooks() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: false, SkipCodex: false, NoPrompt: false, LegacyProjectScope: false);
+        var detected = new DetectedAgents(Claude: true, Codex: true);
+        var paths    = TestPaths() with { PluginDir = null };
+
+        var result = await RunAsync(options, detected, paths, calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.ClaudeInstalled).IsFalse();
+        await Assert.That(calls.ClaudeCalled).IsFalse();
+        await Assert.That(result.CodexHooksInstalled).IsTrue();
+        await Assert.That(calls.CodexHooksCalled).IsTrue();
+        await Assert.That(result.CodexSkillsInstalled).IsFalse();
+        await Assert.That(calls.CodexSkillsCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Plugin directory not found"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Codex hooks installed but skills could not be copied"));
+    }
+
+    [Test]
+    public async Task Neither_detected_emits_warning_and_no_installer_calls() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: false, SkipCodex: false, NoPrompt: false, LegacyProjectScope: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.ClaudeInstalled).IsFalse();
+        await Assert.That(result.CodexHooksInstalled).IsFalse();
+        await Assert.That(result.CodexSkillsInstalled).IsFalse();
+        await Assert.That(calls.ClaudeCalled).IsFalse();
+        await Assert.That(calls.CodexHooksCalled).IsFalse();
+        await Assert.That(calls.CodexSkillsCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("No supported agent CLI detected"));
+    }
+
     static Paths TestPaths() => new(
         ClaudeSettingsPath: "/fake/.claude/settings.json",
         PluginDir:          "/fake/plugin",

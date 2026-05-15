@@ -37,6 +37,10 @@ internal static class CodingAgentsStep {
             ? HandleCodexSkills(paths, installers, writeLine)
             : false;
 
+        if (!detected.Claude && !detected.Codex) {
+            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code or Codex CLI to start capturing sessions.");
+        }
+
         return Task.FromResult(new Result(claudeInstalled, codexHooksInstalled, codexSkillsInstalled));
     }
 
