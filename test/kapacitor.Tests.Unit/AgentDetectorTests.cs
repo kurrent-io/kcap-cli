@@ -69,6 +69,9 @@ public class AgentDetectorTests {
         await Assert.That(found).IsTrue();
     }
 
+    // PATH_env_mutation serialises tests that blank or replace PATH. Any future test in
+    // any class that reads PATH during execution must share this token, otherwise it
+    // can observe a transient null/empty PATH while these tests run.
     [Test, NotInParallel("PATH_env_mutation")]
     public async Task Public_returns_false_when_path_env_is_empty() {
         var original = Environment.GetEnvironmentVariable("PATH");

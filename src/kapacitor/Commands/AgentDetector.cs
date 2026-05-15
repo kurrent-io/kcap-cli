@@ -49,7 +49,7 @@ public static class AgentDetector {
         var pathExt = Environment.GetEnvironmentVariable("PATHEXT");
         var raw     = string.IsNullOrEmpty(pathExt) ? ".EXE;.CMD;.BAT" : pathExt;
 
-        return raw.Split(';', StringSplitOptions.RemoveEmptyEntries);
+        return raw.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
     static bool IsExecutable(string path) {
