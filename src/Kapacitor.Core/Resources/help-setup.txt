@@ -1,4 +1,4 @@
-kapacitor setup — Configure server, login, and install plugin
+kapacitor setup — Configure server, login, and install hooks
 
 Usage: kapacitor setup [options]
 
@@ -9,3 +9,22 @@ Options:
   --no-prompt                 Non-interactive mode (requires --server-url)
   --device                    Force GitHub Device Flow during the login step
                               (use in SSH / headless envs)
+  --skip-claude-hooks         Don't install the Claude Code plugin even if
+                              the claude CLI is detected on PATH.
+  --skip-codex-hooks          Don't install Codex CLI hooks/skills even if
+                              the codex CLI is detected on PATH.
+
+The setup wizard detects every supported coding agent on PATH (claude, codex)
+and asks one yes/no per detected agent. Hooks are installed user-wide. For
+project-scope or post-setup re-installs, use:
+
+  kapacitor plugin install [--codex] [--project]
+
+Legacy:
+  --plugin-scope <user|project|skip>
+        Retained for backwards compatibility. Maps as:
+          user    → no-op (matches new default)
+          project → install the Claude plugin into <repo>/.claude/settings.local.json
+          skip    → alias for --skip-claude-hooks
+        New scripts should use --skip-claude-hooks / --skip-codex-hooks. For
+        project-scope installs, prefer `kapacitor plugin install --project`.
