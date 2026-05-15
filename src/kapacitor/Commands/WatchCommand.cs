@@ -532,7 +532,7 @@ static partial class WatchCommand {
 
             if (payload?.Str("type") != "message" || payload.Value.Str("role") != "assistant") return null;
 
-            return ExtractCodexBlockText(payload.Value, "output_text")?.Trim() is { Length: > 0 } text ? text : null;
+            return TitleGenerator.ExtractCodexBlockText(payload.Value, "output_text")?.Trim() is { Length: > 0 } text ? text : null;
         } catch {
             return null;
         }
@@ -546,13 +546,25 @@ static partial class WatchCommand {
             if (vendor == "codex") {
                 // Codex rolls everything into a top-level response_item envelope;
                 // a "message" payload (user or assistant) is the analog of Claude's
-                // user/assistant event for title-threshold purposes.
+                // user/assistant event for title-threshold purposes. User-role
+                // payloads that are codex-injected preludes
+                // (<environment_context>, AGENTS.md, <turn_aborted>) must NOT
+                // count — otherwise a fresh session with no real prompts can
+                // reach the 5-event threshold and produce a low-context title.
                 if (root.Str("type") != "response_item") return false;
 
                 var payload = root.Obj("payload");
 
-                return payload?.Str("type") == "message"
-                 && payload.Value.Str("role") is "user" or "assistant";
+                if (payload?.Str("type") != "message") return false;
+
+                var role = payload.Value.Str("role");
+
+                return role switch {
+                    "assistant" => true,
+                    "user"      => TitleGenerator.ExtractCodexBlockText(payload.Value, "input_text") is { } text
+                                && !TitleGenerator.IsCodexInjectedUserPrelude(text),
+                    _           => false
+                };
             }
 
             return root.Str("type") is "user" or "assistant";
@@ -616,13 +628,13 @@ static partial class WatchCommand {
 
             if (payload?.Str("type") != "message" || payload.Value.Str("role") != "user") return null;
 
-            var text = ExtractCodexBlockText(payload.Value, "input_text");
-
             // Skip codex-injected wrappers (environment_context, AGENTS.md, turn_aborted).
             // These role:"user" payloads precede the real prompt and would otherwise be
-            // used as the title context. The same prelude list lives in TitleGenerator
-            // for the offline import path.
-            return text is null || IsCodexInjectedUserPrelude(text) ? null : text;
+            // used as the title context. Prelude list and block extractor live in
+            // TitleGenerator so the offline-import and live-watch paths stay in sync.
+            var text = TitleGenerator.ExtractCodexBlockText(payload.Value, "input_text");
+
+            return text is null || TitleGenerator.IsCodexInjectedUserPrelude(text) ? null : text;
         } catch (Exception ex) {
             if (!parseErrorLogged) {
                 parseErrorLogged = true;
@@ -632,23 +644,6 @@ static partial class WatchCommand {
 
         return null;
     }
-
-    static string? ExtractCodexBlockText(JsonElement payload, string blockType) {
-        if (payload.Arr("content") is not { } content) return null;
-
-        foreach (var block in content.EnumerateArray()) {
-            if (block.Str("type") == blockType && block.Str("text") is { Length: > 0 } text) {
-                return text;
-            }
-        }
-
-        return null;
-    }
-
-    static bool IsCodexInjectedUserPrelude(string text) =>
-        text.StartsWith("<environment_context>",    StringComparison.Ordinal)
-     || text.StartsWith("# AGENTS.md instructions", StringComparison.Ordinal)
-     || text.StartsWith("<turn_aborted>",           StringComparison.Ordinal);
 
     /// <summary>
     /// Strips XML-like system instruction blocks from user text so they don't pollute title generation.

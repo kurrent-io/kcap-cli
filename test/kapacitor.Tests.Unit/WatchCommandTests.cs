@@ -276,9 +276,27 @@ public class CodexTranscriptExtractionTests {
     [Arguments("""{"type":"response_item","payload":{"type":"reasoning"}}""", false)]
     [Arguments("""{"type":"response_item","payload":{"type":"function_call"}}""", false)]
     [Arguments("""{"type":"user","message":{"content":"claude shape"}}""", false)]
+    [Arguments("""{"type":"response_item","payload":{"type":"message","role":"user","content":[]}}""", false)]
     public async Task IsEvent_Codex_OnlyCountsMessagePayloads(string line, bool expected) {
         var result = Commands.WatchCommand.IsEvent(line, "codex");
 
         await Assert.That(result).IsEqualTo(expected);
+    }
+
+    // Critical: prelude user-role payloads must NOT count toward the 5-event
+    // title threshold. Otherwise a fresh Codex session with a few injected
+    // <environment_context>/AGENTS.md entries before any real prompt can trip
+    // the threshold and produce a title from prelude content alone.
+    [Test]
+    [Arguments("<environment_context>\nworkspace=/tmp\n</environment_context>")]
+    [Arguments("# AGENTS.md instructions for /tmp\n\nUse pnpm.")]
+    [Arguments("<turn_aborted>user pressed esc</turn_aborted>")]
+    public async Task IsEvent_Codex_SkipsInjectedUserPreludes(string preludeText) {
+        var encoded = System.Text.Json.JsonSerializer.Serialize(preludeText);
+        var line    = "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":" + encoded + "}]}}";
+
+        var result = Commands.WatchCommand.IsEvent(line, "codex");
+
+        await Assert.That(result).IsFalse();
     }
 }
