@@ -64,6 +64,12 @@ public static partial class DaemonRunner {
         if (config.MaxConcurrentAgents == 5 && profileDaemon is { MaxAgents: var mx and not 5 })
             config.MaxConcurrentAgents = mx;
 
+        if (!string.IsNullOrEmpty(profileDaemon?.ClaudePath))
+            config.ClaudePath = profileDaemon.ClaudePath;
+
+        if (!string.IsNullOrEmpty(profileDaemon?.CodexPath))
+            config.CodexPath = profileDaemon.CodexPath;
+
         if (Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_NAME") is { } envName) {
             config.Name = envName;
         }
@@ -74,6 +80,12 @@ public static partial class DaemonRunner {
             else
                 await Console.Error.WriteLineAsync($"Warning: ignoring invalid KAPACITOR_MAX_AGENTS={maxAgents}");
         }
+
+        if (Environment.GetEnvironmentVariable("KAPACITOR_CLAUDE_PATH") is { Length: > 0 } envClaudePath)
+            config.ClaudePath = envClaudePath;
+
+        if (Environment.GetEnvironmentVariable("KAPACITOR_CODEX_PATH") is { Length: > 0 } envCodexPath)
+            config.CodexPath = envCodexPath;
 
         // Fall back to OS username, then machine name, then a static default
         if (string.IsNullOrEmpty(config.Name)) {

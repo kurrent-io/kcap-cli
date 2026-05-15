@@ -1,9 +1,119 @@
+using System.Text.Json;
 using kapacitor.Commands;
 using kapacitor.Config;
 
 namespace kapacitor.Tests.Unit;
 
 public class ConfigCommandTests {
+    // ── daemon.claude_path ───────────────────────────────────────────────────
+
+    [Test]
+    public async Task ApplySet_DaemonClaudePath_StoresValue() {
+        var profile = new Profile();
+
+        var updated = ConfigCommand.ApplySet(profile, "daemon.claude_path", "/opt/claude/bin/claude");
+
+        await Assert.That(updated.Daemon!.ClaudePath).IsEqualTo("/opt/claude/bin/claude");
+    }
+
+    [Test]
+    public async Task ApplySet_DaemonClaudePath_EmptyString_Throws() {
+        var profile = new Profile();
+
+        await Assert.That(() => ConfigCommand.ApplySet(profile, "daemon.claude_path", ""))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task ApplySet_DaemonClaudePath_PreservesOtherDaemonSettings() {
+        var profile = new Profile { Daemon = new DaemonSettings { Name = "mybot", MaxAgents = 3 } };
+
+        var updated = ConfigCommand.ApplySet(profile, "daemon.claude_path", "/usr/local/bin/claude");
+
+        await Assert.That(updated.Daemon!.Name).IsEqualTo("mybot");
+        await Assert.That(updated.Daemon.MaxAgents).IsEqualTo(3);
+        await Assert.That(updated.Daemon.ClaudePath).IsEqualTo("/usr/local/bin/claude");
+    }
+
+    // ── daemon.codex_path ────────────────────────────────────────────────────
+
+    [Test]
+    public async Task ApplySet_DaemonCodexPath_StoresValue() {
+        var profile = new Profile();
+
+        var updated = ConfigCommand.ApplySet(profile, "daemon.codex_path", "/opt/codex/bin/codex");
+
+        await Assert.That(updated.Daemon!.CodexPath).IsEqualTo("/opt/codex/bin/codex");
+    }
+
+    [Test]
+    public async Task ApplySet_DaemonCodexPath_EmptyString_Throws() {
+        var profile = new Profile();
+
+        await Assert.That(() => ConfigCommand.ApplySet(profile, "daemon.codex_path", ""))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task ApplySet_DaemonCodexPath_PreservesOtherDaemonSettings() {
+        var profile = new Profile { Daemon = new DaemonSettings { Name = "bot2", MaxAgents = 7 } };
+
+        var updated = ConfigCommand.ApplySet(profile, "daemon.codex_path", "/usr/bin/codex");
+
+        await Assert.That(updated.Daemon!.Name).IsEqualTo("bot2");
+        await Assert.That(updated.Daemon.MaxAgents).IsEqualTo(7);
+        await Assert.That(updated.Daemon.CodexPath).IsEqualTo("/usr/bin/codex");
+    }
+
+    // ── DaemonSettings JSON round-trip ───────────────────────────────────────
+
+    [Test]
+    public async Task DaemonSettings_JsonRoundTrip_PreservesClaudeAndCodexPaths() {
+        var profile = new Profile {
+            Daemon = new DaemonSettings {
+                Name       = "test",
+                ClaudePath = "/custom/claude",
+                CodexPath  = "/custom/codex"
+            }
+        };
+        var profileConfig = new ProfileConfig {
+            Profiles = new Dictionary<string, Profile> { ["default"] = profile }
+        };
+
+        var json    = JsonSerializer.Serialize(profileConfig, ProfileConfigJsonContextIndented.Default.ProfileConfig);
+        var decoded = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.ProfileConfig);
+
+        var daemon = decoded?.Profiles["default"].Daemon;
+        await Assert.That(daemon?.ClaudePath).IsEqualTo("/custom/claude");
+        await Assert.That(daemon?.CodexPath).IsEqualTo("/custom/codex");
+    }
+
+    [Test]
+    public async Task DaemonSettings_JsonRoundTrip_OldProfileWithoutPaths_DefaultsToNull() {
+        // Simulate an old config.json that has no claude_path / codex_path keys
+        const string json = """
+            {
+              "version": 2,
+              "active_profile": "default",
+              "profiles": {
+                "default": {
+                  "server_url": "https://example.com",
+                  "daemon": { "name": "bot", "max_agents": 2 }
+                }
+              },
+              "profile_bindings": {}
+            }
+            """;
+
+        var decoded = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.ProfileConfig);
+
+        var daemon = decoded?.Profiles["default"].Daemon;
+        await Assert.That(daemon?.ClaudePath).IsNull();
+        await Assert.That(daemon?.CodexPath).IsNull();
+    }
+
+    // ── existing tests ───────────────────────────────────────────────────────
+
     [Test]
     public async Task ApplySet_DisableSessionGuidelines_True_UpdatesProfile() {
         var profile = new Profile();

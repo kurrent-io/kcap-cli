@@ -67,6 +67,10 @@ public static class ConfigCommand {
             "server_url" => profile with { ServerUrl = value },
             "daemon.name" => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { Name = value } },
             "daemon.max_agents" when int.TryParse(value, out var n) => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { MaxAgents = n } },
+            "daemon.claude_path" when !string.IsNullOrEmpty(value) => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { ClaudePath = value } },
+            "daemon.claude_path" => throw new ArgumentException("Invalid value for daemon.claude_path: must not be empty."),
+            "daemon.codex_path" when !string.IsNullOrEmpty(value) => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { CodexPath = value } },
+            "daemon.codex_path" => throw new ArgumentException("Invalid value for daemon.codex_path: must not be empty."),
             "update_check" when bool.TryParse(value, out var b) => profile with { UpdateCheck = b },
             "update_check" => throw new ArgumentException($"Invalid value for update_check: '{value}'. Must be true or false."),
             "disable_session_guidelines" when bool.TryParse(value, out var b) => profile with { DisableSessionGuidelines = b },
@@ -84,6 +88,8 @@ public static class ConfigCommand {
         Console.Error.WriteLine("  server_url                  Server URL");
         Console.Error.WriteLine("  daemon.name                 Daemon name");
         Console.Error.WriteLine("  daemon.max_agents           Max concurrent agents");
+        Console.Error.WriteLine("  daemon.claude_path          Path to claude binary (default: claude)");
+        Console.Error.WriteLine("  daemon.codex_path           Path to codex binary (default: codex)");
         Console.Error.WriteLine("  update_check                Enable update check (true/false)");
         Console.Error.WriteLine("  default_visibility          Default session visibility (private, org_public, public)");
         Console.Error.WriteLine("  disable_session_guidelines  Skip injecting recurring-lessons context at SessionStart (true/false)");

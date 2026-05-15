@@ -219,12 +219,24 @@ PR review for hosted Codex agents is not yet supported (tracked in AI-632). The 
 
 #### Daemon config settings
 
-The daemon reads its configuration from `~/.config/kapacitor/daemon.json`. Relevant settings:
+Use `kapacitor config set` to configure the binary paths used by the daemon. The values are stored in the active profile and take effect the next time the daemon starts.
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `ClaudePath` | `"claude"` | Path to the Claude CLI binary. Resolved via `PATH` unless set to an absolute path. |
-| `CodexPath` | `"codex"` | Path to the Codex CLI binary. Resolved via `PATH` unless set to an absolute path. |
+```bash
+kapacitor config set daemon.claude_path /opt/claude/bin/claude
+kapacitor config set daemon.codex_path  /opt/codex/bin/codex
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `daemon.claude_path` | `"claude"` | Path to the Claude CLI binary. Resolved via `PATH` when not an absolute path. |
+| `daemon.codex_path`  | `"codex"`  | Path to the Codex CLI binary. Resolved via `PATH` when not an absolute path. |
+
+You can also override these at runtime with environment variables (take precedence over the profile):
+
+```bash
+KAPACITOR_CLAUDE_PATH=/opt/claude/bin/claude kapacitor daemon
+KAPACITOR_CODEX_PATH=/opt/codex/bin/codex  kapacitor daemon
+```
 
 ### Repository paths
 
