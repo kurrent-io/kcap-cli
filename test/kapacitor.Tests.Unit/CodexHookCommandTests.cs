@@ -52,7 +52,14 @@ public class CodexHookCommandTests : IDisposable {
         // the watcher spawn.
     }
 
-    [Test, NotInParallel(ConsoleSerialGroup)]
+    // Globally sequential: this test takes ~3m20s and holds Console.Out
+    // captured for the duration. Sharing only ConsoleSerialGroup with other
+    // stdout-mutating tests is enough on a fast machine, but in suite runs
+    // the long capture window plus TUnit's parallel scheduling has been
+    // observed to interleave Console.SetOut from same-group tests, dropping
+    // the captured output. NotInParallel with no group key forces this test
+    // to run on its own.
+    [Test, NotInParallel]
     public async Task Stop_maps_to_session_end_codex_route() {
         _server.Given(Request.Create().WithPath("/hooks/session-end/codex").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
@@ -98,7 +105,10 @@ public class CodexHookCommandTests : IDisposable {
         }
     }
 
-    [Test, NotInParallel(ConsoleSerialGroup)]
+    // Globally sequential alongside Stop_maps_to_session_end_codex_route —
+    // see that test for why ConsoleSerialGroup alone has been observed to
+    // interleave in suite runs and drop captured Console output.
+    [Test, NotInParallel]
     public async Task PermissionRequest_records_event_and_yields_decision_to_codex() {
         // The Codex permission-request hook must not silently auto-allow tool
         // calls; in the stub branch (no KAPACITOR_DAEMON_URL set) it records
