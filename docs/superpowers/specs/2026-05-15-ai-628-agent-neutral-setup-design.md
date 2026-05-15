@@ -50,8 +50,10 @@ Implementation:
 - Read `Environment.GetEnvironmentVariable("PATH")`, split on `Path.PathSeparator`.
 - On Windows (`OperatingSystem.IsWindows()`), read `PATHEXT`; fall back to `".EXE;.CMD;.BAT"` if unset; split on `;`. Empty entries are pruned.
 - On Unix, the extension list is a single empty string.
-- For each `(dir, ext)` pair, check `File.Exists(Path.Combine(dir, name + ext))`. Return `true` on first hit.
-- No subprocess. No reflection. AOT-clean.
+- For each `(dir, ext)` pair, check `File.Exists(Path.Combine(dir, name + ext))`. On Unix, additionally require the executable bit via `File.GetUnixFileMode(path).HasFlag(UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)` (any-execute is enough — matches how shells resolve a binary on `PATH`). On Windows the `PATHEXT` filter already restricts to executables, so no permission check. Return `true` on first hit.
+- `File.GetUnixFileMode` is BCL since .NET 7; AOT-clean. No subprocess. No reflection.
+
+This is a presence-and-executability probe, not an "actually runs" probe — a binary that's installed but broken (e.g. wrong arch, missing dynamic lib) will pass detection and fail the first time the user invokes it. AI-628 originally suggested `claude --help` / `codex --help`, but the extra correctness isn't worth the subprocess cost: a broken local CLI is the user's problem, not setup's.
 
 Probes:
 
@@ -97,22 +99,42 @@ Today `SetupCommand.HandleAsync` is a 240-line monolith. The change pulls step 4
 namespace kapacitor.Commands;
 
 internal static class CodingAgentsStep {
-    internal record Options(bool SkipClaude, bool SkipCodex, bool NoPrompt);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool NoPrompt, bool LegacyProjectScope);
     internal record DetectedAgents(bool Claude, bool Codex);
-    internal record Result(bool ClaudeInstalled, bool CodexInstalled);
+    internal record Paths(string ClaudeSettingsPath, string? PluginDir, string CodexHooksPath, string CodexSkillsDir);
+    internal record Installers(
+        Func<string /*settings*/, string /*pluginDir*/, bool> InstallClaudePlugin,
+        Func<string /*hooksPath*/, bool>                       InstallCodexHooks,
+        Func<string /*src*/, string /*dst*/, bool>             InstallCodexSkills);
+    internal record Result(bool ClaudeInstalled, bool CodexHooksInstalled, bool CodexSkillsInstalled);
 
     internal static Task<Result> RunAsync(
         Options options,
         DetectedAgents detected,
+        Paths paths,
+        Installers installers,
         Func<string, bool> prompt,   // arg: prompt text; return: yes/no (default Y assumed by callers)
-        Action<string> writeLine,    // Spectre markup-aware sink
-        string? pluginPath);         // null = plugin dir not resolved; emit warning, skip Claude install
+        Action<string> writeLine);   // Spectre markup-aware sink
 }
 ```
 
-`SetupCommand` calls `AgentDetector` once, wraps the detection result, and invokes `CodingAgentsStep.RunAsync`. The step does its own install work via the existing `SetupCommand.InstallPlugin` and `PluginCommand.InstallCodexHooks` / `PluginCommand.InstallCodexSkills` helpers (no duplication).
+**No I/O is hard-coded inside the step.** All target file/dir paths come in via `Paths`; the actual install side-effects come in via `Installers`. Production wires them as follows:
 
-`pluginPath == null` (plugin directory not found, today's "Re-install kapacitor via npm" path) means we can install neither Claude nor Codex hooks (Codex skills also live under the plugin dir). The step emits the existing warning and returns `Result(false, false)`.
+- `paths.ClaudeSettingsPath` = `options.LegacyProjectScope ? <repo>/.claude/settings.local.json : ClaudePaths.UserSettings`.
+- `paths.PluginDir` = `SetupCommand.ResolvePluginPath()` (nullable).
+- `paths.CodexHooksPath` = `CodexPaths.UserHooksJson` (setup is always user-wide for Codex — no project-scope path here).
+- `paths.CodexSkillsDir` = `CodexPaths.UserSkillsDir`.
+- `installers.InstallClaudePlugin` = `SetupCommand.InstallPlugin` (existing).
+- `installers.InstallCodexHooks` = `PluginCommand.InstallCodexHooks` (existing).
+- `installers.InstallCodexSkills` = `(src, dst) => PluginCommand.InstallCodexSkills(src, dst)` with `src = Path.Combine(pluginDir, "codex-skills")` (existing).
+
+Tests pass fakes for `Installers` that record their arguments and return scripted results — no real `~/.claude` or `~/.codex` writes, no `ClaudePaths.UserSettings` static state to fight, no env scoping.
+
+**Install behaviour when `paths.PluginDir == null`:**
+
+- Claude plugin: cannot install (marketplace source is the plugin dir itself). Print the existing warning, set `ClaudeInstalled = false`.
+- Codex hooks: **still install**. The hooks.json content is the literal string `"kapacitor codex-hook"` plus a timeout — it never references the plugin dir. This preserves the AI-628 goal for Codex-only users even when plugin path resolution fails.
+- Codex skills: cannot install (skills source lives under the plugin dir). Print a warning that skills were skipped but hooks were installed, set `CodexSkillsInstalled = false`.
 
 The `prompt` callback always uses `ConfirmationPrompt` with `DefaultValue = true` in production. Tests inject a callback that records the prompt text and returns scripted answers.
 
@@ -132,10 +154,12 @@ Back-compat for the existing `--plugin-scope` arg:
 | Old value | New behaviour |
 |---|---|
 | `--plugin-scope user` | No-op (matches new default). |
-| `--plugin-scope project` | Preserved: Claude plugin written to `<repo>/.claude/settings.local.json` instead of user settings. Codex unaffected. |
+| `--plugin-scope project` | **Legacy exception** to the "setup is always user-wide" rule, kept indefinitely until anyone scripting it migrates to `kapacitor plugin install --project`. Claude plugin written to `<repo>/.claude/settings.local.json` instead of user settings; surfaces via `Options.LegacyProjectScope`. Codex is unaffected (no symmetric Codex legacy flag exists; `setup` never wrote project-scope Codex hooks). |
 | `--plugin-scope skip` | Alias for `--skip-claude-hooks`. |
 
-Help text gains: *"`--plugin-scope` is retained for backwards compatibility. New scripts should use `--skip-claude-hooks` and `--skip-codex-hooks`."* No deprecation warning printed at runtime — silent compatibility.
+Help text gains: *"`--plugin-scope` is retained for backwards compatibility. New scripts should use `--skip-claude-hooks` and `--skip-codex-hooks`. For project-scope installs run `kapacitor plugin install [--codex] --project`."* No deprecation warning printed at runtime — silent compatibility.
+
+The `CodingAgentsStep` test list (below) includes one explicit case asserting the legacy `--plugin-scope project` mapping continues to write to the project-scope Claude settings path.
 
 ### Standalone command (unchanged)
 
@@ -149,7 +173,7 @@ The standalone `plugin install --codex` path also gains the same "run /hooks ins
 
 ### README changes
 
-1. **`## Getting started` / prereqs** — add bullet: *"At least one supported coding agent CLI on `PATH`: Claude Code or Codex CLI. Setup will detect installed agents and only configure hooks for those."*
+1. **`## Getting started` / prereqs** — add bullet: *"To capture sessions, kapacitor needs at least one supported coding agent CLI on `PATH` (Claude Code or Codex CLI). Setup itself runs to completion without one — it'll configure your profile, auth, and daemon — and you can install hooks later with `kapacitor plugin install [--codex]` once you have an agent installed."* (Phrased as a hook-install prereq, not a setup prereq — matches the design's "neither detected, setup proceeds" behaviour.)
 2. **"Setup wizard walks you through"** — rewrite item 4 from *"Claude Code plugin — installs hooks, skills, and collaborative memory…"* to *"Coding-agent hooks — detects Claude Code and Codex CLI on `PATH` and offers to install hooks/skills for each."*
 3. **Delete the "Also using Codex CLI?" sub-section.** Replace with one short follow-up note at the end of the quick-start: *"To install hooks for an agent you added after running setup, or to scope an install to a single repo, run `kapacitor plugin install [--codex] [--project]`. Codex doesn't execute hooks until you run `/hooks` inside Codex and trust each entry."*
 4. **`## Hosted Codex agents`** — keep the existing Codex install reminder (daemon hosts may need hooks even without interactive use), but trim the language that implied Codex was always a separate follow-up step.
@@ -164,7 +188,8 @@ The standalone `plugin install --codex` path also gains the same "run /hooks ins
 
 **`AgentDetector` unit tests:**
 
-- Bare name found in one PATH dir (Unix) → detected.
+- Bare name found in one PATH dir with execute bit (Unix) → detected.
+- Bare name found in one PATH dir without execute bit (Unix) → not detected. Guards against finding a stray text file named `claude` in a PATH dir.
 - Name not in any PATH dir → not detected.
 - Empty PATH env → not detected.
 - Windows: `claude.cmd` present, `PATHEXT=".EXE;.CMD"` → detected.
@@ -172,16 +197,18 @@ The standalone `plugin install --codex` path also gains the same "run /hooks ins
 - Windows: `PATHEXT` unset → fallback `.EXE;.CMD;.BAT` applied.
 - PATH contains an empty entry (`::` on Unix) → handled without throwing.
 
-**`CodingAgentsStep` unit tests** (drives `Func<string, bool> prompt` and an `Action<string> writeLine` sink so no AnsiConsole is needed):
+**`CodingAgentsStep` unit tests** (inject fake `Installers` recording arguments and returning scripted bools; inject `Func<string,bool> prompt` and `Action<string> writeLine` sinks; no AnsiConsole, no real filesystem):
 
-- Both detected, user says yes to both → both installs called, both `✓` lines, Codex trust hint printed.
-- Both detected, user says yes to Claude only → Claude installed, Codex declined, no Codex trust hint.
-- Claude only detected → one prompt only, Codex skip line emitted.
-- Codex only detected → symmetric.
-- Neither detected → no prompts, two skip lines, yellow warning emitted.
-- `--no-prompt` with both detected and no skip flags → both install paths called, no prompt invoked.
-- `--no-prompt` with `--skip-codex-hooks` → Claude installed, Codex skipped via flag (distinct message from "not detected").
+- Both detected, user says yes to both → both Claude and Codex-hook installers called with the expected paths, Codex-skill installer called with `<plugin>/codex-skills` → `~/.codex/skills`, both `✓` lines, Codex trust hint printed.
+- Both detected, user says yes to Claude only → Claude installer called, Codex installers not called, no Codex trust hint.
+- Claude only detected → only Claude prompt asked; Codex skip line emitted; no Codex installer called.
+- Codex only detected → symmetric: only Codex prompt asked; Claude skip line emitted.
+- Neither detected → no prompts, two skip lines, yellow warning emitted, no installers called.
+- `paths.PluginDir == null` and both detected, user says yes to both → Claude installer NOT called (plugin dir warning emitted); Codex-hook installer called (still works); Codex-skill installer NOT called (skills warning emitted); Codex trust hint still printed since hooks succeeded.
+- `--no-prompt` with both detected and no skip flags → both install paths called, prompt callback never invoked.
+- `--no-prompt` with `--skip-codex-hooks` → Claude installed, Codex installers not called, message distinguishes "skipped by flag" from "not detected".
 - `--plugin-scope skip` legacy mapping → behaves identical to `--skip-claude-hooks`.
+- `--plugin-scope project` legacy mapping → `Options.LegacyProjectScope = true`, Claude installer called with the project-scope settings path (`<cwd>/.claude/settings.local.json`), not the user one.
 
 **`PluginCommand.InstallCodex` extension:** add one assertion that the trust-hint line appears in stdout after a successful install.
 
