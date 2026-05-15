@@ -119,10 +119,9 @@ public static partial class DaemonRunner {
 
         builder.Services.AddHttpClient("Attachments", client => client.BaseAddress = new Uri(config.ServerUrl));
 
-        // Task 14: orchestrator dispatches launches through this dictionary. Task 19
-        // wires the concrete IHostedAgentLauncher impls (Claude, Codex) into DI.
-        // Until then, the dictionary resolves to whatever ToDictionary sees — empty
-        // if none registered. Production hosted launches stay broken until Task 19.
+        builder.Services.AddSingleton<IHostedAgentLauncher, ClaudeLauncher>();
+        builder.Services.AddSingleton<IHostedAgentLauncher, CodexLauncher>();
+
         builder.Services.AddSingleton<IReadOnlyDictionary<string, IHostedAgentLauncher>>(sp =>
             sp.GetServices<IHostedAgentLauncher>().ToDictionary(l => l.Vendor)
         );
