@@ -197,6 +197,24 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(_server.LogEntries.Count()).IsEqualTo(0);
     }
 
+    [Test]
+    [Arguments("""{"generate_whats_done":true}""",  true)]
+    [Arguments("""{"generate_whats_done":false}""", false)]
+    [Arguments("""{"other_field":"x"}""",           false)]
+    [Arguments("""{"generate_whats_done":"yes"}""", false)] // wrong type — fall through
+    [Arguments("not json",                          false)]
+    [Arguments("",                                  false)]
+    public async Task ShouldSpawnWhatsDone_ParsesGenerateFlag(string responseBody, bool expected) {
+        var result = CodexHookCommand.ShouldSpawnWhatsDone(responseBody);
+        await Assert.That(result).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task ShouldSpawnWhatsDone_NullBody_ReturnsFalse() {
+        var result = CodexHookCommand.ShouldSpawnWhatsDone(null);
+        await Assert.That(result).IsFalse();
+    }
+
     // Fix #3: non-string session_id in a Stop payload must not crash.
     [Test]
     public async Task Stop_with_numeric_session_id_returns_zero_without_crash() {

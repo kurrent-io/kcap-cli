@@ -194,7 +194,7 @@ static class WatcherManager {
         await SpawnWatcher(baseUrl, key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, vendor);
     }
 
-    public static void SpawnWhatsDoneGenerator(string baseUrl, string sessionId) {
+    public static void SpawnWhatsDoneGenerator(string baseUrl, string sessionId, string vendor = "claude") {
         try {
             var kapacitorPath = Environment.ProcessPath ?? "kapacitor";
 
@@ -210,6 +210,12 @@ static class WatcherManager {
             };
             psi.ArgumentList.Add("generate-whats-done");
             psi.ArgumentList.Add(sessionId);
+
+            // The child process picks the headless CLI runner from this flag —
+            // matches the `generate-whats-done [--codex] <id>` surface in Program.cs.
+            if (vendor == "codex") {
+                psi.ArgumentList.Add("--codex");
+            }
 
             var process = Process.Start(psi);
 

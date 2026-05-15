@@ -116,11 +116,37 @@ static class CodexHookCommand {
         // Codex's hook event name into Capacitor's canonical hook vocabulary
         // before posting, so the server doesn't have to know about Codex's
         // missing session-end concept.
-        var exit = await PostHookAsync(baseUrl, "session-end/codex", node.ToJsonString());
+        var (exit, responseBody) = await PostHookWithResponseAsync(baseUrl, "session-end/codex", node.ToJsonString());
+
         if (exit != 0) return exit;
+
+        // Mirror the Claude session-end path in Program.cs: if the server flags
+        // generate_whats_done, spawn the summary generator as a detached process
+        // with --codex so it goes through codex exec, matching the vendor that
+        // produced the work being summarised.
+        if (sessionId is not null && ShouldSpawnWhatsDone(responseBody)) {
+            WatcherManager.SpawnWhatsDoneGenerator(baseUrl, sessionId, vendor: "codex");
+        }
 
         Console.Write(SessionScopedOutputJson);
         return 0;
+    }
+
+    /// <summary>
+    /// Parses the session-end response body and returns whether the server asked
+    /// the CLI to generate a what's-done summary. Extracted so the response-parsing
+    /// branch is testable without actually spawning a subprocess.
+    /// </summary>
+    internal static bool ShouldSpawnWhatsDone(string? responseBody) {
+        if (responseBody is null) return false;
+
+        try {
+            var responseNode = JsonNode.Parse(responseBody);
+            return responseNode?["generate_whats_done"]?.GetValue<bool>() == true;
+        } catch {
+            // Best effort — non-JSON or wrong-typed flag both fall through to "no spawn"
+            return false;
+        }
     }
 
     static async Task<int> HandlePermissionRequest(string baseUrl, JsonNode node) {
@@ -141,6 +167,11 @@ static class CodexHookCommand {
     }
 
     static async Task<int> PostHookAsync(string baseUrl, string endpoint, string body) {
+        var (exit, _) = await PostHookWithResponseAsync(baseUrl, endpoint, body);
+        return exit;
+    }
+
+    static async Task<(int Exit, string? ResponseBody)> PostHookWithResponseAsync(string baseUrl, string endpoint, string body) {
         using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync();
         using var content = new StringContent(body, Encoding.UTF8, "application/json");
 
@@ -148,13 +179,14 @@ static class CodexHookCommand {
             var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{endpoint}", content);
             if (!resp.IsSuccessStatusCode) {
                 Console.Error.WriteLine($"[kapacitor] codex-hook {endpoint}: HTTP {(int)resp.StatusCode}");
-                return 1;
+                return (1, null);
             }
 
-            return 0;
+            var responseBody = await resp.Content.ReadAsStringAsync();
+            return (0, responseBody);
         } catch (HttpRequestException ex) {
             HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
-            return 1;
+            return (1, null);
         }
     }
 
