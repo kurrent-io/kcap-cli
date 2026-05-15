@@ -31,10 +31,50 @@ internal static class CodingAgentsStep {
         Installers installers,
         Func<string, bool> prompt,
         Action<string> writeLine) {
-        var claudeInstalled = HandleClaude(options, detected, paths, installers, prompt, writeLine);
+        var claudeInstalled     = HandleClaude(options, detected, paths, installers, prompt, writeLine);
+        var codexHooksInstalled = HandleCodexHooks(options, detected, paths, installers, prompt, writeLine);
 
-        // Codex hooks + skills wired in subsequent tasks.
-        return Task.FromResult(new Result(claudeInstalled, false, false));
+        // Codex skills wired in Task 6.
+        return Task.FromResult(new Result(claudeInstalled, codexHooksInstalled, false));
+    }
+
+    static bool HandleCodexHooks(
+        Options options,
+        DetectedAgents detected,
+        Paths paths,
+        Installers installers,
+        Func<string, bool> prompt,
+        Action<string> writeLine) {
+        if (!detected.Codex) {
+            writeLine("  [dim]· Codex CLI not found on PATH — skipping[/]");
+            return false;
+        }
+
+        writeLine("  [green]✓[/] Codex CLI detected");
+
+        if (options.SkipCodex) {
+            writeLine("  [dim]· Codex CLI hooks skipped by flag[/]");
+            return false;
+        }
+
+        var shouldInstall = options.NoPrompt || prompt("Install Codex CLI hooks (and skills)?");
+
+        if (!shouldInstall) {
+            writeLine("  [dim]· Codex CLI hooks not installed (you can run kapacitor plugin install --codex later)[/]");
+            return false;
+        }
+
+        var ok = installers.InstallCodexHooks(paths.CodexHooksPath);
+
+        if (!ok) {
+            writeLine("  [yellow]⚠[/] Could not write Codex hooks file.");
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] Codex hooks installed (user: {paths.CodexHooksPath})");
+        writeLine("  [dim]  Next: run /hooks inside Codex and trust each kapacitor entry —[/]");
+        writeLine("  [dim]  Codex won't execute hooks until each is explicitly trusted.[/]");
+        return true;
     }
 
     static bool HandleClaude(
