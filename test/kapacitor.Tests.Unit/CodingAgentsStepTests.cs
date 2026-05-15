@@ -17,14 +17,14 @@ public class CodingAgentsStepTests {
 
         await Assert.That(result.ClaudeInstalled).IsTrue();
         await Assert.That(calls.ClaudeArgs).IsEqualTo((paths.ClaudeSettingsPath, paths.PluginDir!));
-        await Assert.That(sink.Lines).Contains(l => l.Contains("Claude Code plugin installed"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Claude Code plugin installed") && l.Contains("user:"));
     }
 
     [Test]
     public async Task Claude_detected_and_declined_skips_installer() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(false, true, false, false);
+        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false, LegacyProjectScope: false);
         var detected = new DetectedAgents(Claude: true, Codex: false);
 
         var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
@@ -40,7 +40,7 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var promptCount = 0;
-        var options  = new Options(false, true, false, false);
+        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false, LegacyProjectScope: false);
         var detected = new DetectedAgents(Claude: false, Codex: false);
 
         var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
@@ -56,7 +56,7 @@ public class CodingAgentsStepTests {
     public async Task Claude_installer_failure_emits_warning_and_returns_false() {
         var sink     = new Sink();
         var calls    = new InstallerCalls { ClaudeReturns = false };
-        var options  = new Options(false, true, false, false);
+        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false, LegacyProjectScope: false);
         var detected = new DetectedAgents(Claude: true, Codex: false);
 
         var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
