@@ -61,8 +61,6 @@ kapacitor plugin remove --codex             # uninstall
 
 After a `--project` install, Codex won't actually run the hooks until you trust the directory: run `codex` once in the repo and accept the trust prompt. Skills are always installed user-wide regardless of `--project`.
 
-Permission prompts stay in Codex's own in-CLI approval flow — kapacitor records each request server-side for observability but never auto-approves on your behalf, so every tool call still asks you the way it does without kapacitor installed.
-
 `kapacitor status` reports installation state for the user-wide Claude Code and Codex hook surfaces — it does not currently detect `--project` installs. For a `--project` install, check that `<repo>/.claude/settings.local.json` or `<repo>/.codex/hooks.json` exists and contains kapacitor entries.
 
 ### 3. Import existing sessions (optional)
