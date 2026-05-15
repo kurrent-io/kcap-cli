@@ -285,6 +285,30 @@ public class PluginCommandCodexTests {
         File.WriteAllText(Path.Combine(dir, "SKILL.md"), body);
     }
 
+    [Test, NotInParallel("Console.Out_redirect")]
+    public async Task InstallCodex_prints_hooks_trust_hint_after_success() {
+        using var tmp = new TempDir();
+        var homeVar = OperatingSystem.IsWindows() ? "USERPROFILE" : "HOME";
+        var originalHome = Environment.GetEnvironmentVariable(homeVar);
+        Environment.SetEnvironmentVariable(homeVar, tmp.Path);
+
+        var capturedOut = new StringWriter();
+        var originalOut = Console.Out;
+        Console.SetOut(capturedOut);
+
+        try {
+            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex"]);
+            await Assert.That(exit).IsEqualTo(0);
+
+            var stdout = capturedOut.ToString();
+            await Assert.That(stdout).Contains("/hooks");
+            await Assert.That(stdout).Contains("trust");
+        } finally {
+            Console.SetOut(originalOut);
+            Environment.SetEnvironmentVariable(homeVar, originalHome);
+        }
+    }
+
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),

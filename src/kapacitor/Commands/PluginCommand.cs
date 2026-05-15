@@ -145,6 +145,10 @@ public static class PluginCommand {
         }
 
         await Console.Out.WriteLineAsync($"Codex hooks installed ({scope}: {hooksPath})");
+        await Console.Out.WriteLineAsync(
+            "Next: run /hooks inside Codex and trust each kapacitor entry — " +
+            "Codex won't execute hooks until each is explicitly trusted."
+        );
 
         // Skills are user-scoped only. Codex auto-discovers from
         // ~/.codex/skills (or $CODEX_HOME/skills), and project-level skill
