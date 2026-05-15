@@ -107,20 +107,67 @@ static class CodexHookCommand {
     }
 
     static async Task<int> HandlePermissionRequest(string baseUrl, JsonNode node) {
+        var daemonUrl = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
+
+        return daemonUrl is null
+            ? await HandlePermissionRequestStub(baseUrl, node)
+            : await HandlePermissionRequestViaBridge(daemonUrl, node);
+    }
+
+    static async Task<int> HandlePermissionRequestStub(string baseUrl, JsonNode node) {
         // v1 stub — record the event server-side and return a default allow
-        // so recording-only sessions don't block. Full daemon-bridge
-        // translation lands in AI-68 with hosted Codex agents.
+        // so recording-only sessions don't block.
         await PostHookAsync(baseUrl, "permission-request/codex", node.ToJsonString());
 
         var response = new JsonObject {
             ["hookSpecificOutput"] = new JsonObject {
                 ["hookEventName"] = "PermissionRequest",
-                ["decision"] = new JsonObject { ["behavior"] = "allow" }
+                ["decision"]      = new JsonObject { ["behavior"] = "allow" }
             }
         };
 
         Console.Write(response.ToJsonString());
         return 0;
+    }
+
+    static async Task<int> HandlePermissionRequestViaBridge(string daemonUrl, JsonNode node) {
+        if (!DaemonBridgeUrl.TryParseLoopback(daemonUrl, out var bridgeBase)) {
+            Console.Error.WriteLine(
+                $"[kapacitor] codex-hook permission-request: KAPACITOR_DAEMON_URL must be http loopback, got: {daemonUrl}");
+            return EmitDenyAndExitNonzero();
+        }
+
+        using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+
+        try {
+            using var content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp    = await client.PostAsync($"{bridgeBase}/codex/permission-request", content);
+
+            if (!resp.IsSuccessStatusCode) {
+                Console.Error.WriteLine(
+                    $"[kapacitor] codex-hook permission-request bridge: HTTP {(int)resp.StatusCode}");
+                return EmitDenyAndExitNonzero();
+            }
+
+            var body = await resp.Content.ReadAsStringAsync();
+            Console.Write(body);
+            return 0;
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"[kapacitor] codex-hook permission-request bridge error: {ex.Message}");
+            return EmitDenyAndExitNonzero();
+        }
+    }
+
+    static int EmitDenyAndExitNonzero() {
+        var response = new JsonObject {
+            ["hookSpecificOutput"] = new JsonObject {
+                ["hookEventName"] = "PermissionRequest",
+                ["decision"]      = new JsonObject { ["behavior"] = "deny" }
+            }
+        };
+
+        Console.Write(response.ToJsonString());
+        return 1;
     }
 
     static async Task<int> PostHookAsync(string baseUrl, string endpoint, string body) {
