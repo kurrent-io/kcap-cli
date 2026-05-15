@@ -88,7 +88,7 @@ static class WatcherManager {
             process.StandardError.Close();
 
             await File.WriteAllTextAsync(GetPidFilePath(key), process.Id.ToString());
-            await Console.Out.WriteLineAsync($"Spawned watcher for {key} (PID {process.Id})");
+            await Console.Error.WriteLineAsync($"Spawned watcher for {key} (PID {process.Id})");
         } catch (Exception ex) {
             await Console.Error.WriteLineAsync($"Failed to spawn watcher for {key}: {ex.Message}");
         }
@@ -125,7 +125,7 @@ static class WatcherManager {
 
                 try {
                     await process.WaitForExitAsync(cts.Token);
-                    await Console.Out.WriteLineAsync($"Watcher {key} (PID {pid}) exited gracefully");
+                    await Console.Error.WriteLineAsync($"Watcher {key} (PID {pid}) exited gracefully");
                 } catch (OperationCanceledException) {
                     // Force kill if it didn't exit in time
                     process.Kill(entireProcessTree: true);
@@ -135,7 +135,7 @@ static class WatcherManager {
                 return true;
             } catch (ArgumentException) {
                 // Process already exited
-                await Console.Out.WriteLineAsync($"Watcher {key} (PID {pid}) already exited");
+                await Console.Error.WriteLineAsync($"Watcher {key} (PID {pid}) already exited");
 
                 return false;
             }
@@ -190,11 +190,11 @@ static class WatcherManager {
             return;
         }
 
-        await Console.Out.WriteLineAsync($"Watcher {key} not running, respawning...");
+        await Console.Error.WriteLineAsync($"Watcher {key} not running, respawning...");
         await SpawnWatcher(baseUrl, key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, vendor);
     }
 
-    public static void SpawnWhatsDoneGenerator(string baseUrl, string sessionId) {
+    public static void SpawnWhatsDoneGenerator(string baseUrl, string sessionId, string vendor = "claude") {
         try {
             var kapacitorPath = Environment.ProcessPath ?? "kapacitor";
 
@@ -211,6 +211,12 @@ static class WatcherManager {
             psi.ArgumentList.Add("generate-whats-done");
             psi.ArgumentList.Add(sessionId);
 
+            // The child process picks the headless CLI runner from this flag —
+            // matches the `generate-whats-done [--codex] <id>` surface in Program.cs.
+            if (vendor == "codex") {
+                psi.ArgumentList.Add("--codex");
+            }
+
             var process = Process.Start(psi);
 
             if (process is null) {
@@ -224,7 +230,7 @@ static class WatcherManager {
             process.StandardOutput.Close();
             process.StandardError.Close();
 
-            Console.Out.WriteLine($"Spawned what's-done generator for {sessionId} (PID {process.Id})");
+            Console.Error.WriteLine($"Spawned what's-done generator for {sessionId} (PID {process.Id})");
         } catch (Exception ex) {
             Console.Error.WriteLine($"Failed to spawn what's-done generator for {sessionId}: {ex.Message}");
         }
@@ -288,7 +294,7 @@ static class WatcherManager {
             }
 
             if (newLines.Count == 0) {
-                await Console.Out.WriteLineAsync($"Inline drain for {sessionId}: no new lines to send");
+                await Console.Error.WriteLineAsync($"Inline drain for {sessionId}: no new lines to send");
 
                 return;
             }
@@ -308,7 +314,7 @@ static class WatcherManager {
                 var resp = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/transcript", content);
 
                 if (resp.IsSuccessStatusCode) {
-                    await Console.Out.WriteLineAsync($"Inline drain for {sessionId}: sent {newLines.Count} line(s)");
+                    await Console.Error.WriteLineAsync($"Inline drain for {sessionId}: sent {newLines.Count} line(s)");
                 } else {
                     await Console.Error.WriteLineAsync($"Inline drain for {sessionId}: server returned HTTP {(int)resp.StatusCode}");
                     PrintRecoveryHint(sessionId);

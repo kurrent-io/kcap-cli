@@ -7,10 +7,11 @@ using WireMock.Server;
 namespace kapacitor.Tests.Unit;
 
 public class CodexHookCommandTests : IDisposable {
-    // All PermissionRequest tests that manipulate KAPACITOR_DAEMON_URL and
-    // Console.Out must not run in parallel with each other — both are
-    // process-level globals and parallel access corrupts the assertions.
-    const string PermissionRequestGroup = "PermissionRequest_SerialGroup";
+    // Shared NotInParallel group for every test that mutates global state —
+    // Console.Out and the KAPACITOR_DAEMON_URL env var. Without a single
+    // shared group, parallel tests against the same process-wide writer or
+    // env var corrupt each other's assertions nondeterministically.
+    const string ConsoleSerialGroup = nameof(CodexHookCommandTests) + ".Console";
 
     readonly WireMockServer _server = WireMockServer.Start();
 
@@ -41,9 +42,17 @@ public class CodexHookCommandTests : IDisposable {
         var root = JsonDocument.Parse(requests[0].RequestMessage.Body!).RootElement;
         await Assert.That(root.GetProperty("session_id").GetString()).IsEqualTo("019e032205fc7570be6575719c3ea861");
         await Assert.That(root.GetProperty("home_dir").GetString()).IsNotNull();
+
+        // AI-635: SessionStart also writes Codex's required JSON output to stdout.
+        // We can't reliably capture stdout here because the test path spawns a
+        // real watcher child process via Process.Start, which under TUnit's
+        // Console capture corrupts subsequent stdout reads. The Stop test covers
+        // the identical write pattern (Console.Write(SessionScopedOutputJson)),
+        // and HandleSessionStart writes the same constant in the same way before
+        // the watcher spawn.
     }
 
-    [Test]
+    [Test, NotInParallel(ConsoleSerialGroup)]
     public async Task Stop_maps_to_session_end_codex_route() {
         _server.Given(Request.Create().WithPath("/hooks/session-end/codex").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
@@ -57,26 +66,50 @@ public class CodexHookCommandTests : IDisposable {
             }
             """;
 
-        var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
-        await Assert.That(exit).IsEqualTo(0);
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+        try {
+            Console.SetOut(stdoutWriter);
 
-        var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
-        await Assert.That(requests.Count).IsEqualTo(1);
+            var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+            await Assert.That(exit).IsEqualTo(0);
 
-        // Confirm Stop is NOT posted to /hooks/stop or /hooks/codex/stop —
-        // this guards the URL-mapping decision against future regressions.
-        var wrong1 = _server.FindLogEntries(Request.Create().WithPath("/hooks/stop").UsingPost());
-        var wrong2 = _server.FindLogEntries(Request.Create().WithPath("/hooks/codex/stop").UsingPost());
-        await Assert.That(wrong1.Count).IsEqualTo(0);
-        await Assert.That(wrong2.Count).IsEqualTo(0);
+            var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
+            await Assert.That(requests.Count).IsEqualTo(1);
+
+            // Confirm Stop is NOT posted to /hooks/stop or /hooks/codex/stop —
+            // this guards the URL-mapping decision against future regressions.
+            var wrong1 = _server.FindLogEntries(Request.Create().WithPath("/hooks/stop").UsingPost());
+            var wrong2 = _server.FindLogEntries(Request.Create().WithPath("/hooks/codex/stop").UsingPost());
+            await Assert.That(wrong1.Count).IsEqualTo(0);
+            await Assert.That(wrong2.Count).IsEqualTo(0);
+
+            // AI-635: Stop must emit a valid JSON object on stdout so Codex's
+            // hook output parser doesn't reject it as "invalid stop hook JSON
+            // output". WatcherManager chatter must not leak onto the same channel.
+            var stdout = stdoutWriter.ToString();
+            var doc    = JsonDocument.Parse(stdout);
+            await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
+            await Assert.That(stdout.Contains("Watcher ")).IsFalse();
+            await Assert.That(stdout.Contains("Inline drain")).IsFalse();
+            await Assert.That(stdout.Contains("Spawned")).IsFalse();
+        } finally {
+            Console.SetOut(originalOut);
+        }
     }
 
-    [Test, NotInParallel(PermissionRequestGroup)]
-    public async Task PermissionRequest_returns_default_allow_decision() {
+    [Test, NotInParallel(ConsoleSerialGroup)]
+    public async Task PermissionRequest_records_event_and_yields_decision_to_codex() {
+        // The Codex permission-request hook must not silently auto-allow tool
+        // calls; in the stub branch (no KAPACITOR_DAEMON_URL set) it records
+        // the request server-side via /hooks/permission-record (the same
+        // fire-and-forget endpoint Claude's terminal path uses) and emits an
+        // empty hookSpecificOutput so Codex's normal in-CLI approval prompt
+        // asks the user. Regression for AI-636.
         var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
         Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", null);
 
-        _server.Given(Request.Create().WithPath("/hooks/permission-request/codex").UsingPost())
+        _server.Given(Request.Create().WithPath("/hooks/permission-record").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var payload = """
@@ -98,18 +131,99 @@ public class CodexHookCommandTests : IDisposable {
             var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
 
             await Assert.That(exit).IsEqualTo(0);
+
+            // stdout must NOT carry a hook decision — Codex falls back to its
+            // own approval prompt when hookSpecificOutput.decision is absent.
             var stdout = stdoutWriter.ToString();
             var doc    = JsonDocument.Parse(stdout);
-            await Assert.That(doc.RootElement
-                .GetProperty("hookSpecificOutput")
-                .GetProperty("decision")
-                .GetProperty("behavior")
-                .GetString())
-                .IsEqualTo("allow");
+            var hasDecision = doc.RootElement.TryGetProperty("hookSpecificOutput", out var hso)
+                && hso.TryGetProperty("decision", out _);
+            await Assert.That(hasDecision).IsFalse();
         } finally {
             Console.SetOut(originalOut);
             Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
         }
+
+        // Recording must land on /hooks/permission-record, not on the
+        // long-poll /hooks/permission-request/{vendor} route.
+        var recorded = _server.FindLogEntries(Request.Create().WithPath("/hooks/permission-record").UsingPost());
+        await Assert.That(recorded.Count).IsEqualTo(1);
+
+        var wrong = _server.FindLogEntries(Request.Create().WithPath("/hooks/permission-request/codex").UsingPost());
+        await Assert.That(wrong.Count).IsEqualTo(0);
+    }
+
+    // AI-636: the hook must return well under Codex's 30 s timeout even when
+    // the recording endpoint is slow. We cap the HTTP client at 2 s and
+    // swallow the resulting TaskCanceledException — guard against future
+    // regressions where someone reintroduces an unbounded await.
+    [Test, NotInParallel(ConsoleSerialGroup)]
+    public async Task PermissionRequest_returns_quickly_when_server_is_slow() {
+        _server.Given(Request.Create().WithPath("/hooks/permission-record").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
+
+        var payload = """
+            {
+              "hook_event_name": "PermissionRequest",
+              "session_id": "abc",
+              "transcript_path": "/tmp/r.jsonl",
+              "cwd": "/tmp",
+              "tool_name": "shell",
+              "tool_input": { "command": "ls" }
+            }
+            """;
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+        var sw           = System.Diagnostics.Stopwatch.StartNew();
+        try {
+            Console.SetOut(stdoutWriter);
+            var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+            sw.Stop();
+            await Assert.That(exit).IsEqualTo(0);
+        } finally {
+            Console.SetOut(originalOut);
+        }
+
+        // 2 s HTTP timeout + a generous slack for build/CI jitter.
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
+    }
+
+    // AI-636 / Qodo finding: bounding only the POST left auth discovery
+    // (GET /auth/config) running on HttpClient's 100 s default. Stub
+    // /auth/config slow and assert the hook still returns under 5 s — the
+    // shared 2 s CTS in CodexHookCommand covers discovery too.
+    [Test, NotInParallel("CodexPermissionRequestStdout")]
+    public async Task PermissionRequest_returns_quickly_when_auth_discovery_is_slow() {
+        _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
+        _server.Given(Request.Create().WithPath("/hooks/permission-record").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+
+        var payload = """
+            {
+              "hook_event_name": "PermissionRequest",
+              "session_id": "abc",
+              "transcript_path": "/tmp/r.jsonl",
+              "cwd": "/tmp",
+              "tool_name": "shell",
+              "tool_input": { "command": "ls" }
+            }
+            """;
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+        var sw           = System.Diagnostics.Stopwatch.StartNew();
+        try {
+            Console.SetOut(stdoutWriter);
+            var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+            sw.Stop();
+            await Assert.That(exit).IsEqualTo(0);
+        } finally {
+            Console.SetOut(originalOut);
+        }
+
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }
 
     [Test]
@@ -174,6 +288,24 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(_server.LogEntries.Count()).IsEqualTo(0);
     }
 
+    [Test]
+    [Arguments("""{"generate_whats_done":true}""",  true)]
+    [Arguments("""{"generate_whats_done":false}""", false)]
+    [Arguments("""{"other_field":"x"}""",           false)]
+    [Arguments("""{"generate_whats_done":"yes"}""", false)] // wrong type — fall through
+    [Arguments("not json",                          false)]
+    [Arguments("",                                  false)]
+    public async Task ShouldSpawnWhatsDone_ParsesGenerateFlag(string responseBody, bool expected) {
+        var result = CodexHookCommand.ShouldSpawnWhatsDone(responseBody);
+        await Assert.That(result).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task ShouldSpawnWhatsDone_NullBody_ReturnsFalse() {
+        var result = CodexHookCommand.ShouldSpawnWhatsDone(null);
+        await Assert.That(result).IsFalse();
+    }
+
     // Fix #3: non-string session_id in a Stop payload must not crash.
     [Test]
     public async Task Stop_with_numeric_session_id_returns_zero_without_crash() {
@@ -191,35 +323,14 @@ public class CodexHookCommandTests : IDisposable {
     }
 
     // ---- PermissionRequest daemon-bridge tests ----
+    //
+    // The no-daemon-URL "stub" branch is covered by the AI-636 regression test
+    // PermissionRequest_records_event_and_yields_decision_to_codex above; it
+    // asserts the new record-and-yield contract (no in-CLI decision, fall back
+    // to Codex's own approval prompt). The tests below cover the new
+    // daemon-bridge branch added in AI-68.
 
-    [Test, NotInParallel(PermissionRequestGroup)]
-    public async Task PermissionRequest_without_daemon_url_still_uses_legacy_stub() {
-        var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
-        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", null);
-
-        _server.Given(Request.Create().WithPath("/hooks/permission-request/codex").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(200));
-
-        var stdoutCapture = new StringWriter();
-        var originalOut   = Console.Out;
-        Console.SetOut(stdoutCapture);
-
-        try {
-            var exit = await CodexHookCommand.Handle(_server.Url!,
-                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}"""));
-
-            await Assert.That(exit).IsEqualTo(0);
-            await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"allow\"");
-
-            var entries = _server.FindLogEntries(Request.Create().WithPath("/hooks/permission-request/codex").UsingPost());
-            await Assert.That(entries.Count).IsEqualTo(1); // informational POST recorded
-        } finally {
-            Console.SetOut(originalOut);
-            Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
-        }
-    }
-
-    [Test, NotInParallel(PermissionRequestGroup)]
+    [Test, NotInParallel(ConsoleSerialGroup)]
     public async Task PermissionRequest_with_daemon_url_set_posts_to_bridge_and_forwards_response_to_stdout() {
         using var bridge = WireMockServer.Start();
         var token = "abc123";
@@ -247,7 +358,7 @@ public class CodexHookCommandTests : IDisposable {
         }
     }
 
-    [Test, NotInParallel(PermissionRequestGroup)]
+    [Test, NotInParallel(ConsoleSerialGroup)]
     public async Task PermissionRequest_with_daemon_url_emits_deny_and_exits_nonzero_on_500() {
         using var bridge = WireMockServer.Start();
         var token = "abc123";
@@ -273,7 +384,7 @@ public class CodexHookCommandTests : IDisposable {
         }
     }
 
-    [Test, NotInParallel(PermissionRequestGroup)]
+    [Test, NotInParallel(ConsoleSerialGroup)]
     public async Task PermissionRequest_with_daemon_url_emits_deny_on_connection_refused() {
         // Use a deliberately-unreachable port (e.g. 1) so the connection fails immediately.
         var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
@@ -295,7 +406,7 @@ public class CodexHookCommandTests : IDisposable {
         }
     }
 
-    [Test, NotInParallel(PermissionRequestGroup)]
+    [Test, NotInParallel(ConsoleSerialGroup)]
     public async Task PermissionRequest_with_non_loopback_daemon_url_emits_deny_without_posting() {
         using var bridge = WireMockServer.Start();
         var previousEnv  = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
@@ -319,7 +430,7 @@ public class CodexHookCommandTests : IDisposable {
         }
     }
 
-    [Test, NotInParallel(PermissionRequestGroup)]
+    [Test, NotInParallel(ConsoleSerialGroup)]
     public async Task PermissionRequest_with_https_daemon_url_emits_deny_without_posting() {
         using var bridge = WireMockServer.Start();
         var previousEnv  = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
@@ -342,7 +453,7 @@ public class CodexHookCommandTests : IDisposable {
         }
     }
 
-    [Test, NotInParallel(PermissionRequestGroup)]
+    [Test, NotInParallel(ConsoleSerialGroup)]
     public async Task PermissionRequest_with_daemon_url_does_not_double_post_to_server_hooks_endpoint() {
         using var bridge = WireMockServer.Start();
         using var server = WireMockServer.Start();

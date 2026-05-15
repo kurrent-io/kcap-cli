@@ -1,11 +1,10 @@
 using System.Diagnostics;
+using kapacitor.Config;
 
 namespace kapacitor.Commands;
 
 public static class AgentCommands {
-    static readonly string PidPath  = PathHelpers.ConfigPath("agent.pid");
-    static readonly string LogPath  = PathHelpers.ConfigPath("agent.log");
-    static readonly string LockPath = PathHelpers.ConfigPath("agent.start.lock");
+    static readonly string LogPath = PathHelpers.ConfigPath("agent.log");
 
     public static async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
@@ -19,12 +18,16 @@ public static class AgentCommands {
 
         return subcommand switch {
             "start"  => await StartAsync(remaining),
-            "stop"   => Stop(),
-            "status" => await Status(),
+            "stop"   => await StopAsync(remaining),
+            "status" => await Status(remaining),
             "logs"   => await Logs(),
+            "doctor" => await DoctorAsync(remaining),
             _        => PrintUsage()
         };
     }
+
+    static string ResolveName(string[] args) =>
+        DaemonNameResolver.Resolve(args, AppConfig.ResolvedProfile?.Profile?.Daemon?.Name);
 
     static async Task<int> StartAsync(string[] args) {
         var detached = args.Contains("-d") || args.Contains("--detach");
@@ -33,63 +36,62 @@ public static class AgentCommands {
     }
 
     /// <summary>
-    /// Open <c>agent.start.lock</c> with <c>FileShare.None</c>, giving the
-    /// caller exclusive access for as long as the returned stream is held.
-    /// Returns null if another process already holds the lock — i.e. another
-    /// <c>kapacitor agent start</c> is mid-flight (its check + spawn +
-    /// WritePidFile window) or a foreground daemon is currently running.
-    ///
-    /// This is the OS-level barrier the PID-file guard alone can't provide:
-    /// without it, two starts launched concurrently can both observe an
-    /// absent / stale PID file and both spawn a daemon before either writes.
-    /// On POSIX .NET maps <c>FileShare.None</c> to <c>flock(LOCK_EX)</c>;
-    /// on Windows it's a native sharing-mode constraint. Both are
-    /// per-open-handle, so closing the stream releases the lock — including
-    /// when the parent process is SIGKILL'd.
+    /// Open the per-name <c>&lt;name&gt;.start</c> lock with
+    /// <c>FileShare.None</c> for the CLI-side critical section that wraps
+    /// the PID-file stale-check + daemon spawn. The daemon itself takes a
+    /// separate <c>&lt;name&gt;.lock</c> via <see cref="DaemonLock"/>; this
+    /// lock just keeps two concurrent <c>kapacitor agent start --name X</c>
+    /// invocations from both observing a stale PID file and both spawning.
     /// </summary>
-    static FileStream? TryAcquireStartLock() {
+    static FileStream? TryAcquireStartLock(string daemonName) {
         try {
-            Directory.CreateDirectory(Path.GetDirectoryName(LockPath)!);
+            AgentLockPaths.EnsureDirectory();
 
-            return new FileStream(LockPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
+            return new FileStream(
+                AgentLockPaths.StartLockPath(daemonName),
+                FileMode.OpenOrCreate, FileAccess.Write, FileShare.None
+            );
         } catch (IOException) {
             return null;
         }
     }
 
     static async Task<int> StartForegroundAsync(string[] args) {
-        // Take the exclusive start lock BEFORE the PID-file stale-check —
-        // otherwise two concurrent `kapacitor agent start` invocations can
-        // both observe no live daemon, both spawn, and only one's PID ends
-        // up in the file. We hold this lock for the foreground daemon's
-        // entire lifetime so any further start (foreground or detached)
-        // refuses immediately rather than racing through.
-        var startLock = TryAcquireStartLock();
+        var name = ResolveName(args);
+
+        // One-shot migration of pre-AI-630 legacy files so an earlier
+        // foreground daemon that wrote ~/.config/kapacitor/agent.pid is
+        // visible through our per-name PID-file check below. Idempotent.
+        AgentLockMigration.MigrateLegacyFiles(name);
+
+        var startLock = TryAcquireStartLock(name);
 
         if (startLock is null) {
-            await Console.Error.WriteLineAsync("Another `kapacitor agent start` is already in progress or holds the daemon lock. Run `kapacitor agent stop` first or wait for the other start to complete.");
+            await Console.Error.WriteLineAsync(
+                $"Another `kapacitor agent start --name {name}` is already in progress or holds the daemon lock. "
+                + $"Run `kapacitor agent stop --name {name}` first or wait for the other start to complete."
+            );
 
             return 1;
         }
 
         try {
-            // Defence in depth: the lock prevents a concurrent start from
-            // racing past us, but a stale PID file from a prior cleanly-exited
-            // daemon (or one whose parent was SIGKILL'd) can still be lying
-            // around. IsOurDaemon's StartTime check rejects recycled PIDs.
-            if (ReadPidFile() is { } existing && IsOurDaemon(existing.Pid, existing.StartTicks)) {
-                await Console.Error.WriteLineAsync($"Agent daemon already running (PID {existing.Pid}). Use `kapacitor agent stop` first.");
+            if (ReadPidFile(name) is { } existing && IsOurDaemon(existing.Pid, existing.StartTicks)) {
+                await Console.Error.WriteLineAsync(
+                    $"Agent daemon '{name}' already running (PID {existing.Pid}). "
+                    + $"Use `kapacitor agent stop --name {name}` first."
+                );
 
                 return 1;
             }
 
-            return await SpawnForegroundAsync(args);
+            return await SpawnForegroundAsync(name, args);
         } finally {
             startLock.Dispose();
         }
     }
 
-    static async Task<int> SpawnForegroundAsync(string[] args) {
+    static async Task<int> SpawnForegroundAsync(string name, string[] args) {
         var daemonPath = ResolveDaemonBinary();
 
         if (daemonPath is null) {
@@ -116,28 +118,16 @@ public static class AgentCommands {
             return 1;
         }
 
-        // Write the PID file so the guard above (and `kapacitor agent stop` /
-        // `agent status`) sees the foreground daemon too. Best-effort cleanup
-        // on exit; if the parent dies hard, IsOurDaemon's StartTime check
-        // handles the recycled-PID case so a stale file doesn't lock anyone
-        // out.
-        WritePidFile(process);
+        WritePidFile(name, process);
 
         try {
             await process.WaitForExitAsync();
 
             return process.ExitCode;
         } finally {
-            // Only delete the PID file if it still points at us. A concurrent
-            // legitimate `kapacitor agent start` that ran after our daemon
-            // exited (passing the guard because IsOurDaemon returned false on
-            // our exiting PID) would have rewritten the file to its own PID;
-            // an unconditional delete here would orphan that daemon's PID
-            // file and re-open the duplicate-daemon hole this guard is meant
-            // to close.
             try {
-                if (ReadPidFile() is { } current && current.Pid == process.Id) {
-                    File.Delete(PidPath);
+                if (ReadPidFile(name) is { } current && current.Pid == process.Id) {
+                    File.Delete(AgentLockPaths.PidPath(name));
                 }
             } catch {
                 /* best-effort */
@@ -146,23 +136,28 @@ public static class AgentCommands {
     }
 
     static int StartDetached(string[] args) {
-        // Hold the start lock just for the check + spawn + WritePidFile
-        // window. We can't keep it past method return because the parent
-        // process is about to exit, leaving the daemon detached. Once the
-        // PID file is written, subsequent starts will see it via the
-        // existing stale-check path.
-        var startLock = TryAcquireStartLock();
+        var name = ResolveName(args);
+
+        AgentLockMigration.MigrateLegacyFiles(name);
+
+        var startLock = TryAcquireStartLock(name);
 
         if (startLock is null) {
-            Console.Error.WriteLine("Another `kapacitor agent start` is already in progress or holds the daemon lock. Run `kapacitor agent stop` first or wait for the other start to complete.");
+            Console.Error.WriteLine(
+                $"Another `kapacitor agent start --name {name}` is already in progress or holds the daemon lock. "
+                + $"Run `kapacitor agent stop --name {name}` first or wait for the other start to complete."
+            );
 
             return 1;
         }
 
         using var _ = startLock;
 
-        if (ReadPidFile() is { } existing && IsOurDaemon(existing.Pid, existing.StartTicks)) {
-            Console.Error.WriteLine($"Agent daemon already running (PID {existing.Pid}). Use `kapacitor agent stop` first.");
+        if (ReadPidFile(name) is { } existing && IsOurDaemon(existing.Pid, existing.StartTicks)) {
+            Console.Error.WriteLine(
+                $"Agent daemon '{name}' already running (PID {existing.Pid}). "
+                + $"Use `kapacitor agent stop --name {name}` first."
+            );
 
             return 1;
         }
@@ -196,68 +191,258 @@ public static class AgentCommands {
         // Close stdin so the child doesn't wait for input
         process.StandardInput.Close();
 
-        WritePidFile(process);
+        // AI-630: the daemon binary acquires its own per-name flock at
+        // startup and exits with code 2 if another live daemon already
+        // holds it (the race we couldn't catch via the PID-file guard
+        // alone, e.g. when the previous daemon's PID file got wiped but
+        // the process is still alive). Without this short readiness wait
+        // we'd happily write a stale PID file and tell the user the
+        // detached daemon is running when it actually just exited. The
+        // flock acquisition happens *very* early in DaemonRunner.RunAsync
+        // (before SignalR connect), so 1.5s is more than enough to catch
+        // an immediate exit without making the success path feel sluggish.
+        if (process.WaitForExit(1500)) {
+            Console.Error.WriteLine(
+                $"Agent daemon '{name}' failed to start (exit code {process.ExitCode}). "
+                + $"Check `kapacitor agent doctor` to see whether the name is held by another process."
+            );
 
-        Console.Out.WriteLine($"Agent daemon started (PID {process.Id})");
+            // Translate the daemon's flock-conflict exit code straight
+            // through so wrappers / CI can distinguish "name in use" from
+            // a generic spawn failure.
+            return process.ExitCode == 0 ? 1 : process.ExitCode;
+        }
+
+        WritePidFile(name, process);
+
+        Console.Out.WriteLine($"Agent daemon '{name}' started (PID {process.Id})");
         Console.Out.WriteLine($"  Log:       {LogPath}");
-        Console.Out.WriteLine("  Stop with: kapacitor agent stop");
-        Console.Out.WriteLine("  Status:    kapacitor agent status");
+        Console.Out.WriteLine($"  Stop with: kapacitor agent stop --name {name}");
+        Console.Out.WriteLine($"  Status:    kapacitor agent status --name {name}");
 
         return 0;
     }
 
-    static int Stop() {
-        if (ReadPidFile() is not { } entry) {
-            Console.Error.WriteLine("No agent daemon running (no PID file found).");
+    // ── stop ────────────────────────────────────────────────────────────────
+
+    static async Task<int> StopAsync(string[] args) {
+        string? name;
+        try {
+            name = ExtractFlagValue(args, "--name");
+        } catch (ArgumentException ex) {
+            await Console.Error.WriteLineAsync(ex.Message);
+            return 1;
+        }
+        var yes = args.Contains("--yes") || args.Contains("-y");
+
+        if (name is not null) return StopByName(name);
+
+        // No --name: enumerate. Legacy path (pre-AI-630): if no per-name
+        // PID files exist but the legacy `agent.pid` does, migrate it
+        // under the OS-username default name so this command can find it.
+        var candidates = EnumerateRunningNames();
+
+        if (candidates.Count == 0) {
+            await Console.Out.WriteLineAsync("No agent daemons are running.");
+
+            return 0;
+        }
+
+        if (candidates.Count == 1) return StopByName(candidates[0]);
+
+        await Console.Out.WriteLineAsync($"Found {candidates.Count} running daemons:");
+
+        foreach (var n in candidates) {
+            await Console.Out.WriteLineAsync($"  • {n}");
+        }
+
+        if (!yes) {
+            await Console.Out.WriteAsync($"Stop all {candidates.Count}? [y/N] ");
+            var reply = await Console.In.ReadLineAsync();
+
+            if (!string.Equals(reply?.Trim(), "y", StringComparison.OrdinalIgnoreCase)) {
+                await Console.Out.WriteLineAsync("Cancelled.");
+
+                return 0;
+            }
+        }
+
+        var failed = 0;
+
+        foreach (var n in candidates) {
+            if (StopByName(n) != 0) failed++;
+        }
+
+        return failed == 0 ? 0 : 1;
+    }
+
+    static int StopByName(string name) {
+        if (ReadPidFile(name) is not { } entry) {
+            Console.Error.WriteLine($"No agent daemon '{name}' running (no PID file found).");
 
             return 1;
         }
 
         try {
             if (!IsOurDaemon(entry.Pid, entry.StartTicks)) {
-                Console.Out.WriteLine("Agent daemon was not running (stale PID file).");
-                File.Delete(PidPath);
+                Console.Out.WriteLine($"Agent daemon '{name}' was not running (stale PID file).");
+                File.Delete(AgentLockPaths.PidPath(name));
 
                 return 0;
             }
 
             var process = Process.GetProcessById(entry.Pid);
             process.Kill(entireProcessTree: true);
-            Console.Out.WriteLine($"Agent daemon stopped (PID {entry.Pid}).");
+            Console.Out.WriteLine($"Agent daemon '{name}' stopped (PID {entry.Pid}).");
         } catch (ArgumentException) {
-            Console.Out.WriteLine("Agent daemon was not running.");
+            Console.Out.WriteLine($"Agent daemon '{name}' was not running.");
         }
 
-        File.Delete(PidPath);
+        try { File.Delete(AgentLockPaths.PidPath(name)); } catch { /* best-effort */ }
 
         return 0;
     }
 
-    static async Task<int> Status() {
-        if (ReadPidFile() is not { } entry) {
+    // ── status ──────────────────────────────────────────────────────────────
+
+    static async Task<int> Status(string[] args) {
+        string? explicitName;
+        try {
+            explicitName = ExtractFlagValue(args, "--name");
+        } catch (ArgumentException ex) {
+            await Console.Error.WriteLineAsync(ex.Message);
+            return 1;
+        }
+
+        var names = explicitName is not null ? [explicitName] : EnumerateRunningNames();
+
+        if (names.Count == 0) {
             await Console.Out.WriteLineAsync("Agent: not running");
 
             return 0;
         }
 
-        if (IsOurDaemon(entry.Pid, entry.StartTicks)) {
-            await Console.Out.WriteLineAsync($"Agent: running (PID {entry.Pid})");
-        } else {
-            await Console.Out.WriteLineAsync("Agent: not running (stale PID file)");
-            File.Delete(PidPath);
+        foreach (var name in names) {
+            if (ReadPidFile(name) is not { } entry) {
+                await Console.Out.WriteLineAsync($"Agent '{name}': not running");
+
+                continue;
+            }
+
+            if (IsOurDaemon(entry.Pid, entry.StartTicks)) {
+                await Console.Out.WriteLineAsync($"Agent '{name}': running (PID {entry.Pid})");
+            } else {
+                await Console.Out.WriteLineAsync($"Agent '{name}': not running (stale PID file)");
+                try { File.Delete(AgentLockPaths.PidPath(name)); } catch { /* best-effort */ }
+            }
         }
 
         return 0;
     }
 
+    // ── doctor ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Lists every per-name daemon entry on disk — both <c>*.lock</c> and
+    /// <c>*.pid</c> files. For each, attempts a non-destructive
+    /// <c>flock</c> acquire to classify the entry as HELD (a live daemon
+    /// owns the path) or STALE (file lying around with no holder, or
+    /// orphan PID with no corresponding lock). With <c>--clean</c> removes
+    /// the stale entries (held ones are never touched).
+    /// </summary>
+    static async Task<int> DoctorAsync(string[] args) {
+        var clean = args.Contains("--clean");
+
+        AgentLockPaths.EnsureDirectory();
+
+        var names = AgentLockPaths.EnumerateNames();
+
+        if (names.Count == 0) {
+            await Console.Out.WriteLineAsync($"No agent daemon files found under {AgentLockPaths.Directory}.");
+
+            return 0;
+        }
+
+        await Console.Out.WriteLineAsync($"Inspecting {AgentLockPaths.Directory}\n");
+        var staleCount = 0;
+        var heldCount  = 0;
+
+        foreach (var name in names) {
+            var lockPath = AgentLockPaths.LockPath(name);
+            var pidPath  = AgentLockPaths.PidPath(name);
+
+            var hasLock = File.Exists(lockPath);
+            var hasPid  = File.Exists(pidPath);
+
+            string? instanceId = null;
+            if (hasLock) {
+                try { instanceId = File.ReadAllText(lockPath).Trim().Split('\n', 2)[0]; }
+                catch { /* best-effort */ }
+            }
+
+            var instancePrefix = instanceId is { Length: >= 8 } ? instanceId[..8] : instanceId ?? "(unknown)";
+
+            // Probing the lock requires the file to exist. An orphan PID
+            // file (no .lock alongside) is reported as STALE — there's no
+            // live daemon if the flock isn't held by anyone, and a daemon
+            // that's running would always own a .lock too.
+            FileStream? probe = null;
+
+            if (hasLock) {
+                try {
+                    probe = new FileStream(lockPath, FileMode.Open, FileAccess.Read, FileShare.None);
+                } catch (IOException) {
+                    // Lock is held by a live process, OR the file went away
+                    // between EnumerateNames and our open. Either way: treat
+                    // as held — we only down-classify to stale when probe
+                    // succeeds (which means we DID get the lock cleanly).
+                }
+            }
+
+            if (probe is null && hasLock) {
+                heldCount++;
+                var pidEntry = ReadPidFile(name);
+                var alive    = pidEntry is { } e && IsOurDaemon(e.Pid, e.StartTicks);
+                var pidStr   = pidEntry is { } e2 ? e2.Pid.ToString() : "?";
+                var aliveStr = alive ? $"PID {pidStr}" : pidEntry is null ? "(no pid file)" : "(stale pid)";
+                await Console.Out.WriteLineAsync($"  {name,-20}  HELD     instance={instancePrefix}  {aliveStr}");
+            } else if (probe is null) {
+                // No .lock file at all but a .pid is present — orphan.
+                staleCount++;
+                await Console.Out.WriteLineAsync($"  {name,-20}  STALE    instance=(none)   (orphan pid file, no lock)");
+
+                if (clean) {
+                    try { File.Delete(pidPath); } catch { /* best-effort */ }
+                }
+            } else {
+                probe.Dispose();
+                staleCount++;
+                await Console.Out.WriteLineAsync($"  {name,-20}  STALE    instance={instancePrefix}  (no holder)");
+
+                if (clean) {
+                    try { File.Delete(lockPath); } catch { /* best-effort */ }
+                    try { File.Delete(pidPath); }  catch { /* best-effort */ }
+                }
+            }
+        }
+
+        await Console.Out.WriteLineAsync($"\n{heldCount} held, {staleCount} stale.");
+
+        if (staleCount > 0 && !clean) {
+            await Console.Out.WriteLineAsync("Re-run with --clean to remove stale entries.");
+        }
+
+        return 0;
+    }
+
+    // ── shared helpers ──────────────────────────────────────────────────────
+
     record struct PidEntry(int Pid, long? StartTicks);
 
-    static void WritePidFile(Process process) {
-        var dir = Path.GetDirectoryName(PidPath)!;
-        Directory.CreateDirectory(dir);
+    static void WritePidFile(string daemonName, Process process) {
+        var pidPath = AgentLockPaths.PidPath(daemonName);
+        AgentLockPaths.EnsureDirectory();
 
-        // Record StartTime alongside PID so a recycled PID can't be mistaken
-        // for our daemon. UTC ticks are stable across local timezone changes.
         long? startTicks = null;
 
         try {
@@ -272,18 +457,20 @@ public static class AgentCommands {
             ? $"{process.Id}\n{t}"
             : process.Id.ToString();
 
-        File.WriteAllText(PidPath, content);
+        File.WriteAllText(pidPath, content);
     }
 
-    static PidEntry? ReadPidFile() {
-        if (!File.Exists(PidPath)) return null;
+    static PidEntry? ReadPidFile(string daemonName) {
+        var pidPath = AgentLockPaths.PidPath(daemonName);
 
-        var lines = File.ReadAllText(PidPath)
+        if (!File.Exists(pidPath)) return null;
+
+        var lines = File.ReadAllText(pidPath)
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         if (lines.Length == 0 || !int.TryParse(lines[0], out var pid)) {
-            Console.Error.WriteLine($"Invalid PID file: {PidPath}");
-            File.Delete(PidPath);
+            Console.Error.WriteLine($"Invalid PID file: {pidPath}");
+            File.Delete(pidPath);
 
             return null;
         }
@@ -324,6 +511,57 @@ public static class AgentCommands {
         }
     }
 
+    /// <summary>
+    /// Returns the daemon names that currently have a PID file on disk
+    /// (per-name layout under <c>~/.config/kapacitor/agents/</c>). Used by
+    /// <c>agent stop</c> / <c>agent status</c> without <c>--name</c>.
+    /// </summary>
+    static List<string> EnumerateRunningNames() {
+        AgentLockPaths.EnsureDirectory();
+
+        var dir = AgentLockPaths.Directory;
+        if (!Directory.Exists(dir)) return [];
+
+        return [
+            .. Directory.EnumerateFiles(dir, "*.pid")
+                .Select(Path.GetFileNameWithoutExtension)
+                .Where(n => !string.IsNullOrEmpty(n))
+                .Select(n => n!)
+                .Order()
+        ];
+    }
+
+    /// <summary>
+    /// Returns the value of <c>--flag &lt;value&gt;</c> from <paramref name="args"/>,
+    /// or <c>null</c> if the flag isn't present.
+    ///
+    /// <para>Throws <see cref="ArgumentException"/> if the flag is present but
+    /// the following token is missing or itself looks like another flag
+    /// (starts with <c>-</c>). The strict-value check protects destructive
+    /// commands like <c>agent stop --yes --name</c> — without it, a missing
+    /// value would silently fall through to the no-<c>--name</c> enumeration
+    /// path and (with <c>--yes</c>) skip the multi-daemon prompt, stopping
+    /// every daemon the user owns. Surfacing the bad invocation forces the
+    /// user to fix their command line before anything destructive happens.</para>
+    /// </summary>
+    static string? ExtractFlagValue(string[] args, string flag) {
+        for (var i = 0; i < args.Length; i++) {
+            if (args[i] != flag) continue;
+
+            if (i + 1 >= args.Length || string.IsNullOrEmpty(args[i + 1]) || args[i + 1].StartsWith('-')) {
+                var got = i + 1 < args.Length ? $"'{args[i + 1]}'" : "<end of args>";
+                throw new ArgumentException(
+                    $"{flag} requires a value (got {got}). " +
+                    "Pass a value (e.g. --name laptop) or omit the flag entirely."
+                );
+            }
+
+            return args[i + 1];
+        }
+
+        return null;
+    }
+
     static async Task<int> Logs() {
         if (!File.Exists(LogPath)) {
             await Console.Error.WriteLineAsync("No log file found.");
@@ -331,7 +569,6 @@ public static class AgentCommands {
             return 1;
         }
 
-        // Tail last 50 lines
         var lines = await File.ReadAllLinesAsync(LogPath);
         var start = Math.Max(0, lines.Length - 50);
 
@@ -346,8 +583,6 @@ public static class AgentCommands {
 
     /// <summary>
     /// Resolve the kapacitor-daemon executable shipped alongside this binary.
-    /// The daemon is published as a separate AOT binary in the same directory
-    /// as the main kapacitor binary (npm packages bundle both).
     /// </summary>
     static string? ResolveDaemonBinary() {
         var dir = AppContext.BaseDirectory;
@@ -357,20 +592,20 @@ public static class AgentCommands {
         return File.Exists(sibling) ? sibling : null;
     }
 
-    static string DaemonNotFoundMessage() {
-        return $"kapacitor-daemon binary not found next to {AppContext.BaseDirectory}. Reinstall the kapacitor package.";
-    }
+    static string DaemonNotFoundMessage() =>
+        $"kapacitor-daemon binary not found next to {AppContext.BaseDirectory}. Reinstall the kapacitor package.";
 
     static int PrintUsage() {
-        Console.Error.WriteLine("Usage: kapacitor agent <start|stop|status|logs>");
+        Console.Error.WriteLine("Usage: kapacitor agent <start|stop|status|logs|doctor>");
         Console.Error.WriteLine();
-        Console.Error.WriteLine("  start [-d]  Start the agent daemon (foreground, or -d for background)");
-        Console.Error.WriteLine("  stop        Stop the background agent daemon");
-        Console.Error.WriteLine("  status      Show agent daemon status");
-        Console.Error.WriteLine("  logs        Show recent daemon log output");
+        Console.Error.WriteLine("  start [-d] [--name <n>]    Start the agent daemon (foreground, or -d for background)");
+        Console.Error.WriteLine("  stop [--name <n>] [--yes]  Stop a running agent daemon (prompts on multi unless --yes)");
+        Console.Error.WriteLine("  status [--name <n>]        Show agent daemon status (lists all when --name omitted)");
+        Console.Error.WriteLine("  logs                       Show recent daemon log output");
+        Console.Error.WriteLine("  doctor [--clean]           Diagnose lock-file state, optionally clean stale entries");
         Console.Error.WriteLine();
         Console.Error.WriteLine("Options for start:");
-        Console.Error.WriteLine("  --name <name>         Daemon name");
+        Console.Error.WriteLine("  --name <name>         Daemon name (defaults to OS username)");
         Console.Error.WriteLine("  --server-url <url>    Server URL");
         Console.Error.WriteLine("  --max-agents <n>      Max concurrent agents (default: 5)");
         Console.Error.WriteLine("  --log-file <path>     Log to file instead of console");

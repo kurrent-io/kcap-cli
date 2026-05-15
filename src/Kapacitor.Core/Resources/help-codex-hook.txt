@@ -26,5 +26,6 @@ this mode.
 
 Bridge errors are fail-closed: the hook emits {"behavior": "deny"} and exits
 non-zero rather than falling back to allow. Outside daemon context (no
-KAPACITOR_DAEMON_URL), the hook returns the legacy allow-stub:
-{"behavior": "allow"}.
+KAPACITOR_DAEMON_URL), the hook posts to /hooks/permission-record (fire-and-
+forget record) and yields without emitting a decision so Codex's own in-CLI
+approval prompt asks the user.

@@ -13,12 +13,23 @@ namespace kapacitor.Commands;
 /// Wire contract (Codex event → server route):
 ///   SessionStart      → POST /hooks/session-start/codex
 ///   Stop              → POST /hooks/session-end/codex (Codex has no separate session-end hook)
-///   PermissionRequest → POST /hooks/permission-request/codex (informational; CLI returns local stub)
+///   PermissionRequest → in a daemon-launched hosted agent (KAPACITOR_DAEMON_URL set), bounce
+///                       through the daemon's LocalPermissionBridge and wait for the dashboard's
+///                       decision (fail-closed on bridge errors: deny + exit nonzero). Otherwise:
+///                       POST /hooks/permission-record (fire-and-forget; CLI emits no decision so
+///                       Codex's normal in-CLI approval prompt takes over).
 ///   UserPromptSubmit  → swallowed (v1 — neither vendor consumes them)
 ///   PreToolUse        → swallowed
 ///   PostToolUse       → swallowed
 /// </remarks>
 static class CodexHookCommand {
+    // Codex's Stop and SessionStart hooks parse stdout as the
+    // `stop.command.output` / `session-start.command.output` JSON schema and
+    // reject empty bodies with "hook returned invalid stop hook JSON output".
+    // `continue: true` is the schema default; emitting it explicitly satisfies
+    // the parser without altering behavior. See AI-635.
+    const string SessionScopedOutputJson = """{"continue":true}""";
+
     public static async Task<int> Handle(string baseUrl, TextReader stdin) {
         var body = await stdin.ReadToEndAsync();
 
@@ -67,6 +78,12 @@ static class CodexHookCommand {
         var exit = await PostHookAsync(baseUrl, "session-start/codex", enriched);
         if (exit != 0) return exit;
 
+        // Emit Codex's required JSON output BEFORE spawning the watcher. The
+        // watcher is best-effort and may take time to start; the parent (Codex)
+        // is waiting on stdout, and there's nothing the watcher can contribute
+        // to this response.
+        Console.Write(SessionScopedOutputJson);
+
         var enrichedNode = JsonNode.Parse(enriched);
         var sessionId    = TryGetString(enrichedNode, "session_id");
         var transcript   = TryGetString(enrichedNode, "transcript_path");
@@ -103,7 +120,37 @@ static class CodexHookCommand {
         // Codex's hook event name into Capacitor's canonical hook vocabulary
         // before posting, so the server doesn't have to know about Codex's
         // missing session-end concept.
-        return await PostHookAsync(baseUrl, "session-end/codex", node.ToJsonString());
+        var (exit, responseBody) = await PostHookWithResponseAsync(baseUrl, "session-end/codex", node.ToJsonString());
+
+        if (exit != 0) return exit;
+
+        // Mirror the Claude session-end path in Program.cs: if the server flags
+        // generate_whats_done, spawn the summary generator as a detached process
+        // with --codex so it goes through codex exec, matching the vendor that
+        // produced the work being summarised.
+        if (sessionId is not null && ShouldSpawnWhatsDone(responseBody)) {
+            WatcherManager.SpawnWhatsDoneGenerator(baseUrl, sessionId, vendor: "codex");
+        }
+
+        Console.Write(SessionScopedOutputJson);
+        return 0;
+    }
+
+    /// <summary>
+    /// Parses the session-end response body and returns whether the server asked
+    /// the CLI to generate a what's-done summary. Extracted so the response-parsing
+    /// branch is testable without actually spawning a subprocess.
+    /// </summary>
+    internal static bool ShouldSpawnWhatsDone(string? responseBody) {
+        if (responseBody is null) return false;
+
+        try {
+            var responseNode = JsonNode.Parse(responseBody);
+            return responseNode?["generate_whats_done"]?.GetValue<bool>() == true;
+        } catch {
+            // Best effort — non-JSON or wrong-typed flag both fall through to "no spawn"
+            return false;
+        }
     }
 
     static async Task<int> HandlePermissionRequest(string baseUrl, JsonNode node) {
@@ -115,18 +162,37 @@ static class CodexHookCommand {
     }
 
     static async Task<int> HandlePermissionRequestStub(string baseUrl, JsonNode node) {
-        // v1 stub — record the event server-side and return a default allow
-        // so recording-only sessions don't block.
-        await PostHookAsync(baseUrl, "permission-request/codex", node.ToJsonString());
+        // Terminal Codex sessions can't answer a Capacitor UI prompt, so we
+        // record the event server-side (best-effort) and emit no decision —
+        // Codex falls back to its built-in in-CLI approval flow and the user
+        // answers there.
+        //
+        // Do NOT post to /hooks/permission-request/{vendor} — that route runs
+        // RunPermissionFlow which long-polls up to 10 hours waiting for a
+        // hosted-agent UI decision. With Codex's 30 s hook timeout, the hook
+        // process is killed long before the server returns (AI-636).
+        //
+        // Single 2 s deadline covers BOTH the /auth/config discovery inside
+        // CreateAuthenticatedClientAsync and the /hooks/permission-record POST.
+        // Without bounding discovery too, a server that accepts the TCP
+        // connection but stalls on /auth/config can burn the full HttpClient
+        // default (100 s) before we even start the POST, blowing past Codex's
+        // 30 s hook timeout. Passing baseUrl also keeps discovery targeted at
+        // the server we're about to POST to, not the
+        // AppConfig.ResolvedServerUrl / KAPACITOR_URL / localhost:5108 fallback.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try {
+            using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, cts.Token);
+            using var content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
+            using var _       = await client.PostAsync($"{baseUrl}/hooks/permission-record", content, cts.Token);
+        } catch {
+            // Best-effort — recording must never block Codex's approval prompt.
+        }
 
-        var response = new JsonObject {
-            ["hookSpecificOutput"] = new JsonObject {
-                ["hookEventName"] = "PermissionRequest",
-                ["decision"]      = new JsonObject { ["behavior"] = "allow" }
-            }
-        };
-
-        Console.Write(response.ToJsonString());
+        // Empty hookSpecificOutput → Codex treats it as "no decision" and runs
+        // its normal approval flow. See
+        // codex-rs/hooks/src/events/permission_request.rs in openai/codex.
+        Console.Write("{}");
         return 0;
     }
 
@@ -171,6 +237,11 @@ static class CodexHookCommand {
     }
 
     static async Task<int> PostHookAsync(string baseUrl, string endpoint, string body) {
+        var (exit, _) = await PostHookWithResponseAsync(baseUrl, endpoint, body);
+        return exit;
+    }
+
+    static async Task<(int Exit, string? ResponseBody)> PostHookWithResponseAsync(string baseUrl, string endpoint, string body) {
         using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync();
         using var content = new StringContent(body, Encoding.UTF8, "application/json");
 
@@ -178,13 +249,14 @@ static class CodexHookCommand {
             var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{endpoint}", content);
             if (!resp.IsSuccessStatusCode) {
                 Console.Error.WriteLine($"[kapacitor] codex-hook {endpoint}: HTTP {(int)resp.StatusCode}");
-                return 1;
+                return (1, null);
             }
 
-            return 0;
+            var responseBody = await resp.Content.ReadAsStringAsync();
+            return (0, responseBody);
         } catch (HttpRequestException ex) {
             HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
-            return 1;
+            return (1, null);
         }
     }
 

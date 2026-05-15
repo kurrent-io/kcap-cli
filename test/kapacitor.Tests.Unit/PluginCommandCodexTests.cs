@@ -190,6 +190,101 @@ public class PluginCommandCodexTests {
         await Assert.That(CodexHooksParser.EntryReferencesKapacitorCodexHook(null)).IsFalse();
     }
 
+    // ---- Codex skill install / remove ----
+
+    [Test]
+    public async Task InstallCodexSkills_copies_known_skills() {
+        using var tmp    = new TempDir();
+        var       source = Path.Combine(tmp.Path, "codex-skills");
+        var       target = Path.Combine(tmp.Path, "skills");
+        WriteSkill(source, "kapacitor-recap",  "recap body");
+        WriteSkill(source, "kapacitor-errors", "errors body");
+
+        var ok = PluginCommand.InstallCodexSkills(source, target);
+        await Assert.That(ok).IsTrue();
+
+        var recap  = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-recap",  "SKILL.md"));
+        var errors = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-errors", "SKILL.md"));
+        await Assert.That(recap).IsEqualTo("recap body");
+        await Assert.That(errors).IsEqualTo("errors body");
+    }
+
+    [Test]
+    public async Task InstallCodexSkills_overwrites_existing_kapacitor_skill() {
+        using var tmp    = new TempDir();
+        var       source = Path.Combine(tmp.Path, "codex-skills");
+        var       target = Path.Combine(tmp.Path, "skills");
+        WriteSkill(source, "kapacitor-recap",  "new recap");
+        WriteSkill(source, "kapacitor-errors", "new errors");
+
+        // Pre-existing stale copy in target.
+        WriteSkill(target, "kapacitor-recap", "stale recap");
+
+        PluginCommand.InstallCodexSkills(source, target);
+
+        var recap = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-recap", "SKILL.md"));
+        await Assert.That(recap).IsEqualTo("new recap");
+    }
+
+    [Test]
+    public async Task InstallCodexSkills_preserves_foreign_skills() {
+        using var tmp    = new TempDir();
+        var       source = Path.Combine(tmp.Path, "codex-skills");
+        var       target = Path.Combine(tmp.Path, "skills");
+        WriteSkill(source, "kapacitor-recap",  "recap");
+        WriteSkill(source, "kapacitor-errors", "errors");
+
+        // Foreign skill the user installed themselves — must not be touched.
+        WriteSkill(target, "user-skill", "user content");
+
+        PluginCommand.InstallCodexSkills(source, target);
+
+        var foreign = await File.ReadAllTextAsync(Path.Combine(target, "user-skill", "SKILL.md"));
+        await Assert.That(foreign).IsEqualTo("user content");
+    }
+
+    [Test]
+    public async Task InstallCodexSkills_returns_false_for_missing_source() {
+        using var tmp    = new TempDir();
+        var       source = Path.Combine(tmp.Path, "nonexistent");
+        var       target = Path.Combine(tmp.Path, "skills");
+
+        var ok = PluginCommand.InstallCodexSkills(source, target);
+        await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task RemoveCodexSkills_deletes_known_skills_only() {
+        using var tmp    = new TempDir();
+        var       target = Path.Combine(tmp.Path, "skills");
+        WriteSkill(target, "kapacitor-recap",  "recap");
+        WriteSkill(target, "kapacitor-errors", "errors");
+        WriteSkill(target, "user-skill",       "user content");
+
+        var ok = PluginCommand.RemoveCodexSkills(target);
+        await Assert.That(ok).IsTrue();
+
+        await Assert.That(Directory.Exists(Path.Combine(target, "kapacitor-recap"))).IsFalse();
+        await Assert.That(Directory.Exists(Path.Combine(target, "kapacitor-errors"))).IsFalse();
+        await Assert.That(File.Exists(Path.Combine(target, "user-skill", "SKILL.md"))).IsTrue();
+    }
+
+    [Test]
+    public async Task RemoveCodexSkills_returns_false_when_nothing_to_remove() {
+        using var tmp    = new TempDir();
+        var       target = Path.Combine(tmp.Path, "skills");
+        Directory.CreateDirectory(target);
+
+        var ok = PluginCommand.RemoveCodexSkills(target);
+        await Assert.That(ok).IsFalse();
+    }
+
+    static void WriteSkill(string root, string name, string body) {
+        var dir = Path.Combine(root, name);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "SKILL.md"), body);
+    }
+
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),

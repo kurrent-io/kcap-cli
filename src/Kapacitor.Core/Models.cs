@@ -604,13 +604,30 @@ public readonly record struct ResizeTerminalCommand(
         int    Rows
     );
 
-/// <summary>Commands sent from daemon clients to the server via SignalR.</summary>
+/// <summary>
+/// Commands sent from daemon clients to the server via SignalR.
+///
+/// <para><c>InstanceId</c> is a fresh GUID generated at daemon process startup
+/// and held only in memory (also written to the daemon's per-name flock
+/// file content for diagnostics). The server uses it to distinguish a
+/// legitimate reconnect of the same daemon (new SignalR connectionId, same
+/// instance) from a different daemon process claiming the same
+/// <c>(owner, name)</c> slot. Pre-AI-630 daemons sent no <c>InstanceId</c>;
+/// the server still accepts them under a legacy-displacement fallback.</para>
+///
+/// <para><c>Version</c> is the daemon binary's
+/// <c>AssemblyInformationalVersion</c>. Logged on connect and surfaced on
+/// the server's <c>DaemonInfo</c> so the dashboard can show what version
+/// each connected daemon is running.</para>
+/// </summary>
 public readonly record struct DaemonConnect(
         string   Name,
         string   Platform,
         string[] RepoPaths,
         int      MaxAgents,
-        string[] LiveAgentIds
+        string[] LiveAgentIds,
+        string?  InstanceId = null,
+        string?  Version    = null
     );
 
 public readonly record struct AgentRegistered(

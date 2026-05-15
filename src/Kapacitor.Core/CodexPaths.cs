@@ -4,6 +4,7 @@ static class CodexPaths {
     public static string Home          => Path.Combine(PathHelpers.HomeDirectory, ".codex");
     public static string Sessions      => Path.Combine(Home, "sessions");
     public static string UserHooksJson => Path.Combine(Home, "hooks.json");
+    public static string UserSkillsDir => Path.Combine(Home, "skills");
 
     /// <summary>
     /// Walk <c>~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl</c>, optionally pruning
