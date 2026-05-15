@@ -76,12 +76,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly IReadOnlyDictionary<string, IHostedAgentLauncher> _launchers;
     readonly ILogger<AgentOrchestrator>                        _logger;
     readonly PeriodicTimer                                     _heartbeatTimer  = new(TimeSpan.FromSeconds(30));
-    // AI-79: heartbeat tightened from 60 s SendAsync to 15 s round-trip Ping.
-    // Server's default ClientTimeoutInterval is 30 s, and the staging incident
-    // showed daemons holding a displaced slot for nearly a minute before
-    // anyone noticed; 15 s puts us comfortably under both.
-    readonly PeriodicTimer                               _daemonHeartbeat = new(TimeSpan.FromSeconds(15));
-    static readonly TimeSpan                             _pingDeadline    = TimeSpan.FromSeconds(10);
+    // AI-79: heartbeat tightened from 60 s SendAsync to round-trip Ping.
+    // Server-side ClientTimeoutInterval is now 15 s (halved alongside the
+    // SignalR keepalive in Kurrent.Capacitor/Program.cs), so this tick and
+    // its deadline are halved too to stay comfortably under both.
+    readonly PeriodicTimer                               _daemonHeartbeat = new(TimeSpan.FromSeconds(7));
+    static readonly TimeSpan                             _pingDeadline    = TimeSpan.FromSeconds(5);
     readonly CancellationTokenSource                     _shutdownCts     = new();
 
     public AgentOrchestrator(

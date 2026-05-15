@@ -93,6 +93,10 @@ static partial class WatchCommand {
             )
             .Build();
 
+        // Halved from SignalR defaults (15s / 30s); see ServerConnection for rationale.
+        hubConnection.KeepAliveInterval = TimeSpan.FromSeconds(7);
+        hubConnection.ServerTimeout     = TimeSpan.FromSeconds(15);
+
         // Register StopWatcher handler — server sends this to tell us to shut down
         hubConnection.On<string>(
             "StopWatcher",

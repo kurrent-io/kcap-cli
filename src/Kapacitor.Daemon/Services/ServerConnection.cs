@@ -83,6 +83,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             )
             .Build();
 
+        // Halved from SignalR defaults (15s / 30s) so a dead transport is
+        // surfaced before Cloudflare's ~30 min connection rotation can mask it.
+        // Must stay paired with the server-side overrides in Kurrent.Capacitor/Program.cs.
+        _hub.KeepAliveInterval = TimeSpan.FromSeconds(7);
+        _hub.ServerTimeout     = TimeSpan.FromSeconds(15);
+
         _hub.On<LaunchAgentCommand>("LaunchAgent", cmd => SafeInvoke("LaunchAgent", () => OnLaunchAgent?.Invoke(cmd)));
         _hub.On<string>("StopAgent", agentId => SafeInvoke("StopAgent", () => OnStopAgent?.Invoke(agentId)));
         _hub.On<SendInputCommand>("SendInput", cmd => SafeInvoke("SendInput", () => OnSendInput?.Invoke(cmd)));
