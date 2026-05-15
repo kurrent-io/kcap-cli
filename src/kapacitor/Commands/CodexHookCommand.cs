@@ -166,16 +166,18 @@ static class CodexHookCommand {
         // The hosted-agent branch (KAPACITOR_DAEMON_URL set) is intentionally
         // not wired here — it lands with the rest of the hosted-Codex stack
         // in AI-68 so the wire shape, daemon bridge, and tests change together.
+        // Single 2 s deadline covers BOTH the /auth/config discovery inside
+        // CreateAuthenticatedClientAsync and the /hooks/permission-record POST.
+        // Without bounding discovery too, a server that accepts the TCP
+        // connection but stalls on /auth/config can burn the full HttpClient
+        // default (100 s) before we even start the POST, blowing past Codex's
+        // 30 s hook timeout. Passing baseUrl also keeps discovery targeted at
+        // the server we're about to POST to, not the
+        // AppConfig.ResolvedServerUrl / KAPACITOR_URL / localhost:5108 fallback.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         try {
-            // Pass baseUrl into CreateAuthenticatedClientAsync so auth-discovery
-            // targets the same server we're about to POST to, not the
-            // AppConfig.ResolvedServerUrl / KAPACITOR_URL / localhost:5108 fallback
-            // chain — the fallback can hang for the full HttpClient default
-            // (100 s) when something on the dev machine accepts connections on
-            // 5108 but never replies, blowing past Codex's 30 s hook timeout.
-            using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
+            using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, cts.Token);
             using var content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
-            using var cts     = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             using var _       = await client.PostAsync($"{baseUrl}/hooks/permission-record", content, cts.Token);
         } catch {
             // Best-effort — recording must never block Codex's approval prompt.

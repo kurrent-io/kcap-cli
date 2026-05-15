@@ -184,6 +184,43 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }
 
+    // AI-636 / Qodo finding: bounding only the POST left auth discovery
+    // (GET /auth/config) running on HttpClient's 100 s default. Stub
+    // /auth/config slow and assert the hook still returns under 5 s — the
+    // shared 2 s CTS in CodexHookCommand covers discovery too.
+    [Test, NotInParallel("CodexPermissionRequestStdout")]
+    public async Task PermissionRequest_returns_quickly_when_auth_discovery_is_slow() {
+        _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
+        _server.Given(Request.Create().WithPath("/hooks/permission-record").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+
+        var payload = """
+            {
+              "hook_event_name": "PermissionRequest",
+              "session_id": "abc",
+              "transcript_path": "/tmp/r.jsonl",
+              "cwd": "/tmp",
+              "tool_name": "shell",
+              "tool_input": { "command": "ls" }
+            }
+            """;
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+        var sw           = System.Diagnostics.Stopwatch.StartNew();
+        try {
+            Console.SetOut(stdoutWriter);
+            var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+            sw.Stop();
+            await Assert.That(exit).IsEqualTo(0);
+        } finally {
+            Console.SetOut(originalOut);
+        }
+
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
+    }
+
     [Test]
     public async Task UserPromptSubmit_PreToolUse_PostToolUse_are_swallowed() {
         // v1: pass-through events not consumed server-side. CLI should
