@@ -213,6 +213,8 @@ kapacitor plugin install --codex --project  # project scope (<repo>/.codex/hooks
 
 The daemon starts Codex with `--sandbox workspace-write` and `--ask-for-approval on-request`. This lets Codex edit files in the agent's worktree but escalates sensitive operations (e.g. network calls, shell commands outside the worktree) through the daemon's permission bridge to the dashboard.
 
+> **Upgrading from an earlier version of kapacitor?** Re-run `kapacitor plugin install --codex` to refresh your `~/.codex/hooks.json`. Older installs used a 30-second timeout on the `PermissionRequest` hook, which would cause Codex to kill the hook before the dashboard could send back an approval or denial for prompts that take longer than 30 seconds to decide. The current install writes a 24-hour timeout for that event.
+
 PR review for hosted Codex agents is not yet supported (tracked in AI-632). The sandbox and approval-mode selectors in the launch dialog are also planned as a follow-up (AI-633).
 
 #### Daemon config settings

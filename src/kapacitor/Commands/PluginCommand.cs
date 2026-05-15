@@ -8,6 +8,12 @@ public static class PluginCommand {
 
     const string CodexHookCommand = "kapacitor codex-hook";
 
+    // PermissionRequest must wait for the dashboard's decision; the daemon-side
+    // bridge call is intentionally infinite. 86400s = 24h keeps Codex from
+    // killing the hook before the user approves or denies.
+    const int PermissionRequestTimeout = 86400;
+    const int DefaultHookTimeout       = 30;
+
     public static async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
             PrintUsage();
@@ -187,12 +193,13 @@ public static class PluginCommand {
             }
 
             foreach (var evt in CodexHooksParser.CodexHookEvents) {
+                var timeout        = evt == "PermissionRequest" ? PermissionRequestTimeout : DefaultHookTimeout;
                 var kapacitorEntry = new JsonObject {
                     ["hooks"] = new JsonArray(
                         new JsonObject {
                             ["type"]    = "command",
                             ["command"] = CodexHookCommand,
-                            ["timeout"] = 30
+                            ["timeout"] = timeout
                         }
                     )
                 };

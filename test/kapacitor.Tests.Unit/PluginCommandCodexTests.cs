@@ -20,11 +20,32 @@ public class PluginCommandCodexTests {
             var entries = hooks[evt]!.AsArray();
             await Assert.That(entries.Count).IsEqualTo(1);
 
-            var inner = entries[0]!["hooks"]!.AsArray();
+            var inner           = entries[0]!["hooks"]!.AsArray();
+            var expectedTimeout = evt == "PermissionRequest" ? 86400 : 30;
             await Assert.That(inner[0]!["type"]!.GetValue<string>()).IsEqualTo("command");
             await Assert.That(inner[0]!["command"]!.GetValue<string>()).IsEqualTo("kapacitor codex-hook");
-            await Assert.That(inner[0]!["timeout"]!.GetValue<int>()).IsEqualTo(30);
+            await Assert.That(inner[0]!["timeout"]!.GetValue<int>()).IsEqualTo(expectedTimeout);
         }
+    }
+
+    [Test]
+    public async Task PermissionRequest_hook_uses_long_timeout_so_dashboard_decision_isnt_killed() {
+        using var tmp  = new TempDir();
+        var       path = Path.Combine(tmp.Path, "hooks.json");
+
+        PluginCommand.InstallCodexHooks(path);
+
+        var root             = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+        var permissionEntries = root["hooks"]!["PermissionRequest"]!.AsArray();
+        var kapacitorEntry = permissionEntries.First(e =>
+            (e!["hooks"] as JsonArray)!.Any(h =>
+                h?["command"] is JsonValue v && v.TryGetValue<string>(out var s) && s.Contains("kapacitor codex-hook"))
+        );
+        var timeout = kapacitorEntry!["hooks"]!.AsArray()[0]!["timeout"]!.GetValue<int>();
+
+        // 86400 = 24h; must be >= 86400 so Codex cannot kill the hook
+        // before the dashboard sends back an approval or denial.
+        await Assert.That(timeout).IsGreaterThanOrEqualTo(86400);
     }
 
     [Test]
