@@ -31,11 +31,34 @@ internal static class CodingAgentsStep {
         Installers installers,
         Func<string, bool> prompt,
         Action<string> writeLine) {
-        var claudeInstalled     = HandleClaude(options, detected, paths, installers, prompt, writeLine);
-        var codexHooksInstalled = HandleCodexHooks(options, detected, paths, installers, prompt, writeLine);
+        var claudeInstalled      = HandleClaude(options, detected, paths, installers, prompt, writeLine);
+        var codexHooksInstalled  = HandleCodexHooks(options, detected, paths, installers, prompt, writeLine);
+        var codexSkillsInstalled = codexHooksInstalled
+            ? HandleCodexSkills(paths, installers, writeLine)
+            : false;
 
-        // Codex skills wired in Task 6.
-        return Task.FromResult(new Result(claudeInstalled, codexHooksInstalled, false));
+        return Task.FromResult(new Result(claudeInstalled, codexHooksInstalled, codexSkillsInstalled));
+    }
+
+    static bool HandleCodexSkills(
+        Paths paths,
+        Installers installers,
+        Action<string> writeLine) {
+        if (paths.PluginDir is null) {
+            writeLine("  [yellow]⚠[/] Codex hooks installed but skills could not be copied (plugin directory not found).");
+            return false;
+        }
+
+        var src = Path.Combine(paths.PluginDir, "codex-skills");
+        var ok  = installers.InstallCodexSkills(src, paths.CodexSkillsDir);
+
+        if (!ok) {
+            writeLine($"  [yellow]⚠[/] Codex hooks installed but skills could not be copied to {paths.CodexSkillsDir}");
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] Codex skills installed (user: {paths.CodexSkillsDir})");
+        return true;
     }
 
     static bool HandleCodexHooks(

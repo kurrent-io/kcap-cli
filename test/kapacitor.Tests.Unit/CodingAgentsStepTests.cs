@@ -129,6 +129,51 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).DoesNotContain(l => l.Contains("/hooks") && l.Contains("trust"));
     }
 
+    [Test]
+    public async Task Codex_skills_installed_when_hooks_succeed_and_plugin_dir_present() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false, LegacyProjectScope: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CodexSkillsInstalled).IsTrue();
+        await Assert.That(calls.CodexSkillsArgs).IsEqualTo(("/fake/plugin/codex-skills", "/fake/.codex/skills"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Codex skills installed"));
+    }
+
+    [Test]
+    public async Task Codex_skills_not_attempted_when_hooks_fail() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CodexHooksReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false, LegacyProjectScope: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CodexSkillsInstalled).IsFalse();
+        await Assert.That(calls.CodexSkillsCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Codex_skills_failure_still_keeps_trust_hint() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CodexSkillsReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false, LegacyProjectScope: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CodexHooksInstalled).IsTrue();
+        await Assert.That(result.CodexSkillsInstalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Codex hooks installed but skills"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("/hooks") && l.Contains("trust"));
+    }
+
     static Paths TestPaths() => new(
         ClaudeSettingsPath: "/fake/.claude/settings.json",
         PluginDir:          "/fake/plugin",
