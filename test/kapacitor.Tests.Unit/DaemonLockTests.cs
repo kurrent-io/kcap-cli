@@ -7,22 +7,22 @@ namespace kapacitor.Tests.Unit;
 /// holds for its lifetime. Verifies the AI-630 protection: a second daemon
 /// acquiring the same name on the same machine fails fast.
 ///
-/// All tests redirect <see cref="AgentLockPaths"/> to a temp directory so
-/// nothing touches the user's real <c>~/.config/kapacitor/agents</c>. The
+/// All tests redirect <see cref="DaemonLockPaths"/> to a temp directory so
+/// nothing touches the user's real <c>~/.config/kapacitor/daemons</c>. The
 /// per-class isolation pattern (unique subdir per test, restored at the
 /// end) keeps the tests independent of one another's failed/leaked locks.
 /// </summary>
-[NotInParallel(nameof(AgentLockPaths) + ".OverrideDirectoryForTesting")]
+[NotInParallel(nameof(DaemonLockPaths) + ".OverrideDirectoryForTesting")]
 public class DaemonLockTests {
     static string CreateScratchDir() {
         var dir = Path.Combine(Path.GetTempPath(), "kapacitor-lock-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
-        AgentLockPaths.OverrideDirectoryForTesting(dir);
+        DaemonLockPaths.OverrideDirectoryForTesting(dir);
 
         return dir;
     }
 
-    static void Restore() => AgentLockPaths.OverrideDirectoryForTesting(null);
+    static void Restore() => DaemonLockPaths.OverrideDirectoryForTesting(null);
 
     [Test]
     public async Task TryAcquire_OnFreshSlot_ReturnsLockWithFreshInstanceId() {
@@ -124,7 +124,7 @@ public class DaemonLockTests {
 
         try {
             var l = DaemonLock.TryAcquire("alpha")!;
-            var lockPath = AgentLockPaths.LockPath("alpha");
+            var lockPath = DaemonLockPaths.LockPath("alpha");
 
             await Assert.That(File.Exists(lockPath)).IsTrue();
 
@@ -149,7 +149,7 @@ public class DaemonLockTests {
 
         try {
             var l = DaemonLock.TryAcquire("alpha")!;
-            var pidPath = AgentLockPaths.PidPath("alpha");
+            var pidPath = DaemonLockPaths.PidPath("alpha");
 
             // Simulate a successor process that won the race after our
             // flock release and rewrote the PID file. We pick a PID that
@@ -174,8 +174,8 @@ public class DaemonLockTests {
             // Simulate a daemon that died without cleanup: lockfile exists,
             // but no process holds the kernel flock. Re-acquisition must
             // succeed — that's the whole point of flock semantics.
-            AgentLockPaths.EnsureDirectory();
-            File.WriteAllText(AgentLockPaths.LockPath("alpha"), "stale-instance-id");
+            DaemonLockPaths.EnsureDirectory();
+            File.WriteAllText(DaemonLockPaths.LockPath("alpha"), "stale-instance-id");
 
             using var l = DaemonLock.TryAcquire("alpha");
             await Assert.That(l).IsNotNull();

@@ -1,18 +1,18 @@
-kapacitor agent — Manage the agent daemon
+kapacitor daemon — Manage the daemon process
 
-Usage: kapacitor agent <subcommand>
+Usage: kapacitor daemon <subcommand>
 
 Subcommands:
-  start [-d]              Start the agent daemon (foreground, or -d for background)
-  stop [--name N] [--yes] Stop a running agent daemon (prompts on multi unless --yes)
-  status [--name N]       Show agent daemon status (lists all when --name omitted)
+  start [-d]              Start the daemon (foreground, or -d for background)
+  stop [--name N] [--yes] Stop a running daemon (prompts on multi unless --yes)
+  status [--name N]       Show daemon status (lists all when --name omitted)
   logs                    Show recent daemon log output
   doctor [--clean]        Diagnose lock-file state, optionally clean stale entries
 
 Options for start:
   --name <name>           Daemon name (defaults to OS username)
   --server-url <url>      Server URL
-  --max-agents <n>        Max concurrent agents (default: 5)
+  --max-agents <n>        Max concurrent hosted coding agents (default: 5)
   --log-file <path>       Log to file instead of console
   -d, --detach            Run in background (logs to file automatically)
 
@@ -29,7 +29,7 @@ Options for doctor:
                           --clean, doctor reports state without modifying.
 
 Notes:
-  Each daemon holds an exclusive flock on ~/.config/kapacitor/agents/<name>.lock
+  Each daemon holds an exclusive flock on ~/.config/kapacitor/daemons/<name>.lock
   for its entire lifetime. The kernel releases the lock automatically on
   process exit (including SIGKILL or power-off), so stale lock files on disk
   are never a blocker — only a live process holding the kernel-level lock

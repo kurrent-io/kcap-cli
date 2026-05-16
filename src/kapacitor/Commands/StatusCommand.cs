@@ -55,26 +55,26 @@ public static class StatusCommand {
 
         await Console.Out.WriteLineAsync(string.Join("  ", parts));
 
-        // Agent — AI-630: read per-name PID files under
-        // ~/.config/kapacitor/agents/ instead of the pre-AI-630 singleton
+        // Daemon — AI-630: read per-name PID files under
+        // ~/.config/kapacitor/daemons/ instead of the pre-AI-630 singleton
         // at ~/.config/kapacitor/agent.pid. The top-level `kapacitor status`
-        // must agree with `kapacitor agent status`; previously this
-        // command kept saying "not running" while `agent status` reported
+        // must agree with `kapacitor daemon status`; previously this
+        // command kept saying "not running" while `daemon status` reported
         // a healthy daemon because new daemons no longer write the legacy
         // singleton.
-        Console.Write("  Agent:   ");
+        Console.Write("  Daemon:  ");
         await WriteAgentStatusAsync();
 
         return 0;
     }
 
     static async Task WriteAgentStatusAsync() {
-        if (!Directory.Exists(AgentLockPaths.Directory)) {
+        if (!Directory.Exists(DaemonLockPaths.Directory)) {
             await Console.Out.WriteLineAsync("not running");
             return;
         }
 
-        var pidFiles = Directory.EnumerateFiles(AgentLockPaths.Directory, "*.pid")
+        var pidFiles = Directory.EnumerateFiles(DaemonLockPaths.Directory, "*.pid")
             .OrderBy(f => f)
             .ToList();
 
@@ -112,7 +112,7 @@ public static class StatusCommand {
             await Console.Out.WriteLineAsync(
                 entries.Count == 0
                     ? "not running"
-                    : "not running (stale PID files; `kapacitor agent doctor --clean` to remove)"
+                    : "not running (stale PID files; `kapacitor daemon doctor --clean` to remove)"
             );
             return;
         }

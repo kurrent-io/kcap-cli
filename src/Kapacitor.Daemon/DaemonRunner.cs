@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 namespace kapacitor.Daemon;
 
 public static partial class DaemonRunner {
-    public static readonly string LogPath = PathHelpers.ConfigPath("agent.log");
+    public static readonly string LogPath = PathHelpers.ConfigPath("daemon.log");
 
     /// <summary>
     /// Daemon binary version from <c>[AssemblyInformationalVersion]</c>,
@@ -94,7 +94,7 @@ public static partial class DaemonRunner {
             config.CodexPath = envCodexPath;
 
         // Shared name resolution with the CLI supervisor — the CLI's
-        // AgentCommands and the daemon binary must agree on the name so
+        // DaemonCommands and the daemon binary must agree on the name so
         // the per-name PID file the CLI inspects is the one the daemon
         // writes via DaemonLock. Resolve throws on `--name <missing value>`
         // / `--name <next-is-flag>`; refuse to start in that case rather
@@ -118,12 +118,6 @@ public static partial class DaemonRunner {
             return 1;
         }
 
-        // One-shot migration from the pre-AI-630 singleton layout to per-name
-        // files. Runs before lock acquisition so a foreground daemon under
-        // the old layout doesn't get duplicated by a new daemon writing to
-        // the new path. Idempotent — no-op after the first successful run.
-        AgentLockMigration.MigrateLegacyFiles(config.Name);
-
         // Acquire the per-name flock that prevents another daemon from
         // running under the same name on this machine. The lock content is
         // a fresh instance id that we'll also send over DaemonConnect so
@@ -134,7 +128,7 @@ public static partial class DaemonRunner {
         if (daemonLock is null) {
             await Console.Error.WriteLineAsync(
                 $"Another kapacitor-daemon is already running under the name '{config.Name}' on this machine. "
-                + $"Either stop it (`kapacitor agent stop --name {config.Name}`) or start this one with a different `--name`."
+                + $"Either stop it (`kapacitor daemon stop --name {config.Name}`) or start this one with a different `--name`."
             );
 
             return 2;
@@ -245,6 +239,6 @@ public static partial class DaemonRunner {
         return nameInUse ? 3 : 0;
     }
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "kapacitor agent '{Name}' starting, connecting to {ServerUrl}")]
+    [LoggerMessage(Level = LogLevel.Information, Message = "kapacitor daemon '{Name}' starting, connecting to {ServerUrl}")]
     static partial void LogDaemonStarting(ILogger logger, string name, string serverUrl);
 }
