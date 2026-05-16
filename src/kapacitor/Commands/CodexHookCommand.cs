@@ -218,11 +218,6 @@ static class CodexHookCommand {
     }
 
     static async Task<int> PostHookAsync(string baseUrl, string endpoint, string body) {
-        var (exit, _) = await PostHookWithResponseAsync(baseUrl, endpoint, body);
-        return exit;
-    }
-
-    static async Task<(int Exit, string? ResponseBody)> PostHookWithResponseAsync(string baseUrl, string endpoint, string body) {
         using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync();
         using var content = new StringContent(body, Encoding.UTF8, "application/json");
 
@@ -230,14 +225,13 @@ static class CodexHookCommand {
             var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{endpoint}", content);
             if (!resp.IsSuccessStatusCode) {
                 Console.Error.WriteLine($"[kapacitor] codex-hook {endpoint}: HTTP {(int)resp.StatusCode}");
-                return (1, null);
+                return 1;
             }
 
-            var responseBody = await resp.Content.ReadAsStringAsync();
-            return (0, responseBody);
+            return 0;
         } catch (HttpRequestException ex) {
             HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
-            return (1, null);
+            return 1;
         }
     }
 
