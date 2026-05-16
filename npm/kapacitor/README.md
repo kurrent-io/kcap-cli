@@ -20,9 +20,9 @@ This walks you through: server URL, authentication, Claude Code plugin installat
 
 ```
 kapacitor setup                  Configure server, login, and install plugin
-kapacitor status                 Show server, auth, and agent status
-kapacitor agent start [-d]       Start agent daemon
-kapacitor agent stop             Stop agent daemon
+kapacitor status                 Show server, auth, and daemon status
+kapacitor daemon start [-d]      Start the daemon
+kapacitor daemon stop            Stop the daemon
 kapacitor review <pr>            Launch Claude Code with PR review context
 kapacitor update                 Check for updates
 kapacitor --version              Show version
