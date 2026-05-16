@@ -45,10 +45,10 @@ public static class AgentCommands {
     /// </summary>
     static FileStream? TryAcquireStartLock(string daemonName) {
         try {
-            AgentLockPaths.EnsureDirectory();
+            DaemonLockPaths.EnsureDirectory();
 
             return new FileStream(
-                AgentLockPaths.StartLockPath(daemonName),
+                DaemonLockPaths.StartLockPath(daemonName),
                 FileMode.OpenOrCreate, FileAccess.Write, FileShare.None
             );
         } catch (IOException) {
@@ -127,7 +127,7 @@ public static class AgentCommands {
         } finally {
             try {
                 if (ReadPidFile(name) is { } current && current.Pid == process.Id) {
-                    File.Delete(AgentLockPaths.PidPath(name));
+                    File.Delete(DaemonLockPaths.PidPath(name));
                 }
             } catch {
                 /* best-effort */
@@ -286,7 +286,7 @@ public static class AgentCommands {
         try {
             if (!IsOurDaemon(entry.Pid, entry.StartTicks)) {
                 Console.Out.WriteLine($"Agent daemon '{name}' was not running (stale PID file).");
-                File.Delete(AgentLockPaths.PidPath(name));
+                File.Delete(DaemonLockPaths.PidPath(name));
 
                 return 0;
             }
@@ -298,7 +298,7 @@ public static class AgentCommands {
             Console.Out.WriteLine($"Agent daemon '{name}' was not running.");
         }
 
-        try { File.Delete(AgentLockPaths.PidPath(name)); } catch { /* best-effort */ }
+        try { File.Delete(DaemonLockPaths.PidPath(name)); } catch { /* best-effort */ }
 
         return 0;
     }
@@ -333,7 +333,7 @@ public static class AgentCommands {
                 await Console.Out.WriteLineAsync($"Agent '{name}': running (PID {entry.Pid})");
             } else {
                 await Console.Out.WriteLineAsync($"Agent '{name}': not running (stale PID file)");
-                try { File.Delete(AgentLockPaths.PidPath(name)); } catch { /* best-effort */ }
+                try { File.Delete(DaemonLockPaths.PidPath(name)); } catch { /* best-effort */ }
             }
         }
 
@@ -353,23 +353,23 @@ public static class AgentCommands {
     static async Task<int> DoctorAsync(string[] args) {
         var clean = args.Contains("--clean");
 
-        AgentLockPaths.EnsureDirectory();
+        DaemonLockPaths.EnsureDirectory();
 
-        var names = AgentLockPaths.EnumerateNames();
+        var names = DaemonLockPaths.EnumerateNames();
 
         if (names.Count == 0) {
-            await Console.Out.WriteLineAsync($"No agent daemon files found under {AgentLockPaths.Directory}.");
+            await Console.Out.WriteLineAsync($"No agent daemon files found under {DaemonLockPaths.Directory}.");
 
             return 0;
         }
 
-        await Console.Out.WriteLineAsync($"Inspecting {AgentLockPaths.Directory}\n");
+        await Console.Out.WriteLineAsync($"Inspecting {DaemonLockPaths.Directory}\n");
         var staleCount = 0;
         var heldCount  = 0;
 
         foreach (var name in names) {
-            var lockPath = AgentLockPaths.LockPath(name);
-            var pidPath  = AgentLockPaths.PidPath(name);
+            var lockPath = DaemonLockPaths.LockPath(name);
+            var pidPath  = DaemonLockPaths.PidPath(name);
 
             var hasLock = File.Exists(lockPath);
             var hasPid  = File.Exists(pidPath);
@@ -440,8 +440,8 @@ public static class AgentCommands {
     record struct PidEntry(int Pid, long? StartTicks);
 
     static void WritePidFile(string daemonName, Process process) {
-        var pidPath = AgentLockPaths.PidPath(daemonName);
-        AgentLockPaths.EnsureDirectory();
+        var pidPath = DaemonLockPaths.PidPath(daemonName);
+        DaemonLockPaths.EnsureDirectory();
 
         long? startTicks = null;
 
@@ -461,7 +461,7 @@ public static class AgentCommands {
     }
 
     static PidEntry? ReadPidFile(string daemonName) {
-        var pidPath = AgentLockPaths.PidPath(daemonName);
+        var pidPath = DaemonLockPaths.PidPath(daemonName);
 
         if (!File.Exists(pidPath)) return null;
 
@@ -517,9 +517,9 @@ public static class AgentCommands {
     /// <c>agent stop</c> / <c>agent status</c> without <c>--name</c>.
     /// </summary>
     static List<string> EnumerateRunningNames() {
-        AgentLockPaths.EnsureDirectory();
+        DaemonLockPaths.EnsureDirectory();
 
-        var dir = AgentLockPaths.Directory;
+        var dir = DaemonLockPaths.Directory;
         if (!Directory.Exists(dir)) return [];
 
         return [

@@ -16,7 +16,7 @@ namespace kapacitor.Tests.Unit;
 /// affect every other test in the suite that reads
 /// <c>PathHelpers.ConfigPath</c>).
 /// </summary>
-[NotInParallel(nameof(AgentLockPaths) + ".OverrideDirectoryForTesting")]
+[NotInParallel(nameof(DaemonLockPaths) + ".OverrideDirectoryForTesting")]
 public class AgentLockMigrationTests {
     static (string Scratch, string NewAgentsDir, string LegacyPid, string LegacyLock) Setup() {
         var scratch = Path.Combine(Path.GetTempPath(), "kapacitor-migration-tests", Guid.NewGuid().ToString("N"));
@@ -24,7 +24,7 @@ public class AgentLockMigrationTests {
 
         var newAgentsDir = Path.Combine(scratch, "agents");
         Directory.CreateDirectory(newAgentsDir);
-        AgentLockPaths.OverrideDirectoryForTesting(newAgentsDir);
+        DaemonLockPaths.OverrideDirectoryForTesting(newAgentsDir);
 
         var legacyPid  = Path.Combine(scratch, "agent.pid");
         var legacyLock = Path.Combine(scratch, "agent.start.lock");
@@ -33,7 +33,7 @@ public class AgentLockMigrationTests {
     }
 
     static void TearDown(string scratch) {
-        AgentLockPaths.OverrideDirectoryForTesting(null);
+        DaemonLockPaths.OverrideDirectoryForTesting(null);
         try { Directory.Delete(scratch, recursive: true); } catch { /* best-effort */ }
     }
 
@@ -50,9 +50,9 @@ public class AgentLockMigrationTests {
             await Assert.That(moved).Count().IsEqualTo(2);
             await Assert.That(File.Exists(legacyPid)).IsFalse();
             await Assert.That(File.Exists(legacyLock)).IsFalse();
-            await Assert.That(File.Exists(AgentLockPaths.PidPath("alexey"))).IsTrue();
-            await Assert.That(File.Exists(AgentLockPaths.StartLockPath("alexey"))).IsTrue();
-            await Assert.That(File.ReadAllText(AgentLockPaths.PidPath("alexey"))).IsEqualTo("12345\n637899999999999999");
+            await Assert.That(File.Exists(DaemonLockPaths.PidPath("alexey"))).IsTrue();
+            await Assert.That(File.Exists(DaemonLockPaths.StartLockPath("alexey"))).IsTrue();
+            await Assert.That(File.ReadAllText(DaemonLockPaths.PidPath("alexey"))).IsEqualTo("12345\n637899999999999999");
         } finally {
             TearDown(scratch);
         }
@@ -81,13 +81,13 @@ public class AgentLockMigrationTests {
             // A fresh daemon already wrote to the new path. The legacy file
             // from an earlier dead daemon must be discarded, not overwriting
             // the new authoritative file.
-            File.WriteAllText(AgentLockPaths.PidPath("alexey"), "FRESH");
+            File.WriteAllText(DaemonLockPaths.PidPath("alexey"), "FRESH");
             File.WriteAllText(legacyPid, "STALE");
 
             AgentLockMigration.MigrateLegacyFiles("alexey", legacyPid, legacyLock);
 
             await Assert.That(File.Exists(legacyPid)).IsFalse();
-            await Assert.That(File.ReadAllText(AgentLockPaths.PidPath("alexey"))).IsEqualTo("FRESH");
+            await Assert.That(File.ReadAllText(DaemonLockPaths.PidPath("alexey"))).IsEqualTo("FRESH");
         } finally {
             TearDown(scratch);
         }

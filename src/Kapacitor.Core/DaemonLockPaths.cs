@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace kapacitor;
 
 /// <summary>
-/// Path layout for per-name agent daemon lock + PID + start-lock files (AI-630).
+/// Path layout for per-name daemon lock + PID + start-lock files (AI-630).
 ///
 /// <para>The previous layout used singletons at <c>PathHelpers.ConfigPath("agent.pid")</c>
 /// and <c>PathHelpers.ConfigPath("agent.start.lock")</c>. Two daemons with
@@ -15,15 +15,15 @@ namespace kapacitor;
 /// slot. The staging incident that motivated AI-630 was exactly that.</para>
 ///
 /// <para>This helper uses a <b>fixed location</b> under the home directory
-/// (<c>~/.config/kapacitor/agents/</c>) regardless of <c>KAPACITOR_CONFIG_DIR</c>,
+/// (<c>~/.config/kapacitor/daemons/</c>) regardless of <c>KAPACITOR_CONFIG_DIR</c>,
 /// so cross-config-dir daemons under the same name now collide on the same
 /// <c>flock</c>. Sanitization is intentionally strict to keep filenames
 /// portable: only <c>[a-z0-9._-]</c> survives, anything else maps to <c>-</c>.</para>
 /// </summary>
-public static partial class AgentLockPaths {
+public static partial class DaemonLockPaths {
     static readonly string DefaultDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        ".config", "kapacitor", "agents"
+        ".config", "kapacitor", "daemons"
     );
 
     static string? _overrideDir;
@@ -32,7 +32,7 @@ public static partial class AgentLockPaths {
     public static string Directory => _overrideDir ?? DefaultDirectory;
 
     /// <summary>
-    /// Test-only override: redirects the agents directory to a temp path.
+    /// Test-only override: redirects the daemons directory to a temp path.
     /// Pass <c>null</c> to restore the default home-directory location.
     /// Production code never sets this; it's exposed via
     /// <c>InternalsVisibleTo</c> for the test projects only.
@@ -68,7 +68,7 @@ public static partial class AgentLockPaths {
 
     /// <summary>
     /// Path to the CLI-side start lock — the brief critical-section lock the
-    /// <c>kapacitor agent start</c> supervisor takes around its
+    /// <c>kapacitor daemon start</c> supervisor takes around its
     /// check-spawn-write-PID sequence. Distinct from <see cref="LockPath"/>,
     /// which the daemon itself holds for its entire lifetime.
     /// </summary>
@@ -81,7 +81,7 @@ public static partial class AgentLockPaths {
     /// <summary>
     /// Returns the daemon names visible on disk — the union of names
     /// derived from <c>*.lock</c> and <c>*.pid</c> files. Used by
-    /// <c>agent doctor</c> to classify held vs stale entries; covers
+    /// <c>daemon doctor</c> to classify held vs stale entries; covers
     /// orphan PID files that have no matching lock (e.g. a pre-AI-630
     /// daemon whose migration ran for the PID file but not the start
     /// lock, or a stop that removed the lock but left the PID behind).

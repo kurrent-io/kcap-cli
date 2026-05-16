@@ -18,7 +18,7 @@ namespace kapacitor.Daemon;
 ///
 /// <para>The acquisition guards against the AI-630 scenario: two daemons
 /// under the same name on the same machine (regardless of
-/// <c>KAPACITOR_CONFIG_DIR</c> — <see cref="AgentLockPaths"/> uses a fixed
+/// <c>KAPACITOR_CONFIG_DIR</c> — <see cref="DaemonLockPaths"/> uses a fixed
 /// directory). Two daemons with <i>different</i> names are allowed to
 /// coexist; the lock file is per-name.</para>
 /// </summary>
@@ -43,10 +43,10 @@ internal sealed class DaemonLock : IDisposable {
     /// caller should print a "name in use" message and exit with code 2.
     /// </summary>
     public static DaemonLock? TryAcquire(string daemonName) {
-        AgentLockPaths.EnsureDirectory();
+        DaemonLockPaths.EnsureDirectory();
 
-        var lockPath = AgentLockPaths.LockPath(daemonName);
-        var pidPath  = AgentLockPaths.PidPath(daemonName);
+        var lockPath = DaemonLockPaths.LockPath(daemonName);
+        var pidPath  = DaemonLockPaths.PidPath(daemonName);
 
         FileStream stream;
 

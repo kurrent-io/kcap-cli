@@ -69,12 +69,12 @@ public static class StatusCommand {
     }
 
     static async Task WriteAgentStatusAsync() {
-        if (!Directory.Exists(AgentLockPaths.Directory)) {
+        if (!Directory.Exists(DaemonLockPaths.Directory)) {
             await Console.Out.WriteLineAsync("not running");
             return;
         }
 
-        var pidFiles = Directory.EnumerateFiles(AgentLockPaths.Directory, "*.pid")
+        var pidFiles = Directory.EnumerateFiles(DaemonLockPaths.Directory, "*.pid")
             .OrderBy(f => f)
             .ToList();
 

@@ -16,7 +16,7 @@ namespace kapacitor;
 public static class AgentLockMigration {
     /// <summary>
     /// Returns the legacy paths under <c>PathHelpers.ConfigPath</c>. Defined
-    /// here (not in <see cref="AgentLockPaths"/>) so the path layout helper
+    /// here (not in <see cref="DaemonLockPaths"/>) so the path layout helper
     /// stays focused on the current layout and doesn't accidentally suggest
     /// the legacy paths are valid targets.
     /// </summary>
@@ -41,10 +41,10 @@ public static class AgentLockMigration {
     internal static IReadOnlyList<string> MigrateLegacyFiles(string daemonName, string legacyPidPath, string legacyLockPath) {
         var moved = new List<string>(2);
 
-        AgentLockPaths.EnsureDirectory();
+        DaemonLockPaths.EnsureDirectory();
 
-        TryMove(legacyPidPath,  AgentLockPaths.PidPath(daemonName),       moved);
-        TryMove(legacyLockPath, AgentLockPaths.StartLockPath(daemonName), moved);
+        TryMove(legacyPidPath,  DaemonLockPaths.PidPath(daemonName),       moved);
+        TryMove(legacyLockPath, DaemonLockPaths.StartLockPath(daemonName), moved);
 
         return moved;
     }
