@@ -296,3 +296,58 @@ public class PluginCommandCodexTests {
         }
     }
 }
+
+// Separated into its own class so it joins two serialization groups:
+//   class-level: "HomeEnvVarMutation" — prevents concurrent HOME-mutating tests
+//     from leaking the real user profile into our PluginCommand call.
+//   method-level: CodexHookCommandTests.ConsoleSerialGroup ("CodexHookCommandTests.Console")
+//     — TUnit's NotInParallel takes a single key per attribute, so we must share
+//     the SAME literal token that every Console.Out-redirecting test in
+//     CodexHookCommandTests uses. A distinct "Console.Out_redirect" token would
+//     leave us racing against CodexHookCommandTests on the process-wide
+//     Console.Out writer.
+[NotInParallel("HomeEnvVarMutation")]
+public class PluginCommandCodexInstallIntegrationTests {
+    [Test, NotInParallel("CodexHookCommandTests.Console")]
+    public async Task InstallCodex_prints_hooks_trust_hint_after_success() {
+        using var tmp = new TempDir();
+
+        // PathHelpers.HomeDirectory reads HOME first and falls back to UserProfile
+        // (USERPROFILE on Windows). On Windows shells that export HOME (Git Bash,
+        // MSYS, Cygwin, WSL) the production path resolver picks HOME, so setting
+        // only USERPROFILE would leave the test writing to the real ~/.codex.
+        // Set BOTH and restore BOTH regardless of OS.
+        var originalHome        = Environment.GetEnvironmentVariable("HOME");
+        var originalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+        Environment.SetEnvironmentVariable("HOME",        tmp.Path);
+        Environment.SetEnvironmentVariable("USERPROFILE", tmp.Path);
+
+        var capturedOut = new StringWriter();
+        var originalOut = Console.Out;
+        Console.SetOut(capturedOut);
+
+        try {
+            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex"]);
+            await Assert.That(exit).IsEqualTo(0);
+
+            var stdout = capturedOut.ToString();
+            await Assert.That(stdout).Contains("/hooks");
+            await Assert.That(stdout).Contains("trust");
+        } finally {
+            Console.SetOut(originalOut);
+            Environment.SetEnvironmentVariable("HOME",        originalHome);
+            Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
+        }
+    }
+
+    sealed class TempDir : IDisposable {
+        public string Path { get; } = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            $"kapacitor-test-{Guid.NewGuid().ToString("N")[..8]}"
+        );
+        public TempDir() => Directory.CreateDirectory(Path);
+        public void Dispose() {
+            try { Directory.Delete(Path, true); } catch { /* best effort */ }
+        }
+    }
+}

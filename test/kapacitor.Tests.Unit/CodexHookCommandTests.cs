@@ -203,7 +203,14 @@ public class CodexHookCommandTests : IDisposable {
     // (GET /auth/config) running on HttpClient's 100 s default. Stub
     // /auth/config slow and assert the hook still returns under 5 s — the
     // shared 2 s CTS in CodexHookCommand covers discovery too.
-    [Test, NotInParallel("CodexPermissionRequestStdout")]
+    //
+    // AI-628 follow-up: this test redirects Console.Out, so it must share
+    // ConsoleSerialGroup with every other Console.Out-redirecting test in
+    // the suite. Previously it lived in its own "CodexPermissionRequestStdout"
+    // group and raced against the ConsoleSerialGroup tests, occasionally
+    // causing both this test and the unrelated stdout-asserting ones to
+    // observe a stale Console.Out writer.
+    [Test, NotInParallel(ConsoleSerialGroup)]
     public async Task PermissionRequest_returns_quickly_when_auth_discovery_is_slow() {
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
