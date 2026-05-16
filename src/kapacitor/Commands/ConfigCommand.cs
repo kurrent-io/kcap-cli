@@ -87,7 +87,7 @@ public static class ConfigCommand {
         Console.Error.WriteLine("Keys:");
         Console.Error.WriteLine("  server_url                  Server URL");
         Console.Error.WriteLine("  daemon.name                 Daemon name");
-        Console.Error.WriteLine("  daemon.max_agents           Max concurrent agents");
+        Console.Error.WriteLine("  daemon.max_agents           Max concurrent hosted coding agents");
         Console.Error.WriteLine("  daemon.claude_path          Path to claude binary (default: claude)");
         Console.Error.WriteLine("  daemon.codex_path           Path to codex binary (default: codex)");
         Console.Error.WriteLine("  update_check                Enable update check (true/false)");

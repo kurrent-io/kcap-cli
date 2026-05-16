@@ -1,6 +1,6 @@
 Usage: kapacitor repos [add|remove] [path]
 
-Manage known repository paths for the agent daemon launch dialog.
+Manage known repository paths for the daemon launch dialog.
 
 Subcommands:
   (none)         List known repos (sorted by last used)

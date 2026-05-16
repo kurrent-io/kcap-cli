@@ -1,11 +1,11 @@
 namespace kapacitor.Tests.Unit;
 
 /// <summary>
-/// Tests for <see cref="AgentLockPaths"/> — the name-sanitization rules and
+/// Tests for <see cref="DaemonLockPaths"/> — the name-sanitization rules and
 /// the per-name path layout that prevents two daemons under the same name
 /// from racing on the AI-630 lock.
 /// </summary>
-public class AgentLockPathsTests {
+public class DaemonLockPathsTests {
     [Test]
     [Arguments("alexey",            "alexey")]
     [Arguments("ALEXEY",            "alexey")]
@@ -18,7 +18,7 @@ public class AgentLockPathsTests {
     [Arguments("under_score",       "under_score")] // underscores survive: filesystem-safe and common
     [Arguments("collapse---dashes", "collapse-dashes")]
     public async Task Sanitize_NormalisesNames(string input, string expected) {
-        await Assert.That(AgentLockPaths.Sanitize(input)).IsEqualTo(expected);
+        await Assert.That(DaemonLockPaths.Sanitize(input)).IsEqualTo(expected);
     }
 
     [Test]
@@ -27,13 +27,21 @@ public class AgentLockPathsTests {
     [Arguments("???")]
     [Arguments("///")]
     public async Task Sanitize_FallsBackToDaemonForEmptyOrAllInvalid(string input) {
-        await Assert.That(AgentLockPaths.Sanitize(input)).IsEqualTo("daemon");
+        await Assert.That(DaemonLockPaths.Sanitize(input)).IsEqualTo("daemon");
     }
 
     [Test]
     public async Task LockPidStart_ShareSanitizedName() {
-        await Assert.That(AgentLockPaths.LockPath("My Daemon")).EndsWith("my-daemon.lock");
-        await Assert.That(AgentLockPaths.PidPath("My Daemon")).EndsWith("my-daemon.pid");
-        await Assert.That(AgentLockPaths.StartLockPath("My Daemon")).EndsWith("my-daemon.start");
+        await Assert.That(DaemonLockPaths.LockPath("My Daemon")).EndsWith("my-daemon.lock");
+        await Assert.That(DaemonLockPaths.PidPath("My Daemon")).EndsWith("my-daemon.pid");
+        await Assert.That(DaemonLockPaths.StartLockPath("My Daemon")).EndsWith("my-daemon.start");
+    }
+
+    [Test]
+    public async Task Directory_LivesUnderDaemonsFolder() {
+        // Verify the production layout (no test override) uses the renamed
+        // ~/.config/kapacitor/daemons/ path, not the pre-AI-644 agents/ path.
+        await Assert.That(DaemonLockPaths.Directory.Replace('\\', '/'))
+            .EndsWith("/.config/kapacitor/daemons");
     }
 }

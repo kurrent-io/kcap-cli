@@ -1,4 +1,4 @@
-kapacitor status — Show server, auth, hook, and agent status
+kapacitor status — Show server, auth, hook, and daemon status
 
 Usage: kapacitor status
 
@@ -6,4 +6,4 @@ Reports:
   Server     Configured base URL and reachability check
   Auth       Stored credentials and token expiry
   Hooks      Whether the Claude plugin and Codex hooks are installed
-  Agent      Whether the agent daemon is running (PID file check)
+  Daemon     Whether the daemon is running (PID file check)
