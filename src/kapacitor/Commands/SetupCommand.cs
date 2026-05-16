@@ -160,6 +160,7 @@ public static class SetupCommand {
 
         var stepPaths = new CodingAgentsStep.Paths(
             ClaudeSettingsPath: claudeSettingsPath,
+            ClaudeScopeLabel:   legacyProjectScope ? "project" : "user",
             PluginDir:          pluginPath,
             CodexHooksPath:     CodexPaths.UserHooksJson,
             CodexSkillsDir:     CodexPaths.UserSkillsDir);

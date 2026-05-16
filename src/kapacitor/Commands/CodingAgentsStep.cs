@@ -1,3 +1,5 @@
+using Spectre.Console;
+
 namespace kapacitor.Commands;
 
 /// <summary>
@@ -10,6 +12,7 @@ internal static class CodingAgentsStep {
     internal record DetectedAgents(bool Claude, bool Codex);
     internal record Paths(
         string ClaudeSettingsPath,
+        string ClaudeScopeLabel,
         string? PluginDir,
         string CodexHooksPath,
         string CodexSkillsDir);
@@ -57,11 +60,11 @@ internal static class CodingAgentsStep {
         var ok  = installers.InstallCodexSkills(src, paths.CodexSkillsDir);
 
         if (!ok) {
-            writeLine($"  [yellow]⚠[/] Codex hooks installed but skills could not be copied to {paths.CodexSkillsDir}");
+            writeLine($"  [yellow]⚠[/] Codex hooks installed but skills could not be copied to {Markup.Escape(paths.CodexSkillsDir)}");
             return false;
         }
 
-        writeLine($"  [green]✓[/] Codex skills installed (user: {paths.CodexSkillsDir})");
+        writeLine($"  [green]✓[/] Codex skills installed (user: {Markup.Escape(paths.CodexSkillsDir)})");
         return true;
     }
 
@@ -98,7 +101,7 @@ internal static class CodingAgentsStep {
             return false;
         }
 
-        writeLine($"  [green]✓[/] Codex hooks installed (user: {paths.CodexHooksPath})");
+        writeLine($"  [green]✓[/] Codex hooks installed (user: {Markup.Escape(paths.CodexHooksPath)})");
         writeLine("  [dim]  Next: run /hooks inside Codex and trust each kapacitor entry —[/]");
         writeLine("  [dim]  Codex won't execute hooks until each is explicitly trusted.[/]");
         return true;
@@ -131,18 +134,19 @@ internal static class CodingAgentsStep {
         }
 
         if (paths.PluginDir is null) {
-            writeLine("  [yellow]⚠[/] Plugin directory not found. Install manually inside Claude Code: [cyan]/plugin install <pluginPath>[/]");
+            writeLine("  [yellow]⚠[/] Plugin directory not found. Re-install kapacitor via npm:");
+            writeLine("    [cyan]npm install -g @kurrent/kapacitor[/]");
             return false;
         }
 
         var ok = installers.InstallClaudePlugin(paths.ClaudeSettingsPath, paths.PluginDir);
 
         if (!ok) {
-            writeLine($"  [yellow]⚠[/] Could not update Claude settings file. Install manually inside Claude Code: [cyan]/plugin install {paths.PluginDir}[/]");
+            writeLine($"  [yellow]⚠[/] Could not update Claude settings file. Install manually inside Claude Code: [cyan]/plugin install {Markup.Escape(paths.PluginDir)}[/]");
             return false;
         }
 
-        writeLine($"  [green]✓[/] Claude Code plugin installed (user: {paths.ClaudeSettingsPath})");
+        writeLine($"  [green]✓[/] Claude Code plugin installed ({Markup.Escape(paths.ClaudeScopeLabel)}: {Markup.Escape(paths.ClaudeSettingsPath)})");
         return true;
     }
 }

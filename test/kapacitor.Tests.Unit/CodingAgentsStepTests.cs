@@ -220,10 +220,11 @@ public class CodingAgentsStepTests {
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
         var detected = new DetectedAgents(Claude: true, Codex: false);
-        // Caller (SetupCommand) selects the project-scope path when --plugin-scope project
-        // is in effect. The step's contract is to honour whatever ClaudeSettingsPath it's given.
+        // Caller (SetupCommand) selects the project-scope path AND the matching label.
+        // The step's contract is to honour both faithfully.
         var paths    = TestPaths() with {
-            ClaudeSettingsPath = "/repo/.claude/settings.local.json"
+            ClaudeSettingsPath = "/repo/.claude/settings.local.json",
+            ClaudeScopeLabel   = "project"
         };
 
         var result = await RunAsync(options, detected, paths, calls.AsInstallers(),
@@ -231,10 +232,32 @@ public class CodingAgentsStepTests {
 
         await Assert.That(result.ClaudeInstalled).IsTrue();
         await Assert.That(calls.ClaudeArgs).IsEqualTo(("/repo/.claude/settings.local.json", paths.PluginDir!));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("project:") && l.Contains("/repo/.claude/settings.local.json"));
+    }
+
+    [Test]
+    public async Task Claude_path_with_markup_special_chars_does_not_break_output() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: true, Codex: false);
+        // [ and ] are legal in paths; if not escaped, Spectre.MarkupLine throws.
+        var paths    = TestPaths() with {
+            ClaudeSettingsPath = "/weird[path]/.claude/settings.json"
+        };
+
+        var result = await RunAsync(options, detected, paths, calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.ClaudeInstalled).IsTrue();
+        // The path must appear in the sink, escaped so Spectre treats [ and ] as literals.
+        // Markup.Escape("[path]") returns "[[path]]" — Spectre escapes brackets by doubling them.
+        await Assert.That(sink.Lines).Contains(l => l.Contains("[[path]]"));
     }
 
     static Paths TestPaths() => new(
         ClaudeSettingsPath: "/fake/.claude/settings.json",
+        ClaudeScopeLabel:   "user",
         PluginDir:          "/fake/plugin",
         CodexHooksPath:     "/fake/.codex/hooks.json",
         CodexSkillsDir:     "/fake/.codex/skills");

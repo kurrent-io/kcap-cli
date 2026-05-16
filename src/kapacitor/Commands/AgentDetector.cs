@@ -62,6 +62,13 @@ public static class AgentDetector {
         // degrades to the same outcome as a runtime-broken binary.
         const UnixFileMode anyExecute =
             UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
-        return (File.GetUnixFileMode(path) & anyExecute) != 0;
+        try {
+            return (File.GetUnixFileMode(path) & anyExecute) != 0;
+        } catch {
+            // TOCTOU race (file removed between File.Exists and GetUnixFileMode),
+            // permission denied, or other I/O failure — treat as not executable
+            // so detection doesn't abort the wizard.
+            return false;
+        }
     }
 }
