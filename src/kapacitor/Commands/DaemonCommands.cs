@@ -230,9 +230,7 @@ public static class DaemonCommands {
 
         if (name is not null) return StopByName(name);
 
-        // No --name: enumerate. Legacy path (pre-AI-630): if no per-name
-        // PID files exist but the legacy `agent.pid` does, migrate it
-        // under the OS-username default name so this command can find it.
+        // No --name: enumerate all running daemons.
         var candidates = EnumerateRunningNames();
 
         if (candidates.Count == 0) {
