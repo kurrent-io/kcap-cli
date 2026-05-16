@@ -88,7 +88,6 @@ static class WatcherManager {
             process.StandardError.Close();
 
             await File.WriteAllTextAsync(GetPidFilePath(key), process.Id.ToString());
-            await Console.Error.WriteLineAsync($"Spawned watcher for {key} (PID {process.Id})");
         } catch (Exception ex) {
             await Console.Error.WriteLineAsync($"Failed to spawn watcher for {key}: {ex.Message}");
         }
@@ -190,7 +189,6 @@ static class WatcherManager {
             return;
         }
 
-        await Console.Error.WriteLineAsync($"Watcher {key} not running, respawning...");
         await SpawnWatcher(baseUrl, key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, vendor);
     }
 
