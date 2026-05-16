@@ -76,12 +76,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly IReadOnlyDictionary<string, IHostedAgentLauncher> _launchers;
     readonly ILogger<AgentOrchestrator>                        _logger;
     readonly PeriodicTimer                                     _heartbeatTimer  = new(TimeSpan.FromSeconds(30));
-    // AI-79: heartbeat tightened from 60 s SendAsync to 15 s round-trip Ping.
-    // Server's default ClientTimeoutInterval is 30 s, and the staging incident
-    // showed daemons holding a displaced slot for nearly a minute before
-    // anyone noticed; 15 s puts us comfortably under both.
-    readonly PeriodicTimer                               _daemonHeartbeat = new(TimeSpan.FromSeconds(15));
-    static readonly TimeSpan                             _pingDeadline    = TimeSpan.FromSeconds(10);
+    // AI-79: heartbeat tightened from 60 s SendAsync to round-trip Ping.
+    // AI-642: tick halved (15 → 7 s) and deadline halved (10 → 5 s) so a
+    // displaced-slot mismatch or a hung transport is caught within ~10 s
+    // instead of ~25 s. This is independent of SignalR's transport timeout
+    // (which stays at the 30 s default) — the heartbeat is the daemon's
+    // application-level liveness probe.
+    readonly PeriodicTimer                               _daemonHeartbeat = new(TimeSpan.FromSeconds(7));
+    static readonly TimeSpan                             _pingDeadline    = TimeSpan.FromSeconds(5);
     readonly CancellationTokenSource                     _shutdownCts     = new();
 
     public AgentOrchestrator(
