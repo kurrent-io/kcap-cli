@@ -57,7 +57,7 @@ public static class StatusCommand {
 
         // Daemon — AI-630: read per-name PID files under
         // ~/.config/kapacitor/daemons/ instead of the pre-AI-630 singleton
-        // at ~/.config/kapacitor/<name>.pid. The top-level `kapacitor status`
+        // at ~/.config/kapacitor/agent.pid. The top-level `kapacitor status`
         // must agree with `kapacitor daemon status`; previously this
         // command kept saying "not running" while `daemon status` reported
         // a healthy daemon because new daemons no longer write the legacy
