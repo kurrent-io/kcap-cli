@@ -311,9 +311,16 @@ public class PluginCommandCodexInstallIntegrationTests {
     [Test, NotInParallel("CodexHookCommandTests.Console")]
     public async Task InstallCodex_prints_hooks_trust_hint_after_success() {
         using var tmp = new TempDir();
-        var homeVar = OperatingSystem.IsWindows() ? "USERPROFILE" : "HOME";
-        var originalHome = Environment.GetEnvironmentVariable(homeVar);
-        Environment.SetEnvironmentVariable(homeVar, tmp.Path);
+
+        // PathHelpers.HomeDirectory reads HOME first and falls back to UserProfile
+        // (USERPROFILE on Windows). On Windows shells that export HOME (Git Bash,
+        // MSYS, Cygwin, WSL) the production path resolver picks HOME, so setting
+        // only USERPROFILE would leave the test writing to the real ~/.codex.
+        // Set BOTH and restore BOTH regardless of OS.
+        var originalHome        = Environment.GetEnvironmentVariable("HOME");
+        var originalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+        Environment.SetEnvironmentVariable("HOME",        tmp.Path);
+        Environment.SetEnvironmentVariable("USERPROFILE", tmp.Path);
 
         var capturedOut = new StringWriter();
         var originalOut = Console.Out;
@@ -328,7 +335,8 @@ public class PluginCommandCodexInstallIntegrationTests {
             await Assert.That(stdout).Contains("trust");
         } finally {
             Console.SetOut(originalOut);
-            Environment.SetEnvironmentVariable(homeVar, originalHome);
+            Environment.SetEnvironmentVariable("HOME",        originalHome);
+            Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
         }
     }
 
