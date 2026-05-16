@@ -1,7 +1,7 @@
 namespace kapacitor;
 
 /// <summary>
-/// Shared resolution of the agent daemon's name. Lives in Kapacitor.Core
+/// Shared resolution of the daemon's name. Lives in Kapacitor.Core
 /// so the CLI supervisor and the daemon binary agree on which name the
 /// per-name lock / PID files belong to. Precedence — first non-empty
 /// source wins:
@@ -37,7 +37,7 @@ public static class DaemonNameResolver {
         // look like another flag. Silently falling back to env/profile/OS
         // username when the user typed `--name` with no value would mask
         // typos and (combined with --yes in CLI command paths) could turn
-        // `agent stop --yes --name` into "stop every daemon I own". The
+        // `daemon stop --yes --name` into "stop every daemon I own". The
         // CLI catches this ArgumentException and surfaces it as a clean
         // non-zero exit; the daemon binary likewise refuses to start so
         // a bad systemd unit / npm script invocation fails loudly.

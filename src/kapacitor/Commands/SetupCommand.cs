@@ -230,7 +230,7 @@ public static class SetupCommand {
         grid.AddRow("[bold]Config[/]", Markup.Escape(AppConfig.GetConfigPath()));
 
         AnsiConsole.Write(grid);
-        AnsiConsole.MarkupLine("\n[dim]Optional:[/] start the agent daemon with [cyan]kapacitor agent start -d[/]");
+        AnsiConsole.MarkupLine("\n[dim]Optional:[/] start the daemon with [cyan]kapacitor daemon start -d[/]");
         AnsiConsole.MarkupLine("[dim]Optional:[/] import past sessions with [cyan]kapacitor history --org[/]");
 
         return 0;
