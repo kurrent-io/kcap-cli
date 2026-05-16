@@ -93,6 +93,10 @@ static partial class WatchCommand {
             )
             .Build();
 
+        // Halve KeepAliveInterval (15s → 7s); see ServerConnection for rationale.
+        // ServerTimeout stays at the 30s default for rollout safety.
+        hubConnection.KeepAliveInterval = TimeSpan.FromSeconds(7);
+
         // Register StopWatcher handler — server sends this to tell us to shut down
         hubConnection.On<string>(
             "StopWatcher",

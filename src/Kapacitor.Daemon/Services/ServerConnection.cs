@@ -83,6 +83,13 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             )
             .Build();
 
+        // Halve KeepAliveInterval (15s → 7s) so the WebSocket stays warm
+        // through cloudflared and the server detects a dead transport sooner.
+        // ServerTimeout stays at the 30s default to keep a safe 2× margin
+        // against mixed-version rollouts where the server may still be on
+        // the default 15s server-side KeepAliveInterval.
+        _hub.KeepAliveInterval = TimeSpan.FromSeconds(7);
+
         _hub.On<LaunchAgentCommand>("LaunchAgent", cmd => SafeInvoke("LaunchAgent", () => OnLaunchAgent?.Invoke(cmd)));
         _hub.On<string>("StopAgent", agentId => SafeInvoke("StopAgent", () => OnStopAgent?.Invoke(agentId)));
         _hub.On<SendInputCommand>("SendInput", cmd => SafeInvoke("SendInput", () => OnSendInput?.Invoke(cmd)));
@@ -278,9 +285,22 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// transport and a new server-side conn id, then re-registers via
     /// <see cref="RegisterDaemon"/>. Used when the heartbeat ping times out
     /// or throws — the WebSocket is hung and only a fresh connection
-    /// recovers it.
+    /// recovers it. StopAsync is capped at 5 s so a wedged transport
+    /// can't stall the heartbeat loop indefinitely (Qodo AI-642).
     /// </summary>
-    public virtual Task ForceReconnectAsync() => _hub.StopAsync(_ct);
+    public virtual async Task ForceReconnectAsync() {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
+
+        try {
+            await _hub.StopAsync(cts.Token);
+        } catch (OperationCanceledException) when (!_ct.IsCancellationRequested) {
+            // StopAsync didn't return in 5 s — transport is wedged. OnClosed
+            // may still fire eventually, but we don't want to block the
+            // heartbeat loop on it. The next tick will retry.
+            _logger.LogWarning("ForceReconnectAsync: StopAsync exceeded 5 s — abandoning wait");
+        }
+    }
 
     public virtual async Task UpdateRepoPathsAsync() {
         try {
