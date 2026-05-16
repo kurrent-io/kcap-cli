@@ -3,8 +3,8 @@ using kapacitor.Config;
 
 namespace kapacitor.Commands;
 
-public static class AgentCommands {
-    static readonly string LogPath = PathHelpers.ConfigPath("agent.log");
+public static class DaemonCommands {
+    static readonly string LogPath = PathHelpers.ConfigPath("daemon.log");
 
     public static async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {

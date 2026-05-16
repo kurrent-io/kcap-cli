@@ -227,7 +227,7 @@ switch (command) {
         return 0;
     }
     case "agent":
-        return await AgentCommands.HandleAsync(args);
+        return await DaemonCommands.HandleAsync(args);
     case "setup":
         return await SetupCommand.HandleAsync(args);
     case "plugin":
