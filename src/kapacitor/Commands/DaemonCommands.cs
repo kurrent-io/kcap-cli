@@ -40,7 +40,7 @@ public static class DaemonCommands {
     /// <c>FileShare.None</c> for the CLI-side critical section that wraps
     /// the PID-file stale-check + daemon spawn. The daemon itself takes a
     /// separate <c>&lt;name&gt;.lock</c> via <see cref="DaemonLock"/>; this
-    /// lock just keeps two concurrent <c>kapacitor agent start --name X</c>
+    /// lock just keeps two concurrent <c>kapacitor daemon start --name X</c>
     /// invocations from both observing a stale PID file and both spawning.
     /// </summary>
     static FileStream? TryAcquireStartLock(string daemonName) {
@@ -63,8 +63,8 @@ public static class DaemonCommands {
 
         if (startLock is null) {
             await Console.Error.WriteLineAsync(
-                $"Another `kapacitor agent start --name {name}` is already in progress or holds the daemon lock. "
-                + $"Run `kapacitor agent stop --name {name}` first or wait for the other start to complete."
+                $"Another `kapacitor daemon start --name {name}` is already in progress or holds the daemon lock. "
+                + $"Run `kapacitor daemon stop --name {name}` first or wait for the other start to complete."
             );
 
             return 1;
@@ -73,8 +73,8 @@ public static class DaemonCommands {
         try {
             if (ReadPidFile(name) is { } existing && IsOurDaemon(existing.Pid, existing.StartTicks)) {
                 await Console.Error.WriteLineAsync(
-                    $"Agent daemon '{name}' already running (PID {existing.Pid}). "
-                    + $"Use `kapacitor agent stop --name {name}` first."
+                    $"Daemon '{name}' already running (PID {existing.Pid}). "
+                    + $"Use `kapacitor daemon stop --name {name}` first."
                 );
 
                 return 1;
@@ -137,8 +137,8 @@ public static class DaemonCommands {
 
         if (startLock is null) {
             Console.Error.WriteLine(
-                $"Another `kapacitor agent start --name {name}` is already in progress or holds the daemon lock. "
-                + $"Run `kapacitor agent stop --name {name}` first or wait for the other start to complete."
+                $"Another `kapacitor daemon start --name {name}` is already in progress or holds the daemon lock. "
+                + $"Run `kapacitor daemon stop --name {name}` first or wait for the other start to complete."
             );
 
             return 1;
@@ -148,8 +148,8 @@ public static class DaemonCommands {
 
         if (ReadPidFile(name) is { } existing && IsOurDaemon(existing.Pid, existing.StartTicks)) {
             Console.Error.WriteLine(
-                $"Agent daemon '{name}' already running (PID {existing.Pid}). "
-                + $"Use `kapacitor agent stop --name {name}` first."
+                $"Daemon '{name}' already running (PID {existing.Pid}). "
+                + $"Use `kapacitor daemon stop --name {name}` first."
             );
 
             return 1;
@@ -196,8 +196,8 @@ public static class DaemonCommands {
         // an immediate exit without making the success path feel sluggish.
         if (process.WaitForExit(1500)) {
             Console.Error.WriteLine(
-                $"Agent daemon '{name}' failed to start (exit code {process.ExitCode}). "
-                + $"Check `kapacitor agent doctor` to see whether the name is held by another process."
+                $"Daemon '{name}' failed to start (exit code {process.ExitCode}). "
+                + $"Check `kapacitor daemon doctor` to see whether the name is held by another process."
             );
 
             // Translate the daemon's flock-conflict exit code straight
@@ -208,10 +208,10 @@ public static class DaemonCommands {
 
         WritePidFile(name, process);
 
-        Console.Out.WriteLine($"Agent daemon '{name}' started (PID {process.Id})");
+        Console.Out.WriteLine($"Daemon '{name}' started (PID {process.Id})");
         Console.Out.WriteLine($"  Log:       {LogPath}");
-        Console.Out.WriteLine($"  Stop with: kapacitor agent stop --name {name}");
-        Console.Out.WriteLine($"  Status:    kapacitor agent status --name {name}");
+        Console.Out.WriteLine($"  Stop with: kapacitor daemon stop --name {name}");
+        Console.Out.WriteLine($"  Status:    kapacitor daemon status --name {name}");
 
         return 0;
     }
@@ -236,7 +236,7 @@ public static class DaemonCommands {
         var candidates = EnumerateRunningNames();
 
         if (candidates.Count == 0) {
-            await Console.Out.WriteLineAsync("No agent daemons are running.");
+            await Console.Out.WriteLineAsync("No daemons are running.");
 
             return 0;
         }
@@ -271,14 +271,14 @@ public static class DaemonCommands {
 
     static int StopByName(string name) {
         if (ReadPidFile(name) is not { } entry) {
-            Console.Error.WriteLine($"No agent daemon '{name}' running (no PID file found).");
+            Console.Error.WriteLine($"No daemon '{name}' running (no PID file found).");
 
             return 1;
         }
 
         try {
             if (!IsOurDaemon(entry.Pid, entry.StartTicks)) {
-                Console.Out.WriteLine($"Agent daemon '{name}' was not running (stale PID file).");
+                Console.Out.WriteLine($"Daemon '{name}' was not running (stale PID file).");
                 File.Delete(DaemonLockPaths.PidPath(name));
 
                 return 0;
@@ -286,9 +286,9 @@ public static class DaemonCommands {
 
             var process = Process.GetProcessById(entry.Pid);
             process.Kill(entireProcessTree: true);
-            Console.Out.WriteLine($"Agent daemon '{name}' stopped (PID {entry.Pid}).");
+            Console.Out.WriteLine($"Daemon '{name}' stopped (PID {entry.Pid}).");
         } catch (ArgumentException) {
-            Console.Out.WriteLine($"Agent daemon '{name}' was not running.");
+            Console.Out.WriteLine($"Daemon '{name}' was not running.");
         }
 
         try { File.Delete(DaemonLockPaths.PidPath(name)); } catch { /* best-effort */ }
@@ -310,22 +310,22 @@ public static class DaemonCommands {
         var names = explicitName is not null ? [explicitName] : EnumerateRunningNames();
 
         if (names.Count == 0) {
-            await Console.Out.WriteLineAsync("Agent: not running");
+            await Console.Out.WriteLineAsync("Daemon: not running");
 
             return 0;
         }
 
         foreach (var name in names) {
             if (ReadPidFile(name) is not { } entry) {
-                await Console.Out.WriteLineAsync($"Agent '{name}': not running");
+                await Console.Out.WriteLineAsync($"Daemon '{name}': not running");
 
                 continue;
             }
 
             if (IsOurDaemon(entry.Pid, entry.StartTicks)) {
-                await Console.Out.WriteLineAsync($"Agent '{name}': running (PID {entry.Pid})");
+                await Console.Out.WriteLineAsync($"Daemon '{name}': running (PID {entry.Pid})");
             } else {
-                await Console.Out.WriteLineAsync($"Agent '{name}': not running (stale PID file)");
+                await Console.Out.WriteLineAsync($"Daemon '{name}': not running (stale PID file)");
                 try { File.Delete(DaemonLockPaths.PidPath(name)); } catch { /* best-effort */ }
             }
         }
@@ -351,7 +351,7 @@ public static class DaemonCommands {
         var names = DaemonLockPaths.EnumerateNames();
 
         if (names.Count == 0) {
-            await Console.Out.WriteLineAsync($"No agent daemon files found under {DaemonLockPaths.Directory}.");
+            await Console.Out.WriteLineAsync($"No daemon files found under {DaemonLockPaths.Directory}.");
 
             return 0;
         }
@@ -506,8 +506,8 @@ public static class DaemonCommands {
 
     /// <summary>
     /// Returns the daemon names that currently have a PID file on disk
-    /// (per-name layout under <c>~/.config/kapacitor/agents/</c>). Used by
-    /// <c>agent stop</c> / <c>agent status</c> without <c>--name</c>.
+    /// (per-name layout under <c>~/.config/kapacitor/daemons/</c>). Used by
+    /// <c>daemon stop</c> / <c>daemon status</c> without <c>--name</c>.
     /// </summary>
     static List<string> EnumerateRunningNames() {
         DaemonLockPaths.EnsureDirectory();
@@ -531,7 +531,7 @@ public static class DaemonCommands {
     /// <para>Throws <see cref="ArgumentException"/> if the flag is present but
     /// the following token is missing or itself looks like another flag
     /// (starts with <c>-</c>). The strict-value check protects destructive
-    /// commands like <c>agent stop --yes --name</c> — without it, a missing
+    /// commands like <c>daemon stop --yes --name</c> — without it, a missing
     /// value would silently fall through to the no-<c>--name</c> enumeration
     /// path and (with <c>--yes</c>) skip the multi-daemon prompt, stopping
     /// every daemon the user owns. Surfacing the bad invocation forces the
@@ -589,18 +589,18 @@ public static class DaemonCommands {
         $"kapacitor-daemon binary not found next to {AppContext.BaseDirectory}. Reinstall the kapacitor package.";
 
     static int PrintUsage() {
-        Console.Error.WriteLine("Usage: kapacitor agent <start|stop|status|logs|doctor>");
+        Console.Error.WriteLine("Usage: kapacitor daemon <start|stop|status|logs|doctor>");
         Console.Error.WriteLine();
-        Console.Error.WriteLine("  start [-d] [--name <n>]    Start the agent daemon (foreground, or -d for background)");
-        Console.Error.WriteLine("  stop [--name <n>] [--yes]  Stop a running agent daemon (prompts on multi unless --yes)");
-        Console.Error.WriteLine("  status [--name <n>]        Show agent daemon status (lists all when --name omitted)");
+        Console.Error.WriteLine("  start [-d] [--name <n>]    Start the daemon (foreground, or -d for background)");
+        Console.Error.WriteLine("  stop [--name <n>] [--yes]  Stop a running daemon (prompts on multi unless --yes)");
+        Console.Error.WriteLine("  status [--name <n>]        Show daemon status (lists all when --name omitted)");
         Console.Error.WriteLine("  logs                       Show recent daemon log output");
         Console.Error.WriteLine("  doctor [--clean]           Diagnose lock-file state, optionally clean stale entries");
         Console.Error.WriteLine();
         Console.Error.WriteLine("Options for start:");
         Console.Error.WriteLine("  --name <name>         Daemon name (defaults to OS username)");
         Console.Error.WriteLine("  --server-url <url>    Server URL");
-        Console.Error.WriteLine("  --max-agents <n>      Max concurrent agents (default: 5)");
+        Console.Error.WriteLine("  --max-agents <n>      Max concurrent hosted coding agents (default: 5)");
         Console.Error.WriteLine("  --log-file <path>     Log to file instead of console");
         Console.Error.WriteLine("  -d, --detach          Run in background (logs to file automatically)");
 
