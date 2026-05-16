@@ -59,11 +59,6 @@ public static class AgentCommands {
     static async Task<int> StartForegroundAsync(string[] args) {
         var name = ResolveName(args);
 
-        // One-shot migration of pre-AI-630 legacy files so an earlier
-        // foreground daemon that wrote ~/.config/kapacitor/agent.pid is
-        // visible through our per-name PID-file check below. Idempotent.
-        AgentLockMigration.MigrateLegacyFiles(name);
-
         var startLock = TryAcquireStartLock(name);
 
         if (startLock is null) {
@@ -137,8 +132,6 @@ public static class AgentCommands {
 
     static int StartDetached(string[] args) {
         var name = ResolveName(args);
-
-        AgentLockMigration.MigrateLegacyFiles(name);
 
         var startLock = TryAcquireStartLock(name);
 

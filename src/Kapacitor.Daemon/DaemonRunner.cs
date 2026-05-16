@@ -118,12 +118,6 @@ public static partial class DaemonRunner {
             return 1;
         }
 
-        // One-shot migration from the pre-AI-630 singleton layout to per-name
-        // files. Runs before lock acquisition so a foreground daemon under
-        // the old layout doesn't get duplicated by a new daemon writing to
-        // the new path. Idempotent — no-op after the first successful run.
-        AgentLockMigration.MigrateLegacyFiles(config.Name);
-
         // Acquire the per-name flock that prevents another daemon from
         // running under the same name on this machine. The lock content is
         // a fresh instance id that we'll also send over DaemonConnect so
