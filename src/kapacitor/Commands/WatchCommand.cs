@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using kapacitor.Auth;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -36,6 +38,12 @@ static partial class WatchCommand {
         };
         PosixSignalRegistration.Create(PosixSignal.SIGTERM, _ => cts.Cancel());
 
+        // Tracks whether shutdown was triggered by the parent coding-agent process
+        // dying without firing session-end. When true, the watcher takes over the
+        // server's session-end POST (which the parent normally fires) so the read
+        // model doesn't keep the session "active" forever.
+        var parentExited = false;
+
         // Watch the spawning claude process. If it dies without firing session-end
         // (crash, force-kill, IDE-detach), self-terminate within ~5s instead of orphaning.
         if (parentPid is { } ppid && ProcessHelpers.IsProcessAlive(ppid)) {
@@ -50,6 +58,7 @@ static partial class WatchCommand {
 
                     if (!ProcessHelpers.IsProcessAlive(ppid)) {
                         Log($"Parent pid {ppid} exited; shutting down watcher");
+                        parentExited = true;
                         cts.Cancel();
                         return;
                     }
@@ -232,9 +241,75 @@ static partial class WatchCommand {
         Log($"Done. {state.LinesProcessed} total lines processed.");
 
         await hubConnection.DisposeAsync();
+
+        // Parent coding-agent died without firing session-end. Take over the role:
+        // POST /hooks/session-end so the server writes SessionEnded (otherwise the
+        // session stays "active" forever in the read model). Mirrors what the daemon
+        // already does for hosted agents via EndAgentSessionAsync. Skipped for:
+        //   - agent watchers (agentId != null) — their lifecycle is handled by the
+        //     parent session's own session-end hook plus the daemon path.
+        //   - below-threshold sessions — no transcript lines were ever sent, so the
+        //     server may not have a meaningful session to end.
+        // Runs after SignalR dispose so the server's StopAndDrainAsync skips the
+        // 10s drain wait (no live watcher connection to signal).
+        if (parentExited && agentId is null && state.ThresholdReached) {
+            await PostSessionEndOnParentExitAsync(baseUrl, sessionId, transcriptPath, cwd, vendor, state.Repository);
+        }
+
         await logWriter.DisposeAsync();
 
         return 0;
+    }
+
+    internal static async Task PostSessionEndOnParentExitAsync(
+            string             baseUrl,
+            string             sessionId,
+            string             transcriptPath,
+            string?            cwd,
+            string             vendor,
+            RepositoryPayload? repository
+        ) {
+        try {
+            var endHook = new JsonObject {
+                ["session_id"]      = sessionId,
+                ["transcript_path"] = transcriptPath,
+                ["cwd"]             = cwd ?? "",
+                ["hook_event_name"] = "session_end",
+                ["reason"]          = "parent_exited",
+            };
+
+            if (repository is not null) {
+                endHook["repository"] = JsonNode.Parse(
+                    JsonSerializer.Serialize(repository, KapacitorJsonContext.Default.RepositoryPayload)
+                );
+            }
+
+            using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
+            using var content    = new StringContent(endHook.ToJsonString(), Encoding.UTF8, "application/json");
+
+            var url = $"{baseUrl}/hooks/session-end/{vendor}";
+            using var response = await httpClient.PostWithRetryAsync(url, content);
+
+            if (!response.IsSuccessStatusCode) {
+                Log($"Parent-exit session-end POST returned HTTP {(int)response.StatusCode}");
+                return;
+            }
+
+            Log("Parent-exit session-end POST succeeded");
+
+            try {
+                var body = await response.Content.ReadAsStringAsync();
+                var node = JsonNode.Parse(body);
+
+                if (node?["generate_whats_done"]?.GetValue<bool>() == true) {
+                    WatcherManager.SpawnWhatsDoneGenerator(baseUrl, sessionId, vendor);
+                }
+            } catch (Exception ex) {
+                Log($"Parent-exit session-end response parse failed: {ex.Message}");
+            }
+        } catch (Exception ex) {
+            Log($"Parent-exit session-end POST failed: {ex.Message}");
+        }
     }
 
     static readonly Regex CommandNameRegex = CommandNameRx();
