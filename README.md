@@ -83,6 +83,32 @@ Once set up, Capacitor runs silently in the background. Every Claude Code (and C
 
 ## CLI commands
 
+### Initial setup
+
+```bash
+kapacitor setup                                   # interactive wizard
+kapacitor setup --server-url <url> --no-prompt    # CI / scripted
+```
+
+The setup wizard detects every supported coding agent on `PATH` — Claude Code and Codex CLI — and offers to install hooks for each, then configures the agent daemon. Re-run any time to update the configuration.
+
+In `--no-prompt` mode, hooks install for every detected agent by default. Opt out per agent:
+
+```bash
+kapacitor setup --server-url <url> --no-prompt --skip-codex-hooks   # only Claude
+kapacitor setup --server-url <url> --no-prompt --skip-claude-hooks  # only Codex
+```
+
+After installing Codex hooks, run `/hooks` inside Codex and trust each kapacitor entry — Codex does not execute hooks until each is explicitly trusted. For project-scope installs (a single repo), use `kapacitor plugin install [--codex] --project` after setup.
+
+Legacy `--plugin-scope <user|project|skip>` is retained for backwards compatibility:
+
+- `user` — no-op (matches the new default)
+- `project` — install the Claude Code plugin into `<repo>/.claude/settings.local.json`
+- `skip` — alias for `--skip-claude-hooks`
+
+New scripts should prefer `--skip-claude-hooks` / `--skip-codex-hooks` and `kapacitor plugin install --project` for project scope.
+
 ### Session recap
 
 By default, shows a concise AI-generated summary — why the work was done, key decisions, and anything left unfinished. Use `--full` for the complete transcript with all prompts, responses, and file changes.

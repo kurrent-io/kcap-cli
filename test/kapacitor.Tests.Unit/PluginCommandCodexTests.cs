@@ -285,6 +285,24 @@ public class PluginCommandCodexTests {
         File.WriteAllText(Path.Combine(dir, "SKILL.md"), body);
     }
 
+    sealed class TempDir : IDisposable {
+        public string Path { get; } = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            $"kapacitor-test-{Guid.NewGuid().ToString("N")[..8]}"
+        );
+        public TempDir() => Directory.CreateDirectory(Path);
+        public void Dispose() {
+            try { Directory.Delete(Path, true); } catch { /* best effort */ }
+        }
+    }
+}
+
+// Separated into its own class so it joins both serialization groups:
+//   "HomeEnvVarMutation" (class-level) and "Console.Out_redirect" (method-level).
+// Without this, a concurrent HOME-mutating test could leak the real user profile
+// into our PluginCommand call and write hooks under the wrong directory.
+[NotInParallel("HomeEnvVarMutation")]
+public class PluginCommandCodexInstallIntegrationTests {
     [Test, NotInParallel("Console.Out_redirect")]
     public async Task InstallCodex_prints_hooks_trust_hint_after_success() {
         using var tmp = new TempDir();
