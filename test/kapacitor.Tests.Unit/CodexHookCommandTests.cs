@@ -306,38 +306,26 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(_server.LogEntries.Count()).IsEqualTo(0);
     }
 
-    [Test]
-    [Arguments("""{"generate_whats_done":true}""",  true)]
-    [Arguments("""{"generate_whats_done":false}""", false)]
-    [Arguments("""{"other_field":"x"}""",           false)]
-    [Arguments("""{"generate_whats_done":"yes"}""", false)] // wrong type — fall through
-    [Arguments("not json",                          false)]
-    [Arguments("",                                  false)]
-    public async Task ShouldSpawnWhatsDone_ParsesGenerateFlag(string responseBody, bool expected) {
-        var result = CodexHookCommand.ShouldSpawnWhatsDone(responseBody);
-        await Assert.That(result).IsEqualTo(expected);
-    }
-
-    [Test]
-    public async Task ShouldSpawnWhatsDone_NullBody_ReturnsFalse() {
-        var result = CodexHookCommand.ShouldSpawnWhatsDone(null);
-        await Assert.That(result).IsFalse();
-    }
-
-    // Fix #3: non-string session_id in a Stop payload must not crash.
+    // Fix #3 / AI-648: non-string session_id in a Stop payload must not crash.
+    // session_id falls to null via the safe TryGetString helper, so HandleStop
+    // short-circuits before EnsureWatcherRunning. No server POST is expected
+    // (AI-648 made Stop a turn-end no-op), but we still stub /hooks/session-end/codex
+    // so a regression that reintroduces the POST surfaces as a test failure
+    // via the WireMock log assertion below.
     [Test]
     public async Task Stop_with_numeric_session_id_returns_zero_without_crash() {
         var payload = """{"hook_event_name": "Stop", "session_id": 12345, "transcript_path": "/tmp/r.jsonl"}""";
 
-        // No server stub needed — session_id is null after safe extraction,
-        // so KillWatcher is skipped and PostHookAsync is not called (no baseUrl stub).
-        // But we DO need a stub for the post so it doesn't fail due to unreachable.
         _server.Given(Request.Create().WithPath("/hooks/session-end/codex").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
 
         await Assert.That(exit).IsEqualTo(0);
+
+        // AI-648: Stop must never POST session-end, even with a malformed payload.
+        var endRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
+        await Assert.That(endRequests.Count).IsEqualTo(0);
     }
 
     // ---- PermissionRequest daemon-bridge tests ----

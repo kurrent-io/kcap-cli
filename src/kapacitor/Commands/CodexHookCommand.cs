@@ -116,13 +116,13 @@ static class CodexHookCommand {
         //
         // Symmetric with Claude's stop/notification branch in Program.cs —
         // we just keep the watcher alive in case it crashed mid-session.
-        var sessionId      = TryGetString(node, "session_id");
-        var transcriptPath = TryGetString(node, "transcript_path");
-        var cwd            = TryGetString(node, "cwd");
+        var sessionId  = TryGetString(node, "session_id");
+        var transcript = TryGetString(node, "transcript_path");
+        var cwd        = TryGetString(node, "cwd");
 
-        if (sessionId is not null && transcriptPath is not null) {
+        if (sessionId is not null && transcript is not null) {
             await WatcherManager.EnsureWatcherRunning(
-                baseUrl, sessionId, transcriptPath,
+                baseUrl, sessionId, transcript,
                 agentId: null, sessionIdOverride: null, cwd: cwd,
                 skipTitle: false, vendor: "codex"
             );
@@ -132,23 +132,6 @@ static class CodexHookCommand {
         // "invalid stop hook JSON output". Emit the schema default explicitly.
         Console.Write(SessionScopedOutputJson);
         return 0;
-    }
-
-    /// <summary>
-    /// Stub preserved for binary compatibility with existing test references.
-    /// Scheduled for deletion in Task 3 (AI-648) along with its unit tests.
-    /// </summary>
-    [Obsolete("ShouldSpawnWhatsDone is no longer called from HandleStop (AI-648). " +
-              "Delete this stub and its tests in Task 3.")]
-    internal static bool ShouldSpawnWhatsDone(string? responseBody) {
-        if (responseBody is null) return false;
-
-        try {
-            var responseNode = JsonNode.Parse(responseBody);
-            return responseNode?["generate_whats_done"]?.GetValue<bool>() == true;
-        } catch {
-            return false;
-        }
     }
 
     static async Task<int> HandlePermissionRequest(string baseUrl, JsonNode node) {
