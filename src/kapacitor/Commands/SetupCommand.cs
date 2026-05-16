@@ -9,9 +9,14 @@ namespace kapacitor.Commands;
 
 public static class SetupCommand {
     public static async Task<int> HandleAsync(string[] args) {
-        var serverUrlArg = GetArg(args, "--server-url");
-        var noPrompt     = args.Contains("--no-prompt");
-        var forceDevice  = args.Contains("--device");
+        var serverUrlArg     = GetArg(args, "--server-url");
+        var noPrompt         = args.Contains("--no-prompt");
+        var forceDevice      = args.Contains("--device");
+        var skipClaudeFlag   = args.Contains("--skip-claude-hooks");
+        var skipCodexFlag    = args.Contains("--skip-codex-hooks");
+        var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
+        var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
+        var legacyProjectScope = legacyPluginScope == "project";
 
         AnsiConsole.Write(new Rule("[bold green]Welcome to Kapacitor[/]").Centered());
 
@@ -134,56 +139,44 @@ public static class SetupCommand {
 
         await Console.Out.WriteLineAsync();
 
-        // Step 4: Claude Code plugin
-        AnsiConsole.Write(new Rule("[yellow]Step 4/5 — Claude Code Plugin[/]").LeftJustified());
-        await Console.Out.WriteLineAsync("  The Kapacitor plugin provides hooks, skills, and collaborative memory.");
+        // Step 4: Coding agents
+        AnsiConsole.Write(new Rule("[yellow]Step 4/5 — Coding agents[/]").LeftJustified());
+        await Console.Out.WriteLineAsync("  Kapacitor records sessions by installing hooks into your coding agent CLIs.");
         await Console.Out.WriteLineAsync();
 
         var pluginPath = ResolvePluginPath();
+        var detected   = new CodingAgentsStep.DetectedAgents(
+            Claude: AgentDetector.IsInstalled("claude"),
+            Codex:  AgentDetector.IsInstalled("codex"));
 
-        if (pluginPath is not null) {
-            // The plugin directory itself is the marketplace root (single-plugin marketplace)
+        var claudeSettingsPath = legacyProjectScope
+            ? Path.Combine(Environment.CurrentDirectory, ".claude", "settings.local.json")
+            : ClaudePaths.UserSettings;
 
-            string pluginScope;
+        var stepOptions = new CodingAgentsStep.Options(
+            SkipClaude: skipClaude,
+            SkipCodex:  skipCodexFlag,
+            NoPrompt:   noPrompt);
 
-            if (noPrompt) {
-                pluginScope = GetArg(args, "--plugin-scope") ?? "user";
-                await Console.Out.WriteLineAsync($"  Plugin scope: {pluginScope}");
-            } else {
-                pluginScope = AnsiConsole.Prompt(
-                    new SelectionPrompt<string>()
-                        .Title("Where should the plugin be installed?")
-                        .AddChoices("user", "project", "skip")
-                        .UseConverter(v => v switch {
-                            "user"    => "User-wide — all Claude Code sessions (recommended)",
-                            "project" => "This project only",
-                            "skip"    => "Skip — I'll install it manually",
-                            _         => v
-                        }));
-            }
+        var stepPaths = new CodingAgentsStep.Paths(
+            ClaudeSettingsPath: claudeSettingsPath,
+            ClaudeScopeLabel:   legacyProjectScope ? "project" : "user",
+            PluginDir:          pluginPath,
+            CodexHooksPath:     CodexPaths.UserHooksJson,
+            CodexSkillsDir:     CodexPaths.UserSkillsDir);
 
-            if (pluginScope == "skip") {
-                await Console.Out.WriteLineAsync("  Skipped. Install manually inside Claude Code:");
-                await Console.Out.WriteLineAsync($"    /plugin install {pluginPath}");
-            } else {
-                var settingsPath = pluginScope == "project"
-                    ? Path.Combine(Environment.CurrentDirectory, ".claude", "settings.local.json")
-                    : ClaudePaths.UserSettings;
+        var stepInstallers = new CodingAgentsStep.Installers(
+            InstallClaudePlugin: InstallPlugin,
+            InstallCodexHooks:   PluginCommand.InstallCodexHooks,
+            InstallCodexSkills:  PluginCommand.InstallCodexSkills);
 
-                var installed = InstallPlugin(settingsPath, pluginPath);
+        bool PromptYesNo(string text) =>
+            AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
 
-                if (installed) {
-                    var scope = pluginScope == "project" ? "project" : "user";
-                    await Console.Out.WriteLineAsync($"  ✓ Plugin registered ({scope}: {settingsPath})");
-                } else {
-                    await Console.Out.WriteLineAsync("  ⚠ Could not update settings. Install manually inside Claude Code:");
-                    await Console.Out.WriteLineAsync($"    /plugin install {pluginPath}");
-                }
-            }
-        } else {
-            await Console.Out.WriteLineAsync("  ⚠ Plugin directory not found. Re-install kapacitor via npm:");
-            await Console.Out.WriteLineAsync("    npm install -g @kurrent/kapacitor");
-        }
+        void WriteLine(string line) => AnsiConsole.MarkupLine(line);
+
+        var _ = await CodingAgentsStep.RunAsync(
+            stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
 
         await Console.Out.WriteLineAsync();
 

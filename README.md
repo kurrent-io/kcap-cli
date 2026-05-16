@@ -36,7 +36,7 @@ The setup wizard walks you through:
 1. **Server URL** — enter the URL your admin provided
 2. **Login** — authenticates via GitHub Device Flow (if the server requires auth)
 3. **Default visibility** — choose how your sessions are visible to others
-4. **Claude Code plugin** — installs hooks, skills, and collaborative memory (user-wide or project-only)
+4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH` and offers to install hooks/skills for each (user-wide)
 5. **Agent daemon** — configure the daemon name for remote agent execution
 
 Verify with `kapacitor whoami` and `kapacitor status`.
@@ -47,21 +47,12 @@ For non-interactive environments:
 kapacitor setup --server-url https://capacitor.example.com --default-visibility org_public --no-prompt
 ```
 
-#### Also using Codex CLI?
+In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks` and/or `--skip-codex-hooks`.
 
-`setup` installs Claude Code hooks only. If you also use Codex CLI — either for local sessions or for hosting agents via the daemon — install the Codex hook surface separately:
+> **Need hooks for an agent installed after setup, or scoped to a single repo?**
+> Run `kapacitor plugin install [--codex] [--project]`. After installing Codex hooks, run `/hooks` inside Codex and trust each kapacitor entry — Codex doesn't execute hooks until each is explicitly trusted. After a `--project` install, also run `codex` once in the repo and accept the trust prompt.
 
-```bash
-kapacitor plugin install --codex            # user-wide  (~/.codex/hooks.json)
-kapacitor plugin install --codex --project  # this repo only (<repo>/.codex/hooks.json)
-kapacitor plugin remove --codex             # uninstall
-```
-
-`--codex` also installs two Codex skills into `~/.codex/skills/` — `kapacitor-recap` and `kapacitor-errors` — so the Codex CLI can pull repo session summaries and tool-error reports on demand. Codex sessions don't auto-populate `KAPACITOR_SESSION_ID`, so the recap skill leads with `kapacitor recap --repo` and falls back to explicit session IDs. The `validate-plan` skill is Claude Code–only (no Codex plan mode equivalent).
-
-After a `--project` install, Codex won't actually run the hooks until you trust the directory: run `codex` once in the repo and accept the trust prompt. Skills are always installed user-wide regardless of `--project`.
-
-`kapacitor status` reports installation state for the user-wide Claude Code and Codex hook surfaces — it does not currently detect `--project` installs. For a `--project` install, check that `<repo>/.claude/settings.local.json` or `<repo>/.codex/hooks.json` exists and contains kapacitor entries.
+> **Need at least one agent to capture sessions:** the setup wizard runs to completion without an agent CLI on `PATH` (it'll still configure your profile, auth, and daemon), but kapacitor only records work once Claude Code or Codex CLI is installed and the hooks are in place.
 
 ### 3. Import existing sessions (optional)
 
@@ -91,6 +82,32 @@ Once set up, Capacitor runs silently in the background. Every Claude Code (and C
 - **Repository context** — git repo, branch, and PR linkage
 
 ## CLI commands
+
+### Initial setup
+
+```bash
+kapacitor setup                                   # interactive wizard
+kapacitor setup --server-url <url> --no-prompt    # CI / scripted
+```
+
+The setup wizard detects every supported coding agent on `PATH` — Claude Code and Codex CLI — and offers to install hooks for each, then configures the agent daemon. Re-run any time to update the configuration.
+
+In `--no-prompt` mode, hooks install for every detected agent by default. Opt out per agent:
+
+```bash
+kapacitor setup --server-url <url> --no-prompt --skip-codex-hooks   # only Claude
+kapacitor setup --server-url <url> --no-prompt --skip-claude-hooks  # only Codex
+```
+
+After installing Codex hooks, run `/hooks` inside Codex and trust each kapacitor entry — Codex does not execute hooks until each is explicitly trusted. For project-scope installs (a single repo), use `kapacitor plugin install [--codex] --project` after setup.
+
+Legacy `--plugin-scope <user|project|skip>` is retained for backwards compatibility:
+
+- `user` — no-op (matches the new default)
+- `project` — install the Claude Code plugin into `<repo>/.claude/settings.local.json`
+- `skip` — alias for `--skip-claude-hooks`
+
+New scripts should prefer `--skip-claude-hooks` / `--skip-codex-hooks` and `kapacitor plugin install --project` for project scope.
 
 ### Session recap
 
@@ -213,7 +230,7 @@ Two daemons with **different** `--name` values can run side-by-side. Two daemons
 
 #### Hosted Codex agents
 
-To launch hosted Codex agents from the dashboard, the Codex hook surface must be installed first:
+Hosted Codex agents require the Codex hook surface — if you said yes during `kapacitor setup`, you already have it. Otherwise install it manually:
 
 ```bash
 kapacitor plugin install --codex            # user scope (~/.codex/hooks.json)
