@@ -90,7 +90,7 @@ kapacitor setup                                   # interactive wizard
 kapacitor setup --server-url <url> --no-prompt    # CI / scripted
 ```
 
-The setup wizard detects every supported coding agent on `PATH` — Claude Code and Codex CLI — and offers to install hooks for each, then configures the agent daemon. Re-run any time to update the configuration.
+The setup wizard detects every supported coding agent on `PATH` — Claude Code and Codex CLI — and offers to install hooks for each, then configures the daemon. Re-run any time to update the configuration.
 
 In `--no-prompt` mode, hooks install for every detected agent by default. Opt out per agent:
 
