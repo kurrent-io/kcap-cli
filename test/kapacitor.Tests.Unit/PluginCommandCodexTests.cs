@@ -297,13 +297,18 @@ public class PluginCommandCodexTests {
     }
 }
 
-// Separated into its own class so it joins both serialization groups:
-//   "HomeEnvVarMutation" (class-level) and "Console.Out_redirect" (method-level).
-// Without this, a concurrent HOME-mutating test could leak the real user profile
-// into our PluginCommand call and write hooks under the wrong directory.
+// Separated into its own class so it joins two serialization groups:
+//   class-level: "HomeEnvVarMutation" — prevents concurrent HOME-mutating tests
+//     from leaking the real user profile into our PluginCommand call.
+//   method-level: CodexHookCommandTests.ConsoleSerialGroup ("CodexHookCommandTests.Console")
+//     — TUnit's NotInParallel takes a single key per attribute, so we must share
+//     the SAME literal token that every Console.Out-redirecting test in
+//     CodexHookCommandTests uses. A distinct "Console.Out_redirect" token would
+//     leave us racing against CodexHookCommandTests on the process-wide
+//     Console.Out writer.
 [NotInParallel("HomeEnvVarMutation")]
 public class PluginCommandCodexInstallIntegrationTests {
-    [Test, NotInParallel("Console.Out_redirect")]
+    [Test, NotInParallel("CodexHookCommandTests.Console")]
     public async Task InstallCodex_prints_hooks_trust_hint_after_success() {
         using var tmp = new TempDir();
         var homeVar = OperatingSystem.IsWindows() ? "USERPROFILE" : "HOME";
