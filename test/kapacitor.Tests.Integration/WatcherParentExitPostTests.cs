@@ -88,6 +88,31 @@ public class WatcherParentExitPostTests : IDisposable {
     }
 
     [Test]
+    public async Task ParentExit_SkipsPost_ForUnknownVendor() {
+        // Vendor is interpolated into the URL path. Validate against a known whitelist
+        // to defend against malformed --vendor values producing path traversal or
+        // hitting unintended endpoints.
+        _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"provider":"None"}"""));
+
+        // Catch-all for any session-end variant so we can assert nothing was posted.
+        _server.Given(Request.Create().WithPath("/hooks/session-end/*").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"generate_whats_done":false}"""));
+
+        await WatchCommand.PostSessionEndOnParentExitAsync(
+            baseUrl:        _server.Url!,
+            sessionId:      $"test-{Guid.NewGuid():N}",
+            transcriptPath: "/tmp/fake.jsonl",
+            cwd:            "/repo",
+            vendor:         "../admin",
+            repository:     null
+        );
+
+        var hits = _server.FindLogEntries(Request.Create().WithPath("/hooks/*").UsingPost());
+        await Assert.That(hits.Count).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task ParentExit_PostsToVendorSpecificRoute_ForCodex() {
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"provider":"None"}"""));

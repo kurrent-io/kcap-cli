@@ -39,10 +39,15 @@ static partial class WatchCommand {
         PosixSignalRegistration.Create(PosixSignal.SIGTERM, _ => cts.Cancel());
 
         // Tracks whether shutdown was triggered by the parent coding-agent process
-        // dying without firing session-end. When true, the watcher takes over the
+        // dying without firing session-end. When true (1), the watcher takes over the
         // server's session-end POST (which the parent normally fires) so the read
         // model doesn't keep the session "active" forever.
-        var parentExited = false;
+        //
+        // Written by the parent-PID monitor task, read on the main thread —
+        // use Interlocked/Volatile so the C# memory model formally guarantees the
+        // write is observed even though awaits already act as memory barriers in
+        // practice.
+        var parentExited = 0;
 
         // Watch the spawning claude process. If it dies without firing session-end
         // (crash, force-kill, IDE-detach), self-terminate within ~5s instead of orphaning.
@@ -58,7 +63,7 @@ static partial class WatchCommand {
 
                     if (!ProcessHelpers.IsProcessAlive(ppid)) {
                         Log($"Parent pid {ppid} exited; shutting down watcher");
-                        parentExited = true;
+                        Interlocked.Exchange(ref parentExited, 1);
                         cts.Cancel();
                         return;
                     }
@@ -252,7 +257,7 @@ static partial class WatchCommand {
         //     server may not have a meaningful session to end.
         // Runs after SignalR dispose so the server's StopAndDrainAsync skips the
         // 10s drain wait (no live watcher connection to signal).
-        if (parentExited && agentId is null && state.ThresholdReached) {
+        if (Volatile.Read(ref parentExited) == 1 && agentId is null && state.ThresholdReached) {
             await PostSessionEndOnParentExitAsync(baseUrl, sessionId, transcriptPath, cwd, vendor, state.Repository);
         }
 
@@ -260,6 +265,21 @@ static partial class WatchCommand {
 
         return 0;
     }
+
+    /// <summary>
+    /// Whitelist of vendor values accepted by the server's session-end route.
+    /// Used to reject unexpected --vendor input before interpolating into the URL
+    /// path (defence-in-depth against path traversal even though the CLI runs locally).
+    /// </summary>
+    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex" };
+
+    /// <summary>
+    /// Total time budget for the parent-exit session-end POST. Covers /auth/config
+    /// discovery + retrying POST. Short by design — this runs on the watcher's
+    /// shutdown path; a stalled server must not block process termination, the whole
+    /// point of the parent-PID watchdog is to self-terminate within ~5s.
+    /// </summary>
+    static readonly TimeSpan ParentExitPostBudget = TimeSpan.FromSeconds(10);
 
     internal static async Task PostSessionEndOnParentExitAsync(
             string             baseUrl,
@@ -269,6 +289,13 @@ static partial class WatchCommand {
             string             vendor,
             RepositoryPayload? repository
         ) {
+        if (!KnownVendors.Contains(vendor)) {
+            Log($"Parent-exit session-end skipped: unknown vendor '{vendor}'");
+            return;
+        }
+
+        using var budgetCts = new CancellationTokenSource(ParentExitPostBudget);
+
         try {
             var endHook = new JsonObject {
                 ["session_id"]      = sessionId,
@@ -284,11 +311,11 @@ static partial class WatchCommand {
                 );
             }
 
-            using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
+            using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, budgetCts.Token);
             using var content    = new StringContent(endHook.ToJsonString(), Encoding.UTF8, "application/json");
 
             var url = $"{baseUrl}/hooks/session-end/{vendor}";
-            using var response = await httpClient.PostWithRetryAsync(url, content);
+            using var response = await httpClient.PostWithRetryAsync(url, content, timeout: ParentExitPostBudget, ct: budgetCts.Token);
 
             if (!response.IsSuccessStatusCode) {
                 Log($"Parent-exit session-end POST returned HTTP {(int)response.StatusCode}");
@@ -298,7 +325,7 @@ static partial class WatchCommand {
             Log("Parent-exit session-end POST succeeded");
 
             try {
-                var body = await response.Content.ReadAsStringAsync();
+                var body = await response.Content.ReadAsStringAsync(budgetCts.Token);
                 var node = JsonNode.Parse(body);
 
                 if (node?["generate_whats_done"]?.GetValue<bool>() == true) {
@@ -307,6 +334,8 @@ static partial class WatchCommand {
             } catch (Exception ex) {
                 Log($"Parent-exit session-end response parse failed: {ex.Message}");
             }
+        } catch (OperationCanceledException) {
+            Log($"Parent-exit session-end POST timed out after {ParentExitPostBudget.TotalSeconds:F0}s");
         } catch (Exception ex) {
             Log($"Parent-exit session-end POST failed: {ex.Message}");
         }
