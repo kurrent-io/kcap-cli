@@ -21,16 +21,16 @@
         <InternalsVisibleTo Include="kapacitor.Tests.Unit" />
         <InternalsVisibleTo Include="kapacitor.Tests.Integration" />
         <!-- Used when referenced as a submodule from the server repo -->
-        <InternalsVisibleTo Include="Kurrent.Capacitor.TestHelpers" />
-        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests" />
-        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.Agents" />
-        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.Auth" />
-        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.Chat" />
-        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.Evals" />
-        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.Ingest" />
-        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.Notify" />
-        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.Read" />
-        <InternalsVisibleTo Include="Kurrent.Capacitor.Tests.UI" />
+        <InternalsVisibleTo Include="Kapacitor.Server.TestHelpers" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Agents" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Auth" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Chat" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Evals" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Ingest" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Notify" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Read" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.UI" />
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
