@@ -309,9 +309,9 @@ public class CodexHookCommandTests : IDisposable {
     // Fix #3 / AI-648: non-string session_id in a Stop payload must not crash.
     // session_id falls to null via the safe TryGetString helper, so HandleStop
     // short-circuits before EnsureWatcherRunning. No server POST is expected
-    // (AI-648 made Stop a turn-end no-op), but we still stub /hooks/session-end/codex
-    // so a regression that reintroduces the POST surfaces as a test failure
-    // via the WireMock log assertion below.
+    // (AI-648 removed Stop's session-end POST), but we still stub
+    // /hooks/session-end/codex so a regression that reintroduces the POST
+    // surfaces as a test failure via the WireMock log assertion below.
     [Test]
     public async Task Stop_with_numeric_session_id_returns_zero_without_crash() {
         var payload = """{"hook_event_name": "Stop", "session_id": 12345, "transcript_path": "/tmp/r.jsonl"}""";
