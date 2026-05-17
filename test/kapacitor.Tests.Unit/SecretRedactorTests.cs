@@ -311,6 +311,87 @@ public class SecretRedactorTests {
 
         await Assert.That(result).DoesNotContain("abc123def456ghi789jkl012mno");
         await Assert.That(result).Contains("[REDACTED]");
+
+        // Result must remain valid JSON after redaction.
+        using var doc = System.Text.Json.JsonDocument.Parse(result);
+        await Assert.That(doc.RootElement.GetProperty("message").GetProperty("content")[0].GetProperty("is_error").GetBoolean()).IsFalse();
+    }
+
+    [Test]
+    public async Task RedactsLine_AuthorizationHeader_AsRealJsonObject() {
+        // Real JSON object (NOT a string-encoded one) with Authorization as a true key.
+        var line = """
+            {"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"ok"}]},"toolUseResult":{"headers":{"Authorization":"Bearer opaque-token-1234567890abc"}}}
+            """.Trim();
+
+        var result = SecretRedactor.RedactLine(line);
+
+        await Assert.That(result).DoesNotContain("opaque-token-1234567890abc");
+        await Assert.That(result).Contains("[REDACTED]");
+
+        using var doc = System.Text.Json.JsonDocument.Parse(result);
+        await Assert.That(doc.RootElement.GetProperty("toolUseResult").GetProperty("headers").GetProperty("Authorization").GetString()).IsEqualTo("[REDACTED]");
+    }
+
+    [Test]
+    [Arguments("Private-Token", "glpat-AAAAAAAAAAAAAAAAAAAA")]
+    [Arguments("Job-Token", "ci_job_token_value_1234567890")]
+    [Arguments("Deploy-Token", "deploy_token_value_1234567890")]
+    [Arguments("X-Vault-Token", "hvs.AAAAAAAAAAAAAAAAAAAAAAAA")]
+    [Arguments("X-Consul-Token", "00000000-0000-0000-0000-000000000000")]
+    [Arguments("X-CSRF-Token", "csrf_value_abcdef1234567890")]
+    [Arguments("X-XSRF-TOKEN", "xsrf_value_abcdef1234567890")]
+    [Arguments("X-Hub-Signature-256", "sha256=abcdef1234567890abcdef1234567890")]
+    [Arguments("X-Slack-Signature", "v0=abcdef1234567890abcdef1234567890")]
+    [Arguments("Stripe-Signature", "t=1492774577,v1=5257a86")]
+    [Arguments("X-Registry-Auth", "ewogICJhdXRoIjogImFiY2QifQo=")]
+    public async Task RedactsLine_AdditionalAuthHeaders_InToolResult(string header, string value) {
+        var line = $$$"""
+            {"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"{{{header}}}: {{{value}}}","is_error":false}]}}
+            """.Trim();
+
+        var result = SecretRedactor.RedactLine(line);
+
+        await Assert.That(result).DoesNotContain(value);
+        await Assert.That(result).Contains($"{header}: [REDACTED]");
+    }
+
+    // Finding 4 coverage — URL query secrets and userinfo
+
+    [Test]
+    [Arguments("https://example.com/path?access_token=at_abcdef1234567890&user=alice")]
+    [Arguments("https://example.com/cb?id_token=jwt.eyJhbGciOi.payload&state=xyz")]
+    [Arguments("https://api.example.com/x?signature=abcdef1234567890abcdef&v=1")]
+    [Arguments("https://s3.amazonaws.com/b/k?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Signature=abc%2F123&Expires=1")]
+    [Arguments("https://example.com/h?api_key=key_abcdef1234567890")]
+    public async Task RedactsLine_UrlQuerySecret_InToolResult(string url) {
+        var line = $$$"""
+            {"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"GET {{{url}}} -> 200","is_error":false}]}}
+            """.Trim();
+
+        var result = SecretRedactor.RedactLine(line);
+
+        await Assert.That(result).Contains("[REDACTED]");
+        // The secret param value must not survive — check by ensuring no `[?&]<param>=<longvalue>` is left.
+        await Assert.That(result).DoesNotContain("at_abcdef1234567890");
+        await Assert.That(result).DoesNotContain("jwt.eyJhbGciOi.payload");
+        await Assert.That(result).DoesNotContain("abcdef1234567890abcdef");
+        await Assert.That(result).DoesNotContain("AKIAIOSFODNN7EXAMPLE");
+        await Assert.That(result).DoesNotContain("key_abcdef1234567890");
+    }
+
+    [Test]
+    public async Task RedactsLine_UrlUserinfo_InToolResult() {
+        // RFC 3986 userinfo: literal `@` must be percent-encoded, so the password component cannot
+        // legally contain `@`. Realistic test case is a Git URL with an opaque-token password.
+        var line = """
+            {"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"cloning https://alice:ghp_abcdef1234567890ABCDEF@github.com/org/repo.git","is_error":false}]}}
+            """.Trim();
+
+        var result = SecretRedactor.RedactLine(line);
+
+        await Assert.That(result).DoesNotContain("ghp_abcdef1234567890ABCDEF");
+        await Assert.That(result).Contains("https://alice:[REDACTED]@github.com");
     }
 
     // AI-53 — labeled secrets with no colon separator (e.g. `hcloud:token  <value>`)
@@ -337,6 +418,21 @@ public class SecretRedactorTests {
         var result = SecretRedactor.RedactLine(line);
 
         await Assert.That(result).DoesNotContain("supersecretvalue1234567890");
+        await Assert.That(result).Contains("[REDACTED]");
+    }
+
+    [Test]
+    public async Task RedactsLine_LabeledSecret_PasswordWithPunctuation() {
+        // Value with `!`, `@`, `#`, etc. — broader charset must catch the full opaque value, not
+        // stop at the first non-alnum char.
+        var line = """
+            {"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"password abcdefghijklmnop!tail#more$end","is_error":false}]}}
+            """.Trim();
+
+        var result = SecretRedactor.RedactLine(line);
+
+        await Assert.That(result).DoesNotContain("abcdefghijklmnop!tail#more$end");
+        await Assert.That(result).DoesNotContain("!tail");
         await Assert.That(result).Contains("[REDACTED]");
     }
 
