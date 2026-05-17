@@ -12,7 +12,12 @@ namespace kapacitor.Commands;
 /// <remarks>
 /// Wire contract (Codex event → server route):
 ///   SessionStart      → POST /hooks/session-start/codex
-///   Stop              → POST /hooks/session-end/codex (Codex has no separate session-end hook)
+///   Stop              → no server POST. Codex fires Stop at every turn end,
+///                       not session end (AI-648). Session-end is owned by the
+///                       watcher's parent-PID monitor (AI-647 — see
+///                       WatchCommand.PostSessionEndOnParentExitAsync).
+///                       HandleStop only refreshes watcher liveness and emits
+///                       {"continue":true} so Codex's hook parser is satisfied.
 ///   PermissionRequest → in a daemon-launched hosted agent (KAPACITOR_DAEMON_URL set), bounce
 ///                       through the daemon's LocalPermissionBridge and wait for the dashboard's
 ///                       decision (fail-closed on bridge errors: deny + exit nonzero). Otherwise:
@@ -101,56 +106,32 @@ static class CodexHookCommand {
     }
 
     static async Task<int> HandleStop(string baseUrl, JsonNode node) {
+        // Codex 'Stop' fires at every turn end, NOT session end. Session-end
+        // is fired by the watcher's parent-PID monitor in WatchCommand.cs
+        // (AI-647) when the codex process actually exits — that path POSTs
+        // /hooks/session-end/codex with reason: "parent_exited" and handles
+        // generate_whats_done. Treating Stop as session-end here would kill
+        // the watcher after turn 1 and mismark multi-turn sessions as ended
+        // before they actually finish.
+        //
+        // Symmetric with Claude's stop/notification branch in Program.cs —
+        // we just keep the watcher alive in case it crashed mid-session.
         var sessionId  = TryGetString(node, "session_id");
         var transcript = TryGetString(node, "transcript_path");
+        var cwd        = TryGetString(node, "cwd");
 
-        // Codex Stop is the closest analog to Claude's session-end (Codex has
-        // no separate session-end hook — see AI-67 spike). Kill the watcher
-        // BEFORE posting so the transcript is fully drained before the server
-        // computes session-end stats.
-        if (sessionId is not null) {
-            await WatcherManager.KillWatcher(sessionId);
-
-            if (transcript is not null) {
-                await WatcherManager.InlineDrainAsync(baseUrl, sessionId, transcript, agentId: null, vendor: "codex");
-            }
+        if (sessionId is not null && transcript is not null) {
+            await WatcherManager.EnsureWatcherRunning(
+                baseUrl, sessionId, transcript,
+                agentId: null, sessionIdOverride: null, cwd: cwd,
+                skipTitle: false, vendor: "codex"
+            );
         }
 
-        // Note the URL: session-END/codex, not stop/codex. The CLI translates
-        // Codex's hook event name into Capacitor's canonical hook vocabulary
-        // before posting, so the server doesn't have to know about Codex's
-        // missing session-end concept.
-        var (exit, responseBody) = await PostHookWithResponseAsync(baseUrl, "session-end/codex", node.ToJsonString());
-
-        if (exit != 0) return exit;
-
-        // Mirror the Claude session-end path in Program.cs: if the server flags
-        // generate_whats_done, spawn the summary generator as a detached process
-        // with --codex so it goes through codex exec, matching the vendor that
-        // produced the work being summarised.
-        if (sessionId is not null && ShouldSpawnWhatsDone(responseBody)) {
-            WatcherManager.SpawnWhatsDoneGenerator(baseUrl, sessionId, vendor: "codex");
-        }
-
+        // AI-635: Codex's stop-hook output parser rejects empty stdout as
+        // "invalid stop hook JSON output". Emit the schema default explicitly.
         Console.Write(SessionScopedOutputJson);
         return 0;
-    }
-
-    /// <summary>
-    /// Parses the session-end response body and returns whether the server asked
-    /// the CLI to generate a what's-done summary. Extracted so the response-parsing
-    /// branch is testable without actually spawning a subprocess.
-    /// </summary>
-    internal static bool ShouldSpawnWhatsDone(string? responseBody) {
-        if (responseBody is null) return false;
-
-        try {
-            var responseNode = JsonNode.Parse(responseBody);
-            return responseNode?["generate_whats_done"]?.GetValue<bool>() == true;
-        } catch {
-            // Best effort — non-JSON or wrong-typed flag both fall through to "no spawn"
-            return false;
-        }
     }
 
     static async Task<int> HandlePermissionRequest(string baseUrl, JsonNode node) {
@@ -237,11 +218,6 @@ static class CodexHookCommand {
     }
 
     static async Task<int> PostHookAsync(string baseUrl, string endpoint, string body) {
-        var (exit, _) = await PostHookWithResponseAsync(baseUrl, endpoint, body);
-        return exit;
-    }
-
-    static async Task<(int Exit, string? ResponseBody)> PostHookWithResponseAsync(string baseUrl, string endpoint, string body) {
         using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync();
         using var content = new StringContent(body, Encoding.UTF8, "application/json");
 
@@ -249,14 +225,13 @@ static class CodexHookCommand {
             var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{endpoint}", content);
             if (!resp.IsSuccessStatusCode) {
                 Console.Error.WriteLine($"[kapacitor] codex-hook {endpoint}: HTTP {(int)resp.StatusCode}");
-                return (1, null);
+                return 1;
             }
 
-            var responseBody = await resp.Content.ReadAsStringAsync();
-            return (0, responseBody);
+            return 0;
         } catch (HttpRequestException ex) {
             HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
-            return (1, null);
+            return 1;
         }
     }
 

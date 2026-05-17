@@ -7,7 +7,9 @@ forwards to the Capacitor server. Wired via `kapacitor plugin install --codex`.
 
 Hook events handled (Codex event → server route):
   SessionStart        → POST /hooks/session-start/codex (also spawns watcher)
-  Stop                → POST /hooks/session-end/codex   (kills watcher, drains transcript first)
+  Stop                → refreshes watcher liveness; emits {"continue":true} (no server POST —
+                        session-end is fired by the watcher's parent-PID monitor when codex
+                        actually exits, see AI-647)
   PermissionRequest   → see Daemon-bridge mode below
   UserPromptSubmit    → swallowed (informational; no server route in v1)
   PreToolUse          → swallowed (informational; no server route in v1)
