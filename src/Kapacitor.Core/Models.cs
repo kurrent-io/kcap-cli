@@ -233,7 +233,7 @@ record EvalContextResult {
 /// <summary>
 /// Wire-format DTO for a single eval question served by
 /// <c>GET /api/eval/questions</c>. Mirrors the shape of
-/// <c>Kurrent.Capacitor.EvalQuestionMetadata.Question</c> on the server —
+/// <c>Kurrent.Kapacitor.EvalQuestionMetadata.Question</c> on the server —
 /// the CLI cannot reference the Shared library (standalone submodule),
 /// so the shape is duplicated here.
 /// </summary>
