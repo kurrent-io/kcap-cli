@@ -61,9 +61,11 @@ static partial class SecretRedactor {
         text = PemBlockRegex.Replace(text, "[REDACTED]");
         text = AwsUniqueIdRegex.Replace(text, "[REDACTED]");
         text = VendorTokenRegex.Replace(text, "[REDACTED]");
+        text = AuthHeaderRegex.Replace(text, "$1[REDACTED]");
         text = JsonKeySecretRegex.Replace(text, "$1[REDACTED]$3");
         text = EnvVarSecretRegex.Replace(text, "$1[REDACTED]");
         text = YamlStyleSecretRegex.Replace(text, "$1[REDACTED]");
+        text = LabeledSecretRegex.Replace(text, "$1[REDACTED]");
         text = ConnectionStringPwdRegex.Replace(text, "$1[REDACTED]$3");
 
         return text;
@@ -125,4 +127,32 @@ static partial class SecretRedactor {
     private static partial Regex ConnectionStringPwdRx();
 
     static readonly Regex ConnectionStringPwdRegex = ConnectionStringPwdRx();
+
+    // HTTP auth-bearing headers — redact the entire header value.
+    // Covers Authorization (Bearer/Basic/Digest/etc.), Cookie, Set-Cookie, and common API-key
+    // header variants. Tolerates JSON-escaped quotes around the key and value, so it matches both
+    // raw `Authorization: Bearer xxx` (e.g. inside a curl tool_result) and `\"Authorization\": \"Bearer xxx\"`
+    // (HTTP request logged as a JSON object). Excludes " and \ to stop at JSON string boundaries.
+    // group 1 = header name + colon + optional opening quote, group 2 = value
+    [GeneratedRegex(
+        """((?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|x-access-token|x-amz-security-token|x-goog-api-key|api-key)(?:\\")?\s*:\s*(?:\\")?\s*)([^\r\n"\\]+)""",
+        RegexOptions.IgnoreCase
+    )]
+    private static partial Regex AuthHeaderRx();
+
+    static readonly Regex AuthHeaderRegex = AuthHeaderRx();
+
+    // Labeled secret — secret keyword followed by whitespace (NOT a colon) and an opaque value.
+    // Catches `hcloud:token  9xKMA…` and similar where the keyword is a label, not a key:value
+    // separator. The colon form is already covered by YamlStyleSecretRegex.
+    // 16-char minimum + character set [A-Za-z0-9_\-+/=.] keeps this from matching prose like
+    // "the token might fail" while still catching base64/base62/url-safe API tokens.
+    // group 1 = keyword + whitespace, group 2 = value
+    [GeneratedRegex(
+        @"\b((?:secret|token|password|passwd|pwd|api_key|apikey|private_key|credentials|client_secret|access_key|auth_token)\b[ \t]+)([A-Za-z0-9_\-+/=.]{16,})",
+        RegexOptions.IgnoreCase
+    )]
+    private static partial Regex LabeledSecretRx();
+
+    static readonly Regex LabeledSecretRegex = LabeledSecretRx();
 }
