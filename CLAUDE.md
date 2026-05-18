@@ -1,6 +1,6 @@
 # Kurrent Capacitor CLI
 
-**File paths:** CLI source at `src/kapacitor/`, npm packages at `npm/`, Claude Code plugin at `kapacitor/`, unit tests at `test/kapacitor.Tests.Unit/`, integration tests at `test/kapacitor.Tests.Integration/`.
+**File paths:** CLI source at `src/Kapacitor.Cli/`, shared core at `src/Kapacitor.Cli.Core/`, daemon at `src/Kapacitor.Cli.Daemon/`, npm packages at `npm/`, Claude Code plugin at `kapacitor/`, unit tests at `test/Kapacitor.Cli.Tests.Unit/`, integration tests at `test/Kapacitor.Cli.Tests.Integration/`.
 
 ## What this project does
 
@@ -15,7 +15,7 @@ The kapacitor CLI records Claude Code sessions by forwarding hook payloads and t
 ## Building
 
 ```bash
-dotnet build src/kapacitor/kapacitor.csproj
+dotnet build src/Kapacitor.Cli/Kapacitor.Cli.csproj
 ```
 
 ## Running tests
@@ -23,8 +23,8 @@ dotnet build src/kapacitor/kapacitor.csproj
 Tests use TUnit on Microsoft Testing Platform. Run directly as executables:
 
 ```bash
-dotnet run --project test/kapacitor.Tests.Unit/kapacitor.Tests.Unit.csproj
-dotnet run --project test/kapacitor.Tests.Integration/kapacitor.Tests.Integration.csproj
+dotnet run --project test/Kapacitor.Cli.Tests.Unit/Kapacitor.Cli.Tests.Unit.csproj
+dotnet run --project test/Kapacitor.Cli.Tests.Integration/Kapacitor.Cli.Tests.Integration.csproj
 ```
 
 ## Publishing
@@ -32,13 +32,13 @@ dotnet run --project test/kapacitor.Tests.Integration/kapacitor.Tests.Integratio
 AOT publish for the current platform:
 
 ```bash
-dotnet publish src/kapacitor/kapacitor.csproj -c Release
+dotnet publish src/Kapacitor.Cli/Kapacitor.Cli.csproj -c Release
 ```
 
 Always verify no IL3050/IL2026 AOT warnings after changes:
 
 ```bash
-dotnet publish src/kapacitor/kapacitor.csproj -c Release 2>&1 | grep -E 'IL[23][01][0-9]{2}'
+dotnet publish src/Kapacitor.Cli/Kapacitor.Cli.csproj -c Release 2>&1 | grep -E 'IL[23][01][0-9]{2}'
 ```
 
 ## Common mistakes to avoid
@@ -47,4 +47,4 @@ dotnet publish src/kapacitor/kapacitor.csproj -c Release 2>&1 | grep -E 'IL[23][
 - **JsonArray collection expressions** — `[item1, item2]` compiles to `Add<T>()` which requires dynamic code. Use `new JsonArray(item1, item2)` constructor instead.
 - **TUnit test filtering** — Use `--treenode-filter` with glob syntax, NOT `--filter`.
 - **macOS AOT binary code signing** — After copying an AOT binary, run `codesign --force --sign -` to re-sign.
-- **README sync on CLI changes** — Any change to user-facing CLI surface (new command, new/renamed/removed flag, changed default behavior, new prerequisite) must update `README.md` in the *same* PR. Check both the quick-start (`## Getting started`) and the per-command section under `## CLI commands`. Updating only `src/Kapacitor.Core/Resources/help-*.txt` is not enough — the README is the public-facing docs. This has been missed repeatedly and has required follow-up doc-only PRs (#60, #61).
+- **README sync on CLI changes** — Any change to user-facing CLI surface (new command, new/renamed/removed flag, changed default behavior, new prerequisite) must update `README.md` in the *same* PR. Check both the quick-start (`## Getting started`) and the per-command section under `## CLI commands`. Updating only `src/Kapacitor.Cli.Core/Resources/help-*.txt` is not enough — the README is the public-facing docs. This has been missed repeatedly and has required follow-up doc-only PRs (#60, #61).

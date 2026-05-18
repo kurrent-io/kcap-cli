@@ -1,0 +1,289 @@
+using Kapacitor.Cli.Commands;
+using static Kapacitor.Cli.Commands.CodingAgentsStep;
+
+namespace Kapacitor.Cli.Tests.Unit;
+
+public class CodingAgentsStepTests {
+    [Test]
+    public async Task Claude_detected_and_accepted_calls_installer_with_settings_path() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new CodingAgentsStep.Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
+        var paths    = TestPaths();
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: true, Codex: false);
+
+        var result = await RunAsync(options, detected, paths, calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.ClaudeInstalled).IsTrue();
+        await Assert.That(calls.ClaudeArgs).IsEqualTo((paths.ClaudeSettingsPath, paths.PluginDir!));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Claude Code plugin installed") && l.Contains("user:"));
+    }
+
+    [Test]
+    public async Task Claude_detected_and_declined_skips_installer() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: true, Codex: false);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => false, writeLine: sink.Write);
+
+        await Assert.That(result.ClaudeInstalled).IsFalse();
+        await Assert.That(calls.ClaudeCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Claude Code") && l.Contains("not installed"));
+    }
+
+    [Test]
+    public async Task Claude_not_detected_skips_prompt_and_emits_skip_line() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var promptCount = 0;
+        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: false);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => { promptCount++; return true; }, writeLine: sink.Write);
+
+        await Assert.That(result.ClaudeInstalled).IsFalse();
+        await Assert.That(calls.ClaudeCalled).IsFalse();
+        await Assert.That(promptCount).IsEqualTo(0);
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Claude Code not found"));
+    }
+
+    [Test]
+    public async Task Claude_installer_failure_emits_warning_and_returns_false() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { ClaudeReturns = false };
+        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: true, Codex: false);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.ClaudeInstalled).IsFalse();
+        await Assert.That(calls.ClaudeCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not update Claude settings"));
+    }
+
+    [Test]
+    public async Task Codex_detected_and_accepted_installs_hooks_and_prints_trust_hint() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CodexHooksInstalled).IsTrue();
+        await Assert.That(calls.CodexHooksArg).IsEqualTo("/fake/.codex/hooks.json");
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Codex hooks installed"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("/hooks") && l.Contains("trust"));
+    }
+
+    [Test]
+    public async Task Codex_detected_and_declined_skips_installer_and_trust_hint() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => false, writeLine: sink.Write);
+
+        await Assert.That(result.CodexHooksInstalled).IsFalse();
+        await Assert.That(calls.CodexHooksCalled).IsFalse();
+        await Assert.That(sink.Lines).DoesNotContain(l => l.Contains("/hooks") && l.Contains("trust"));
+    }
+
+    [Test]
+    public async Task Codex_not_detected_skips_prompt_and_emits_skip_line() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: false);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CodexHooksInstalled).IsFalse();
+        await Assert.That(calls.CodexHooksCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Codex CLI not found"));
+    }
+
+    [Test]
+    public async Task Codex_hooks_installer_failure_emits_warning_and_skips_trust_hint() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CodexHooksReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CodexHooksInstalled).IsFalse();
+        await Assert.That(calls.CodexHooksCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write Codex hooks"));
+        await Assert.That(sink.Lines).DoesNotContain(l => l.Contains("/hooks") && l.Contains("trust"));
+    }
+
+    [Test]
+    public async Task Codex_skills_installed_when_hooks_succeed_and_plugin_dir_present() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CodexSkillsInstalled).IsTrue();
+        await Assert.That(calls.CodexSkillsArgs).IsEqualTo(("/fake/plugin/codex-skills", "/fake/.codex/skills"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Codex skills installed"));
+    }
+
+    [Test]
+    public async Task Codex_skills_not_attempted_when_hooks_fail() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CodexHooksReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CodexSkillsInstalled).IsFalse();
+        await Assert.That(calls.CodexSkillsCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Codex_skills_failure_still_keeps_trust_hint() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CodexSkillsReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CodexHooksInstalled).IsTrue();
+        await Assert.That(result.CodexSkillsInstalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Codex hooks installed but skills"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("/hooks") && l.Contains("trust"));
+    }
+
+    [Test]
+    public async Task Plugin_dir_null_skips_claude_install_but_keeps_codex_hooks() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: false, SkipCodex: false, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: true, Codex: true);
+        var paths    = TestPaths() with { PluginDir = null };
+
+        var result = await RunAsync(options, detected, paths, calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.ClaudeInstalled).IsFalse();
+        await Assert.That(calls.ClaudeCalled).IsFalse();
+        await Assert.That(result.CodexHooksInstalled).IsTrue();
+        await Assert.That(calls.CodexHooksCalled).IsTrue();
+        await Assert.That(result.CodexSkillsInstalled).IsFalse();
+        await Assert.That(calls.CodexSkillsCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Plugin directory not found"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Codex hooks installed but skills could not be copied"));
+    }
+
+    [Test]
+    public async Task Neither_detected_emits_warning_and_no_installer_calls() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: false, SkipCodex: false, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: false);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.ClaudeInstalled).IsFalse();
+        await Assert.That(result.CodexHooksInstalled).IsFalse();
+        await Assert.That(result.CodexSkillsInstalled).IsFalse();
+        await Assert.That(calls.ClaudeCalled).IsFalse();
+        await Assert.That(calls.CodexHooksCalled).IsFalse();
+        await Assert.That(calls.CodexSkillsCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("No supported agent CLI detected"));
+    }
+
+    [Test]
+    public async Task Project_scope_claude_path_is_passed_through_to_installer() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: true, Codex: false);
+        // Caller (SetupCommand) selects the project-scope path AND the matching label.
+        // The step's contract is to honour both faithfully.
+        var paths    = TestPaths() with {
+            ClaudeSettingsPath = "/repo/.claude/settings.local.json",
+            ClaudeScopeLabel   = "project"
+        };
+
+        var result = await RunAsync(options, detected, paths, calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.ClaudeInstalled).IsTrue();
+        await Assert.That(calls.ClaudeArgs).IsEqualTo(("/repo/.claude/settings.local.json", paths.PluginDir!));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("project:") && l.Contains("/repo/.claude/settings.local.json"));
+    }
+
+    [Test]
+    public async Task Claude_path_with_markup_special_chars_does_not_break_output() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: true, Codex: false);
+        // [ and ] are legal in paths; if not escaped, Spectre.MarkupLine throws.
+        var paths    = TestPaths() with {
+            ClaudeSettingsPath = "/weird[path]/.claude/settings.json"
+        };
+
+        var result = await RunAsync(options, detected, paths, calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.ClaudeInstalled).IsTrue();
+        // The path must appear in the sink, escaped so Spectre treats [ and ] as literals.
+        // Markup.Escape("[path]") returns "[[path]]" — Spectre escapes brackets by doubling them.
+        await Assert.That(sink.Lines).Contains(l => l.Contains("[[path]]"));
+    }
+
+    static CodingAgentsStep.Paths TestPaths() => new(
+        ClaudeSettingsPath: "/fake/.claude/settings.json",
+        ClaudeScopeLabel:   "user",
+        PluginDir:          "/fake/plugin",
+        CodexHooksPath:     "/fake/.codex/hooks.json",
+        CodexSkillsDir:     "/fake/.codex/skills");
+
+    sealed class Sink {
+        public List<string> Lines { get; } = [];
+        public void Write(string s) => Lines.Add(s);
+    }
+
+    sealed class InstallerCalls {
+        public bool ClaudeCalled { get; private set; }
+        public (string Settings, string PluginDir)? ClaudeArgs { get; private set; }
+        public bool ClaudeReturns { get; set; } = true;
+
+        public bool CodexHooksCalled { get; private set; }
+        public string? CodexHooksArg  { get; private set; }
+        public bool CodexHooksReturns { get; set; } = true;
+
+        public bool CodexSkillsCalled { get; private set; }
+        public (string Src, string Dst)? CodexSkillsArgs { get; private set; }
+        public bool CodexSkillsReturns { get; set; } = true;
+
+        public CodingAgentsStep.Installers AsInstallers() => new(
+            InstallClaudePlugin: (s, p) => { ClaudeCalled = true; ClaudeArgs = (s, p); return ClaudeReturns; },
+            InstallCodexHooks:   h      => { CodexHooksCalled = true; CodexHooksArg = h; return CodexHooksReturns; },
+            InstallCodexSkills:  (s, d) => { CodexSkillsCalled = true; CodexSkillsArgs = (s, d); return CodexSkillsReturns; }
+        );
+    }
+}

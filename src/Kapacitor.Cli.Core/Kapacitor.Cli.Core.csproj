@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <IsAotCompatible>true</IsAotCompatible>
+        <IsTrimmable>true</IsTrimmable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    </PropertyGroup>
+    <ItemGroup>
+        <EmbeddedResource Include="Resources\**\*" />
+    </ItemGroup>
+    <ItemGroup>
+        <InternalsVisibleTo Include="kapacitor" />
+        <InternalsVisibleTo Include="kapacitor-daemon" />
+        <InternalsVisibleTo Include="Kapacitor.Cli.Tests.Unit" />
+        <InternalsVisibleTo Include="Kapacitor.Cli.Tests.Integration" />
+        <!-- Used when referenced as a submodule from the server repo -->
+        <InternalsVisibleTo Include="Kapacitor.Server.TestHelpers" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Agents" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Auth" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Chat" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Evals" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Ingest" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Notify" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Read" />
+        <InternalsVisibleTo Include="Kapacitor.Server.Tests.UI" />
+    </ItemGroup>
+</Project>

@@ -1,11 +1,11 @@
 <Solution>
   <Folder Name="/src/">
-    <Project Path="src/Kapacitor.Core/Kapacitor.Core.csproj" />
-    <Project Path="src/Kapacitor.Daemon/Kapacitor.Daemon.csproj" />
-    <Project Path="src/kapacitor/kapacitor.csproj" />
+    <Project Path="src/Kapacitor.Cli.Core/Kapacitor.Cli.Core.csproj" />
+    <Project Path="src/Kapacitor.Cli.Daemon/Kapacitor.Cli.Daemon.csproj" />
+    <Project Path="src/Kapacitor.Cli/Kapacitor.Cli.csproj" />
   </Folder>
   <Folder Name="/test/">
-    <Project Path="test/kapacitor.Tests.Unit/kapacitor.Tests.Unit.csproj" />
-    <Project Path="test/kapacitor.Tests.Integration/kapacitor.Tests.Integration.csproj" />
+    <Project Path="test/Kapacitor.Cli.Tests.Unit/Kapacitor.Cli.Tests.Unit.csproj" />
+    <Project Path="test/Kapacitor.Cli.Tests.Integration/Kapacitor.Cli.Tests.Integration.csproj" />
   </Folder>
 </Solution>
