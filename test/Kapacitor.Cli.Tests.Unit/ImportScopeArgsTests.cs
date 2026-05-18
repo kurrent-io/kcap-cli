@@ -1,0 +1,205 @@
+using Kapacitor.Cli.Commands;
+
+namespace Kapacitor.Cli.Tests.Unit;
+
+public class ImportScopeArgsTests {
+    [Test]
+    public async Task ParseFlags_reads_all() {
+        var f = ImportScopeArgs.ParseFlags(["history", "--all"]);
+        await Assert.That(f.All).IsTrue();
+        await Assert.That(f.Org).IsFalse();
+        await Assert.That(f.RepoArg).IsNull();
+        await Assert.That(f.Yes).IsFalse();
+        await Assert.That(f.Private).IsFalse();
+    }
+
+    [Test]
+    public async Task ParseFlags_reads_repo_value() {
+        var f = ImportScopeArgs.ParseFlags(["history", "--repo", "EventStore/kapacitor"]);
+        await Assert.That(f.RepoArg).IsEqualTo("EventStore/kapacitor");
+    }
+
+    [Test]
+    public async Task ParseFlags_reads_yes_short_form() {
+        var f = ImportScopeArgs.ParseFlags(["history", "--all", "-y"]);
+        await Assert.That(f.Yes).IsTrue();
+    }
+
+    [Test]
+    public async Task ParseFlags_reads_private() {
+        var f = ImportScopeArgs.ParseFlags(["history", "--all", "--private"]);
+        await Assert.That(f.Private).IsTrue();
+    }
+
+    [Test]
+    public async Task Resolve_errors_when_two_scope_flags_set() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: true, Org: true, RepoArg: null, Yes: false, Private: false),
+            ActiveProfile: "EventStore",
+            IsInteractive: true,
+            CurrentRepo: null);
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        await Assert.That(r.Scope).IsNull();
+        await Assert.That(r.Error).IsNotNull();
+        await Assert.That(r.Error!).Contains("mutually exclusive");
+    }
+
+    [Test]
+    public async Task Resolve_returns_All_for_all_flag() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: true, Org: false, RepoArg: null, Yes: false, Private: false),
+            ActiveProfile: "default",
+            IsInteractive: true,
+            CurrentRepo: null);
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        await Assert.That(r.Scope).IsTypeOf<ImportScope.All>();
+        await Assert.That(r.Error).IsNull();
+    }
+
+    [Test]
+    public async Task Resolve_returns_Org_with_active_profile() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: false, Org: true, RepoArg: null, Yes: false, Private: false),
+            ActiveProfile: "EventStore",
+            IsInteractive: true,
+            CurrentRepo: null);
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        await Assert.That(r.Scope).IsTypeOf<ImportScope.Org>();
+        await Assert.That(((ImportScope.Org)r.Scope!).OrgLogin).IsEqualTo("EventStore");
+    }
+
+    [Test]
+    public async Task Resolve_errors_on_Org_when_profile_is_default() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: false, Org: true, RepoArg: null, Yes: false, Private: false),
+            ActiveProfile: "default",
+            IsInteractive: true,
+            CurrentRepo: null);
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        await Assert.That(r.Scope).IsNull();
+        await Assert.That(r.Error!).Contains("tenant-bound profile");
+    }
+
+    [Test]
+    public async Task Resolve_returns_Repo_for_owner_slash_name() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: false, Org: false, RepoArg: "EventStore/kapacitor", Yes: false, Private: false),
+            ActiveProfile: "EventStore",
+            IsInteractive: true,
+            CurrentRepo: null);
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        var repo = (ImportScope.Repo)r.Scope!;
+        await Assert.That(repo.Owner).IsEqualTo("EventStore");
+        await Assert.That(repo.Name).IsEqualTo("kapacitor");
+    }
+
+    [Test]
+    public async Task Resolve_repo_dot_uses_current_repo() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: false, Org: false, RepoArg: ".", Yes: false, Private: false),
+            ActiveProfile: "EventStore",
+            IsInteractive: true,
+            CurrentRepo: ("EventStore", "kapacitor"));
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        var repo = (ImportScope.Repo)r.Scope!;
+        await Assert.That(repo.Owner).IsEqualTo("EventStore");
+        await Assert.That(repo.Name).IsEqualTo("kapacitor");
+    }
+
+    [Test]
+    public async Task Resolve_repo_current_alias_uses_current_repo() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: false, Org: false, RepoArg: "current", Yes: false, Private: false),
+            ActiveProfile: "EventStore",
+            IsInteractive: true,
+            CurrentRepo: ("EventStore", "kapacitor"));
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        var repo = (ImportScope.Repo)r.Scope!;
+        await Assert.That(repo.Owner).IsEqualTo("EventStore");
+        await Assert.That(repo.Name).IsEqualTo("kapacitor");
+    }
+
+    [Test]
+    public async Task Resolve_repo_dot_errors_when_cwd_has_no_repo() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: false, Org: false, RepoArg: ".", Yes: false, Private: false),
+            ActiveProfile: "EventStore",
+            IsInteractive: true,
+            CurrentRepo: null);
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        await Assert.That(r.Scope).IsNull();
+        await Assert.That(r.Error!).Contains("git repo with an origin remote");
+    }
+
+    [Test]
+    public async Task Resolve_errors_on_malformed_repo_arg() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: false, Org: false, RepoArg: "no-slash", Yes: false, Private: false),
+            ActiveProfile: "EventStore",
+            IsInteractive: true,
+            CurrentRepo: null);
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        await Assert.That(r.Scope).IsNull();
+        await Assert.That(r.Error!).Contains("owner/name");
+    }
+
+    [Test]
+    public async Task Resolve_returns_null_scope_and_null_error_when_no_flag_and_interactive() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: false, Org: false, RepoArg: null, Yes: false, Private: false),
+            ActiveProfile: "EventStore",
+            IsInteractive: true,
+            CurrentRepo: null);
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        await Assert.That(r.Scope).IsNull();
+        await Assert.That(r.Error).IsNull();
+    }
+
+    [Test]
+    public async Task Resolve_errors_when_no_flag_and_non_interactive() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: false, Org: false, RepoArg: null, Yes: false, Private: false),
+            ActiveProfile: "EventStore",
+            IsInteractive: false,
+            CurrentRepo: null);
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        await Assert.That(r.Scope).IsNull();
+        await Assert.That(r.Error!).Contains("--all, --org, or --repo");
+    }
+
+    [Test]
+    public async Task Resolve_errors_when_flag_set_and_non_interactive_without_yes() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: true, Org: false, RepoArg: null, Yes: false, Private: false),
+            ActiveProfile: "EventStore",
+            IsInteractive: false,
+            CurrentRepo: null);
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        await Assert.That(r.Scope).IsNull();
+        await Assert.That(r.Error!).Contains("--yes");
+    }
+}

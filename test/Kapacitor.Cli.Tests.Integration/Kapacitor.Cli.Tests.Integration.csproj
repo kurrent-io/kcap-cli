@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <OutputType>Exe</OutputType>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
+    <ItemGroup>
+        <ProjectReference Include="../../src/Kapacitor.Cli/Kapacitor.Cli.csproj" />
+        <ProjectReference Include="../../src/Kapacitor.Cli.Daemon/Kapacitor.Cli.Daemon.csproj" />
+    </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="TUnit" />
+        <PackageReference Include="WireMock.Net" />
+    </ItemGroup>
+</Project>

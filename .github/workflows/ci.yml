@@ -31,10 +31,10 @@ jobs:
         run: dotnet build Kapacitor.slnx
 
       - name: Run unit tests
-        run: dotnet run --project test/kapacitor.Tests.Unit/kapacitor.Tests.Unit.csproj
+        run: dotnet run --project test/Kapacitor.Cli.Tests.Unit/Kapacitor.Cli.Tests.Unit.csproj
 
       - name: Run integration tests
-        run: dotnet run --project test/kapacitor.Tests.Integration/kapacitor.Tests.Integration.csproj
+        run: dotnet run --project test/Kapacitor.Cli.Tests.Integration/Kapacitor.Cli.Tests.Integration.csproj
 
   aot-check:
     name: AOT publish check
@@ -43,8 +43,8 @@ jobs:
       fail-fast: false
       matrix:
         project:
-          - src/kapacitor/kapacitor.csproj
-          - src/Kapacitor.Daemon/Kapacitor.Daemon.csproj
+          - src/Kapacitor.Cli/Kapacitor.Cli.csproj
+          - src/Kapacitor.Cli.Daemon/Kapacitor.Cli.Daemon.csproj
 
     steps:
       - uses: actions/checkout@v6
