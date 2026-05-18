@@ -1,6 +1,6 @@
 # @kurrent/kapacitor
 
-CLI companion for [Kurrent Capacitor](https://github.com/kurrent-io/kapacitor) — records and visualizes Claude Code sessions.
+CLI companion for [Kurrent Capacitor](https://github.com/kurrent-io/kapacitor-cli) — records and visualizes Claude Code sessions.
 
 ## Install
 
