@@ -6,7 +6,7 @@ Capacitor captures the complete picture — session lifecycle, transcript data, 
 
 ## Getting started
 
-You need the server URL from your admin (e.g. `https://capacitor.example.com`).
+You need the server URL from your admin (e.g. `https://my-tenant.kapacitor.ai`).
 
 ### 1. Install the CLI
 
@@ -44,7 +44,7 @@ Verify with `kapacitor whoami` and `kapacitor status`.
 For non-interactive environments:
 
 ```bash
-kapacitor setup --server-url https://capacitor.example.com --default-visibility org_public --no-prompt
+kapacitor setup --server-url https://my-tenant.kapacitor.ai --default-visibility org_public --no-prompt
 ```
 
 In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks` and/or `--skip-codex-hooks`.
@@ -59,10 +59,9 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 ```bash
 kapacitor history --org                          # sessions for the org bound to your active profile
 kapacitor history --repo owner/repo              # sessions for one specific repo
-kapacitor history --codex --org                  # same, but from Codex rollouts (~/.codex/sessions)
 ```
 
-This backfills your past sessions from `~/.claude/projects/` (or `~/.codex/sessions` with `--codex`) so they appear in the dashboard. It's idempotent — safe to run multiple times.
+This backfills your past sessions from `~/.claude/projects/` so they appear in the dashboard. It's idempotent — safe to run multiple times.
 
 You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org` uses the active profile name as the GitHub org login — it works out of the box when the profile was created by `kapacitor setup` (which names it after the picked tenant), and errors otherwise. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
@@ -282,7 +281,7 @@ Known repos are persisted to `~/.config/kapacitor/repos.json` and reported to th
 Profiles let you work with multiple Capacitor servers — for example, a company server for work repos and a separate one for open-source projects. Each profile stores its own server URL, visibility settings, and daemon configuration.
 
 ```bash
-kapacitor profile add work --server-url https://cap.example.com
+kapacitor profile add work --server-url https://my-other-tenant.kapacitor.ai
 kapacitor profile add oss --server-url https://cap.oss.dev --remote "github.com/myorg/*"
 kapacitor profile list
 kapacitor profile show work
@@ -352,7 +351,7 @@ scheme. If `kapacitor` crashes with `An invalid request URI was provided`
 after upgrading, your config still has the old format. Fix it with one
 command:
 
-    kapacitor config set server_url https://your-server.example.com
+    kapacitor config set server_url https://my-tenant.kapacitor.ai
 
 Or remove the config file and re-run setup:
 
