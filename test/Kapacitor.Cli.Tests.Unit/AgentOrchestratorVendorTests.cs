@@ -275,6 +275,8 @@ public class AgentOrchestratorVendorTests {
         public int                 CleanupCalls   { get; private set; }
         public Exception?          PrepareThrow   { get; init; }
 
+        public bool IsAvailable() => true;
+
         public void Prepare(LauncherContext ctx) {
             PrepareCalls++;
             if (PrepareThrow is not null) throw PrepareThrow;

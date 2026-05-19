@@ -209,7 +209,7 @@ Non-interactive runs (no TTY, e.g. CI) must pass both a scope flag and `--yes`. 
 
 ### Daemon
 
-The daemon connects to the Capacitor server and runs Claude Code or Codex agents in isolated git worktrees, controlled from the dashboard. The daemon supports hosted Claude and Codex agents on macOS and Linux — choose the vendor from the dashboard's launch dialog.
+The daemon connects to the Capacitor server and runs Claude Code or Codex agents in isolated git worktrees, controlled from the dashboard. The daemon supports hosted Claude and Codex agents on macOS and Linux — choose the vendor from the dashboard's launch dialog. At startup the daemon probes `daemon.claude_path` and `daemon.codex_path` and advertises only the vendors it can actually spawn, so the launch dialog hides whichever agent isn't installed on the selected daemon.
 
 ```bash
 kapacitor daemon start                   # start in foreground (defaults --name to your OS username)

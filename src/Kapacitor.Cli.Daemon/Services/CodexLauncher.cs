@@ -12,6 +12,8 @@ internal sealed partial class CodexLauncher(
     public string Vendor  => "codex";
     public string CliPath => config.CodexPath;
 
+    public bool IsAvailable() => CliResolver.Exists(CliPath);
+
     static readonly string[] CriticalHookEvents = ["SessionStart", "Stop", "PermissionRequest"];
 
     public void Prepare(LauncherContext ctx) {

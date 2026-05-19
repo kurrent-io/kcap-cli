@@ -24,6 +24,16 @@ public class DaemonConfig {
     /// </summary>
     public string? Version { get; set; }
 
+    /// <summary>
+    /// Vendor tokens this daemon can actually spawn — populated in
+    /// <c>DaemonRunner.RunAsync</c> by probing each registered
+    /// <c>IHostedAgentLauncher.IsAvailable()</c>. Sent over
+    /// <c>DaemonConnect</c> (AI-652) so the server's launch dialog only
+    /// offers vendors this daemon has installed. <c>null</c> when the
+    /// host hasn't been built yet or in tests that bypass the runner.
+    /// </summary>
+    public string[]? SupportedVendors { get; set; }
+
     public string WorktreeRoot { get; set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ".capacitor",
