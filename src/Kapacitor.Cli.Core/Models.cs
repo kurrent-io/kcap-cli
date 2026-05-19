@@ -621,13 +621,14 @@ public readonly record struct ResizeTerminalCommand(
 /// each connected daemon is running.</para>
 /// </summary>
 public readonly record struct DaemonConnect(
-        string   Name,
-        string   Platform,
-        string[] RepoPaths,
-        int      MaxAgents,
-        string[] LiveAgentIds,
-        string?  InstanceId = null,
-        string?  Version    = null
+        string    Name,
+        string    Platform,
+        string[]  RepoPaths,
+        int       MaxAgents,
+        string[]  LiveAgentIds,
+        string?   InstanceId       = null,
+        string?   Version          = null,
+        string[]? SupportedVendors = null
     );
 
 public readonly record struct AgentRegistered(

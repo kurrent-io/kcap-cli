@@ -176,6 +176,17 @@ public static partial class DaemonRunner {
         var host   = builder.Build();
         var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("kapacitor.Daemon");
 
+        // AI-652: probe each registered launcher's CLI binary so the
+        // DaemonConnect payload only advertises vendors this daemon can
+        // actually spawn. The launch dialog filters its vendor selector
+        // by this list. Ordered alphabetically so the wire format is
+        // stable across restarts.
+        config.SupportedVendors = host.Services.GetServices<IHostedAgentLauncher>()
+            .Where(l => l.IsAvailable())
+            .Select(l => l.Vendor)
+            .OrderBy(v => v, StringComparer.Ordinal)
+            .ToArray();
+
         LogDaemonStarting(logger, config.Name, config.ServerUrl);
 
         var lifetime   = host.Services.GetRequiredService<IHostApplicationLifetime>();

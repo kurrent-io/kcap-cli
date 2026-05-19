@@ -17,6 +17,14 @@ internal interface IHostedAgentLauncher {
     string CliPath { get; }
 
     /// <summary>
+    /// Reports whether <see cref="CliPath"/> resolves to an executable that
+    /// looks installed. Used at daemon startup (AI-652) to build the list of
+    /// supported vendors advertised over <c>DaemonConnect</c>, so the launch
+    /// dialog only offers vendors the daemon can actually spawn.
+    /// </summary>
+    bool IsAvailable();
+
+    /// <summary>
     /// Per-vendor preparation BEFORE the PTY is spawned. Implementations:
     ///   • Overlay vendor-specific settings dir from source repo into worktree
     ///   • Pre-trust the worktree path in the vendor's config file

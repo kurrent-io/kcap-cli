@@ -13,6 +13,8 @@ internal sealed partial class ClaudeLauncher(
     public string Vendor  => "claude";
     public string CliPath => config.ClaudePath;
 
+    public bool IsAvailable() => CliResolver.Exists(CliPath);
+
     static readonly Lock                  TrustWriteLock   = new();
     static readonly JsonSerializerOptions IndentedJsonOpts = new() { WriteIndented = true };
 
