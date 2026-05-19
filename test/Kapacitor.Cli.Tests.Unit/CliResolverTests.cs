@@ -16,12 +16,34 @@ public class CliResolverTests {
     }
 
     [Test]
-    public async Task ReturnsTrue_WhenAbsolutePathExists() {
+    public async Task ReturnsTrue_WhenAbsolutePathIsExecutable() {
         var tempFile = Path.Combine(Path.GetTempPath(), $"cli-resolver-test-{Guid.NewGuid():N}");
         await File.WriteAllTextAsync(tempFile, "#!/bin/sh\necho hi\n");
+        MakeExecutable(tempFile);
 
         try {
             await Assert.That(CliResolver.Exists(tempFile)).IsTrue();
+        } finally {
+            File.Delete(tempFile);
+        }
+    }
+
+    /// <summary>
+    /// A non-executable file on disk must NOT be advertised as a spawnable
+    /// CLI. The original AI-652 resolver missed this and would have shipped
+    /// "claude" as supported on hosts where the binary existed but couldn't
+    /// be executed (e.g. wrong owner, stripped exec bit).
+    /// </summary>
+    [Test]
+    public async Task ReturnsFalse_WhenAbsolutePathIsNotExecutable() {
+        if (OperatingSystem.IsWindows()) return; // Windows has no exec bit
+
+        var tempFile = Path.Combine(Path.GetTempPath(), $"cli-resolver-noexec-{Guid.NewGuid():N}");
+        await File.WriteAllTextAsync(tempFile, "#!/bin/sh\necho hi\n");
+        File.SetUnixFileMode(tempFile, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+
+        try {
+            await Assert.That(CliResolver.Exists(tempFile)).IsFalse();
         } finally {
             File.Delete(tempFile);
         }
@@ -36,22 +58,45 @@ public class CliResolverTests {
 
     [Test]
     public async Task ReturnsTrue_WhenBareCommandResolvesOnPath() {
-        // Drop a fake "kapacitor-pathprobe-{guid}" binary into a temp dir and
-        // prepend that dir to PATH so the resolver finds it. Touch the
-        // executable bit on POSIX so the binary is plausibly runnable —
-        // the resolver doesn't enforce it, but the file has to exist.
-        var dir = Directory.CreateTempSubdirectory("cli-resolver-path-").FullName;
-        var name = $"kapacitor-pathprobe-{Guid.NewGuid():N}";
+        // Drop a fake "kapacitor-pathprobe-{guid}" binary into a temp dir,
+        // mark it executable on POSIX, and prepend that dir to PATH.
+        var dir        = Directory.CreateTempSubdirectory("cli-resolver-path-").FullName;
+        var name       = $"kapacitor-pathprobe-{Guid.NewGuid():N}";
         var binaryName = OperatingSystem.IsWindows() ? name + ".exe" : name;
         var binaryPath = Path.Combine(dir, binaryName);
         await File.WriteAllTextAsync(binaryPath, "");
+        MakeExecutable(binaryPath);
 
         var savedPath = Environment.GetEnvironmentVariable("PATH");
-        var sep       = OperatingSystem.IsWindows() ? ';' : ':';
-        Environment.SetEnvironmentVariable("PATH", $"{dir}{sep}{savedPath}");
+        Environment.SetEnvironmentVariable("PATH", $"{dir}{Path.PathSeparator}{savedPath}");
 
         try {
             await Assert.That(CliResolver.Exists(name)).IsTrue();
+        } finally {
+            Environment.SetEnvironmentVariable("PATH", savedPath);
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The Unix exec-bit check (mirrors <c>AgentDetector.IsExecutable</c>)
+    /// applies to PATH-resolved candidates too, not just absolute paths.
+    /// </summary>
+    [Test]
+    public async Task ReturnsFalse_WhenBareCommandOnPathIsNotExecutable() {
+        if (OperatingSystem.IsWindows()) return;
+
+        var dir        = Directory.CreateTempSubdirectory("cli-resolver-noexec-path-").FullName;
+        var name       = $"kapacitor-pathprobe-noexec-{Guid.NewGuid():N}";
+        var binaryPath = Path.Combine(dir, name);
+        await File.WriteAllTextAsync(binaryPath, "");
+        File.SetUnixFileMode(binaryPath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+
+        var savedPath = Environment.GetEnvironmentVariable("PATH");
+        Environment.SetEnvironmentVariable("PATH", $"{dir}{Path.PathSeparator}{savedPath}");
+
+        try {
+            await Assert.That(CliResolver.Exists(name)).IsFalse();
         } finally {
             Environment.SetEnvironmentVariable("PATH", savedPath);
             Directory.Delete(dir, recursive: true);
@@ -63,5 +108,15 @@ public class CliResolverTests {
         var unlikely = $"kapacitor-not-installed-{Guid.NewGuid():N}";
 
         await Assert.That(CliResolver.Exists(unlikely)).IsFalse();
+    }
+
+    static void MakeExecutable(string path) {
+        if (OperatingSystem.IsWindows()) return;
+        File.SetUnixFileMode(
+            path,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+          | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+          | UnixFileMode.OtherRead | UnixFileMode.OtherExecute
+        );
     }
 }
