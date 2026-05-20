@@ -19,6 +19,22 @@ public static class SetupCommand {
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
 
+        // Resolve repo root once and reuse for both the project-scope install path and the
+        // non-repo tip at the end. --plugin-scope project writes hooks at <repo>/.claude/...,
+        // so it requires a working tree; without one the hooks would land in a directory
+        // unrelated to any project, or — worse — under a subdirectory of the repo if we
+        // used cwd directly, which means two devs running setup from different subdirs
+        // install hooks in different places.
+        var gitRoot = GitRepository.FindRoot(Environment.CurrentDirectory);
+
+        if (legacyProjectScope && gitRoot is null) {
+            await Console.Error.WriteLineAsync(
+                $"--plugin-scope project requires a git working tree, but '{Environment.CurrentDirectory}' is not inside one.");
+            await Console.Error.WriteLineAsync(
+                "Either re-run `kapacitor setup` from inside your repo, or drop --plugin-scope project to install user-scope hooks.");
+            return 1;
+        }
+
         AnsiConsole.Write(new Rule("[bold green]Welcome to Kapacitor[/]").Centered());
 
         // Check if already configured
@@ -150,8 +166,10 @@ public static class SetupCommand {
             Claude: AgentDetector.IsInstalled("claude"),
             Codex:  AgentDetector.IsInstalled("codex"));
 
+        // gitRoot is guaranteed non-null here when legacyProjectScope is true (the early
+        // guard at the top of HandleAsync returns 1 otherwise).
         var claudeSettingsPath = legacyProjectScope
-            ? Path.Combine(Environment.CurrentDirectory, ".claude", "settings.local.json")
+            ? Path.Combine(gitRoot!, ".claude", "settings.local.json")
             : ClaudePaths.UserSettings;
 
         var stepOptions = new CodingAgentsStep.Options(
@@ -231,6 +249,19 @@ public static class SetupCommand {
         grid.AddRow("[bold]Config[/]", Markup.Escape(AppConfig.GetConfigPath()));
 
         AnsiConsole.Write(grid);
+
+        // Setup itself is user-scope and works fine outside a repo, but sessions recorded
+        // from non-repo directories have no owner/repo/branch/PR enrichment (see
+        // RepositoryDetection.DetectRepositoryAsync), which weakens grouping in the UI.
+        if (gitRoot is null) {
+            AnsiConsole.MarkupLine(
+                $"\n[yellow]Tip:[/] you ran setup outside a git working tree ([dim]{Markup.Escape(Environment.CurrentDirectory)}[/]).");
+            AnsiConsole.MarkupLine(
+                "  Hooks fire from any directory, but sessions recorded outside a repo won't include owner/repo/branch context.");
+            AnsiConsole.MarkupLine(
+                "  [dim]cd[/] into your project before recording to capture full session context.");
+        }
+
         AnsiConsole.MarkupLine("\n[dim]Optional:[/] start the daemon with [cyan]kapacitor daemon start -d[/]");
         AnsiConsole.MarkupLine("[dim]Optional:[/] import past sessions with [cyan]kapacitor history --org[/]");
 

@@ -103,10 +103,12 @@ After installing Codex hooks, run `/hooks` inside Codex and trust each kapacitor
 Legacy `--plugin-scope <user|project|skip>` is retained for backwards compatibility:
 
 - `user` — no-op (matches the new default)
-- `project` — install the Claude Code plugin into `<repo>/.claude/settings.local.json`
+- `project` — install the Claude Code plugin into `<repo>/.claude/settings.local.json`. Must be run from inside a git working tree; setup exits with an error otherwise.
 - `skip` — alias for `--skip-claude-hooks`
 
 New scripts should prefer `--skip-claude-hooks` / `--skip-codex-hooks` and `kapacitor plugin install --project` for project scope.
+
+If you run `kapacitor setup` outside any git working tree, it still completes — hooks install user-scope and fire for every session — but a tip at the end reminds you that sessions recorded from non-repo directories won't capture owner/repo/branch/PR context.
 
 ### Session recap
 
