@@ -19,10 +19,15 @@ public static class SetupCommand {
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
 
-        // --plugin-scope project writes ./.claude/settings.local.json into cwd. That only
-        // makes sense inside a git working tree — otherwise the hooks land in a directory
-        // that has no relationship to any project the user is recording sessions for.
-        if (legacyProjectScope && !GitRepository.IsInsideRepo(Environment.CurrentDirectory)) {
+        // Resolve repo root once and reuse for both the project-scope install path and the
+        // non-repo tip at the end. --plugin-scope project writes hooks at <repo>/.claude/...,
+        // so it requires a working tree; without one the hooks would land in a directory
+        // unrelated to any project, or — worse — under a subdirectory of the repo if we
+        // used cwd directly, which means two devs running setup from different subdirs
+        // install hooks in different places.
+        var gitRoot = GitRepository.FindRoot(Environment.CurrentDirectory);
+
+        if (legacyProjectScope && gitRoot is null) {
             await Console.Error.WriteLineAsync(
                 $"--plugin-scope project requires a git working tree, but '{Environment.CurrentDirectory}' is not inside one.");
             await Console.Error.WriteLineAsync(
@@ -161,8 +166,10 @@ public static class SetupCommand {
             Claude: AgentDetector.IsInstalled("claude"),
             Codex:  AgentDetector.IsInstalled("codex"));
 
+        // gitRoot is guaranteed non-null here when legacyProjectScope is true (the early
+        // guard at the top of HandleAsync returns 1 otherwise).
         var claudeSettingsPath = legacyProjectScope
-            ? Path.Combine(Environment.CurrentDirectory, ".claude", "settings.local.json")
+            ? Path.Combine(gitRoot!, ".claude", "settings.local.json")
             : ClaudePaths.UserSettings;
 
         var stepOptions = new CodingAgentsStep.Options(
@@ -246,7 +253,7 @@ public static class SetupCommand {
         // Setup itself is user-scope and works fine outside a repo, but sessions recorded
         // from non-repo directories have no owner/repo/branch/PR enrichment (see
         // RepositoryDetection.DetectRepositoryAsync), which weakens grouping in the UI.
-        if (!GitRepository.IsInsideRepo(Environment.CurrentDirectory)) {
+        if (gitRoot is null) {
             AnsiConsole.MarkupLine(
                 $"\n[yellow]Tip:[/] you ran setup outside a git working tree ([dim]{Markup.Escape(Environment.CurrentDirectory)}[/]).");
             AnsiConsole.MarkupLine(
