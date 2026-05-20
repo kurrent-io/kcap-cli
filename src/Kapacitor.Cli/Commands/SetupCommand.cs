@@ -19,6 +19,17 @@ public static class SetupCommand {
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
 
+        // --plugin-scope project writes ./.claude/settings.local.json into cwd. That only
+        // makes sense inside a git working tree — otherwise the hooks land in a directory
+        // that has no relationship to any project the user is recording sessions for.
+        if (legacyProjectScope && !GitRepository.IsInsideRepo(Environment.CurrentDirectory)) {
+            await Console.Error.WriteLineAsync(
+                $"--plugin-scope project requires a git working tree, but '{Environment.CurrentDirectory}' is not inside one.");
+            await Console.Error.WriteLineAsync(
+                "Either re-run `kapacitor setup` from inside your repo, or drop --plugin-scope project to install user-scope hooks.");
+            return 1;
+        }
+
         AnsiConsole.Write(new Rule("[bold green]Welcome to Kapacitor[/]").Centered());
 
         // Check if already configured
@@ -231,6 +242,19 @@ public static class SetupCommand {
         grid.AddRow("[bold]Config[/]", Markup.Escape(AppConfig.GetConfigPath()));
 
         AnsiConsole.Write(grid);
+
+        // Setup itself is user-scope and works fine outside a repo, but sessions recorded
+        // from non-repo directories have no owner/repo/branch/PR enrichment (see
+        // RepositoryDetection.DetectRepositoryAsync), which weakens grouping in the UI.
+        if (!GitRepository.IsInsideRepo(Environment.CurrentDirectory)) {
+            AnsiConsole.MarkupLine(
+                $"\n[yellow]Tip:[/] you ran setup outside a git working tree ([dim]{Markup.Escape(Environment.CurrentDirectory)}[/]).");
+            AnsiConsole.MarkupLine(
+                "  Hooks fire from any directory, but sessions recorded outside a repo won't include owner/repo/branch context.");
+            AnsiConsole.MarkupLine(
+                "  [dim]cd[/] into your project before recording to capture full session context.");
+        }
+
         AnsiConsole.MarkupLine("\n[dim]Optional:[/] start the daemon with [cyan]kapacitor daemon start -d[/]");
         AnsiConsole.MarkupLine("[dim]Optional:[/] import past sessions with [cyan]kapacitor history --org[/]");
 
