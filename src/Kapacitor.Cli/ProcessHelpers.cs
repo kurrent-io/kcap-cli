@@ -104,22 +104,18 @@ static partial class ProcessHelpers {
     /// covered by Claude's own SessionEnd hook.
     /// </remarks>
     public static int? GetCodingAgentPid() {
-        try {
-            if (OperatingSystem.IsWindows()) {
-                return GetParentPidWindows();
-            }
-
-            var pgid = getpgrp_native();
-
-            if (pgid <= 1) {
-                return getppid_native();
-            }
-
-            // Avoid self-monitoring when this process happens to be its own group leader.
-            return pgid == getpid_native() ? getppid_native() : pgid;
-        } catch {
-            return null;
+        if (OperatingSystem.IsWindows()) {
+            return GetParentPidWindows();
         }
+
+        var pgid = getpgrp_native();
+
+        if (pgid <= 1) {
+            return getppid_native();
+        }
+
+        // Avoid self-monitoring when this process happens to be its own group leader.
+        return pgid == getpid_native() ? getppid_native() : pgid;
     }
 
     /// <summary>
