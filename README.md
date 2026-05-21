@@ -59,9 +59,10 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 ```bash
 kapacitor history --org                          # sessions for the org bound to your active profile
 kapacitor history --repo owner/repo              # sessions for one specific repo
+kapacitor cursor import                          # Cursor IDE Composer/Agent sessions from the current workspace
 ```
 
-This backfills your past sessions from `~/.claude/projects/` so they appear in the dashboard. It's idempotent — safe to run multiple times.
+This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex via `--codex`), or Cursor's local SQLite (`kapacitor cursor import`) so they appear in the dashboard. All forms are idempotent — safe to run multiple times.
 
 You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org` uses the active profile name as the GitHub org login — it works out of the box when the profile was created by `kapacitor setup` (which names it after the picked tenant), and errors otherwise. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
@@ -206,6 +207,18 @@ kapacitor history --org --session abc123           # single session
 ```
 
 Non-interactive runs (no TTY, e.g. CI) must pass both a scope flag and `--yes`. The command is idempotent and resumable — re-running with the same scope only uploads what's missing or incomplete.
+
+### Loading Cursor sessions
+
+Cursor IDE doesn't have a hook API, so its Composer/Agent-mode sessions are imported post-hoc from Cursor's local SQLite state:
+
+```bash
+kapacitor cursor import                          # the current directory's Cursor workspace
+kapacitor cursor import --workspace /path/to/proj
+kapacitor cursor import --all                    # every Cursor workspace
+```
+
+Only Composer/Agent-mode sessions are imported — Chat (Ask), Inline Edit (Cmd+K), and Tab autocomplete don't fit the session model and are skipped. Sessions with bubbles still being generated are skipped until idle. Re-running is safe: a server-side tracker deduplicates events on `(stream, eventId)` so previously-imported turns don't get re-appended.
 
 ### Daemon
 
