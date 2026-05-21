@@ -24,7 +24,6 @@ public class CursorCommandTests {
         var rc = await CursorCommand.RunAsync(
             args: ["import", "--workspace", workspace],
             baseUrl: server.Url!,
-            token: "fake",
             pathsOverride: paths
         );
 
@@ -48,13 +47,53 @@ public class CursorCommandTests {
         var rc = await CursorCommand.RunAsync(
             args: ["import", "--workspace", workspace],
             baseUrl: server.Url!,
-            token: "fake",
             pathsOverride: paths
         );
 
         await Assert.That(rc).IsEqualTo(0);
         var posts = server.FindLogEntries(Request.Create().UsingPost().WithPath("/hooks/cursor-import"));
         await Assert.That(posts.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Import_skips_composer_with_generating_bubbles_in_flight() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().UsingGet().WithPath("/api/cursor/comp-A/watermark"))
+              .RespondWith(Response.Create().WithStatusCode(404));
+        server.Given(Request.Create().UsingPost().WithPath("/hooks/cursor-import"))
+              .RespondWith(Response.Create().WithStatusCode(202).WithBody("{}"));
+
+        var (workspace, paths) = CursorCommandTestFixtures.WorkspaceWithOneComposer("comp-A",
+            generatingBubbleIds: ["b1"]);
+
+        var rc = await CursorCommand.RunAsync(
+            args: ["import", "--workspace", workspace],
+            baseUrl: server.Url!,
+            pathsOverride: paths
+        );
+
+        await Assert.That(rc).IsEqualTo(0);
+        var posts = server.FindLogEntries(Request.Create().UsingPost().WithPath("/hooks/cursor-import"));
+        await Assert.That(posts.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Import_returns_nonzero_when_post_fails() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().UsingGet().WithPath("/api/cursor/comp-A/watermark"))
+              .RespondWith(Response.Create().WithStatusCode(404));
+        server.Given(Request.Create().UsingPost().WithPath("/hooks/cursor-import"))
+              .RespondWith(Response.Create().WithStatusCode(500));
+
+        var (workspace, paths) = CursorCommandTestFixtures.WorkspaceWithOneComposer("comp-A");
+
+        var rc = await CursorCommand.RunAsync(
+            args: ["import", "--workspace", workspace],
+            baseUrl: server.Url!,
+            pathsOverride: paths
+        );
+
+        await Assert.That(rc).IsEqualTo(1);
     }
 }
 
@@ -71,7 +110,10 @@ static class CursorCommandTestFixtures {
     /// The <c>CursorPaths.WorkspaceStorageDir</c> is set to the fixture's workspace storage dir so
     /// <see cref="CursorCommand.ResolveWorkspaces"/> finds the fixture workspace.
     /// </summary>
-    public static (string WorkspaceFolder, CursorPaths Paths) WorkspaceWithOneComposer(string composerId) {
+    public static (string WorkspaceFolder, CursorPaths Paths) WorkspaceWithOneComposer(
+        string    composerId,
+        string[]? generatingBubbleIds = null
+    ) {
         var root = Path.Combine(Path.GetTempPath(), $"cursor-fixture-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
 
@@ -92,10 +134,12 @@ static class CursorCommandTestFixtures {
                 """;
             ExecParam(conn, "INSERT INTO ItemTable VALUES ('composer.composerHeaders', @v)", headersJson);
 
-            // Minimal composerData blob
+            // Minimal composerData blob — include any in-flight generating bubble IDs
+            var ids      = generatingBubbleIds ?? [];
+            var idsJson  = "[" + string.Join(",", ids.Select(id => $"\"{id}\"")) + "]";
             var dataJson = $$"""
                 {"modelConfig":{"modelName":"claude-4"},"fullConversationHeadersOnly":[],
-                 "generatingBubbleIds":[],"status":"idle"}
+                 "generatingBubbleIds":{{idsJson}},"status":"idle"}
                 """;
             ExecParam(conn, "INSERT INTO cursorDiskKV VALUES (@k, @v)",
                 key: $"composerData:{composerId}", value: dataJson);

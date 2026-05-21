@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Kapacitor.Cli.Core;
 using Kapacitor.Cli.Core.Cursor;
 
@@ -13,7 +12,6 @@ static class CursorCommand {
     public static async Task<int> RunAsync(
         string[]      args,
         string        baseUrl,
-        string        token,
         CursorPaths?  pathsOverride = null,
         CancellationToken ct        = default
     ) {
@@ -30,9 +28,8 @@ static class CursorCommand {
 
         var paths = pathsOverride ?? CursorPaths.Resolve();
 
-        // Build an authenticated HttpClient using the supplied token
-        using var http = new HttpClient();
-        http.DefaultRequestHeaders.Authorization = new("Bearer", token);
+        // Build an authenticated HttpClient using the shared helper (token discovery, provider check)
+        using var http = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, ct);
 
         var workspaces = ResolveWorkspaces(paths, workspace, allFlag).ToList();
 
@@ -41,6 +38,8 @@ static class CursorCommand {
 
             return 1;
         }
+
+        var failed = 0;
 
         foreach (var (folderPath, wsDbPath) in workspaces) {
             if (!File.Exists(wsDbPath)) {
@@ -88,6 +87,35 @@ static class CursorCommand {
                     continue;
                 }
 
+                // Read composerData up-front to check for in-flight bubbles (Bug #1)
+                string? composerDataRaw;
+
+                try {
+                    composerDataRaw = await CursorStateReader.GetComposerDataAsync(paths.GlobalStateDb, composerId, ct);
+                } catch (Exception ex) {
+                    Console.Error.WriteLine($"[cursor] Failed to read composerData for {composerId}: {ex.Message}");
+
+                    continue;
+                }
+
+                if (composerDataRaw is not null) {
+                    try {
+                        using var doc            = JsonDocument.Parse(composerDataRaw);
+                        var       root           = doc.RootElement;
+                        var       generatingIds  = root.TryGetProperty("generatingBubbleIds", out var gbEl)
+                            ? gbEl.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList()
+                            : [];
+
+                        if (generatingIds.Count > 0) {
+                            Console.Error.WriteLine($"[skip] {composerId} in-flight bubbles");
+
+                            continue;
+                        }
+                    } catch {
+                        // Best-effort — if we can't parse, continue and let the server decide
+                    }
+                }
+
                 // Check watermark
                 if (await IsWatermarkCurrentAsync(http, baseUrl, composerId, header.LastUpdatedAtMs, ct)) {
                     Console.Error.WriteLine($"[skip] {composerId} unchanged");
@@ -95,13 +123,14 @@ static class CursorCommand {
                     continue;
                 }
 
-                // Build payload
+                // Build payload (re-uses already-read composerDataRaw to avoid double read)
                 CursorImportPayload payload;
 
                 try {
-                    payload = await BuildPayload(paths, composerId, folderPath, ct);
+                    payload = await BuildPayload(paths, composerId, folderPath, composerDataRaw, ct);
                 } catch (Exception ex) {
                     Console.Error.WriteLine($"[cursor] Failed to build payload for {composerId}: {ex.Message}");
+                    failed++;
 
                     continue;
                 }
@@ -120,15 +149,22 @@ static class CursorCommand {
 
                 try {
                     using var content = new StringContent(payloadJson, Encoding.UTF8, "application/json");
-                    var       resp    = await http.PostAsync($"{baseUrl}/hooks/cursor-import", content, ct);
-                    Console.Error.WriteLine($"[{(int)resp.StatusCode}] {composerId} ({name})");
+                    var       resp    = await http.PostWithRetryAsync($"{baseUrl}/hooks/cursor-import", content, ct: ct);
+
+                    if (!resp.IsSuccessStatusCode) {
+                        Console.Error.WriteLine($"[fail] {composerId} HTTP {(int)resp.StatusCode}");
+                        failed++;
+                    } else {
+                        Console.Error.WriteLine($"[{(int)resp.StatusCode}] {composerId} ({name})");
+                    }
                 } catch (Exception ex) {
                     Console.Error.WriteLine($"[cursor] POST failed for {composerId}: {ex.Message}");
+                    failed++;
                 }
             }
         }
 
-        return 0;
+        return failed > 0 ? 1 : 0;
     }
 
     static async Task<bool> IsWatermarkCurrentAsync(
@@ -139,7 +175,7 @@ static class CursorCommand {
         CancellationToken ct
     ) {
         try {
-            var resp = await http.GetAsync($"{baseUrl}/api/cursor/{composerId}/watermark", ct);
+            var resp = await http.GetWithRetryAsync($"{baseUrl}/api/cursor/{composerId}/watermark", ct: ct);
 
             if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return false;
 
@@ -165,11 +201,10 @@ static class CursorCommand {
         CursorPaths       paths,
         string            composerId,
         string            workspaceFolder,
+        string?           composerDataRaw,
         CancellationToken ct
     ) {
-        // Read composer data blob from global DB
-        var composerDataRaw = await CursorStateReader.GetComposerDataAsync(paths.GlobalStateDb, composerId, ct);
-
+        // composerDataRaw is pre-read by the caller (already checked for in-flight bubbles)
         CursorComposerData composerData;
 
         if (composerDataRaw is not null) {

@@ -543,11 +543,8 @@ switch (command) {
     }
     case "codex-hook":
         return await CodexHookCommand.Handle(baseUrl!, Console.In);
-    case "cursor": {
-        var tokens = await Kapacitor.Cli.Core.Auth.TokenStore.LoadAsync();
-        var token  = tokens?.AccessToken ?? "";
-        return await CursorCommand.RunAsync(args[1..], baseUrl!, token);
-    }
+    case "cursor":
+        return await CursorCommand.RunAsync(args[1..], baseUrl!);
 }
 
 if (!hookCommands.Contains(command)) {
