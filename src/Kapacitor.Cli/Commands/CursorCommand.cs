@@ -177,24 +177,26 @@ static class CursorCommand {
             var       root = doc.RootElement;
 
             var modelConfig = new CursorModelConfig {
-                ModelName      = root.TryGetProperty("modelConfig", out var mc) && mc.TryGetProperty("modelName",      out var mn) ? mn.GetString() : null,
+                ModelName      = root.TryGetProperty("modelConfig", out var mc) && mc.TryGetProperty("modelName", out var mn) && mn.ValueKind == JsonValueKind.String ? mn.GetString() : null,
                 SelectedModels = root.TryGetProperty("modelConfig", out var mc2) && mc2.TryGetProperty("selectedModels", out var sm)
-                    ? sm.EnumerateArray().Select(e => e.GetString()!).ToList()
+                    ? sm.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList()
                     : null
             };
 
             var headers = root.TryGetProperty("fullConversationHeadersOnly", out var hdrsEl)
-                ? hdrsEl.EnumerateArray().Select(h => new CursorTurnHeader {
-                    BubbleId = h.GetProperty("bubbleId").GetString()!,
-                    Type     = h.GetProperty("type").GetInt32()
-                }).ToList<CursorTurnHeader>()
+                ? hdrsEl.EnumerateArray()
+                    .Where(h => h.ValueKind == JsonValueKind.Object)
+                    .Select(h => new CursorTurnHeader {
+                        BubbleId = h.TryGetProperty("bubbleId", out var bidEl) && bidEl.ValueKind == JsonValueKind.String ? bidEl.GetString()! : "",
+                        Type     = h.TryGetProperty("type",     out var tyEl)  && tyEl.ValueKind  == JsonValueKind.Number ? tyEl.GetInt32()    : 0
+                    }).ToList<CursorTurnHeader>()
                 : new List<CursorTurnHeader>();
 
             var generatingIds = root.TryGetProperty("generatingBubbleIds", out var gbEl)
-                ? gbEl.EnumerateArray().Select(e => e.GetString()!).ToList()
+                ? gbEl.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList()
                 : new List<string>();
 
-            var status = root.TryGetProperty("status", out var stEl) ? stEl.GetString() : null;
+            var status = root.TryGetProperty("status", out var stEl) && stEl.ValueKind == JsonValueKind.String ? stEl.GetString() : null;
 
             composerData = new CursorComposerData {
                 ModelConfig                 = modelConfig,

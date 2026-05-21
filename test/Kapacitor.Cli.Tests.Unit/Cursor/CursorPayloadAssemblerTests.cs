@@ -24,6 +24,17 @@ public class CursorPayloadAssemblerTests {
     }
 
     [Test]
+    public async Task Handles_object_typed_params_and_result() {
+        // Real Cursor data can have params/result as JSON objects (not JSON-encoded strings)
+        var raw = """{"bubbleId":"b2","type":2,"capabilityType":15,"createdAt":"2026-05-21T00:00:00Z","toolFormerData":{"toolCallId":"tc2","name":"edit_file_v2","params":{"relativeWorkspacePath":"src/foo.cs"},"result":{"success":true}}}""";
+        var bubble = CursorPayloadAssembler.AssembleBubble(raw, repoPath: "/repo/foo");
+        await Assert.That(bubble.ToolFormerData).IsNotNull();
+        // Params/result should be serialized back to JSON text, not throw
+        await Assert.That(bubble.ToolFormerData!.Params).Contains("relativeWorkspacePath");
+        await Assert.That(bubble.ToolFormerData!.Result).Contains("success");
+    }
+
+    [Test]
     public async Task Truncates_oversize_content_blob() {
         var big = new string('x', 300_000);
         var (key, value) = CursorPayloadAssembler.MaybeTruncateBlob("composer.content.aaa", big);
