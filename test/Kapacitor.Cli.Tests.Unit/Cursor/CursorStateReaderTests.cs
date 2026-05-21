@@ -86,4 +86,61 @@ public class CursorStateReaderTests {
         var content = await CursorStateReader.GetContentBlobAsync(path, "composer.content.abc");
         await Assert.That(content).IsEqualTo("# README");
     }
+
+    [Test]
+    public async Task Reads_extended_composer_header_fields() {
+        var path = CreateFixtureDb(conn => {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "INSERT INTO ItemTable VALUES ('composer.composerHeaders', @v)";
+            cmd.Parameters.AddWithValue("@v", """
+                {
+                  "allComposers": [{
+                    "composerId": "c1",
+                    "unifiedMode": "agent",
+                    "name": "My Session",
+                    "createdAt": 1000,
+                    "lastUpdatedAt": 2000,
+                    "subtitle": "Fix the bug",
+                    "totalLinesAdded": 42,
+                    "totalLinesRemoved": 7,
+                    "filesChangedCount": 3,
+                    "trackedGitRepos": [
+                      {"repoPath": "/home/user/repo", "branchNames": ["main", "feature/x"]}
+                    ]
+                  }]
+                }
+                """);
+            cmd.ExecuteNonQuery();
+        });
+        var hdr = await CursorStateReader.GetComposerHeaderAsync(path, "c1");
+        await Assert.That(hdr).IsNotNull();
+        await Assert.That(hdr!.Subtitle).IsEqualTo("Fix the bug");
+        await Assert.That(hdr.TotalLinesAdded).IsEqualTo(42);
+        await Assert.That(hdr.TotalLinesRemoved).IsEqualTo(7);
+        await Assert.That(hdr.FilesChangedCount).IsEqualTo(3);
+        await Assert.That(hdr.TrackedGitRepos).IsNotNull();
+        await Assert.That(hdr.TrackedGitRepos!.Count).IsEqualTo(1);
+        await Assert.That(hdr.TrackedGitRepos[0].RepoPath).IsEqualTo("/home/user/repo");
+        await Assert.That(hdr.TrackedGitRepos[0].BranchNames).IsNotNull();
+        await Assert.That(hdr.TrackedGitRepos[0].BranchNames!.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Reads_composer_header_with_missing_optional_fields() {
+        var path = CreateFixtureDb(conn => {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "INSERT INTO ItemTable VALUES ('composer.composerHeaders', @v)";
+            // Minimal header — no subtitle, line counts, or tracked repos
+            cmd.Parameters.AddWithValue("@v",
+                """{"allComposers":[{"composerId":"c1","unifiedMode":"agent","createdAt":1,"lastUpdatedAt":2}]}""");
+            cmd.ExecuteNonQuery();
+        });
+        var hdr = await CursorStateReader.GetComposerHeaderAsync(path, "c1");
+        await Assert.That(hdr).IsNotNull();
+        await Assert.That(hdr!.Subtitle).IsNull();
+        await Assert.That(hdr.TotalLinesAdded).IsEqualTo(0);
+        await Assert.That(hdr.TotalLinesRemoved).IsEqualTo(0);
+        await Assert.That(hdr.FilesChangedCount).IsEqualTo(0);
+        await Assert.That(hdr.TrackedGitRepos).IsNull();
+    }
 }

@@ -3,7 +3,19 @@ using Microsoft.Data.Sqlite;
 
 namespace Kapacitor.Cli.Core.Cursor;
 
-public sealed record RawComposerHeader(string ComposerId, string UnifiedMode, string? Name, long CreatedAtMs, long LastUpdatedAtMs);
+public sealed record RawComposerHeader(
+    string ComposerId,
+    string UnifiedMode,
+    string? Name,
+    long CreatedAtMs,
+    long LastUpdatedAtMs,
+    string? Subtitle,
+    int TotalLinesAdded,
+    int TotalLinesRemoved,
+    int FilesChangedCount,
+    IReadOnlyList<RawTrackedRepo>? TrackedGitRepos);
+
+public sealed record RawTrackedRepo(string RepoPath, IReadOnlyList<string>? BranchNames);
 
 public static class CursorStateReader {
     static string ConnString(string path) => new SqliteConnectionStringBuilder {
@@ -48,12 +60,36 @@ public static class CursorStateReader {
         if (!doc.RootElement.TryGetProperty("allComposers", out var all)) return null;
         foreach (var c in all.EnumerateArray()) {
             if (c.GetProperty("composerId").GetString() != composerId) continue;
+
+            // Parse optional tracked git repos (present in Cursor ≥ v0.x when a folder is open)
+            IReadOnlyList<RawTrackedRepo>? trackedRepos = null;
+            if (c.TryGetProperty("trackedGitRepos", out var tgrEl) && tgrEl.ValueKind == JsonValueKind.Array) {
+                var repos = new List<RawTrackedRepo>();
+                foreach (var r in tgrEl.EnumerateArray()) {
+                    var repoPath = r.TryGetProperty("repoPath", out var rp) ? rp.GetString() ?? "" : "";
+                    IReadOnlyList<string>? branches = null;
+                    if (r.TryGetProperty("branchNames", out var bnEl) && bnEl.ValueKind == JsonValueKind.Array) {
+                        branches = bnEl.EnumerateArray()
+                            .Where(b => b.ValueKind == JsonValueKind.String)
+                            .Select(b => b.GetString()!)
+                            .ToList();
+                    }
+                    repos.Add(new RawTrackedRepo(repoPath, branches));
+                }
+                trackedRepos = repos;
+            }
+
             return new RawComposerHeader(
-                ComposerId:      composerId,
-                UnifiedMode:     c.GetProperty("unifiedMode").GetString() ?? "",
-                Name:            c.TryGetProperty("name", out var n) ? n.GetString() : null,
-                CreatedAtMs:     c.GetProperty("createdAt").GetInt64(),
-                LastUpdatedAtMs: c.GetProperty("lastUpdatedAt").GetInt64()
+                ComposerId:       composerId,
+                UnifiedMode:      c.GetProperty("unifiedMode").GetString() ?? "",
+                Name:             c.TryGetProperty("name",             out var n)    ? n.GetString()   : null,
+                CreatedAtMs:      c.GetProperty("createdAt").GetInt64(),
+                LastUpdatedAtMs:  c.GetProperty("lastUpdatedAt").GetInt64(),
+                Subtitle:         c.TryGetProperty("subtitle",         out var sub)  ? sub.GetString() : null,
+                TotalLinesAdded:  c.TryGetProperty("totalLinesAdded",   out var tla) && tla.ValueKind == JsonValueKind.Number ? tla.GetInt32() : 0,
+                TotalLinesRemoved:c.TryGetProperty("totalLinesRemoved", out var tlr) && tlr.ValueKind == JsonValueKind.Number ? tlr.GetInt32() : 0,
+                FilesChangedCount:c.TryGetProperty("filesChangedCount", out var fcc) && fcc.ValueKind == JsonValueKind.Number ? fcc.GetInt32() : 0,
+                TrackedGitRepos:  trackedRepos
             );
         }
         return null;

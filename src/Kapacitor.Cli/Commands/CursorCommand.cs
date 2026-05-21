@@ -248,8 +248,28 @@ static class CursorCommand {
             };
         }
 
-        // Read bubbles from global DB
+        // Read bubbles from global DB (SQLite row order is undefined; we sort below)
         var rawBubbles = await CursorStateReader.ListBubblesAsync(paths.GlobalStateDb, composerId, ct);
+
+        // Build a position map from fullConversationHeadersOnly so bubbles are ordered
+        // as the conversation prescribes, not by SQLite storage order.
+        var orderMap = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (composerDataRaw is not null) {
+            try {
+                using var ordDoc  = JsonDocument.Parse(composerDataRaw);
+                var       ordRoot = ordDoc.RootElement;
+                if (ordRoot.TryGetProperty("fullConversationHeadersOnly", out var headersArr)
+                    && headersArr.ValueKind == JsonValueKind.Array) {
+                    var i = 0;
+                    foreach (var h in headersArr.EnumerateArray()) {
+                        if (h.TryGetProperty("bubbleId", out var bid) && bid.ValueKind == JsonValueKind.String)
+                            orderMap[bid.GetString()!] = i++;
+                    }
+                }
+            } catch {
+                // Best-effort — if parsing fails, fall back to SQLite order below.
+            }
+        }
 
         // Collect content blob keys referenced by edit_file_v2 bubbles
         var contentBlobKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -294,19 +314,36 @@ static class CursorCommand {
             contentBlobs[k] = v;
         }
 
+        // Order bubbles by fullConversationHeadersOnly position (spec rule); bubbles not in
+        // the header list are orphaned SQLite rows and are dropped from the wire payload.
+        // If the orderMap is empty (couldn't parse — rare), fall back to SQLite order.
+        var orderedBubbles = orderMap.Count > 0
+            ? assembledBubbles
+                .Where(b => orderMap.ContainsKey(b.BubbleId))
+                .OrderBy(b => orderMap[b.BubbleId])
+                .ToList()
+            : assembledBubbles;
+
         // Read header again (it was already verified to exist by caller)
         var header = await CursorStateReader.GetComposerHeaderAsync(paths.GlobalStateDb, composerId, ct);
 
+        var trackedRepos = header!.TrackedGitRepos?
+            .Select(r => new CursorTrackedRepo {
+                RepoPath = r.RepoPath,
+                Branches = r.BranchNames?.Select(b => new CursorTrackedBranch { BranchName = b }).ToList()
+            })
+            .ToList();
+
         var cursorHeader = new CursorHeader {
-            Name              = header!.Name,
+            Name              = header.Name,
             UnifiedMode       = header.UnifiedMode,
             CreatedAtMs       = header.CreatedAtMs,
             LastUpdatedAtMs   = header.LastUpdatedAtMs,
-            TrackedGitRepos   = null,  // not in the raw header; server may enrich
-            TotalLinesAdded   = 0,
-            TotalLinesRemoved = 0,
-            FilesChangedCount = 0,
-            Subtitle          = null
+            TrackedGitRepos   = trackedRepos,
+            TotalLinesAdded   = header.TotalLinesAdded,
+            TotalLinesRemoved = header.TotalLinesRemoved,
+            FilesChangedCount = header.FilesChangedCount,
+            Subtitle          = header.Subtitle
         };
 
         return new CursorImportPayload {
@@ -315,7 +352,7 @@ static class CursorCommand {
             SchemaSourceVersion = new CursorSchemaVersion { ComposerData = 1, Bubble = 1 },
             Header              = cursorHeader,
             ComposerData        = composerData,
-            Bubbles             = assembledBubbles,
+            Bubbles             = orderedBubbles,
             ContentBlobs        = contentBlobs
         };
     }
