@@ -108,14 +108,12 @@ static partial class ProcessHelpers {
             return GetParentPidWindows();
         }
 
+        // Fall back to getppid for the degenerate cases: pgid <= 1 means no
+        // group / init, and pgid == our own pid means we're our own group
+        // leader — monitoring ourselves would let the watcher self-terminate.
         var pgid = getpgrp_native();
 
-        if (pgid <= 1) {
-            return getppid_native();
-        }
-
-        // Avoid self-monitoring when this process happens to be its own group leader.
-        return pgid == getpid_native() ? getppid_native() : pgid;
+        return pgid > 1 && pgid != getpid_native() ? pgid : getppid_native();
     }
 
     /// <summary>
