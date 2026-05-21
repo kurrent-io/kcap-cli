@@ -110,6 +110,39 @@ public class CursorCommandTests {
     }
 
     [Test]
+    public async Task Import_content_blobs_excludes_orphan_bubble_blobs() {
+        // Fixture: one bubble in fullConversationHeadersOnly (references blob-in),
+        // one orphan bubble not in headers (references blob-orphan).
+        // After the fix, only blob-in must appear in the posted contentBlobs dict.
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().UsingGet().WithPath("/api/cursor/comp-C/watermark"))
+              .RespondWith(Response.Create().WithStatusCode(404));
+        server.Given(Request.Create().UsingPost().WithPath("/hooks/cursor-import"))
+              .RespondWith(Response.Create().WithStatusCode(202).WithBody("{}"));
+
+        var (workspace, paths) = CursorCommandTestFixtures.WorkspaceWithOrphanBubbleBlobs("comp-C");
+
+        var rc = await CursorCommand.RunAsync(
+            args: ["import", "--workspace", workspace],
+            baseUrl: server.Url!,
+            pathsOverride: paths
+        );
+
+        await Assert.That(rc).IsEqualTo(0);
+        var posts = server.FindLogEntries(Request.Create().UsingPost().WithPath("/hooks/cursor-import"));
+        await Assert.That(posts.Count).IsEqualTo(1);
+
+        var body = posts[0].RequestMessage.Body!;
+        using var doc = JsonDocument.Parse(body);
+        var blobs = doc.RootElement.GetProperty("contentBlobs");
+
+        // In-headers bubble's blob must be present
+        await Assert.That(blobs.TryGetProperty("composer.content.blob-in", out _)).IsTrue();
+        // Orphan bubble's blob must NOT be present
+        await Assert.That(blobs.TryGetProperty("composer.content.blob-orphan", out _)).IsFalse();
+    }
+
+    [Test]
     public async Task Import_returns_nonzero_when_post_fails() {
         using var server = WireMockServer.Start();
         server.Given(Request.Create().UsingGet().WithPath("/api/cursor/comp-A/watermark"))
@@ -283,6 +316,95 @@ static class CursorCommandTestFixtures {
                 ExecParam(conn, "INSERT INTO cursorDiskKV VALUES (@k, @v)",
                     key: $"bubbleId:{composerId}:{bid}", value: bJson);
             }
+        });
+
+        var wsStorageDir = Path.Combine(root, "workspaceStorage");
+        var wsSubdir     = Path.Combine(wsStorageDir, "ws-fixture");
+        Directory.CreateDirectory(wsSubdir);
+
+        var workspaceFolder = root;
+        var folderUri       = $"file://{workspaceFolder}";
+        File.WriteAllText(Path.Combine(wsSubdir, "workspace.json"),
+            $$"""{"folder":"{{folderUri}}"}""");
+
+        var wsDb = Path.Combine(wsSubdir, "state.vscdb");
+        CreateDb(wsDb, conn => {
+            Exec(conn, "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT);");
+            ExecParam(conn, "INSERT INTO ItemTable VALUES ('composer.composerData', @v)",
+                value: $$"""{"selectedComposerId":"{{composerId}}","selectedComposerIds":["{{composerId}}"]}""");
+        });
+
+        var paths = new CursorPaths(
+            UserDir:             root,
+            WorkspaceStorageDir: wsStorageDir,
+            GlobalStateDb:       globalDb
+        );
+        return (workspaceFolder, paths);
+    }
+
+    /// <summary>
+    /// Creates a fixture with two edit_file_v2 bubbles:
+    /// <list type="bullet">
+    ///   <item><c>bub-in</c> — listed in <c>fullConversationHeadersOnly</c>; references <c>composer.content.blob-in</c>.</item>
+    ///   <item><c>bub-orphan</c> — NOT listed in headers (orphan); references <c>composer.content.blob-orphan</c>.</item>
+    /// </list>
+    /// After the orphan-blob fix, only <c>blob-in</c> must appear in the posted <c>contentBlobs</c>.
+    /// </summary>
+    public static (string WorkspaceFolder, CursorPaths Paths) WorkspaceWithOrphanBubbleBlobs(string composerId) {
+        var root = Path.Combine(Path.GetTempPath(), $"cursor-fixture-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+
+        var globalDir = Path.Combine(root, "globalStorage");
+        Directory.CreateDirectory(globalDir);
+        var globalDb = Path.Combine(globalDir, "state.vscdb");
+
+        var bubIdIn     = $"{composerId}:bub-in";
+        var bubIdOrphan = $"{composerId}:bub-orphan";
+
+        CreateDb(globalDb, conn => {
+            Exec(conn, "CREATE TABLE ItemTable    (key TEXT PRIMARY KEY, value TEXT);");
+            Exec(conn, "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT);");
+
+            // Composer header
+            var headersJson = $$"""
+                {"allComposers":[
+                  {"composerId":"{{composerId}}","unifiedMode":"agent","name":"Blob Test",
+                   "createdAt":1,"lastUpdatedAt":1}
+                ]}
+                """;
+            ExecParam(conn, "INSERT INTO ItemTable VALUES ('composer.composerHeaders', @v)", headersJson);
+
+            // fullConversationHeadersOnly: only bub-in is listed; bub-orphan is NOT listed
+            var dataJson = $$"""
+                {
+                  "modelConfig":{"modelName":"claude-4"},
+                  "fullConversationHeadersOnly":[
+                    {"bubbleId":"{{bubIdIn}}","type":2}
+                  ],
+                  "generatingBubbleIds":[],
+                  "status":"completed"
+                }
+                """;
+            ExecParam(conn, "INSERT INTO cursorDiskKV VALUES (@k, @v)",
+                key: $"composerData:{composerId}", value: dataJson);
+
+            // bub-in: edit_file_v2 referencing blob-in
+            var resultIn  = @"{""beforeContentId"":""composer.content.blob-in"",""afterContentId"":null}";
+            var bubInJson = $@"{{""bubbleId"":""{bubIdIn}"",""type"":2,""createdAt"":""2024-01-01T00:00:00Z"",""toolFormerData"":{{""toolCallId"":""t1"",""name"":""edit_file_v2"",""result"":{resultIn}}}}}";
+            ExecParam(conn, "INSERT INTO cursorDiskKV VALUES (@k, @v)",
+                key: $"bubbleId:{composerId}:{bubIdIn}", value: bubInJson);
+
+            // bub-orphan: edit_file_v2 referencing blob-orphan (NOT in headers)
+            var resultOrphan  = @"{""beforeContentId"":""composer.content.blob-orphan"",""afterContentId"":null}";
+            var bubOrphanJson = $@"{{""bubbleId"":""{bubIdOrphan}"",""type"":2,""createdAt"":""2024-01-01T00:00:00Z"",""toolFormerData"":{{""toolCallId"":""t2"",""name"":""edit_file_v2"",""result"":{resultOrphan}}}}}";
+            ExecParam(conn, "INSERT INTO cursorDiskKV VALUES (@k, @v)",
+                key: $"bubbleId:{composerId}:{bubIdOrphan}", value: bubOrphanJson);
+
+            // Content blobs referenced by both bubbles
+            ExecParam(conn, "INSERT INTO cursorDiskKV VALUES (@k, @v)",
+                key: "composer.content.blob-in",     value: "// content for in-headers bubble");
+            ExecParam(conn, "INSERT INTO cursorDiskKV VALUES (@k, @v)",
+                key: "composer.content.blob-orphan", value: "// content for orphan bubble");
         });
 
         var wsStorageDir = Path.Combine(root, "workspaceStorage");

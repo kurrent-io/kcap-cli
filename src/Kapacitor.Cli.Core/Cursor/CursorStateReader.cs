@@ -68,11 +68,28 @@ public static class CursorStateReader {
                 foreach (var r in tgrEl.EnumerateArray()) {
                     var repoPath = r.TryGetProperty("repoPath", out var rp) ? rp.GetString() ?? "" : "";
                     IReadOnlyList<string>? branches = null;
-                    if (r.TryGetProperty("branchNames", out var bnEl) && bnEl.ValueKind == JsonValueKind.Array) {
-                        branches = bnEl.EnumerateArray()
-                            .Where(b => b.ValueKind == JsonValueKind.String)
-                            .Select(b => b.GetString()!)
-                            .ToList();
+                    // Real Cursor shape: "branches":[{"branchName":"main","lastInteractionAt":...}]
+                    // Legacy fallback:   "branchNames":["main","feature/x"]  (older schemas)
+                    var branchesEl = r.TryGetProperty("branches",     out var bEl) ? bEl
+                                   : r.TryGetProperty("branchNames",  out var nEl) ? nEl
+                                   : default;
+                    if (branchesEl.ValueKind == JsonValueKind.Array) {
+                        var names = new List<string>();
+                        foreach (var b in branchesEl.EnumerateArray()) {
+                            if (b.ValueKind == JsonValueKind.Object) {
+                                // Real shape: extract branchName property
+                                if (b.TryGetProperty("branchName", out var bn) && bn.ValueKind == JsonValueKind.String) {
+                                    var name = bn.GetString();
+                                    if (!string.IsNullOrEmpty(name)) names.Add(name);
+                                }
+                            } else if (b.ValueKind == JsonValueKind.String) {
+                                // Legacy shape: element is already the branch name string
+                                var name = b.GetString();
+                                if (!string.IsNullOrEmpty(name)) names.Add(name);
+                            }
+                            // Skip malformed entries
+                        }
+                        if (names.Count > 0) branches = names;
                     }
                     repos.Add(new RawTrackedRepo(repoPath, branches));
                 }

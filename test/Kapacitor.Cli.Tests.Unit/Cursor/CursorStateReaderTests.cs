@@ -89,6 +89,7 @@ public class CursorStateReaderTests {
 
     [Test]
     public async Task Reads_extended_composer_header_fields() {
+        // Uses the real Cursor wire shape: branches is an array of objects with branchName field.
         var path = CreateFixtureDb(conn => {
             using var cmd = conn.CreateCommand();
             cmd.CommandText = "INSERT INTO ItemTable VALUES ('composer.composerHeaders', @v)";
@@ -105,7 +106,10 @@ public class CursorStateReaderTests {
                     "totalLinesRemoved": 7,
                     "filesChangedCount": 3,
                     "trackedGitRepos": [
-                      {"repoPath": "/home/user/repo", "branchNames": ["main", "feature/x"]}
+                      {"repoPath": "/home/user/repo", "branches": [
+                        {"branchName": "main", "lastInteractionAt": 1779302743015},
+                        {"branchName": "feature/x", "lastInteractionAt": 1779302700000}
+                      ]}
                     ]
                   }]
                 }
@@ -123,6 +127,41 @@ public class CursorStateReaderTests {
         await Assert.That(hdr.TrackedGitRepos[0].RepoPath).IsEqualTo("/home/user/repo");
         await Assert.That(hdr.TrackedGitRepos[0].BranchNames).IsNotNull();
         await Assert.That(hdr.TrackedGitRepos[0].BranchNames!.Count).IsEqualTo(2);
+        await Assert.That(hdr.TrackedGitRepos[0].BranchNames[0]).IsEqualTo("main");
+        await Assert.That(hdr.TrackedGitRepos[0].BranchNames[1]).IsEqualTo("feature/x");
+    }
+
+    [Test]
+    public async Task Reads_branches_from_legacy_string_array_shape() {
+        // Defensive backward compat: older Cursor schemas stored branchNames as a flat
+        // string array ("branchNames": ["main", "feature/x"]) rather than the current
+        // object-array form.  The parser must handle both shapes.
+        var path = CreateFixtureDb(conn => {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "INSERT INTO ItemTable VALUES ('composer.composerHeaders', @v)";
+            cmd.Parameters.AddWithValue("@v", """
+                {
+                  "allComposers": [{
+                    "composerId": "c1",
+                    "unifiedMode": "agent",
+                    "createdAt": 1000,
+                    "lastUpdatedAt": 2000,
+                    "trackedGitRepos": [
+                      {"repoPath": "/home/user/repo", "branchNames": ["main", "feature/x"]}
+                    ]
+                  }]
+                }
+                """);
+            cmd.ExecuteNonQuery();
+        });
+        var hdr = await CursorStateReader.GetComposerHeaderAsync(path, "c1");
+        await Assert.That(hdr).IsNotNull();
+        await Assert.That(hdr!.TrackedGitRepos).IsNotNull();
+        await Assert.That(hdr.TrackedGitRepos!.Count).IsEqualTo(1);
+        await Assert.That(hdr.TrackedGitRepos[0].BranchNames).IsNotNull();
+        await Assert.That(hdr.TrackedGitRepos[0].BranchNames!.Count).IsEqualTo(2);
+        await Assert.That(hdr.TrackedGitRepos[0].BranchNames[0]).IsEqualTo("main");
+        await Assert.That(hdr.TrackedGitRepos[0].BranchNames[1]).IsEqualTo("feature/x");
     }
 
     [Test]

@@ -273,14 +273,28 @@ static class CursorCommand {
             }
         }
 
-        // Collect content blob keys referenced by edit_file_v2 bubbles
-        var contentBlobKeys = new HashSet<string>(StringComparer.Ordinal);
+        // Assemble all raw bubbles into typed objects.
         var assembledBubbles = new List<CursorBubble>(rawBubbles.Count);
 
         foreach (var (_, bubbleJson) in rawBubbles) {
-            var bubble = CursorPayloadAssembler.AssembleBubble(bubbleJson, workspaceFolder);
-            assembledBubbles.Add(bubble);
+            assembledBubbles.Add(CursorPayloadAssembler.AssembleBubble(bubbleJson, workspaceFolder));
+        }
 
+        // Order bubbles by fullConversationHeadersOnly position (spec rule); bubbles not in
+        // the header list are orphaned SQLite rows and are dropped from the wire payload.
+        // If the orderMap is empty (couldn't parse — rare), fall back to SQLite order.
+        var orderedBubbles = orderMap.Count > 0
+            ? assembledBubbles
+                .Where(b => orderMap.ContainsKey(b.BubbleId))
+                .OrderBy(b => orderMap[b.BubbleId])
+                .ToList()
+            : assembledBubbles;
+
+        // Collect content blob keys referenced by edit_file_v2 bubbles — only from ordered
+        // (non-orphan) bubbles so we never upload blobs from dropped orphan bubbles.
+        var contentBlobKeys = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var bubble in orderedBubbles) {
             // Extract content blob refs from edit_file_v2 result JSON
             if (bubble.ToolFormerData is { Name: "edit_file_v2", Result: { } resultJson }) {
                 try {
@@ -315,16 +329,6 @@ static class CursorCommand {
             var (k, v) = CursorPayloadAssembler.MaybeTruncateBlob(key, blob);
             contentBlobs[k] = v;
         }
-
-        // Order bubbles by fullConversationHeadersOnly position (spec rule); bubbles not in
-        // the header list are orphaned SQLite rows and are dropped from the wire payload.
-        // If the orderMap is empty (couldn't parse — rare), fall back to SQLite order.
-        var orderedBubbles = orderMap.Count > 0
-            ? assembledBubbles
-                .Where(b => orderMap.ContainsKey(b.BubbleId))
-                .OrderBy(b => orderMap[b.BubbleId])
-                .ToList()
-            : assembledBubbles;
 
         // Read header again (it was already verified to exist by caller)
         var header = await CursorStateReader.GetComposerHeaderAsync(paths.GlobalStateDb, composerId, ct);
