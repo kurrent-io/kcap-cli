@@ -12,8 +12,9 @@ static class CursorCommand {
     public static async Task<int> RunAsync(
         string[]      args,
         string        baseUrl,
-        CursorPaths?  pathsOverride = null,
-        CancellationToken ct        = default
+        CursorPaths?  pathsOverride        = null,
+        int           payloadHardCapBytes   = CursorPayloadAssembler.PayloadHardCapBytes,
+        CancellationToken ct               = default
     ) {
         if (args.Length < 1 || args[0] != "import") {
             var help = EmbeddedResources.TryLoad("help-cursor.txt");
@@ -138,8 +139,9 @@ static class CursorCommand {
                 // Serialize and size-check
                 var payloadJson = JsonSerializer.Serialize(payload, CursorJsonContext.Default.CursorImportPayload);
 
-                if (Encoding.UTF8.GetByteCount(payloadJson) > CursorPayloadAssembler.PayloadHardCapBytes) {
-                    Console.Error.WriteLine($"[cursor] Payload for {composerId} exceeds 10 MB hard cap — skipping. Reduce session size or contact support.");
+                if (Encoding.UTF8.GetByteCount(payloadJson) > payloadHardCapBytes) {
+                    Console.Error.WriteLine($"[cursor] Payload for {composerId} exceeds {payloadHardCapBytes / 1024 / 1024} MB hard cap — skipping. Reduce session size or contact support.");
+                    failed++;
 
                     continue;
                 }

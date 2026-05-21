@@ -127,6 +127,31 @@ public class CursorCommandTests {
 
         await Assert.That(rc).IsEqualTo(1);
     }
+
+    [Test]
+    public async Task Import_returns_nonzero_when_payload_exceeds_hard_cap() {
+        // Use a 1-byte hard cap so the standard minimal payload always exceeds it,
+        // avoiding the need to synthesise a real 10 MB fixture.
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().UsingGet().WithPath("/api/cursor/comp-A/watermark"))
+              .RespondWith(Response.Create().WithStatusCode(404));
+        // POST should never be reached — the cap check comes first.
+        server.Given(Request.Create().UsingPost().WithPath("/hooks/cursor-import"))
+              .RespondWith(Response.Create().WithStatusCode(202).WithBody("{}"));
+
+        var (workspace, paths) = CursorCommandTestFixtures.WorkspaceWithOneComposer("comp-A");
+
+        var rc = await CursorCommand.RunAsync(
+            args: ["import", "--workspace", workspace],
+            baseUrl: server.Url!,
+            pathsOverride: paths,
+            payloadHardCapBytes: 1   // force every payload to exceed the cap
+        );
+
+        await Assert.That(rc).IsEqualTo(1);
+        var posts = server.FindLogEntries(Request.Create().UsingPost().WithPath("/hooks/cursor-import"));
+        await Assert.That(posts.Count).IsEqualTo(0);
+    }
 }
 
 static class CursorCommandTestFixtures {
