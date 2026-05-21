@@ -543,6 +543,8 @@ switch (command) {
     }
     case "codex-hook":
         return await CodexHookCommand.Handle(baseUrl!, Console.In);
+    case "cursor":
+        return await CursorCommand.RunAsync(args[1..], baseUrl!);
 }
 
 if (!hookCommands.Contains(command)) {

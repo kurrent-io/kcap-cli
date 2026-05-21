@@ -46,6 +46,9 @@ Plugin:
   plugin install [--project] [--codex]   Register hooks (Claude or --codex for Codex)
   plugin remove  [--project] [--codex]   Remove hooks (Claude or --codex for Codex)
 
+Import:
+  cursor import [--workspace P] [--all]  Import Cursor IDE Composer/Agent sessions
+
 Maintenance:
   update                           Check for and install updates
   cleanup                          Kill all orphaned watcher processes

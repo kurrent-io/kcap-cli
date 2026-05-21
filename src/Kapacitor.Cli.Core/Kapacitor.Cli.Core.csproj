@@ -11,6 +11,9 @@
         <EmbeddedResource Include="Resources\**\*" />
     </ItemGroup>
     <ItemGroup>
+        <PackageReference Include="Microsoft.Data.Sqlite" />
+    </ItemGroup>
+    <ItemGroup>
         <InternalsVisibleTo Include="kapacitor" />
         <InternalsVisibleTo Include="kapacitor-daemon" />
         <InternalsVisibleTo Include="Kapacitor.Cli.Tests.Unit" />
