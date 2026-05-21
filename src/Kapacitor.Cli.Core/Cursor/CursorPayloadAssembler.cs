@@ -93,8 +93,36 @@ public static class CursorPayloadAssembler {
 
     static string? RedactPaths(string? json, string repoPath) {
         if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(repoPath)) return json;
-        // Cheap: textual replace. Bubbles are short; if false positives become a problem,
-        // upgrade to JSON walk.
-        return json.Replace(repoPath, "/repo");
+
+        // Trim trailing path separators so a repoPath ending in '/' or '\\'
+        // matches the same as one without.
+        var trimmed = repoPath.TrimEnd('/', '\\');
+        if (trimmed.Length == 0) return json;
+
+        // Variants we might find in bubble JSON:
+        //   forward          — POSIX-style forward slashes.
+        //   backward         — Windows-native backslashes.
+        //   backwardEscaped  — Windows backslashes in their JSON-escaped form,
+        //                      which is how they appear inside the bubble JSON
+        //                      when params/result was originally JSON-encoded
+        //                      (one '\\' → two characters '\\\\').
+        var forward         = trimmed.Replace('\\', '/');
+        var backward        = trimmed.Replace('/', '\\');
+        var backwardEscaped = backward.Replace("\\", "\\\\");
+
+        // Windows filesystems are case-insensitive; POSIX is case-sensitive.
+        var cmp = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        // Replace the escaped Windows form first — its substring 'backward' must
+        // not be consumed mid-escape before we get a chance to see the full pair.
+        var result = json;
+        if (!string.Equals(forward, backward, StringComparison.Ordinal)) {
+            result = result.Replace(backwardEscaped, "/repo", cmp);
+            result = result.Replace(backward, "/repo", cmp);
+        }
+        result = result.Replace(forward, "/repo", cmp);
+        return result;
     }
 }
