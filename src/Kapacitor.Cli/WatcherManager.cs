@@ -65,7 +65,12 @@ static class WatcherManager {
             Directory.CreateDirectory(watcherDir);
 
             var kapacitorPath = Environment.ProcessPath ?? "kapacitor";
-            var parentPid     = ProcessHelpers.GetParentPid();
+            // Use the coding-agent's PID (process group leader on Unix) rather than
+            // getppid(): coding agents invoke hooks through a transient executor that
+            // dies the moment the hook returns, so by the time the watcher checks
+            // IsProcessAlive it sees a dead PID and never starts the monitor task —
+            // leaving Codex sessions stuck "active" because session-end is never POSTed.
+            var parentPid     = ProcessHelpers.GetCodingAgentPid();
             var arguments     = BuildSpawnArgs(key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, parentPid, vendor);
 
             var psi = new ProcessStartInfo(kapacitorPath, arguments) {

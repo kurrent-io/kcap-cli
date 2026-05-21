@@ -65,4 +65,26 @@ public class ProcessHelpersTests {
         await Assert.That(ppid).IsNotNull();
         await Assert.That(ProcessHelpers.IsProcessAlive(ppid!.Value)).IsTrue();
     }
+
+    [Test]
+    public async Task GetCodingAgentPid_returns_a_live_process() {
+        // The whole point of GetCodingAgentPid is to identify a process that's
+        // still alive when the watcher boots up — i.e. the long-lived coding
+        // agent, not the short-lived hook executor. Anything it returns must
+        // therefore answer "yes" to IsProcessAlive at the moment of the call.
+        var pid = ProcessHelpers.GetCodingAgentPid();
+
+        await Assert.That(pid).IsNotNull();
+        await Assert.That(ProcessHelpers.IsProcessAlive(pid!.Value)).IsTrue();
+    }
+
+    [Test]
+    public async Task GetCodingAgentPid_does_not_return_own_pid() {
+        // Self-monitoring would let the watcher self-terminate as soon as it
+        // starts. The Unix branch falls back to getppid when the process group
+        // leader is the calling process itself.
+        var pid = ProcessHelpers.GetCodingAgentPid();
+
+        await Assert.That(pid).IsNotEqualTo(Environment.ProcessId);
+    }
 }
