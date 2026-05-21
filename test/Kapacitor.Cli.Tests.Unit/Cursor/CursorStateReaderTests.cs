@@ -88,6 +88,65 @@ public class CursorStateReaderTests {
     }
 
     [Test]
+    public async Task GetContentBlobs_returns_requested_keys_in_one_call() {
+        var path = CreateFixtureDb(conn => {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                              INSERT INTO cursorDiskKV VALUES ('composer.content.a', 'one');
+                              INSERT INTO cursorDiskKV VALUES ('composer.content.b', 'two');
+                              INSERT INTO cursorDiskKV VALUES ('composer.content.c', 'three');
+                              INSERT INTO cursorDiskKV VALUES ('bubbleId:other',     'noise');
+                              """;
+            cmd.ExecuteNonQuery();
+        });
+        var blobs = await CursorStateReader.GetContentBlobsAsync(path, new[] {
+            "composer.content.a",
+            "composer.content.b",
+            "composer.content.c"
+        });
+        await Assert.That(blobs.Count).IsEqualTo(3);
+        await Assert.That(blobs["composer.content.a"]).IsEqualTo("one");
+        await Assert.That(blobs["composer.content.b"]).IsEqualTo("two");
+        await Assert.That(blobs["composer.content.c"]).IsEqualTo("three");
+    }
+
+    [Test]
+    public async Task GetContentBlobs_omits_missing_keys_and_returns_empty_dict_for_empty_input() {
+        var path = CreateFixtureDb(conn => {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "INSERT INTO cursorDiskKV VALUES ('composer.content.a', 'one')";
+            cmd.ExecuteNonQuery();
+        });
+
+        var empty = await CursorStateReader.GetContentBlobsAsync(path, []);
+        await Assert.That(empty.Count).IsEqualTo(0);
+
+        var partial = await CursorStateReader.GetContentBlobsAsync(path, new[] {
+            "composer.content.a",
+            "composer.content.missing"
+        });
+        await Assert.That(partial.Count).IsEqualTo(1);
+        await Assert.That(partial.ContainsKey("composer.content.missing")).IsFalse();
+        await Assert.That(partial["composer.content.a"]).IsEqualTo("one");
+    }
+
+    [Test]
+    public async Task GetContentBlobs_deduplicates_input_keys() {
+        var path = CreateFixtureDb(conn => {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "INSERT INTO cursorDiskKV VALUES ('composer.content.a', 'one')";
+            cmd.ExecuteNonQuery();
+        });
+        var blobs = await CursorStateReader.GetContentBlobsAsync(path, new[] {
+            "composer.content.a",
+            "composer.content.a",
+            "composer.content.a"
+        });
+        await Assert.That(blobs.Count).IsEqualTo(1);
+        await Assert.That(blobs["composer.content.a"]).IsEqualTo("one");
+    }
+
+    [Test]
     public async Task Reads_extended_composer_header_fields() {
         // Uses the real Cursor wire shape: branches is an array of objects with branchName field.
         var path = CreateFixtureDb(conn => {

@@ -318,14 +318,12 @@ static class CursorCommand {
             }
         }
 
-        // Load content blobs and apply size cap
+        // Load all referenced content blobs in a single connection + single query
+        // (or batched queries when key count is huge), then apply the per-blob size cap.
+        var fetchedBlobs = await CursorStateReader.GetContentBlobsAsync(paths.GlobalStateDb, contentBlobKeys, ct);
         var contentBlobs = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        foreach (var key in contentBlobKeys) {
-            var blob = await CursorStateReader.GetContentBlobAsync(paths.GlobalStateDb, key, ct);
-
-            if (blob is null) continue;
-
+        foreach (var (key, blob) in fetchedBlobs) {
             var (k, v) = CursorPayloadAssembler.MaybeTruncateBlob(key, blob);
             contentBlobs[k] = v;
         }
