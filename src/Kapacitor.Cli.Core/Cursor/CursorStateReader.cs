@@ -174,7 +174,13 @@ public static class CursorStateReader {
             for (var i = 0; i < batch.Count; i++) cmd.Parameters.AddWithValue("@k" + i, batch[i]);
 
             await using var reader = await cmd.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct)) result[reader.GetString(0)] = reader.GetString(1);
+            while (await reader.ReadAsync(ct)) {
+                // cursorDiskKV.value is TEXT NULL — skip NULL rows instead of throwing
+                // InvalidCastException from GetString. Matches the singular
+                // GetContentBlobAsync's null-on-NULL contract (callers already filter).
+                if (reader.IsDBNull(1)) continue;
+                result[reader.GetString(0)] = reader.GetString(1);
+            }
         }
 
         return result;

@@ -147,6 +147,28 @@ public class CursorStateReaderTests {
     }
 
     [Test]
+    public async Task GetContentBlobs_skips_rows_with_null_value() {
+        // cursorDiskKV.value is TEXT NULL. The bulk fetcher must not throw
+        // InvalidCastException on NULL — it should silently drop the key, matching
+        // the singular GetContentBlobAsync's null-on-NULL contract.
+        var path = CreateFixtureDb(conn => {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                              INSERT INTO cursorDiskKV (key, value) VALUES ('composer.content.a', 'one');
+                              INSERT INTO cursorDiskKV (key, value) VALUES ('composer.content.b', NULL);
+                              """;
+            cmd.ExecuteNonQuery();
+        });
+        var blobs = await CursorStateReader.GetContentBlobsAsync(path, new[] {
+            "composer.content.a",
+            "composer.content.b"
+        });
+        await Assert.That(blobs.Count).IsEqualTo(1);
+        await Assert.That(blobs["composer.content.a"]).IsEqualTo("one");
+        await Assert.That(blobs.ContainsKey("composer.content.b")).IsFalse();
+    }
+
+    [Test]
     public async Task Reads_extended_composer_header_fields() {
         // Uses the real Cursor wire shape: branches is an array of objects with branchName field.
         var path = CreateFixtureDb(conn => {
