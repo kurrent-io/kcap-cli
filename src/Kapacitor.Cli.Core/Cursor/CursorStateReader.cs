@@ -141,4 +141,48 @@ public static class CursorStateReader {
         cmd.Parameters.AddWithValue("@k", contentKey);
         return (string?)await cmd.ExecuteScalarAsync(ct);
     }
+
+    /// <summary>
+    /// Fetches multiple <c>composer.content.&lt;sha256&gt;</c> blobs in a single SQLite
+    /// connection and a single query per batch. Missing keys are absent from the
+    /// returned dictionary. Duplicate keys in the input are deduplicated.
+    /// </summary>
+    public static async Task<IReadOnlyDictionary<string, string>> GetContentBlobsAsync(
+        string              globalDbPath,
+        IEnumerable<string> keys,
+        CancellationToken   ct = default
+    ) {
+        var unique = new HashSet<string>(keys, StringComparer.Ordinal);
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (unique.Count == 0) return result;
+
+        await using var conn = new SqliteConnection(ConnString(globalDbPath));
+        await conn.OpenAsync(ct);
+
+        // SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999 (older builds) /
+        // 32766 (newer). 500 is a safe batch size that also keeps the IN clause
+        // small for query-plan purposes.
+        const int batchSize = 500;
+        var pending = unique.ToList();
+
+        for (var offset = 0; offset < pending.Count; offset += batchSize) {
+            var batch = pending.GetRange(offset, Math.Min(batchSize, pending.Count - offset));
+
+            await using var cmd = conn.CreateCommand();
+            var placeholders = string.Join(",", Enumerable.Range(0, batch.Count).Select(i => "@k" + i));
+            cmd.CommandText = $"SELECT key, value FROM cursorDiskKV WHERE key IN ({placeholders})";
+            for (var i = 0; i < batch.Count; i++) cmd.Parameters.AddWithValue("@k" + i, batch[i]);
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct)) {
+                // cursorDiskKV.value is TEXT NULL — skip NULL rows instead of throwing
+                // InvalidCastException from GetString. Matches the singular
+                // GetContentBlobAsync's null-on-NULL contract (callers already filter).
+                if (reader.IsDBNull(1)) continue;
+                result[reader.GetString(0)] = reader.GetString(1);
+            }
+        }
+
+        return result;
+    }
 }
