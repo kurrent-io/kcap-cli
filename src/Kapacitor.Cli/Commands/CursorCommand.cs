@@ -409,7 +409,8 @@ static class CursorCommand {
             string normalizedFolder;
             try {
                 normalizedFolder = NormalizePath(folderPath);
-            } catch {
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"[cursor] Skipping workspace {subdir}: invalid folder path '{folderPath}' ({ex.Message})");
                 continue;
             }
 
