@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   checks: read
+  id-token: write
 
 env:
   DOTNET_VERSION: '10.0.x'
@@ -172,8 +173,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+
+      # npm trusted publishing (OIDC) requires npm >= 11.5.1. Node 24 ships
+      # with npm 11.x but the exact patch can lag, so pin to latest explicitly.
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest
 
       - name: Extract version from tag
         id: version
@@ -186,8 +192,6 @@ jobs:
           path: npm-artifacts/
 
       - name: Update package versions and publish platform packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION=${{ steps.version.outputs.VERSION }}
 
@@ -236,8 +240,6 @@ jobs:
         run: cp -r kapacitor/ npm/kapacitor/kapacitor/
 
       - name: Publish wrapper package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION=${{ steps.version.outputs.VERSION }}
           cd npm/kapacitor
