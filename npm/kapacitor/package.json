@@ -3,6 +3,10 @@
   "version": "0.0.0",
   "description": "CLI companion for Kurrent Capacitor — records and visualizes Claude Code sessions",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kurrent-io/kapacitor-cli.git"
+  },
   "bin": {
     "kapacitor": "bin/kapacitor.js"
   },

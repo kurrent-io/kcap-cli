@@ -3,6 +3,10 @@
   "version": "0.0.0",
   "description": "kapacitor native binary for macOS ARM64",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kurrent-io/kapacitor-cli.git"
+  },
   "os": ["darwin"],
   "cpu": ["arm64"],
   "files": ["bin/"]
