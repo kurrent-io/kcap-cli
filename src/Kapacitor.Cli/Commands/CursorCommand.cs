@@ -402,20 +402,29 @@ static class CursorCommand {
 
             if (folderPath is null) continue;
 
+            // Normalize once so downstream consumers (path-redaction in particular)
+            // see a canonical native form, not whatever shape workspace.json used.
+            string normalizedFolder;
+            try {
+                normalizedFolder = NormalizePath(folderPath);
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"[cursor] Skipping workspace {subdir}: invalid folder path '{folderPath}' ({ex.Message})");
+                continue;
+            }
+
             var wsDbPath = Path.Combine(subdir, "state.vscdb");
 
             if (all) {
-                yield return (folderPath, wsDbPath);
+                yield return (normalizedFolder, wsDbPath);
 
                 continue;
             }
 
             var target = selectedWorkspace ?? cwd;
             var normalizedTarget = NormalizePath(target);
-            var normalizedFolder = NormalizePath(folderPath);
 
             if (string.Equals(normalizedTarget, normalizedFolder, StringComparison.OrdinalIgnoreCase)) {
-                yield return (folderPath, wsDbPath);
+                yield return (normalizedFolder, wsDbPath);
             }
         }
     }
