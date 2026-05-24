@@ -110,6 +110,15 @@ public class ConfigMigrationTests {
     }
 
     [Test]
+    public async Task ProfileConfig_ExcludedPaths_RoundTrips() {
+        var json = """{ "excluded_paths": ["/home/alice/secret", "/srv/private"] }""";
+        var profile = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.Profile)!;
+
+        await Assert.That(profile.ExcludedPaths).Contains("/home/alice/secret");
+        await Assert.That(profile.ExcludedPaths).Contains("/srv/private");
+    }
+
+    [Test]
     public async Task ProfileConfig_DisableSessionGuidelines_RoundTripsTrue() {
         var json   = """{ "disable_session_guidelines": true }""";
         var config = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.Profile)!;

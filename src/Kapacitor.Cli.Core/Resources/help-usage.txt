@@ -19,6 +19,9 @@ Profiles:
 Configuration:
   config show                      Print current configuration
   config set <key> <value>         Update a config value
+  ignore <path>                    Exclude a path (and descendants) from session recording
+  ignore --list                    List excluded paths in the active profile
+  ignore --remove <path>           Remove a path from the exclusion list
 
 Daemon:
   daemon start [-d] [--name N]     Start the daemon (foreground, or -d for background; refuses on duplicate name)

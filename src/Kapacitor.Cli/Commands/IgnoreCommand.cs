@@ -1,0 +1,134 @@
+using Kapacitor.Cli.Core.Config;
+
+namespace Kapacitor.Cli.Commands;
+
+public static class IgnoreCommand {
+    public static async Task<int> HandleAsync(string[] args) {
+        // args[0] == "ignore"; --help / -h is handled by the dispatcher in Program.cs.
+        if (args.Length < 2) return Usage();
+
+        if (args[1] == "--list") return await List();
+
+        if (args[1] == "--remove") {
+            if (args.Length < 3) {
+                await Console.Error.WriteLineAsync("Usage: kapacitor ignore --remove <path>");
+
+                return 1;
+            }
+
+            return await Remove(args[2]);
+        }
+
+        return await Add(args[1]);
+    }
+
+    static async Task<int> Add(string path) {
+        var (config, profileName, profile) = await LoadActive();
+        var before = Current(profile).Length;
+
+        profile = ApplyAdd(profile, path);
+        await SaveActive(config, profileName, profile);
+
+        var normalized = PathExclusion.Normalize(path);
+
+        if (Current(profile).Length == before) {
+            await Console.Out.WriteLineAsync($"Already ignored: {normalized} (profile: {profileName})");
+        } else {
+            await Console.Out.WriteLineAsync($"Ignoring: {normalized} (profile: {profileName})");
+        }
+
+        return 0;
+    }
+
+    static async Task<int> Remove(string path) {
+        var (config, profileName, profile) = await LoadActive();
+        var before = Current(profile).Length;
+
+        profile = ApplyRemove(profile, path);
+        await SaveActive(config, profileName, profile);
+
+        var normalized = PathExclusion.Normalize(path);
+
+        if (Current(profile).Length == before) {
+            await Console.Out.WriteLineAsync($"Not in ignore list: {normalized} (profile: {profileName})");
+        } else {
+            await Console.Out.WriteLineAsync($"Removed: {normalized} (profile: {profileName})");
+        }
+
+        return 0;
+    }
+
+    static async Task<int> List() {
+        var (_, profileName, profile) = await LoadActive();
+        var paths                     = Current(profile);
+
+        if (paths.Length == 0) {
+            await Console.Out.WriteLineAsync($"No ignored paths (profile: {profileName}).");
+
+            return 0;
+        }
+
+        await Console.Out.WriteLineAsync($"Ignored paths (profile: {profileName}):");
+
+        foreach (var p in paths)
+            await Console.Out.WriteLineAsync($"  {p}");
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Pure: returns a new <see cref="Profile"/> with <paramref name="path"/> added to
+    /// <see cref="Profile.ExcludedPaths"/>, normalized and deduped. Exposed for testing.
+    /// </summary>
+    public static Profile ApplyAdd(Profile profile, string path) {
+        var normalized = PathExclusion.Normalize(path);
+        var current    = Current(profile);
+
+        if (current.Any(existing => PathExclusion.Normalize(existing) == normalized))
+            return profile;
+
+        return profile with { ExcludedPaths = [.. current, normalized] };
+    }
+
+    /// <summary>
+    /// Pure: returns a new <see cref="Profile"/> with <paramref name="path"/> removed
+    /// from <see cref="Profile.ExcludedPaths"/>. Exposed for testing.
+    /// </summary>
+    public static Profile ApplyRemove(Profile profile, string path) {
+        var normalized = PathExclusion.Normalize(path);
+        var current    = Current(profile);
+        var remaining  = current
+            .Where(existing => PathExclusion.Normalize(existing) != normalized)
+            .ToArray();
+
+        return remaining.Length == current.Length
+            ? profile
+            : profile with { ExcludedPaths = remaining };
+    }
+
+    // JSON source-gen for init-only array properties leaves the value null when
+    // the JSON key is absent, even though the C# initializer is `= []`. Treat
+    // null as empty everywhere that touches the array.
+    static string[] Current(Profile profile) => profile.ExcludedPaths ?? [];
+
+    static async Task<(ProfileConfig Config, string ProfileName, Profile Profile)> LoadActive() {
+        var config      = await AppConfig.LoadProfileConfig();
+        var profileName = config.ActiveProfile;
+        var profile     = config.Profiles.GetValueOrDefault(profileName) ?? new Profile();
+
+        return (config, profileName, profile);
+    }
+
+    static async Task SaveActive(ProfileConfig config, string profileName, Profile profile) {
+        var profiles = new Dictionary<string, Profile>(config.Profiles) { [profileName] = profile };
+        await AppConfig.SaveProfileConfig(config with { Profiles = profiles });
+    }
+
+    static int Usage() {
+        Console.Error.WriteLine("Usage: kapacitor ignore <path>");
+        Console.Error.WriteLine("       kapacitor ignore --list");
+        Console.Error.WriteLine("       kapacitor ignore --remove <path>");
+
+        return 1;
+    }
+}

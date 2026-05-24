@@ -1,0 +1,27 @@
+kapacitor ignore — Exclude paths from session recording
+
+Usage: kapacitor ignore <path>
+       kapacitor ignore --list
+       kapacitor ignore --remove <path>
+
+Marks <path> as excluded for the active profile. Any coding-agent session whose
+working directory is the path itself, or any directory inside it, is silently
+dropped — no hook payload is sent and no transcript is imported via
+`kapacitor history`.
+
+Path resolution:
+  - `.` and `~` are expanded to absolute paths.
+  - Trailing separators are stripped.
+  - Symlinks are resolved so a worktree symlink and its target match.
+
+Scope:
+  Entries are stored on the **active profile** (see `kapacitor profile show`).
+  Switching profiles with `kapacitor use` switches the ignore list too. To
+  share the same list across profiles, run `kapacitor ignore` while each
+  profile is active.
+
+Examples:
+  kapacitor ignore .                            # ignore the current directory
+  kapacitor ignore ~/code/secret-project        # ignore a specific tree
+  kapacitor ignore --list                       # show all ignored paths
+  kapacitor ignore --remove ~/code/secret-project

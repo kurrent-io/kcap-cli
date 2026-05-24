@@ -160,6 +160,13 @@ public static class ProfileCommand {
             await Console.Out.WriteLineAsync($"  excluded_repos: {string.Join(", ", profile.ExcludedRepos)}");
         }
 
+        if (profile.ExcludedPaths is { Length: > 0 }) {
+            await Console.Out.WriteLineAsync("  excluded_paths:");
+
+            foreach (var p in profile.ExcludedPaths)
+                await Console.Out.WriteLineAsync($"    - {p}");
+        }
+
         return 0;
     }
 

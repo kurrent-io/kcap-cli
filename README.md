@@ -348,6 +348,17 @@ kapacitor config set default_visibility public       # all sessions visible to e
 kapacitor config set excluded_repos "myorg/secret-project,personal/diary"
 ```
 
+**Path exclusions** silently skip any session whose working directory is, or sits inside, a configured path — useful for ignoring scratch dirs, worktrees, or monorepo subtrees regardless of git remote:
+
+```bash
+kapacitor ignore .                       # ignore the current directory
+kapacitor ignore ~/code/secret-project   # ignore a specific tree
+kapacitor ignore --list                  # show all ignored paths
+kapacitor ignore --remove ~/code/secret-project
+```
+
+Entries are stored on the **active profile**, so switching profiles with `kapacitor use` switches the ignore list too. Symlinks are resolved on both the stored entry and the session's reported cwd, so a worktree symlink and its target match.
+
 ### Other commands
 
 ```bash
