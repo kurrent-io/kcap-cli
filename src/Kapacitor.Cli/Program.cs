@@ -631,10 +631,12 @@ if (kapacitorConfig?.ExcludedRepos is { Length: > 0 } repos && await RepoExclusi
     return 0;
 }
 
-// Check path exclusion against the active V2 profile (resolved during ResolveServerUrl above).
-// Reads ExcludedPaths off ResolvedProfile rather than the V1-flat KapacitorConfig because
-// excluded_paths only exists on V2 profiles.
-if (AppConfig.ResolvedProfile?.Profile?.ExcludedPaths is { Length: > 0 } paths) {
+// Check path exclusion against the V2 profile that applies to this process.
+// GetActiveProfileAsync falls back to ActiveProfile when --server-url / KAPACITOR_URL
+// caused the resolver to skip profile selection — without that fallback `kapacitor
+// ignore` writes (which also fall back to ActiveProfile) would be silently ignored
+// by hooks.
+if ((await AppConfig.GetActiveProfileAsync())?.ExcludedPaths is { Length: > 0 } paths) {
     try {
         var cwd = JsonNode.Parse(body)?["cwd"]?.GetValue<string>();
 

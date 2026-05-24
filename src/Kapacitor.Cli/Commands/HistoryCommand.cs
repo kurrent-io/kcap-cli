@@ -342,7 +342,7 @@ static class HistoryCommand {
 
         // --- Classify (parallel probes) ---
         var                         excludedRepos = kapacitorConfig?.ExcludedRepos;
-        var                         excludedPaths = AppConfig.ResolvedProfile?.Profile?.ExcludedPaths;
+        var                         excludedPaths = (await AppConfig.GetActiveProfileAsync())?.ExcludedPaths;
         List<SessionClassification> classifications;
 
         if (display.Tty) {

@@ -57,6 +57,27 @@ public class PathExclusionTests {
     }
 
     [Test]
+    public async Task IsExcluded_matches_descendant_whose_leaf_name_starts_with_dotdot() {
+        // /ignored/..scratch is a legitimate child of /ignored. Path.GetRelativePath
+        // returns "..scratch", which our containment check must not treat as a
+        // parent-directory reference.
+        using var tmp = TempDir.Create();
+        var       sub = Path.Combine(tmp.Path, "..scratch");
+        Directory.CreateDirectory(sub);
+
+        await Assert.That(PathExclusion.IsExcluded(sub, [tmp.Path])).IsTrue();
+    }
+
+    [Test]
+    public async Task IsExcluded_matches_deeper_descendant_under_dotdot_named_intermediate() {
+        using var tmp = TempDir.Create();
+        var       sub = Path.Combine(tmp.Path, "..data", "session");
+        Directory.CreateDirectory(sub);
+
+        await Assert.That(PathExclusion.IsExcluded(sub, [tmp.Path])).IsTrue();
+    }
+
+    [Test]
     public async Task IsExcluded_matches_any_entry() {
         using var tmp = TempDir.Create();
         var       sub = Path.Combine(tmp.Path, "child");

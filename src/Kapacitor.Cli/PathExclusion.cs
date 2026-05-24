@@ -122,8 +122,14 @@ static class PathExclusion {
         var rel = Path.GetRelativePath(parent, candidate);
 
         if (rel == ".") return true;
-        if (rel.StartsWith("..", StringComparison.Ordinal)) return false;
         if (Path.IsPathRooted(rel)) return false; // different volume/root
+
+        // Reject only literal parent-directory references — `..` exactly or
+        // `..` followed by a separator. A filename that merely starts with `..`
+        // (e.g. `..scratch`, `..data/session`) is a legitimate descendant.
+        if (rel == "..") return false;
+        if (rel.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)) return false;
+        if (rel.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal)) return false;
 
         return true;
     }
