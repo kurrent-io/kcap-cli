@@ -110,6 +110,53 @@ public class ConfigMigrationTests {
     }
 
     [Test]
+    public async Task ProfileConfig_ExcludedPaths_RoundTrips() {
+        var json = """{ "excluded_paths": ["/home/alice/secret", "/srv/private"] }""";
+        var profile = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.Profile)!;
+
+        await Assert.That(profile.ExcludedPaths).Contains("/home/alice/secret");
+        await Assert.That(profile.ExcludedPaths).Contains("/srv/private");
+    }
+
+    [Test]
+    public async Task PickActiveProfile_returns_resolved_profile_when_present() {
+        var resolved = new Profile { ExcludedPaths = ["/from/resolved"] };
+        var config   = new ProfileConfig {
+            ActiveProfile = "default",
+            Profiles      = new Dictionary<string, Profile> { ["default"] = new() { ExcludedPaths = ["/from/active"] } }
+        };
+
+        var picked = AppConfig.PickActiveProfile(resolved, config);
+
+        await Assert.That(picked).IsSameReferenceAs(resolved);
+    }
+
+    [Test]
+    public async Task PickActiveProfile_falls_back_to_active_when_resolved_is_null() {
+        // URL override case: ResolveServerUrl returns ResolvedProfile.Profile == null,
+        // but `kapacitor ignore` still writes to ActiveProfile, so the hook must look there.
+        var activeProfile = new Profile { ExcludedPaths = ["/from/active"] };
+        var config        = new ProfileConfig {
+            ActiveProfile = "default",
+            Profiles      = new Dictionary<string, Profile> { ["default"] = activeProfile }
+        };
+
+        var picked = AppConfig.PickActiveProfile(resolvedProfile: null, config);
+
+        await Assert.That(picked).IsSameReferenceAs(activeProfile);
+    }
+
+    [Test]
+    public async Task PickActiveProfile_returns_null_when_active_missing_and_no_resolution() {
+        var config = new ProfileConfig {
+            ActiveProfile = "missing",
+            Profiles      = new Dictionary<string, Profile>()
+        };
+
+        await Assert.That(AppConfig.PickActiveProfile(null, config)).IsNull();
+    }
+
+    [Test]
     public async Task ProfileConfig_DisableSessionGuidelines_RoundTripsTrue() {
         var json   = """{ "disable_session_guidelines": true }""";
         var config = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.Profile)!;

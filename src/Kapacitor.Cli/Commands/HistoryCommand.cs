@@ -148,6 +148,14 @@ static class HistoryCommand {
         /// </summary>
         public string? ExcludedRepoKey { get; init; }
 
+        /// <summary>
+        /// Populated when the session's cwd lies within a path configured via
+        /// <c>kapacitor ignore</c>. Holds the matching excluded-path entry
+        /// (normalized) so prompts can group sessions by the entry that excluded
+        /// them.
+        /// </summary>
+        public string? ExcludedPathKey { get; init; }
+
         /// <summary>Total transcript line count (cached so we don't re-read the file downstream).</summary>
         public int TotalLines { get; init; }
     }
@@ -334,6 +342,7 @@ static class HistoryCommand {
 
         // --- Classify (parallel probes) ---
         var                         excludedRepos = kapacitorConfig?.ExcludedRepos;
+        var                         excludedPaths = (await AppConfig.GetActiveProfileAsync())?.ExcludedPaths;
         List<SessionClassification> classifications;
 
         if (display.Tty) {
@@ -353,7 +362,8 @@ static class HistoryCommand {
                             excludedRepos,
                             CancellationToken.None,
                             vendor,
-                            onProbed: () => bar.Increment(1)
+                            onProbed: () => bar.Increment(1),
+                            excludedPaths: excludedPaths
                         );
                         tmp.AddRange(results);
                     }
@@ -361,7 +371,7 @@ static class HistoryCommand {
             classifications = tmp;
         } else {
             display.Line($"Probing {transcriptFiles.Count} sessions...");
-            classifications = await ClassifyAsync(httpClient, baseUrl, transcriptFiles, minLines, excludedRepos, CancellationToken.None, vendor);
+            classifications = await ClassifyAsync(httpClient, baseUrl, transcriptFiles, minLines, excludedRepos, CancellationToken.None, vendor, excludedPaths: excludedPaths);
         }
 
         // --- --since filter (Claude path only — Codex pruned at discovery) ---
@@ -382,35 +392,54 @@ static class HistoryCommand {
             ];
         }
 
-        // --- Resolve excluded-repo prompts (TTY only; non-TTY auto-skips) ---
-        var excludedByKey = classifications
+        // --- Resolve excluded-repo / excluded-path prompts (TTY only; non-TTY auto-skips) ---
+        // Repo and path exclusions are independent gates: a session is included only when
+        // EVERY applicable exclusion key has been opted-in. Without that, opting into a
+        // repo would silently bypass a path the user had explicitly ignored.
+        var excludedByRepo = classifications
             .Where(c => c.ExcludedRepoKey is not null)
             .GroupBy(c => c.ExcludedRepoKey!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
 
-        if (excludedByKey.Count > 0) {
-            var includedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var excludedByPath = classifications
+            .Where(c => c.ExcludedPathKey is not null)
+            .GroupBy(c => c.ExcludedPathKey!, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
+        if (excludedByRepo.Count > 0 || excludedByPath.Count > 0) {
+            var includedRepoKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var includedPathKeys = new HashSet<string>(StringComparer.Ordinal);
             // Only prompt when both stdin and stdout are interactive. Writing prompts to stderr
             // keeps them visible even when stdout is redirected, but we still can't ReadLine
             // meaningfully without a TTY on stdin.
             var canPrompt = display.Tty && !Console.IsInputRedirected;
 
             if (canPrompt) {
-                foreach (var (key, sessions) in excludedByKey) {
+                foreach (var (key, sessions) in excludedByRepo) {
                     await Console.Error.WriteAsync($"Repository {key} is excluded. Include {sessions.Count} session{(sessions.Count == 1 ? "" : "s")} from it? (y/N) ");
                     var answer = Console.ReadLine()?.Trim();
-                    if (string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)) includedKeys.Add(key);
+                    if (string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)) includedRepoKeys.Add(key);
+                }
+
+                foreach (var (key, sessions) in excludedByPath) {
+                    await Console.Error.WriteAsync($"Path {key} is excluded. Include {sessions.Count} session{(sessions.Count == 1 ? "" : "s")} under it? (y/N) ");
+                    var answer = Console.ReadLine()?.Trim();
+                    if (string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)) includedPathKeys.Add(key);
                 }
             } else {
-                await Console.Error.WriteLineAsync($"Auto-skipping {excludedByKey.Values.Sum(v => v.Count)} session(s) from {excludedByKey.Count} excluded repo(s) (non-interactive).");
+                var distinctSessions = excludedByRepo.Values.SelectMany(v => v)
+                    .Concat(excludedByPath.Values.SelectMany(v => v))
+                    .Select(c => c.SessionId)
+                    .Distinct()
+                    .Count();
+                var totalGroups = excludedByRepo.Count + excludedByPath.Count;
+                await Console.Error.WriteLineAsync($"Auto-skipping {distinctSessions} session(s) from {totalGroups} excluded source(s) (non-interactive).");
             }
 
             for (var i = 0; i < classifications.Count; i++) {
                 var c = classifications[i];
 
-                if (c.ExcludedRepoKey is null) continue;
-
-                if (!includedKeys.Contains(c.ExcludedRepoKey)) {
+                if (ShouldExclude(c, includedRepoKeys, includedPathKeys)) {
                     classifications[i] = c with { Status = ClassificationStatus.Excluded };
                 }
             }
@@ -1405,6 +1434,23 @@ static class HistoryCommand {
     /// what the import phase should do with it. Probes run concurrently via
     /// SemaphoreSlim(8) — idempotent GETs, safe to parallelize.
     /// </summary>
+    /// <summary>
+    /// Decides whether a classified session should be force-flipped to Excluded
+    /// after the prompt loop. Repo and path exclusions are independent gates:
+    /// the session is excluded if ANY applicable exclusion key was not opted-in.
+    /// Exposed for testing.
+    /// </summary>
+    internal static bool ShouldExclude(
+            SessionClassification c,
+            HashSet<string>       includedRepoKeys,
+            HashSet<string>       includedPathKeys
+        ) {
+        if (c.ExcludedRepoKey is { } repoKey && !includedRepoKeys.Contains(repoKey)) return true;
+        if (c.ExcludedPathKey is { } pathKey && !includedPathKeys.Contains(pathKey)) return true;
+
+        return false;
+    }
+
     internal static async Task<List<SessionClassification>> ClassifyAsync(
             HttpClient                                                   httpClient,
             string                                                       baseUrl,
@@ -1412,14 +1458,15 @@ static class HistoryCommand {
             int                                                          minLines,
             string[]?                                                    excludedRepos,
             CancellationToken                                            ct,
-            string                                                       vendor   = "claude",
-            Action?                                                      onProbed = null
+            string                                                       vendor        = "claude",
+            Action?                                                      onProbed      = null,
+            string[]?                                                    excludedPaths = null
         ) {
         using var probeGate = new SemaphoreSlim(8);
         var       tasks     = new List<Task<SessionClassification>>(transcripts.Count);
 
         foreach (var (sessionId, filePath, encodedCwd) in transcripts) {
-            tasks.Add(ClassifyOneAsync(httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, probeGate, vendor, onProbed, ct));
+            tasks.Add(ClassifyOneAsync(httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, excludedPaths, probeGate, vendor, onProbed, ct));
         }
 
         var results = await Task.WhenAll(tasks);
@@ -1435,13 +1482,14 @@ static class HistoryCommand {
             string            encodedCwd,
             int               minLines,
             string[]?         excludedRepos,
+            string[]?         excludedPaths,
             SemaphoreSlim     probeGate,
             string            vendor,
             Action?           onProbed,
             CancellationToken ct
         ) {
         try {
-            return await ClassifyOneCoreAsync(httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, probeGate, vendor, ct);
+            return await ClassifyOneCoreAsync(httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, excludedPaths, probeGate, vendor, ct);
         } finally {
             onProbed?.Invoke();
         }
@@ -1455,6 +1503,7 @@ static class HistoryCommand {
             string            encodedCwd,
             int               minLines,
             string[]?         excludedRepos,
+            string[]?         excludedPaths,
             SemaphoreSlim     probeGate,
             string            vendor,
             CancellationToken ct
@@ -1574,22 +1623,33 @@ static class HistoryCommand {
             }
         }
 
-        // Flag excluded repos for New/Partial sessions. Resolution (include or skip?)
-        // happens later in HandleHistory, where we can batch prompts by repo key.
+        // Flag excluded repos/paths for New/Partial sessions. Resolution (include or skip?)
+        // happens later in HandleHistory, where we can batch prompts by key.
         string? excludedRepoKey = null;
+        string? excludedPathKey = null;
 
-        if (status is ClassificationStatus.New or ClassificationStatus.Partial
-         && excludedRepos is { Length: > 0 }) {
+        if (status is ClassificationStatus.New or ClassificationStatus.Partial) {
             var cwd = meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(encodedCwd);
 
             if (cwd is not null) {
-                var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
+                if (excludedRepos is { Length: > 0 }) {
+                    var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
 
-                if (repo?.Owner is not null && repo.RepoName is not null) {
-                    var key = $"{repo.Owner}/{repo.RepoName}";
+                    if (repo?.Owner is not null && repo.RepoName is not null) {
+                        var key = $"{repo.Owner}/{repo.RepoName}";
 
-                    if (excludedRepos.Contains(key, StringComparer.OrdinalIgnoreCase)) {
-                        excludedRepoKey = key;
+                        if (excludedRepos.Contains(key, StringComparer.OrdinalIgnoreCase)) {
+                            excludedRepoKey = key;
+                        }
+                    }
+                }
+
+                if (excludedPathKey is null && excludedPaths is { Length: > 0 }) {
+                    foreach (var entry in excludedPaths) {
+                        if (PathExclusion.IsExcluded(cwd, [entry])) {
+                            excludedPathKey = PathExclusion.Normalize(entry);
+                            break;
+                        }
                     }
                 }
             }
@@ -1607,6 +1667,7 @@ static class HistoryCommand {
             ResumeFromLine   = resumeFromLine,
             ProbeErrorReason = probeErrorReason,
             ExcludedRepoKey  = excludedRepoKey,
+            ExcludedPathKey  = excludedPathKey,
             Vendor           = vendor,
         };
     }

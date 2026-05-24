@@ -67,7 +67,7 @@ if (args.Skip(1).Any(a => a is "--help" or "-h")) {
 }
 
 // Commands that don't need a server URL
-string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "update", "plugin", "profile", "use", "repos", "login"];
+string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "update", "plugin", "profile", "use", "repos", "login", "ignore"];
 
 if (baseUrl is null && !offlineCommands.Contains(command)) {
     Console.Error.WriteLine("No server configured. Run `kapacitor setup` or set KAPACITOR_URL.");
@@ -242,6 +242,8 @@ switch (command) {
         return await StatusCommand.HandleAsync(baseUrl);
     case "config":
         return await ConfigCommand.HandleAsync(args);
+    case "ignore":
+        return await IgnoreCommand.HandleAsync(args);
     case "repos":
         return await ReposCommand.HandleAsync(args);
     case "update":
@@ -627,6 +629,23 @@ var kapacitorConfig = await AppConfig.Load();
 // Check repo exclusion — silently exit for excluded repos
 if (kapacitorConfig?.ExcludedRepos is { Length: > 0 } repos && await RepoExclusion.IsExcludedAsync(body, repos)) {
     return 0;
+}
+
+// Check path exclusion against the V2 profile that applies to this process.
+// GetActiveProfileAsync falls back to ActiveProfile when --server-url / KAPACITOR_URL
+// caused the resolver to skip profile selection — without that fallback `kapacitor
+// ignore` writes (which also fall back to ActiveProfile) would be silently ignored
+// by hooks.
+if ((await AppConfig.GetActiveProfileAsync())?.ExcludedPaths is { Length: > 0 } paths) {
+    try {
+        var cwd = JsonNode.Parse(body)?["cwd"]?.GetValue<string>();
+
+        if (PathExclusion.IsExcluded(cwd, paths)) return 0;
+    } catch {
+        // Best effort — a malformed payload or pathological exclusion entry must not
+        // break hook forwarding. PathExclusion.IsExcluded already swallows per-entry
+        // errors; this outer guard covers the cwd parse and any unforeseen surface.
+    }
 }
 
 // Inject default_visibility from config for session-start hooks

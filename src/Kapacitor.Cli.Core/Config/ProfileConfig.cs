@@ -35,6 +35,9 @@ public record Profile {
     [JsonPropertyName("excluded_repos")]
     public string[] ExcludedRepos { get; init; } = [];
 
+    [JsonPropertyName("excluded_paths")]
+    public string[] ExcludedPaths { get; init; } = [];
+
     [JsonPropertyName("remotes")]
     public string[] Remotes { get; init; } = [];
 }

@@ -306,4 +306,27 @@ public static class AppConfig {
     }
 
     public static string GetConfigPath() => ConfigPath;
+
+    /// <summary>
+    /// Returns the profile whose per-profile settings apply to the current
+    /// process. Prefers <paramref name="resolvedProfile"/> (set by
+    /// <see cref="ResolveServerUrl"/>) and falls back to the on-disk
+    /// <see cref="ProfileConfig.ActiveProfile"/> when URL overrides
+    /// (<c>--server-url</c> / <c>KAPACITOR_URL</c>) caused the resolver to
+    /// skip profile selection. Exposed for testing; production callers should
+    /// use <see cref="GetActiveProfileAsync"/>.
+    /// </summary>
+    public static Profile? PickActiveProfile(Profile? resolvedProfile, ProfileConfig fallback) =>
+        resolvedProfile ?? fallback.Profiles.GetValueOrDefault(fallback.ActiveProfile);
+
+    /// <summary>
+    /// Convenience wrapper around <see cref="PickActiveProfile"/> that pulls
+    /// the resolved profile from <see cref="ResolvedProfile"/> and loads the
+    /// fallback config from disk when needed.
+    /// </summary>
+    public static async Task<Profile?> GetActiveProfileAsync() {
+        if (ResolvedProfile?.Profile is { } profile) return profile;
+
+        return PickActiveProfile(null, await LoadProfileConfig());
+    }
 }
