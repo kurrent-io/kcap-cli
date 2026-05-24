@@ -157,6 +157,7 @@ public static class AppConfig {
         try {
             var psi = new ProcessStartInfo("git", "remote -v") {
                 RedirectStandardOutput = true,
+                RedirectStandardError  = true,
                 UseShellExecute        = false,
                 CreateNoWindow         = true
             };
@@ -188,6 +189,7 @@ public static class AppConfig {
         try {
             var psi = new ProcessStartInfo("git", "rev-parse --show-toplevel") {
                 RedirectStandardOutput = true,
+                RedirectStandardError  = true,
                 UseShellExecute        = false,
                 CreateNoWindow         = true
             };
