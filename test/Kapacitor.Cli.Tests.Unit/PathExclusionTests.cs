@@ -77,12 +77,57 @@ public class PathExclusionTests {
     }
 
     [Test]
+    public async Task IsExcluded_resolves_parent_symlinks() {
+        // /link -> /real, cwd is /link/sub. Ignoring /real (or /link) must match
+        // /link/sub. Today this fails because only the leaf is resolved.
+        using var real = TempDir.Create();
+        using var link = TempSymlink.To(real.Path);
+
+        var subUnderReal = Path.Combine(real.Path, "sub");
+        Directory.CreateDirectory(subUnderReal);
+
+        // The cwd reported by an agent that descended through the symlink path.
+        var subUnderLink = Path.Combine(link.Path, "sub");
+
+        await Assert.That(PathExclusion.IsExcluded(subUnderLink, [real.Path])).IsTrue();
+        await Assert.That(PathExclusion.IsExcluded(subUnderLink, [link.Path])).IsTrue();
+    }
+
+    [Test]
     public async Task IsExcluded_resolves_symlinked_cwd_against_real_entry() {
         // Reverse direction: entry stored as real path, cwd reported via symlink.
         using var real = TempDir.Create();
         using var link = TempSymlink.To(real.Path);
 
         await Assert.That(PathExclusion.IsExcluded(link.Path, [real.Path])).IsTrue();
+    }
+
+    [Test]
+    public async Task IsExcluded_ignores_null_entries() {
+        using var tmp = TempDir.Create();
+
+        await Assert.That(PathExclusion.IsExcluded(tmp.Path, [null!])).IsFalse();
+    }
+
+    [Test]
+    public async Task IsExcluded_ignores_empty_entries() {
+        using var tmp = TempDir.Create();
+
+        await Assert.That(PathExclusion.IsExcluded(tmp.Path, [""])).IsFalse();
+    }
+
+    [Test]
+    public async Task IsExcluded_ignores_whitespace_entries() {
+        using var tmp = TempDir.Create();
+
+        await Assert.That(PathExclusion.IsExcluded(tmp.Path, ["   "])).IsFalse();
+    }
+
+    [Test]
+    public async Task IsExcluded_skips_bad_entries_but_still_matches_good_ones() {
+        using var tmp = TempDir.Create();
+
+        await Assert.That(PathExclusion.IsExcluded(tmp.Path, [null!, "", tmp.Path])).IsTrue();
     }
 
     [Test]
@@ -128,12 +173,11 @@ sealed class TempDir : IDisposable {
         var p = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "kap-pathex-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(p);
 
-        // On macOS, /var/folders is itself reached via a symlink. Resolve once
-        // so tests that compare paths directly (without going through
-        // PathExclusion.Normalize) operate on the canonical form.
-        var resolved = new DirectoryInfo(p).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? p;
-
-        return new(resolved);
+        // On macOS, /var itself is a symlink to /private/var, so the temp dir's
+        // canonical form differs from Path.GetTempPath()'s output. Run it through
+        // the same normalizer the production code uses so test fixtures and
+        // production matching observe the same path.
+        return new(PathExclusion.Normalize(p));
     }
 
     public void Dispose() {

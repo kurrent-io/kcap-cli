@@ -393,13 +393,16 @@ static class HistoryCommand {
         }
 
         // --- Resolve excluded-repo / excluded-path prompts (TTY only; non-TTY auto-skips) ---
+        // Repo and path exclusions are independent gates: a session is included only when
+        // EVERY applicable exclusion key has been opted-in. Without that, opting into a
+        // repo would silently bypass a path the user had explicitly ignored.
         var excludedByRepo = classifications
             .Where(c => c.ExcludedRepoKey is not null)
             .GroupBy(c => c.ExcludedRepoKey!, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
 
         var excludedByPath = classifications
-            .Where(c => c.ExcludedPathKey is not null && c.ExcludedRepoKey is null)
+            .Where(c => c.ExcludedPathKey is not null)
             .GroupBy(c => c.ExcludedPathKey!, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
 
@@ -424,20 +427,19 @@ static class HistoryCommand {
                     if (string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)) includedPathKeys.Add(key);
                 }
             } else {
-                var totalSkipped = excludedByRepo.Values.Sum(v => v.Count) + excludedByPath.Values.Sum(v => v.Count);
-                var totalGroups  = excludedByRepo.Count + excludedByPath.Count;
-                await Console.Error.WriteLineAsync($"Auto-skipping {totalSkipped} session(s) from {totalGroups} excluded source(s) (non-interactive).");
+                var distinctSessions = excludedByRepo.Values.SelectMany(v => v)
+                    .Concat(excludedByPath.Values.SelectMany(v => v))
+                    .Select(c => c.SessionId)
+                    .Distinct()
+                    .Count();
+                var totalGroups = excludedByRepo.Count + excludedByPath.Count;
+                await Console.Error.WriteLineAsync($"Auto-skipping {distinctSessions} session(s) from {totalGroups} excluded source(s) (non-interactive).");
             }
 
             for (var i = 0; i < classifications.Count; i++) {
                 var c = classifications[i];
 
-                if (c.ExcludedRepoKey is not null && !includedRepoKeys.Contains(c.ExcludedRepoKey)) {
-                    classifications[i] = c with { Status = ClassificationStatus.Excluded };
-                    continue;
-                }
-
-                if (c.ExcludedRepoKey is null && c.ExcludedPathKey is not null && !includedPathKeys.Contains(c.ExcludedPathKey)) {
+                if (ShouldExclude(c, includedRepoKeys, includedPathKeys)) {
                     classifications[i] = c with { Status = ClassificationStatus.Excluded };
                 }
             }
@@ -1432,6 +1434,23 @@ static class HistoryCommand {
     /// what the import phase should do with it. Probes run concurrently via
     /// SemaphoreSlim(8) — idempotent GETs, safe to parallelize.
     /// </summary>
+    /// <summary>
+    /// Decides whether a classified session should be force-flipped to Excluded
+    /// after the prompt loop. Repo and path exclusions are independent gates:
+    /// the session is excluded if ANY applicable exclusion key was not opted-in.
+    /// Exposed for testing.
+    /// </summary>
+    internal static bool ShouldExclude(
+            SessionClassification c,
+            HashSet<string>       includedRepoKeys,
+            HashSet<string>       includedPathKeys
+        ) {
+        if (c.ExcludedRepoKey is { } repoKey && !includedRepoKeys.Contains(repoKey)) return true;
+        if (c.ExcludedPathKey is { } pathKey && !includedPathKeys.Contains(pathKey)) return true;
+
+        return false;
+    }
+
     internal static async Task<List<SessionClassification>> ClassifyAsync(
             HttpClient                                                   httpClient,
             string                                                       baseUrl,

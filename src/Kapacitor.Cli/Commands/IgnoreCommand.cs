@@ -113,11 +113,23 @@ public static class IgnoreCommand {
 
     static async Task<(ProfileConfig Config, string ProfileName, Profile Profile)> LoadActive() {
         var config      = await AppConfig.LoadProfileConfig();
-        var profileName = config.ActiveProfile;
+        var profileName = ResolveTargetProfile(config, AppConfig.ResolvedProfile?.ProfileName);
         var profile     = config.Profiles.GetValueOrDefault(profileName) ?? new Profile();
 
         return (config, profileName, profile);
     }
+
+    /// <summary>
+    /// Picks the profile to write ignore entries into. Prefers the profile that
+    /// <see cref="AppConfig.ResolveServerUrl"/> resolved for the current cwd
+    /// (which is the profile the hook will read from) so a `kapacitor ignore .`
+    /// in a repo bound to a non-default profile updates the same profile the
+    /// hook will check. Falls back to <see cref="ProfileConfig.ActiveProfile"/>
+    /// when called outside a resolution context.
+    /// Exposed for testing.
+    /// </summary>
+    public static string ResolveTargetProfile(ProfileConfig config, string? resolvedProfileName) =>
+        resolvedProfileName ?? config.ActiveProfile;
 
     static async Task SaveActive(ProfileConfig config, string profileName, Profile profile) {
         var profiles = new Dictionary<string, Profile>(config.Profiles) { [profileName] = profile };

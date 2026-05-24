@@ -635,11 +635,15 @@ if (kapacitorConfig?.ExcludedRepos is { Length: > 0 } repos && await RepoExclusi
 // Reads ExcludedPaths off ResolvedProfile rather than the V1-flat KapacitorConfig because
 // excluded_paths only exists on V2 profiles.
 if (AppConfig.ResolvedProfile?.Profile?.ExcludedPaths is { Length: > 0 } paths) {
-    string? cwd = null;
+    try {
+        var cwd = JsonNode.Parse(body)?["cwd"]?.GetValue<string>();
 
-    try { cwd = JsonNode.Parse(body)?["cwd"]?.GetValue<string>(); } catch { /* best effort */ }
-
-    if (PathExclusion.IsExcluded(cwd, paths)) return 0;
+        if (PathExclusion.IsExcluded(cwd, paths)) return 0;
+    } catch {
+        // Best effort — a malformed payload or pathological exclusion entry must not
+        // break hook forwarding. PathExclusion.IsExcluded already swallows per-entry
+        // errors; this outer guard covers the cwd parse and any unforeseen surface.
+    }
 }
 
 // Inject default_visibility from config for session-start hooks

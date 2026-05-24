@@ -8,7 +8,7 @@ namespace Kapacitor.Cli;
 /// </summary>
 static class PathExclusion {
     public static bool IsExcluded(string? cwd, IReadOnlyList<string>? excludedPaths) {
-        if (cwd is null) return false;
+        if (string.IsNullOrWhiteSpace(cwd)) return false;
         if (excludedPaths is null or { Count: 0 }) return false;
 
         string normalizedCwd;
@@ -19,24 +19,31 @@ static class PathExclusion {
             return false;
         }
 
+        if (string.IsNullOrEmpty(normalizedCwd)) return false;
+
         foreach (var entry in excludedPaths) {
-            string normalizedEntry;
+            // Hand-edited configs can contain null/empty/whitespace entries; treat them
+            // as no-ops rather than crashing hook forwarding via Path.GetRelativePath.
+            if (string.IsNullOrWhiteSpace(entry)) continue;
 
             try {
-                normalizedEntry = Normalize(entry);
-            } catch {
-                continue;
-            }
+                var normalizedEntry = Normalize(entry);
 
-            if (Contains(normalizedEntry, normalizedCwd)) return true;
+                if (string.IsNullOrEmpty(normalizedEntry)) continue;
+                if (Contains(normalizedEntry, normalizedCwd)) return true;
+            } catch {
+                // best effort: a bad entry never blocks evaluation of the rest
+            }
         }
 
         return false;
     }
 
     /// <summary>
-    /// Resolves a user-supplied path to an absolute, leaf-symlink-resolved form
-    /// without a trailing separator. Expands <c>~</c> to the user's home dir.
+    /// Resolves a user-supplied path to an absolute form with all symlinks
+    /// expanded (including parent components), and no trailing separator.
+    /// Expands <c>~</c> to the user's home dir. Non-existent components are
+    /// preserved as-is.
     /// </summary>
     public static string Normalize(string path) {
         if (string.IsNullOrEmpty(path)) return path;
@@ -48,23 +55,64 @@ static class PathExclusion {
         }
 
         var full = Path.GetFullPath(path);
+        var resolved = ResolveAllSymlinks(full);
 
-        try {
-            if (Directory.Exists(full)) {
-                var info = new DirectoryInfo(full);
+        if (resolved.Length > 1) {
+            resolved = resolved.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+
+        return resolved;
+    }
+
+    /// <summary>
+    /// Walks an absolute path component-by-component, resolving every
+    /// intermediate directory symlink. Stops resolving as soon as a component
+    /// doesn't exist on disk; the unresolved tail is appended verbatim so paths
+    /// that haven't been created yet still normalize consistently.
+    /// </summary>
+    const int MaxSymlinkResolveDepth = 32;
+
+    static string ResolveAllSymlinks(string absolutePath, int depth = 0) {
+        if (depth > MaxSymlinkResolveDepth) return absolutePath;
+
+        var root = Path.GetPathRoot(absolutePath);
+
+        if (string.IsNullOrEmpty(root)) return absolutePath;
+
+        var remainder = absolutePath[root.Length..];
+        var parts     = remainder.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                                        StringSplitOptions.RemoveEmptyEntries);
+        var current   = root;
+        var i         = 0;
+
+        for (; i < parts.Length; i++) {
+            var next = Path.Combine(current, parts[i]);
+
+            try {
+                if (!Directory.Exists(next)) break;
+
+                var info     = new DirectoryInfo(next);
                 var resolved = info.ResolveLinkTarget(returnFinalTarget: true);
 
-                if (resolved is not null) full = resolved.FullName;
+                if (resolved is not null) {
+                    // The symlink target may live under a different symlinked ancestor.
+                    // Re-resolve from the root so every component of the target is canonical too.
+                    current = ResolveAllSymlinks(resolved.FullName, depth + 1);
+                } else {
+                    current = next;
+                }
+            } catch {
+                current = next;
+                i++;
+
+                break;
             }
-        } catch {
-            // best effort — non-existent paths stay as the abstract absolute form
         }
 
-        if (full.Length > 1) {
-            full = full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        }
+        // Append any unresolved tail (path components past a non-existent or errored segment).
+        for (; i < parts.Length; i++) current = Path.Combine(current, parts[i]);
 
-        return full;
+        return current;
     }
 
     static bool Contains(string parent, string candidate) {
