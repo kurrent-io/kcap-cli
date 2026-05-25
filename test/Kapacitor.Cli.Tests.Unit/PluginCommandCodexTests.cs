@@ -198,16 +198,82 @@ public class PluginCommandCodexTests {
         using var tmp    = new TempDir();
         var       source = Path.Combine(tmp.Path, "codex-skills");
         var       target = Path.Combine(tmp.Path, "skills");
-        WriteSkill(source, "kapacitor-recap",  "recap body");
-        WriteSkill(source, "kapacitor-errors", "errors body");
+        // Preflight requires every known skill folder to exist under source.
+        foreach (var name in PluginCommand.CodexSkillNames) {
+            WriteSkill(source, name, $"{name} body");
+        }
 
         var ok = PluginCommand.InstallCodexSkills(source, target);
         await Assert.That(ok).IsTrue();
 
         var recap  = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-recap",  "SKILL.md"));
         var errors = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-errors", "SKILL.md"));
-        await Assert.That(recap).IsEqualTo("recap body");
-        await Assert.That(errors).IsEqualTo("errors body");
+        await Assert.That(recap).IsEqualTo("kapacitor-recap body");
+        await Assert.That(errors).IsEqualTo("kapacitor-errors body");
+    }
+
+    [Test]
+    public async Task InstallCodexSkills_copies_all_five_known_skills() {
+        using var tmp    = new TempDir();
+        var       source = Path.Combine(tmp.Path, "codex-skills");
+        var       target = Path.Combine(tmp.Path, "skills");
+        foreach (var name in PluginCommand.CodexSkillNames) {
+            WriteSkill(source, name, $"{name} body");
+        }
+
+        var ok = PluginCommand.InstallCodexSkills(source, target);
+        await Assert.That(ok).IsTrue();
+
+        foreach (var name in PluginCommand.CodexSkillNames) {
+            var path = Path.Combine(target, name, "SKILL.md");
+            await Assert.That(File.Exists(path)).IsTrue();
+            var body = await File.ReadAllTextAsync(path);
+            await Assert.That(body).IsEqualTo($"{name} body");
+        }
+    }
+
+    [Test]
+    public async Task CodexSkillNames_contains_expected_five() {
+        var expected = new[] {
+            "kapacitor-recap",
+            "kapacitor-errors",
+            "kapacitor-hide",
+            "kapacitor-disable",
+            "kapacitor-validate-plan"
+        };
+
+        await Assert.That(PluginCommand.CodexSkillNames).IsEquivalentTo(expected);
+    }
+
+    [Test]
+    public async Task InstallCodexSkills_returns_false_when_known_folder_missing() {
+        using var tmp    = new TempDir();
+        var       source = Path.Combine(tmp.Path, "codex-skills");
+        var       target = Path.Combine(tmp.Path, "skills");
+
+        // Write four of the five expected names — leave kapacitor-validate-plan missing.
+        WriteSkill(source, "kapacitor-recap",         "r");
+        WriteSkill(source, "kapacitor-errors",        "e");
+        WriteSkill(source, "kapacitor-hide",          "h");
+        WriteSkill(source, "kapacitor-disable",       "d");
+
+        // Pre-existing target folder for one of the known skills. The preflight
+        // must NOT delete it because the install is aborted before any destructive
+        // step runs.
+        WriteSkill(target, "kapacitor-recap", "stale recap that must survive");
+
+        var ok = PluginCommand.InstallCodexSkills(source, target);
+        await Assert.That(ok).IsFalse();
+
+        // Pre-existing target folder unchanged — preflight bailed before deletion.
+        var preserved = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-recap", "SKILL.md"));
+        await Assert.That(preserved).IsEqualTo("stale recap that must survive");
+
+        // None of the other expected target folders were created.
+        await Assert.That(Directory.Exists(Path.Combine(target, "kapacitor-errors"))).IsFalse();
+        await Assert.That(Directory.Exists(Path.Combine(target, "kapacitor-hide"))).IsFalse();
+        await Assert.That(Directory.Exists(Path.Combine(target, "kapacitor-disable"))).IsFalse();
+        await Assert.That(Directory.Exists(Path.Combine(target, "kapacitor-validate-plan"))).IsFalse();
     }
 
     [Test]
@@ -215,8 +281,10 @@ public class PluginCommandCodexTests {
         using var tmp    = new TempDir();
         var       source = Path.Combine(tmp.Path, "codex-skills");
         var       target = Path.Combine(tmp.Path, "skills");
-        WriteSkill(source, "kapacitor-recap",  "new recap");
-        WriteSkill(source, "kapacitor-errors", "new errors");
+        // Preflight requires every known skill folder to exist under source.
+        foreach (var name in PluginCommand.CodexSkillNames) {
+            WriteSkill(source, name, name == "kapacitor-recap" ? "new recap" : $"{name} body");
+        }
 
         // Pre-existing stale copy in target.
         WriteSkill(target, "kapacitor-recap", "stale recap");
@@ -232,8 +300,10 @@ public class PluginCommandCodexTests {
         using var tmp    = new TempDir();
         var       source = Path.Combine(tmp.Path, "codex-skills");
         var       target = Path.Combine(tmp.Path, "skills");
-        WriteSkill(source, "kapacitor-recap",  "recap");
-        WriteSkill(source, "kapacitor-errors", "errors");
+        // Preflight requires every known skill folder to exist under source.
+        foreach (var name in PluginCommand.CodexSkillNames) {
+            WriteSkill(source, name, $"{name} body");
+        }
 
         // Foreign skill the user installed themselves — must not be touched.
         WriteSkill(target, "user-skill", "user content");

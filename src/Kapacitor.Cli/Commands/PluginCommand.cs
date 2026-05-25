@@ -11,9 +11,12 @@ public static class PluginCommand {
     // also the target folder under <codex>/skills/, so on remove we can delete
     // them without re-reading the source tree. Add a new skill here when adding
     // it to codex-skills/.
-    static readonly string[] CodexSkillNames = [
+    internal static readonly string[] CodexSkillNames = [
         "kapacitor-recap",
-        "kapacitor-errors"
+        "kapacitor-errors",
+        "kapacitor-hide",
+        "kapacitor-disable",
+        "kapacitor-validate-plan"
     ];
 
     const string CodexHookCommand = "kapacitor codex-hook";
@@ -322,14 +325,26 @@ public static class PluginCommand {
     public static bool InstallCodexSkills(string sourceDir, string targetDir) {
         if (!Directory.Exists(sourceDir)) return false;
 
+        // Preflight: every known skill must have a folder under sourceDir. If
+        // any is missing, fail BEFORE doing anything destructive — otherwise a
+        // packaging error would leave the target dir half-overwritten.
+        var missing = CodexSkillNames
+            .Where(name => !Directory.Exists(Path.Combine(sourceDir, name)))
+            .ToList();
+
+        if (missing.Count > 0) {
+            Console.Error.WriteLine(
+                $"Cannot install Codex skills: missing source folder(s) under {sourceDir}: "
+                + string.Join(", ", missing)
+            );
+            return false;
+        }
+
         try {
             Directory.CreateDirectory(targetDir);
 
             foreach (var name in CodexSkillNames) {
                 var src = Path.Combine(sourceDir, name);
-
-                if (!Directory.Exists(src)) continue;
-
                 var dst = Path.Combine(targetDir, name);
 
                 if (Directory.Exists(dst)) Directory.Delete(dst, recursive: true);
