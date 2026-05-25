@@ -50,23 +50,41 @@ public class ArgParsingTests {
 
     // These tests mutate KAPACITOR_SESSION_ID / CODEX_THREAD_ID and must not run
     // in parallel with each other (TUnit parallelizes by default).
+    //
+    // Every SessionEnvVarMutation test saves AND restores BOTH env vars,
+    // even when the test body only manipulates one of them. The test runner
+    // can be invoked from inside an active Codex session — where
+    // CODEX_THREAD_ID is set process-wide — and any test that reads the env
+    // would otherwise observe that leaked value as a fallback session id and
+    // fail nondeterministically depending on where it was run.
     [Test]
     [NotInParallel(nameof(SessionEnvVarMutation))]
     public async Task ResolveSessionId_returns_env_fallback_when_only_flags_present() {
+        var savedKap = Environment.GetEnvironmentVariable(KapacitorSessionIdEnvVar);
+        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
         Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, null);
+        Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      null);
 
-        var id = ArgParsing.ResolveSessionId(
-            ["eval", "--model", "sonnet", "--chain"],
-            valueFlags: ["--model"]
-        );
+        try {
+            var id = ArgParsing.ResolveSessionId(
+                ["eval", "--model", "sonnet", "--chain"],
+                valueFlags: ["--model"]
+            );
 
-        await Assert.That(id).IsNull();
+            await Assert.That(id).IsNull();
+        } finally {
+            Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, savedKap);
+            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      savedCdx);
+        }
     }
 
     [Test]
     [NotInParallel(nameof(SessionEnvVarMutation))]
     public async Task ResolveSessionId_honors_env_when_no_positional() {
+        var savedKap = Environment.GetEnvironmentVariable(KapacitorSessionIdEnvVar);
+        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
         Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, "envsess");
+        Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      null);
 
         try {
             var id = ArgParsing.ResolveSessionId(
@@ -76,7 +94,8 @@ public class ArgParsingTests {
 
             await Assert.That(id).IsEqualTo("envsess");
         } finally {
-            Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, null);
+            Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, savedKap);
+            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      savedCdx);
         }
     }
 
@@ -99,17 +118,26 @@ public class ArgParsingTests {
     [Test]
     [NotInParallel(nameof(SessionEnvVarMutation))]
     public async Task ResolveSessionIdFromEnv_returns_null_when_neither_env_set() {
+        var savedKap = Environment.GetEnvironmentVariable(KapacitorSessionIdEnvVar);
+        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
         Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, null);
         Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      null);
 
-        var id = ArgParsing.ResolveSessionIdFromEnv();
+        try {
+            var id = ArgParsing.ResolveSessionIdFromEnv();
 
-        await Assert.That(id).IsNull();
+            await Assert.That(id).IsNull();
+        } finally {
+            Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, savedKap);
+            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      savedCdx);
+        }
     }
 
     [Test]
     [NotInParallel(nameof(SessionEnvVarMutation))]
     public async Task ResolveSessionIdFromEnv_returns_kapacitor_env_stripped_of_dashes() {
+        var savedKap = Environment.GetEnvironmentVariable(KapacitorSessionIdEnvVar);
+        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
         Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, "abc-def-123");
         Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      null);
 
@@ -118,13 +146,16 @@ public class ArgParsingTests {
 
             await Assert.That(id).IsEqualTo("abcdef123");
         } finally {
-            Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, null);
+            Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, savedKap);
+            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      savedCdx);
         }
     }
 
     [Test]
     [NotInParallel(nameof(SessionEnvVarMutation))]
     public async Task ResolveSessionIdFromEnv_returns_codex_env_stripped_of_dashes_when_kapacitor_unset() {
+        var savedKap = Environment.GetEnvironmentVariable(KapacitorSessionIdEnvVar);
+        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
         Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, null);
         Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      "thread-uuid-1");
 
@@ -133,13 +164,16 @@ public class ArgParsingTests {
 
             await Assert.That(id).IsEqualTo("threaduuid1");
         } finally {
-            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, null);
+            Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, savedKap);
+            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      savedCdx);
         }
     }
 
     [Test]
     [NotInParallel(nameof(SessionEnvVarMutation))]
     public async Task ResolveSessionIdFromEnv_prefers_kapacitor_over_codex() {
+        var savedKap = Environment.GetEnvironmentVariable(KapacitorSessionIdEnvVar);
+        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
         Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, "kap-1");
         Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      "cdx-2");
 
@@ -148,14 +182,16 @@ public class ArgParsingTests {
 
             await Assert.That(id).IsEqualTo("kap1");
         } finally {
-            Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, null);
-            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      null);
+            Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, savedKap);
+            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      savedCdx);
         }
     }
 
     [Test]
     [NotInParallel(nameof(SessionEnvVarMutation))]
     public async Task ResolveSessionIdFromEnv_treats_whitespace_kapacitor_as_unset_and_falls_back_to_codex() {
+        var savedKap = Environment.GetEnvironmentVariable(KapacitorSessionIdEnvVar);
+        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
         Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, "   ");
         Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      "cdx-3");
 
@@ -164,14 +200,16 @@ public class ArgParsingTests {
 
             await Assert.That(id).IsEqualTo("cdx3");
         } finally {
-            Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, null);
-            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      null);
+            Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, savedKap);
+            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      savedCdx);
         }
     }
 
     [Test]
     [NotInParallel(nameof(SessionEnvVarMutation))]
     public async Task ResolveSessionId_falls_back_to_codex_env_when_no_args_and_no_kapacitor_env() {
+        var savedKap = Environment.GetEnvironmentVariable(KapacitorSessionIdEnvVar);
+        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
         Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, null);
         Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      "cdx-only");
 
@@ -183,13 +221,16 @@ public class ArgParsingTests {
 
             await Assert.That(id).IsEqualTo("cdxonly");
         } finally {
-            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, null);
+            Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, savedKap);
+            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      savedCdx);
         }
     }
 
     [Test]
     [NotInParallel(nameof(SessionEnvVarMutation))]
     public async Task ResolveSessionId_strips_dashes_from_kapacitor_env_fallback() {
+        var savedKap = Environment.GetEnvironmentVariable(KapacitorSessionIdEnvVar);
+        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
         Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, "abc-def");
         Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      null);
 
@@ -201,7 +242,8 @@ public class ArgParsingTests {
 
             await Assert.That(id).IsEqualTo("abcdef");
         } finally {
-            Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, null);
+            Environment.SetEnvironmentVariable(KapacitorSessionIdEnvVar, savedKap);
+            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar,      savedCdx);
         }
     }
 }
