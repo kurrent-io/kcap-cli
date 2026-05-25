@@ -379,6 +379,36 @@ public class PluginCommandCodexTests {
 //     Console.Out writer.
 [NotInParallel("HomeEnvVarMutation")]
 public class PluginCommandCodexInstallIntegrationTests {
+    // SetupCommand.ResolvePluginPath probes paths relative to Environment.ProcessPath.
+    // In the test runner the process exe lives at
+    //   <repo>/test/Kapacitor.Cli.Tests.Unit/bin/Debug/net10.0/Kapacitor.Cli.Tests.Unit
+    // None of the resolver's fallbacks exist by default, so this helper plants
+    // a fake plugin tree at the "<exeDir>/../../kapacitor" path the resolver
+    // probes (= "<bin>/kapacitor"). The folder is cleaned up after the test
+    // so it doesn't pollute subsequent runs that expect resolution to fail.
+    static string ProbedPluginRoot() {
+        var exeDir = Path.GetDirectoryName(Environment.ProcessPath)!;
+        return Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kapacitor"));
+    }
+
+    static void PlantFakePlugin(string pluginRoot) {
+        var skillsSrc = Path.Combine(pluginRoot, "codex-skills");
+        Directory.CreateDirectory(skillsSrc);
+
+        // InstallCodexSkills has a per-skill preflight that requires every
+        // name in PluginCommand.CodexSkillNames to be present. Plant a stub
+        // SKILL.md so the copy succeeds.
+        foreach (var name in PluginCommand.CodexSkillNames) {
+            var dir = Path.Combine(skillsSrc, name);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "SKILL.md"), $"# {name}");
+        }
+    }
+
+    static void RemoveFakePlugin(string pluginRoot) {
+        try { Directory.Delete(pluginRoot, recursive: true); } catch { /* best effort */ }
+    }
+
     [Test, NotInParallel("CodexHookCommandTests.Console")]
     public async Task InstallCodex_prints_hooks_trust_hint_after_success() {
         using var tmp = new TempDir();
@@ -393,6 +423,9 @@ public class PluginCommandCodexInstallIntegrationTests {
         Environment.SetEnvironmentVariable("HOME",        tmp.Path);
         Environment.SetEnvironmentVariable("USERPROFILE", tmp.Path);
 
+        var pluginRoot = ProbedPluginRoot();
+        PlantFakePlugin(pluginRoot);
+
         var capturedOut = new StringWriter();
         var originalOut = Console.Out;
         Console.SetOut(capturedOut);
@@ -406,6 +439,49 @@ public class PluginCommandCodexInstallIntegrationTests {
             await Assert.That(stdout).Contains("trust");
         } finally {
             Console.SetOut(originalOut);
+            Environment.SetEnvironmentVariable("HOME",        originalHome);
+            Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
+            RemoveFakePlugin(pluginRoot);
+        }
+    }
+
+    // AI-676 P2: when the kapacitor plugin folder cannot be resolved (e.g.,
+    // the binary was hand-copied and the sibling `kapacitor/` tree is gone),
+    // `plugin install --codex` must fail BEFORE writing hooks. Otherwise the
+    // user ends up with hook entries pointing at a kapacitor binary whose
+    // skills never installed, breaking the documented `--codex` contract.
+    [Test, NotInParallel("CodexHookCommandTests.Console")]
+    public async Task InstallCodex_fails_before_writing_hooks_when_plugin_folder_missing() {
+        using var tmp = new TempDir();
+
+        var originalHome        = Environment.GetEnvironmentVariable("HOME");
+        var originalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+        Environment.SetEnvironmentVariable("HOME",        tmp.Path);
+        Environment.SetEnvironmentVariable("USERPROFILE", tmp.Path);
+
+        // Defensive: make sure no leftover plant from a previous test forces
+        // ResolvePluginPath to succeed. With no folder at the probed path,
+        // resolver returns null and InstallCodex must short-circuit.
+        var pluginRoot = ProbedPluginRoot();
+        RemoveFakePlugin(pluginRoot);
+
+        var capturedErr = new StringWriter();
+        var originalErr = Console.Error;
+        Console.SetError(capturedErr);
+
+        try {
+            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex"]);
+            await Assert.That(exit).IsEqualTo(1);
+
+            // The atomic-install contract: NO hooks.json may exist in the
+            // temp HOME after a failed install.
+            var hooksPath = Path.Combine(tmp.Path, ".codex", "hooks.json");
+            await Assert.That(File.Exists(hooksPath)).IsFalse();
+
+            var stderr = capturedErr.ToString();
+            await Assert.That(stderr).Contains("Cannot install Codex plugin");
+        } finally {
+            Console.SetError(originalErr);
             Environment.SetEnvironmentVariable("HOME",        originalHome);
             Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
         }

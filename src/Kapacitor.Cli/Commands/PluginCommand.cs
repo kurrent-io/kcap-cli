@@ -142,6 +142,31 @@ public static class PluginCommand {
             ? Path.Combine(Environment.CurrentDirectory, ".codex", "hooks.json")
             : CodexPaths.UserHooksJson;
 
+        // `--codex` is an atomic hooks AND skills contract. Resolve the
+        // skills source BEFORE writing hooks so a missing plugin folder
+        // doesn't leave the user with hooks pointing at a binary whose
+        // skills never installed. The acceptance criterion from AI-676 is
+        // "writes all five skills" — either everything installs or nothing.
+        var pluginPath = SetupCommand.ResolvePluginPath();
+
+        if (pluginPath is null) {
+            await Console.Error.WriteLineAsync(
+                "Cannot install Codex plugin: kapacitor plugin folder not found. " +
+                "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
+            );
+            return 1;
+        }
+
+        var skillsSource = Path.Combine(pluginPath, "codex-skills");
+
+        if (!Directory.Exists(skillsSource)) {
+            await Console.Error.WriteLineAsync(
+                $"Cannot install Codex plugin: 'codex-skills' folder missing from {pluginPath}. " +
+                "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
+            );
+            return 1;
+        }
+
         if (!InstallCodexHooks(hooksPath)) {
             await Console.Error.WriteLineAsync("Could not write Codex hooks file.");
 
@@ -158,20 +183,16 @@ public static class PluginCommand {
         // ~/.codex/skills (or $CODEX_HOME/skills), and project-level skill
         // discovery isn't documented — so we keep behaviour consistent and
         // predictable by always installing them user-wide.
-        var pluginPath = SetupCommand.ResolvePluginPath();
-        var skillsSource = pluginPath is null ? null : Path.Combine(pluginPath, "codex-skills");
-
-        if (skillsSource is not null && Directory.Exists(skillsSource)) {
-            if (InstallCodexSkills(skillsSource, CodexPaths.UserSkillsDir)) {
-                await Console.Out.WriteLineAsync($"Codex skills installed (user: {CodexPaths.UserSkillsDir})");
-            } else {
-                // Hooks succeeded but skills failed — `--codex` is a hooks AND
-                // skills contract, so surface the partial failure via exit code
-                // so callers (CI, scripts) can detect it.
-                await Console.Error.WriteLineAsync("Could not install Codex skills.");
-                return 1;
-            }
+        if (!InstallCodexSkills(skillsSource, CodexPaths.UserSkillsDir)) {
+            // Preflight above guarantees the source tree exists, so this
+            // branch indicates a real filesystem failure (per-skill preflight
+            // inside InstallCodexSkills, permission error, etc.). Surface a
+            // non-zero exit so callers (CI, scripts) can detect it.
+            await Console.Error.WriteLineAsync("Could not install Codex skills.");
+            return 1;
         }
+
+        await Console.Out.WriteLineAsync($"Codex skills installed (user: {CodexPaths.UserSkillsDir})");
 
         if (scope == "project") {
             await Console.Out.WriteLineAsync(
