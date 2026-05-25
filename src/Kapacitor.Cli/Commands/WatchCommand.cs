@@ -52,19 +52,33 @@ static partial class WatchCommand {
         // barriers in practice.
         var parentExited = 0;
 
-        // Handle SIGTERM/SIGINT for graceful shutdown
+        // Handle SIGTERM/SIGINT for graceful shutdown.
+        //
+        // PosixSignalRegistration.Create returns an IDisposable that owns the
+        // underlying handler slot; if it's not rooted for the lifetime of the
+        // method the finalizer silently unregisters the handler. `using var`
+        // keeps both registrations alive until RunWatch returns and disposes
+        // them deterministically.
+        //
+        // For SIGTERM and SIGHUP, ctx.Cancel = true is required: .NET runs the
+        // signal's default action (terminate) after the handler unless the
+        // context is cancelled, which would kill the watcher before the main
+        // loop notices cts and the drain / session-end POST never run.
         Console.CancelKeyPress += (_, e) => {
             e.Cancel = true;
             cts.Cancel();
         };
-        PosixSignalRegistration.Create(PosixSignal.SIGTERM, _ => cts.Cancel());
+        using var sigtermReg = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx => {
+            cts.Cancel();
+            ctx.Cancel = true;
+        });
 
         // SIGHUP defense-in-depth: setsid above should prevent the kernel from
         // delivering SIGHUP to us, but if a shell forwards SIGHUP explicitly to
         // its process group children before our setsid lands, or if setsid
         // failed, this handler keeps the watcher alive long enough to run the
         // parent-exit cleanup path (drain + session-end POST).
-        PosixSignalRegistration.Create(PosixSignal.SIGHUP, ctx => {
+        using var sighupReg = PosixSignalRegistration.Create(PosixSignal.SIGHUP, ctx => {
             Log("Received SIGHUP; treating as parent-exit");
             Interlocked.Exchange(ref parentExited, 1);
             cts.Cancel();
