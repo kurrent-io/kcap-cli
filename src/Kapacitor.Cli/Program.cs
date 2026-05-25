@@ -302,14 +302,21 @@ switch (command) {
     case "cleanup":
         return await CleanupCommand.HandleCleanup();
     case "disable": {
-        // Positional override may be a dashed UUID; the WatcherManager and
-        // server-side path both expect dashless, so we strip here. Env-sourced
-        // values come pre-normalized from the resolver.
-        var sessionId = ResolveSessionId(args)?.Replace("-", "");
+        // The sessionId is consumed as a filesystem path component
+        // (watcher PID files, disabled marker file). Validate strictly as a
+        // GUID to prevent path traversal via crafted positional input.
+        var resolved = ResolveSessionId(args);
 
-        if (sessionId is null) {
+        if (resolved is null) {
             Console.Error.WriteLine("Usage: kapacitor disable [sessionId]");
             Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
+
+            return 1;
+        }
+
+        if (!ArgParsing.TryNormalizeSessionGuid(resolved, out var sessionId)) {
+            Console.Error.WriteLine($"Invalid session ID: '{resolved}'");
+            Console.Error.WriteLine("  Session ID must be a UUID. Use `kapacitor recap --repo` to find recent session IDs.");
 
             return 1;
         }
@@ -355,11 +362,21 @@ switch (command) {
         return 0;
     }
     case "hide": {
-        var sessionId = ResolveSessionId(args)?.Replace("-", "");
+        // The sessionId is forwarded into a server URL path but we keep the
+        // same strict GUID validation as `disable` to reject path-traversal
+        // characters and slugs uniformly across local-state-mutating commands.
+        var resolved = ResolveSessionId(args);
 
-        if (sessionId is null) {
+        if (resolved is null) {
             Console.Error.WriteLine("Usage: kapacitor hide [sessionId]");
             Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
+
+            return 1;
+        }
+
+        if (!ArgParsing.TryNormalizeSessionGuid(resolved, out var sessionId)) {
+            Console.Error.WriteLine($"Invalid session ID: '{resolved}'");
+            Console.Error.WriteLine("  Session ID must be a UUID. Use `kapacitor recap --repo` to find recent session IDs.");
 
             return 1;
         }

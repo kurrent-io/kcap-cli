@@ -45,4 +45,20 @@ static class ArgParsing {
 
         return null;
     }
+
+    /// <summary>
+    /// Validates that <paramref name="input"/> parses as a GUID and returns its
+    /// canonical dashless 32-hex-character form. Use this at sites that consume
+    /// the session ID as a filesystem path component (e.g. <c>kapacitor hide</c>,
+    /// <c>kapacitor disable</c>), where slugs and path-traversal characters are
+    /// not acceptable input.
+    /// </summary>
+    internal static bool TryNormalizeSessionGuid(string input, out string canonical) {
+        if (Guid.TryParse(input, out var guid)) {
+            canonical = guid.ToString("N");
+            return true;
+        }
+        canonical = string.Empty;
+        return false;
+    }
 }

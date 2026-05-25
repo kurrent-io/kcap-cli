@@ -227,6 +227,38 @@ public class ArgParsingTests {
     }
 
     [Test]
+    public async Task TryNormalizeSessionGuid_accepts_dashed_uuid_and_returns_dashless() {
+        var ok = ArgParsing.TryNormalizeSessionGuid("01234567-89ab-cdef-0123-456789abcdef", out var canonical);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(canonical).IsEqualTo("0123456789abcdef0123456789abcdef");
+    }
+
+    [Test]
+    public async Task TryNormalizeSessionGuid_accepts_dashless_uuid_unchanged() {
+        var ok = ArgParsing.TryNormalizeSessionGuid("0123456789abcdef0123456789abcdef", out var canonical);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(canonical).IsEqualTo("0123456789abcdef0123456789abcdef");
+    }
+
+    [Test]
+    public async Task TryNormalizeSessionGuid_rejects_slug() {
+        var ok = ArgParsing.TryNormalizeSessionGuid("foo-bar-baz", out _);
+        await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task TryNormalizeSessionGuid_rejects_path_traversal() {
+        var ok = ArgParsing.TryNormalizeSessionGuid("../etc/passwd", out _);
+        await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task TryNormalizeSessionGuid_rejects_empty() {
+        var ok = ArgParsing.TryNormalizeSessionGuid("", out _);
+        await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
     [NotInParallel(nameof(SessionEnvVarMutation))]
     public async Task ResolveSessionId_strips_dashes_from_kapacitor_env_fallback() {
         var savedKap = Environment.GetEnvironmentVariable(KapacitorSessionIdEnvVar);
