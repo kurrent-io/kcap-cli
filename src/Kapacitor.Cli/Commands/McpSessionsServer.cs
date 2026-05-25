@@ -225,38 +225,78 @@ static class McpSessionsServer {
     /// <summary>
     /// Reads a numeric field as int, tolerant of JsonValue holding any underlying numeric type
     /// (int/long/double) — TryGetValue&lt;int&gt; on a JsonValue constructed from a long returns false.
+    /// Returns false when the key is missing or the value is the wrong shape (e.g., a string).
+    /// Throws <see cref="ArgumentException"/> when the value is numeric but out of range for int,
+    /// so the caller (via <see cref="HandleToolCallAsync"/>) surfaces it as a JSON-RPC validation error
+    /// rather than silently falling back to the default.
     /// </summary>
-    static bool TryReadInt(JsonObject? args, string key, out int value) {
+    internal static bool TryReadInt(JsonObject? args, string key, out int value) {
         value = 0;
         var node = args?[key];
 
         if (node is null) return false;
 
+        JsonValue v;
+
         try {
-            var v = node.AsValue();
-            if (v.TryGetValue<int>(out value)) return true;
-            if (v.TryGetValue<long>(out var lv)) { value = checked((int)lv); return true; }
-            if (v.TryGetValue<double>(out var dv)) { value = checked((int)dv); return true; }
+            v = node.AsValue();
         } catch {
-            // overflow or wrong shape
+            return false; // wrong shape (object/array)
+        }
+
+        if (v.TryGetValue<int>(out value)) return true;
+
+        if (v.TryGetValue<long>(out var lv)) {
+            if (lv < int.MinValue || lv > int.MaxValue)
+                throw new ArgumentException($"'{key}' value {lv} is out of range for int.");
+
+            value = (int)lv;
+            return true;
+        }
+
+        if (v.TryGetValue<double>(out var dv)) {
+            var rounded = (long)dv;
+            if (rounded < int.MinValue || rounded > int.MaxValue || rounded != dv)
+                throw new ArgumentException($"'{key}' value {dv} is out of range or non-integer for int.");
+
+            value = (int)rounded;
+            return true;
         }
 
         return false;
     }
 
-    static bool TryReadLong(JsonObject? args, string key, out long value) {
+    /// <summary>
+    /// Reads a numeric field as long, tolerant of JsonValue holding int/long/double.
+    /// Throws <see cref="ArgumentException"/> when a double value is out of range for long
+    /// or has a non-integer fractional part.
+    /// </summary>
+    internal static bool TryReadLong(JsonObject? args, string key, out long value) {
         value = 0;
         var node = args?[key];
 
         if (node is null) return false;
 
+        JsonValue v;
+
         try {
-            var v = node.AsValue();
-            if (v.TryGetValue<long>(out value)) return true;
-            if (v.TryGetValue<int>(out var iv)) { value = iv; return true; }
-            if (v.TryGetValue<double>(out var dv)) { value = (long)dv; return true; }
+            v = node.AsValue();
         } catch {
-            // wrong shape
+            return false; // wrong shape (object/array)
+        }
+
+        if (v.TryGetValue<long>(out value)) return true;
+        if (v.TryGetValue<int>(out var iv)) { value = iv; return true; }
+
+        if (v.TryGetValue<double>(out var dv)) {
+            // long.MaxValue (9.22e18) is not exactly representable as double; the smallest double
+            // strictly greater than long.MaxValue is 9223372036854775808.0. Comparing against that
+            // boundary avoids the (long)dv cast overflowing silently.
+            if (dv < long.MinValue || dv >= 9223372036854775808.0 || Math.Truncate(dv) != dv)
+                throw new ArgumentException($"'{key}' value {dv} is out of range or non-integer for long.");
+
+            value = (long)dv;
+            return true;
         }
 
         return false;

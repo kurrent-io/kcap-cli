@@ -140,4 +140,116 @@ public class McpSessionsServerTests {
         using var doc = JsonDocument.Parse(projected);
         await Assert.That(doc.RootElement.GetProperty("summary_text").GetString()).IsEqualTo("Has \"quotes\" and \nnewlines");
     }
+
+    [Test]
+    public async Task BuildTranscriptUrl_session_id_only_emits_minimal_url() {
+        var url = InvokeBuildTranscriptUrl(
+            "http://srv",
+            new JsonObject { ["session_id"] = "abc-123" }
+        );
+
+        await Assert.That(url).IsEqualTo("http://srv/api/sessions/abc-123/transcript");
+    }
+
+    [Test]
+    public async Task BuildTranscriptUrl_includes_around_event_and_agent_id_when_set() {
+        var url = InvokeBuildTranscriptUrl(
+            "http://srv",
+            new JsonObject {
+                ["session_id"]   = "abc-123",
+                ["around_event"] = 42,
+                ["agent_id"]     = "sub-7"
+            }
+        );
+
+        await Assert.That(url).Contains("around_event=42");
+        await Assert.That(url).Contains("agent_id=sub-7");
+    }
+
+    [Test]
+    public async Task BuildTranscriptUrl_emits_chain_as_lowercase_bool() {
+        var url = InvokeBuildTranscriptUrl(
+            "http://srv",
+            new JsonObject {
+                ["session_id"] = "abc-123",
+                ["chain"]      = true
+            }
+        );
+
+        await Assert.That(url).Contains("chain=true");
+        await Assert.That(url).DoesNotContain("chain=True");
+    }
+
+    [Test]
+    public async Task BuildTranscriptUrl_throws_when_session_id_missing() {
+        var ex = Assert.Throws<ArgumentException>(() => InvokeBuildTranscriptUrl("http://srv", new JsonObject()));
+
+        await Assert.That(ex!.Message).Contains("session_id");
+    }
+
+    [Test]
+    public async Task BuildTranscriptUrl_emits_include_thinking_false_when_explicitly_set() {
+        var url = InvokeBuildTranscriptUrl(
+            "http://srv",
+            new JsonObject {
+                ["session_id"]       = "abc-123",
+                ["include_thinking"] = false
+            }
+        );
+
+        // Documents current behaviour: helper appends the param whenever it's present in args,
+        // even when its value matches the server-side default of false.
+        await Assert.That(url).Contains("include_thinking=false");
+    }
+
+    [Test]
+    public async Task BuildSearchUrl_accepts_author_github_id_above_int_max() {
+        var url = McpSessionsServer.BuildSearchUrl(
+            "http://srv",
+            new JsonObject { ["author_github_id"] = 5_000_000_000L },
+            cwdRepoHash: null
+        );
+
+        await Assert.That(url).Contains("author_github_id=5000000000");
+    }
+
+    [Test]
+    public async Task TryReadInt_throws_on_long_overflow() {
+        var args = new JsonObject { ["limit"] = 5_000_000_000L };
+
+        Assert.Throws<ArgumentException>(() => McpSessionsServer.TryReadInt(args, "limit", out _));
+        await Task.CompletedTask;
+    }
+
+    [Test]
+    public async Task TryReadInt_returns_false_for_missing_key() {
+        var ok = McpSessionsServer.TryReadInt(new JsonObject(), "limit", out var value);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(value).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryReadInt_returns_false_for_wrong_type() {
+        var args = new JsonObject { ["limit"] = "not-a-number" };
+
+        var ok = McpSessionsServer.TryReadInt(args, "limit", out _);
+
+        await Assert.That(ok).IsFalse();
+    }
+
+    // BuildTranscriptUrl is private; reach it via the public test entry point HandleToolCallForTests
+    // would round-trip through HTTP, so instead we use reflection for narrow per-builder coverage.
+    static string InvokeBuildTranscriptUrl(string baseUrl, JsonObject args) {
+        var method = typeof(McpSessionsServer).GetMethod(
+            "BuildTranscriptUrl",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic
+        ) ?? throw new InvalidOperationException("BuildTranscriptUrl not found");
+
+        try {
+            return (string)method.Invoke(null, [baseUrl, args])!;
+        } catch (System.Reflection.TargetInvocationException tie) when (tie.InnerException is not null) {
+            throw tie.InnerException;
+        }
+    }
 }
