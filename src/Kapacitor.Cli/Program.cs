@@ -302,10 +302,14 @@ switch (command) {
     case "cleanup":
         return await CleanupCommand.HandleCleanup();
     case "disable": {
-        var sessionId = Environment.GetEnvironmentVariable("KAPACITOR_SESSION_ID")?.Replace("-", "");
+        // Positional override may be a dashed UUID; the WatcherManager and
+        // server-side path both expect dashless, so we strip here. Env-sourced
+        // values come pre-normalized from the resolver.
+        var sessionId = ResolveSessionId(args)?.Replace("-", "");
 
         if (sessionId is null) {
-            Console.Error.WriteLine("KAPACITOR_SESSION_ID not set. Run this inside an active Claude Code session.");
+            Console.Error.WriteLine("Usage: kapacitor disable [sessionId]");
+            Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
 
             return 1;
         }
@@ -351,10 +355,11 @@ switch (command) {
         return 0;
     }
     case "hide": {
-        var sessionId = Environment.GetEnvironmentVariable("KAPACITOR_SESSION_ID")?.Replace("-", "");
+        var sessionId = ResolveSessionId(args)?.Replace("-", "");
 
         if (sessionId is null) {
-            Console.Error.WriteLine("KAPACITOR_SESSION_ID not set. Run this inside an active Claude Code session.");
+            Console.Error.WriteLine("Usage: kapacitor hide [sessionId]");
+            Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
 
             return 1;
         }
