@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Kapacitor.Cli;
 using Kapacitor.Cli.Commands;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -326,6 +327,62 @@ public class CodexHookCommandTests : IDisposable {
         // AI-648: Stop must never POST session-end, even with a malformed payload.
         var endRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
         await Assert.That(endRequests.Count).IsEqualTo(0);
+    }
+
+    // AI-676 P1: when the user runs `kapacitor disable`, the marker file
+    // under PathHelpers.ConfigPath("disabled") must short-circuit the Codex
+    // hook the same way it does for Claude. Without this guard, the next
+    // Codex Stop hook restarts the watcher (HandleStop calls
+    // WatcherManager.EnsureWatcherRunning) and re-enlivens a session whose
+    // data was just deleted server-side.
+    //
+    // Globally sequential: this test captures Console.Out, and shares the
+    // same NotInParallel(ConsoleSerialGroup) lock as every other
+    // stdout-redirecting test in the suite.
+    [Test, NotInParallel(ConsoleSerialGroup)]
+    public async Task Handle_skips_dispatch_when_session_is_disabled() {
+        // session_id without dashes — NormalizeGuidField is a no-op on this
+        // shape, so the value written to disk matches the value the hook
+        // looks up after normalization.
+        const string sessionId = "disabledsess123abc";
+
+        // Stub every route the dispatch path could hit so a regression that
+        // re-enables dispatch surfaces as a recorded request.
+        _server.Given(Request.Create().WithPath("/hooks/session-start/codex").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+
+        var payload = $$"""
+            {
+              "hook_event_name": "Stop",
+              "session_id": "{{sessionId}}",
+              "transcript_path": "/tmp/rollout.jsonl",
+              "cwd": "/tmp"
+            }
+            """;
+
+        DisabledSessions.Mark(sessionId);
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+        try {
+            Console.SetOut(stdoutWriter);
+
+            var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+
+            await Assert.That(exit).IsEqualTo(0);
+
+            // Disabled-session branch must skip every server POST and the
+            // watcher restart.
+            await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
+
+            // Codex's Stop parser still expects valid JSON on stdout.
+            var stdout = stdoutWriter.ToString();
+            var doc    = JsonDocument.Parse(stdout);
+            await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
+        } finally {
+            Console.SetOut(originalOut);
+            DisabledSessions.RemoveMarker(sessionId);
+        }
     }
 
     // ---- PermissionRequest daemon-bridge tests ----

@@ -56,8 +56,8 @@ static class CodexHookCommand {
 
         // Normalize session_id to dashless GUID, inject home_dir, and tag the
         // agent host id when running inside a daemon-spawned agent. Mirrors
-        // the Claude hook path in Program.cs but without the disabled-session
-        // and plan_content branches (those are Claude-specific).
+        // the Claude hook path in Program.cs (including the disabled-session
+        // check below); the plan_content branch remains Claude-specific.
         NormalizeGuidField(node, "session_id");
 
         node["home_dir"] = PathHelpers.HomeDirectory;
@@ -65,6 +65,21 @@ static class CodexHookCommand {
         var agentHostId = Environment.GetEnvironmentVariable("KAPACITOR_AGENT_ID");
         if (agentHostId is not null) {
             node["agent_host_id"] = agentHostId;
+        }
+
+        // Mirror the Claude path: if the user ran `kapacitor disable`, skip every
+        // server POST and the watcher restart. Without this check the next Codex
+        // Stop hook would re-enliven the watcher and re-send transcript data for
+        // a session whose data was just deleted server-side.
+        var disabledSessionId = TryGetString(node, "session_id");
+        if (disabledSessionId is not null && DisabledSessions.IsDisabled(disabledSessionId)) {
+            // Emit the session-scoped JSON Codex's Stop/SessionStart parsers expect,
+            // then skip dispatch. (Claude's disabled branch also returns immediately
+            // — see Program.cs around line 593.)
+            if (eventName == "Stop" || eventName == "SessionStart") {
+                Console.Write(SessionScopedOutputJson);
+            }
+            return 0;
         }
 
         return eventName switch {

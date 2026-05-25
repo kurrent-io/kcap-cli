@@ -328,7 +328,7 @@ switch (command) {
         }
 
         // 2. Mark session as disabled (prevents future hook calls from sending data)
-        MarkSessionDisabled(sessionId);
+        DisabledSessions.Mark(sessionId);
 
         // 3. Tell server to delete session data
         using var disableClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
@@ -590,10 +590,10 @@ try {
 try {
     var disabledSessionId = JsonNode.Parse(body)?["session_id"]?.GetValue<string>();
 
-    if (disabledSessionId is not null && IsSessionDisabled(disabledSessionId)) {
+    if (disabledSessionId is not null && DisabledSessions.IsDisabled(disabledSessionId)) {
         // For session-end: remove the marker so it doesn't accumulate
         if (command == "session-end") {
-            RemoveDisabledMarker(disabledSessionId);
+            DisabledSessions.RemoveMarker(disabledSessionId);
         }
 
         return 0;
@@ -973,25 +973,6 @@ async Task PrintUsage() {
     var hookList = string.Join('\n', hookCommands.Select(h => $"  {h}"));
     var text     = EmbeddedResources.Load("help-usage.txt").Replace("{hookCommands}", hookList);
     await Console.Out.WriteAsync(text);
-}
-
-string GetDisabledDir() => PathHelpers.ConfigPath("disabled");
-
-bool IsSessionDisabled(string sessionId) =>
-    File.Exists(Path.Combine(GetDisabledDir(), sessionId));
-
-void MarkSessionDisabled(string sessionId) {
-    var dir = GetDisabledDir();
-    Directory.CreateDirectory(dir);
-    File.WriteAllText(Path.Combine(dir, sessionId), "");
-}
-
-void RemoveDisabledMarker(string sessionId) {
-    var path = Path.Combine(GetDisabledDir(), sessionId);
-
-    try { File.Delete(path); } catch {
-        /* ignore */
-    }
 }
 
 async Task<int> PrintCommandHelp(string cmd) {
