@@ -30,25 +30,60 @@ static partial class WatchCommand {
         Console.SetOut(logWriter);
         Console.SetError(logWriter);
 
-        using var cts = new CancellationTokenSource();
+        // Detach from controlling terminal so closing the parent's terminal does
+        // not deliver SIGHUP to the watcher. Without this, both the coding agent
+        // and the watcher die simultaneously when the user closes the terminal
+        // window, and the parent-PID poll below never fires — leaving the
+        // session stuck "active" because session-end is never POSTed.
+        if (!ProcessHelpers.DetachFromControllingTerminal()) {
+            Log("setsid() failed; SIGHUP from terminal close may kill the watcher");
+        }
 
-        // Handle SIGTERM/SIGINT for graceful shutdown
-        Console.CancelKeyPress += (_, e) => {
-            e.Cancel = true;
-            cts.Cancel();
-        };
-        PosixSignalRegistration.Create(PosixSignal.SIGTERM, _ => cts.Cancel());
+        using var cts = new CancellationTokenSource();
 
         // Tracks whether shutdown was triggered by the parent coding-agent process
         // dying without firing session-end. When true (1), the watcher takes over the
         // server's session-end POST (which the parent normally fires) so the read
         // model doesn't keep the session "active" forever.
         //
-        // Written by the parent-PID monitor task, read on the main thread —
-        // use Interlocked/Volatile so the C# memory model formally guarantees the
-        // write is observed even though awaits already act as memory barriers in
-        // practice.
+        // Written by the parent-PID monitor task and signal handlers, read on the
+        // main thread — use Interlocked/Volatile so the C# memory model formally
+        // guarantees the write is observed even though awaits already act as memory
+        // barriers in practice.
         var parentExited = 0;
+
+        // Handle SIGTERM/SIGINT for graceful shutdown.
+        //
+        // PosixSignalRegistration.Create returns an IDisposable that owns the
+        // underlying handler slot; if it's not rooted for the lifetime of the
+        // method the finalizer silently unregisters the handler. `using var`
+        // keeps both registrations alive until RunWatch returns and disposes
+        // them deterministically.
+        //
+        // For SIGTERM and SIGHUP, ctx.Cancel = true is required: .NET runs the
+        // signal's default action (terminate) after the handler unless the
+        // context is cancelled, which would kill the watcher before the main
+        // loop notices cts and the drain / session-end POST never run.
+        Console.CancelKeyPress += (_, e) => {
+            e.Cancel = true;
+            cts.Cancel();
+        };
+        using var sigtermReg = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx => {
+            cts.Cancel();
+            ctx.Cancel = true;
+        });
+
+        // SIGHUP defense-in-depth: setsid above should prevent the kernel from
+        // delivering SIGHUP to us, but if a shell forwards SIGHUP explicitly to
+        // its process group children before our setsid lands, or if setsid
+        // failed, this handler keeps the watcher alive long enough to run the
+        // parent-exit cleanup path (drain + session-end POST).
+        using var sighupReg = PosixSignalRegistration.Create(PosixSignal.SIGHUP, ctx => {
+            Log("Received SIGHUP; treating as parent-exit");
+            Interlocked.Exchange(ref parentExited, 1);
+            cts.Cancel();
+            ctx.Cancel = true;
+        });
 
         // Watch the spawning claude process. If it dies without firing session-end
         // (crash, force-kill, IDE-detach), self-terminate within ~5s instead of orphaning.

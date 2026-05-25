@@ -26,6 +26,10 @@ static partial class ProcessHelpers {
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     private static partial int kill_native(int pid, int sig);
 
+    [LibraryImport("libc", EntryPoint = "setsid", SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial int setsid_native();
+
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial nint OpenProcess(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwProcessId);
 
@@ -114,6 +118,49 @@ static partial class ProcessHelpers {
         var pgid = getpgrp_native();
 
         return pgid > 1 && pgid != getpid_native() ? pgid : getppid_native();
+    }
+
+    /// <summary>
+    /// Detaches the current process from its controlling terminal on Unix so that
+    /// closing the parent terminal does not deliver SIGHUP to this process.
+    /// </summary>
+    /// <remarks>
+    /// The watcher is forked by the coding-agent's hook executor and inherits the
+    /// agent's process group and controlling terminal. When the user closes the
+    /// terminal, the kernel sends SIGHUP to the controlling-terminal's foreground
+    /// process group — that includes the watcher, which has no SIGHUP handler and
+    /// dies instantly with default action <c>terminate</c>. The parent-PID poll in
+    /// <c>WatchCommand.RunWatch</c> never gets to fire, so the watcher never
+    /// POSTs session-end and the session stays "active" forever in the read model.
+    ///
+    /// <c>setsid()</c> moves the watcher into a new session with no controlling
+    /// terminal. The captured <c>parentPid</c> (the coding-agent's PGID, recorded
+    /// before the watcher was spawned) is unchanged and still resolves to the
+    /// agent's actual PID — when the agent dies the 5s polling loop detects it
+    /// and runs the cleanup path that POSTs session-end.
+    ///
+    /// No-op on Windows (no equivalent terminal-session abstraction; closing a
+    /// console window kills the watcher via a different mechanism and the
+    /// codex/Windows combination is uncommon).
+    /// </remarks>
+    /// <returns>
+    /// <c>true</c> if the process was successfully detached (or if running on
+    /// Windows where the call is intentionally a no-op). <c>false</c> if
+    /// <c>setsid()</c> failed — typically because the process is already a
+    /// process-group leader, which means it's already isolated and the call
+    /// would be redundant anyway.
+    /// </returns>
+    public static bool DetachFromControllingTerminal() {
+        if (OperatingSystem.IsWindows()) {
+            return true;
+        }
+
+        // setsid() fails with EPERM if the caller is already a process-group
+        // leader. That's fine — it means we're already isolated. Any other
+        // failure is logged by the caller but isn't fatal: SIGHUP delivery may
+        // kill the watcher in that edge case, but the worst outcome is the
+        // pre-existing bug, not a regression.
+        return setsid_native() != -1;
     }
 
     /// <summary>
