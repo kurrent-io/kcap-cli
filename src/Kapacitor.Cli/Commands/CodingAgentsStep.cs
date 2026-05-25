@@ -65,6 +65,7 @@ internal static class CodingAgentsStep {
         }
 
         writeLine($"  [green]✓[/] Codex skills installed (user: {Markup.Escape(paths.CodexSkillsDir)})");
+        writeLine("    [dim]kapacitor-recap, kapacitor-errors, kapacitor-hide, kapacitor-disable, kapacitor-validate-plan[/]");
         return true;
     }
 
@@ -87,7 +88,7 @@ internal static class CodingAgentsStep {
             return false;
         }
 
-        var shouldInstall = options.NoPrompt || prompt("Install Codex CLI hooks (and skills)?");
+        var shouldInstall = options.NoPrompt || prompt("Install Codex CLI hooks and 5 skills?");
 
         if (!shouldInstall) {
             writeLine("  [dim]· Codex CLI hooks not installed (you can run kapacitor plugin install --codex later)[/]");

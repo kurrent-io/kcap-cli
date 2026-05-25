@@ -144,6 +144,26 @@ With the plugin installed, use the `/kapacitor:validate-plan` skill or ask natur
 Did I finish everything in the plan? Check what's left to do.
 ```
 
+### Hide session
+
+Mark a session as owner-only so other users no longer see it in the dashboard.
+
+```bash
+kapacitor hide                 # current session
+kapacitor hide <sessionId>     # specific session
+```
+
+### Disable recording
+
+Stop the watcher, silence future hooks, and delete server-side data for a session.
+
+```bash
+kapacitor disable                 # current session
+kapacitor disable <sessionId>     # specific session
+```
+
+This is irreversible on the server side; the local transcript file is untouched.
+
 ### Error extraction
 
 Scan a recorded session for tool call errors — failed bash commands, file read/write errors, agent failures, etc.
@@ -246,10 +266,24 @@ Two daemons with **different** `--name` values can run side-by-side. Two daemons
 
 Hosted Codex agents require the Codex hook surface — if you said yes during `kapacitor setup`, you already have it. Otherwise install it manually:
 
+Codex CLI 0.81+ exports `CODEX_THREAD_ID`; kapacitor reads it the same way it reads `KAPACITOR_SESSION_ID` for Claude sessions — no manual session ID needed for any of the Codex skills (`kapacitor-recap`, `kapacitor-errors`, `kapacitor-hide`, `kapacitor-disable`, `kapacitor-validate-plan`).
+
 ```bash
 kapacitor plugin install --codex            # user scope (~/.codex/hooks.json)
 kapacitor plugin install --codex --project  # project scope (<repo>/.codex/hooks.json)
 ```
+
+Installing with `--codex` writes five skills under `~/.codex/skills/`:
+
+| Skill | Wraps | Purpose |
+|---|---|---|
+| `kapacitor-recap` | `kapacitor recap` | Session summary / continuation chain / repo history |
+| `kapacitor-errors` | `kapacitor errors` | Tool-call error extraction |
+| `kapacitor-hide` | `kapacitor hide` | Mark session owner-only |
+| `kapacitor-disable` | `kapacitor disable` | Stop recording + delete server data |
+| `kapacitor-validate-plan` | `kapacitor validate-plan` | Verify plan items were completed |
+
+All five auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionId>` explicitly to operate on a different session.
 
 The daemon starts Codex with `--sandbox workspace-write` and `--ask-for-approval on-request`. This lets Codex edit files in the agent's worktree but escalates sensitive operations (e.g. network calls, shell commands outside the worktree) through the daemon's permission bridge to the dashboard.
 

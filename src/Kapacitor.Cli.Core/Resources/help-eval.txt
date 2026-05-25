@@ -27,8 +27,9 @@ Notes:
     session size. Parallelization is tracked in DEV-1435.
   - Each judge has no tools — Read, Bash, Grep, WebFetch, etc. are all blocked.
     The full compacted trace is embedded in the prompt.
-  - If the session ID is omitted, the currently-recorded session (as set by
-    the session-start hook in KAPACITOR_SESSION_ID) is used.
+  - If the session ID is omitted, the currently-recorded session is used —
+    resolved from KAPACITOR_SESSION_ID (Claude) or CODEX_THREAD_ID
+    (Codex 0.81+).
 
 Examples:
   kapacitor eval --questions safety                # 4 safety judges only

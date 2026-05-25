@@ -12,11 +12,17 @@ description: >-
 
 Extract tool call errors from a session recorded by Kurrent Capacitor. The output lists each failed tool call — shell commands, file reads/writes, agent delegations, etc. — along with the error message and the tool that caused it.
 
+Codex CLI 0.81+ exports `CODEX_THREAD_ID`; `kapacitor errors` uses it the same way it uses `KAPACITOR_SESSION_ID` for Claude. No args needed for the current session.
+
 ## Usage
 
-Codex sessions do not export `KAPACITOR_SESSION_ID`, so you must pass the session ID explicitly. To find recent session IDs, run `kapacitor recap --repo` first.
-
 ```bash
+# Current session — auto-resolved from CODEX_THREAD_ID
+kapacitor errors
+
+# Errors from the full continuation chain of the current session
+kapacitor errors --chain
+
 # Errors from a specific session
 kapacitor errors <sessionId>
 
@@ -28,17 +34,18 @@ kapacitor errors --chain <sessionId>
 
 Each error is printed as a block with:
 
-- **Session ID** and optional **agent ID** (if the error occurred in a subagent)
-- **Event number** and **timestamp**
-- **Tool name** — the tool that failed (e.g., Bash, Read, Edit, Write, Grep, Glob)
-- **Error message** — the error output or failure reason
+- **Session ID** and optional **agent ID** (if the error occurred in a subagent).
+- **Event number** and **timestamp**.
+- **Tool name** — the tool that failed (e.g., Bash, Read, Edit, Write, Grep, Glob).
+- **Error message** — the error output or failure reason.
 
 When using `--chain`, errors from all sessions in the continuation chain are included, ordered chronologically.
 
 ## When to Use Each Flag
 
-- **No flag** (`kapacitor errors <sessionId>`) — reviewing errors from one specific session
-- **`--chain <sessionId>`** — reviewing errors across a full task that spanned multiple sessions
+- **No flag** (`kapacitor errors`) — reviewing errors from the current session.
+- **`<sessionId>`** — reviewing errors from a specific session (e.g. from `kapacitor recap --repo`).
+- **`--chain`** — reviewing errors across a full task that spanned multiple sessions.
 
 ## Practical Applications
 

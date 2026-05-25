@@ -12,8 +12,10 @@ Options:
 
 Notes:
   --codex installs hooks (~/.codex/hooks.json or <repo>/.codex/hooks.json with
-  --project) plus kapacitor-recap and kapacitor-errors skills in
-  ~/.codex/skills/. Skills are always user-wide; --project only affects hooks.
+  --project) plus five skills in ~/.codex/skills/: kapacitor-recap,
+  kapacitor-errors, kapacitor-hide, kapacitor-disable, and
+  kapacitor-validate-plan. Skills are always user-wide; --project only
+  affects hooks.
 
 Examples:
   kapacitor plugin install                    # Install Claude Code plugin (user)

@@ -91,7 +91,7 @@ switch (command) {
 
         if (errSessionId is null) {
             Console.Error.WriteLine("Usage: kapacitor errors [--chain] [sessionId]");
-            Console.Error.WriteLine("  No session ID provided and KAPACITOR_SESSION_ID not set.");
+            Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
 
             return 1;
         }
@@ -111,7 +111,7 @@ switch (command) {
 
         if (recapSessionId is null) {
             Console.Error.WriteLine("Usage: kapacitor recap [--chain] [--full] [--repo] [sessionId]");
-            Console.Error.WriteLine("  No session ID provided and KAPACITOR_SESSION_ID not set.");
+            Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
             Console.Error.WriteLine("  Use --repo to see recent session summaries for the current repository.");
 
             return 1;
@@ -124,7 +124,7 @@ switch (command) {
 
         if (vpSessionId is null) {
             Console.Error.WriteLine("Usage: kapacitor validate-plan [sessionId]");
-            Console.Error.WriteLine("  No session ID provided and KAPACITOR_SESSION_ID not set.");
+            Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
 
             return 1;
         }
@@ -143,7 +143,7 @@ switch (command) {
             Console.Error.WriteLine("Usage: kapacitor eval [--model sonnet] [--chain] [--threshold N]");
             Console.Error.WriteLine("                     [--questions <csv> | --skip <csv>] [sessionId]");
             Console.Error.WriteLine("       kapacitor eval --list-questions");
-            Console.Error.WriteLine("  No session ID provided and KAPACITOR_SESSION_ID not set.");
+            Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
 
             return 1;
         }
@@ -302,10 +302,21 @@ switch (command) {
     case "cleanup":
         return await CleanupCommand.HandleCleanup();
     case "disable": {
-        var sessionId = Environment.GetEnvironmentVariable("KAPACITOR_SESSION_ID")?.Replace("-", "");
+        // The sessionId is consumed as a filesystem path component
+        // (watcher PID files, disabled marker file). Validate strictly as a
+        // GUID to prevent path traversal via crafted positional input.
+        var resolved = ResolveSessionId(args);
 
-        if (sessionId is null) {
-            Console.Error.WriteLine("KAPACITOR_SESSION_ID not set. Run this inside an active Claude Code session.");
+        if (resolved is null) {
+            Console.Error.WriteLine("Usage: kapacitor disable [sessionId]");
+            Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
+
+            return 1;
+        }
+
+        if (!ArgParsing.TryNormalizeSessionGuid(resolved, out var sessionId)) {
+            Console.Error.WriteLine($"Invalid session ID: '{resolved}'");
+            Console.Error.WriteLine("  Session ID must be a UUID. Use `kapacitor recap --repo` to find recent session IDs.");
 
             return 1;
         }
@@ -324,7 +335,7 @@ switch (command) {
         }
 
         // 2. Mark session as disabled (prevents future hook calls from sending data)
-        MarkSessionDisabled(sessionId);
+        DisabledSessions.Mark(sessionId);
 
         // 3. Tell server to delete session data
         using var disableClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
@@ -351,10 +362,21 @@ switch (command) {
         return 0;
     }
     case "hide": {
-        var sessionId = Environment.GetEnvironmentVariable("KAPACITOR_SESSION_ID")?.Replace("-", "");
+        // The sessionId is forwarded into a server URL path but we keep the
+        // same strict GUID validation as `disable` to reject path-traversal
+        // characters and slugs uniformly across local-state-mutating commands.
+        var resolved = ResolveSessionId(args);
 
-        if (sessionId is null) {
-            Console.Error.WriteLine("KAPACITOR_SESSION_ID not set. Run this inside an active Claude Code session.");
+        if (resolved is null) {
+            Console.Error.WriteLine("Usage: kapacitor hide [sessionId]");
+            Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
+
+            return 1;
+        }
+
+        if (!ArgParsing.TryNormalizeSessionGuid(resolved, out var sessionId)) {
+            Console.Error.WriteLine($"Invalid session ID: '{resolved}'");
+            Console.Error.WriteLine("  Session ID must be a UUID. Use `kapacitor recap --repo` to find recent session IDs.");
 
             return 1;
         }
@@ -497,14 +519,14 @@ switch (command) {
         return await PermissionRequestCommand.Handle(baseUrl!);
     case "set-title" when args.Length < 2:
         Console.Error.WriteLine("Usage: kapacitor set-title <title>");
-        Console.Error.WriteLine("  KAPACITOR_SESSION_ID must be set.");
 
         return 1;
     case "set-title": {
-        var stSessionId = Environment.GetEnvironmentVariable("KAPACITOR_SESSION_ID")?.Replace("-", "");
+        var stSessionId = ArgParsing.ResolveSessionIdFromEnv();
 
         if (stSessionId is null) {
-            Console.Error.WriteLine("KAPACITOR_SESSION_ID not set");
+            Console.Error.WriteLine("No session ID found in KAPACITOR_SESSION_ID or CODEX_THREAD_ID.");
+            Console.Error.WriteLine("Run set-title inside an active Claude Code / Codex CLI 0.81+ session.");
 
             return 1;
         }
@@ -585,10 +607,10 @@ try {
 try {
     var disabledSessionId = JsonNode.Parse(body)?["session_id"]?.GetValue<string>();
 
-    if (disabledSessionId is not null && IsSessionDisabled(disabledSessionId)) {
+    if (disabledSessionId is not null && DisabledSessions.IsDisabled(disabledSessionId)) {
         // For session-end: remove the marker so it doesn't accumulate
         if (command == "session-end") {
-            RemoveDisabledMarker(disabledSessionId);
+            DisabledSessions.RemoveMarker(disabledSessionId);
         }
 
         return 0;
@@ -968,25 +990,6 @@ async Task PrintUsage() {
     var hookList = string.Join('\n', hookCommands.Select(h => $"  {h}"));
     var text     = EmbeddedResources.Load("help-usage.txt").Replace("{hookCommands}", hookList);
     await Console.Out.WriteAsync(text);
-}
-
-string GetDisabledDir() => PathHelpers.ConfigPath("disabled");
-
-bool IsSessionDisabled(string sessionId) =>
-    File.Exists(Path.Combine(GetDisabledDir(), sessionId));
-
-void MarkSessionDisabled(string sessionId) {
-    var dir = GetDisabledDir();
-    Directory.CreateDirectory(dir);
-    File.WriteAllText(Path.Combine(dir, sessionId), "");
-}
-
-void RemoveDisabledMarker(string sessionId) {
-    var path = Path.Combine(GetDisabledDir(), sessionId);
-
-    try { File.Delete(path); } catch {
-        /* ignore */
-    }
 }
 
 async Task<int> PrintCommandHelp(string cmd) {
