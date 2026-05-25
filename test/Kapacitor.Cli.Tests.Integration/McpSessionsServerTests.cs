@@ -283,17 +283,16 @@ public class McpSessionsServerTests : IDisposable {
     }
 
     /// <summary>
-    /// When the server reports a non-"None" provider and no tokens are seeded, the CLI
-    /// builds an unauthenticated HttpClient (it prints a "Run 'kapacitor login'" hint to
-    /// stderr, which is out-of-band for the MCP wire protocol). The Bearer-less call
-    /// to the server then returns 401, which <see cref="Kapacitor.Cli.Commands.McpSessionsServer"/>
-    /// surfaces verbatim — "Error: HTTP 401 — &lt;body&gt;" with <c>isError: true</c>.
+    /// Spec compliance: when the server returns 401, <see cref="Kapacitor.Cli.Commands.McpSessionsServer"/>
+    /// must surface the exact friendly message "Not logged in. Run 'kapacitor login' on the host shell."
+    /// inside the MCP tool result (with <c>isError: true</c>) — not the raw HTTP body.
     ///
-    /// Observation for Task 7 follow-up: the MCP-level tool result does NOT explicitly
-    /// mention "kapacitor login" — only the stderr does, and MCP clients (Claude Code,
-    /// Codex) don't forward CLI stderr to the model. A friendlier message inside the
-    /// tool result body would be a small but real UX win. Not fixed here to keep this
-    /// task focused on tests + docs; raising as a separate follow-up.
+    /// MCP clients (Claude Code, Codex) don't forward CLI stderr to the model, so the
+    /// stderr hint emitted by <c>HttpClientExtensions.CreateAuthenticatedClientAsync</c>
+    /// is invisible to the agent; the friendly message has to live in the tool result.
+    ///
+    /// The WireMock 401 stub returns an EMPTY body so the assertion proves the message
+    /// comes from <c>McpSessionsServer</c>, not from server-body bleed-through.
     /// </summary>
     [Test]
     public async Task Unauthenticated_returns_friendly_error() {
@@ -302,7 +301,7 @@ public class McpSessionsServerTests : IDisposable {
                 Response.Create()
                     .WithStatusCode(401)
                     .WithHeader("Content-Type", "application/json")
-                    .WithBody("""{"message":"Authentication required. Run 'kapacitor login' to sign in."}""")
+                    .WithBody("")
             );
 
         // Provider != "None" forces the auth path; no tokens.json exists in _cfgDir so the
@@ -315,14 +314,8 @@ public class McpSessionsServerTests : IDisposable {
             var result   = response["result"]?.AsObject();
             await Assert.That(result?["isError"]?.GetValue<bool>()).IsTrue();
 
-            var text = result?["content"]?[0]?["text"]?.GetValue<string>();
-            await Assert.That(text).IsNotNull();
-            // The 401 surfaces in the response body verbatim. We assert on the HTTP status
-            // (always present) and the message snippet (proves the server's hint body made
-            // it through). Neither is strictly the "Not logged in" friendly message; see
-            // the XML doc comment above for the follow-up.
-            await Assert.That(text!.Contains("401")).IsTrue();
-            await Assert.That(text.Contains("kapacitor login")).IsTrue();
+            var content = result?["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(content).IsEqualTo("Not logged in. Run 'kapacitor login' on the host shell.");
         } finally {
             await ShutdownAsync(proc);
         }

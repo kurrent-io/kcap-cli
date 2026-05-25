@@ -98,6 +98,10 @@ static class McpSessionsServer {
 
             var body = await httpResponse.Content.ReadAsStringAsync();
 
+            if (httpResponse.StatusCode == System.Net.HttpStatusCode.Unauthorized) {
+                return BuildToolResult(id, "Not logged in. Run 'kapacitor login' on the host shell.", isError: true);
+            }
+
             if (!httpResponse.IsSuccessStatusCode) {
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
             }
