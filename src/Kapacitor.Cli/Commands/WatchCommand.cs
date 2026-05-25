@@ -30,7 +30,27 @@ static partial class WatchCommand {
         Console.SetOut(logWriter);
         Console.SetError(logWriter);
 
+        // Detach from controlling terminal so closing the parent's terminal does
+        // not deliver SIGHUP to the watcher. Without this, both the coding agent
+        // and the watcher die simultaneously when the user closes the terminal
+        // window, and the parent-PID poll below never fires — leaving the
+        // session stuck "active" because session-end is never POSTed.
+        if (!ProcessHelpers.DetachFromControllingTerminal()) {
+            Log("setsid() failed; SIGHUP from terminal close may kill the watcher");
+        }
+
         using var cts = new CancellationTokenSource();
+
+        // Tracks whether shutdown was triggered by the parent coding-agent process
+        // dying without firing session-end. When true (1), the watcher takes over the
+        // server's session-end POST (which the parent normally fires) so the read
+        // model doesn't keep the session "active" forever.
+        //
+        // Written by the parent-PID monitor task and signal handlers, read on the
+        // main thread — use Interlocked/Volatile so the C# memory model formally
+        // guarantees the write is observed even though awaits already act as memory
+        // barriers in practice.
+        var parentExited = 0;
 
         // Handle SIGTERM/SIGINT for graceful shutdown
         Console.CancelKeyPress += (_, e) => {
@@ -39,16 +59,17 @@ static partial class WatchCommand {
         };
         PosixSignalRegistration.Create(PosixSignal.SIGTERM, _ => cts.Cancel());
 
-        // Tracks whether shutdown was triggered by the parent coding-agent process
-        // dying without firing session-end. When true (1), the watcher takes over the
-        // server's session-end POST (which the parent normally fires) so the read
-        // model doesn't keep the session "active" forever.
-        //
-        // Written by the parent-PID monitor task, read on the main thread —
-        // use Interlocked/Volatile so the C# memory model formally guarantees the
-        // write is observed even though awaits already act as memory barriers in
-        // practice.
-        var parentExited = 0;
+        // SIGHUP defense-in-depth: setsid above should prevent the kernel from
+        // delivering SIGHUP to us, but if a shell forwards SIGHUP explicitly to
+        // its process group children before our setsid lands, or if setsid
+        // failed, this handler keeps the watcher alive long enough to run the
+        // parent-exit cleanup path (drain + session-end POST).
+        PosixSignalRegistration.Create(PosixSignal.SIGHUP, ctx => {
+            Log("Received SIGHUP; treating as parent-exit");
+            Interlocked.Exchange(ref parentExited, 1);
+            cts.Cancel();
+            ctx.Cancel = true;
+        });
 
         // Watch the spawning claude process. If it dies without firing session-end
         // (crash, force-kill, IDE-detach), self-terminate within ~5s instead of orphaning.
