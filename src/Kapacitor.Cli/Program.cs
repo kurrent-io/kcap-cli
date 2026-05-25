@@ -91,7 +91,7 @@ switch (command) {
 
         if (errSessionId is null) {
             Console.Error.WriteLine("Usage: kapacitor errors [--chain] [sessionId]");
-            Console.Error.WriteLine("  No session ID provided and KAPACITOR_SESSION_ID not set.");
+            Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
 
             return 1;
         }
@@ -111,7 +111,7 @@ switch (command) {
 
         if (recapSessionId is null) {
             Console.Error.WriteLine("Usage: kapacitor recap [--chain] [--full] [--repo] [sessionId]");
-            Console.Error.WriteLine("  No session ID provided and KAPACITOR_SESSION_ID not set.");
+            Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
             Console.Error.WriteLine("  Use --repo to see recent session summaries for the current repository.");
 
             return 1;
@@ -124,7 +124,7 @@ switch (command) {
 
         if (vpSessionId is null) {
             Console.Error.WriteLine("Usage: kapacitor validate-plan [sessionId]");
-            Console.Error.WriteLine("  No session ID provided and KAPACITOR_SESSION_ID not set.");
+            Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
 
             return 1;
         }
@@ -143,7 +143,7 @@ switch (command) {
             Console.Error.WriteLine("Usage: kapacitor eval [--model sonnet] [--chain] [--threshold N]");
             Console.Error.WriteLine("                     [--questions <csv> | --skip <csv>] [sessionId]");
             Console.Error.WriteLine("       kapacitor eval --list-questions");
-            Console.Error.WriteLine("  No session ID provided and KAPACITOR_SESSION_ID not set.");
+            Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
 
             return 1;
         }
