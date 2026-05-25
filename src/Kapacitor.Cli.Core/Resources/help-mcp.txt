@@ -4,6 +4,8 @@ Usage: kapacitor mcp <subcommand>
 
 Subcommands:
   review                  Start the MCP review server (stdio)
+  judge                   Start the MCP judge server (stdio)
+  sessions                Start the MCP sessions server (stdio)
 
 Options for review:
   --owner <owner>         Repository owner
@@ -11,3 +13,13 @@ Options for review:
   --pr <number>           PR number
 
 If --owner/--repo/--pr are omitted, auto-detects from git.
+
+Options for judge:
+  --session <sessionId>   Bind the judge to a specific session
+
+mcp sessions:
+  Exposes three tools — search_sessions, get_session_summary,
+  get_session_transcript — for agents to search and inspect past
+  Kurrent Capacitor sessions. The active repo is resolved from cwd at
+  startup. Install with:
+    claude mcp add kapacitor-sessions -- kapacitor mcp sessions

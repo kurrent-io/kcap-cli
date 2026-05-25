@@ -1,0 +1,23 @@
+USAGE
+  kapacitor mcp sessions
+
+DESCRIPTION
+  Stdio MCP server exposing three tools for agents to search and inspect
+  past Kurrent Capacitor sessions:
+    - search_sessions
+    - get_session_summary
+    - get_session_transcript
+
+INSTALL (Claude Code)
+  claude mcp add kapacitor-sessions -- kapacitor mcp sessions
+
+INSTALL (Codex)
+  Add to ~/.config/codex/mcp_servers.toml:
+
+    [kapacitor-sessions]
+    command = "kapacitor"
+    args    = ["mcp", "sessions"]
+
+REQUIREMENTS
+  Must be logged in: `kapacitor login`. The server resolves the active
+  repo from cwd at startup; cd into your project before spawning.
