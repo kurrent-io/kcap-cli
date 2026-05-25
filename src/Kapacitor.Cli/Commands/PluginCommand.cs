@@ -167,6 +167,20 @@ public static class PluginCommand {
             return 1;
         }
 
+        // Per-skill preflight runs BEFORE writing hooks so a packaging defect
+        // (top-level codex-skills/ present, but an individual skill folder
+        // missing) can't leave the user with hooks installed and skills not.
+        // The duplicate preflight inside InstallCodexSkills is kept as defense
+        // in depth for direct callers like CodingAgentsStep.
+        if (!ValidateCodexSkillsSource(skillsSource, out var missing)) {
+            await Console.Error.WriteLineAsync(
+                $"Cannot install Codex plugin: missing skill folder(s) under {skillsSource}: "
+                + string.Join(", ", missing)
+                + ". Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
+            );
+            return 1;
+        }
+
         if (!InstallCodexHooks(hooksPath)) {
             await Console.Error.WriteLineAsync("Could not write Codex hooks file.");
 
@@ -337,6 +351,22 @@ public static class PluginCommand {
     }
 
     /// <summary>
+    /// Returns true iff every name in <see cref="CodexSkillNames"/> has a
+    /// matching subdirectory under <paramref name="sourceDir"/>. Populates
+    /// <paramref name="missing"/> with the names that didn't resolve, so
+    /// callers can render an actionable error message. Used by
+    /// <see cref="InstallCodex"/> to fail before writing hooks when the
+    /// packaging is incomplete.
+    /// </summary>
+    public static bool ValidateCodexSkillsSource(string sourceDir, out List<string> missing) {
+        missing = CodexSkillNames
+            .Where(name => !Directory.Exists(Path.Combine(sourceDir, name)))
+            .ToList();
+
+        return missing.Count == 0;
+    }
+
+    /// <summary>
     /// Copies every skill folder in <paramref name="sourceDir"/> (each
     /// containing a <c>SKILL.md</c>) into <paramref name="targetDir"/>, one
     /// subdirectory per skill. Existing kapacitor-owned folders (by name) are
@@ -349,11 +379,10 @@ public static class PluginCommand {
         // Preflight: every known skill must have a folder under sourceDir. If
         // any is missing, fail BEFORE doing anything destructive — otherwise a
         // packaging error would leave the target dir half-overwritten.
-        var missing = CodexSkillNames
-            .Where(name => !Directory.Exists(Path.Combine(sourceDir, name)))
-            .ToList();
-
-        if (missing.Count > 0) {
+        // Kept as defense in depth: InstallCodex already calls
+        // ValidateCodexSkillsSource before writing hooks, but direct callers
+        // (e.g. CodingAgentsStep) rely on this method to enforce the contract.
+        if (!ValidateCodexSkillsSource(sourceDir, out var missing)) {
             Console.Error.WriteLine(
                 $"Cannot install Codex skills: missing source folder(s) under {sourceDir}: "
                 + string.Join(", ", missing)
