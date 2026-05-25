@@ -70,6 +70,14 @@ You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/priv
 
 Open the server URL in your browser. The dashboard shows repositories, sessions, and agents. It updates in real time as Claude Code sessions are active.
 
+### Installing the sessions MCP server (for agents)
+
+To let coding agents (Claude Code, Codex) search and recall past Capacitor sessions:
+
+    claude mcp add kapacitor-sessions -- kapacitor mcp sessions
+
+The server is repo-aware: `cd` into a project before spawning your agent, and `search_sessions` defaults to that repo's sessions.
+
 ## What it records
 
 Once set up, Capacitor runs silently in the background. Every Claude Code (and Codex CLI, if you installed those hooks) session is captured automatically:
@@ -201,6 +209,24 @@ kapacitor review <pr-url>
 ```
 
 Launches a Claude Code session equipped with MCP tools that query the implementation transcripts. Reviewers can ask *why* code was changed, understand design decisions, check what alternatives were considered, and verify test coverage — all grounded in what actually happened during development.
+
+### Sessions MCP server (for agents)
+
+```bash
+kapacitor mcp sessions
+```
+
+Stdio MCP server that exposes past Capacitor sessions to coding agents (Claude Code, Codex) so they can search and recall prior work without leaving the chat. Install once with:
+
+    claude mcp add kapacitor-sessions -- kapacitor mcp sessions
+
+It provides three tools:
+
+- **`search_sessions`** — free-text search over past sessions (and subagent transcripts) in the current repo. Pass `repo: "all"` to search across every repo you can see, or `repo: "owner/name"` for a different one. Filter by `author` / `author_github_id`. Returns ranked hits with `session_id`, snippet, and (for transcript hits) `hit_event_index` + `agent_id` for drilling in.
+- **`get_session_summary`** — concise `summary_text` + `plan` for a session. Use this to orient before reading the transcript.
+- **`get_session_transcript`** — speaker-tagged events from a session. Pair `around_event` (and `agent_id` if the hit was in a subagent) with the values returned by `search_sessions` to fetch the exact decision context.
+
+The server is repo-aware — it resolves the current working directory to a repo hash at startup, and `search_sessions` defaults its `repo` filter to that hash unless you override it.
 
 ### Loading historical sessions
 
