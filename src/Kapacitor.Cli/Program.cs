@@ -502,14 +502,14 @@ switch (command) {
         return await PermissionRequestCommand.Handle(baseUrl!);
     case "set-title" when args.Length < 2:
         Console.Error.WriteLine("Usage: kapacitor set-title <title>");
-        Console.Error.WriteLine("  KAPACITOR_SESSION_ID must be set.");
 
         return 1;
     case "set-title": {
-        var stSessionId = Environment.GetEnvironmentVariable("KAPACITOR_SESSION_ID")?.Replace("-", "");
+        var stSessionId = ArgParsing.ResolveSessionIdFromEnv();
 
         if (stSessionId is null) {
-            Console.Error.WriteLine("KAPACITOR_SESSION_ID not set");
+            Console.Error.WriteLine("No session ID found in KAPACITOR_SESSION_ID or CODEX_THREAD_ID.");
+            Console.Error.WriteLine("Run set-title inside an active Claude Code / Codex CLI 0.81+ session.");
 
             return 1;
         }
