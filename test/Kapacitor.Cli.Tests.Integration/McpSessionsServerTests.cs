@@ -299,6 +299,81 @@ public class McpSessionsServerTests : IDisposable {
     }
 
     /// <summary>
+    /// Writes a non-expired token to the per-test config dir's token store so the
+    /// CLI's <c>HttpClientExtensions.CreateAuthenticatedClientAsync</c> attaches a
+    /// Bearer header. Exercises the long-lived-server path (the MCP server holds a
+    /// single HttpClient for the agent's whole session).
+    /// </summary>
+    void SeedToken(string accessToken = "seed-token") {
+        var tokensDir  = Path.Combine(_cfgDir, "tokens");
+        Directory.CreateDirectory(tokensDir);
+        var tokenJson = $$"""
+            {
+              "access_token": "{{accessToken}}",
+              "expires_at": "{{DateTimeOffset.UtcNow.AddHours(1):O}}",
+              "github_username": "seed-user",
+              "provider": "GitHubApp"
+            }
+            """;
+        File.WriteAllText(Path.Combine(tokensDir, "default.json"), tokenJson);
+    }
+
+    /// <summary>
+    /// Regression for the "token refresh is never picked up after startup" bug.
+    /// The MCP server caches a single <c>HttpClient</c> for the whole agent session;
+    /// if the auth header expires mid-session, every tool call returned the friendly
+    /// 401 message until the server was restarted. The fix retries once on 401 after
+    /// calling <c>TokenStore.GetValidTokensAsync</c>.
+    ///
+    /// We seed a non-expired token in the per-test config dir and stub WireMock so
+    /// the first call returns 401 and the second returns 200. The retry re-reads
+    /// the token (which hasn't actually expired, so it's returned as-is) and resends —
+    /// proving the retry path runs at all. (Exercising the real refresh-token flow
+    /// would require stubbing the GitHub refresh endpoint as well, which is out of
+    /// scope for this regression.)
+    /// </summary>
+    [Test]
+    public async Task Refreshed_token_succeeds_after_401() {
+        const string stubbedBody = """{"hits":[{"session_id":"abc","title":"OK"}]}""";
+        const string scenario    = "auth-retry";
+
+        _server.Given(Request.Create().WithPath("/api/sessions/search").UsingGet())
+            .InScenario(scenario)
+            .WillSetStateTo("after-401")
+            .RespondWith(Response.Create().WithStatusCode(401).WithBody(""));
+
+        _server.Given(Request.Create().WithPath("/api/sessions/search").UsingGet())
+            .InScenario(scenario)
+            .WhenStateIs("after-401")
+            .RespondWith(
+                Response.Create()
+                    .WithStatusCode(200)
+                    .WithHeader("Content-Type", "application/json")
+                    .WithBody(stubbedBody)
+            );
+
+        SeedToken();
+
+        using var proc = SpawnMcpServer(provider: "GitHubApp");
+        try {
+            var args     = new JsonObject { ["query"] = "anything", ["repo"] = "all" };
+            var response = await SendRequest(proc, ToolsCallRequest(7, "search_sessions", args));
+
+            var result = response["result"]?.AsObject();
+            // Must be a success — the 401 was retried and the second call succeeded.
+            await Assert.That(result?["isError"]?.GetValue<bool>()).IsNotEqualTo(true);
+
+            var content = result?["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(content).IsEqualTo(stubbedBody);
+
+            var hits = _server.FindLogEntries(Request.Create().WithPath("/api/sessions/search").UsingGet());
+            await Assert.That(hits.Count).IsEqualTo(2);
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
     /// Spec compliance: when the server returns 401, <see cref="Kapacitor.Cli.Commands.McpSessionsServer"/>
     /// must surface the exact friendly message "Not logged in. Run 'kapacitor login' on the host shell."
     /// inside the MCP tool result (with <c>isError: true</c>) — not the raw HTTP body.

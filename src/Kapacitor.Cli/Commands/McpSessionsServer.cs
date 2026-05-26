@@ -1,9 +1,11 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
 using Kapacitor.Cli.Core;
+using Kapacitor.Cli.Core.Auth;
 
 namespace Kapacitor.Cli.Commands;
 
@@ -93,9 +95,9 @@ static class McpSessionsServer {
 
         try {
             using var httpResponse = toolName switch {
-                "search_sessions"        => await client.GetAsync(BuildSearchUrl(baseUrl, arguments, cwdRepoHash)),
-                "get_session_summary"    => await client.GetAsync(BuildSummaryUrl(baseUrl, arguments)),
-                "get_session_transcript" => await client.GetAsync(BuildTranscriptUrl(baseUrl, arguments)),
+                "search_sessions"        => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildSearchUrl(baseUrl, arguments, cwdRepoHash))),
+                "get_session_summary"    => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildSummaryUrl(baseUrl, arguments))),
+                "get_session_transcript" => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildTranscriptUrl(baseUrl, arguments))),
                 _                        => throw new ArgumentException($"Unknown tool: {toolName}")
             };
 
@@ -118,6 +120,31 @@ static class McpSessionsServer {
         } catch (HttpRequestException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         }
+    }
+
+    /// <summary>
+    /// Sends an HTTP request with one-shot retry on 401. The MCP server reuses a single
+    /// <see cref="HttpClient"/> for the lifetime of the agent session, so a cached token
+    /// that was valid at startup may have expired by the time a tool call is made. On 401
+    /// we ask <see cref="TokenStore.GetValidTokensAsync"/> for a fresh token (which triggers
+    /// the refresh flow for Auth0 / GitHubApp), update the client's <c>Authorization</c>
+    /// header, and retry the same request once. If refresh fails (genuinely not logged in
+    /// or refresh-token expired), the original 401 is returned and the caller surfaces the
+    /// friendly "Not logged in" message.
+    /// </summary>
+    static async Task<HttpResponseMessage> SendWithRefreshRetryAsync(HttpClient client, Func<HttpClient, Task<HttpResponseMessage>> send) {
+        var response = await send(client);
+
+        if (response.StatusCode != HttpStatusCode.Unauthorized) return response;
+
+        var refreshed = await TokenStore.GetValidTokensAsync();
+
+        if (refreshed is null) return response; // genuinely not logged in; keep the original 401
+
+        response.Dispose();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", refreshed.AccessToken);
+
+        return await send(client);
     }
 
     /// <summary>
@@ -162,7 +189,10 @@ static class McpSessionsServer {
         }
 
         // repo: explicit value > cwd-derived hash > omit. Sentinel "all" means cross-repo (omit param).
+        // Normalise empty/whitespace explicit repo to null so the cwd fallback runs — otherwise
+        // `repo: ""` produced `repo=` in the URL and silently broadened search to all visible repos.
         var explicitRepo = args?["repo"]?.GetValue<string>();
+        if (string.IsNullOrWhiteSpace(explicitRepo)) explicitRepo = null;
         var repo         = explicitRepo ?? cwdRepoHash;
 
         if (repo is not null && !string.Equals(explicitRepo, "all", StringComparison.OrdinalIgnoreCase)) {

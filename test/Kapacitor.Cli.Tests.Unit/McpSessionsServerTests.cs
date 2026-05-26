@@ -63,6 +63,28 @@ public class McpSessionsServerTests {
     }
 
     [Test]
+    public async Task BuildSearchUrl_falls_back_to_cwd_hash_when_repo_is_empty_string() {
+        var url = McpSessionsServer.BuildSearchUrl(
+            "http://srv",
+            new JsonObject { ["repo"] = "" },
+            cwdRepoHash: "abc1234567890def"
+        );
+
+        await Assert.That(url).IsEqualTo("http://srv/api/sessions/search?repo=abc1234567890def");
+    }
+
+    [Test]
+    public async Task BuildSearchUrl_falls_back_to_cwd_hash_when_repo_is_whitespace() {
+        var url = McpSessionsServer.BuildSearchUrl(
+            "http://srv",
+            new JsonObject { ["repo"] = "   " },
+            cwdRepoHash: "abc1234567890def"
+        );
+
+        await Assert.That(url).IsEqualTo("http://srv/api/sessions/search?repo=abc1234567890def");
+    }
+
+    [Test]
     public async Task BuildSearchUrl_explicit_repo_overrides_cwd_hash() {
         var url = McpSessionsServer.BuildSearchUrl(
             "http://srv",
