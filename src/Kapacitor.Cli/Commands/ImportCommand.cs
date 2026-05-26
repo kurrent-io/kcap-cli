@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -264,27 +265,13 @@ static class ImportCommand {
         var kapacitorConfig = await AppConfig.Load();
 
         // --- Scope: pre-detect repos for the filter and (if needed) the picker ---
-        async ValueTask<(string? Owner, string? Name)> ResolveRepoAsync(
-            (string SessionId, string FilePath, string EncodedCwd) t,
-            CancellationToken                                       ctInner) {
-            var cwd = ExtractCwdFromTranscript(t.FilePath, codex);
-            if (cwd is null) return (null, null);
-            var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
-            return (repo?.Owner, repo?.RepoName);
-        }
-
-        // If we landed without a resolved scope, run the picker. The picker needs
-        // the set of distinct repos to drive its "specific repository" sub-picker,
-        // so detect ahead of time and reuse the results in the filter pass.
-        // Hoist the cache outside the if/else so sampleRepos can reuse it.
-        Dictionary<string, (string Owner, string Name)?>? resolved = null;
+        // Resolve all transcript → repo mappings up front, in parallel and deduped by
+        // cwd. With many sessions sharing a cwd, sequential per-session detection
+        // (git config + `gh pr view`) could take minutes; that silent gap made
+        // `kapacitor import` look frozen (see AI-692).
+        var resolved = await ResolveTranscriptReposAsync(transcriptFiles, codex, display);
 
         if (scope is null) {
-            resolved = new(StringComparer.Ordinal);
-            foreach (var t in transcriptFiles) {
-                var (o, n) = await ResolveRepoAsync(t, CancellationToken.None);
-                resolved[t.SessionId] = (o is not null && n is not null) ? (o, n) : null;
-            }
             var distinct = resolved.Values
                 .Where(v => v is not null)
                 .Select(v => v!.Value)
@@ -297,16 +284,13 @@ static class ImportCommand {
                 // AnsiConsole. Don't tack on a misleading "cancelled" message.
                 return 1;
             }
-
-            // Reuse the cached lookup in the filter pass below.
-            transcriptFiles = await ImportScopeFilter.Apply(
-                transcriptFiles,
-                scope,
-                (t, _) => new ValueTask<(string?, string?)>(
-                    resolved.TryGetValue(t.SessionId, out var v) && v is { } x ? (x.Owner, x.Name) : (null, null)));
-        } else {
-            transcriptFiles = await ImportScopeFilter.Apply(transcriptFiles, scope, ResolveRepoAsync);
         }
+
+        transcriptFiles = await ImportScopeFilter.Apply(
+            transcriptFiles,
+            scope,
+            (t, _) => new ValueTask<(string?, string?)>(
+                resolved.TryGetValue(t.SessionId, out var v) && v is { } x ? (x.Owner, x.Name) : (null, null)));
 
         if (transcriptFiles.Count == 0) {
             display.Line("No sessions match the selected scope.");
@@ -318,15 +302,8 @@ static class ImportCommand {
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var t in transcriptFiles) {
-                string? o;
-                string? n;
-                if (resolved is not null && resolved.TryGetValue(t.SessionId, out var cached)) {
-                    (o, n) = cached is { } x ? (x.Owner, x.Name) : (null, null);
-                } else {
-                    (o, n) = await ResolveRepoAsync(t, CancellationToken.None);
-                }
-                if (o is null || n is null) continue;
-                if (seen.Add($"{o}/{n}")) sampleRepos.Add($"{o}/{n}");
+                if (!resolved.TryGetValue(t.SessionId, out var v) || v is not { } x) continue;
+                if (seen.Add($"{x.Owner}/{x.Name}")) sampleRepos.Add($"{x.Owner}/{x.Name}");
             }
         }
 
@@ -1049,6 +1026,73 @@ static class ImportCommand {
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Build a SessionId → repo lookup for every discovered transcript. Repo
+    /// detection (git + `gh pr view`) is the slow part of the discovery phase
+    /// and ran sequentially per-session pre-AI-692, making `kapacitor import`
+    /// look frozen on large histories. This version deduplicates by cwd
+    /// (transcripts in the same project share a repo) and runs detection in
+    /// parallel, surfacing progress via a Spectre status spinner on a TTY and
+    /// a plain status line otherwise.
+    /// </summary>
+    static async Task<Dictionary<string, (string Owner, string Name)?>> ResolveTranscriptReposAsync(
+            IReadOnlyList<(string SessionId, string FilePath, string EncodedCwd)> transcripts,
+            bool                                                                   codex,
+            ImportDisplay                                                          display) {
+        // Extract cwd per transcript first (cheap: ≤20-line file read).
+        var perTranscript = new (string SessionId, string? Cwd)[transcripts.Count];
+        for (var i = 0; i < transcripts.Count; i++) {
+            perTranscript[i] = (transcripts[i].SessionId, ExtractCwdFromTranscript(transcripts[i].FilePath, codex));
+        }
+
+        var uniqueCwds = perTranscript
+            .Select(p => p.Cwd)
+            .Where(c => c is not null)
+            .Distinct(StringComparer.Ordinal)
+            .Cast<string>()
+            .ToList();
+
+        var repoByCwd = new ConcurrentDictionary<string, (string Owner, string Name)?>(StringComparer.Ordinal);
+
+        if (uniqueCwds.Count > 0) {
+            var options = new ParallelOptions { MaxDegreeOfParallelism = 8 };
+            var done    = 0;
+            var total   = uniqueCwds.Count;
+
+            async ValueTask DetectOne(string cwd) {
+                var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
+                repoByCwd[cwd] = repo is { Owner: { } o, RepoName: { } n } ? (o, n) : null;
+            }
+
+            if (display.Tty) {
+                var statusLock = new Lock();
+                await AnsiConsole.Status()
+                    .Spinner(Spinner.Known.Dots)
+                    .StartAsync($"Scanning repositories (0/{total})…", async ctx => {
+                        await Parallel.ForEachAsync(uniqueCwds, options, async (cwd, _) => {
+                            await DetectOne(cwd);
+                            var d = Interlocked.Increment(ref done);
+                            // Spectre's StatusContext isn't documented as thread-safe; serialize
+                            // the per-completion update so parallel workers can't race on the
+                            // status renderer.
+                            lock (statusLock) {
+                                ctx.Status($"Scanning repositories ({d}/{total})…");
+                            }
+                        });
+                    });
+            } else {
+                display.Line($"Scanning {total} repositor{(total == 1 ? "y" : "ies")}...");
+                await Parallel.ForEachAsync(uniqueCwds, options, async (cwd, _) => await DetectOne(cwd));
+            }
+        }
+
+        var resolved = new Dictionary<string, (string Owner, string Name)?>(StringComparer.Ordinal);
+        foreach (var (sid, cwd) in perTranscript) {
+            resolved[sid] = cwd is not null && repoByCwd.TryGetValue(cwd, out var r) ? r : null;
+        }
+        return resolved;
     }
 
     /// <summary>
