@@ -72,17 +72,7 @@ Open the server URL in your browser. The dashboard shows repositories, sessions,
 
 ### Sessions MCP server for agents
 
-The `kapacitor mcp sessions` stdio server lets coding agents search and recall past Capacitor sessions without leaving the chat.
-
-For Claude Code users, the Kapacitor plugin (installed by `kapacitor setup`) **auto-registers it** — no extra step. The server is repo-aware: `cd` into a project before spawning your agent and `search_sessions` defaults to that repo's sessions.
-
-Codex CLI has no equivalent plugin-MCP convention, so Codex users wire it up manually once:
-
-    [kapacitor-sessions]
-    command = "kapacitor"
-    args    = ["mcp", "sessions"]
-
-(in `~/.config/codex/mcp_servers.toml`).
+The `kapacitor mcp sessions` stdio server lets coding agents search and recall past Capacitor sessions without leaving the chat. The Kapacitor plugin (installed by `kapacitor setup`) **auto-registers it for both Claude Code and Codex CLI** — no manual `claude mcp add` or TOML edit. The server is repo-aware: `cd` into a project before spawning your agent and `search_sessions` defaults to that repo's sessions.
 
 ## What it records
 
@@ -222,13 +212,7 @@ Launches a Claude Code session equipped with MCP tools that query the implementa
 kapacitor mcp sessions
 ```
 
-Stdio MCP server that exposes past Capacitor sessions to coding agents (Claude Code, Codex) so they can search and recall prior work without leaving the chat.
-
-For Claude Code, the Kapacitor plugin (installed by `kapacitor setup`) auto-registers this server via its `mcpServers` manifest entry — nothing extra to do. For Codex, add it to `~/.config/codex/mcp_servers.toml`:
-
-    [kapacitor-sessions]
-    command = "kapacitor"
-    args    = ["mcp", "sessions"]
+Stdio MCP server that exposes past Capacitor sessions to coding agents (Claude Code, Codex) so they can search and recall prior work without leaving the chat. The Kapacitor plugin auto-registers it for both Claude Code (via `.mcp.json`) and Codex CLI (via `.codex-plugin/plugin.json` → `.codex-mcp.json`), so there's nothing extra to do after `kapacitor setup`.
 
 It provides three tools:
 

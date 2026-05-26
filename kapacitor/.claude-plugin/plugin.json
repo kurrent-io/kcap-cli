@@ -1,12 +1,5 @@
 {
   "name": "kapacitor",
   "version": "1.6.0",
-  "description": "Records and visualizes Claude Code sessions via kapacitor CLI hooks",
-  "mcpServers": {
-    "kapacitor-sessions": {
-      "command": "kapacitor",
-      "args": ["mcp", "sessions"],
-      "cwd": "${CLAUDE_PROJECT_DIR}"
-    }
-  }
+  "description": "Records and visualizes Claude Code sessions via kapacitor CLI hooks"
 }
