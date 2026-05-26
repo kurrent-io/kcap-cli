@@ -1067,13 +1067,19 @@ static class ImportCommand {
             }
 
             if (display.Tty) {
+                var statusLock = new Lock();
                 await AnsiConsole.Status()
                     .Spinner(Spinner.Known.Dots)
                     .StartAsync($"Scanning repositories (0/{total})…", async ctx => {
                         await Parallel.ForEachAsync(uniqueCwds, options, async (cwd, _) => {
                             await DetectOne(cwd);
                             var d = Interlocked.Increment(ref done);
-                            ctx.Status($"Scanning repositories ({d}/{total})…");
+                            // Spectre's StatusContext isn't documented as thread-safe; serialize
+                            // the per-completion update so parallel workers can't race on the
+                            // status renderer.
+                            lock (statusLock) {
+                                ctx.Status($"Scanning repositories ({d}/{total})…");
+                            }
                         });
                     });
             } else {
