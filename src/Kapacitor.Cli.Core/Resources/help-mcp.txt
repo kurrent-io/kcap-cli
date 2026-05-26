@@ -28,21 +28,19 @@ mcp sessions:
 
 INSTALL
 
-  Claude Code:
-    claude mcp add kapacitor-review   -- kapacitor mcp review
-    claude mcp add kapacitor-judge    -- kapacitor mcp judge
-    claude mcp add kapacitor-sessions -- kapacitor mcp sessions
+  The Kapacitor plugin auto-registers `kapacitor-sessions` and
+  `kapacitor-review` for both Claude Code (via the plugin's `.mcp.json`)
+  and Codex CLI (via `.codex-plugin/plugin.json` -> `.codex-mcp.json`),
+  so no manual `claude mcp add` or TOML edit is needed after
+  `kapacitor setup`.
 
-  Codex (~/.config/codex/mcp_servers.toml):
+  `kapacitor-judge` is not auto-registered. Add it explicitly if you
+  want it:
 
-    [kapacitor-review]
-    command = "kapacitor"
-    args    = ["mcp", "review"]
+    Claude Code:
+      claude mcp add kapacitor-judge -- kapacitor mcp judge
 
-    [kapacitor-judge]
-    command = "kapacitor"
-    args    = ["mcp", "judge"]
-
-    [kapacitor-sessions]
-    command = "kapacitor"
-    args    = ["mcp", "sessions"]
+    Codex (~/.config/codex/mcp_servers.toml):
+      [kapacitor-judge]
+      command = "kapacitor"
+      args    = ["mcp", "judge"]
