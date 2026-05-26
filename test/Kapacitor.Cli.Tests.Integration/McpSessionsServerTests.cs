@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
+using Kapacitor.Cli.Commands;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -15,9 +16,10 @@ namespace kapacitor.Tests.Integration;
 /// the server emits plus the HTTP calls WireMock observed.
 /// </summary>
 public class McpSessionsServerTests : IDisposable {
-    readonly WireMockServer _server  = WireMockServer.Start();
-    readonly string         _cfgDir  = Path.Combine(Path.GetTempPath(), $"kapacitor-mcp-cfg-{Guid.NewGuid():N}");
-    readonly string         _cwdDir  = Path.Combine(Path.GetTempPath(), $"kapacitor-mcp-cwd-{Guid.NewGuid():N}");
+    readonly WireMockServer _server            = WireMockServer.Start();
+    readonly string         _cfgDir            = Path.Combine(Path.GetTempPath(), $"kapacitor-mcp-cfg-{Guid.NewGuid():N}");
+    readonly string         _cwdDir            = Path.Combine(Path.GetTempPath(), $"kapacitor-mcp-cwd-{Guid.NewGuid():N}");
+    readonly List<Process>  _spawnedProcesses  = new();
 
     public McpSessionsServerTests() {
         Directory.CreateDirectory(_cfgDir);
@@ -25,6 +27,17 @@ public class McpSessionsServerTests : IDisposable {
     }
 
     public void Dispose() {
+        // Safety net: per-test `using`/`finally` blocks should already shut down processes,
+        // but track + sweep here so a throw between Process.Start and the using-wrap can't leak.
+        foreach (var p in _spawnedProcesses) {
+            try {
+                if (!p.HasExited) p.Kill(entireProcessTree: true);
+                p.Dispose();
+            } catch {
+                // best-effort cleanup
+            }
+        }
+
         _server.Stop();
         try { Directory.Delete(_cfgDir, recursive: true); } catch { /* best effort */ }
         try { Directory.Delete(_cwdDir, recursive: true); } catch { /* best effort */ }
@@ -84,7 +97,10 @@ public class McpSessionsServerTests : IDisposable {
             }
         };
 
-        return Process.Start(psi) ?? throw new InvalidOperationException("Failed to start kapacitor process");
+        var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start kapacitor process");
+        _spawnedProcesses.Add(process);
+
+        return process;
     }
 
     static async Task<JsonObject> SendRequest(Process proc, JsonObject request, TimeSpan? timeout = null) {
@@ -315,7 +331,7 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(result?["isError"]?.GetValue<bool>()).IsTrue();
 
             var content = result?["content"]?[0]?["text"]?.GetValue<string>();
-            await Assert.That(content).IsEqualTo("Not logged in. Run 'kapacitor login' on the host shell.");
+            await Assert.That(content).IsEqualTo(McpSessionsServer.NotLoggedInMessage);
         } finally {
             await ShutdownAsync(proc);
         }

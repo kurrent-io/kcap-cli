@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -7,6 +8,8 @@ using Kapacitor.Cli.Core;
 namespace Kapacitor.Cli.Commands;
 
 static class McpSessionsServer {
+    internal const string NotLoggedInMessage = "Not logged in. Run 'kapacitor login' on the host shell.";
+
     public static async Task<int> RunAsync(string baseUrl) {
         using var client      = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
         var       cwdRepoHash = await ResolveCwdRepoHashAsync();
@@ -98,8 +101,8 @@ static class McpSessionsServer {
 
             var body = await httpResponse.Content.ReadAsStringAsync();
 
-            if (httpResponse.StatusCode == System.Net.HttpStatusCode.Unauthorized) {
-                return BuildToolResult(id, "Not logged in. Run 'kapacitor login' on the host shell.", isError: true);
+            if (httpResponse.StatusCode == HttpStatusCode.Unauthorized) {
+                return BuildToolResult(id, NotLoggedInMessage, isError: true);
             }
 
             if (!httpResponse.IsSuccessStatusCode) {
