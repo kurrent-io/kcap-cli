@@ -3,7 +3,7 @@
 **Status:** design proposed, pending implementation plan
 **Linear:** [AI-669](https://linear.app/kurrent/issue/AI-669/cursor-session-ingest-milestone-b-periodic-poll-watcher)
 **Related:** [AI-661](https://linear.app/kurrent/issue/AI-661/cursor-session-ingest-milestone-a-post-hoc-cli-import), [AI-680](https://linear.app/kurrent/issue/AI-680/cursor-cli-daemon-support-for-hosted-agents)
-**Source spec:** `../kapacitor-server/docs/superpowers/specs/2026-05-20-cursor-session-ingest-feasibility.md`
+**Source spec:** `docs/superpowers/specs/2026-05-20-cursor-session-ingest-feasibility.md` in the `kurrent-io/kapacitor-server` repo ([view on GitHub](https://github.com/kurrent-io/kapacitor-server/blob/main/docs/superpowers/specs/2026-05-20-cursor-session-ingest-feasibility.md))
 
 ## Problem
 
