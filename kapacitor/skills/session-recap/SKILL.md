@@ -12,6 +12,8 @@ description: >-
   Provides instructions for retrieving session history via the kapacitor CLI.
 ---
 
+> **For agents:** When the `kapacitor-sessions` MCP server is available, prefer its tools (`search_sessions`, `get_session_summary`, `get_session_transcript`) for retrieving past sessions. This CLI-wrapped skill remains a fallback for shell use and when MCP isn't installed.
+
 # Session Recap
 
 Retrieve session history recorded by Kurrent Capacitor. Supports single-session recap, continuation chains, and **repository-wide session summaries** for understanding recent work across multiple sessions.

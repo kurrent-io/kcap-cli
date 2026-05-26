@@ -3,7 +3,12 @@ kapacitor mcp — MCP server commands
 Usage: kapacitor mcp <subcommand>
 
 Subcommands:
-  review                  Start the MCP review server (stdio)
+  review                  Start the MCP review server (stdio) — implementation
+                          context for PR review.
+  judge                   Start the MCP judge server (stdio) — bind to a session
+                          and surface judge facts/clusters.
+  sessions                Start the MCP sessions server (stdio) — search and
+                          inspect past Kurrent Capacitor sessions.
 
 Options for review:
   --owner <owner>         Repository owner
@@ -11,3 +16,33 @@ Options for review:
   --pr <number>           PR number
 
 If --owner/--repo/--pr are omitted, auto-detects from git.
+
+Options for judge:
+  --session <sessionId>   Bind the judge to a specific session
+
+mcp sessions:
+  Exposes three tools — search_sessions, get_session_summary,
+  get_session_transcript — for agents to search and inspect past Kurrent
+  Capacitor sessions. The active repo is resolved from cwd at startup;
+  cd into your project before spawning. Requires `kapacitor login`.
+
+INSTALL
+
+  Claude Code:
+    claude mcp add kapacitor-review   -- kapacitor mcp review
+    claude mcp add kapacitor-judge    -- kapacitor mcp judge
+    claude mcp add kapacitor-sessions -- kapacitor mcp sessions
+
+  Codex (~/.config/codex/mcp_servers.toml):
+
+    [kapacitor-review]
+    command = "kapacitor"
+    args    = ["mcp", "review"]
+
+    [kapacitor-judge]
+    command = "kapacitor"
+    args    = ["mcp", "judge"]
+
+    [kapacitor-sessions]
+    command = "kapacitor"
+    args    = ["mcp", "sessions"]

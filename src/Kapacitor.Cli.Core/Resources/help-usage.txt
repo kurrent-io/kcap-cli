@@ -45,6 +45,11 @@ Session:
   hide                             Hide session (owner-only visibility)
   review <pr>                      Launch Claude with PR review context
 
+MCP servers (stdio):
+  mcp review [--owner --repo --pr]   PR review context for agents
+  mcp judge --session <id>           Per-session judge tools
+  mcp sessions                       Search/inspect past sessions from agents
+
 Plugin:
   plugin install [--project] [--codex]   Register hooks (Claude or --codex for Codex)
   plugin remove  [--project] [--codex]   Remove hooks (Claude or --codex for Codex)
