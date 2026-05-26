@@ -29,7 +29,7 @@ public static class HttpClientExtensions {
         if (tokens is not null) {
             client.DefaultRequestHeaders.Authorization = new("Bearer", tokens.AccessToken);
         } else {
-            var stored = TokenStore.LoadAsync();
+            var stored = await TokenStore.LoadAsync();
 
             if (stored is not null) {
                 await Console.Error.WriteLineAsync("Authentication token has expired. Run 'kapacitor login' to re-authenticate.");

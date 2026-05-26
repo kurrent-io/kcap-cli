@@ -13,9 +13,17 @@ static class McpSessionsServer {
     internal const string NotLoggedInMessage = "Not logged in. Run 'kapacitor login' on the host shell.";
 
     public static async Task<int> RunAsync(string baseUrl) {
-        using var client      = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
-        var       cwdRepoHash = await ResolveCwdRepoHashAsync();
-        var       tools       = BuildToolsList();
+        var cwdRepoHash = await ResolveCwdRepoHashAsync();
+        var tools       = BuildToolsList();
+
+        // Defer the authenticated-client creation until the first tools/call.
+        // Under the plugin's auto-register manifest, Claude Code spawns
+        // `kapacitor mcp sessions` for every session, so an eager
+        // CreateAuthenticatedClientAsync (which does GET /auth/config + token
+        // load) would charge every session the network round-trip even when
+        // the agent never invokes a sessions tool. initialize / tools/list
+        // don't need auth, so we keep startup local-only.
+        var clientLazy = new Lazy<Task<HttpClient>>(() => HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl));
 
         await using var stdin  = Console.OpenStandardInput();
         await using var stdout = Console.OpenStandardOutput();
@@ -23,33 +31,39 @@ static class McpSessionsServer {
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        while (await reader.ReadLineAsync() is { } line) {
-            if (string.IsNullOrWhiteSpace(line)) continue;
+        try {
+            while (await reader.ReadLineAsync() is { } line) {
+                if (string.IsNullOrWhiteSpace(line)) continue;
 
-            JsonObject? request;
+                JsonObject? request;
 
-            try {
-                request = JsonNode.Parse(line)?.AsObject();
-            } catch {
-                continue; // skip malformed JSON
+                try {
+                    request = JsonNode.Parse(line)?.AsObject();
+                } catch {
+                    continue; // skip malformed JSON
+                }
+
+                if (request is null) continue;
+
+                var id     = request["id"];
+                var method = request["method"]?.GetValue<string>();
+
+                // Notifications have no id — don't send a response
+                if (id is null) continue;
+
+                var response = method switch {
+                    "initialize" => BuildInitializeResponse(id),
+                    "tools/list" => BuildToolsListResponse(id, tools),
+                    "tools/call" => await HandleToolCallAsync(id, request, await clientLazy.Value, baseUrl, cwdRepoHash),
+                    _            => BuildErrorResponse(id, -32601, $"Method not found: {method}")
+                };
+
+                await writer.WriteLineAsync(response);
             }
-
-            if (request is null) continue;
-
-            var id     = request["id"];
-            var method = request["method"]?.GetValue<string>();
-
-            // Notifications have no id — don't send a response
-            if (id is null) continue;
-
-            var response = method switch {
-                "initialize" => BuildInitializeResponse(id),
-                "tools/list" => BuildToolsListResponse(id, tools),
-                "tools/call" => await HandleToolCallAsync(id, request, client, baseUrl, cwdRepoHash),
-                _            => BuildErrorResponse(id, -32601, $"Method not found: {method}")
-            };
-
-            await writer.WriteLineAsync(response);
+        } finally {
+            if (clientLazy.IsValueCreated) {
+                try { (await clientLazy.Value).Dispose(); } catch { /* swallow — best-effort cleanup */ }
+            }
         }
 
         return 0;
