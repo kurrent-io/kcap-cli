@@ -29,9 +29,12 @@ mcp sessions:
 INSTALL
 
   Claude Code:
-    claude mcp add kapacitor-review   -- kapacitor mcp review
-    claude mcp add kapacitor-judge    -- kapacitor mcp judge
-    claude mcp add kapacitor-sessions -- kapacitor mcp sessions
+    The Kapacitor plugin auto-registers `kapacitor-sessions` via its
+    `mcpServers` manifest entry, so no manual `claude mcp add` is needed
+    after `kapacitor setup`. The other two are still added explicitly:
+
+      claude mcp add kapacitor-review -- kapacitor mcp review
+      claude mcp add kapacitor-judge  -- kapacitor mcp judge
 
   Codex (~/.config/codex/mcp_servers.toml):
 

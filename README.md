@@ -70,13 +70,19 @@ You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/priv
 
 Open the server URL in your browser. The dashboard shows repositories, sessions, and agents. It updates in real time as Claude Code sessions are active.
 
-### Installing the sessions MCP server (for agents)
+### Sessions MCP server for agents
 
-To let coding agents (Claude Code, Codex) search and recall past Capacitor sessions:
+The `kapacitor mcp sessions` stdio server lets coding agents search and recall past Capacitor sessions without leaving the chat.
 
-    claude mcp add kapacitor-sessions -- kapacitor mcp sessions
+For Claude Code users, the Kapacitor plugin (installed by `kapacitor setup`) **auto-registers it** — no extra step. The server is repo-aware: `cd` into a project before spawning your agent and `search_sessions` defaults to that repo's sessions.
 
-The server is repo-aware: `cd` into a project before spawning your agent, and `search_sessions` defaults to that repo's sessions.
+Codex CLI has no equivalent plugin-MCP convention, so Codex users wire it up manually once:
+
+    [kapacitor-sessions]
+    command = "kapacitor"
+    args    = ["mcp", "sessions"]
+
+(in `~/.config/codex/mcp_servers.toml`).
 
 ## What it records
 
@@ -216,9 +222,13 @@ Launches a Claude Code session equipped with MCP tools that query the implementa
 kapacitor mcp sessions
 ```
 
-Stdio MCP server that exposes past Capacitor sessions to coding agents (Claude Code, Codex) so they can search and recall prior work without leaving the chat. Install once with:
+Stdio MCP server that exposes past Capacitor sessions to coding agents (Claude Code, Codex) so they can search and recall prior work without leaving the chat.
 
-    claude mcp add kapacitor-sessions -- kapacitor mcp sessions
+For Claude Code, the Kapacitor plugin (installed by `kapacitor setup`) auto-registers this server via its `mcpServers` manifest entry — nothing extra to do. For Codex, add it to `~/.config/codex/mcp_servers.toml`:
+
+    [kapacitor-sessions]
+    command = "kapacitor"
+    args    = ["mcp", "sessions"]
 
 It provides three tools:
 
