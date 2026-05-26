@@ -2,7 +2,7 @@ using Kapacitor.Cli.Commands;
 
 namespace Kapacitor.Cli.Tests.Unit;
 
-public class HistoryScopeFilterTests {
+public class ImportScopeFilterTests {
     static (string SessionId, string FilePath, string EncodedCwd) T(string id) =>
         (id, $"/tmp/{id}.jsonl", $"-tmp-proj-{id}");
 
@@ -16,7 +16,7 @@ public class HistoryScopeFilterTests {
         var transcripts = new[] { T("a"), T("b"), T("c") };
         var resolver = Resolver(new() { ["a"] = ("EventStore", "kapacitor"), ["b"] = null });
 
-        var kept = await HistoryScopeFilter.Apply(transcripts, new ImportScope.All(), resolver);
+        var kept = await ImportScopeFilter.Apply(transcripts, new ImportScope.All(), resolver);
 
         await Assert.That(kept.Select(x => x.SessionId).ToArray()).IsEquivalentTo(new[] { "a", "b", "c" });
     }
@@ -30,7 +30,7 @@ public class HistoryScopeFilterTests {
             ["c"] = ("EventStore", "kurrentdb"),
         });
 
-        var kept = await HistoryScopeFilter.Apply(transcripts, new ImportScope.Org("EventStore"), resolver);
+        var kept = await ImportScopeFilter.Apply(transcripts, new ImportScope.Org("EventStore"), resolver);
 
         await Assert.That(kept.Select(x => x.SessionId).ToArray()).IsEquivalentTo(new[] { "a", "c" });
     }
@@ -40,7 +40,7 @@ public class HistoryScopeFilterTests {
         var transcripts = new[] { T("a") };
         var resolver = Resolver(new() { ["a"] = ("eventstore", "kapacitor") });
 
-        var kept = await HistoryScopeFilter.Apply(transcripts, new ImportScope.Org("EventStore"), resolver);
+        var kept = await ImportScopeFilter.Apply(transcripts, new ImportScope.Org("EventStore"), resolver);
 
         await Assert.That(kept).Count().IsEqualTo(1);
     }
@@ -50,7 +50,7 @@ public class HistoryScopeFilterTests {
         var transcripts = new[] { T("a") };
         var resolver = Resolver(new() { ["a"] = null });
 
-        var kept = await HistoryScopeFilter.Apply(transcripts, new ImportScope.Org("EventStore"), resolver);
+        var kept = await ImportScopeFilter.Apply(transcripts, new ImportScope.Org("EventStore"), resolver);
 
         await Assert.That(kept).IsEmpty();
     }
@@ -64,7 +64,7 @@ public class HistoryScopeFilterTests {
             ["c"] = ("EventStore", "kapacitor"),
         });
 
-        var kept = await HistoryScopeFilter.Apply(
+        var kept = await ImportScopeFilter.Apply(
             transcripts, new ImportScope.Repo("EventStore", "kapacitor"), resolver);
 
         await Assert.That(kept.Select(x => x.SessionId).ToArray()).IsEquivalentTo(new[] { "a", "c" });

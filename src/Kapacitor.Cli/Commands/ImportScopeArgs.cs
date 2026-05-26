@@ -1,7 +1,7 @@
 namespace Kapacitor.Cli.Commands;
 
 /// <summary>
-/// Pure flag parser and resolver for `kapacitor history` scope selection.
+/// Pure flag parser and resolver for `kapacitor import` scope selection.
 /// Performs no I/O — current-repo lookup is the caller's job; the resolved
 /// result is passed in via <see cref="ResolveInput.CurrentRepo"/>.
 /// </summary>

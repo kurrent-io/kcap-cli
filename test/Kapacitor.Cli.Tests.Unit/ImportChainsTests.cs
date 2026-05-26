@@ -7,7 +7,7 @@ using WireMock.Server;
 
 namespace Kapacitor.Cli.Tests.Unit;
 
-public class HistoryImportChainsTests : IDisposable {
+public class ImportChainsTests : IDisposable {
     readonly WireMockServer _server  = WireMockServer.Start();
     // TUnit creates a new class instance per test, so _tempDir is always unique.
     readonly string _tempDir = Directory.CreateTempSubdirectory("kapacitor-import-chains-test").FullName;
@@ -30,7 +30,7 @@ public class HistoryImportChainsTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200));
     }
 
-    HistoryCommand.SessionClassification MakeNew(string id, int lines) {
+    ImportCommand.SessionClassification MakeNew(string id, int lines) {
         var path = Path.Combine(_tempDir, $"{id}.jsonl");
         File.WriteAllLines(path, Enumerable.Range(0, lines).Select(i =>
             $$$"""{"type":"user","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/proj","message":{"content":"line-{{{i}}}"}}"""
@@ -40,7 +40,7 @@ public class HistoryImportChainsTests : IDisposable {
             FilePath   = path,
             EncodedCwd = "-tmp-proj",
             Meta       = new() { Cwd = "/tmp/proj" },
-            Status     = HistoryCommand.ClassificationStatus.New,
+            Status     = ImportCommand.ClassificationStatus.New,
             TotalLines = lines,
         };
     }
@@ -49,7 +49,7 @@ public class HistoryImportChainsTests : IDisposable {
     // ImportSingleSessionAsync resolves cwd to null and skips DetectRepositoryAsync.
     // A non-empty EncodedCwd would still decode to a valid cwd, triggering repo
     // detection and polluting parallelism-timing measurements.
-    HistoryCommand.SessionClassification MakeNewNoGit(string id, int lines) {
+    ImportCommand.SessionClassification MakeNewNoGit(string id, int lines) {
         var path = Path.Combine(_tempDir, $"{id}.jsonl");
         File.WriteAllLines(path, Enumerable.Range(0, lines).Select(i =>
             $$$"""{"type":"user","timestamp":"2026-03-15T10:00:00Z","cwd":"/tmp/proj","message":{"content":"line-{{{i}}}"}}"""
@@ -59,7 +59,7 @@ public class HistoryImportChainsTests : IDisposable {
             FilePath   = path,
             EncodedCwd = "",                      // DecodeCwdFromDirName returns null on empty input
             Meta       = new SessionMetadata(),   // Cwd = null
-            Status     = HistoryCommand.ClassificationStatus.New,
+            Status     = ImportCommand.ClassificationStatus.New,
             TotalLines = lines,
         };
     }
@@ -68,14 +68,14 @@ public class HistoryImportChainsTests : IDisposable {
     public async Task ImportChainsAsync_counts_loaded_sessions() {
         StubAllHookEndpoints();
 
-        var chains = new List<List<HistoryCommand.SessionClassification>> {
+        var chains = new List<List<ImportCommand.SessionClassification>> {
             new() { MakeNew("cnt-s1", 50) },
             new() { MakeNew("cnt-s2", 50) },
             new() { MakeNew("cnt-s3", 50) },
         };
 
         var completedLines = new ConcurrentBag<string>();
-        var events = new HistoryCommand.ChainWorkerEvents {
+        var events = new ImportCommand.ChainWorkerEvents {
             OnSessionStarted      = (_, _) => { },
             OnSubagentStarted     = (_, _, _) => { },
             OnSubagentFinished    = (_, _, _, _) => { },
@@ -86,7 +86,7 @@ public class HistoryImportChainsTests : IDisposable {
         };
 
         using var client = new HttpClient();
-        var result = await HistoryCommand.ImportChainsAsync(client, _server.Url!, chains, events, CancellationToken.None);
+        var result = await ImportCommand.ImportChainsAsync(client, _server.Url!, chains, events, CancellationToken.None);
 
         await Assert.That(result.Loaded).IsEqualTo(3);
         await Assert.That(result.Errored).IsEqualTo(0);
@@ -98,13 +98,13 @@ public class HistoryImportChainsTests : IDisposable {
         StubAllHookEndpoints();
 
         // Single chain of 3 sessions. They must complete in order s1 → s2 → s3.
-        var chain = new List<HistoryCommand.SessionClassification> {
+        var chain = new List<ImportCommand.SessionClassification> {
             MakeNew("ord-s1", 50), MakeNew("ord-s2", 50), MakeNew("ord-s3", 50),
         };
-        var chains = new List<List<HistoryCommand.SessionClassification>> { chain };
+        var chains = new List<List<ImportCommand.SessionClassification>> { chain };
 
         var order = new ConcurrentQueue<string>();
-        var events = new HistoryCommand.ChainWorkerEvents {
+        var events = new ImportCommand.ChainWorkerEvents {
             OnSessionStarted      = (_, _) => { },
             OnSubagentStarted     = (_, _, _) => { },
             OnSubagentFinished    = (_, _, _, _) => { },
@@ -115,7 +115,7 @@ public class HistoryImportChainsTests : IDisposable {
         };
 
         using var client = new HttpClient();
-        await HistoryCommand.ImportChainsAsync(client, _server.Url!, chains, events, CancellationToken.None);
+        await ImportCommand.ImportChainsAsync(client, _server.Url!, chains, events, CancellationToken.None);
 
         var lines = order.ToArray();
         await Assert.That(lines[0]).Contains("ord-s1");
@@ -145,10 +145,10 @@ public class HistoryImportChainsTests : IDisposable {
         // MakeNewNoGit omits Meta.Cwd so DetectRepositoryAsync is never called —
         // git process startup would pollute the arrival-time spread.
         var chains = Enumerable.Range(0, 4)
-            .Select(i => new List<HistoryCommand.SessionClassification> { MakeNewNoGit($"par{i}", 50) })
+            .Select(i => new List<ImportCommand.SessionClassification> { MakeNewNoGit($"par{i}", 50) })
             .ToList();
 
-        var events = new HistoryCommand.ChainWorkerEvents {
+        var events = new ImportCommand.ChainWorkerEvents {
             OnSessionStarted      = (_, _) => { },
             OnSubagentStarted     = (_, _, _) => { },
             OnSubagentFinished    = (_, _, _, _) => { },
@@ -159,7 +159,7 @@ public class HistoryImportChainsTests : IDisposable {
         };
 
         using var client = new HttpClient();
-        await HistoryCommand.ImportChainsAsync(client, _server.Url!, chains, events, CancellationToken.None);
+        await ImportCommand.ImportChainsAsync(client, _server.Url!, chains, events, CancellationToken.None);
 
         // Verify all 4 transcript POSTs arrived at the server.
         var transcriptEntries = _server.LogEntries

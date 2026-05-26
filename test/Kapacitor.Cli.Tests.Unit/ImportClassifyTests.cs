@@ -5,7 +5,7 @@ using WireMock.Server;
 
 namespace Kapacitor.Cli.Tests.Unit;
 
-public class HistoryClassifyTests : IDisposable {
+public class ImportClassifyTests : IDisposable {
     readonly WireMockServer _server  = WireMockServer.Start();
     readonly string         _tempDir = Directory.CreateTempSubdirectory("kapacitor-classify-test").FullName;
 
@@ -44,7 +44,7 @@ public class HistoryClassifyTests : IDisposable {
 
         using var client = new HttpClient();
 
-        var result = await HistoryCommand.ClassifyAsync(
+        var result = await ImportCommand.ClassifyAsync(
             client,
             _server.Url!,
             transcripts,
@@ -54,7 +54,7 @@ public class HistoryClassifyTests : IDisposable {
         );
 
         await Assert.That(result.Count).IsEqualTo(1);
-        await Assert.That(result[0].Status).IsEqualTo(HistoryCommand.ClassificationStatus.New);
+        await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
         await Assert.That(result[0].SessionId).IsEqualTo("sessionNew");
         // TotalLines is only populated for TooShort; classification uses a bounded
         // count that early-exits once the file clears the minLines threshold.
@@ -74,7 +74,7 @@ public class HistoryClassifyTests : IDisposable {
 
         using var client = new HttpClient();
 
-        var result = await HistoryCommand.ClassifyAsync(
+        var result = await ImportCommand.ClassifyAsync(
             client,
             _server.Url!,
             transcripts,
@@ -84,7 +84,7 @@ public class HistoryClassifyTests : IDisposable {
         );
 
         await Assert.That(result.Count).IsEqualTo(1);
-        await Assert.That(result[0].Status).IsEqualTo(HistoryCommand.ClassificationStatus.AlreadyLoaded);
+        await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
     }
 
     [Test]
@@ -105,7 +105,7 @@ public class HistoryClassifyTests : IDisposable {
 
         using var client = new HttpClient();
 
-        var result = await HistoryCommand.ClassifyAsync(
+        var result = await ImportCommand.ClassifyAsync(
             client,
             _server.Url!,
             transcripts,
@@ -114,7 +114,7 @@ public class HistoryClassifyTests : IDisposable {
             CancellationToken.None
         );
 
-        await Assert.That(result[0].Status).IsEqualTo(HistoryCommand.ClassificationStatus.Partial);
+        await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
         await Assert.That(result[0].ResumeFromLine).IsEqualTo(43);
     }
 
@@ -134,7 +134,7 @@ public class HistoryClassifyTests : IDisposable {
 
         using var client = new HttpClient();
 
-        var result = await HistoryCommand.ClassifyAsync(
+        var result = await ImportCommand.ClassifyAsync(
             client,
             _server.Url!,
             transcripts,
@@ -143,7 +143,7 @@ public class HistoryClassifyTests : IDisposable {
             CancellationToken.None
         );
 
-        await Assert.That(result[0].Status).IsEqualTo(HistoryCommand.ClassificationStatus.TooShort);
+        await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.TooShort);
         await Assert.That(result[0].TotalLines).IsEqualTo(5);
     }
 
@@ -160,7 +160,7 @@ public class HistoryClassifyTests : IDisposable {
 
         using var client = new HttpClient();
 
-        var result = await HistoryCommand.ClassifyAsync(
+        var result = await ImportCommand.ClassifyAsync(
             client,
             _server.Url!,
             transcripts,
@@ -169,7 +169,7 @@ public class HistoryClassifyTests : IDisposable {
             CancellationToken.None
         );
 
-        await Assert.That(result[0].Status).IsEqualTo(HistoryCommand.ClassificationStatus.ProbeError);
+        await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.ProbeError);
         await Assert.That(result[0].ProbeErrorReason).IsEqualTo("HTTP 500");
     }
 
@@ -193,7 +193,7 @@ public class HistoryClassifyTests : IDisposable {
 
         using var client = new HttpClient();
 
-        var result = await HistoryCommand.ClassifyAsync(
+        var result = await ImportCommand.ClassifyAsync(
             client,
             _server.Url!,
             transcripts,
@@ -202,7 +202,7 @@ public class HistoryClassifyTests : IDisposable {
             CancellationToken.None
         );
 
-        await Assert.That(result[0].Status).IsEqualTo(HistoryCommand.ClassificationStatus.InternalSubSession);
+        await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.InternalSubSession);
     }
 
     [Test]
@@ -234,7 +234,7 @@ public class HistoryClassifyTests : IDisposable {
 
         using var client = new HttpClient();
 
-        var result = await HistoryCommand.ClassifyAsync(
+        var result = await ImportCommand.ClassifyAsync(
             client,
             _server.Url!,
             transcripts,
@@ -243,7 +243,7 @@ public class HistoryClassifyTests : IDisposable {
             CancellationToken.None
         );
 
-        await Assert.That(result[0].Status).IsEqualTo(HistoryCommand.ClassificationStatus.New);
+        await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
         await Assert.That(result[0].ExcludedRepoKey).IsEqualTo("acme/secret");
     }
 
@@ -261,7 +261,7 @@ public class HistoryClassifyTests : IDisposable {
         var probedCount = 0;
         using var client = new HttpClient();
 
-        var result = await HistoryCommand.ClassifyAsync(
+        var result = await ImportCommand.ClassifyAsync(
             client,
             _server.Url!,
             paths,
@@ -297,12 +297,12 @@ public class HistoryClassifyTests : IDisposable {
 
         using var client = new HttpClient();
 
-        var result = await HistoryCommand.ClassifyAsync(
+        var result = await ImportCommand.ClassifyAsync(
             client, _server.Url!, transcripts,
             minLines: 15, excludedRepos: null, CancellationToken.None
         );
 
-        await Assert.That(result[0].Status).IsEqualTo(HistoryCommand.ClassificationStatus.AlreadyLoaded);
+        await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
         await Assert.That(result[0].ResumeFromLine).IsEqualTo(0);
     }
 
@@ -326,12 +326,12 @@ public class HistoryClassifyTests : IDisposable {
 
         using var client = new HttpClient();
 
-        var result = await HistoryCommand.ClassifyAsync(
+        var result = await ImportCommand.ClassifyAsync(
             client, _server.Url!, transcripts,
             minLines: 15, excludedRepos: null, CancellationToken.None
         );
 
-        await Assert.That(result[0].Status).IsEqualTo(HistoryCommand.ClassificationStatus.Partial);
+        await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
         await Assert.That(result[0].ResumeFromLine).IsEqualTo(50);
     }
 
@@ -381,7 +381,7 @@ public class HistoryClassifyTests : IDisposable {
 
         using var client = new HttpClient();
 
-        var result = await HistoryCommand.ClassifyAsync(
+        var result = await ImportCommand.ClassifyAsync(
             client, _server.Url!, transcripts,
             minLines: 15,
             excludedRepos: ["any/repo"],
@@ -392,7 +392,7 @@ public class HistoryClassifyTests : IDisposable {
         // so the session is reclassified from Partial to AlreadyLoaded.
         // The excluded-repo block only fires for New|Partial, so ExcludedRepoKey must
         // be null even though the repo key matches the excluded list.
-        await Assert.That(result[0].Status).IsEqualTo(HistoryCommand.ClassificationStatus.AlreadyLoaded);
+        await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
         await Assert.That(result[0].ExcludedRepoKey).IsNull();
     }
 
