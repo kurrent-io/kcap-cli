@@ -7,7 +7,7 @@ using WireMock.Server;
 
 namespace Kapacitor.Cli.Tests.Unit;
 
-public class CodexHistoryTests {
+public class CodexImportTests {
     [Test]
     public async Task ExtractCodexSessionMetadata_pulls_cwd_model_provider_and_first_timestamp() {
         var path = Path.GetTempFileName();
@@ -22,7 +22,7 @@ public class CodexHistoryTests {
                 """{"timestamp":"2026-05-07T15:51:46.686Z","type":"event_msg","payload":{"type":"task_started"}}""",
             ]);
 
-            var meta = HistoryCommand.ExtractCodexSessionMetadata(path);
+            var meta = ImportCommand.ExtractCodexSessionMetadata(path);
 
             await Assert.That(meta.Cwd).IsEqualTo("/Users/alexey/dev/temp/Kurrent.Capacitor");
             await Assert.That(meta.Model).IsEqualTo("openai");
@@ -50,7 +50,7 @@ public class CodexHistoryTests {
                 """{"timestamp":"2026-05-07T15:51:46.750Z","type":"turn_context","payload":{"turn_id":"abc","cwd":"/x","model":"gpt-5.5"}}""",
             ]);
 
-            var meta = HistoryCommand.ExtractCodexSessionMetadata(path);
+            var meta = ImportCommand.ExtractCodexSessionMetadata(path);
 
             await Assert.That(meta.Model).IsEqualTo("gpt-5.5");
         } finally {
@@ -74,7 +74,7 @@ public class CodexHistoryTests {
                 """{"type":"event_msg","payload":{"type":"task_started"}}""",
             ]);
 
-            var meta = HistoryCommand.ExtractCodexSessionMetadata(path);
+            var meta = ImportCommand.ExtractCodexSessionMetadata(path);
 
             await Assert.That(meta.Model).IsNull();
         } finally {
@@ -94,7 +94,7 @@ public class CodexHistoryTests {
                 """{"type":"session_meta","payload":{"id":"x","cwd":"/x","model_provider":"openai"}}""",
             ]);
 
-            var meta = HistoryCommand.ExtractCodexSessionMetadata(path);
+            var meta = ImportCommand.ExtractCodexSessionMetadata(path);
 
             await Assert.That(meta.Model).IsEqualTo("openai");
         } finally {
@@ -111,7 +111,7 @@ public class CodexHistoryTests {
                 """{"type":"event_msg","payload":{"type":"task_started"}}""",
             ]);
 
-            var meta = HistoryCommand.ExtractCodexSessionMetadata(path);
+            var meta = ImportCommand.ExtractCodexSessionMetadata(path);
 
             await Assert.That(meta.Cwd).IsNull();
             await Assert.That(meta.Model).IsNull();
@@ -129,7 +129,7 @@ public class CodexHistoryTests {
                 """{"type":"session_meta","payload":{"id":"x","cwd":"/x","git":{"commit_hash":"deadbeef","branch":"main","repository_url":"https://github.com/owner/repo"}}}""",
             ]);
 
-            var git = HistoryCommand.ExtractCodexGitInfo(path);
+            var git = ImportCommand.ExtractCodexGitInfo(path);
 
             await Assert.That(git).IsNotNull();
             await Assert.That(git!.RemoteUrl).IsEqualTo("https://github.com/owner/repo");
@@ -149,7 +149,7 @@ public class CodexHistoryTests {
                 """{"type":"session_meta","payload":{"id":"x","cwd":"/x"}}""",
             ]);
 
-            var git = HistoryCommand.ExtractCodexGitInfo(path);
+            var git = ImportCommand.ExtractCodexGitInfo(path);
 
             await Assert.That(git).IsNull();
         } finally {
@@ -278,7 +278,7 @@ public class CodexHistoryTests {
 
             using var client = new HttpClient();
 
-            var result = await HistoryCommand.ClassifyAsync(
+            var result = await ImportCommand.ClassifyAsync(
                 client,
                 server.Url!,
                 transcripts,
@@ -289,7 +289,7 @@ public class CodexHistoryTests {
             );
 
             await Assert.That(result.Count).IsEqualTo(1);
-            await Assert.That(result[0].Status).IsEqualTo(HistoryCommand.ClassificationStatus.ProbeError);
+            await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.ProbeError);
             await Assert.That(result[0].ProbeErrorReason).IsNotNull();
             await Assert.That(result[0].ProbeErrorReason!).Contains("session id mismatch");
         } finally {
@@ -319,7 +319,7 @@ public class CodexHistoryTests {
 
             using var client = new HttpClient();
 
-            var result = await HistoryCommand.ClassifyAsync(
+            var result = await ImportCommand.ClassifyAsync(
                 client,
                 server.Url!,
                 transcripts,
@@ -330,7 +330,7 @@ public class CodexHistoryTests {
             );
 
             await Assert.That(result.Count).IsEqualTo(1);
-            await Assert.That(result[0].Status).IsEqualTo(HistoryCommand.ClassificationStatus.New);
+            await Assert.That(result[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
         } finally {
             Directory.Delete(dir, true);
         }

@@ -9,16 +9,16 @@ using Spectre.Console;
 
 namespace Kapacitor.Cli.Commands;
 
-static class HistoryCommand {
+static class ImportCommand {
     /// <summary>
     /// Maximum parallel worker count for the Importing phase. Both the
     /// channel-based dispatcher in ImportChainsAsync and the TTY slot-row
-    /// renderer in HandleHistory size themselves to this value, so they
+    /// renderer in HandleImport size themselves to this value, so they
     /// MUST stay in lockstep.
     /// </summary>
     const int ImportWorkerCount = 4;
 
-    readonly struct HistoryDisplay {
+    readonly struct ImportDisplay {
         public bool Tty { get; init; }
 
         public void Line(string plain, string? markup = null) {
@@ -95,7 +95,7 @@ static class HistoryCommand {
             }
         }
 
-        public static HistoryDisplay Create() => new() { Tty = !Console.IsOutputRedirected };
+        public static ImportDisplay Create() => new() { Tty = !Console.IsOutputRedirected };
     }
 
     internal enum ClassificationStatus {
@@ -186,7 +186,7 @@ static class HistoryCommand {
             bool RequestedSummaries
         );
 
-    public static async Task<int> HandleHistory(
+    public static async Task<int> HandleImport(
             string       baseUrl,
             string?      filterCwd,
             string?      filterSession     = null,
@@ -201,7 +201,7 @@ static class HistoryCommand {
             (string Owner, string Name)? currentRepo = null
         ) {
         using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
-        var       display    = HistoryDisplay.Create();
+        var       display    = ImportDisplay.Create();
         var       vendor     = codex ? "codex" : "claude";
 
         // --- Discover ---
@@ -290,7 +290,7 @@ static class HistoryCommand {
                 .Select(v => v!.Value)
                 .ToList();
 
-            scope = HistoryScopePrompt.RunPicker(activeProfile, currentRepo, distinct);
+            scope = ImportScopePrompt.RunPicker(activeProfile, currentRepo, distinct);
             if (scope is null) {
                 // RunPicker has already printed the specific reason (e.g. "Active profile
                 // has no org" or "No repositories detected in discovered sessions") via
@@ -299,13 +299,13 @@ static class HistoryCommand {
             }
 
             // Reuse the cached lookup in the filter pass below.
-            transcriptFiles = await HistoryScopeFilter.Apply(
+            transcriptFiles = await ImportScopeFilter.Apply(
                 transcriptFiles,
                 scope,
                 (t, _) => new ValueTask<(string?, string?)>(
                     resolved.TryGetValue(t.SessionId, out var v) && v is { } x ? (x.Owner, x.Name) : (null, null)));
         } else {
-            transcriptFiles = await HistoryScopeFilter.Apply(transcriptFiles, scope, ResolveRepoAsync);
+            transcriptFiles = await ImportScopeFilter.Apply(transcriptFiles, scope, ResolveRepoAsync);
         }
 
         if (transcriptFiles.Count == 0) {
@@ -334,7 +334,7 @@ static class HistoryCommand {
             ? "private (--private)"
             : $"{kapacitorConfig?.DefaultVisibility ?? "org_public"} (from profile)";
 
-        if (!HistoryScopePrompt.PromptConfirm(
+        if (!ImportScopePrompt.PromptConfirm(
                 scope, transcriptFiles.Count, sampleRepos, visibilityDesc, skipConfirmation)) {
             await Console.Error.WriteLineAsync("Import cancelled.");
             return 0;
@@ -766,7 +766,7 @@ static class HistoryCommand {
     /// `DateTimeOffset.MinValue` and could displace real predecessors — corrupting
     /// `previous_session_id` links in the session-start hook. The mtime lookup is
     /// wrapped so a file deleted between discovery and chain building can't crash
-    /// the whole history run; ordering is best-effort.
+    /// the whole import run; ordering is best-effort.
     /// </summary>
     static DateTimeOffset ChainTimestamp(SessionClassification c) {
         if (c.Meta.FirstTimestamp is { } ts) return ts;
@@ -1624,7 +1624,7 @@ static class HistoryCommand {
         }
 
         // Flag excluded repos/paths for New/Partial sessions. Resolution (include or skip?)
-        // happens later in HandleHistory, where we can batch prompts by key.
+        // happens later in HandleImport, where we can batch prompts by key.
         string? excludedRepoKey = null;
         string? excludedPathKey = null;
 

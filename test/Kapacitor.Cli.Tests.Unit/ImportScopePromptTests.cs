@@ -2,12 +2,12 @@ using Kapacitor.Cli.Commands;
 
 namespace Kapacitor.Cli.Tests.Unit;
 
-public class HistoryScopePromptTests {
+public class ImportScopePromptTests {
     // --- BuildRepoChoices ---
 
     [Test]
     public async Task BuildRepoChoices_orders_current_first_then_alphabetical() {
-        var choices = HistoryScopePrompt.BuildRepoChoices(
+        var choices = ImportScopePrompt.BuildRepoChoices(
             currentRepo: ("EventStore", "kapacitor"),
             discoveredRepos: [
                 ("EventStore", "kurrentdb"),
@@ -24,7 +24,7 @@ public class HistoryScopePromptTests {
 
     [Test]
     public async Task BuildRepoChoices_no_current_repo_just_sorts_alphabetically() {
-        var choices = HistoryScopePrompt.BuildRepoChoices(
+        var choices = ImportScopePrompt.BuildRepoChoices(
             currentRepo: null,
             discoveredRepos: [("Z-org", "z"), ("A-org", "a"), ("M-org", "m")]);
 
@@ -37,7 +37,7 @@ public class HistoryScopePromptTests {
 
     [Test]
     public async Task BuildRepoChoices_deduplicates_discovered_set() {
-        var choices = HistoryScopePrompt.BuildRepoChoices(
+        var choices = ImportScopePrompt.BuildRepoChoices(
             currentRepo: null,
             discoveredRepos: [("A", "x"), ("A", "x"), ("A", "y")]);
 
@@ -48,7 +48,7 @@ public class HistoryScopePromptTests {
 
     [Test]
     public async Task FormatSummary_All_scope() {
-        var s = HistoryScopePrompt.FormatSummary(
+        var s = ImportScopePrompt.FormatSummary(
             scope: new ImportScope.All(),
             matchedCount: 47,
             repoSamples: ["EventStore/kapacitor", "EventStore/kurrentdb"],
@@ -61,7 +61,7 @@ public class HistoryScopePromptTests {
 
     [Test]
     public async Task FormatSummary_Org_includes_org_name() {
-        var s = HistoryScopePrompt.FormatSummary(
+        var s = ImportScopePrompt.FormatSummary(
             scope: new ImportScope.Org("EventStore"),
             matchedCount: 5,
             repoSamples: ["EventStore/kapacitor"],
@@ -73,7 +73,7 @@ public class HistoryScopePromptTests {
 
     [Test]
     public async Task FormatSummary_Repo_includes_owner_name() {
-        var s = HistoryScopePrompt.FormatSummary(
+        var s = ImportScopePrompt.FormatSummary(
             scope: new ImportScope.Repo("EventStore", "kapacitor"),
             matchedCount: 3,
             repoSamples: ["EventStore/kapacitor"],
@@ -85,7 +85,7 @@ public class HistoryScopePromptTests {
     [Test]
     public async Task FormatSummary_caps_repo_samples_at_5() {
         var samples = Enumerable.Range(1, 9).Select(i => $"EventStore/r{i}").ToArray();
-        var s = HistoryScopePrompt.FormatSummary(
+        var s = ImportScopePrompt.FormatSummary(
             scope: new ImportScope.All(),
             matchedCount: 50,
             repoSamples: samples,

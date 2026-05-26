@@ -263,7 +263,7 @@ public static class SetupCommand {
         }
 
         AnsiConsole.MarkupLine("\n[dim]Optional:[/] start the daemon with [cyan]kapacitor daemon start -d[/]");
-        AnsiConsole.MarkupLine("[dim]Optional:[/] import past sessions with [cyan]kapacitor history --org[/]");
+        AnsiConsole.MarkupLine("[dim]Optional:[/] import past sessions with [cyan]kapacitor import --org[/]");
 
         return 0;
     }

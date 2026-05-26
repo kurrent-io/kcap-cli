@@ -1,7 +1,7 @@
 namespace Kapacitor.Cli.Commands;
 
 /// <summary>
-/// Selected history import scope, resolved from CLI flags or the interactive picker.
+/// Selected import scope, resolved from CLI flags or the interactive picker.
 /// </summary>
 public abstract record ImportScope {
     public sealed record All  : ImportScope;

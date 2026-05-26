@@ -57,8 +57,8 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 ### 3. Import existing sessions (optional)
 
 ```bash
-kapacitor history --org                          # sessions for the org bound to your active profile
-kapacitor history --repo owner/repo              # sessions for one specific repo
+kapacitor import --org                          # sessions for the org bound to your active profile
+kapacitor import --repo owner/repo              # sessions for one specific repo
 kapacitor cursor import                          # Cursor IDE Composer/Agent sessions from the current workspace
 ```
 
@@ -227,25 +227,25 @@ The server is repo-aware — it resolves the current working directory to a repo
 Backfill older sessions from local transcript files. The command requires an explicit scope so personal/private repos aren't uploaded by accident:
 
 ```bash
-kapacitor history --all                            # every discovered session
-kapacitor history --org                            # sessions whose repo owner matches your active profile name
-kapacitor history --repo owner/repo                # one specific repo
-kapacitor history --repo .                         # the repo at the current cwd (must be a git repo with an origin remote)
+kapacitor import --all                            # every discovered session
+kapacitor import --org                            # sessions whose repo owner matches your active profile name
+kapacitor import --repo owner/repo                # one specific repo
+kapacitor import --repo .                         # the repo at the current cwd (must be a git repo with an origin remote)
 ```
 
-Run `kapacitor history` with no scope on an interactive terminal to get a picker. Each run shows a confirmation summary (scope, matched count, repo samples, visibility) before uploading anything.
+Run `kapacitor import` with no scope on an interactive terminal to get a picker. Each run shows a confirmation summary (scope, matched count, repo samples, visibility) before uploading anything.
 
 `--org` is a shortcut: it takes the active profile *name* and uses it as a GitHub org login to filter on. `kapacitor setup` names the profile after the picked tenant, so `--org` works out of the box for tenant-bound profiles; on the `default` profile, or a manually-named profile like `work`, use `--repo <owner/name>` instead (or run `kapacitor setup` to bind a profile to your org).
 
 Additional flags:
 
 ```bash
-kapacitor history --org --yes                      # skip the confirmation prompt
-kapacitor history --org --private                  # mark every imported session as Only Visible to You
-kapacitor history --codex --org                    # Codex rollouts from ~/.codex/sessions
-kapacitor history --org --since 2026-01-01         # only sessions on or after this date
-kapacitor history --org --cwd /path/to/project     # filter by working directory
-kapacitor history --org --session abc123           # single session
+kapacitor import --org --yes                      # skip the confirmation prompt
+kapacitor import --org --private                  # mark every imported session as Only Visible to You
+kapacitor import --codex --org                    # Codex rollouts from ~/.codex/sessions
+kapacitor import --org --since 2026-01-01         # only sessions on or after this date
+kapacitor import --org --cwd /path/to/project     # filter by working directory
+kapacitor import --org --session abc123           # single session
 ```
 
 Non-interactive runs (no TTY, e.g. CI) must pass both a scope flag and `--yes`. The command is idempotent and resumable — re-running with the same scope only uploads what's missing or incomplete.

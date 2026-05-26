@@ -4,11 +4,11 @@ using Spectre.Console;
 namespace Kapacitor.Cli.Commands;
 
 /// <summary>
-/// Spectre.Console-backed pickers for history import scope, plus the pure
+/// Spectre.Console-backed pickers for import scope, plus the pure
 /// helpers that drive their content. Pure helpers are public for unit testing;
 /// Spectre wrappers are added in a separate task.
 /// </summary>
-public static partial class HistoryScopePrompt {
+public static partial class ImportScopePrompt {
     /// <summary>
     /// Build the option strings for the "specific repository" sub-picker.
     /// The current cwd's repo (if any) is pinned to the top with a "(current)"
@@ -67,7 +67,7 @@ public static partial class HistoryScopePrompt {
     }
 }
 
-public static partial class HistoryScopePrompt {
+public static partial class ImportScopePrompt {
     /// <summary>
     /// Run the top-level scope picker. Returns the resolved scope, or null
     /// when the user picks "specific repository" but the sub-picker has no

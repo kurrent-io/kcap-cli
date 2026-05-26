@@ -5,7 +5,7 @@ namespace Kapacitor.Cli.Tests.Unit;
 public class ImportScopeArgsTests {
     [Test]
     public async Task ParseFlags_reads_all() {
-        var f = ImportScopeArgs.ParseFlags(["history", "--all"]);
+        var f = ImportScopeArgs.ParseFlags(["import", "--all"]);
         await Assert.That(f.All).IsTrue();
         await Assert.That(f.Org).IsFalse();
         await Assert.That(f.RepoArg).IsNull();
@@ -15,19 +15,19 @@ public class ImportScopeArgsTests {
 
     [Test]
     public async Task ParseFlags_reads_repo_value() {
-        var f = ImportScopeArgs.ParseFlags(["history", "--repo", "EventStore/kapacitor"]);
+        var f = ImportScopeArgs.ParseFlags(["import", "--repo", "EventStore/kapacitor"]);
         await Assert.That(f.RepoArg).IsEqualTo("EventStore/kapacitor");
     }
 
     [Test]
     public async Task ParseFlags_reads_yes_short_form() {
-        var f = ImportScopeArgs.ParseFlags(["history", "--all", "-y"]);
+        var f = ImportScopeArgs.ParseFlags(["import", "--all", "-y"]);
         await Assert.That(f.Yes).IsTrue();
     }
 
     [Test]
     public async Task ParseFlags_reads_private() {
-        var f = ImportScopeArgs.ParseFlags(["history", "--all", "--private"]);
+        var f = ImportScopeArgs.ParseFlags(["import", "--all", "--private"]);
         await Assert.That(f.Private).IsTrue();
     }
 

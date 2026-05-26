@@ -1,11 +1,11 @@
 namespace Kapacitor.Cli.Commands;
 
 /// <summary>
-/// Pure scope filter for the history pipeline. The repo resolver is injected
+/// Pure scope filter for the import pipeline. The repo resolver is injected
 /// so unit tests can stub out repository detection; production wires it to
 /// the cwd-extractor + RepositoryDetection.DetectRepositoryAsync.
 /// </summary>
-public static class HistoryScopeFilter {
+public static class ImportScopeFilter {
     public static async Task<List<(string SessionId, string FilePath, string EncodedCwd)>> Apply(
         IReadOnlyList<(string SessionId, string FilePath, string EncodedCwd)>                       transcripts,
         ImportScope                                                                                  scope,

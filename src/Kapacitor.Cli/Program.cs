@@ -408,7 +408,7 @@ switch (command) {
 
         return 0;
     }
-    case "history": {
+    case "import": {
         string?   filterCwd     = null;
         string?   filterSession = null;
         var       minLines      = 15;
@@ -467,7 +467,7 @@ switch (command) {
             return 1;
         }
 
-        return await HistoryCommand.HandleHistory(
+        return await ImportCommand.HandleImport(
             baseUrl!,
             filterCwd,
             filterSession,
@@ -475,7 +475,7 @@ switch (command) {
             generateSummaries,
             codex,
             since,
-            scope:            resolveResult.Scope,     // null => HandleHistory runs picker
+            scope:            resolveResult.Scope,     // null => HandleImport runs picker
             skipConfirmation: resolveResult.Yes,
             forcePrivate:     resolveResult.Private,
             activeProfile:    activeProfile,

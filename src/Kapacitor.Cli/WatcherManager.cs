@@ -335,5 +335,5 @@ static class WatcherManager {
     }
 
     static void PrintRecoveryHint(string sessionId) =>
-        Console.Error.WriteLine($"Transcript not uploaded. To import later, run: kapacitor history --session {sessionId}");
+        Console.Error.WriteLine($"Transcript not uploaded. To import later, run: kapacitor import --session {sessionId}");
 }

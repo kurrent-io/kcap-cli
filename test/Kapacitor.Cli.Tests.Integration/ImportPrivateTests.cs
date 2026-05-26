@@ -5,7 +5,7 @@ using WireMock.Server;
 
 namespace kapacitor.Tests.Integration;
 
-public class HistoryPrivateImportTests : IDisposable {
+public class ImportPrivateTests : IDisposable {
     readonly WireMockServer _server  = WireMockServer.Start();
     readonly string         _tempDir = Directory.CreateTempSubdirectory("kapacitor-private-test").FullName;
 
@@ -21,7 +21,7 @@ public class HistoryPrivateImportTests : IDisposable {
 
         using var client = new HttpClient();
 
-        await HistoryCommand.SetVisibilityNoneForAll(
+        await ImportCommand.SetVisibilityNoneForAll(
             client,
             _server.Url!,
             ["sess1", "sess2", "sess3"]);
@@ -52,7 +52,7 @@ public class HistoryPrivateImportTests : IDisposable {
         using var client = new HttpClient();
 
         // Should not throw even though sess2 returns 500.
-        await HistoryCommand.SetVisibilityNoneForAll(
+        await ImportCommand.SetVisibilityNoneForAll(
             client,
             _server.Url!,
             ["sess1", "sess2", "sess3"]);

@@ -7,7 +7,7 @@ Usage: kapacitor ignore <path>
 Marks <path> as excluded for the active profile. Any coding-agent session whose
 working directory is the path itself, or any directory inside it, is silently
 dropped — no hook payload is sent and no transcript is imported via
-`kapacitor history`.
+`kapacitor import`.
 
 Path resolution:
   - `.` and `~` are expanded to absolute paths.

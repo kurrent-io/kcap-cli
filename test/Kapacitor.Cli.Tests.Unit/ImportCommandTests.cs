@@ -2,7 +2,7 @@ using Kapacitor.Cli.Commands;
 
 namespace Kapacitor.Cli.Tests.Unit;
 
-public class HistoryCommandTests {
+public class ImportCommandTests {
     // --- ExtractLastTimestamp ---
 
     [Test]
@@ -16,7 +16,7 @@ public class HistoryCommandTests {
                 """{"type":"user","timestamp":"2026-03-15T10:05:00Z","message":{"content":"bye"}}""",
             ]);
 
-            var result = HistoryCommand.ExtractLastTimestamp(path);
+            var result = ImportCommand.ExtractLastTimestamp(path);
 
             await Assert.That(result).IsNotNull();
             await Assert.That(result!.Value).IsEqualTo(DateTimeOffset.Parse("2026-03-15T10:05:00Z"));
@@ -35,7 +35,7 @@ public class HistoryCommandTests {
                 """{"type":"file-history-snapshot","files":[]}""",
             ]);
 
-            var result = HistoryCommand.ExtractLastTimestamp(path);
+            var result = ImportCommand.ExtractLastTimestamp(path);
 
             await Assert.That(result).IsNotNull();
             await Assert.That(result!.Value).IsEqualTo(DateTimeOffset.Parse("2026-03-15T10:00:00Z"));
@@ -49,7 +49,7 @@ public class HistoryCommandTests {
         var path = Path.GetTempFileName();
 
         try {
-            var result = HistoryCommand.ExtractLastTimestamp(path);
+            var result = ImportCommand.ExtractLastTimestamp(path);
             await Assert.That(result).IsNull();
         } finally {
             File.Delete(path);
@@ -58,7 +58,7 @@ public class HistoryCommandTests {
 
     [Test]
     public async Task ExtractLastTimestamp_returns_null_for_missing_file() {
-        var result = HistoryCommand.ExtractLastTimestamp($"/tmp/nonexistent-{Guid.NewGuid()}.jsonl");
+        var result = ImportCommand.ExtractLastTimestamp($"/tmp/nonexistent-{Guid.NewGuid()}.jsonl");
         await Assert.That(result).IsNull();
     }
 
@@ -74,7 +74,7 @@ public class HistoryCommandTests {
                 """{"type":"assistant","timestamp":"2026-03-15T09:31:00Z","message":{"model":"opus","content":"hi"}}""",
             ]);
 
-            var meta = HistoryCommand.ExtractSessionMetadata(path);
+            var meta = ImportCommand.ExtractSessionMetadata(path);
 
             await Assert.That(meta.FirstTimestamp).IsNotNull();
             await Assert.That(meta.FirstTimestamp!.Value).IsEqualTo(DateTimeOffset.Parse("2026-03-15T09:30:00Z"));
