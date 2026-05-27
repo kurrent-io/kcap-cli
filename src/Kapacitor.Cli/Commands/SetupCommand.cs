@@ -189,7 +189,7 @@ public static class SetupCommand {
             InstallClaudePlugin:    InstallPlugin,
             InstallCodexHooks:      PluginCommand.InstallCodexHooks,
             InstallAgentSkills:     Kapacitor.Cli.Core.AgentsSkillsInstaller.Install,
-            CleanLegacyCodexSkills: Kapacitor.Cli.Core.AgentsSkillsInstaller.CleanLegacyCodexSkills);
+            CleanLegacyCodexSkills: legacyDir => Kapacitor.Cli.Core.AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny);
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });

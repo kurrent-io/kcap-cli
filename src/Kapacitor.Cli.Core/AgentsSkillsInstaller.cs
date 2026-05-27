@@ -68,23 +68,26 @@ public static class AgentsSkillsInstaller {
     /// <summary>
     /// Deletes every <c>kapacitor-&lt;name&gt;</c> folder this installer owns
     /// from <paramref name="targetDir"/>. User-authored folders are left alone.
-    /// Returns true if any folder was removed.
+    /// Returns a <see cref="RemovalResult"/> indicating whether any folder was
+    /// removed and whether any deletion failed.
     /// </summary>
-    public static bool Remove(string targetDir) {
-        if (!Directory.Exists(targetDir)) return false;
+    public static RemovalResult Remove(string targetDir) {
+        if (!Directory.Exists(targetDir)) return new RemovalResult(false, false);
 
-        var changed = false;
+        var removed = false;
+        var errors  = false;
         foreach (var name in SourceNames) {
             var dst = Path.Combine(targetDir, "kapacitor-" + name);
             if (!Directory.Exists(dst)) continue;
             try {
                 Directory.Delete(dst, recursive: true);
-                changed = true;
+                removed = true;
             } catch (Exception ex) {
                 Console.Error.WriteLine($"Could not remove agent skill 'kapacitor-{name}': {ex.Message}");
+                errors = true;
             }
         }
-        return changed;
+        return new RemovalResult(removed, errors);
     }
 
     /// <summary>
@@ -92,20 +95,24 @@ public static class AgentsSkillsInstaller {
     /// wrote to <c>~/.codex/skills/</c>. List of folder names is fixed
     /// (<see cref="LegacyCodexSkillNames"/>); user-authored skills are never
     /// touched. If the parent directory becomes empty, it is removed too.
+    /// Returns a <see cref="RemovalResult"/> indicating whether any folder was
+    /// removed and whether any deletion failed.
     /// </summary>
-    public static bool CleanLegacyCodexSkills(string legacySkillsDir) {
-        if (!Directory.Exists(legacySkillsDir)) return false;
+    public static RemovalResult CleanLegacyCodexSkills(string legacySkillsDir) {
+        if (!Directory.Exists(legacySkillsDir)) return new RemovalResult(false, false);
 
-        var changed = false;
+        var removed = false;
+        var errors  = false;
         foreach (var name in LegacyCodexSkillNames) {
             var dst = Path.Combine(legacySkillsDir, name);
             if (!Directory.Exists(dst)) continue;
             try {
                 Directory.Delete(dst, recursive: true);
                 Console.Out.WriteLine($"Removed legacy Codex skill folder: {dst}");
-                changed = true;
+                removed = true;
             } catch (Exception ex) {
                 Console.Error.WriteLine($"Could not remove legacy Codex skill '{name}': {ex.Message}");
+                errors = true;
             }
         }
 
@@ -118,7 +125,7 @@ public static class AgentsSkillsInstaller {
             // Best effort — leaving an empty dir behind isn't harmful.
         }
 
-        return changed;
+        return new RemovalResult(removed, errors);
     }
 
     static void CopyDirectoryWithFrontmatterRewrite(string source, string destination, string targetName) {
@@ -159,3 +166,9 @@ public static class AgentsSkillsInstaller {
         return string.Join('\n', lines);
     }
 }
+
+/// <summary>
+/// Describes the outcome of a removal operation performed by
+/// <see cref="AgentsSkillsInstaller"/>.
+/// </summary>
+public readonly record struct RemovalResult(bool RemovedAny, bool HadErrors);

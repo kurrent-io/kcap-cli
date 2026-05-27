@@ -166,9 +166,10 @@ public class AgentsSkillsInstallerTests {
         }
         Directory.CreateDirectory(Path.Combine(dst.Path, "user-skill"));
 
-        var removed = AgentsSkillsInstaller.Remove(dst.Path);
+        var result = AgentsSkillsInstaller.Remove(dst.Path);
 
-        await Assert.That(removed).IsTrue();
+        await Assert.That(result.RemovedAny).IsTrue();
+        await Assert.That(result.HadErrors).IsFalse();
         foreach (var src in SourceNames) {
             await Assert.That(Directory.Exists(Path.Combine(dst.Path, $"kapacitor-{src}"))).IsFalse();
         }
@@ -180,9 +181,10 @@ public class AgentsSkillsInstallerTests {
         using var dst = new InstallerTempDir();
         Directory.CreateDirectory(Path.Combine(dst.Path, "someone-elses-skill"));
 
-        var removed = AgentsSkillsInstaller.Remove(dst.Path);
+        var result = AgentsSkillsInstaller.Remove(dst.Path);
 
-        await Assert.That(removed).IsFalse();
+        await Assert.That(result.RemovedAny).IsFalse();
+        await Assert.That(result.HadErrors).IsFalse();
     }
 
     [Test]
@@ -196,9 +198,10 @@ public class AgentsSkillsInstallerTests {
         }
         Directory.CreateDirectory(Path.Combine(legacy, "user-codex-skill"));
 
-        var removed = AgentsSkillsInstaller.CleanLegacyCodexSkills(legacy);
+        var result = AgentsSkillsInstaller.CleanLegacyCodexSkills(legacy);
 
-        await Assert.That(removed).IsTrue();
+        await Assert.That(result.RemovedAny).IsTrue();
+        await Assert.That(result.HadErrors).IsFalse();
         foreach (var name in AgentsSkillsInstaller.LegacyCodexSkillNames) {
             await Assert.That(Directory.Exists(Path.Combine(legacy, name))).IsFalse();
         }
@@ -239,9 +242,10 @@ public class AgentsSkillsInstallerTests {
         var legacy = Path.Combine(fakeHome.Path, ".codex", "skills");
         // legacy dir not created
 
-        var removed = AgentsSkillsInstaller.CleanLegacyCodexSkills(legacy);
+        var result = AgentsSkillsInstaller.CleanLegacyCodexSkills(legacy);
 
-        await Assert.That(removed).IsFalse();
+        await Assert.That(result.RemovedAny).IsFalse();
+        await Assert.That(result.HadErrors).IsFalse();
     }
 
     [Test]
@@ -261,6 +265,29 @@ public class AgentsSkillsInstallerTests {
 
         // Caller would skip cleanup. Verify directly that legacy dir is still present.
         await Assert.That(Directory.Exists(Path.Combine(legacy, "kapacitor-recap"))).IsTrue();
+    }
+
+    [Test]
+    public async Task Remove_returns_RemovedAny_false_HadErrors_false_when_no_kapacitor_folders_in_populated_dir() {
+        using var dst = new InstallerTempDir();
+        Directory.CreateDirectory(Path.Combine(dst.Path, "someone-elses-skill"));
+
+        var result = AgentsSkillsInstaller.Remove(dst.Path);
+
+        await Assert.That(result.RemovedAny).IsFalse();
+        await Assert.That(result.HadErrors).IsFalse();
+    }
+
+    [Test]
+    public async Task CleanLegacyCodexSkills_returns_RemovedAny_false_HadErrors_false_when_dir_missing() {
+        using var fakeHome = new InstallerTempDir();
+        var legacy = Path.Combine(fakeHome.Path, ".codex", "skills");
+        // legacy dir not created — simulates never having had Codex installed
+
+        var result = AgentsSkillsInstaller.CleanLegacyCodexSkills(legacy);
+
+        await Assert.That(result.RemovedAny).IsFalse();
+        await Assert.That(result.HadErrors).IsFalse();
     }
 
     sealed class InstallerTempDir : IDisposable {

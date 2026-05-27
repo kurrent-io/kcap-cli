@@ -327,8 +327,8 @@ public class PluginCommandCodexTests {
         WriteSkill(target, "kapacitor-errors", "errors");
         WriteSkill(target, "user-skill",       "user content");
 
-        var ok = AgentsSkillsInstaller.Remove(target);
-        await Assert.That(ok).IsTrue();
+        var result = AgentsSkillsInstaller.Remove(target);
+        await Assert.That(result.RemovedAny).IsTrue();
 
         await Assert.That(Directory.Exists(Path.Combine(target, "kapacitor-recap"))).IsFalse();
         await Assert.That(Directory.Exists(Path.Combine(target, "kapacitor-errors"))).IsFalse();
@@ -341,8 +341,8 @@ public class PluginCommandCodexTests {
         var       target = Path.Combine(tmp.Path, "agents-skills");
         Directory.CreateDirectory(target);
 
-        var ok = AgentsSkillsInstaller.Remove(target);
-        await Assert.That(ok).IsFalse();
+        var result = AgentsSkillsInstaller.Remove(target);
+        await Assert.That(result.RemovedAny).IsFalse();
     }
 
     static void WriteSkill(string root, string name, string body) {
