@@ -1,6 +1,6 @@
 using Kapacitor.Cli.Daemon;
 
-namespace Kapacitor.Cli.Tests.Unit;
+namespace Kapacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
 /// Tests for <see cref="DaemonLock"/> — the per-name flock the daemon binary

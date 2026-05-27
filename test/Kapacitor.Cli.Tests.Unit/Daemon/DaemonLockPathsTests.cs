@@ -1,4 +1,4 @@
-namespace Kapacitor.Cli.Tests.Unit;
+namespace Kapacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
 /// Tests for <see cref="Kapacitor.Cli.Core.DaemonLockPaths"/> — the name-sanitization rules and

@@ -48,7 +48,7 @@ public class AgentOrchestratorVendorTests {
         }
     }
 
-    static Daemon.Services.AgentOrchestrator BuildOrchestrator(
+    static AgentOrchestrator BuildOrchestrator(
             CaptureServerConnection                   server,
             IPtyProcessFactory                        ptyFactory,
             IReadOnlyDictionary<string, IHostedAgentLauncher> launchers,
@@ -67,11 +67,11 @@ public class AgentOrchestratorVendorTests {
         }
 
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
-        var repoMatcher      = new Daemon.Services.RepoMatcher(config, NullLogger<Daemon.Services.RepoMatcher>.Instance);
+        var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
         var httpFactory      = new StubHttpClientFactory();
-        var permissionBridge = new Daemon.Services.LocalPermissionBridge(server, NullLogger<Daemon.Services.LocalPermissionBridge>.Instance);
+        var permissionBridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance);
 
-        return new Daemon.Services.AgentOrchestrator(
+        return new AgentOrchestrator(
             config,
             server,
             worktreeManager,
@@ -81,7 +81,7 @@ public class AgentOrchestratorVendorTests {
             permissionBridge,
             launchers,
             new StubHostLifetime(),
-            NullLogger<Daemon.Services.AgentOrchestrator>.Instance
+            NullLogger<AgentOrchestrator>.Instance
         );
     }
 

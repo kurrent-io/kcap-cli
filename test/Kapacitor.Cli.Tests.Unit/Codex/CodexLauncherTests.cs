@@ -2,12 +2,12 @@ using Kapacitor.Cli.Daemon;
 using Kapacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Kapacitor.Cli.Tests.Unit;
+namespace Kapacitor.Cli.Tests.Unit.Codex;
 
 [NotInParallel("HomeEnvVarMutation")]
 public class CodexLauncherTests {
-    static Daemon.Services.CodexLauncher NewLauncher() =>
-        new(new DaemonConfig { CodexPath = "codex" }, NullLogger<Daemon.Services.CodexLauncher>.Instance);
+    static CodexLauncher NewLauncher() =>
+        new(new DaemonConfig { CodexPath = "codex" }, NullLogger<CodexLauncher>.Instance);
 
     static LauncherContext NewCtx(
         string? prompt = null,

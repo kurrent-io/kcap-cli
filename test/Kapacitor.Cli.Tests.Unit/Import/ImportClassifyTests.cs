@@ -3,7 +3,7 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 
-namespace Kapacitor.Cli.Tests.Unit;
+namespace Kapacitor.Cli.Tests.Unit.Import;
 
 public class ImportClassifyTests : IDisposable {
     readonly WireMockServer _server  = WireMockServer.Start();

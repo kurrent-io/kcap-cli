@@ -1,6 +1,6 @@
 using Kapacitor.Cli.Core;
 
-namespace Kapacitor.Cli.Tests.Unit;
+namespace Kapacitor.Cli.Tests.Unit.Codex;
 
 public class CodexPathsTests {
     [Test]

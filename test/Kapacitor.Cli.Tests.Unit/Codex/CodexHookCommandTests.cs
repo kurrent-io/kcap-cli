@@ -1,11 +1,10 @@
 using System.Text.Json;
-using Kapacitor.Cli;
 using Kapacitor.Cli.Commands;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 
-namespace Kapacitor.Cli.Tests.Unit;
+namespace Kapacitor.Cli.Tests.Unit.Codex;
 
 public class CodexHookCommandTests : IDisposable {
     // Shared NotInParallel group for every test that mutates global state —
@@ -24,14 +23,14 @@ public class CodexHookCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var payload = """
-            {
-              "hook_event_name": "SessionStart",
-              "session_id": "019e0322-05fc-7570-be65-75719c3ea861",
-              "transcript_path": "/tmp/rollout.jsonl",
-              "cwd": "/tmp",
-              "model": "gpt-5"
-            }
-            """;
+                      {
+                        "hook_event_name": "SessionStart",
+                        "session_id": "019e0322-05fc-7570-be65-75719c3ea861",
+                        "transcript_path": "/tmp/rollout.jsonl",
+                        "cwd": "/tmp",
+                        "model": "gpt-5"
+                      }
+                      """;
 
         var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
 
@@ -69,16 +68,17 @@ public class CodexHookCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var payload = """
-            {
-              "hook_event_name": "Stop",
-              "session_id": "abc",
-              "transcript_path": "/tmp/rollout.jsonl",
-              "cwd": "/tmp"
-            }
-            """;
+                      {
+                        "hook_event_name": "Stop",
+                        "session_id": "abc",
+                        "transcript_path": "/tmp/rollout.jsonl",
+                        "cwd": "/tmp"
+                      }
+                      """;
 
         var originalOut  = Console.Out;
         var stdoutWriter = new StringWriter();
+
         try {
             Console.SetOut(stdoutWriter);
 
@@ -125,18 +125,19 @@ public class CodexHookCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var payload = """
-            {
-              "hook_event_name": "PermissionRequest",
-              "session_id": "abc",
-              "transcript_path": "/tmp/r.jsonl",
-              "cwd": "/tmp",
-              "tool_name": "shell",
-              "tool_input": { "command": "ls" }
-            }
-            """;
+                      {
+                        "hook_event_name": "PermissionRequest",
+                        "session_id": "abc",
+                        "transcript_path": "/tmp/r.jsonl",
+                        "cwd": "/tmp",
+                        "tool_name": "shell",
+                        "tool_input": { "command": "ls" }
+                      }
+                      """;
 
         var originalOut  = Console.Out;
         var stdoutWriter = new StringWriter();
+
         try {
             Console.SetOut(stdoutWriter);
 
@@ -148,8 +149,9 @@ public class CodexHookCommandTests : IDisposable {
             // own approval prompt when hookSpecificOutput.decision is absent.
             var stdout = stdoutWriter.ToString();
             var doc    = JsonDocument.Parse(stdout);
+
             var hasDecision = doc.RootElement.TryGetProperty("hookSpecificOutput", out var hso)
-                && hso.TryGetProperty("decision", out _);
+             && hso.TryGetProperty("decision", out _);
             await Assert.That(hasDecision).IsFalse();
         } finally {
             Console.SetOut(originalOut);
@@ -175,19 +177,20 @@ public class CodexHookCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
 
         var payload = """
-            {
-              "hook_event_name": "PermissionRequest",
-              "session_id": "abc",
-              "transcript_path": "/tmp/r.jsonl",
-              "cwd": "/tmp",
-              "tool_name": "shell",
-              "tool_input": { "command": "ls" }
-            }
-            """;
+                      {
+                        "hook_event_name": "PermissionRequest",
+                        "session_id": "abc",
+                        "transcript_path": "/tmp/r.jsonl",
+                        "cwd": "/tmp",
+                        "tool_name": "shell",
+                        "tool_input": { "command": "ls" }
+                      }
+                      """;
 
         var originalOut  = Console.Out;
         var stdoutWriter = new StringWriter();
         var sw           = System.Diagnostics.Stopwatch.StartNew();
+
         try {
             Console.SetOut(stdoutWriter);
             var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
@@ -216,23 +219,25 @@ public class CodexHookCommandTests : IDisposable {
     public async Task PermissionRequest_returns_quickly_when_auth_discovery_is_slow() {
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
+
         _server.Given(Request.Create().WithPath("/hooks/permission-record").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var payload = """
-            {
-              "hook_event_name": "PermissionRequest",
-              "session_id": "abc",
-              "transcript_path": "/tmp/r.jsonl",
-              "cwd": "/tmp",
-              "tool_name": "shell",
-              "tool_input": { "command": "ls" }
-            }
-            """;
+                      {
+                        "hook_event_name": "PermissionRequest",
+                        "session_id": "abc",
+                        "transcript_path": "/tmp/r.jsonl",
+                        "cwd": "/tmp",
+                        "tool_name": "shell",
+                        "tool_input": { "command": "ls" }
+                      }
+                      """;
 
         var originalOut  = Console.Out;
         var stdoutWriter = new StringWriter();
         var sw           = System.Diagnostics.Stopwatch.StartNew();
+
         try {
             Console.SetOut(stdoutWriter);
             var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
@@ -251,13 +256,13 @@ public class CodexHookCommandTests : IDisposable {
         // exit 0 without making any HTTP request.
         foreach (var evt in new[] { "UserPromptSubmit", "PreToolUse", "PostToolUse" }) {
             var payload = $$"""
-                {
-                  "hook_event_name": "{{evt}}",
-                  "session_id": "abc",
-                  "transcript_path": "/tmp/r.jsonl",
-                  "cwd": "/tmp"
-                }
-                """;
+                            {
+                              "hook_event_name": "{{evt}}",
+                              "session_id": "abc",
+                              "transcript_path": "/tmp/r.jsonl",
+                              "cwd": "/tmp"
+                            }
+                            """;
 
             var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
             await Assert.That(exit).IsEqualTo(0);
@@ -352,18 +357,19 @@ public class CodexHookCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var payload = $$"""
-            {
-              "hook_event_name": "Stop",
-              "session_id": "{{sessionId}}",
-              "transcript_path": "/tmp/rollout.jsonl",
-              "cwd": "/tmp"
-            }
-            """;
+                        {
+                          "hook_event_name": "Stop",
+                          "session_id": "{{sessionId}}",
+                          "transcript_path": "/tmp/rollout.jsonl",
+                          "cwd": "/tmp"
+                        }
+                        """;
 
         DisabledSessions.Mark(sessionId);
 
         var originalOut  = Console.Out;
         var stdoutWriter = new StringWriter();
+
         try {
             Console.SetOut(stdoutWriter);
 
@@ -396,11 +402,14 @@ public class CodexHookCommandTests : IDisposable {
     [Test, NotInParallel(ConsoleSerialGroup)]
     public async Task PermissionRequest_with_daemon_url_set_posts_to_bridge_and_forwards_response_to_stdout() {
         using var bridge = WireMockServer.Start();
-        var token = "abc123";
+        var       token  = "abc123";
+
         bridge.Given(Request.Create().WithPath($"/{token}/codex/permission-request").UsingPost())
-              .RespondWith(Response.Create()
-                  .WithStatusCode(200)
-                  .WithBody("""{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"""));
+            .RespondWith(
+                Response.Create()
+                    .WithStatusCode(200)
+                    .WithBody("""{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}""")
+            );
 
         var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
         Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/{token}");
@@ -410,8 +419,10 @@ public class CodexHookCommandTests : IDisposable {
         Console.SetOut(stdoutCapture);
 
         try {
-            var exit = await CodexHookCommand.Handle("http://server.example",
-                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}"""));
+            var exit = await CodexHookCommand.Handle(
+                "http://server.example",
+                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
+            );
 
             await Assert.That(exit).IsEqualTo(0);
             await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"allow\"");
@@ -424,9 +435,10 @@ public class CodexHookCommandTests : IDisposable {
     [Test, NotInParallel(ConsoleSerialGroup)]
     public async Task PermissionRequest_with_daemon_url_emits_deny_and_exits_nonzero_on_500() {
         using var bridge = WireMockServer.Start();
-        var token = "abc123";
+        var       token  = "abc123";
+
         bridge.Given(Request.Create().WithPath($"/{token}/codex/permission-request").UsingPost())
-              .RespondWith(Response.Create().WithStatusCode(500));
+            .RespondWith(Response.Create().WithStatusCode(500));
 
         var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
         Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/{token}");
@@ -436,8 +448,10 @@ public class CodexHookCommandTests : IDisposable {
         Console.SetOut(stdoutCapture);
 
         try {
-            var exit = await CodexHookCommand.Handle("http://server.example",
-                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}"""));
+            var exit = await CodexHookCommand.Handle(
+                "http://server.example",
+                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
+            );
 
             await Assert.That(exit).IsEqualTo(1);
             await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"deny\"");
@@ -458,8 +472,10 @@ public class CodexHookCommandTests : IDisposable {
         Console.SetOut(stdoutCapture);
 
         try {
-            var exit = await CodexHookCommand.Handle("http://server.example",
-                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}"""));
+            var exit = await CodexHookCommand.Handle(
+                "http://server.example",
+                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
+            );
 
             await Assert.That(exit).IsEqualTo(1);
             await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"deny\"");
@@ -471,8 +487,8 @@ public class CodexHookCommandTests : IDisposable {
 
     [Test, NotInParallel(ConsoleSerialGroup)]
     public async Task PermissionRequest_with_non_loopback_daemon_url_emits_deny_without_posting() {
-        using var bridge = WireMockServer.Start();
-        var previousEnv  = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
+        using var bridge      = WireMockServer.Start();
+        var       previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
         // Non-loopback host should be rejected by DaemonBridgeUrl.TryParseLoopback
         Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", $"http://example.com:{bridge.Ports[0]}/abc");
 
@@ -481,8 +497,10 @@ public class CodexHookCommandTests : IDisposable {
         Console.SetOut(stdoutCapture);
 
         try {
-            var exit = await CodexHookCommand.Handle("http://server.example",
-                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}"""));
+            var exit = await CodexHookCommand.Handle(
+                "http://server.example",
+                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
+            );
 
             await Assert.That(exit).IsEqualTo(1);
             await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"deny\"");
@@ -495,8 +513,8 @@ public class CodexHookCommandTests : IDisposable {
 
     [Test, NotInParallel(ConsoleSerialGroup)]
     public async Task PermissionRequest_with_https_daemon_url_emits_deny_without_posting() {
-        using var bridge = WireMockServer.Start();
-        var previousEnv  = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
+        using var bridge      = WireMockServer.Start();
+        var       previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
         Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", $"https://127.0.0.1:{bridge.Ports[0]}/abc");
 
         var stdoutCapture = new StringWriter();
@@ -504,8 +522,10 @@ public class CodexHookCommandTests : IDisposable {
         Console.SetOut(stdoutCapture);
 
         try {
-            var exit = await CodexHookCommand.Handle("http://server.example",
-                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}"""));
+            var exit = await CodexHookCommand.Handle(
+                "http://server.example",
+                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
+            );
 
             await Assert.That(exit).IsEqualTo(1);
             await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"deny\"");
@@ -520,14 +540,17 @@ public class CodexHookCommandTests : IDisposable {
     public async Task PermissionRequest_with_daemon_url_does_not_double_post_to_server_hooks_endpoint() {
         using var bridge = WireMockServer.Start();
         using var server = WireMockServer.Start();
-        var token = "abc123";
+        var       token  = "abc123";
+
         bridge.Given(Request.Create().WithPath($"/{token}/codex/permission-request").UsingPost())
-              .RespondWith(Response.Create()
-                  .WithStatusCode(200)
-                  .WithBody("""{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"""));
+            .RespondWith(
+                Response.Create()
+                    .WithStatusCode(200)
+                    .WithBody("""{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}""")
+            );
 
         server.Given(Request.Create().WithPath("/hooks/permission-request/codex").UsingPost())
-              .RespondWith(Response.Create().WithStatusCode(200));
+            .RespondWith(Response.Create().WithStatusCode(200));
 
         var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
         Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/{token}");
@@ -537,8 +560,10 @@ public class CodexHookCommandTests : IDisposable {
         Console.SetOut(stdoutCapture);
 
         try {
-            await CodexHookCommand.Handle($"http://127.0.0.1:{server.Ports[0]}",
-                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}"""));
+            await CodexHookCommand.Handle(
+                $"http://127.0.0.1:{server.Ports[0]}",
+                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
+            );
 
             await Assert.That(server.LogEntries.Count).IsEqualTo(0); // server NOT touched
             await Assert.That(bridge.LogEntries.Count).IsEqualTo(1);

@@ -1,6 +1,6 @@
 using Kapacitor.Cli.Core;
 
-namespace Kapacitor.Cli.Tests.Unit;
+namespace Kapacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
 /// Tests for <see cref="DaemonNameResolver"/> — the shared name-resolution

@@ -1,4 +1,4 @@
-namespace Kapacitor.Cli.Tests.Unit;
+namespace Kapacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
 /// AI-630 review fix #4: <see cref="Kapacitor.Cli.Core.DaemonLockPaths.EnumerateNames"/> must

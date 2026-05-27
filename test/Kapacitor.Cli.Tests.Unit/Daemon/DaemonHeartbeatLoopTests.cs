@@ -1,7 +1,7 @@
 using Kapacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Kapacitor.Cli.Tests.Unit;
+namespace Kapacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
 /// Unit tests for the daemon-side heartbeat tick. The loop runs every ~15 s

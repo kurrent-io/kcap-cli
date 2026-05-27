@@ -1,7 +1,4 @@
 using Kapacitor.Cli.Core.Cursor;
-using TUnit.Assertions;
-using TUnit.Assertions.Extensions;
-using TUnit.Core;
 
 namespace Kapacitor.Cli.Tests.Unit.Cursor;
 

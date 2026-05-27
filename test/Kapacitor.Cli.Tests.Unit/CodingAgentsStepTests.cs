@@ -8,12 +8,18 @@ public class CodingAgentsStepTests {
     public async Task Claude_detected_and_accepted_calls_installer_with_settings_path() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new CodingAgentsStep.Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
+        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
         var paths    = TestPaths();
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: true, Codex: false);
+        var detected = new DetectedAgents(Claude: true, Codex: false);
 
-        var result = await RunAsync(options, detected, paths, calls.AsInstallers(),
-            prompt: _ => true, writeLine: sink.Write);
+        var result = await RunAsync(
+            options,
+            detected,
+            paths,
+            calls.AsInstallers(),
+            prompt: _ => true,
+            writeLine: sink.Write
+        );
 
         await Assert.That(result.ClaudeInstalled).IsTrue();
         await Assert.That(calls.ClaudeArgs).IsEqualTo((paths.ClaudeSettingsPath, paths.PluginDir!));
@@ -25,10 +31,16 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: true, Codex: false);
+        var detected = new DetectedAgents(Claude: true, Codex: false);
 
-        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
-            prompt: _ => false, writeLine: sink.Write);
+        var result = await RunAsync(
+            options,
+            detected,
+            TestPaths(),
+            calls.AsInstallers(),
+            prompt: _ => false,
+            writeLine: sink.Write
+        );
 
         await Assert.That(result.ClaudeInstalled).IsFalse();
         await Assert.That(calls.ClaudeCalled).IsFalse();
@@ -37,14 +49,24 @@ public class CodingAgentsStepTests {
 
     [Test]
     public async Task Claude_not_detected_skips_prompt_and_emits_skip_line() {
-        var sink     = new Sink();
-        var calls    = new InstallerCalls();
+        var sink        = new Sink();
+        var calls       = new InstallerCalls();
         var promptCount = 0;
-        var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: false);
+        var options     = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
+        var detected    = new DetectedAgents(Claude: false, Codex: false);
 
-        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
-            prompt: _ => { promptCount++; return true; }, writeLine: sink.Write);
+        var result = await RunAsync(
+            options,
+            detected,
+            TestPaths(),
+            calls.AsInstallers(),
+            prompt: _ => {
+                promptCount++;
+
+                return true;
+            },
+            writeLine: sink.Write
+        );
 
         await Assert.That(result.ClaudeInstalled).IsFalse();
         await Assert.That(calls.ClaudeCalled).IsFalse();
@@ -57,10 +79,16 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls { ClaudeReturns = false };
         var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: true, Codex: false);
+        var detected = new DetectedAgents(Claude: true, Codex: false);
 
-        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
-            prompt: _ => true, writeLine: sink.Write);
+        var result = await RunAsync(
+            options,
+            detected,
+            TestPaths(),
+            calls.AsInstallers(),
+            prompt: _ => true,
+            writeLine: sink.Write
+        );
 
         await Assert.That(result.ClaudeInstalled).IsFalse();
         await Assert.That(calls.ClaudeCalled).IsTrue();
@@ -72,10 +100,16 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true);
 
-        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
-            prompt: _ => true, writeLine: sink.Write);
+        var result = await RunAsync(
+            options,
+            detected,
+            TestPaths(),
+            calls.AsInstallers(),
+            prompt: _ => true,
+            writeLine: sink.Write
+        );
 
         await Assert.That(result.CodexHooksInstalled).IsTrue();
         await Assert.That(calls.CodexHooksArg).IsEqualTo("/fake/.codex/hooks.json");
@@ -88,10 +122,16 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true);
 
-        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
-            prompt: _ => false, writeLine: sink.Write);
+        var result = await RunAsync(
+            options,
+            detected,
+            TestPaths(),
+            calls.AsInstallers(),
+            prompt: _ => false,
+            writeLine: sink.Write
+        );
 
         await Assert.That(result.CodexHooksInstalled).IsFalse();
         await Assert.That(calls.CodexHooksCalled).IsFalse();
@@ -103,10 +143,16 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false);
 
-        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
-            prompt: _ => true, writeLine: sink.Write);
+        var result = await RunAsync(
+            options,
+            detected,
+            TestPaths(),
+            calls.AsInstallers(),
+            prompt: _ => true,
+            writeLine: sink.Write
+        );
 
         await Assert.That(result.CodexHooksInstalled).IsFalse();
         await Assert.That(calls.CodexHooksCalled).IsFalse();
@@ -118,10 +164,16 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls { CodexHooksReturns = false };
         var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true);
 
-        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
-            prompt: _ => true, writeLine: sink.Write);
+        var result = await RunAsync(
+            options,
+            detected,
+            TestPaths(),
+            calls.AsInstallers(),
+            prompt: _ => true,
+            writeLine: sink.Write
+        );
 
         await Assert.That(result.CodexHooksInstalled).IsFalse();
         await Assert.That(calls.CodexHooksCalled).IsTrue();
@@ -134,10 +186,16 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true);
 
-        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
-            prompt: _ => true, writeLine: sink.Write);
+        var result = await RunAsync(
+            options,
+            detected,
+            TestPaths(),
+            calls.AsInstallers(),
+            prompt: _ => true,
+            writeLine: sink.Write
+        );
 
         await Assert.That(result.CodexSkillsInstalled).IsTrue();
         await Assert.That(calls.AgentSkillsArgs).IsEqualTo(("/fake/plugin/skills", "/fake/.agents/skills"));
@@ -149,10 +207,16 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls { CodexHooksReturns = false };
         var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true);
 
-        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
-            prompt: _ => true, writeLine: sink.Write);
+        var result = await RunAsync(
+            options,
+            detected,
+            TestPaths(),
+            calls.AsInstallers(),
+            prompt: _ => true,
+            writeLine: sink.Write
+        );
 
         await Assert.That(result.CodexSkillsInstalled).IsFalse();
         await Assert.That(calls.AgentSkillsCalled).IsFalse();
@@ -163,10 +227,16 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls { AgentSkillsReturns = false };
         var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true);
 
-        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
-            prompt: _ => true, writeLine: sink.Write);
+        var result = await RunAsync(
+            options,
+            detected,
+            TestPaths(),
+            calls.AsInstallers(),
+            prompt: _ => true,
+            writeLine: sink.Write
+        );
 
         await Assert.That(result.CodexHooksInstalled).IsTrue();
         await Assert.That(result.CodexSkillsInstalled).IsFalse();
@@ -179,11 +249,17 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: false, SkipCodex: false, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: true, Codex: true);
+        var detected = new DetectedAgents(Claude: true, Codex: true);
         var paths    = TestPaths() with { PluginDir = null };
 
-        var result = await RunAsync(options, detected, paths, calls.AsInstallers(),
-            prompt: _ => true, writeLine: sink.Write);
+        var result = await RunAsync(
+            options,
+            detected,
+            paths,
+            calls.AsInstallers(),
+            prompt: _ => true,
+            writeLine: sink.Write
+        );
 
         await Assert.That(result.ClaudeInstalled).IsFalse();
         await Assert.That(calls.ClaudeCalled).IsFalse();
@@ -200,10 +276,16 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: false, SkipCodex: false, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false);
 
-        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
-            prompt: _ => true, writeLine: sink.Write);
+        var result = await RunAsync(
+            options,
+            detected,
+            TestPaths(),
+            calls.AsInstallers(),
+            prompt: _ => true,
+            writeLine: sink.Write
+        );
 
         await Assert.That(result.ClaudeInstalled).IsFalse();
         await Assert.That(result.CodexHooksInstalled).IsFalse();
@@ -219,16 +301,23 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: true, Codex: false);
+        var detected = new DetectedAgents(Claude: true, Codex: false);
+
         // Caller (SetupCommand) selects the project-scope path AND the matching label.
         // The step's contract is to honour both faithfully.
-        var paths    = TestPaths() with {
+        var paths = TestPaths() with {
             ClaudeSettingsPath = "/repo/.claude/settings.local.json",
-            ClaudeScopeLabel   = "project"
+            ClaudeScopeLabel = "project"
         };
 
-        var result = await RunAsync(options, detected, paths, calls.AsInstallers(),
-            prompt: _ => true, writeLine: sink.Write);
+        var result = await RunAsync(
+            options,
+            detected,
+            paths,
+            calls.AsInstallers(),
+            prompt: _ => true,
+            writeLine: sink.Write
+        );
 
         await Assert.That(result.ClaudeInstalled).IsTrue();
         await Assert.That(calls.ClaudeArgs).IsEqualTo(("/repo/.claude/settings.local.json", paths.PluginDir!));
@@ -240,10 +329,16 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true);
 
-        await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
-            prompt: _ => true, writeLine: sink.Write);
+        await RunAsync(
+            options,
+            detected,
+            TestPaths(),
+            calls.AsInstallers(),
+            prompt: _ => true,
+            writeLine: sink.Write
+        );
 
         await Assert.That(calls.LegacyCleanupCalled).IsTrue();
         await Assert.That(calls.LegacyCleanupArg).IsEqualTo("/fake/.codex/skills");
@@ -254,10 +349,16 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls { AgentSkillsReturns = false };
         var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true);
 
-        await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
-            prompt: _ => true, writeLine: sink.Write);
+        await RunAsync(
+            options,
+            detected,
+            TestPaths(),
+            calls.AsInstallers(),
+            prompt: _ => true,
+            writeLine: sink.Write
+        );
 
         await Assert.That(calls.AgentSkillsCalled).IsTrue();
         await Assert.That(calls.LegacyCleanupCalled).IsFalse();
@@ -268,14 +369,21 @@ public class CodingAgentsStepTests {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
         var options  = new Options(SkipClaude: false, SkipCodex: true, NoPrompt: false);
-        var detected = new CodingAgentsStep.DetectedAgents(Claude: true, Codex: false);
+        var detected = new DetectedAgents(Claude: true, Codex: false);
+
         // [ and ] are legal in paths; if not escaped, Spectre.MarkupLine throws.
-        var paths    = TestPaths() with {
+        var paths = TestPaths() with {
             ClaudeSettingsPath = "/weird[path]/.claude/settings.json"
         };
 
-        var result = await RunAsync(options, detected, paths, calls.AsInstallers(),
-            prompt: _ => true, writeLine: sink.Write);
+        var result = await RunAsync(
+            options,
+            detected,
+            paths,
+            calls.AsInstallers(),
+            prompt: _ => true,
+            writeLine: sink.Write
+        );
 
         await Assert.That(result.ClaudeInstalled).IsTrue();
         // The path must appear in the sink, escaped so Spectre treats [ and ] as literals.
@@ -284,12 +392,13 @@ public class CodingAgentsStepTests {
     }
 
     static CodingAgentsStep.Paths TestPaths() => new(
-        ClaudeSettingsPath:   "/fake/.claude/settings.json",
-        ClaudeScopeLabel:     "user",
-        PluginDir:            "/fake/plugin",
-        CodexHooksPath:       "/fake/.codex/hooks.json",
-        AgentsSkillsDir:      "/fake/.agents/skills",
-        LegacyCodexSkillsDir: "/fake/.codex/skills");
+        ClaudeSettingsPath: "/fake/.claude/settings.json",
+        ClaudeScopeLabel: "user",
+        PluginDir: "/fake/plugin",
+        CodexHooksPath: "/fake/.codex/hooks.json",
+        AgentsSkillsDir: "/fake/.agents/skills",
+        LegacyCodexSkillsDir: "/fake/.codex/skills"
+    );
 
     sealed class Sink {
         public List<string> Lines { get; } = [];
@@ -297,27 +406,47 @@ public class CodingAgentsStepTests {
     }
 
     sealed class InstallerCalls {
-        public bool ClaudeCalled { get; private set; }
-        public (string Settings, string PluginDir)? ClaudeArgs { get; private set; }
-        public bool ClaudeReturns { get; set; } = true;
+        public bool                                 ClaudeCalled  { get; private set; }
+        public (string Settings, string PluginDir)? ClaudeArgs    { get; private set; }
+        public bool                                 ClaudeReturns { get; set; } = true;
 
-        public bool CodexHooksCalled { get; private set; }
-        public string? CodexHooksArg  { get; private set; }
-        public bool CodexHooksReturns { get; set; } = true;
+        public bool    CodexHooksCalled  { get; private set; }
+        public string? CodexHooksArg     { get; private set; }
+        public bool    CodexHooksReturns { get; set; } = true;
 
-        public bool AgentSkillsCalled { get; private set; }
-        public (string Src, string Dst)? AgentSkillsArgs { get; private set; }
-        public bool AgentSkillsReturns { get; set; } = true;
+        public bool                      AgentSkillsCalled  { get; private set; }
+        public (string Src, string Dst)? AgentSkillsArgs    { get; private set; }
+        public bool                      AgentSkillsReturns { get; set; } = true;
 
-        public bool LegacyCleanupCalled { get; private set; }
-        public string? LegacyCleanupArg { get; private set; }
-        public bool LegacyCleanupReturns { get; set; } = true;
+        public bool    LegacyCleanupCalled  { get; private set; }
+        public string? LegacyCleanupArg     { get; private set; }
+        public bool    LegacyCleanupReturns { get; set; } = true;
 
         public CodingAgentsStep.Installers AsInstallers() => new(
-            InstallClaudePlugin:    (s, p) => { ClaudeCalled = true; ClaudeArgs = (s, p); return ClaudeReturns; },
-            InstallCodexHooks:      h      => { CodexHooksCalled = true; CodexHooksArg = h; return CodexHooksReturns; },
-            InstallAgentSkills:     (s, d) => { AgentSkillsCalled = true; AgentSkillsArgs = (s, d); return AgentSkillsReturns; },
-            CleanLegacyCodexSkills: d      => { LegacyCleanupCalled = true; LegacyCleanupArg = d; return LegacyCleanupReturns; }
+            InstallClaudePlugin: (s, p) => {
+                ClaudeCalled = true;
+                ClaudeArgs   = (s, p);
+
+                return ClaudeReturns;
+            },
+            InstallCodexHooks: h => {
+                CodexHooksCalled = true;
+                CodexHooksArg    = h;
+
+                return CodexHooksReturns;
+            },
+            InstallAgentSkills: (s, d) => {
+                AgentSkillsCalled = true;
+                AgentSkillsArgs   = (s, d);
+
+                return AgentSkillsReturns;
+            },
+            CleanLegacyCodexSkills: d => {
+                LegacyCleanupCalled = true;
+                LegacyCleanupArg    = d;
+
+                return LegacyCleanupReturns;
+            }
         );
     }
 }

@@ -1,5 +1,3 @@
-using Kapacitor.Cli;
-
 namespace Kapacitor.Cli.Tests.Unit;
 
 public class PathExclusionTests {
@@ -20,8 +18,8 @@ public class PathExclusionTests {
 
     [Test]
     public async Task IsExcluded_matches_exact_path() {
-        using var tmp = TempDir.Create();
-        var path = tmp.Path;
+        using var tmp  = TempDir.Create();
+        var       path = tmp.Path;
 
         await Assert.That(PathExclusion.IsExcluded(path, [path])).IsTrue();
     }
@@ -29,7 +27,7 @@ public class PathExclusionTests {
     [Test]
     public async Task IsExcluded_matches_descendant() {
         using var tmp = TempDir.Create();
-        var sub = Path.Combine(tmp.Path, "sub", "deeper");
+        var       sub = Path.Combine(tmp.Path, "sub", "deeper");
         Directory.CreateDirectory(sub);
 
         await Assert.That(PathExclusion.IsExcluded(sub, [tmp.Path])).IsTrue();
@@ -38,9 +36,9 @@ public class PathExclusionTests {
     [Test]
     public async Task IsExcluded_does_not_match_sibling_with_shared_prefix() {
         // /tmp/foo vs /tmp/foobar — must NOT match
-        using var tmp     = TempDir.Create();
-        var       foo     = Path.Combine(tmp.Path, "foo");
-        var       foobar  = Path.Combine(tmp.Path, "foobar");
+        using var tmp    = TempDir.Create();
+        var       foo    = Path.Combine(tmp.Path, "foo");
+        var       foobar = Path.Combine(tmp.Path, "foobar");
         Directory.CreateDirectory(foo);
         Directory.CreateDirectory(foobar);
 
@@ -50,7 +48,7 @@ public class PathExclusionTests {
     [Test]
     public async Task IsExcluded_ignores_trailing_separator_on_entry() {
         using var tmp = TempDir.Create();
-        var sub = Path.Combine(tmp.Path, "child");
+        var       sub = Path.Combine(tmp.Path, "child");
         Directory.CreateDirectory(sub);
 
         await Assert.That(PathExclusion.IsExcluded(sub, [tmp.Path + Path.DirectorySeparatorChar])).IsTrue();
@@ -161,9 +159,9 @@ public class PathExclusionTests {
 
     [Test]
     public async Task Normalize_expands_tilde_subpath() {
-        var home  = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var home     = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var expected = Path.Combine(home, "stuff");
-        var normd = PathExclusion.Normalize("~/stuff");
+        var normd    = PathExclusion.Normalize("~/stuff");
 
         await Assert.That(normd).IsEqualTo(expected);
     }
@@ -177,8 +175,8 @@ public class PathExclusionTests {
 
     [Test]
     public async Task Normalize_strips_trailing_separator() {
-        using var tmp = TempDir.Create();
-        var withSlash = tmp.Path + Path.DirectorySeparatorChar;
+        using var tmp       = TempDir.Create();
+        var       withSlash = tmp.Path + Path.DirectorySeparatorChar;
 
         await Assert.That(PathExclusion.Normalize(withSlash))
             .DoesNotEndWith(Path.DirectorySeparatorChar.ToString());
@@ -202,7 +200,9 @@ sealed class TempDir : IDisposable {
     }
 
     public void Dispose() {
-        try { Directory.Delete(Path, recursive: true); } catch { /* best effort */ }
+        try { Directory.Delete(Path, recursive: true); } catch {
+            /* best effort */
+        }
     }
 }
 
@@ -219,6 +219,8 @@ sealed class TempSymlink : IDisposable {
     }
 
     public void Dispose() {
-        try { Directory.Delete(Path); } catch { /* best effort */ }
+        try { Directory.Delete(Path); } catch {
+            /* best effort */
+        }
     }
 }

@@ -2,9 +2,6 @@ using System.Text.Json;
 using Kapacitor.Cli.Commands;
 using Kapacitor.Cli.Core.Cursor;
 using Microsoft.Data.Sqlite;
-using TUnit.Assertions;
-using TUnit.Assertions.Extensions;
-using TUnit.Core;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -15,10 +12,12 @@ public class CursorCommandTests {
     [Test]
     public async Task Import_posts_payload_when_watermark_absent() {
         using var server = WireMockServer.Start();
+
         server.Given(Request.Create().UsingGet().WithPath("/api/cursor/comp-A/watermark"))
-              .RespondWith(Response.Create().WithStatusCode(404));
+            .RespondWith(Response.Create().WithStatusCode(404));
+
         server.Given(Request.Create().UsingPost().WithPath("/hooks/cursor-import"))
-              .RespondWith(Response.Create().WithStatusCode(202).WithBody("{}"));
+            .RespondWith(Response.Create().WithStatusCode(202).WithBody("{}"));
 
         var (workspace, paths) = CursorCommandTestFixtures.WorkspaceWithOneComposer("comp-A");
 
@@ -36,12 +35,16 @@ public class CursorCommandTests {
     [Test]
     public async Task Import_skips_when_watermark_current() {
         using var server = WireMockServer.Start();
+
         server.Given(Request.Create().UsingGet().WithPath("/api/cursor/comp-A/watermark"))
-              .RespondWith(Response.Create()
-                  .WithStatusCode(200)
-                  .WithBody("""{"last_bubble_id":"b1","last_updated_at_ms":9999999999999}"""));
+            .RespondWith(
+                Response.Create()
+                    .WithStatusCode(200)
+                    .WithBody("""{"last_bubble_id":"b1","last_updated_at_ms":9999999999999}""")
+            );
+
         server.Given(Request.Create().UsingPost().WithPath("/hooks/cursor-import"))
-              .RespondWith(Response.Create().WithStatusCode(202).WithBody("{}"));
+            .RespondWith(Response.Create().WithStatusCode(202).WithBody("{}"));
 
         var (workspace, paths) = CursorCommandTestFixtures.WorkspaceWithOneComposer("comp-A");
 
@@ -59,13 +62,17 @@ public class CursorCommandTests {
     [Test]
     public async Task Import_skips_composer_with_generating_bubbles_in_flight() {
         using var server = WireMockServer.Start();
-        server.Given(Request.Create().UsingGet().WithPath("/api/cursor/comp-A/watermark"))
-              .RespondWith(Response.Create().WithStatusCode(404));
-        server.Given(Request.Create().UsingPost().WithPath("/hooks/cursor-import"))
-              .RespondWith(Response.Create().WithStatusCode(202).WithBody("{}"));
 
-        var (workspace, paths) = CursorCommandTestFixtures.WorkspaceWithOneComposer("comp-A",
-            generatingBubbleIds: ["b1"]);
+        server.Given(Request.Create().UsingGet().WithPath("/api/cursor/comp-A/watermark"))
+            .RespondWith(Response.Create().WithStatusCode(404));
+
+        server.Given(Request.Create().UsingPost().WithPath("/hooks/cursor-import"))
+            .RespondWith(Response.Create().WithStatusCode(202).WithBody("{}"));
+
+        var (workspace, paths) = CursorCommandTestFixtures.WorkspaceWithOneComposer(
+            "comp-A",
+            generatingBubbleIds: ["b1"]
+        );
 
         var rc = await CursorCommand.RunAsync(
             args: ["import", "--workspace", workspace],
@@ -81,10 +88,12 @@ public class CursorCommandTests {
     [Test]
     public async Task Import_orders_bubbles_by_fullConversationHeadersOnly() {
         using var server = WireMockServer.Start();
+
         server.Given(Request.Create().UsingGet().WithPath("/api/cursor/comp-B/watermark"))
-              .RespondWith(Response.Create().WithStatusCode(404));
+            .RespondWith(Response.Create().WithStatusCode(404));
+
         server.Given(Request.Create().UsingPost().WithPath("/hooks/cursor-import"))
-              .RespondWith(Response.Create().WithStatusCode(202).WithBody("{}"));
+            .RespondWith(Response.Create().WithStatusCode(202).WithBody("{}"));
 
         var (workspace, paths) = CursorCommandTestFixtures.WorkspaceWithBubblesInShuffledOrder("comp-B");
 
@@ -99,9 +108,9 @@ public class CursorCommandTests {
         await Assert.That(posts.Count).IsEqualTo(1);
 
         // Deserialise the posted body and verify bubble order matches fullConversationHeadersOnly
-        var body = posts[0].RequestMessage.Body!;
-        using var doc = JsonDocument.Parse(body);
-        var bubbles = doc.RootElement.GetProperty("bubbles").EnumerateArray().ToList();
+        var       body    = posts[0].RequestMessage.Body!;
+        using var doc     = JsonDocument.Parse(body);
+        var       bubbles = doc.RootElement.GetProperty("bubbles").EnumerateArray().ToList();
         await Assert.That(bubbles.Count).IsEqualTo(3);
         // Expected order: A, B, C  (as declared in fullConversationHeadersOnly)
         await Assert.That(bubbles[0].GetProperty("bubbleId").GetString()).IsEqualTo("comp-B:bub-A");
@@ -115,10 +124,12 @@ public class CursorCommandTests {
         // one orphan bubble not in headers (references blob-orphan).
         // After the fix, only blob-in must appear in the posted contentBlobs dict.
         using var server = WireMockServer.Start();
+
         server.Given(Request.Create().UsingGet().WithPath("/api/cursor/comp-C/watermark"))
-              .RespondWith(Response.Create().WithStatusCode(404));
+            .RespondWith(Response.Create().WithStatusCode(404));
+
         server.Given(Request.Create().UsingPost().WithPath("/hooks/cursor-import"))
-              .RespondWith(Response.Create().WithStatusCode(202).WithBody("{}"));
+            .RespondWith(Response.Create().WithStatusCode(202).WithBody("{}"));
 
         var (workspace, paths) = CursorCommandTestFixtures.WorkspaceWithOrphanBubbleBlobs("comp-C");
 
@@ -132,9 +143,9 @@ public class CursorCommandTests {
         var posts = server.FindLogEntries(Request.Create().UsingPost().WithPath("/hooks/cursor-import"));
         await Assert.That(posts.Count).IsEqualTo(1);
 
-        var body = posts[0].RequestMessage.Body!;
-        using var doc = JsonDocument.Parse(body);
-        var blobs = doc.RootElement.GetProperty("contentBlobs");
+        var       body  = posts[0].RequestMessage.Body!;
+        using var doc   = JsonDocument.Parse(body);
+        var       blobs = doc.RootElement.GetProperty("contentBlobs");
 
         // In-headers bubble's blob must be present
         await Assert.That(blobs.TryGetProperty("composer.content.blob-in", out _)).IsTrue();
@@ -145,10 +156,12 @@ public class CursorCommandTests {
     [Test]
     public async Task Import_returns_nonzero_when_post_fails() {
         using var server = WireMockServer.Start();
+
         server.Given(Request.Create().UsingGet().WithPath("/api/cursor/comp-A/watermark"))
-              .RespondWith(Response.Create().WithStatusCode(404));
+            .RespondWith(Response.Create().WithStatusCode(404));
+
         server.Given(Request.Create().UsingPost().WithPath("/hooks/cursor-import"))
-              .RespondWith(Response.Create().WithStatusCode(500));
+            .RespondWith(Response.Create().WithStatusCode(500));
 
         var (workspace, paths) = CursorCommandTestFixtures.WorkspaceWithOneComposer("comp-A");
 
@@ -166,11 +179,13 @@ public class CursorCommandTests {
         // Use a 1-byte hard cap so the standard minimal payload always exceeds it,
         // avoiding the need to synthesise a real 10 MB fixture.
         using var server = WireMockServer.Start();
+
         server.Given(Request.Create().UsingGet().WithPath("/api/cursor/comp-A/watermark"))
-              .RespondWith(Response.Create().WithStatusCode(404));
+            .RespondWith(Response.Create().WithStatusCode(404));
+
         // POST should never be reached — the cap check comes first.
         server.Given(Request.Create().UsingPost().WithPath("/hooks/cursor-import"))
-              .RespondWith(Response.Create().WithStatusCode(202).WithBody("{}"));
+            .RespondWith(Response.Create().WithStatusCode(202).WithBody("{}"));
 
         var (workspace, paths) = CursorCommandTestFixtures.WorkspaceWithOneComposer("comp-A");
 
@@ -178,7 +193,7 @@ public class CursorCommandTests {
             args: ["import", "--workspace", workspace],
             baseUrl: server.Url!,
             pathsOverride: paths,
-            payloadHardCapBytes: 1   // force every payload to exceed the cap
+            payloadHardCapBytes: 1 // force every payload to exceed the cap
         );
 
         await Assert.That(rc).IsEqualTo(1);
@@ -201,9 +216,9 @@ static class CursorCommandTestFixtures {
     /// <see cref="CursorCommand.ResolveWorkspaces"/> finds the fixture workspace.
     /// </summary>
     public static (string WorkspaceFolder, CursorPaths Paths) WorkspaceWithOneComposer(
-        string    composerId,
-        string[]? generatingBubbleIds = null
-    ) {
+            string    composerId,
+            string[]? generatingBubbleIds = null
+        ) {
         var root = Path.Combine(Path.GetTempPath(), $"cursor-fixture-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
 
@@ -211,29 +226,39 @@ static class CursorCommandTestFixtures {
         var globalDir = Path.Combine(root, "globalStorage");
         Directory.CreateDirectory(globalDir);
         var globalDb = Path.Combine(globalDir, "state.vscdb");
-        CreateDb(globalDb, conn => {
-            Exec(conn, "CREATE TABLE ItemTable    (key TEXT PRIMARY KEY, value TEXT);");
-            Exec(conn, "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT);");
 
-            // Composer header — unifiedMode = "agent", lastUpdatedAt = 1
-            var headersJson = $$"""
-                {"allComposers":[
-                  {"composerId":"{{composerId}}","unifiedMode":"agent","name":"Test Session",
-                   "createdAt":1,"lastUpdatedAt":1}
-                ]}
-                """;
-            ExecParam(conn, "INSERT INTO ItemTable VALUES ('composer.composerHeaders', @v)", headersJson);
+        CreateDb(
+            globalDb,
+            conn => {
+                Exec(conn, "CREATE TABLE ItemTable    (key TEXT PRIMARY KEY, value TEXT);");
+                Exec(conn, "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT);");
 
-            // Minimal composerData blob — include any in-flight generating bubble IDs
-            var ids      = generatingBubbleIds ?? [];
-            var idsJson  = "[" + string.Join(",", ids.Select(id => $"\"{id}\"")) + "]";
-            var dataJson = $$"""
-                {"modelConfig":{"modelName":"claude-4"},"fullConversationHeadersOnly":[],
-                 "generatingBubbleIds":{{idsJson}},"status":"idle"}
-                """;
-            ExecParam(conn, "INSERT INTO cursorDiskKV VALUES (@k, @v)",
-                key: $"composerData:{composerId}", value: dataJson);
-        });
+                // Composer header — unifiedMode = "agent", lastUpdatedAt = 1
+                var headersJson = $$"""
+                                    {"allComposers":[
+                                      {"composerId":"{{composerId}}","unifiedMode":"agent","name":"Test Session",
+                                       "createdAt":1,"lastUpdatedAt":1}
+                                    ]}
+                                    """;
+                ExecParam(conn, "INSERT INTO ItemTable VALUES ('composer.composerHeaders', @v)", headersJson);
+
+                // Minimal composerData blob — include any in-flight generating bubble IDs
+                var ids     = generatingBubbleIds ?? [];
+                var idsJson = "[" + string.Join(",", ids.Select(id => $"\"{id}\"")) + "]";
+
+                var dataJson = $$"""
+                                 {"modelConfig":{"modelName":"claude-4"},"fullConversationHeadersOnly":[],
+                                  "generatingBubbleIds":{{idsJson}},"status":"idle"}
+                                 """;
+
+                ExecParam(
+                    conn,
+                    "INSERT INTO cursorDiskKV VALUES (@k, @v)",
+                    key: $"composerData:{composerId}",
+                    value: dataJson
+                );
+            }
+        );
 
         // ── workspace storage ────────────────────────────────────────────────
         var wsStorageDir = Path.Combine(root, "workspaceStorage");
@@ -243,21 +268,32 @@ static class CursorCommandTestFixtures {
         // The workspace folder is just the temp root itself
         var workspaceFolder = root;
         var folderUri       = $"file://{workspaceFolder}";
-        File.WriteAllText(Path.Combine(wsSubdir, "workspace.json"),
-            $$"""{"folder":"{{folderUri}}"}""");
+
+        File.WriteAllText(
+            Path.Combine(wsSubdir, "workspace.json"),
+            $$"""{"folder":"{{folderUri}}"}"""
+        );
 
         var wsDb = Path.Combine(wsSubdir, "state.vscdb");
-        CreateDb(wsDb, conn => {
-            Exec(conn, "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT);");
-            ExecParam(conn, "INSERT INTO ItemTable VALUES ('composer.composerData', @v)",
-                value: $$"""{"selectedComposerId":"{{composerId}}","selectedComposerIds":["{{composerId}}"]}""");
-        });
+
+        CreateDb(
+            wsDb,
+            conn => {
+                Exec(conn, "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT);");
+
+                ExecParam(
+                    conn,
+                    "INSERT INTO ItemTable VALUES ('composer.composerData', @v)",
+                    value: $$"""{"selectedComposerId":"{{composerId}}","selectedComposerIds":["{{composerId}}"]}"""
+                );
+            }
+        );
 
         // Build paths pointing at our fixture tree
         var paths = new CursorPaths(
-            UserDir:             root,
+            UserDir: root,
             WorkspaceStorageDir: wsStorageDir,
-            GlobalStateDb:       globalDb
+            GlobalStateDb: globalDb
         );
 
         return (workspaceFolder, paths);
@@ -269,54 +305,68 @@ static class CursorCommandTestFixtures {
     /// <c>fullConversationHeadersOnly</c>. Used to verify bubble-ordering fix.
     /// </summary>
     public static (string WorkspaceFolder, CursorPaths Paths) WorkspaceWithBubblesInShuffledOrder(
-        string composerId
-    ) {
+            string composerId
+        ) {
         var root = Path.Combine(Path.GetTempPath(), $"cursor-fixture-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
 
         var globalDir = Path.Combine(root, "globalStorage");
         Directory.CreateDirectory(globalDir);
         var globalDb = Path.Combine(globalDir, "state.vscdb");
-        CreateDb(globalDb, conn => {
-            Exec(conn, "CREATE TABLE ItemTable    (key TEXT PRIMARY KEY, value TEXT);");
-            Exec(conn, "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT);");
 
-            var headersJson = $$"""
-                {"allComposers":[
-                  {"composerId":"{{composerId}}","unifiedMode":"agent","name":"Ordered Test",
-                   "createdAt":1,"lastUpdatedAt":1}
-                ]}
-                """;
-            ExecParam(conn, "INSERT INTO ItemTable VALUES ('composer.composerHeaders', @v)", headersJson);
+        CreateDb(
+            globalDb,
+            conn => {
+                Exec(conn, "CREATE TABLE ItemTable    (key TEXT PRIMARY KEY, value TEXT);");
+                Exec(conn, "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT);");
 
-            // fullConversationHeadersOnly lists A, B, C
-            // SQLite storage order (insert order) is B, C, A — purposely shuffled
-            var bubIdA = $"{composerId}:bub-A";
-            var bubIdB = $"{composerId}:bub-B";
-            var bubIdC = $"{composerId}:bub-C";
+                var headersJson = $$"""
+                                    {"allComposers":[
+                                      {"composerId":"{{composerId}}","unifiedMode":"agent","name":"Ordered Test",
+                                       "createdAt":1,"lastUpdatedAt":1}
+                                    ]}
+                                    """;
+                ExecParam(conn, "INSERT INTO ItemTable VALUES ('composer.composerHeaders', @v)", headersJson);
 
-            var dataJson = $$"""
-                {
-                  "modelConfig":{"modelName":"claude-4"},
-                  "fullConversationHeadersOnly":[
-                    {"bubbleId":"{{bubIdA}}","type":1},
-                    {"bubbleId":"{{bubIdB}}","type":1},
-                    {"bubbleId":"{{bubIdC}}","type":1}
-                  ],
-                  "generatingBubbleIds":[],
-                  "status":"completed"
+                // fullConversationHeadersOnly lists A, B, C
+                // SQLite storage order (insert order) is B, C, A — purposely shuffled
+                var bubIdA = $"{composerId}:bub-A";
+                var bubIdB = $"{composerId}:bub-B";
+                var bubIdC = $"{composerId}:bub-C";
+
+                var dataJson = $$"""
+                                 {
+                                   "modelConfig":{"modelName":"claude-4"},
+                                   "fullConversationHeadersOnly":[
+                                     {"bubbleId":"{{bubIdA}}","type":1},
+                                     {"bubbleId":"{{bubIdB}}","type":1},
+                                     {"bubbleId":"{{bubIdC}}","type":1}
+                                   ],
+                                   "generatingBubbleIds":[],
+                                   "status":"completed"
+                                 }
+                                 """;
+
+                ExecParam(
+                    conn,
+                    "INSERT INTO cursorDiskKV VALUES (@k, @v)",
+                    key: $"composerData:{composerId}",
+                    value: dataJson
+                );
+
+                // Insert bubbles in shuffled order: B, C, A
+                foreach (var (bid, text) in new[] { (bubIdB, "msg B"), (bubIdC, "msg C"), (bubIdA, "msg A") }) {
+                    var bJson = $$"""{"bubbleId":"{{bid}}","type":1,"createdAt":"2024-01-01T00:00:00Z","text":"{{text}}"}""";
+
+                    ExecParam(
+                        conn,
+                        "INSERT INTO cursorDiskKV VALUES (@k, @v)",
+                        key: $"bubbleId:{composerId}:{bid}",
+                        value: bJson
+                    );
                 }
-                """;
-            ExecParam(conn, "INSERT INTO cursorDiskKV VALUES (@k, @v)",
-                key: $"composerData:{composerId}", value: dataJson);
-
-            // Insert bubbles in shuffled order: B, C, A
-            foreach (var (bid, text) in new[] { (bubIdB, "msg B"), (bubIdC, "msg C"), (bubIdA, "msg A") }) {
-                var bJson = $$"""{"bubbleId":"{{bid}}","type":1,"createdAt":"2024-01-01T00:00:00Z","text":"{{text}}"}""";
-                ExecParam(conn, "INSERT INTO cursorDiskKV VALUES (@k, @v)",
-                    key: $"bubbleId:{composerId}:{bid}", value: bJson);
             }
-        });
+        );
 
         var wsStorageDir = Path.Combine(root, "workspaceStorage");
         var wsSubdir     = Path.Combine(wsStorageDir, "ws-fixture");
@@ -324,21 +374,33 @@ static class CursorCommandTestFixtures {
 
         var workspaceFolder = root;
         var folderUri       = $"file://{workspaceFolder}";
-        File.WriteAllText(Path.Combine(wsSubdir, "workspace.json"),
-            $$"""{"folder":"{{folderUri}}"}""");
+
+        File.WriteAllText(
+            Path.Combine(wsSubdir, "workspace.json"),
+            $$"""{"folder":"{{folderUri}}"}"""
+        );
 
         var wsDb = Path.Combine(wsSubdir, "state.vscdb");
-        CreateDb(wsDb, conn => {
-            Exec(conn, "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT);");
-            ExecParam(conn, "INSERT INTO ItemTable VALUES ('composer.composerData', @v)",
-                value: $$"""{"selectedComposerId":"{{composerId}}","selectedComposerIds":["{{composerId}}"]}""");
-        });
+
+        CreateDb(
+            wsDb,
+            conn => {
+                Exec(conn, "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT);");
+
+                ExecParam(
+                    conn,
+                    "INSERT INTO ItemTable VALUES ('composer.composerData', @v)",
+                    value: $$"""{"selectedComposerId":"{{composerId}}","selectedComposerIds":["{{composerId}}"]}"""
+                );
+            }
+        );
 
         var paths = new CursorPaths(
-            UserDir:             root,
+            UserDir: root,
             WorkspaceStorageDir: wsStorageDir,
-            GlobalStateDb:       globalDb
+            GlobalStateDb: globalDb
         );
+
         return (workspaceFolder, paths);
     }
 
@@ -361,51 +423,82 @@ static class CursorCommandTestFixtures {
         var bubIdIn     = $"{composerId}:bub-in";
         var bubIdOrphan = $"{composerId}:bub-orphan";
 
-        CreateDb(globalDb, conn => {
-            Exec(conn, "CREATE TABLE ItemTable    (key TEXT PRIMARY KEY, value TEXT);");
-            Exec(conn, "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT);");
+        CreateDb(
+            globalDb,
+            conn => {
+                Exec(conn, "CREATE TABLE ItemTable    (key TEXT PRIMARY KEY, value TEXT);");
+                Exec(conn, "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT);");
 
-            // Composer header
-            var headersJson = $$"""
-                {"allComposers":[
-                  {"composerId":"{{composerId}}","unifiedMode":"agent","name":"Blob Test",
-                   "createdAt":1,"lastUpdatedAt":1}
-                ]}
-                """;
-            ExecParam(conn, "INSERT INTO ItemTable VALUES ('composer.composerHeaders', @v)", headersJson);
+                // Composer header
+                var headersJson = $$"""
+                                    {"allComposers":[
+                                      {"composerId":"{{composerId}}","unifiedMode":"agent","name":"Blob Test",
+                                       "createdAt":1,"lastUpdatedAt":1}
+                                    ]}
+                                    """;
+                ExecParam(conn, "INSERT INTO ItemTable VALUES ('composer.composerHeaders', @v)", headersJson);
 
-            // fullConversationHeadersOnly: only bub-in is listed; bub-orphan is NOT listed
-            var dataJson = $$"""
-                {
-                  "modelConfig":{"modelName":"claude-4"},
-                  "fullConversationHeadersOnly":[
-                    {"bubbleId":"{{bubIdIn}}","type":2}
-                  ],
-                  "generatingBubbleIds":[],
-                  "status":"completed"
-                }
-                """;
-            ExecParam(conn, "INSERT INTO cursorDiskKV VALUES (@k, @v)",
-                key: $"composerData:{composerId}", value: dataJson);
+                // fullConversationHeadersOnly: only bub-in is listed; bub-orphan is NOT listed
+                var dataJson = $$"""
+                                 {
+                                   "modelConfig":{"modelName":"claude-4"},
+                                   "fullConversationHeadersOnly":[
+                                     {"bubbleId":"{{bubIdIn}}","type":2}
+                                   ],
+                                   "generatingBubbleIds":[],
+                                   "status":"completed"
+                                 }
+                                 """;
 
-            // bub-in: edit_file_v2 referencing blob-in
-            var resultIn  = @"{""beforeContentId"":""composer.content.blob-in"",""afterContentId"":null}";
-            var bubInJson = $@"{{""bubbleId"":""{bubIdIn}"",""type"":2,""createdAt"":""2024-01-01T00:00:00Z"",""toolFormerData"":{{""toolCallId"":""t1"",""name"":""edit_file_v2"",""result"":{resultIn}}}}}";
-            ExecParam(conn, "INSERT INTO cursorDiskKV VALUES (@k, @v)",
-                key: $"bubbleId:{composerId}:{bubIdIn}", value: bubInJson);
+                ExecParam(
+                    conn,
+                    "INSERT INTO cursorDiskKV VALUES (@k, @v)",
+                    key: $"composerData:{composerId}",
+                    value: dataJson
+                );
 
-            // bub-orphan: edit_file_v2 referencing blob-orphan (NOT in headers)
-            var resultOrphan  = @"{""beforeContentId"":""composer.content.blob-orphan"",""afterContentId"":null}";
-            var bubOrphanJson = $@"{{""bubbleId"":""{bubIdOrphan}"",""type"":2,""createdAt"":""2024-01-01T00:00:00Z"",""toolFormerData"":{{""toolCallId"":""t2"",""name"":""edit_file_v2"",""result"":{resultOrphan}}}}}";
-            ExecParam(conn, "INSERT INTO cursorDiskKV VALUES (@k, @v)",
-                key: $"bubbleId:{composerId}:{bubIdOrphan}", value: bubOrphanJson);
+                // bub-in: edit_file_v2 referencing blob-in
+                var resultIn = @"{""beforeContentId"":""composer.content.blob-in"",""afterContentId"":null}";
 
-            // Content blobs referenced by both bubbles
-            ExecParam(conn, "INSERT INTO cursorDiskKV VALUES (@k, @v)",
-                key: "composer.content.blob-in",     value: "// content for in-headers bubble");
-            ExecParam(conn, "INSERT INTO cursorDiskKV VALUES (@k, @v)",
-                key: "composer.content.blob-orphan", value: "// content for orphan bubble");
-        });
+                var bubInJson =
+                    $@"{{""bubbleId"":""{bubIdIn}"",""type"":2,""createdAt"":""2024-01-01T00:00:00Z"",""toolFormerData"":{{""toolCallId"":""t1"",""name"":""edit_file_v2"",""result"":{resultIn}}}}}";
+
+                ExecParam(
+                    conn,
+                    "INSERT INTO cursorDiskKV VALUES (@k, @v)",
+                    key: $"bubbleId:{composerId}:{bubIdIn}",
+                    value: bubInJson
+                );
+
+                // bub-orphan: edit_file_v2 referencing blob-orphan (NOT in headers)
+                var resultOrphan = @"{""beforeContentId"":""composer.content.blob-orphan"",""afterContentId"":null}";
+
+                var bubOrphanJson =
+                    $@"{{""bubbleId"":""{bubIdOrphan}"",""type"":2,""createdAt"":""2024-01-01T00:00:00Z"",""toolFormerData"":{{""toolCallId"":""t2"",""name"":""edit_file_v2"",""result"":{resultOrphan}}}}}";
+
+                ExecParam(
+                    conn,
+                    "INSERT INTO cursorDiskKV VALUES (@k, @v)",
+                    key: $"bubbleId:{composerId}:{bubIdOrphan}",
+                    value: bubOrphanJson
+                );
+
+                // Content blobs referenced by both bubbles
+                ExecParam(
+                    conn,
+                    "INSERT INTO cursorDiskKV VALUES (@k, @v)",
+                    key: "composer.content.blob-in",
+                    value: "// content for in-headers bubble"
+                );
+
+                ExecParam(
+                    conn,
+                    "INSERT INTO cursorDiskKV VALUES (@k, @v)",
+                    key: "composer.content.blob-orphan",
+                    value: "// content for orphan bubble"
+                );
+            }
+        );
 
         var wsStorageDir = Path.Combine(root, "workspaceStorage");
         var wsSubdir     = Path.Combine(wsStorageDir, "ws-fixture");
@@ -413,21 +506,33 @@ static class CursorCommandTestFixtures {
 
         var workspaceFolder = root;
         var folderUri       = $"file://{workspaceFolder}";
-        File.WriteAllText(Path.Combine(wsSubdir, "workspace.json"),
-            $$"""{"folder":"{{folderUri}}"}""");
+
+        File.WriteAllText(
+            Path.Combine(wsSubdir, "workspace.json"),
+            $$"""{"folder":"{{folderUri}}"}"""
+        );
 
         var wsDb = Path.Combine(wsSubdir, "state.vscdb");
-        CreateDb(wsDb, conn => {
-            Exec(conn, "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT);");
-            ExecParam(conn, "INSERT INTO ItemTable VALUES ('composer.composerData', @v)",
-                value: $$"""{"selectedComposerId":"{{composerId}}","selectedComposerIds":["{{composerId}}"]}""");
-        });
+
+        CreateDb(
+            wsDb,
+            conn => {
+                Exec(conn, "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT);");
+
+                ExecParam(
+                    conn,
+                    "INSERT INTO ItemTable VALUES ('composer.composerData', @v)",
+                    value: $$"""{"selectedComposerId":"{{composerId}}","selectedComposerIds":["{{composerId}}"]}"""
+                );
+            }
+        );
 
         var paths = new CursorPaths(
-            UserDir:             root,
+            UserDir: root,
             WorkspaceStorageDir: wsStorageDir,
-            GlobalStateDb:       globalDb
+            GlobalStateDb: globalDb
         );
+
         return (workspaceFolder, paths);
     }
 

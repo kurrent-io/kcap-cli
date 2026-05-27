@@ -1,7 +1,7 @@
 using Kapacitor.Cli.Commands;
 using Kapacitor.Cli.Core;
 
-namespace Kapacitor.Cli.Tests.Unit;
+namespace Kapacitor.Cli.Tests.Unit.Import;
 
 public class ImportChainTests {
     static ImportCommand.SessionClassification Classify(

@@ -1,7 +1,7 @@
 using Kapacitor.Cli.Core.Config;
 using Kapacitor.Cli.Daemon;
 
-namespace Kapacitor.Cli.Tests.Unit;
+namespace Kapacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
 /// Verifies that <see cref="DaemonConfig"/> is correctly populated from

@@ -1,6 +1,6 @@
 using Kapacitor.Cli.Commands;
 
-namespace Kapacitor.Cli.Tests.Unit;
+namespace Kapacitor.Cli.Tests.Unit.Import;
 
 public class ImportScopePromptTests {
     // --- BuildRepoChoices ---
