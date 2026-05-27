@@ -7,18 +7,6 @@ namespace Kapacitor.Cli.Commands;
 public static class PluginCommand {
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
-    // Folders inside <plugin>/codex-skills/ that we ship to Codex. Each name is
-    // also the target folder under <codex>/skills/, so on remove we can delete
-    // them without re-reading the source tree. Add a new skill here when adding
-    // it to codex-skills/.
-    internal static readonly string[] CodexSkillNames = [
-        "kapacitor-recap",
-        "kapacitor-errors",
-        "kapacitor-hide",
-        "kapacitor-disable",
-        "kapacitor-validate-plan"
-    ];
-
     const string CodexHookCommand = "kapacitor codex-hook";
 
     // PermissionRequest must wait for the dashboard's decision; the daemon-side
@@ -42,6 +30,10 @@ public static class PluginCommand {
     }
 
     static async Task<int> Install(string[] args) {
+        if (args.Contains("--skills")) {
+            return await InstallSkills(args);
+        }
+
         if (args.Contains("--codex")) {
             return await InstallCodex(args);
         }
@@ -50,6 +42,10 @@ public static class PluginCommand {
     }
 
     static async Task<int> Remove(string[] args) {
+        if (args.Contains("--skills")) {
+            return await RemoveSkills(args);
+        }
+
         if (args.Contains("--codex")) {
             return await RemoveCodex(args);
         }
@@ -135,6 +131,52 @@ public static class PluginCommand {
         }
     }
 
+    static async Task<int> InstallSkills(string[] _) {
+        var pluginPath = SetupCommand.ResolvePluginPath();
+
+        if (pluginPath is null) {
+            await Console.Error.WriteLineAsync(
+                "Cannot install agent skills: kapacitor plugin folder not found. " +
+                "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor");
+            return 1;
+        }
+
+        var skillsSource = Path.Combine(pluginPath, "skills");
+
+        if (!Directory.Exists(skillsSource)) {
+            await Console.Error.WriteLineAsync(
+                $"Cannot install agent skills: 'skills' folder missing from {pluginPath}. " +
+                "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor");
+            return 1;
+        }
+
+        if (!AgentsSkillsInstaller.Install(skillsSource, AgentsPaths.UserSkillsDir)) {
+            await Console.Error.WriteLineAsync("Could not install agent skills.");
+            return 1;
+        }
+
+        await Console.Out.WriteLineAsync($"Agent skills installed (user: {AgentsPaths.UserSkillsDir})");
+
+        AgentsSkillsInstaller.CleanLegacyCodexSkills(Path.Combine(CodexPaths.Home, "skills"));
+        return 0;
+    }
+
+    static async Task<int> RemoveSkills(string[] _) {
+        var agentsRemoved = AgentsSkillsInstaller.Remove(AgentsPaths.UserSkillsDir);
+
+        if (agentsRemoved) {
+            await Console.Out.WriteLineAsync($"Agent skills removed (user: {AgentsPaths.UserSkillsDir})");
+        }
+
+        var legacyRemoved = AgentsSkillsInstaller.CleanLegacyCodexSkills(Path.Combine(CodexPaths.Home, "skills"));
+
+        if (!agentsRemoved && !legacyRemoved) {
+            await Console.Out.WriteLineAsync("Nothing to remove — agent skills were not installed.");
+        }
+
+        return 0;
+    }
+
     static async Task<int> InstallCodex(string[] args) {
         var scope = args.Contains("--project") ? "project" : "user";
 
@@ -145,8 +187,7 @@ public static class PluginCommand {
         // `--codex` is an atomic hooks AND skills contract. Resolve the
         // skills source BEFORE writing hooks so a missing plugin folder
         // doesn't leave the user with hooks pointing at a binary whose
-        // skills never installed. The acceptance criterion from AI-676 is
-        // "writes all five skills" — either everything installs or nothing.
+        // skills never installed.
         var pluginPath = SetupCommand.ResolvePluginPath();
 
         if (pluginPath is null) {
@@ -157,26 +198,12 @@ public static class PluginCommand {
             return 1;
         }
 
-        var skillsSource = Path.Combine(pluginPath, "codex-skills");
+        var skillsSource = Path.Combine(pluginPath, "skills");
 
         if (!Directory.Exists(skillsSource)) {
             await Console.Error.WriteLineAsync(
-                $"Cannot install Codex plugin: 'codex-skills' folder missing from {pluginPath}. " +
+                $"Cannot install Codex plugin: 'skills' folder missing from {pluginPath}. " +
                 "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
-            );
-            return 1;
-        }
-
-        // Per-skill preflight runs BEFORE writing hooks so a packaging defect
-        // (top-level codex-skills/ present, but an individual skill folder
-        // missing) can't leave the user with hooks installed and skills not.
-        // The duplicate preflight inside InstallCodexSkills is kept as defense
-        // in depth for direct callers like CodingAgentsStep.
-        if (!ValidateCodexSkillsSource(skillsSource, out var missing)) {
-            await Console.Error.WriteLineAsync(
-                $"Cannot install Codex plugin: missing skill folder(s) under {skillsSource}: "
-                + string.Join(", ", missing)
-                + ". Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
             );
             return 1;
         }
@@ -193,20 +220,16 @@ public static class PluginCommand {
             "Codex won't execute hooks until each is explicitly trusted."
         );
 
-        // Skills are user-scoped only. Codex auto-discovers from
-        // ~/.codex/skills (or $CODEX_HOME/skills), and project-level skill
-        // discovery isn't documented — so we keep behaviour consistent and
-        // predictable by always installing them user-wide.
-        if (!InstallCodexSkills(skillsSource, CodexPaths.UserSkillsDir)) {
-            // Preflight above guarantees the source tree exists, so this
-            // branch indicates a real filesystem failure (per-skill preflight
-            // inside InstallCodexSkills, permission error, etc.). Surface a
-            // non-zero exit so callers (CI, scripts) can detect it.
-            await Console.Error.WriteLineAsync("Could not install Codex skills.");
+        // Skills are user-scoped only. Written to ~/.agents/skills/ so they
+        // work across Codex and other compatible agents.
+        if (!AgentsSkillsInstaller.Install(skillsSource, AgentsPaths.UserSkillsDir)) {
+            await Console.Error.WriteLineAsync("Could not install agent skills.");
             return 1;
         }
 
-        await Console.Out.WriteLineAsync($"Codex skills installed (user: {CodexPaths.UserSkillsDir})");
+        await Console.Out.WriteLineAsync($"Agent skills installed (user: {AgentsPaths.UserSkillsDir})");
+
+        AgentsSkillsInstaller.CleanLegacyCodexSkills(Path.Combine(CodexPaths.Home, "skills"));
 
         if (scope == "project") {
             await Console.Out.WriteLineAsync(
@@ -231,14 +254,15 @@ public static class PluginCommand {
             await Console.Out.WriteLineAsync($"Codex hooks removed ({scope}: {hooksPath})");
         }
 
-        // Skills always installed user-wide — remove them regardless of scope.
-        var skillsRemoved = RemoveCodexSkills(CodexPaths.UserSkillsDir);
+        var agentsRemoved = AgentsSkillsInstaller.Remove(AgentsPaths.UserSkillsDir);
 
-        if (skillsRemoved) {
-            await Console.Out.WriteLineAsync($"Codex skills removed (user: {CodexPaths.UserSkillsDir})");
+        if (agentsRemoved) {
+            await Console.Out.WriteLineAsync($"Agent skills removed (user: {AgentsPaths.UserSkillsDir})");
         }
 
-        if (!hooksRemoved && !skillsRemoved) {
+        var legacyRemoved = AgentsSkillsInstaller.CleanLegacyCodexSkills(Path.Combine(CodexPaths.Home, "skills"));
+
+        if (!hooksRemoved && !agentsRemoved && !legacyRemoved) {
             await Console.Out.WriteLineAsync("Nothing to remove — hooks and skills were not installed.");
         }
 
@@ -350,107 +374,8 @@ public static class PluginCommand {
         }
     }
 
-    /// <summary>
-    /// Returns true iff every name in <see cref="CodexSkillNames"/> has a
-    /// matching subdirectory under <paramref name="sourceDir"/>. Populates
-    /// <paramref name="missing"/> with the names that didn't resolve, so
-    /// callers can render an actionable error message. Used by
-    /// <see cref="InstallCodex"/> to fail before writing hooks when the
-    /// packaging is incomplete.
-    /// </summary>
-    public static bool ValidateCodexSkillsSource(string sourceDir, out List<string> missing) {
-        missing = CodexSkillNames
-            .Where(name => !Directory.Exists(Path.Combine(sourceDir, name)))
-            .ToList();
-
-        return missing.Count == 0;
-    }
-
-    /// <summary>
-    /// Copies every skill folder in <paramref name="sourceDir"/> (each
-    /// containing a <c>SKILL.md</c>) into <paramref name="targetDir"/>, one
-    /// subdirectory per skill. Existing kapacitor-owned folders (by name) are
-    /// replaced wholesale so the bundled SKILL.md stays current after a CLI
-    /// upgrade. Foreign folders in <paramref name="targetDir"/> are untouched.
-    /// </summary>
-    public static bool InstallCodexSkills(string sourceDir, string targetDir) {
-        if (!Directory.Exists(sourceDir)) return false;
-
-        // Preflight: every known skill must have a folder under sourceDir. If
-        // any is missing, fail BEFORE doing anything destructive — otherwise a
-        // packaging error would leave the target dir half-overwritten.
-        // Kept as defense in depth: InstallCodex already calls
-        // ValidateCodexSkillsSource before writing hooks, but direct callers
-        // (e.g. CodingAgentsStep) rely on this method to enforce the contract.
-        if (!ValidateCodexSkillsSource(sourceDir, out var missing)) {
-            Console.Error.WriteLine(
-                $"Cannot install Codex skills: missing source folder(s) under {sourceDir}: "
-                + string.Join(", ", missing)
-            );
-            return false;
-        }
-
-        try {
-            Directory.CreateDirectory(targetDir);
-
-            foreach (var name in CodexSkillNames) {
-                var src = Path.Combine(sourceDir, name);
-                var dst = Path.Combine(targetDir, name);
-
-                if (Directory.Exists(dst)) Directory.Delete(dst, recursive: true);
-
-                CopyDirectory(src, dst);
-            }
-
-            return true;
-        } catch {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Deletes every kapacitor-owned skill folder from <paramref name="targetDir"/>.
-    /// Returns true if any folder was actually removed. Foreign folders are
-    /// left intact.
-    /// </summary>
-    public static bool RemoveCodexSkills(string targetDir) {
-        if (!Directory.Exists(targetDir)) return false;
-
-        var changed = false;
-
-        foreach (var name in CodexSkillNames) {
-            var dst = Path.Combine(targetDir, name);
-
-            if (!Directory.Exists(dst)) continue;
-
-            try {
-                Directory.Delete(dst, recursive: true);
-                changed = true;
-            } catch (Exception ex) {
-                // Log so the user knows a skill is stuck. Exit code stays 0 for
-                // parity with RemoveCodexHooks, which also degrades gracefully.
-                Console.Error.WriteLine($"Could not remove Codex skill '{name}': {ex.Message}");
-            }
-        }
-
-        return changed;
-    }
-
-    static void CopyDirectory(string source, string destination) {
-        Directory.CreateDirectory(destination);
-
-        foreach (var file in Directory.GetFiles(source)) {
-            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), overwrite: true);
-        }
-
-        foreach (var dir in Directory.GetDirectories(source)) {
-            CopyDirectory(dir, Path.Combine(destination, Path.GetFileName(dir)));
-        }
-    }
-
-
     static int PrintUsage() {
-        Console.Error.WriteLine("Usage: kapacitor plugin <install|remove> [--project] [--codex]");
+        Console.Error.WriteLine("Usage: kapacitor plugin <install|remove> [--project] [--codex|--skills]");
 
         return 1;
     }

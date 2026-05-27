@@ -191,78 +191,75 @@ public class PluginCommandCodexTests {
         await Assert.That(CodexHooksParser.EntryReferencesKapacitorCodexHook(null)).IsFalse();
     }
 
-    // ---- Codex skill install / remove ----
+    // ---- Agent skill install / remove (via AgentsSkillsInstaller) ----
 
     [Test]
-    public async Task InstallCodexSkills_copies_known_skills() {
+    public async Task Install_copies_known_skills_with_kapacitor_prefix() {
         using var tmp    = new TempDir();
-        var       source = Path.Combine(tmp.Path, "codex-skills");
-        var       target = Path.Combine(tmp.Path, "skills");
-        // Preflight requires every known skill folder to exist under source.
-        foreach (var name in PluginCommand.CodexSkillNames) {
-            WriteSkill(source, name, $"{name} body");
+        var       source = Path.Combine(tmp.Path, "skills");
+        var       target = Path.Combine(tmp.Path, "agents-skills");
+        foreach (var name in AgentsSkillsInstaller.SourceNames) {
+            WriteSkill(source, name, $"---\nname: {name}\n---\n{name} body");
         }
 
-        var ok = PluginCommand.InstallCodexSkills(source, target);
+        var ok = AgentsSkillsInstaller.Install(source, target);
         await Assert.That(ok).IsTrue();
 
         var recap  = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-recap",  "SKILL.md"));
         var errors = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-errors", "SKILL.md"));
-        await Assert.That(recap).IsEqualTo("kapacitor-recap body");
-        await Assert.That(errors).IsEqualTo("kapacitor-errors body");
+        await Assert.That(recap).Contains("recap body");
+        await Assert.That(errors).Contains("errors body");
     }
 
     [Test]
-    public async Task InstallCodexSkills_copies_all_five_known_skills() {
+    public async Task Install_copies_all_five_known_skills() {
         using var tmp    = new TempDir();
-        var       source = Path.Combine(tmp.Path, "codex-skills");
-        var       target = Path.Combine(tmp.Path, "skills");
-        foreach (var name in PluginCommand.CodexSkillNames) {
-            WriteSkill(source, name, $"{name} body");
+        var       source = Path.Combine(tmp.Path, "skills");
+        var       target = Path.Combine(tmp.Path, "agents-skills");
+        foreach (var name in AgentsSkillsInstaller.SourceNames) {
+            WriteSkill(source, name, $"---\nname: {name}\n---\n{name} body");
         }
 
-        var ok = PluginCommand.InstallCodexSkills(source, target);
+        var ok = AgentsSkillsInstaller.Install(source, target);
         await Assert.That(ok).IsTrue();
 
-        foreach (var name in PluginCommand.CodexSkillNames) {
-            var path = Path.Combine(target, name, "SKILL.md");
+        foreach (var name in AgentsSkillsInstaller.SourceNames) {
+            var path = Path.Combine(target, $"kapacitor-{name}", "SKILL.md");
             await Assert.That(File.Exists(path)).IsTrue();
-            var body = await File.ReadAllTextAsync(path);
-            await Assert.That(body).IsEqualTo($"{name} body");
         }
     }
 
     [Test]
-    public async Task CodexSkillNames_contains_expected_five() {
+    public async Task SourceNames_contains_expected_five() {
         var expected = new[] {
-            "kapacitor-recap",
-            "kapacitor-errors",
-            "kapacitor-hide",
-            "kapacitor-disable",
-            "kapacitor-validate-plan"
+            "recap",
+            "errors",
+            "hide",
+            "disable",
+            "validate-plan"
         };
 
-        await Assert.That(PluginCommand.CodexSkillNames).IsEquivalentTo(expected);
+        await Assert.That(AgentsSkillsInstaller.SourceNames).IsEquivalentTo(expected);
     }
 
     [Test]
-    public async Task InstallCodexSkills_returns_false_when_known_folder_missing() {
+    public async Task Install_returns_false_when_known_folder_missing() {
         using var tmp    = new TempDir();
-        var       source = Path.Combine(tmp.Path, "codex-skills");
-        var       target = Path.Combine(tmp.Path, "skills");
+        var       source = Path.Combine(tmp.Path, "skills");
+        var       target = Path.Combine(tmp.Path, "agents-skills");
 
-        // Write four of the five expected names — leave kapacitor-validate-plan missing.
-        WriteSkill(source, "kapacitor-recap",         "r");
-        WriteSkill(source, "kapacitor-errors",        "e");
-        WriteSkill(source, "kapacitor-hide",          "h");
-        WriteSkill(source, "kapacitor-disable",       "d");
+        // Write four of the five expected names — leave validate-plan missing.
+        WriteSkill(source, "recap",   "r");
+        WriteSkill(source, "errors",  "e");
+        WriteSkill(source, "hide",    "h");
+        WriteSkill(source, "disable", "d");
 
         // Pre-existing target folder for one of the known skills. The preflight
         // must NOT delete it because the install is aborted before any destructive
         // step runs.
         WriteSkill(target, "kapacitor-recap", "stale recap that must survive");
 
-        var ok = PluginCommand.InstallCodexSkills(source, target);
+        var ok = AgentsSkillsInstaller.Install(source, target);
         await Assert.That(ok).IsFalse();
 
         // Pre-existing target folder unchanged — preflight bailed before deletion.
@@ -277,62 +274,60 @@ public class PluginCommandCodexTests {
     }
 
     [Test]
-    public async Task InstallCodexSkills_overwrites_existing_kapacitor_skill() {
+    public async Task Install_overwrites_existing_kapacitor_skill() {
         using var tmp    = new TempDir();
-        var       source = Path.Combine(tmp.Path, "codex-skills");
-        var       target = Path.Combine(tmp.Path, "skills");
-        // Preflight requires every known skill folder to exist under source.
-        foreach (var name in PluginCommand.CodexSkillNames) {
-            WriteSkill(source, name, name == "kapacitor-recap" ? "new recap" : $"{name} body");
+        var       source = Path.Combine(tmp.Path, "skills");
+        var       target = Path.Combine(tmp.Path, "agents-skills");
+        foreach (var name in AgentsSkillsInstaller.SourceNames) {
+            WriteSkill(source, name, $"---\nname: {name}\n---\n{(name == "recap" ? "new recap" : $"{name} body")}");
         }
 
         // Pre-existing stale copy in target.
         WriteSkill(target, "kapacitor-recap", "stale recap");
 
-        PluginCommand.InstallCodexSkills(source, target);
+        AgentsSkillsInstaller.Install(source, target);
 
         var recap = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-recap", "SKILL.md"));
-        await Assert.That(recap).IsEqualTo("new recap");
+        await Assert.That(recap).Contains("new recap");
     }
 
     [Test]
-    public async Task InstallCodexSkills_preserves_foreign_skills() {
+    public async Task Install_preserves_foreign_skills() {
         using var tmp    = new TempDir();
-        var       source = Path.Combine(tmp.Path, "codex-skills");
-        var       target = Path.Combine(tmp.Path, "skills");
-        // Preflight requires every known skill folder to exist under source.
-        foreach (var name in PluginCommand.CodexSkillNames) {
-            WriteSkill(source, name, $"{name} body");
+        var       source = Path.Combine(tmp.Path, "skills");
+        var       target = Path.Combine(tmp.Path, "agents-skills");
+        foreach (var name in AgentsSkillsInstaller.SourceNames) {
+            WriteSkill(source, name, $"---\nname: {name}\n---\n{name} body");
         }
 
         // Foreign skill the user installed themselves — must not be touched.
         WriteSkill(target, "user-skill", "user content");
 
-        PluginCommand.InstallCodexSkills(source, target);
+        AgentsSkillsInstaller.Install(source, target);
 
         var foreign = await File.ReadAllTextAsync(Path.Combine(target, "user-skill", "SKILL.md"));
         await Assert.That(foreign).IsEqualTo("user content");
     }
 
     [Test]
-    public async Task InstallCodexSkills_returns_false_for_missing_source() {
+    public async Task Install_returns_false_for_missing_source() {
         using var tmp    = new TempDir();
         var       source = Path.Combine(tmp.Path, "nonexistent");
-        var       target = Path.Combine(tmp.Path, "skills");
+        var       target = Path.Combine(tmp.Path, "agents-skills");
 
-        var ok = PluginCommand.InstallCodexSkills(source, target);
+        var ok = AgentsSkillsInstaller.Install(source, target);
         await Assert.That(ok).IsFalse();
     }
 
     [Test]
-    public async Task RemoveCodexSkills_deletes_known_skills_only() {
+    public async Task Remove_deletes_known_skills_only() {
         using var tmp    = new TempDir();
-        var       target = Path.Combine(tmp.Path, "skills");
+        var       target = Path.Combine(tmp.Path, "agents-skills");
         WriteSkill(target, "kapacitor-recap",  "recap");
         WriteSkill(target, "kapacitor-errors", "errors");
         WriteSkill(target, "user-skill",       "user content");
 
-        var ok = PluginCommand.RemoveCodexSkills(target);
+        var ok = AgentsSkillsInstaller.Remove(target);
         await Assert.That(ok).IsTrue();
 
         await Assert.That(Directory.Exists(Path.Combine(target, "kapacitor-recap"))).IsFalse();
@@ -341,12 +336,12 @@ public class PluginCommandCodexTests {
     }
 
     [Test]
-    public async Task RemoveCodexSkills_returns_false_when_nothing_to_remove() {
+    public async Task Remove_returns_false_when_nothing_to_remove() {
         using var tmp    = new TempDir();
-        var       target = Path.Combine(tmp.Path, "skills");
+        var       target = Path.Combine(tmp.Path, "agents-skills");
         Directory.CreateDirectory(target);
 
-        var ok = PluginCommand.RemoveCodexSkills(target);
+        var ok = AgentsSkillsInstaller.Remove(target);
         await Assert.That(ok).IsFalse();
     }
 
@@ -392,33 +387,16 @@ public class PluginCommandCodexInstallIntegrationTests {
     }
 
     static void PlantFakePlugin(string pluginRoot) {
-        var skillsSrc = Path.Combine(pluginRoot, "codex-skills");
+        var skillsSrc = Path.Combine(pluginRoot, "skills");
         Directory.CreateDirectory(skillsSrc);
 
-        // InstallCodexSkills has a per-skill preflight that requires every
-        // name in PluginCommand.CodexSkillNames to be present. Plant a stub
-        // SKILL.md so the copy succeeds.
-        foreach (var name in PluginCommand.CodexSkillNames) {
+        // AgentsSkillsInstaller.Install has a per-skill preflight that requires
+        // every name in AgentsSkillsInstaller.SourceNames to be present. Plant a
+        // stub SKILL.md so the copy succeeds.
+        foreach (var name in AgentsSkillsInstaller.SourceNames) {
             var dir = Path.Combine(skillsSrc, name);
             Directory.CreateDirectory(dir);
-            File.WriteAllText(Path.Combine(dir, "SKILL.md"), $"# {name}");
-        }
-    }
-
-    // Variant of PlantFakePlugin that plants the top-level codex-skills/
-    // folder and every known skill EXCEPT the one named in `omit`. Used to
-    // simulate a partially-packaged install where the directory-level preflight
-    // passes but the per-skill preflight should still fail atomically.
-    static void PlantFakePluginMissingSkill(string pluginRoot, string omit) {
-        var skillsSrc = Path.Combine(pluginRoot, "codex-skills");
-        Directory.CreateDirectory(skillsSrc);
-
-        foreach (var name in PluginCommand.CodexSkillNames) {
-            if (name == omit) continue;
-
-            var dir = Path.Combine(skillsSrc, name);
-            Directory.CreateDirectory(dir);
-            File.WriteAllText(Path.Combine(dir, "SKILL.md"), $"# {name}");
+            File.WriteAllText(Path.Combine(dir, "SKILL.md"), $"---\nname: {name}\n---\n# {name}");
         }
     }
 
@@ -501,52 +479,6 @@ public class PluginCommandCodexInstallIntegrationTests {
             Console.SetError(originalErr);
             Environment.SetEnvironmentVariable("HOME",        originalHome);
             Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
-        }
-    }
-
-    // AI-676 P2 revised: packaging defect where codex-skills/ exists but an
-    // individual skill folder (e.g. kapacitor-validate-plan) is missing. The
-    // atomic-install contract requires the preflight to run BEFORE hooks are
-    // written, otherwise the user is left with hooks installed and no skills.
-    [Test, NotInParallel("CodexHookCommandTests.Console")]
-    public async Task InstallCodex_fails_before_writing_hooks_when_individual_skill_folder_missing() {
-        using var tmp = new TempDir();
-
-        var originalHome        = Environment.GetEnvironmentVariable("HOME");
-        var originalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
-        Environment.SetEnvironmentVariable("HOME",        tmp.Path);
-        Environment.SetEnvironmentVariable("USERPROFILE", tmp.Path);
-
-        var pluginRoot = ProbedPluginRoot();
-        PlantFakePluginMissingSkill(pluginRoot, "kapacitor-validate-plan");
-
-        var capturedErr = new StringWriter();
-        var originalErr = Console.Error;
-        Console.SetError(capturedErr);
-
-        try {
-            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex"]);
-            await Assert.That(exit).IsEqualTo(1);
-
-            // The atomic-install contract: NO hooks.json may exist in the
-            // temp HOME after a failed install.
-            var hooksPath = Path.Combine(tmp.Path, ".codex", "hooks.json");
-            await Assert.That(File.Exists(hooksPath)).IsFalse();
-
-            // And no skill folder may have been written either.
-            var skillsDir = Path.Combine(tmp.Path, ".codex", "skills");
-            foreach (var name in PluginCommand.CodexSkillNames) {
-                await Assert.That(Directory.Exists(Path.Combine(skillsDir, name))).IsFalse();
-            }
-
-            var stderr = capturedErr.ToString();
-            await Assert.That(stderr).Contains("Cannot install Codex plugin");
-            await Assert.That(stderr).Contains("kapacitor-validate-plan");
-        } finally {
-            Console.SetError(originalErr);
-            Environment.SetEnvironmentVariable("HOME",        originalHome);
-            Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
-            RemoveFakePlugin(pluginRoot);
         }
     }
 

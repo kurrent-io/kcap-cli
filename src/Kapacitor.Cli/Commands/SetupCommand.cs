@@ -187,7 +187,7 @@ public static class SetupCommand {
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin: InstallPlugin,
             InstallCodexHooks:   PluginCommand.InstallCodexHooks,
-            InstallCodexSkills:  PluginCommand.InstallCodexSkills);
+            InstallCodexSkills:  Kapacitor.Cli.Core.AgentsSkillsInstaller.Install);
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
@@ -303,6 +303,11 @@ public static class SetupCommand {
     }
 
     internal static string? ResolvePluginPath() {
+        var overrideDir = Environment.GetEnvironmentVariable("KAPACITOR_PLUGIN_DIR");
+        if (!string.IsNullOrWhiteSpace(overrideDir) && Directory.Exists(overrideDir)) {
+            return overrideDir;
+        }
+
         var exePath = Environment.ProcessPath;
 
         if (exePath is null) return null;
