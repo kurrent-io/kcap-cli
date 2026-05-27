@@ -1,5 +1,5 @@
 ---
-name: session-hide
+name: hide
 description: >-
   This skill should be used when the user asks to "hide this session",
   "make this private", "hide session", "owner only", "make private",

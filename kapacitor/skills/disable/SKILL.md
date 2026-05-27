@@ -1,5 +1,5 @@
 ---
-name: session-disable
+name: disable
 description: >-
   This skill should be used when the user asks to "disable recording",
   "stop recording", "delete this session", "don't record this",

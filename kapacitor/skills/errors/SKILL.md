@@ -1,5 +1,5 @@
 ---
-name: session-errors
+name: errors
 description: >-
   This skill should be used when the user asks to "show errors", "extract errors",
   "what went wrong", "find tool errors", "review errors from session",

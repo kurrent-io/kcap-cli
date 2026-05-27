@@ -1,5 +1,5 @@
 ---
-name: session-recap
+name: recap
 description: >-
   This skill should be used when the user asks to "read a previous session",
   "get session history", "recap session", "what happened in session X",
