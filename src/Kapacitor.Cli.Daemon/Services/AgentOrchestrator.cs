@@ -7,6 +7,7 @@ using Kapacitor.Cli.Core.Auth;
 using Kapacitor.Cli.Core.Commands;
 using Kapacitor.Cli.Core.Config;
 using Kapacitor.Cli.Daemon.Pty;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Kapacitor.Cli.Daemon.Services;
@@ -85,7 +86,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // application-level liveness probe.
     readonly PeriodicTimer                               _daemonHeartbeat = new(TimeSpan.FromSeconds(7));
     static readonly TimeSpan                             _pingDeadline    = TimeSpan.FromSeconds(5);
-    readonly CancellationTokenSource                     _shutdownCts     = new();
+    // Linked to IHostApplicationLifetime.ApplicationStopping so the shutdown gate
+    // trips as soon as the host begins stopping — the same instant ServerConnection's
+    // _ct (also ApplicationStopping) cancels SignalR calls. Otherwise there's a
+    // window between ApplicationStopping firing and DisposeAsync running where
+    // server calls would still throw TaskCanceledException unguarded.
+    readonly CancellationTokenSource                     _shutdownCts;
 
     public AgentOrchestrator(
             DaemonConfig                                       config,
@@ -96,8 +102,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             IHttpClientFactory                                 httpClientFactory,
             LocalPermissionBridge                              permissionBridge,
             IReadOnlyDictionary<string, IHostedAgentLauncher>  launchers,
+            IHostApplicationLifetime                           lifetime,
             ILogger<AgentOrchestrator>                         logger
         ) {
+        _shutdownCts = CancellationTokenSource.CreateLinkedTokenSource(lifetime.ApplicationStopping);
         _config            = config;
         _server            = server;
         _worktreeManager   = worktreeManager;
@@ -498,6 +506,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (result.GenerateWhatsDone && result.SessionId is not null) {
                     SpawnWhatsDoneGenerator(result.SessionId);
                 }
+            } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) {
+                // Shutdown fired mid-call — connection is being torn down. Server
+                // detects daemon disconnection independently. No warning needed.
             } catch (Exception ex) {
                 LogEndSessionFailed(ex, agent.Id);
             }
@@ -849,9 +860,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         // Skip server unregister during shutdown — _ct is cancelled and the call
         // would throw TaskCanceledException. The server detects the daemon
-        // disconnection through SignalR's transport-level signals.
+        // disconnection through SignalR's transport-level signals. Filtered
+        // catch covers the residual race where shutdown fires mid-call.
         if (!_shutdownCts.IsCancellationRequested) {
-            try { await _server.AgentUnregisteredAsync(agentId); } catch (Exception ex) { LogCleanupStepFailed(ex, "unregistering", agentId); }
+            try { await _server.AgentUnregisteredAsync(agentId); }
+            catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) { }
+            catch (Exception ex) { LogCleanupStepFailed(ex, "unregistering", agentId); }
         }
     }
 
