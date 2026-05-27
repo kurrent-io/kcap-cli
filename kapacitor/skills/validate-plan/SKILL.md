@@ -9,7 +9,7 @@ description: >-
 
 # Validate Plan
 
-Verify that all items in the current session's plan have been completed. Plans come from either a continuation (`SessionStarted.planContent`) or an in-session `ExitPlanMode` write to `~/.claude/plans/`.
+Verify that all items in the current session's plan have been completed. Plans come from either a session continuation (`SessionStarted.planContent`) or an in-session plan recorded by the kapacitor hooks.
 
 ## Usage
 
@@ -44,7 +44,7 @@ The command outputs three sections:
 
 If the output says "No plan found for this session", inform the user that no plan was detected for this session. A plan is only present when:
 - The session continued from a previous session that had a plan (`planContent`)
-- The session used `ExitPlanMode` to create a plan file (written to `~/.claude/plans/`)
+- The session recorded an in-session plan via the kapacitor hooks.
 
 ## Environment
 

@@ -47,7 +47,7 @@ When using `--chain`, errors from all sessions in the continuation chain are inc
 
 ## Practical Applications
 
-- **End-of-session review** — run after finishing a session to identify recurring mistakes and update CLAUDE.md with avoidance rules
+- **End-of-session review** — run after finishing a session to identify recurring mistakes and add avoidance rules to the project's agent instructions file (e.g. `AGENTS.md` or `CLAUDE.md`).
 - **Debugging** — quickly find what went wrong in a session without scrolling through the full timeline
 - **Pattern detection** — use `--chain` across a multi-session task to spot repeated error patterns (e.g., wrong file paths, incorrect API usage)
 
@@ -58,7 +58,7 @@ The `KAPACITOR_URL` environment variable overrides the default server URL (`http
 ## Tips
 
 - After extracting errors, look for patterns: the same tool failing repeatedly, or the same type of mistake across sessions.
-- Propose concrete avoidance rules based on the errors found — these can be added to the project's CLAUDE.md.
+- Propose concrete avoidance rules based on the errors found — these can be added to the project's agent instructions file.
 - The `kapacitor` CLI must be available on PATH (typically installed at `~/.local/bin/kapacitor`).
 
 ## Error Handling
