@@ -65,6 +65,62 @@ public static class AgentsSkillsInstaller {
         }
     }
 
+    /// <summary>
+    /// Deletes every <c>kapacitor-&lt;name&gt;</c> folder this installer owns
+    /// from <paramref name="targetDir"/>. User-authored folders are left alone.
+    /// Returns true if any folder was removed.
+    /// </summary>
+    public static bool Remove(string targetDir) {
+        if (!Directory.Exists(targetDir)) return false;
+
+        var changed = false;
+        foreach (var name in SourceNames) {
+            var dst = Path.Combine(targetDir, "kapacitor-" + name);
+            if (!Directory.Exists(dst)) continue;
+            try {
+                Directory.Delete(dst, recursive: true);
+                changed = true;
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"Could not remove agent skill 'kapacitor-{name}': {ex.Message}");
+            }
+        }
+        return changed;
+    }
+
+    /// <summary>
+    /// Removes legacy <c>kapacitor-*</c> folders that prior installer versions
+    /// wrote to <c>~/.codex/skills/</c>. List of folder names is fixed
+    /// (<see cref="LegacyCodexSkillNames"/>); user-authored skills are never
+    /// touched. If the parent directory becomes empty, it is removed too.
+    /// </summary>
+    public static bool CleanLegacyCodexSkills(string legacySkillsDir) {
+        if (!Directory.Exists(legacySkillsDir)) return false;
+
+        var changed = false;
+        foreach (var name in LegacyCodexSkillNames) {
+            var dst = Path.Combine(legacySkillsDir, name);
+            if (!Directory.Exists(dst)) continue;
+            try {
+                Directory.Delete(dst, recursive: true);
+                Console.Out.WriteLine($"Removed legacy Codex skill folder: {dst}");
+                changed = true;
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"Could not remove legacy Codex skill '{name}': {ex.Message}");
+            }
+        }
+
+        // Clean up empty parent.
+        try {
+            if (Directory.Exists(legacySkillsDir) && !Directory.EnumerateFileSystemEntries(legacySkillsDir).Any()) {
+                Directory.Delete(legacySkillsDir);
+            }
+        } catch {
+            // Best effort — leaving an empty dir behind isn't harmful.
+        }
+
+        return changed;
+    }
+
     static void CopyDirectoryWithFrontmatterRewrite(string source, string destination, string targetName) {
         Directory.CreateDirectory(destination);
 

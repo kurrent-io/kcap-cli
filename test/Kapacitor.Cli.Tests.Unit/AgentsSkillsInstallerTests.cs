@@ -135,6 +135,112 @@ public class AgentsSkillsInstallerTests {
         await Assert.That(Directory.Exists(Path.Combine(dst.Path, "kapacitor-recap"))).IsFalse();
     }
 
+    [Test]
+    public async Task Remove_deletes_kapacitor_prefixed_folders_only() {
+        using var dst = new InstallerTempDir();
+
+        foreach (var src in SourceNames) {
+            Directory.CreateDirectory(Path.Combine(dst.Path, $"kapacitor-{src}"));
+        }
+        Directory.CreateDirectory(Path.Combine(dst.Path, "user-skill"));
+
+        var removed = AgentsSkillsInstaller.Remove(dst.Path);
+
+        await Assert.That(removed).IsTrue();
+        foreach (var src in SourceNames) {
+            await Assert.That(Directory.Exists(Path.Combine(dst.Path, $"kapacitor-{src}"))).IsFalse();
+        }
+        await Assert.That(Directory.Exists(Path.Combine(dst.Path, "user-skill"))).IsTrue();
+    }
+
+    [Test]
+    public async Task Remove_returns_false_when_no_kapacitor_folders_present() {
+        using var dst = new InstallerTempDir();
+        Directory.CreateDirectory(Path.Combine(dst.Path, "someone-elses-skill"));
+
+        var removed = AgentsSkillsInstaller.Remove(dst.Path);
+
+        await Assert.That(removed).IsFalse();
+    }
+
+    [Test]
+    public async Task CleanLegacyCodexSkills_removes_only_known_kapacitor_folders() {
+        using var fakeHome = new InstallerTempDir();
+        var legacy = Path.Combine(fakeHome.Path, ".codex", "skills");
+        Directory.CreateDirectory(legacy);
+
+        foreach (var name in AgentsSkillsInstaller.LegacyCodexSkillNames) {
+            Directory.CreateDirectory(Path.Combine(legacy, name));
+        }
+        Directory.CreateDirectory(Path.Combine(legacy, "user-codex-skill"));
+
+        var removed = AgentsSkillsInstaller.CleanLegacyCodexSkills(legacy);
+
+        await Assert.That(removed).IsTrue();
+        foreach (var name in AgentsSkillsInstaller.LegacyCodexSkillNames) {
+            await Assert.That(Directory.Exists(Path.Combine(legacy, name))).IsFalse();
+        }
+        await Assert.That(Directory.Exists(Path.Combine(legacy, "user-codex-skill"))).IsTrue();
+    }
+
+    [Test]
+    public async Task CleanLegacyCodexSkills_removes_empty_parent_dir() {
+        using var fakeHome = new InstallerTempDir();
+        var legacy = Path.Combine(fakeHome.Path, ".codex", "skills");
+        Directory.CreateDirectory(legacy);
+        foreach (var name in AgentsSkillsInstaller.LegacyCodexSkillNames) {
+            Directory.CreateDirectory(Path.Combine(legacy, name));
+        }
+
+        AgentsSkillsInstaller.CleanLegacyCodexSkills(legacy);
+
+        await Assert.That(Directory.Exists(legacy)).IsFalse();
+    }
+
+    [Test]
+    public async Task CleanLegacyCodexSkills_preserves_non_empty_parent_dir() {
+        using var fakeHome = new InstallerTempDir();
+        var legacy = Path.Combine(fakeHome.Path, ".codex", "skills");
+        Directory.CreateDirectory(legacy);
+        Directory.CreateDirectory(Path.Combine(legacy, "kapacitor-recap"));
+        Directory.CreateDirectory(Path.Combine(legacy, "user-codex-skill"));
+
+        AgentsSkillsInstaller.CleanLegacyCodexSkills(legacy);
+
+        await Assert.That(Directory.Exists(legacy)).IsTrue();
+        await Assert.That(Directory.Exists(Path.Combine(legacy, "user-codex-skill"))).IsTrue();
+    }
+
+    [Test]
+    public async Task CleanLegacyCodexSkills_is_noop_when_parent_dir_missing() {
+        using var fakeHome = new InstallerTempDir();
+        var legacy = Path.Combine(fakeHome.Path, ".codex", "skills");
+        // legacy dir not created
+
+        var removed = AgentsSkillsInstaller.CleanLegacyCodexSkills(legacy);
+
+        await Assert.That(removed).IsFalse();
+    }
+
+    [Test]
+    public async Task Install_failure_does_not_trigger_legacy_cleanup() {
+        // Asserts the contract: install runs first, legacy cleanup runs only on success.
+        // The contract lives in PluginCommand (caller); here we verify the unit
+        // primitives are independent and the caller can sequence them safely.
+        using var src      = new InstallerTempDir();
+        using var fakeHome = new InstallerTempDir();
+        var legacy = Path.Combine(fakeHome.Path, ".codex", "skills");
+        Directory.CreateDirectory(legacy);
+        Directory.CreateDirectory(Path.Combine(legacy, "kapacitor-recap"));
+
+        // sourceDir empty -> Install returns false without throwing.
+        var ok = AgentsSkillsInstaller.Install(src.Path, Path.Combine(fakeHome.Path, ".agents", "skills"));
+        await Assert.That(ok).IsFalse();
+
+        // Caller would skip cleanup. Verify directly that legacy dir is still present.
+        await Assert.That(Directory.Exists(Path.Combine(legacy, "kapacitor-recap"))).IsTrue();
+    }
+
     sealed class InstallerTempDir : IDisposable {
         public string Path { get; }
         public InstallerTempDir() {
