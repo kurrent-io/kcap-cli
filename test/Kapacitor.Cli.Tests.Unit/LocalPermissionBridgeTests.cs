@@ -339,7 +339,12 @@ public class LocalPermissionBridgeTests {
     }
 
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
-    public async Task Codex_path_invokes_server_with_vendor_codex() {
+    public async Task Codex_path_invokes_server_and_shapes_codex_response() {
+        // The bridge derives the vendor from the URL path segment and uses it
+        // LOCALLY to pick the hook response shape. The vendor is intentionally
+        // NOT forwarded over the SignalR wire — JsonHubProtocol's strict arg-count
+        // binder would reject any extra argument the server hub method doesn't
+        // declare. The proof of correct vendor routing is the response shape.
         var (bridge, server) = CreateBridge();
         try {
             await bridge.StartAsync(CancellationToken.None);
@@ -349,14 +354,23 @@ public class LocalPermissionBridgeTests {
 
             await Assert.That((int)response.StatusCode).IsEqualTo(200);
             await Assert.That(server.Calls.Count).IsEqualTo(1);
-            await Assert.That(server.Calls[0].Vendor).IsEqualTo("codex");
+
+            // Codex hook schema: hookSpecificOutput.decision.behavior, no applyPermissions / updatedInput.
+            var body = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(body);
+            var decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
+            await Assert.That(decision.GetProperty("behavior").GetString()).IsEqualTo("allow");
+            await Assert.That(body.Contains("applyPermissions")).IsFalse();
+            await Assert.That(body.Contains("updatedInput")).IsFalse();
         } finally {
             await bridge.DisposeAsync();
         }
     }
 
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
-    public async Task Claude_path_invokes_server_with_vendor_claude() {
+    public async Task Claude_path_invokes_server_and_shapes_claude_response() {
+        // Mirror of the Codex test: vendor is local-only state in the bridge, used
+        // to pick the Claude-flavoured hookSpecificOutput envelope. Not on the wire.
         var (bridge, server) = CreateBridge();
         try {
             await bridge.StartAsync(CancellationToken.None);
@@ -366,7 +380,12 @@ public class LocalPermissionBridgeTests {
 
             await Assert.That((int)response.StatusCode).IsEqualTo(200);
             await Assert.That(server.Calls.Count).IsEqualTo(1);
-            await Assert.That(server.Calls[0].Vendor).IsEqualTo("claude");
+
+            var body = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(body);
+            var hookOutput = doc.RootElement.GetProperty("hookSpecificOutput");
+            await Assert.That(hookOutput.GetProperty("hookEventName").GetString()).IsEqualTo("PermissionRequest");
+            await Assert.That(hookOutput.GetProperty("decision").GetProperty("behavior").GetString()).IsEqualTo("allow");
         } finally {
             await bridge.DisposeAsync();
         }
@@ -411,7 +430,7 @@ public class LocalPermissionBridgeTests {
 
             await Assert.That((int)response.StatusCode).IsEqualTo(200);
             await Assert.That(server.Calls.Count).IsEqualTo(1);
-            await Assert.That(server.Calls[0].Vendor).IsEqualTo("claude");
+            await Assert.That(server.Calls[0].ToolName).IsEqualTo("Bash");
         } finally {
             await bridge.DisposeAsync();
         }
@@ -442,15 +461,14 @@ sealed class FakeServerConnection : ServerConnection {
             string?           toolName,
             JsonElement?      toolInput,
             JsonElement?      suggestions,
-            string            vendor,
             CancellationToken ct = default
         ) {
-        Calls.Add(new Call(sessionId, toolName, toolInput, suggestions, vendor));
+        Calls.Add(new Call(sessionId, toolName, toolInput, suggestions));
 
         return _respond is null
             ? Task.FromResult(new PermissionDecision("allow", null, null))
             : _respond(sessionId, toolName, toolInput, suggestions, ct);
     }
 
-    public sealed record Call(string SessionId, string? ToolName, JsonElement? ToolInput, JsonElement? Suggestions, string Vendor);
+    public sealed record Call(string SessionId, string? ToolName, JsonElement? ToolInput, JsonElement? Suggestions);
 }
