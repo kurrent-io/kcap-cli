@@ -140,7 +140,7 @@ public class CodingAgentsStepTests {
             prompt: _ => true, writeLine: sink.Write);
 
         await Assert.That(result.CodexSkillsInstalled).IsTrue();
-        await Assert.That(calls.AgentSkillsArgs).IsEqualTo(("/fake/plugin/skills", "/fake/.codex/skills"));
+        await Assert.That(calls.AgentSkillsArgs).IsEqualTo(("/fake/plugin/skills", "/fake/.agents/skills"));
         await Assert.That(sink.Lines).Contains(l => l.Contains("Agent skills installed"));
     }
 
@@ -260,7 +260,7 @@ public class CodingAgentsStepTests {
         ClaudeScopeLabel:   "user",
         PluginDir:          "/fake/plugin",
         CodexHooksPath:     "/fake/.codex/hooks.json",
-        AgentsSkillsDir:    "/fake/.codex/skills");
+        AgentsSkillsDir:    "/fake/.agents/skills");
 
     sealed class Sink {
         public List<string> Lines { get; } = [];
