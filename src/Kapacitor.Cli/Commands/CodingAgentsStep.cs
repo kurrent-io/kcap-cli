@@ -15,11 +15,13 @@ internal static class CodingAgentsStep {
         string ClaudeScopeLabel,
         string? PluginDir,
         string CodexHooksPath,
-        string AgentsSkillsDir);
+        string AgentsSkillsDir,
+        string LegacyCodexSkillsDir);
     internal record Installers(
         Func<string /*settingsPath*/, string /*pluginDir*/, bool> InstallClaudePlugin,
         Func<string /*hooksPath*/, bool>                          InstallCodexHooks,
-        Func<string /*srcDir*/, string /*dstDir*/, bool>          InstallAgentSkills);
+        Func<string /*srcDir*/, string /*dstDir*/, bool>          InstallAgentSkills,
+        Func<string /*legacyDir*/, bool>                          CleanLegacyCodexSkills);
     internal record Result(bool ClaudeInstalled, bool CodexHooksInstalled, bool CodexSkillsInstalled);
 
     /// <summary>
@@ -66,6 +68,7 @@ internal static class CodingAgentsStep {
 
         writeLine($"  [green]✓[/] Agent skills installed (user: {Markup.Escape(paths.AgentsSkillsDir)})");
         writeLine("    [dim]kapacitor-recap, kapacitor-errors, kapacitor-hide, kapacitor-disable, kapacitor-validate-plan[/]");
+        installers.CleanLegacyCodexSkills(paths.LegacyCodexSkillsDir);
         return true;
     }
 

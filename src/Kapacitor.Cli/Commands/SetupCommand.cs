@@ -178,16 +178,18 @@ public static class SetupCommand {
             NoPrompt:   noPrompt);
 
         var stepPaths = new CodingAgentsStep.Paths(
-            ClaudeSettingsPath: claudeSettingsPath,
-            ClaudeScopeLabel:   legacyProjectScope ? "project" : "user",
-            PluginDir:          pluginPath,
-            CodexHooksPath:     CodexPaths.UserHooksJson,
-            AgentsSkillsDir:    AgentsPaths.UserSkillsDir);
+            ClaudeSettingsPath:   claudeSettingsPath,
+            ClaudeScopeLabel:     legacyProjectScope ? "project" : "user",
+            PluginDir:            pluginPath,
+            CodexHooksPath:       CodexPaths.UserHooksJson,
+            AgentsSkillsDir:      AgentsPaths.UserSkillsDir,
+            LegacyCodexSkillsDir: Path.Combine(CodexPaths.Home, "skills"));
 
         var stepInstallers = new CodingAgentsStep.Installers(
-            InstallClaudePlugin: InstallPlugin,
-            InstallCodexHooks:   PluginCommand.InstallCodexHooks,
-            InstallAgentSkills:  Kapacitor.Cli.Core.AgentsSkillsInstaller.Install);
+            InstallClaudePlugin:    InstallPlugin,
+            InstallCodexHooks:      PluginCommand.InstallCodexHooks,
+            InstallAgentSkills:     Kapacitor.Cli.Core.AgentsSkillsInstaller.Install,
+            CleanLegacyCodexSkills: Kapacitor.Cli.Core.AgentsSkillsInstaller.CleanLegacyCodexSkills);
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
