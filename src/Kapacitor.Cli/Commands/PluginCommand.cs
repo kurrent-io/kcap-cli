@@ -30,6 +30,11 @@ public static class PluginCommand {
     }
 
     static async Task<int> Install(string[] args) {
+        if (args.Contains("--codex") && args.Contains("--skills")) {
+            await Console.Error.WriteLineAsync("--codex and --skills cannot be used together.");
+            return 1;
+        }
+
         if (args.Contains("--skills")) {
             return await InstallSkills(args);
         }
@@ -42,6 +47,11 @@ public static class PluginCommand {
     }
 
     static async Task<int> Remove(string[] args) {
+        if (args.Contains("--codex") && args.Contains("--skills")) {
+            await Console.Error.WriteLineAsync("--codex and --skills cannot be used together.");
+            return 1;
+        }
+
         if (args.Contains("--skills")) {
             return await RemoveSkills(args);
         }
@@ -162,15 +172,20 @@ public static class PluginCommand {
     }
 
     static async Task<int> RemoveSkills(string[] _) {
-        var agentsRemoved = AgentsSkillsInstaller.Remove(AgentsPaths.UserSkillsDir);
+        var agents = AgentsSkillsInstaller.Remove(AgentsPaths.UserSkillsDir);
 
-        if (agentsRemoved) {
+        if (agents.RemovedAny) {
             await Console.Out.WriteLineAsync($"Agent skills removed (user: {AgentsPaths.UserSkillsDir})");
         }
 
-        var legacyRemoved = AgentsSkillsInstaller.CleanLegacyCodexSkills(Path.Combine(CodexPaths.Home, "skills"));
+        var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(Path.Combine(CodexPaths.Home, "skills"));
 
-        if (!agentsRemoved && !legacyRemoved) {
+        if (agents.HadErrors || legacy.HadErrors) {
+            await Console.Out.WriteLineAsync("Removal incomplete — see errors above.");
+            return 0;
+        }
+
+        if (!agents.RemovedAny && !legacy.RemovedAny) {
             await Console.Out.WriteLineAsync("Nothing to remove — agent skills were not installed.");
         }
 
@@ -269,15 +284,20 @@ public static class PluginCommand {
             await Console.Out.WriteLineAsync($"Codex hooks removed ({scope}: {hooksPath})");
         }
 
-        var agentsRemoved = AgentsSkillsInstaller.Remove(AgentsPaths.UserSkillsDir);
+        var agents = AgentsSkillsInstaller.Remove(AgentsPaths.UserSkillsDir);
 
-        if (agentsRemoved) {
+        if (agents.RemovedAny) {
             await Console.Out.WriteLineAsync($"Agent skills removed (user: {AgentsPaths.UserSkillsDir})");
         }
 
-        var legacyRemoved = AgentsSkillsInstaller.CleanLegacyCodexSkills(Path.Combine(CodexPaths.Home, "skills"));
+        var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(Path.Combine(CodexPaths.Home, "skills"));
 
-        if (!hooksRemoved && !agentsRemoved && !legacyRemoved) {
+        if (agents.HadErrors || legacy.HadErrors) {
+            await Console.Out.WriteLineAsync("Removal incomplete — see errors above.");
+            return 0;
+        }
+
+        if (!hooksRemoved && !agents.RemovedAny && !legacy.RemovedAny) {
             await Console.Out.WriteLineAsync("Nothing to remove — hooks and skills were not installed.");
         }
 

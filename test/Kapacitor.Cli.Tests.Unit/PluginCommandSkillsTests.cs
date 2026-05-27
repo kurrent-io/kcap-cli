@@ -6,6 +6,37 @@ namespace Kapacitor.Cli.Tests.Unit;
 [NotInParallel("HomeEnvVarMutation")]
 public class PluginCommandSkillsTests {
     [Test]
+    [NotInParallel("ConsoleStreams")]
+    public async Task Install_with_both_codex_and_skills_flags_returns_error() {
+        var originalErr = Console.Error;
+        var capturedErr = new StringWriter();
+        try {
+            Console.SetError(capturedErr);
+            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex", "--skills"]);
+            await Assert.That(exit).IsEqualTo(1);
+            await Assert.That(capturedErr.ToString()).Contains("cannot be used together");
+        } finally {
+            Console.SetError(originalErr);
+        }
+    }
+
+    [Test]
+    [NotInParallel("ConsoleStreams")]
+    public async Task Remove_with_both_codex_and_skills_flags_returns_error() {
+        var originalErr = Console.Error;
+        var capturedErr = new StringWriter();
+        try {
+            Console.SetError(capturedErr);
+            var exit = await PluginCommand.HandleAsync(["plugin", "remove", "--codex", "--skills"]);
+            await Assert.That(exit).IsEqualTo(1);
+            await Assert.That(capturedErr.ToString()).Contains("cannot be used together");
+        } finally {
+            Console.SetError(originalErr);
+        }
+    }
+
+
+    [Test]
     public async Task Install_skills_writes_to_agents_dir_and_cleans_legacy() {
         var fakeHome      = Directory.CreateTempSubdirectory("kapacitor-plugin-skills-test-");
         var originalHome  = Environment.GetEnvironmentVariable("HOME");
