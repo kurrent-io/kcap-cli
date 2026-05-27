@@ -1136,6 +1136,8 @@ git commit -m "[AI-68] models: required Vendor field on AgentRunStarted"
 
 ### Task 9: Update `ServerConnection.RequestPermissionAsync` to take `vendor`
 
+> **Superseded by AI-702 (2026-05-27).** The 5-arg wire-shape change planned in this task was rolled back. `JsonHubProtocol.BindArguments` strict-count-matches arguments against the target hub method and does not honour C# default values, so adding a 5th positional `vendor` arg without a coordinated server-side hub method bump made every hosted-agent permission prompt fall back to deny. The fix kept `vendor` local to `LocalPermissionBridge` (used in `BuildHookResponseJson` to shape the Claude vs Codex response envelope) and removed it from `ServerConnection.RequestPermissionAsync` and from `_hub.InvokeAsync(...)`. The instructions below are kept as a historical record of what was attempted — do **not** follow them on a fresh implementation.
+
 **Files:**
 - Modify: `src/Kapacitor.Daemon/Services/ServerConnection.cs`
 - Modify: `src/Kapacitor.Daemon/Services/LocalPermissionBridge.cs`

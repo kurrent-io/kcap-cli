@@ -273,8 +273,10 @@ public class LocalPermissionBridgeTests {
             await Assert.That((int)response.StatusCode).IsEqualTo(200);
 
             var body = await response.Content.ReadAsStringAsync();
-            await Assert.That(body.Contains("applyPermissions")).IsTrue();
-            await Assert.That(body.Contains("updatedInput")).IsTrue();
+            using var doc    = JsonDocument.Parse(body);
+            var       decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
+            await Assert.That(decision.TryGetProperty("applyPermissions", out _)).IsTrue();
+            await Assert.That(decision.TryGetProperty("updatedInput",     out _)).IsTrue();
         } finally {
             await bridge.DisposeAsync();
         }
@@ -301,8 +303,8 @@ public class LocalPermissionBridgeTests {
             using var doc    = JsonDocument.Parse(body);
             var       decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
             await Assert.That(decision.GetProperty("behavior").GetString()).IsEqualTo("allow");
-            await Assert.That(body.Contains("applyPermissions")).IsFalse();
-            await Assert.That(body.Contains("updatedInput")).IsFalse();
+            await Assert.That(decision.TryGetProperty("applyPermissions", out _)).IsFalse();
+            await Assert.That(decision.TryGetProperty("updatedInput",     out _)).IsFalse();
         } finally {
             await bridge.DisposeAsync();
         }
@@ -360,8 +362,8 @@ public class LocalPermissionBridgeTests {
             using var doc = JsonDocument.Parse(body);
             var decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
             await Assert.That(decision.GetProperty("behavior").GetString()).IsEqualTo("allow");
-            await Assert.That(body.Contains("applyPermissions")).IsFalse();
-            await Assert.That(body.Contains("updatedInput")).IsFalse();
+            await Assert.That(decision.TryGetProperty("applyPermissions", out _)).IsFalse();
+            await Assert.That(decision.TryGetProperty("updatedInput",     out _)).IsFalse();
         } finally {
             await bridge.DisposeAsync();
         }
@@ -408,7 +410,9 @@ public class LocalPermissionBridgeTests {
             await Assert.That((int)response.StatusCode).IsEqualTo(200);
 
             var body = await response.Content.ReadAsStringAsync();
-            await Assert.That(body.Contains("applyPermissions")).IsFalse();
+            using var doc = JsonDocument.Parse(body);
+            var decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
+            await Assert.That(decision.TryGetProperty("applyPermissions", out _)).IsFalse();
         } finally {
             await bridge.DisposeAsync();
         }
