@@ -415,86 +415,97 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         } catch (Exception ex) {
             LogOutputReadError(ex, agent.Id);
         } finally {
-            try {
-                // PTY output can end before waitpid reports the child as exited.
-                // Wait briefly for the process to finalize so we get a real exit code.
-                await agent.Process.WaitForExitAsync(TimeSpan.FromSeconds(5));
-
-                var exitCode = agent.Process.ExitCode;
-
-                var status = agent.Process.HasExited
-                    ? exitCode is null or 0 ? "Completed" : "Failed"
-                    : "Failed";
-
-                if (agent.Status is not "Completed" and not "Failed") {
-                    // A startup failure means the process exited before establishing
-                    // a real interactive session (CLI config error, auth issue, immediate
-                    // crash). A real session keeps producing output throughout its
-                    // lifetime, so the gap between CreatedAt and LastOutputAt is the
-                    // discriminator: tiny gap → startup failure; sustained → real session.
-                    //
-                    // We avoid agent.Status because the first output chunk flips it to
-                    // "Running" — a one-line error banner triggers that flip too. We
-                    // also avoid wall-clock since spawn: a user who types /exit shortly
-                    // after starting produces a short-but-real session that must not be
-                    // flagged as a launch failure (AI-572). HasReceivedOutput guards
-                    // against a no-output process whose CreatedAt/LastOutputAt
-                    // initializers happened to straddle a long pause.
-                    if (IsStartupFailure(agent.CreatedAt, agent.LastOutputAt, agent.HasReceivedOutput)) {
-                        var output = ExtractTerminalText(agent.OutputBuffer);
-
-                        var reason = !string.IsNullOrWhiteSpace(output)
-                            ? output
-                            : exitCode is null or 0
-                                ? "Process exited before establishing a session"
-                                : $"Process exited immediately (exit code {exitCode})";
-
-                        status = "Failed";
-
-                        LogStartupFailed(agent.Id, exitCode, reason);
-
-                        _ = _server.LaunchFailedAsync(agent.Id, reason);
-                    }
-
-                    agent.Status = status;
-                    _            = _server.AgentStatusChangedAsync(agent.Id, status, agent.SessionId);
-
-                    var stopReason = status == "Completed" ? "exited" : "failed";
-
-                    _ = _server.AppendAgentRunEventAsync(
-                        agent.Id,
-                        new AgentRunStopped(stopReason, exitCode)
-                    );
-                }
-
-                LogAgentExited(agent.Id, exitCode);
-
-                // Tell the server to end the AgentSession. Claude doesn't reliably fire
-                // its own session-end hook on SIGTERM/exit, so without this call the
-                // session would stay "active" forever in the read model. Server-side is
-                // idempotent — if claude did fire session-end first, this is a no-op.
-                // Reason is read from agent.PendingEndReason so that if HandleStopAgent's
-                // own call failed (transient SignalR error) and this finally-block call
-                // is the one that lands, a user-initiated stop is still recorded as
-                // "agent_stopped" rather than "agent_exited".
-                try {
-                    var result = await _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
-
-                    // The daemon doesn't track sessionId on its own (only agentId), so
-                    // the server returns it in the result. Spawn what's-done locally
-                    // when the server says yes.
-                    if (result.GenerateWhatsDone && result.SessionId is not null) {
-                        SpawnWhatsDoneGenerator(result.SessionId);
-                    }
-                } catch (Exception ex) {
-                    LogEndSessionFailed(ex, agent.Id);
-                }
-
-                // Clean up worktree and unregister from server
-                await CleanupAgentAsync(agent.Id);
-            } catch (Exception ex) {
-                LogCleanupError(ex, agent.Id);
+            // Daemon shutdown: ServerConnection's _ct (= lifetime.ApplicationStopping)
+            // is cancelled and the hub is being disposed, so every server call here
+            // would throw TaskCanceledException. DisposeAsync owns the local cleanup
+            // path for in-flight agents; the server detects the daemon disconnection
+            // and ends its sessions on its own. Skip to avoid noisy warnings.
+            if (!_shutdownCts.IsCancellationRequested) {
+                await FinalizeAgentRunAsync(agent);
             }
+        }
+    }
+
+    async Task FinalizeAgentRunAsync(AgentInstance agent) {
+        try {
+            // PTY output can end before waitpid reports the child as exited.
+            // Wait briefly for the process to finalize so we get a real exit code.
+            await agent.Process.WaitForExitAsync(TimeSpan.FromSeconds(5));
+
+            var exitCode = agent.Process.ExitCode;
+
+            var status = agent.Process.HasExited
+                ? exitCode is null or 0 ? "Completed" : "Failed"
+                : "Failed";
+
+            if (agent.Status is not "Completed" and not "Failed") {
+                // A startup failure means the process exited before establishing
+                // a real interactive session (CLI config error, auth issue, immediate
+                // crash). A real session keeps producing output throughout its
+                // lifetime, so the gap between CreatedAt and LastOutputAt is the
+                // discriminator: tiny gap → startup failure; sustained → real session.
+                //
+                // We avoid agent.Status because the first output chunk flips it to
+                // "Running" — a one-line error banner triggers that flip too. We
+                // also avoid wall-clock since spawn: a user who types /exit shortly
+                // after starting produces a short-but-real session that must not be
+                // flagged as a launch failure (AI-572). HasReceivedOutput guards
+                // against a no-output process whose CreatedAt/LastOutputAt
+                // initializers happened to straddle a long pause.
+                if (IsStartupFailure(agent.CreatedAt, agent.LastOutputAt, agent.HasReceivedOutput)) {
+                    var output = ExtractTerminalText(agent.OutputBuffer);
+
+                    var reason = !string.IsNullOrWhiteSpace(output)
+                        ? output
+                        : exitCode is null or 0
+                            ? "Process exited before establishing a session"
+                            : $"Process exited immediately (exit code {exitCode})";
+
+                    status = "Failed";
+
+                    LogStartupFailed(agent.Id, exitCode, reason);
+
+                    _ = _server.LaunchFailedAsync(agent.Id, reason);
+                }
+
+                agent.Status = status;
+                _            = _server.AgentStatusChangedAsync(agent.Id, status, agent.SessionId);
+
+                var stopReason = status == "Completed" ? "exited" : "failed";
+
+                _ = _server.AppendAgentRunEventAsync(
+                    agent.Id,
+                    new AgentRunStopped(stopReason, exitCode)
+                );
+            }
+
+            LogAgentExited(agent.Id, exitCode);
+
+            // Tell the server to end the AgentSession. Claude doesn't reliably fire
+            // its own session-end hook on SIGTERM/exit, so without this call the
+            // session would stay "active" forever in the read model. Server-side is
+            // idempotent — if claude did fire session-end first, this is a no-op.
+            // Reason is read from agent.PendingEndReason so that if HandleStopAgent's
+            // own call failed (transient SignalR error) and this finally-block call
+            // is the one that lands, a user-initiated stop is still recorded as
+            // "agent_stopped" rather than "agent_exited".
+            try {
+                var result = await _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
+
+                // The daemon doesn't track sessionId on its own (only agentId), so
+                // the server returns it in the result. Spawn what's-done locally
+                // when the server says yes.
+                if (result.GenerateWhatsDone && result.SessionId is not null) {
+                    SpawnWhatsDoneGenerator(result.SessionId);
+                }
+            } catch (Exception ex) {
+                LogEndSessionFailed(ex, agent.Id);
+            }
+
+            // Clean up worktree and unregister from server
+            await CleanupAgentAsync(agent.Id);
+        } catch (Exception ex) {
+            LogCleanupError(ex, agent.Id);
         }
     }
 
@@ -836,7 +847,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         try { await WorktreeManager.RemoveAsync(agent.Worktree); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
 
-        try { await _server.AgentUnregisteredAsync(agentId); } catch (Exception ex) { LogCleanupStepFailed(ex, "unregistering", agentId); }
+        // Skip server unregister during shutdown — _ct is cancelled and the call
+        // would throw TaskCanceledException. The server detects the daemon
+        // disconnection through SignalR's transport-level signals.
+        if (!_shutdownCts.IsCancellationRequested) {
+            try { await _server.AgentUnregisteredAsync(agentId); } catch (Exception ex) { LogCleanupStepFailed(ex, "unregistering", agentId); }
+        }
     }
 
     public async ValueTask DisposeAsync() {
