@@ -13,7 +13,7 @@ Verify that all items in the current session's plan have been completed. Plans c
 
 ## Usage
 
-Run `kapacitor validate-plan` via the Bash tool. The session ID is automatically set by the `KAPACITOR_SESSION_ID` environment variable (persisted at session start).
+Run `kapacitor validate-plan` via the Bash tool. `kapacitor validate-plan` resolves the current session id from the environment when the host agent CLI exposes one. If no session id is available, pass it explicitly: `kapacitor validate-plan <sessionId>`.
 
 ```bash
 # Validate the current session's plan

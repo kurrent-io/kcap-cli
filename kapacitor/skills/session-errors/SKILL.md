@@ -11,11 +11,11 @@ description: >-
 
 # Session Errors
 
-Extract tool call errors from a Claude Code session recorded by Kurrent Capacitor. The output lists each failed tool call — bash commands, file reads/writes, agent delegations, etc. — along with the error message and the tool that caused it.
+Extract tool call errors from an agent session recorded by Kurrent Capacitor. The output lists each failed tool call — bash commands, file reads/writes, agent delegations, etc. — along with the error message and the tool that caused it.
 
 ## Usage
 
-Run `kapacitor errors` via the Bash tool. The session ID is automatically set by the `KAPACITOR_SESSION_ID` environment variable (persisted at session start).
+Run `kapacitor errors` via the Bash tool. `kapacitor errors` resolves the current session id from the environment when the host agent CLI exposes one. If no session id is available, pass it explicitly: `kapacitor errors <sessionId>`.
 
 ```bash
 # Errors from the current session

@@ -28,7 +28,7 @@ This will:
 
 ## Requirements
 
-- Must be run inside an active Claude Code session (`KAPACITOR_SESSION_ID` must be set)
+- `kapacitor disable` resolves the current session id from the environment when the host agent CLI exposes one. If no session id is available, pass it explicitly: `kapacitor disable <sessionId>`.
 - The kapacitor CLI must be on PATH
 
 ## Notes

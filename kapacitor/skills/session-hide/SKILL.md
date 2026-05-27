@@ -24,7 +24,7 @@ This sets the session visibility to "none" (owner-only). Other users will no lon
 
 ## Requirements
 
-- Must be run inside an active Claude Code session (`KAPACITOR_SESSION_ID` must be set)
+- `kapacitor hide` resolves the current session id from the environment when the host agent CLI exposes one. If no session id is available, pass it explicitly: `kapacitor hide <sessionId>`.
 - The kapacitor CLI must be on PATH
 
 ## Notes
