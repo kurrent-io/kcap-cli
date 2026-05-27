@@ -28,7 +28,7 @@ public record AgentInstance(
     public DateTime             CreatedAt         { get; }      = DateTime.UtcNow;
     public DateTime             LastOutputAt      { get; set; } = DateTime.UtcNow;
     public bool                 HasReceivedOutput { get; set; }
-    public TerminalOutputBuffer OutputBuffer      { get; }      = new();
+    public TerminalOutputBuffer OutputBuffer      { get; } = new();
 
     /// <summary>Temp MCP config path written for hosted PR reviews; deleted on cleanup.</summary>
     public string? McpConfigPath { get; set; }
@@ -77,35 +77,39 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly LocalPermissionBridge                             _permissionBridge;
     readonly IReadOnlyDictionary<string, IHostedAgentLauncher> _launchers;
     readonly ILogger<AgentOrchestrator>                        _logger;
-    readonly PeriodicTimer                                     _heartbeatTimer  = new(TimeSpan.FromSeconds(30));
+
+    readonly PeriodicTimer _heartbeatTimer = new(TimeSpan.FromSeconds(30));
+
     // AI-79: heartbeat tightened from 60 s SendAsync to round-trip Ping.
     // AI-642: tick halved (15 → 7 s) and deadline halved (10 → 5 s) so a
     // displaced-slot mismatch or a hung transport is caught within ~10 s
     // instead of ~25 s. This is independent of SignalR's transport timeout
     // (which stays at the 30 s default) — the heartbeat is the daemon's
     // application-level liveness probe.
-    readonly PeriodicTimer                               _daemonHeartbeat = new(TimeSpan.FromSeconds(7));
-    static readonly TimeSpan                             _pingDeadline    = TimeSpan.FromSeconds(5);
+    readonly PeriodicTimer _daemonHeartbeat = new(TimeSpan.FromSeconds(7));
+
+    static readonly TimeSpan PingDeadline = TimeSpan.FromSeconds(5);
+
     // Linked to IHostApplicationLifetime.ApplicationStopping so the shutdown gate
     // trips as soon as the host begins stopping — the same instant ServerConnection's
     // _ct (also ApplicationStopping) cancels SignalR calls. Otherwise there's a
     // window between ApplicationStopping firing and DisposeAsync running where
     // server calls would still throw TaskCanceledException unguarded.
-    readonly CancellationTokenSource                     _shutdownCts;
+    readonly CancellationTokenSource _shutdownCts;
 
     public AgentOrchestrator(
-            DaemonConfig                                       config,
-            ServerConnection                                   server,
-            WorktreeManager                                    worktreeManager,
-            RepoMatcher                                        repoMatcher,
-            IPtyProcessFactory                                 ptyFactory,
-            IHttpClientFactory                                 httpClientFactory,
-            LocalPermissionBridge                              permissionBridge,
-            IReadOnlyDictionary<string, IHostedAgentLauncher>  launchers,
-            IHostApplicationLifetime                           lifetime,
-            ILogger<AgentOrchestrator>                         logger
+            DaemonConfig                                      config,
+            ServerConnection                                  server,
+            WorktreeManager                                   worktreeManager,
+            RepoMatcher                                       repoMatcher,
+            IPtyProcessFactory                                ptyFactory,
+            IHttpClientFactory                                httpClientFactory,
+            LocalPermissionBridge                             permissionBridge,
+            IReadOnlyDictionary<string, IHostedAgentLauncher> launchers,
+            IHostApplicationLifetime                          lifetime,
+            ILogger<AgentOrchestrator>                        logger
         ) {
-        _shutdownCts = CancellationTokenSource.CreateLinkedTokenSource(lifetime.ApplicationStopping);
+        _shutdownCts       = CancellationTokenSource.CreateLinkedTokenSource(lifetime.ApplicationStopping);
         _config            = config;
         _server            = server;
         _worktreeManager   = worktreeManager;
@@ -117,18 +121,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _logger            = logger;
 
         // Wire up server commands
-        _server.OnLaunchAgent             += HandleLaunchAgent;
-        _server.OnStopAgent               += HandleStopAgent;
-        _server.OnSendInput               += HandleSendInput;
-        _server.OnSendSpecialKey          += HandleSendSpecialKey;
-        _server.OnResizeTerminal          += HandleResizeTerminal;
-        _server.OnReconnectedCallback     += ReRegisterAgents;
-        _server.FindRepoForRemoteHandler  =  HandleFindRepoForRemote;
+        _server.OnLaunchAgent            += HandleLaunchAgent;
+        _server.OnStopAgent              += HandleStopAgent;
+        _server.OnSendInput              += HandleSendInput;
+        _server.OnSendSpecialKey         += HandleSendSpecialKey;
+        _server.OnResizeTerminal         += HandleResizeTerminal;
+        _server.OnReconnectedCallback    += ReRegisterAgents;
+        _server.FindRepoForRemoteHandler =  HandleFindRepoForRemote;
 
-        _server.GetLiveAgentIds = () => _agents
+        _server.GetLiveAgentIds = () => [.. _agents
             .Where(kvp => kvp.Value.Status is "Starting" or "Running")
-            .Select(kvp => kvp.Key)
-            .ToArray();
+            .Select(kvp => kvp.Key)];
 
         // Start heartbeat loops
         _ = RunHeartbeatLoopAsync(_shutdownCts.Token);
@@ -150,16 +153,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (cmd.Vendor is not ("claude" or "codex")) {
             await _server.LaunchFailedAsync(cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
+
             return;
         }
 
         if (!_launchers.TryGetValue(cmd.Vendor, out var launcher)) {
             await _server.LaunchFailedAsync(cmd.AgentId, $"No launcher registered for vendor: {cmd.Vendor}");
+
             return;
         }
 
         if (isReview && cmd.Vendor == "codex") {
             await _server.LaunchFailedAsync(cmd.AgentId, "PR review for Codex is not yet supported");
+
             return;
         }
 
@@ -267,8 +273,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 launcher.Prepare(launcherCtx);
             } catch (CodexHooksNotInstalledException ex) {
                 await _server.LaunchFailedAsync(agentId, ex.Message);
+
                 // Still need to clean up the worktree before returning
-                try { await WorktreeManager.RemoveAsync(worktree); } catch { /* best-effort */ }
+                try { await WorktreeManager.RemoveAsync(worktree); } catch {
+                    /* best-effort */
+                }
+
                 return;
             } catch (Exception ex) {
                 LogPrepareSoftFailure(ex, agentId);
@@ -276,7 +286,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             var launchArgs = launcher.BuildArgs(launcherCtx);
             var args       = launchArgs.Args;
-            mcpConfigPath  = launchArgs.McpConfigPath;
+            mcpConfigPath = launchArgs.McpConfigPath;
 
             var env = new Dictionary<string, string> {
                 ["KAPACITOR_RENDERED_AGENT"] = "1",
@@ -303,7 +313,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             LogAgentSpawned(agentId, process.Pid, worktree.Path, launcher.CliPath);
 
-            var cts   = new CancellationTokenSource();
+            var cts = new CancellationTokenSource();
+
             var agent = new AgentInstance(agentId, prompt, model, effort, repoPath, cmd.Vendor, process, worktree, cts) {
                 McpConfigPath = mcpConfigPath
             };
@@ -339,8 +350,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                         // Build a transient AgentInstance with a no-op PTY just so launcher.Cleanup
                         // can run its symlink/mcp-config teardown without a live agent.
                         var transient = new AgentInstance(
-                            agentId, prompt, model, effort, repoPath, cmd.Vendor,
-                            NoopPtyProcess.Instance, worktree, new CancellationTokenSource()
+                            agentId,
+                            prompt,
+                            model,
+                            effort,
+                            repoPath,
+                            cmd.Vendor,
+                            NoopPtyProcess.Instance,
+                            worktree,
+                            new CancellationTokenSource()
                         ) {
                             McpConfigPath = mcpConfigPath
                         };
@@ -388,7 +406,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             try {
                 await proc.WaitForExitAsync(cts.Token);
             } catch (OperationCanceledException) {
-                try { proc.Kill(true); } catch { /* best-effort */ }
+                try { proc.Kill(true); } catch {
+                    /* best-effort */
+                }
 
                 return null;
             }
@@ -457,7 +477,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // "Running" — a one-line error banner triggers that flip too. We
                 // also avoid wall-clock since spawn: a user who types /exit shortly
                 // after starting produces a short-but-real session that must not be
-                // flagged as a launch failure (AI-572). HasReceivedOutput guards
+                // flagged as a launch failure. HasReceivedOutput guards
                 // against a no-output process whose CreatedAt/LastOutputAt
                 // initializers happened to straddle a long pause.
                 if (IsStartupFailure(agent.CreatedAt, agent.LastOutputAt, agent.HasReceivedOutput)) {
@@ -477,14 +497,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
 
                 agent.Status = status;
-                _            = _server.AgentStatusChangedAsync(agent.Id, status, agent.SessionId);
+                await _server.AgentStatusChangedAsync(agent.Id, status, agent.SessionId);
 
                 var stopReason = status == "Completed" ? "exited" : "failed";
 
-                _ = _server.AppendAgentRunEventAsync(
-                    agent.Id,
-                    new AgentRunStopped(stopReason, exitCode)
-                );
+                await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(stopReason, exitCode));
             }
 
             LogAgentExited(agent.Id, exitCode);
@@ -503,7 +520,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // The daemon doesn't track sessionId on its own (only agentId), so
                 // the server returns it in the result. Spawn what's-done locally
                 // when the server says yes.
-                if (result.GenerateWhatsDone && result.SessionId is not null) {
+                if (result is { GenerateWhatsDone: true, SessionId: not null }) {
                     SpawnWhatsDoneGenerator(result.SessionId);
                 }
             } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) {
@@ -579,7 +596,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             try {
                 var result = await _server.EndAgentSessionAsync(agentId, agent.PendingEndReason);
 
-                if (result.GenerateWhatsDone && result.SessionId is not null) {
+                if (result is { GenerateWhatsDone: true, SessionId: not null }) {
                     SpawnWhatsDoneGenerator(result.SessionId);
                 }
             } catch (Exception ex) {
@@ -827,7 +844,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task RunDaemonHeartbeatLoopAsync(CancellationToken ct) {
-        var loop = new DaemonHeartbeatLoop(_server, _pingDeadline, _logger);
+        var loop = new DaemonHeartbeatLoop(_server, PingDeadline, _logger);
 
         while (await _daemonHeartbeat.WaitForNextTickAsync(ct)) {
             // Defence in depth: TickAsync is intentionally total, but we
@@ -863,9 +880,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // disconnection through SignalR's transport-level signals. Filtered
         // catch covers the residual race where shutdown fires mid-call.
         if (!_shutdownCts.IsCancellationRequested) {
-            try { await _server.AgentUnregisteredAsync(agentId); }
-            catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) { }
-            catch (Exception ex) { LogCleanupStepFailed(ex, "unregistering", agentId); }
+            try { await _server.AgentUnregisteredAsync(agentId); } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) { } catch (Exception ex) {
+                LogCleanupStepFailed(ex, "unregistering", agentId);
+            }
         }
     }
 
@@ -1013,7 +1030,7 @@ internal sealed class NoopPtyProcess : IPtyProcess {
     public ValueTask DisposeAsync() => default;
 
     public Task WaitForExitAsync(TimeSpan? timeout = null) => Task.CompletedTask;
-    public Task TerminateAsync(TimeSpan?  timeout = null) => Task.CompletedTask;
+    public Task TerminateAsync(TimeSpan?   timeout = null) => Task.CompletedTask;
 
 #pragma warning disable CS1998
     public async IAsyncEnumerable<byte[]> ReadOutputAsync(
@@ -1024,7 +1041,7 @@ internal sealed class NoopPtyProcess : IPtyProcess {
 #pragma warning restore CS1998
 
     public Task WriteAsync(string input) => Task.CompletedTask;
-    public Task WriteAsync(byte[] data)  => Task.CompletedTask;
-    public void Resize(ushort cols, ushort rows) { }
+    public Task WriteAsync(byte[] data) => Task.CompletedTask;
+    public void Resize(ushort     cols, ushort rows) { }
     public void SendInterrupt() { }
 }
