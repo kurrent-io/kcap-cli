@@ -47,7 +47,7 @@ When using `--chain`, errors from all sessions in the continuation chain are inc
 
 ## Practical Applications
 
-- **End-of-session review** — run after finishing a session to identify recurring mistakes and add avoidance rules to the project's agent instructions file (e.g. `AGENTS.md` or `CLAUDE.md`).
+- **End-of-session review** — run after finishing a session to identify recurring mistakes and add avoidance rules to the project's agent instructions file (e.g. `AGENTS.md`).
 - **Debugging** — quickly find what went wrong in a session without scrolling through the full timeline
 - **Pattern detection** — use `--chain` across a multi-session task to spot repeated error patterns (e.g., wrong file paths, incorrect API usage)
 
