@@ -440,6 +440,55 @@ public class PluginCommandCodexInstallIntegrationTests {
         }
     }
 
+    // AI-698 regression: when the top-level skills/ folder is present but one
+    // or more individual skill sub-folders are missing (packaging defect),
+    // `plugin install --codex` must fail BEFORE writing hooks. The per-skill
+    // preflight must run before InstallCodexHooks to maintain the atomicity
+    // guarantee from AI-676 — either everything installs or nothing does.
+    [Test, NotInParallel("CodexHookCommandTests.Console")]
+    public async Task InstallCodex_fails_before_writing_hooks_when_individual_skill_folder_missing() {
+        using var tmp = new TempDir();
+
+        var originalHome        = Environment.GetEnvironmentVariable("HOME");
+        var originalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+        Environment.SetEnvironmentVariable("HOME",        tmp.Path);
+        Environment.SetEnvironmentVariable("USERPROFILE", tmp.Path);
+
+        var pluginRoot = ProbedPluginRoot();
+
+        // Plant a fake plugin tree with skills/ present but validate-plan/ missing.
+        // This simulates a packaging defect where the top-level folder exists but
+        // at least one individual skill folder is absent.
+        var skillsSrc = Path.Combine(pluginRoot, "skills");
+        Directory.CreateDirectory(skillsSrc);
+        foreach (var name in AgentsSkillsInstaller.SourceNames.Where(n => n != "validate-plan")) {
+            var dir = Path.Combine(skillsSrc, name);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "SKILL.md"), $"---\nname: {name}\n---\n# {name}");
+        }
+
+        var capturedErr = new StringWriter();
+        var originalErr = Console.Error;
+        Console.SetError(capturedErr);
+
+        try {
+            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex"]);
+            await Assert.That(exit).IsEqualTo(1);
+
+            // Atomicity contract: hooks.json must NOT exist after a failed install.
+            var hooksPath = Path.Combine(tmp.Path, ".codex", "hooks.json");
+            await Assert.That(File.Exists(hooksPath)).IsFalse();
+
+            var stderr = capturedErr.ToString();
+            await Assert.That(stderr).Contains("Cannot install Codex plugin");
+        } finally {
+            Console.SetError(originalErr);
+            Environment.SetEnvironmentVariable("HOME",        originalHome);
+            Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
+            RemoveFakePlugin(pluginRoot);
+        }
+    }
+
     // AI-676 P2: when the kapacitor plugin folder cannot be resolved (e.g.,
     // the binary was hand-copied and the sibling `kapacitor/` tree is gone),
     // `plugin install --codex` must fail BEFORE writing hooks. Otherwise the

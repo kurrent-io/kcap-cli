@@ -208,6 +208,21 @@ public static class PluginCommand {
             return 1;
         }
 
+        // Per-skill preflight runs BEFORE writing hooks so a packaging defect
+        // (top-level skills/ present but an individual skill folder missing)
+        // can't leave the user with hooks installed and skills not. This is the
+        // atomicity guarantee from AI-676 — either everything installs or nothing.
+        var missingSkills = AgentsSkillsInstaller.SourceNames
+            .Where(name => !Directory.Exists(Path.Combine(skillsSource, name)))
+            .ToList();
+        if (missingSkills.Count > 0) {
+            await Console.Error.WriteLineAsync(
+                $"Cannot install Codex plugin: missing skill folder(s) under {skillsSource}: "
+                + string.Join(", ", missingSkills)
+                + ". Re-install kapacitor via npm: npm install -g @kurrent/kapacitor");
+            return 1;
+        }
+
         if (!InstallCodexHooks(hooksPath)) {
             await Console.Error.WriteLineAsync("Could not write Codex hooks file.");
 
