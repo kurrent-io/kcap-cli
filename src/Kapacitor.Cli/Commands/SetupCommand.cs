@@ -182,12 +182,12 @@ public static class SetupCommand {
             ClaudeScopeLabel:   legacyProjectScope ? "project" : "user",
             PluginDir:          pluginPath,
             CodexHooksPath:     CodexPaths.UserHooksJson,
-            CodexSkillsDir:     CodexPaths.UserSkillsDir);
+            AgentsSkillsDir:    AgentsPaths.UserSkillsDir);
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin: InstallPlugin,
             InstallCodexHooks:   PluginCommand.InstallCodexHooks,
-            InstallCodexSkills:  Kapacitor.Cli.Core.AgentsSkillsInstaller.Install);
+            InstallAgentSkills:  Kapacitor.Cli.Core.AgentsSkillsInstaller.Install);
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
