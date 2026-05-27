@@ -136,6 +136,28 @@ public class AgentsSkillsInstallerTests {
     }
 
     [Test]
+    public async Task Install_returns_false_when_SKILL_md_is_missing() {
+        using var src = new InstallerTempDir();
+        using var dst = new InstallerTempDir();
+
+        // Every folder exists, but one is missing its SKILL.md
+        foreach (var name in SourceNames) {
+            Directory.CreateDirectory(Path.Combine(src.Path, name));
+            if (name != "validate-plan") {
+                await File.WriteAllTextAsync(
+                    Path.Combine(src.Path, name, "SKILL.md"),
+                    $"---\nname: {name}\n---\nbody");
+            }
+        }
+
+        var ok = AgentsSkillsInstaller.Install(src.Path, dst.Path);
+        await Assert.That(ok).IsFalse();
+        foreach (var name in SourceNames) {
+            await Assert.That(Directory.Exists(Path.Combine(dst.Path, $"kapacitor-{name}"))).IsFalse();
+        }
+    }
+
+    [Test]
     public async Task Remove_deletes_kapacitor_prefixed_folders_only() {
         using var dst = new InstallerTempDir();
 

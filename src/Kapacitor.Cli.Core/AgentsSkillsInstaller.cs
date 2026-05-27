@@ -38,11 +38,11 @@ public static class AgentsSkillsInstaller {
         if (!Directory.Exists(sourceDir)) return false;
 
         var missing = SourceNames
-            .Where(n => !Directory.Exists(Path.Combine(sourceDir, n)))
+            .Where(n => !File.Exists(Path.Combine(sourceDir, n, "SKILL.md")))
             .ToList();
         if (missing.Count > 0) {
             Console.Error.WriteLine(
-                $"Cannot install agent skills: missing source folder(s) under {sourceDir}: "
+                $"Cannot install agent skills: missing SKILL.md for skill(s) under {sourceDir}: "
                 + string.Join(", ", missing));
             return false;
         }
