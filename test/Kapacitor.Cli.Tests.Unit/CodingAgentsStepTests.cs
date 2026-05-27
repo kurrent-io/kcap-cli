@@ -140,8 +140,8 @@ public class CodingAgentsStepTests {
             prompt: _ => true, writeLine: sink.Write);
 
         await Assert.That(result.CodexSkillsInstalled).IsTrue();
-        await Assert.That(calls.CodexSkillsArgs).IsEqualTo(("/fake/plugin/codex-skills", "/fake/.codex/skills"));
-        await Assert.That(sink.Lines).Contains(l => l.Contains("Codex skills installed"));
+        await Assert.That(calls.AgentSkillsArgs).IsEqualTo(("/fake/plugin/skills", "/fake/.agents/skills"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Agent skills installed"));
     }
 
     [Test]
@@ -155,13 +155,13 @@ public class CodingAgentsStepTests {
             prompt: _ => true, writeLine: sink.Write);
 
         await Assert.That(result.CodexSkillsInstalled).IsFalse();
-        await Assert.That(calls.CodexSkillsCalled).IsFalse();
+        await Assert.That(calls.AgentSkillsCalled).IsFalse();
     }
 
     [Test]
     public async Task Codex_skills_failure_still_keeps_trust_hint() {
         var sink     = new Sink();
-        var calls    = new InstallerCalls { CodexSkillsReturns = false };
+        var calls    = new InstallerCalls { AgentSkillsReturns = false };
         var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
         var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
 
@@ -170,7 +170,7 @@ public class CodingAgentsStepTests {
 
         await Assert.That(result.CodexHooksInstalled).IsTrue();
         await Assert.That(result.CodexSkillsInstalled).IsFalse();
-        await Assert.That(sink.Lines).Contains(l => l.Contains("Codex hooks installed but skills"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Codex hooks installed but agent skills"));
         await Assert.That(sink.Lines).Contains(l => l.Contains("/hooks") && l.Contains("trust"));
     }
 
@@ -190,9 +190,9 @@ public class CodingAgentsStepTests {
         await Assert.That(result.CodexHooksInstalled).IsTrue();
         await Assert.That(calls.CodexHooksCalled).IsTrue();
         await Assert.That(result.CodexSkillsInstalled).IsFalse();
-        await Assert.That(calls.CodexSkillsCalled).IsFalse();
+        await Assert.That(calls.AgentSkillsCalled).IsFalse();
         await Assert.That(sink.Lines).Contains(l => l.Contains("Plugin directory not found"));
-        await Assert.That(sink.Lines).Contains(l => l.Contains("Codex hooks installed but skills could not be copied"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Codex hooks installed but agent skills could not be copied"));
     }
 
     [Test]
@@ -210,7 +210,7 @@ public class CodingAgentsStepTests {
         await Assert.That(result.CodexSkillsInstalled).IsFalse();
         await Assert.That(calls.ClaudeCalled).IsFalse();
         await Assert.That(calls.CodexHooksCalled).IsFalse();
-        await Assert.That(calls.CodexSkillsCalled).IsFalse();
+        await Assert.That(calls.AgentSkillsCalled).IsFalse();
         await Assert.That(sink.Lines).Contains(l => l.Contains("No supported agent CLI detected"));
     }
 
@@ -236,6 +236,34 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
+    public async Task Legacy_cleanup_invoked_after_successful_codex_skills_install() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+
+        await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.LegacyCleanupCalled).IsTrue();
+        await Assert.That(calls.LegacyCleanupArg).IsEqualTo("/fake/.codex/skills");
+    }
+
+    [Test]
+    public async Task Legacy_cleanup_not_invoked_when_codex_skills_install_fails() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { AgentSkillsReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, NoPrompt: false);
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: true);
+
+        await RunAsync(options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.AgentSkillsCalled).IsTrue();
+        await Assert.That(calls.LegacyCleanupCalled).IsFalse();
+    }
+
+    [Test]
     public async Task Claude_path_with_markup_special_chars_does_not_break_output() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
@@ -256,11 +284,12 @@ public class CodingAgentsStepTests {
     }
 
     static CodingAgentsStep.Paths TestPaths() => new(
-        ClaudeSettingsPath: "/fake/.claude/settings.json",
-        ClaudeScopeLabel:   "user",
-        PluginDir:          "/fake/plugin",
-        CodexHooksPath:     "/fake/.codex/hooks.json",
-        CodexSkillsDir:     "/fake/.codex/skills");
+        ClaudeSettingsPath:   "/fake/.claude/settings.json",
+        ClaudeScopeLabel:     "user",
+        PluginDir:            "/fake/plugin",
+        CodexHooksPath:       "/fake/.codex/hooks.json",
+        AgentsSkillsDir:      "/fake/.agents/skills",
+        LegacyCodexSkillsDir: "/fake/.codex/skills");
 
     sealed class Sink {
         public List<string> Lines { get; } = [];
@@ -276,14 +305,19 @@ public class CodingAgentsStepTests {
         public string? CodexHooksArg  { get; private set; }
         public bool CodexHooksReturns { get; set; } = true;
 
-        public bool CodexSkillsCalled { get; private set; }
-        public (string Src, string Dst)? CodexSkillsArgs { get; private set; }
-        public bool CodexSkillsReturns { get; set; } = true;
+        public bool AgentSkillsCalled { get; private set; }
+        public (string Src, string Dst)? AgentSkillsArgs { get; private set; }
+        public bool AgentSkillsReturns { get; set; } = true;
+
+        public bool LegacyCleanupCalled { get; private set; }
+        public string? LegacyCleanupArg { get; private set; }
+        public bool LegacyCleanupReturns { get; set; } = true;
 
         public CodingAgentsStep.Installers AsInstallers() => new(
-            InstallClaudePlugin: (s, p) => { ClaudeCalled = true; ClaudeArgs = (s, p); return ClaudeReturns; },
-            InstallCodexHooks:   h      => { CodexHooksCalled = true; CodexHooksArg = h; return CodexHooksReturns; },
-            InstallCodexSkills:  (s, d) => { CodexSkillsCalled = true; CodexSkillsArgs = (s, d); return CodexSkillsReturns; }
+            InstallClaudePlugin:    (s, p) => { ClaudeCalled = true; ClaudeArgs = (s, p); return ClaudeReturns; },
+            InstallCodexHooks:      h      => { CodexHooksCalled = true; CodexHooksArg = h; return CodexHooksReturns; },
+            InstallAgentSkills:     (s, d) => { AgentSkillsCalled = true; AgentSkillsArgs = (s, d); return AgentSkillsReturns; },
+            CleanLegacyCodexSkills: d      => { LegacyCleanupCalled = true; LegacyCleanupArg = d; return LegacyCleanupReturns; }
         );
     }
 }

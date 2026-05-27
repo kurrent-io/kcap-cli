@@ -434,6 +434,8 @@ Path expected: `/{token}/{vendor}/permission-request`. The handler asserts vendo
 
 ### 6.2 Server SignalR call
 
+> **Superseded by AI-702 (2026-05-27).** The 5-arg server hub plan below was never landed — `vendor` is **not** sent over the SignalR wire. `JsonHubProtocol.BindArguments` enforces strict `paramIndex == paramCount` matching and does not honour C# default values, so adding a positional `vendor` arg without a coordinated server bump breaks every hosted-agent permission prompt. Vendor stays local in `LocalPermissionBridge.BuildHookResponseJson` (which already has it in scope from the URL segment in §6.1) to pick the response shape; the server's permission flow is vendor-agnostic. The current wire shape is the original 4-arg `(sessionId, toolName, toolInput, suggestions)`. The bridge tests now assert response envelope shape directly instead of capturing a `vendor` parameter.
+
 The bridge today invokes `server.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, ct)`. With cross-repo scope (§3.5), the daemon-side wrapper `ServerConnection.RequestPermissionAsync` gains a required `string vendor` parameter and the hub method `RequestPermission` is bumped to five args server-side (no V2 alias). New signature:
 
 ```csharp

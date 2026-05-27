@@ -15,11 +15,13 @@ internal static class CodingAgentsStep {
         string ClaudeScopeLabel,
         string? PluginDir,
         string CodexHooksPath,
-        string CodexSkillsDir);
+        string AgentsSkillsDir,
+        string LegacyCodexSkillsDir);
     internal record Installers(
         Func<string /*settingsPath*/, string /*pluginDir*/, bool> InstallClaudePlugin,
         Func<string /*hooksPath*/, bool>                          InstallCodexHooks,
-        Func<string /*srcDir*/, string /*dstDir*/, bool>          InstallCodexSkills);
+        Func<string /*srcDir*/, string /*dstDir*/, bool>          InstallAgentSkills,
+        Func<string /*legacyDir*/, bool>                          CleanLegacyCodexSkills);
     internal record Result(bool ClaudeInstalled, bool CodexHooksInstalled, bool CodexSkillsInstalled);
 
     /// <summary>
@@ -52,20 +54,21 @@ internal static class CodingAgentsStep {
         Installers installers,
         Action<string> writeLine) {
         if (paths.PluginDir is null) {
-            writeLine("  [yellow]⚠[/] Codex hooks installed but skills could not be copied (plugin directory not found).");
+            writeLine("  [yellow]⚠[/] Codex hooks installed but agent skills could not be copied (plugin directory not found).");
             return false;
         }
 
-        var src = Path.Combine(paths.PluginDir, "codex-skills");
-        var ok  = installers.InstallCodexSkills(src, paths.CodexSkillsDir);
+        var src = Path.Combine(paths.PluginDir, "skills");
+        var ok  = installers.InstallAgentSkills(src, paths.AgentsSkillsDir);
 
         if (!ok) {
-            writeLine($"  [yellow]⚠[/] Codex hooks installed but skills could not be copied to {Markup.Escape(paths.CodexSkillsDir)}");
+            writeLine($"  [yellow]⚠[/] Codex hooks installed but agent skills could not be copied to {Markup.Escape(paths.AgentsSkillsDir)}");
             return false;
         }
 
-        writeLine($"  [green]✓[/] Codex skills installed (user: {Markup.Escape(paths.CodexSkillsDir)})");
+        writeLine($"  [green]✓[/] Agent skills installed (user: {Markup.Escape(paths.AgentsSkillsDir)})");
         writeLine("    [dim]kapacitor-recap, kapacitor-errors, kapacitor-hide, kapacitor-disable, kapacitor-validate-plan[/]");
+        installers.CleanLegacyCodexSkills(paths.LegacyCodexSkillsDir);
         return true;
     }
 
@@ -88,7 +91,7 @@ internal static class CodingAgentsStep {
             return false;
         }
 
-        var shouldInstall = options.NoPrompt || prompt("Install Codex CLI hooks and 5 skills?");
+        var shouldInstall = options.NoPrompt || prompt("Install Codex CLI hooks and kapacitor agent skills?");
 
         if (!shouldInstall) {
             writeLine("  [dim]· Codex CLI hooks not installed (you can run kapacitor plugin install --codex later)[/]");

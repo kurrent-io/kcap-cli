@@ -46,15 +46,15 @@ PR review context tools, available automatically when the agent is on a branch w
 
 Each hook pipes its JSON payload through the `kapacitor` CLI, which enriches it with git/PR info and forwards it to the server. A background watcher process streams transcript lines in real time.
 
-**Skills** — Slash commands for reviewing recorded sessions. Available on both harnesses (Claude reads `skills/`, Codex reads `codex-skills/`):
+**Skills** — Slash commands for reviewing recorded sessions. Claude reads `skills/` (unprefixed folder names); Codex and Cursor read `~/.agents/skills/` (`kapacitor-*` prefixed folder names):
 
-- `kapacitor-recap` — Retrieve a structured summary of a session (user prompts, assistant responses, plans, file changes)
-- `kapacitor-errors` — Extract tool call errors from a session for post-session review and pattern detection
-- `kapacitor-validate-plan` — Verify that all planned items were completed
-- `kapacitor-disable` — Stop recording and delete all server data for the current session
-- `kapacitor-hide` — Hide the current session (owner-only visibility)
+- `recap` / `kapacitor-recap` — Retrieve a structured summary of a session (user prompts, assistant responses, plans, file changes)
+- `errors` / `kapacitor-errors` — Extract tool call errors from a session for post-session review and pattern detection
+- `validate-plan` / `kapacitor-validate-plan` — Verify that all planned items were completed
+- `disable` / `kapacitor-disable` — Stop recording and delete all server data for the current session
+- `hide` / `kapacitor-hide` — Hide the current session (owner-only visibility)
 
-In Claude they're invoked as `/kapacitor:session-recap`, `/kapacitor:session-errors`, etc.
+In Claude they're invoked as `/kapacitor:recap`, `/kapacitor:errors`, etc.
 
 ## Prerequisites
 
@@ -67,14 +67,17 @@ In Claude they're invoked as `/kapacitor:session-recap`, `/kapacitor:session-err
 
 ```bash
 kapacitor plugin install            # Claude Code, user-wide
-kapacitor plugin install --codex    # Codex CLI, user-wide
-kapacitor plugin install --project  # current project only
+kapacitor plugin install --codex    # Codex CLI, user-wide (hooks + agent skills)
+kapacitor plugin install --skills   # Agent skills only (~/.agents/skills/), no Codex hooks
+kapacitor plugin install --project  # current project only (hooks scope; skills always user-wide)
 ```
 
 ### Option B: Interactive plugin manager
 
 - Claude Code: run `/plugin` inside a session and browse the **Installed** tab.
 - Codex CLI: `codex plugin marketplace add kurrent-io/kapacitor-cli` then enable from the marketplace.
+
+> **Note:** Codex's native plugin loader installs the MCP servers only. To get hooks and agent skills, additionally run `kapacitor plugin install --codex`.
 
 ### Option C: Settings file (manual)
 
@@ -117,32 +120,21 @@ kapacitor/
     plugin.json          — Claude manifest (name, version, description)
     marketplace.json     — Marketplace manifest for plugin discovery
   .codex-plugin/
-    plugin.json          — Codex manifest (refs ./.codex-mcp.json and ./codex-skills/)
+    plugin.json          — Codex manifest (refs ./.codex-mcp.json)
   .mcp.json              — Claude MCP servers (camelCase mcpServers shape)
   .codex-mcp.json        — Codex MCP servers (snake_case mcp_servers shape)
   hooks/
     hooks.json           — Hook definitions for all Claude lifecycle events
   skills/
-    session-recap/
-      SKILL.md           — /kapacitor:session-recap skill (Claude)
-    session-errors/
+    recap/
+      SKILL.md           — /kapacitor:recap skill (Claude)
+    errors/
       SKILL.md
     validate-plan/
       SKILL.md
-    session-disable/
+    disable/
       SKILL.md
-    session-hide/
-      SKILL.md
-  codex-skills/
-    kapacitor-recap/
-      SKILL.md           — same skill, Codex variant
-    kapacitor-errors/
-      SKILL.md
-    kapacitor-validate-plan/
-      SKILL.md
-    kapacitor-disable/
-      SKILL.md
-    kapacitor-hide/
+    hide/
       SKILL.md
 ```
 

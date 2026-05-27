@@ -4,6 +4,7 @@ using Kapacitor.Cli.Core;
 using Kapacitor.Cli.Daemon;
 using Kapacitor.Cli.Daemon.Pty;
 using Kapacitor.Cli.Daemon.Services;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Kapacitor.Cli.Tests.Unit;
@@ -79,8 +80,16 @@ public class AgentOrchestratorVendorTests {
             httpFactory,
             permissionBridge,
             launchers,
+            new StubHostLifetime(),
             NullLogger<Daemon.Services.AgentOrchestrator>.Instance
         );
+    }
+
+    sealed class StubHostLifetime : IHostApplicationLifetime {
+        public CancellationToken ApplicationStarted  => CancellationToken.None;
+        public CancellationToken ApplicationStopping => CancellationToken.None;
+        public CancellationToken ApplicationStopped  => CancellationToken.None;
+        public void StopApplication() { }
     }
 
     [Test]
@@ -374,7 +383,6 @@ public class AgentOrchestratorVendorTests {
                 string?           toolName,
                 JsonElement?      toolInput,
                 JsonElement?      suggestions,
-                string            vendor,
                 CancellationToken ct = default
             ) => Task.FromResult(new PermissionDecision("deny", null, null));
     }

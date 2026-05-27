@@ -1,5 +1,5 @@
 ---
-name: session-errors
+name: errors
 description: >-
   This skill should be used when the user asks to "show errors", "extract errors",
   "what went wrong", "find tool errors", "review errors from session",
@@ -11,11 +11,11 @@ description: >-
 
 # Session Errors
 
-Extract tool call errors from a Claude Code session recorded by Kurrent Capacitor. The output lists each failed tool call — bash commands, file reads/writes, agent delegations, etc. — along with the error message and the tool that caused it.
+Extract tool call errors from an agent session recorded by Kurrent Capacitor. The output lists each failed tool call — bash commands, file reads/writes, agent delegations, etc. — along with the error message and the tool that caused it.
 
 ## Usage
 
-Run `kapacitor errors` via the Bash tool. The session ID is automatically set by the `KAPACITOR_SESSION_ID` environment variable (persisted at session start).
+Run `kapacitor errors` via the Bash tool. `kapacitor errors` resolves the current session id from the environment when the host agent CLI exposes one. If no session id is available, pass it explicitly: `kapacitor errors <sessionId>`.
 
 ```bash
 # Errors from the current session
@@ -47,7 +47,7 @@ When using `--chain`, errors from all sessions in the continuation chain are inc
 
 ## Practical Applications
 
-- **End-of-session review** — run after finishing a session to identify recurring mistakes and update CLAUDE.md with avoidance rules
+- **End-of-session review** — run after finishing a session to identify recurring mistakes and add avoidance rules to the project's agent instructions file (e.g. `AGENTS.md`).
 - **Debugging** — quickly find what went wrong in a session without scrolling through the full timeline
 - **Pattern detection** — use `--chain` across a multi-session task to spot repeated error patterns (e.g., wrong file paths, incorrect API usage)
 
@@ -58,7 +58,7 @@ The `KAPACITOR_URL` environment variable overrides the default server URL (`http
 ## Tips
 
 - After extracting errors, look for patterns: the same tool failing repeatedly, or the same type of mistake across sessions.
-- Propose concrete avoidance rules based on the errors found — these can be added to the project's CLAUDE.md.
+- Propose concrete avoidance rules based on the errors found — these can be added to the project's agent instructions file.
 - The `kapacitor` CLI must be available on PATH (typically installed at `~/.local/bin/kapacitor`).
 
 ## Error Handling

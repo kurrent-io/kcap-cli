@@ -350,13 +350,20 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// in the bridge doesn't surface a per-request "client disconnected" signal, so a
     /// Claude process exiting mid-wait won't cancel this call. Switching the bridge to
     /// Kestrel + <c>HttpContext.RequestAborted</c> would give us per-request cancellation.
+    ///
+    /// The bridge knows the vendor ("claude" or "codex") locally to pick the right hook
+    /// response shape in <c>LocalPermissionBridge.BuildHookResponseJson</c>, but the
+    /// server's permission flow is vendor-agnostic so it is NOT forwarded over the wire.
+    /// Sending it would add a 5th positional argument that <c>JsonHubProtocol.BindArguments</c>
+    /// strict-count-matches against the server signature (default values are not honoured
+    /// by the binder), breaking every hosted-agent permission prompt against any server
+    /// build whose hub method doesn't declare a matching 5th parameter.
     /// </summary>
     public virtual Task<PermissionDecision> RequestPermissionAsync(
             string            sessionId,
             string?           toolName,
             JsonElement?      toolInput,
             JsonElement?      suggestions,
-            string            vendor,
             CancellationToken ct = default
         ) =>
         _hub.InvokeAsync<PermissionDecision>(
@@ -365,7 +372,6 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             toolName,
             toolInput,
             suggestions,
-            vendor,
             ct
         );
 
