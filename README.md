@@ -212,7 +212,7 @@ Launches a Claude Code session equipped with MCP tools that query the implementa
 kapacitor mcp sessions
 ```
 
-Stdio MCP server that exposes past Capacitor sessions to coding agents (Claude Code, Codex) so they can search and recall prior work without leaving the chat. The Kapacitor plugin auto-registers it for both Claude Code (via `.mcp.json`) and Codex CLI (via `.codex-plugin/plugin.json` → `.codex-mcp.json`), so there's nothing extra to do after `kapacitor setup`.
+Stdio MCP server that exposes past Capacitor sessions to coding agents (Claude Code, Codex) so they can search and recall prior work without leaving the chat. The Kapacitor plugin auto-registers it for both Claude Code (via `.mcp.json`) and Codex CLI (via `.codex-plugin/plugin.json` → `.codex-mcp.json`), so there's nothing extra to do after `kapacitor setup`. If you installed the kapacitor plugin via Codex's native plugin manager (rather than `kapacitor setup` / `kapacitor plugin install --codex`), the MCP server is still auto-registered, but you'll also want to run `kapacitor plugin install --codex` to get hooks and agent skills.
 
 It provides three tools:
 

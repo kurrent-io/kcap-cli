@@ -77,6 +77,8 @@ kapacitor plugin install --project  # current project only (hooks scope; skills 
 - Claude Code: run `/plugin` inside a session and browse the **Installed** tab.
 - Codex CLI: `codex plugin marketplace add kurrent-io/kapacitor-cli` then enable from the marketplace.
 
+> **Note:** Codex's native plugin loader installs the MCP servers only. To get hooks and agent skills, additionally run `kapacitor plugin install --codex`.
+
 ### Option C: Settings file (manual)
 
 Add to `.claude/settings.local.json` or `~/.claude/settings.json`:
