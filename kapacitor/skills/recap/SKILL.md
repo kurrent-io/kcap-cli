@@ -1,5 +1,5 @@
 ---
-name: session-recap
+name: recap
 description: >-
   This skill should be used when the user asks to "read a previous session",
   "get session history", "recap session", "what happened in session X",
@@ -44,7 +44,7 @@ kapacitor recap --full <sessionId>
 kapacitor recap --chain <sessionId>
 ```
 
-The session ID is automatically set by the `KAPACITOR_SESSION_ID` environment variable (persisted at session start). You can pass an explicit ID to review a different session.
+`kapacitor recap` resolves the current session id from the environment when the host agent CLI exposes one. If no session id is available, pass it explicitly: `kapacitor recap <sessionId>`.
 
 ## Repository Recap (`--repo`)
 
@@ -72,7 +72,7 @@ If no summary is available (e.g., active session), a hint is shown to use `--ful
 The complete transcript with these section types:
 
 - **`## User Prompt`** — what the user asked
-- **`## Assistant`** — Claude's text responses
+- **`## Assistant`** — Agent text responses
 - **`## Plan`** — plans that were created
 - **`## Write <path>`** — files that were created (with syntax-highlighted content)
 - **`## Edit <path>`** — files that were edited (with diff content)

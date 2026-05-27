@@ -50,7 +50,7 @@ kapacitor setup --server-url https://my-tenant.kapacitor.ai --default-visibility
 In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks` and/or `--skip-codex-hooks`.
 
 > **Need hooks for an agent installed after setup, or scoped to a single repo?**
-> Run `kapacitor plugin install [--codex] [--project]`. After installing Codex hooks, run `/hooks` inside Codex and trust each kapacitor entry — Codex doesn't execute hooks until each is explicitly trusted. After a `--project` install, also run `codex` once in the repo and accept the trust prompt.
+> Run `kapacitor plugin install [--codex] [--project]`. Use `--skills` instead of `--codex` if you only want the agent skills (Cursor, etc.) without Codex hooks. After installing Codex hooks, run `/hooks` inside Codex and trust each kapacitor entry — Codex doesn't execute hooks until each is explicitly trusted. After a `--project` install, also run `codex` once in the repo and accept the trust prompt.
 
 > **Need at least one agent to capture sessions:** the setup wizard runs to completion without an agent CLI on `PATH` (it'll still configure your profile, auth, and daemon), but kapacitor only records work once Claude Code or Codex CLI is installed and the hooks are in place.
 
@@ -128,7 +128,7 @@ kapacitor recap --chain --full <sessionId>  # full transcript across chain
 
 The identifier can be a session GUID or a meta session slug. Find these from the dashboard or the current session's hook payloads. When run inside a Claude Code session with the kapacitor plugin, the session ID is set automatically.
 
-If the kapacitor plugin is installed, you can also use the `/kapacitor:session-recap` skill inside Claude Code, or just ask:
+If the kapacitor plugin is installed, you can also use the `/kapacitor:recap` skill inside Claude Code, or just ask:
 
 ```
 Recap session c4de7fbe-cff5-4e2c-bf80-9858d02f58be and propose what should be done next.
@@ -212,7 +212,7 @@ Launches a Claude Code session equipped with MCP tools that query the implementa
 kapacitor mcp sessions
 ```
 
-Stdio MCP server that exposes past Capacitor sessions to coding agents (Claude Code, Codex) so they can search and recall prior work without leaving the chat. The Kapacitor plugin auto-registers it for both Claude Code (via `.mcp.json`) and Codex CLI (via `.codex-plugin/plugin.json` → `.codex-mcp.json`), so there's nothing extra to do after `kapacitor setup`.
+Stdio MCP server that exposes past Capacitor sessions to coding agents (Claude Code, Codex) so they can search and recall prior work without leaving the chat. The Kapacitor plugin auto-registers it for both Claude Code (via `.mcp.json`) and Codex CLI (via `.codex-plugin/plugin.json` → `.codex-mcp.json`), so there's nothing extra to do after `kapacitor setup`. If you installed the kapacitor plugin via Codex's native plugin manager (rather than `kapacitor setup` / `kapacitor plugin install --codex`), the MCP server is still auto-registered, but you'll also want to run `kapacitor plugin install --codex` to get hooks and agent skills.
 
 It provides three tools:
 
@@ -289,11 +289,12 @@ Hosted Codex agents require the Codex hook surface — if you said yes during `k
 Codex CLI 0.81+ exports `CODEX_THREAD_ID`; kapacitor reads it the same way it reads `KAPACITOR_SESSION_ID` for Claude sessions — no manual session ID needed for any of the Codex skills (`kapacitor-recap`, `kapacitor-errors`, `kapacitor-hide`, `kapacitor-disable`, `kapacitor-validate-plan`).
 
 ```bash
-kapacitor plugin install --codex            # user scope (~/.codex/hooks.json)
-kapacitor plugin install --codex --project  # project scope (<repo>/.codex/hooks.json)
+kapacitor plugin install --codex            # user scope (~/.codex/hooks.json + ~/.agents/skills/)
+kapacitor plugin install --codex --project  # project scope (<repo>/.codex/hooks.json), skills still user-wide
+kapacitor plugin install --skills           # skills only (~/.agents/skills/), no Codex hooks
 ```
 
-Installing with `--codex` writes five skills under `~/.codex/skills/`:
+Installing with `--codex` (or `--skills`) writes five skills under `~/.agents/skills/`:
 
 | Skill | Wraps | Purpose |
 |---|---|---|
