@@ -374,7 +374,6 @@ public class AgentOrchestratorVendorTests {
                 string?           toolName,
                 JsonElement?      toolInput,
                 JsonElement?      suggestions,
-                string            vendor,
                 CancellationToken ct = default
             ) => Task.FromResult(new PermissionDecision("deny", null, null));
     }
