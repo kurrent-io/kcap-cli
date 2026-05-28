@@ -409,35 +409,37 @@ switch (command) {
         return 0;
     }
     case "import": {
+        // Vendor selection first — quick exit on parse errors so we don't do other work.
+        var vsel = VendorSelection.Parse(args);
+        if (vsel.HasError) {
+            Console.Error.WriteLine(vsel.Error);
+            return 1;
+        }
+
         string?   filterCwd     = null;
         string?   filterSession = null;
         var       minLines      = 15;
         DateOnly? since         = null;
-        var       codex         = args.Contains("--codex");
-        var       cwdArgIdx     = Array.IndexOf(args, "--cwd");
 
+        var cwdArgIdx = Array.IndexOf(args, "--cwd");
         if (cwdArgIdx >= 0 && cwdArgIdx + 1 < args.Length) {
             filterCwd = args[cwdArgIdx + 1];
         }
 
         var sessionArgIdx = Array.IndexOf(args, "--session");
-
         if (sessionArgIdx >= 0 && sessionArgIdx + 1 < args.Length) {
             filterSession = args[sessionArgIdx + 1];
         }
 
         var minLinesIdx = Array.IndexOf(args, "--min-lines");
-
         if (minLinesIdx >= 0 && minLinesIdx + 1 < args.Length && int.TryParse(args[minLinesIdx + 1], out var parsed)) {
             minLines = parsed;
         }
 
         var sinceIdx = Array.IndexOf(args, "--since");
-
         if (sinceIdx >= 0 && sinceIdx + 1 < args.Length) {
             if (!DateOnly.TryParseExact(args[sinceIdx + 1], "yyyy-MM-dd", out var parsedSince)) {
                 Console.Error.WriteLine("--since must be YYYY-MM-DD");
-
                 return 1;
             }
 
@@ -445,6 +447,25 @@ switch (command) {
         }
 
         var generateSummaries = args.Contains("--generate-summaries");
+
+        // Cursor-specific args
+        var cursorWorkspaceIdx = Array.IndexOf(args, "--cursor-workspace");
+        var cursorWorkspace = cursorWorkspaceIdx >= 0 && cursorWorkspaceIdx + 1 < args.Length
+            ? args[cursorWorkspaceIdx + 1]
+            : null;
+        var cursorAllWorkspaces = args.Contains("--cursor-all-workspaces");
+        var cursorArgs = new ImportCommand.CursorWorkspaceArgs(cursorWorkspace, cursorAllWorkspaces);
+
+        // Build sources
+        var explicitVendorSelection = vsel.Vendors.Count > 0;
+        var allSources = new IImportSource[] {
+            new ClaudeImportSource(),
+            new CodexImportSource(),
+            new CursorImportSource(),
+        };
+        IReadOnlyList<IImportSource> sources = explicitVendorSelection
+            ? allSources.Where(s => vsel.Vendors.Contains(s.Vendor)).ToList()
+            : allSources;
 
         // --- Scope resolution (AI-613) ---
         var profileConfig = await AppConfig.LoadProfileConfig();
@@ -467,23 +488,15 @@ switch (command) {
             return 1;
         }
 
-        // E2: HandleImport now takes a list of IImportSource. E3 will replace
-        // the legacy --codex bool with a full VendorSelection parse; for now
-        // we preserve the existing single-source behaviour by mapping the
-        // bool flag to a single Claude or Codex source.
-        IReadOnlyList<IImportSource> importSources = codex
-            ? [new CodexImportSource()]
-            : [new ClaudeImportSource()];
-
         return await ImportCommand.HandleImport(
             baseUrl!,
             filterCwd,
             filterSession,
             minLines,
             generateSummaries,
-            sources:                 importSources,
-            explicitVendorSelection: codex,             // --codex was an explicit selection; default Claude was implicit
-            cursorArgs:              null,              // E3 will populate from --cursor-* flags
+            sources:                 sources,
+            explicitVendorSelection: explicitVendorSelection,
+            cursorArgs:              cursorArgs,
             since:                   since,
             scope:                   resolveResult.Scope, // null => HandleImport runs picker
             skipConfirmation:        resolveResult.Yes,
@@ -581,7 +594,9 @@ switch (command) {
     case "codex-hook":
         return await CodexHookCommand.Handle(baseUrl!, Console.In);
     case "cursor":
-        return await CursorCommand.RunAsync(args[1..], baseUrl!);
+        await Console.Error.WriteLineAsync(
+            "kapacitor cursor import has been removed. Use 'kapacitor import --cursor' instead.");
+        return 2;
 }
 
 if (!hookCommands.Contains(command)) {
