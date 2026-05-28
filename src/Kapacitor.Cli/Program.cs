@@ -467,19 +467,29 @@ switch (command) {
             return 1;
         }
 
+        // E2: HandleImport now takes a list of IImportSource. E3 will replace
+        // the legacy --codex bool with a full VendorSelection parse; for now
+        // we preserve the existing single-source behaviour by mapping the
+        // bool flag to a single Claude or Codex source.
+        IReadOnlyList<IImportSource> importSources = codex
+            ? [new CodexImportSource()]
+            : [new ClaudeImportSource()];
+
         return await ImportCommand.HandleImport(
             baseUrl!,
             filterCwd,
             filterSession,
             minLines,
             generateSummaries,
-            codex,
-            since,
-            scope:            resolveResult.Scope,     // null => HandleImport runs picker
-            skipConfirmation: resolveResult.Yes,
-            forcePrivate:     resolveResult.Private,
-            activeProfile:    activeProfile,
-            currentRepo:      currentRepo);
+            sources:                 importSources,
+            explicitVendorSelection: codex,             // --codex was an explicit selection; default Claude was implicit
+            cursorArgs:              null,              // E3 will populate from --cursor-* flags
+            since:                   since,
+            scope:                   resolveResult.Scope, // null => HandleImport runs picker
+            skipConfirmation:        resolveResult.Yes,
+            forcePrivate:            resolveResult.Private,
+            activeProfile:           activeProfile,
+            currentRepo:             currentRepo);
     }
     case "watch" when args.Length < 3:
         Console.Error.WriteLine("Usage: kapacitor watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex]");
