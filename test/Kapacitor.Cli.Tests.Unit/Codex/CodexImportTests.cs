@@ -278,7 +278,7 @@ public class CodexImportTests {
 
             using var client = new HttpClient();
 
-            var result = await ImportCommand.ClassifyAsync(
+            var result = await TranscriptFileClassification.ClassifyAsync(
                 client,
                 server.Url!,
                 transcripts,
@@ -319,7 +319,7 @@ public class CodexImportTests {
 
             using var client = new HttpClient();
 
-            var result = await ImportCommand.ClassifyAsync(
+            var result = await TranscriptFileClassification.ClassifyAsync(
                 client,
                 server.Url!,
                 transcripts,
