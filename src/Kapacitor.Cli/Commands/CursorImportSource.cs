@@ -151,6 +151,46 @@ internal sealed class CursorImportSource : IImportSource {
                 continue;
             }
 
+            // Mirror CursorCommand.RunAsync: skip non-agent composers (chat / inline / ask).
+            // These are not agent sessions and shouldn't be ingested. ProbeErrorReason is
+            // kept short ("mode={X}") so a future Plan-grid sub-row can render it.
+            if (!IsAgentMode(header)) {
+                results.Add(new() {
+                    SessionId        = s.SessionId,
+                    FilePath         = "",
+                    EncodedCwd       = "",
+                    Meta             = meta,
+                    Status           = ImportCommand.ClassificationStatus.Excluded,
+                    Vendor           = Vendor,
+                    ProbeErrorReason = $"mode={header.UnifiedMode}",
+                    SourceMeta       = s.SourceMeta,
+                });
+                continue;
+            }
+
+            // Mirror CursorCommand.RunAsync: skip composers with non-empty generatingBubbleIds
+            // (an LLM is actively writing). Importing now would push a mid-write payload.
+            string? composerDataRaw;
+            try {
+                composerDataRaw = await CursorStateReader.GetComposerDataAsync(globalDbPath, composerId, ct);
+            } catch {
+                composerDataRaw = null;  // best-effort; let downstream BuildPayload re-attempt
+            }
+
+            if (HasInFlightBubbles(composerDataRaw)) {
+                results.Add(new() {
+                    SessionId        = s.SessionId,
+                    FilePath         = "",
+                    EncodedCwd       = "",
+                    Meta             = meta,
+                    Status           = ImportCommand.ClassificationStatus.Excluded,
+                    Vendor           = Vendor,
+                    ProbeErrorReason = "in-flight bubbles",
+                    SourceMeta       = s.SourceMeta,
+                });
+                continue;
+            }
+
             meta.FirstTimestamp = header.CreatedAtMs > 0
                 ? DateTimeOffset.FromUnixTimeMilliseconds(header.CreatedAtMs)
                 : null;
@@ -212,6 +252,33 @@ internal sealed class CursorImportSource : IImportSource {
             return resp.IsSuccessStatusCode ? ImportOutcome.Loaded : ImportOutcome.Failed;
         } catch {
             return ImportOutcome.Failed;
+        }
+    }
+
+    /// <summary>
+    /// True when the composer header's <c>unifiedMode</c> is "agent" (case-insensitive).
+    /// Cursor chat / inline / ask composers are not agent sessions and shouldn't be ingested.
+    /// </summary>
+    internal static bool IsAgentMode(RawComposerHeader header) =>
+        string.Equals(header.UnifiedMode, "agent", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True when the composer's <c>composerData</c> JSON has non-empty <c>generatingBubbleIds</c>,
+    /// i.e. an LLM is actively writing. Returns <c>false</c> on null input or parse failure
+    /// (best-effort — the import path will re-attempt the parse downstream).
+    /// </summary>
+    internal static bool HasInFlightBubbles(string? composerDataRaw) {
+        if (composerDataRaw is null) return false;
+
+        try {
+            using var doc           = JsonDocument.Parse(composerDataRaw);
+            var       generatingIds = doc.RootElement.TryGetProperty("generatingBubbleIds", out var gb)
+                ? gb.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList()
+                : [];
+
+            return generatingIds.Count > 0;
+        } catch {
+            return false;
         }
     }
 
