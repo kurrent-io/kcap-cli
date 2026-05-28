@@ -305,6 +305,64 @@ static class ImportCommand {
             ProbeError:    classifications.Count(c => c.Status == ClassificationStatus.ProbeError)
         );
 
+    /// <summary>
+    /// Compute the per-source Done-grid row for a single vendor.
+    /// </summary>
+    /// <param name="classifications">All classifications for this vendor (already filtered).</param>
+    /// <param name="imported">Count of sessions in <paramref name="classifications"/> whose SessionId appears in importedSessionIds (i.e. chain-phase imports).</param>
+    /// <param name="routedOutcomes">Per-vendor routed-phase outcomes, or null if this vendor ran through the chain phase only.</param>
+    /// <remarks>
+    /// Routed-phase vendors (Cursor today) get exact attribution: <c>routedOutcomes.Skipped</c>
+    /// folds into Excluded (server said "already current"), <c>routedOutcomes.Failed</c> into Errored.
+    /// Chain-phase vendors (Claude/Codex) still use the best-effort approximation:
+    /// imported sessions → Loaded; (New+Partial)−imported → Errored — because the chain worker
+    /// doesn't record per-session outcome by vendor yet.
+    /// </remarks>
+    internal static FinalCounts ComputePerSourceFinalCounts(
+            IReadOnlyList<SessionClassification>      classifications,
+            int                                       imported,
+            (int Loaded, int Skipped, int Failed)?    routedOutcomes
+        ) {
+        var counts = ComputeCounts(classifications);
+
+        if (routedOutcomes is { } r) {
+            // Routed-phase vendor: take exact counts from the per-vendor tracker.
+            return new FinalCounts(
+                Loaded:             r.Loaded,
+                Resumed:            0,
+                AlreadyLoaded:      counts.AlreadyLoaded,
+                TooShort:           counts.TooShort,
+                Excluded:           counts.Excluded + r.Skipped,
+                ProbeError:         counts.ProbeError,
+                Errored:            r.Failed,
+                TitlesGenerated:    0,
+                TitlesSkipped:      0,
+                TitlesFailed:       0,
+                SummariesGenerated: 0,
+                SummariesFailed:    0,
+                RanBackground:      false,
+                RequestedSummaries: false);
+        }
+
+        // Chain-phase vendor: best-effort approximation because the chain worker
+        // doesn't record per-session outcome by vendor yet.
+        return new FinalCounts(
+            Loaded:             imported,
+            Resumed:            0,
+            AlreadyLoaded:      counts.AlreadyLoaded,
+            TooShort:           counts.TooShort,
+            Excluded:           counts.Excluded,
+            ProbeError:         counts.ProbeError,
+            Errored:            classifications.Count(c => c.Status is ClassificationStatus.New or ClassificationStatus.Partial) - imported,
+            TitlesGenerated:    0,
+            TitlesSkipped:      0,
+            TitlesFailed:       0,
+            SummariesGenerated: 0,
+            SummariesFailed:    0,
+            RanBackground:      false,
+            RequestedSummaries: false);
+    }
+
     internal sealed record FinalCounts(
             int  Loaded,
             int  Resumed,
@@ -813,6 +871,20 @@ static class ImportCommand {
         var routedLoaded   = 0;
         var routedErrored  = 0;
         var routedExcluded = 0;
+        // Per-vendor routed outcomes for the Done sub-grid. Aggregate
+        // routedLoaded/routedExcluded/routedErrored above remain authoritative
+        // for the totals row; this tracker is what feeds doneBySource so the
+        // sub-grid attributes Skipped-at-import to Excluded (not Errored).
+        var routedOutcomesByVendor = new ConcurrentDictionary<string, (int Loaded, int Skipped, int Failed)>(StringComparer.Ordinal);
+
+        static (int Loaded, int Skipped, int Failed) AddRoutedOutcome(
+            (int Loaded, int Skipped, int Failed) prev,
+            ImportOutcome                          outcome
+        ) => outcome switch {
+            ImportOutcome.Loaded or ImportOutcome.Resumed => (prev.Loaded + 1, prev.Skipped,     prev.Failed),
+            ImportOutcome.Skipped                         => (prev.Loaded,     prev.Skipped + 1, prev.Failed),
+            _                                             => (prev.Loaded,     prev.Skipped,     prev.Failed + 1),
+        };
 
         if (chains.Count > 0) {
             display.BeginPhase($"Importing {chains.Sum(c => c.Count)} sessions");
@@ -954,6 +1026,10 @@ static class ImportCommand {
                             new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount },
                             async (c, _) => {
                                 var outcome = await ImportOne(c);
+                                routedOutcomesByVendor.AddOrUpdate(
+                                    c.Vendor,
+                                    addValueFactory:    _ => AddRoutedOutcome((0, 0, 0), outcome),
+                                    updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome));
                                 switch (outcome) {
                                     case ImportOutcome.Loaded:
                                     case ImportOutcome.Resumed:
@@ -982,6 +1058,10 @@ static class ImportCommand {
                     new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount },
                     async (c, _) => {
                         var outcome = await ImportOne(c);
+                        routedOutcomesByVendor.AddOrUpdate(
+                            c.Vendor,
+                            addValueFactory:    _ => AddRoutedOutcome((0, 0, 0), outcome),
+                            updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome));
                         switch (outcome) {
                             case ImportOutcome.Loaded:
                             case ImportOutcome.Resumed:
@@ -1101,31 +1181,19 @@ static class ImportCommand {
 
             doneBySource = classifications
                 .GroupBy(c => c.Vendor, StringComparer.Ordinal)
-                .ToDictionary(g => g.Key, g => {
-                    var slice = g.ToList();
-                    var imported = slice.Count(c => importedSet.Contains(c.SessionId));
-                    // Within a vendor slice we can't disambiguate Loaded vs
-                    // Resumed cheaply after the fact (the chain worker doesn't
-                    // record per-session vendor); approximate by attributing
-                    // all imported sessions to Loaded. A future follow-up can
-                    // track outcome per session via a ConcurrentDictionary.
-                    var counts = ComputeCounts(slice);
-                    return new FinalCounts(
-                        Loaded:             imported,
-                        Resumed:            0,
-                        AlreadyLoaded:      counts.AlreadyLoaded,
-                        TooShort:           counts.TooShort,
-                        Excluded:           counts.Excluded,
-                        ProbeError:         counts.ProbeError,
-                        Errored:            slice.Count(c => c.Status is ClassificationStatus.New or ClassificationStatus.Partial) - imported,
-                        TitlesGenerated:    0,
-                        TitlesSkipped:      0,
-                        TitlesFailed:       0,
-                        SummariesGenerated: 0,
-                        SummariesFailed:    0,
-                        RanBackground:      false,
-                        RequestedSummaries: false);
-                }, StringComparer.Ordinal);
+                .ToDictionary(
+                    g => g.Key,
+                    g => {
+                        var slice    = g.ToList();
+                        var imported = slice.Count(c => importedSet.Contains(c.SessionId));
+                        routedOutcomesByVendor.TryGetValue(g.Key, out var routed);
+                        var hasRouted = routedOutcomesByVendor.ContainsKey(g.Key);
+                        return ComputePerSourceFinalCounts(
+                            slice,
+                            imported,
+                            hasRouted ? routed : null);
+                    },
+                    StringComparer.Ordinal);
         }
 
         display.WriteDoneGrid(final, doneBySource);
