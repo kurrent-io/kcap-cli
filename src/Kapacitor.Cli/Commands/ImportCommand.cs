@@ -159,6 +159,15 @@ static class ImportCommand {
 
         /// <summary>Total transcript line count (cached so we don't re-read the file downstream).</summary>
         public int TotalLines { get; init; }
+
+        /// <summary>
+        /// Source-specific opaque metadata attached during DiscoverAsync.
+        /// Claude/Codex sources don't need this (their fields live in FilePath/EncodedCwd).
+        /// Cursor uses it to carry ComposerId, WorkspacePath, GlobalDbPath, CliOwner, CliRepo.
+        /// The orchestrator does not inspect this dictionary; only the originating
+        /// IImportSource reads it back in ImportSessionAsync.
+        /// </summary>
+        public IReadOnlyDictionary<string, object?>? SourceMeta { get; init; }
     }
 
     internal sealed record ClassificationCounts(
