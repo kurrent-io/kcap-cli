@@ -18,7 +18,7 @@ static class ImportCommand {
     /// </summary>
     const int ImportWorkerCount = 4;
 
-    readonly struct ImportDisplay {
+    internal readonly struct ImportDisplay {
         public bool Tty { get; init; }
 
         public void Line(string plain, string? markup = null) {
@@ -35,8 +35,42 @@ static class ImportCommand {
             }
         }
 
-        public void WritePlanGrid(ClassificationCounts c) {
+        public void WritePlanGrid(
+                ClassificationCounts                              c,
+                IReadOnlyDictionary<string, ClassificationCounts>? bySource = null
+            ) {
             if (Tty) {
+                if (bySource is { Count: > 1 }) {
+                    AnsiConsole.Write(new Rule("[yellow]By source[/]").LeftJustified());
+
+                    var sub = new Grid()
+                        .AddColumn().AddColumn().AddColumn().AddColumn().AddColumn().AddColumn().AddColumn();
+                    sub.AddRow(
+                        "[dim]Source[/]",
+                        "[dim]New[/]",
+                        "[dim]Resumable[/]",
+                        "[dim]Already loaded[/]",
+                        "[dim]Too short[/]",
+                        "[dim]Excluded[/]",
+                        "[dim]Probe errors[/]"
+                    );
+
+                    foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
+                        var sc = kv.Value;
+                        sub.AddRow(
+                            $"[bold]{Markup.Escape(kv.Key)}[/]",
+                            sc.New.ToString(),
+                            sc.Partial.ToString(),
+                            sc.AlreadyLoaded.ToString(),
+                            sc.TooShort.ToString(),
+                            sc.Excluded.ToString(),
+                            sc.ProbeError > 0 ? $"[red]{sc.ProbeError}[/]" : "0"
+                        );
+                    }
+
+                    AnsiConsole.Write(sub);
+                }
+
                 var grid = new Grid().AddColumn().AddColumn();
                 grid.AddRow("[bold]New[/]", c.New.ToString());
                 grid.AddRow("[bold]Resumable[/]", c.Partial.ToString());
@@ -46,6 +80,22 @@ static class ImportCommand {
                 if (c.ProbeError > 0) grid.AddRow("[bold]Probe errors[/]", $"[red]{c.ProbeError}[/]");
                 AnsiConsole.Write(grid);
             } else {
+                if (bySource is { Count: > 1 }) {
+                    Console.WriteLine();
+                    Console.WriteLine("== By source ==");
+                    foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
+                        var sc = kv.Value;
+                        Console.WriteLine($"  [{kv.Key}]");
+                        Console.WriteLine($"    New               {sc.New}");
+                        Console.WriteLine($"    Resumable         {sc.Partial}");
+                        Console.WriteLine($"    Already loaded    {sc.AlreadyLoaded}");
+                        Console.WriteLine($"    Too short         {sc.TooShort}");
+                        Console.WriteLine($"    Excluded          {sc.Excluded}");
+                        if (sc.ProbeError > 0) Console.WriteLine($"    Probe errors      {sc.ProbeError}");
+                    }
+                    Console.WriteLine();
+                }
+
                 Console.WriteLine($"  New               {c.New}");
                 Console.WriteLine($"  Resumable         {c.Partial}");
                 Console.WriteLine($"  Already loaded    {c.AlreadyLoaded}");
@@ -55,8 +105,47 @@ static class ImportCommand {
             }
         }
 
-        public void WriteDoneGrid(FinalCounts f) {
+        public void WriteDoneGrid(
+                FinalCounts                              f,
+                IReadOnlyDictionary<string, FinalCounts>? bySource = null
+            ) {
             if (Tty) {
+                AnsiConsole.Write(new Rule("[green]Done[/]").LeftJustified());
+
+                if (bySource is { Count: > 1 }) {
+                    AnsiConsole.Write(new Rule("[green]By source[/]").LeftJustified());
+
+                    var sub = new Grid()
+                        .AddColumn().AddColumn().AddColumn().AddColumn()
+                        .AddColumn().AddColumn().AddColumn().AddColumn();
+                    sub.AddRow(
+                        "[dim]Source[/]",
+                        "[dim]Loaded[/]",
+                        "[dim]Resumed[/]",
+                        "[dim]Already loaded[/]",
+                        "[dim]Too short[/]",
+                        "[dim]Excluded[/]",
+                        "[dim]Probe errors[/]",
+                        "[dim]Errored[/]"
+                    );
+
+                    foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
+                        var sf = kv.Value;
+                        sub.AddRow(
+                            $"[bold]{Markup.Escape(kv.Key)}[/]",
+                            sf.Loaded.ToString(),
+                            sf.Resumed.ToString(),
+                            sf.AlreadyLoaded.ToString(),
+                            sf.TooShort.ToString(),
+                            sf.Excluded.ToString(),
+                            sf.ProbeError > 0 ? $"[red]{sf.ProbeError}[/]" : "0",
+                            sf.Errored    > 0 ? $"[red]{sf.Errored}[/]"    : "0"
+                        );
+                    }
+
+                    AnsiConsole.Write(sub);
+                }
+
                 var grid = new Grid().AddColumn().AddColumn();
                 grid.AddRow("[bold]Loaded[/]", f.Loaded.ToString());
                 grid.AddRow("[bold]Resumed[/]", f.Resumed.ToString());
@@ -73,11 +162,28 @@ static class ImportCommand {
                         grid.AddRow("[bold]Summaries[/]", $"{f.SummariesGenerated} generated, {f.SummariesFailed} failed");
                 }
 
-                AnsiConsole.Write(new Rule("[green]Done[/]").LeftJustified());
                 AnsiConsole.Write(grid);
             } else {
                 Console.WriteLine();
                 Console.WriteLine("== Done ==");
+
+                if (bySource is { Count: > 1 }) {
+                    Console.WriteLine();
+                    Console.WriteLine("== By source ==");
+                    foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
+                        var sf = kv.Value;
+                        Console.WriteLine($"  [{kv.Key}]");
+                        Console.WriteLine($"    Loaded              {sf.Loaded}");
+                        Console.WriteLine($"    Resumed             {sf.Resumed}");
+                        Console.WriteLine($"    Already loaded      {sf.AlreadyLoaded}");
+                        if (sf.TooShort   > 0) Console.WriteLine($"    Too short           {sf.TooShort}");
+                        if (sf.Excluded   > 0) Console.WriteLine($"    Excluded            {sf.Excluded}");
+                        if (sf.ProbeError > 0) Console.WriteLine($"    Probe errors        {sf.ProbeError}");
+                        if (sf.Errored    > 0) Console.WriteLine($"    Errored             {sf.Errored}");
+                    }
+                    Console.WriteLine();
+                }
+
                 Console.WriteLine($"  Loaded              {f.Loaded}");
                 Console.WriteLine($"  Resumed             {f.Resumed}");
                 Console.WriteLine($"  Already loaded      {f.AlreadyLoaded}");
