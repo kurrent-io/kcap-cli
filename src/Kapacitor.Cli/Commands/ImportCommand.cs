@@ -887,7 +887,7 @@ static class ImportCommand {
         return null;
     }
 
-    static string? ExtractCwdFromTranscript(string filePath, bool codex = false) {
+    internal static string? ExtractCwdFromTranscript(string filePath, bool codex = false) {
         try {
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var reader = new StreamReader(stream);
@@ -1163,7 +1163,7 @@ static class ImportCommand {
     /// Normalize a GUID string to dashless format (matching the live CLI's NormalizeGuidField).
     /// Non-GUID strings are returned as-is.
     /// </summary>
-    static string NormalizeGuid(string value) =>
+    internal static string NormalizeGuid(string value) =>
         Guid.TryParse(value, out var guid) ? guid.ToString("N") : value;
 
     static async Task<TitleResult> GenerateTitleForImportAsync(HttpClient httpClient, string baseUrl, string sessionId, string filePath, string vendor) {
