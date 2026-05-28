@@ -36,9 +36,11 @@ namespace Kapacitor.Cli.Commands;
 /// </summary>
 internal sealed class CursorImportSource : IImportSource {
     readonly CursorPaths _paths;
+    readonly int         _payloadHardCapBytes;
 
-    public CursorImportSource(CursorPaths? pathsOverride = null) {
-        _paths = pathsOverride ?? CursorPaths.Resolve();
+    public CursorImportSource(CursorPaths? pathsOverride = null, int? payloadHardCapBytes = null) {
+        _paths               = pathsOverride ?? CursorPaths.Resolve();
+        _payloadHardCapBytes = payloadHardCapBytes ?? CursorPayloadAssembler.PayloadHardCapBytes;
     }
 
     public string Vendor => "cursor";
@@ -55,7 +57,7 @@ internal sealed class CursorImportSource : IImportSource {
     public static string NormalizeCursorSessionId(string id) => id.Replace("-", "");
 
     public async Task<IReadOnlyList<DiscoveredSession>> DiscoverAsync(DiscoveryFilters filters, CancellationToken ct) {
-        var workspaces = CursorCommand.ResolveWorkspaces(_paths, filters.CursorWorkspace, filters.CursorAllWorkspaces).ToList();
+        var workspaces = ResolveWorkspaces(_paths, filters.CursorWorkspace, filters.CursorAllWorkspaces).ToList();
 
         var sessionFilter = filters.FilterSession is { } sf ? NormalizeCursorSessionId(sf) : null;
 
@@ -151,9 +153,9 @@ internal sealed class CursorImportSource : IImportSource {
                 continue;
             }
 
-            // Mirror CursorCommand.RunAsync: skip non-agent composers (chat / inline / ask).
-            // These are not agent sessions and shouldn't be ingested. ProbeErrorReason is
-            // kept short ("mode={X}") so a future Plan-grid sub-row can render it.
+            // Skip non-agent composers (chat / inline / ask). These are not agent sessions
+            // and shouldn't be ingested. ProbeErrorReason is kept short ("mode={X}") so a
+            // future Plan-grid sub-row can render it.
             if (!IsAgentMode(header)) {
                 results.Add(new() {
                     SessionId        = s.SessionId,
@@ -168,8 +170,8 @@ internal sealed class CursorImportSource : IImportSource {
                 continue;
             }
 
-            // Mirror CursorCommand.RunAsync: skip composers with non-empty generatingBubbleIds
-            // (an LLM is actively writing). Importing now would push a mid-write payload.
+            // Skip composers with non-empty generatingBubbleIds (an LLM is actively writing).
+            // Importing now would push a mid-write payload.
             string? composerDataRaw;
             try {
                 composerDataRaw = await CursorStateReader.GetComposerDataAsync(globalDbPath, composerId, ct);
@@ -241,7 +243,7 @@ internal sealed class CursorImportSource : IImportSource {
 
         var payloadJson = JsonSerializer.Serialize(payload, CursorJsonContext.Default.CursorImportPayload);
 
-        if (Encoding.UTF8.GetByteCount(payloadJson) > CursorPayloadAssembler.PayloadHardCapBytes) {
+        if (Encoding.UTF8.GetByteCount(payloadJson) > _payloadHardCapBytes) {
             return ImportOutcome.Failed;
         }
 
@@ -314,9 +316,6 @@ internal sealed class CursorImportSource : IImportSource {
 
     /// <summary>
     /// Assembles a <see cref="CursorImportPayload"/> from the SQLite state.
-    /// Logic mirrors <c>CursorCommand.BuildPayload</c>; that helper is private
-    /// and the orchestrator removal task (F1) will delete CursorCommand
-    /// entirely, so duplicating the logic here is the lower-risk move.
     /// </summary>
     static async Task<CursorImportPayload> BuildPayload(
             string            globalDbPath,
@@ -466,4 +465,92 @@ internal sealed class CursorImportSource : IImportSource {
             ContentBlobs        = contentBlobs
         };
     }
+
+    /// <summary>
+    /// Walks <see cref="CursorPaths.WorkspaceStorageDir"/>, reads each subdir's
+    /// <c>workspace.json</c> for a <c>folder</c> URI, and yields
+    /// <c>(folderPath, wsDbPath)</c> tuples.
+    /// </summary>
+    private static IEnumerable<(string FolderPath, string WsDbPath)> ResolveWorkspaces(
+        CursorPaths paths,
+        string?     selectedWorkspace,
+        bool        all
+    ) {
+        if (!Directory.Exists(paths.WorkspaceStorageDir)) yield break;
+
+        var cwd = Environment.CurrentDirectory;
+
+        foreach (var subdir in Directory.EnumerateDirectories(paths.WorkspaceStorageDir)) {
+            var wsJsonPath = Path.Combine(subdir, "workspace.json");
+
+            string? folderPath = null;
+
+            if (File.Exists(wsJsonPath)) {
+                try {
+                    var json = File.ReadAllText(wsJsonPath);
+
+                    using var doc = JsonDocument.Parse(json);
+
+                    if (doc.RootElement.TryGetProperty("folder", out var folderEl)) {
+                        var uri = folderEl.GetString();
+
+                        if (uri is not null) {
+                            // Strip file:// prefix and URI-decode
+                            folderPath = StripFileUri(uri);
+                        }
+                    }
+                } catch {
+                    // If we can't read workspace.json, skip this directory
+                    continue;
+                }
+            }
+
+            if (folderPath is null) continue;
+
+            // Normalize once so downstream consumers (path-redaction in particular)
+            // see a canonical native form, not whatever shape workspace.json used.
+            string normalizedFolder;
+            try {
+                normalizedFolder = NormalizePath(folderPath);
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"[cursor] Skipping workspace {subdir}: invalid folder path '{folderPath}' ({ex.Message})");
+                continue;
+            }
+
+            var wsDbPath = Path.Combine(subdir, "state.vscdb");
+
+            if (all) {
+                yield return (normalizedFolder, wsDbPath);
+
+                continue;
+            }
+
+            var target = selectedWorkspace ?? cwd;
+            var normalizedTarget = NormalizePath(target);
+
+            if (string.Equals(normalizedTarget, normalizedFolder, StringComparison.OrdinalIgnoreCase)) {
+                yield return (normalizedFolder, wsDbPath);
+            }
+        }
+    }
+
+    private static string StripFileUri(string uri) {
+        if (uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase)) {
+            // file:///path → /path  or  file://host/path (rare)
+            var path = uri.Substring("file://".Length);
+
+            // On Windows the URI is file:///C:/... → strip leading /
+            // On Unix the URI is file:///home/... → strip two leading slashes leaving /
+            if (path.StartsWith('/') && path.Length > 2 && path[2] == ':') {
+                path = path.TrimStart('/'); // Windows: /C:/foo → C:/foo
+            }
+
+            return Uri.UnescapeDataString(path);
+        }
+
+        return uri;
+    }
+
+    private static string NormalizePath(string path) =>
+        Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 }

@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text.Json;
 using Kapacitor.Cli.Commands;
 using Kapacitor.Cli.Core;
 using Kapacitor.Cli.Core.Cursor;
@@ -182,9 +184,9 @@ public class CursorImportSourceTests {
 
     [Test]
     public async Task classify_skips_composer_when_bubbles_are_in_flight() {
-        // Reuse the richer CursorCommandTestFixtures helper: it sets up workspace+global DBs
+        // Reuse the richer CursorTestFixtures helper: it sets up workspace+global DBs
         // with unifiedMode=agent, then we ask it to seed generatingBubbleIds=["b1"].
-        var (_, paths) = CursorCommandTestFixtures.WorkspaceWithOneComposer("comp-inflight", generatingBubbleIds: ["b1"]);
+        var (_, paths) = CursorTestFixtures.WorkspaceWithOneComposer("comp-inflight", generatingBubbleIds: ["b1"]);
 
         try {
             var src     = new CursorImportSource(paths);
@@ -206,7 +208,7 @@ public class CursorImportSourceTests {
 
     [Test]
     public async Task import_session_async_includes_cli_owner_and_cli_repo_on_payload() {
-        var (workspaceFolder, paths) = CursorCommandTestFixtures.WorkspaceWithOneComposer("comp-wire");
+        var (workspaceFolder, paths) = CursorTestFixtures.WorkspaceWithOneComposer("comp-wire");
 
         try {
             string? capturedBody = null;
@@ -250,6 +252,171 @@ public class CursorImportSourceTests {
             try { Directory.Delete(paths.UserDir, recursive: true); } catch { /* best-effort */ }
         }
     }
+
+    // ── Wire-level behaviour: bubble ordering, orphan blobs, payload cap, POST failure ──
+
+    [Test]
+    public async Task import_orders_bubbles_by_full_conversation_headers_only() {
+        var (workspaceFolder, paths) = CursorTestFixtures.WorkspaceWithBubblesInShuffledOrder("comp-B");
+
+        try {
+            string? capturedBody = null;
+
+            var handler = new TestHttpMessageHandler(async (req, ct) => {
+                if (req.Method == HttpMethod.Post
+                    && req.RequestUri!.AbsolutePath == "/hooks/cursor-import") {
+                    capturedBody = req.Content is not null ? await req.Content.ReadAsStringAsync(ct) : null;
+                    return new HttpResponseMessage(HttpStatusCode.OK);
+                }
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            });
+
+            using var http    = new HttpClient(handler);
+            var       src     = new CursorImportSource(paths);
+            var       outcome = await src.ImportSessionAsync(
+                MakeCursorClassification("compB", "comp-B", workspaceFolder, paths.GlobalStateDb),
+                new ImportContext(http, "http://localhost", ForcePrivate: false),
+                default
+            );
+
+            await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
+            await Assert.That(capturedBody).IsNotNull();
+
+            using var doc     = JsonDocument.Parse(capturedBody!);
+            var       bubbles = doc.RootElement.GetProperty("bubbles").EnumerateArray().ToList();
+            await Assert.That(bubbles.Count).IsEqualTo(3);
+            // Expected order: A, B, C (as declared in fullConversationHeadersOnly),
+            // not B, C, A (the SQLite insertion order).
+            await Assert.That(bubbles[0].GetProperty("bubbleId").GetString()).IsEqualTo("comp-B:bub-A");
+            await Assert.That(bubbles[1].GetProperty("bubbleId").GetString()).IsEqualTo("comp-B:bub-B");
+            await Assert.That(bubbles[2].GetProperty("bubbleId").GetString()).IsEqualTo("comp-B:bub-C");
+        } finally {
+            try { Directory.Delete(paths.UserDir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Test]
+    public async Task import_content_blobs_excludes_orphan_bubble_blobs() {
+        // Fixture: one bubble in fullConversationHeadersOnly (references blob-in),
+        // one orphan bubble not in headers (references blob-orphan).
+        // Only blob-in must appear in the posted contentBlobs dict.
+        var (workspaceFolder, paths) = CursorTestFixtures.WorkspaceWithOrphanBubbleBlobs("comp-C");
+
+        try {
+            string? capturedBody = null;
+
+            var handler = new TestHttpMessageHandler(async (req, ct) => {
+                if (req.Method == HttpMethod.Post
+                    && req.RequestUri!.AbsolutePath == "/hooks/cursor-import") {
+                    capturedBody = req.Content is not null ? await req.Content.ReadAsStringAsync(ct) : null;
+                    return new HttpResponseMessage(HttpStatusCode.OK);
+                }
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            });
+
+            using var http    = new HttpClient(handler);
+            var       src     = new CursorImportSource(paths);
+            var       outcome = await src.ImportSessionAsync(
+                MakeCursorClassification("compC", "comp-C", workspaceFolder, paths.GlobalStateDb),
+                new ImportContext(http, "http://localhost", ForcePrivate: false),
+                default
+            );
+
+            await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
+            await Assert.That(capturedBody).IsNotNull();
+
+            using var doc   = JsonDocument.Parse(capturedBody!);
+            var       blobs = doc.RootElement.GetProperty("contentBlobs");
+
+            // In-headers bubble's blob must be present
+            await Assert.That(blobs.TryGetProperty("composer.content.blob-in", out _)).IsTrue();
+            // Orphan bubble's blob must NOT be present
+            await Assert.That(blobs.TryGetProperty("composer.content.blob-orphan", out _)).IsFalse();
+        } finally {
+            try { Directory.Delete(paths.UserDir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Test]
+    public async Task import_returns_failed_when_payload_exceeds_hard_cap() {
+        // Use a 1-byte hard cap so the minimal payload always exceeds it,
+        // avoiding the need to synthesise a real 10 MB fixture.
+        var (workspaceFolder, paths) = CursorTestFixtures.WorkspaceWithOneComposer("comp-A");
+
+        try {
+            var postReached = false;
+
+            var handler = new TestHttpMessageHandler((req, _) => {
+                if (req.Method == HttpMethod.Post
+                    && req.RequestUri!.AbsolutePath == "/hooks/cursor-import") {
+                    postReached = true;
+                }
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+            });
+
+            using var http    = new HttpClient(handler);
+            var       src     = new CursorImportSource(paths, payloadHardCapBytes: 1);
+            var       outcome = await src.ImportSessionAsync(
+                MakeCursorClassification("compA", "comp-A", workspaceFolder, paths.GlobalStateDb),
+                new ImportContext(http, "http://localhost", ForcePrivate: false),
+                default
+            );
+
+            await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+            // POST should never be reached — the cap check comes first.
+            await Assert.That(postReached).IsFalse();
+        } finally {
+            try { Directory.Delete(paths.UserDir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Test]
+    public async Task import_returns_failed_when_post_fails() {
+        var (workspaceFolder, paths) = CursorTestFixtures.WorkspaceWithOneComposer("comp-A");
+
+        try {
+            var handler = new TestHttpMessageHandler((req, _) => {
+                if (req.Method == HttpMethod.Post
+                    && req.RequestUri!.AbsolutePath == "/hooks/cursor-import") {
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
+                }
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+            });
+
+            using var http    = new HttpClient(handler);
+            var       src     = new CursorImportSource(paths);
+            var       outcome = await src.ImportSessionAsync(
+                MakeCursorClassification("compA", "comp-A", workspaceFolder, paths.GlobalStateDb),
+                new ImportContext(http, "http://localhost", ForcePrivate: false),
+                default
+            );
+
+            await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+        } finally {
+            try { Directory.Delete(paths.UserDir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    static ImportCommand.SessionClassification MakeCursorClassification(
+            string sessionId,
+            string composerId,
+            string workspaceFolder,
+            string globalDbPath
+        ) => new() {
+            SessionId  = sessionId,
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata { SessionId = sessionId, Cwd = workspaceFolder },
+            Status     = ImportCommand.ClassificationStatus.New,
+            Vendor     = "cursor",
+            SourceMeta = new Dictionary<string, object?> {
+                ["ComposerId"]    = composerId,
+                ["WorkspacePath"] = workspaceFolder,
+                ["GlobalDbPath"]  = globalDbPath,
+                ["CliOwner"]      = (string?)null,
+                ["CliRepo"]       = (string?)null,
+            },
+        };
 
     static CursorPaths MakePaths(string globalStateDb) =>
         new(
@@ -300,7 +467,7 @@ sealed class TestHttpMessageHandler(Func<HttpRequestMessage, CancellationToken, 
 
 /// <summary>
 /// Tiny SQLite fixtures specific to <see cref="CursorImportSourceTests"/>. The shared
-/// <c>CursorCommandTestFixtures</c> always seeds <c>unifiedMode=agent</c>, so we need
+/// <c>CursorTestFixtures</c> always seeds <c>unifiedMode=agent</c>, so we need
 /// our own seeder for the non-agent guard test.
 /// </summary>
 static class CursorImportSourceTestFixtures {

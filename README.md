@@ -57,12 +57,13 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 ### 3. Import existing sessions (optional)
 
 ```bash
-kapacitor import --org                          # sessions for the org bound to your active profile
-kapacitor import --repo owner/repo              # sessions for one specific repo
-kapacitor cursor import                          # Cursor IDE Composer/Agent sessions from the current workspace
+kapacitor import                                 # every detected agent (Claude, Codex, Cursor)
+kapacitor import --org                           # sessions for the org bound to your active profile
+kapacitor import --repo owner/repo               # sessions for one specific repo
+kapacitor import --cursor --cursor-all-workspaces   # only Cursor, every workspace
 ```
 
-This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex via `--codex`), or Cursor's local SQLite (`kapacitor cursor import`) so they appear in the dashboard. All forms are idempotent — safe to run multiple times.
+This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), and Cursor's local SQLite so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, or `--cursor` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
 
 You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org` uses the active profile name as the GitHub org login — it works out of the box when the profile was created by `kapacitor setup` (which names it after the picked tenant), and errors otherwise. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
@@ -224,10 +225,10 @@ The server is repo-aware — it resolves the current working directory to a repo
 
 ### Loading historical sessions
 
-Backfill older sessions from local transcript files. The command requires an explicit scope so personal/private repos aren't uploaded by accident:
+Backfill older sessions from every detected coding agent in a single run. Claude and Codex sessions come from local `.jsonl` transcripts (`~/.claude/projects/`, `~/.codex/sessions/`); Cursor Composer/Agent sessions come from Cursor's local SQLite state. All three are discovered automatically and the command requires an explicit scope so personal/private repos aren't uploaded by accident:
 
 ```bash
-kapacitor import --all                            # every discovered session
+kapacitor import --all                            # every discovered session from every agent
 kapacitor import --org                            # sessions whose repo owner matches your active profile name
 kapacitor import --repo owner/repo                # one specific repo
 kapacitor import --repo .                         # the repo at the current cwd (must be a git repo with an origin remote)
@@ -237,30 +238,29 @@ Run `kapacitor import` with no scope on an interactive terminal to get a picker.
 
 `--org` is a shortcut: it takes the active profile *name* and uses it as a GitHub org login to filter on. `kapacitor setup` names the profile after the picked tenant, so `--org` works out of the box for tenant-bound profiles; on the `default` profile, or a manually-named profile like `work`, use `--repo <owner/name>` instead (or run `kapacitor setup` to bind a profile to your org).
 
+By default every available agent is imported. Pass one or more vendor filters to restrict the run:
+
+```bash
+kapacitor import --claude --org                   # only Claude transcripts
+kapacitor import --codex --org                    # only Codex rollouts
+kapacitor import --cursor                         # only Cursor (current cwd's workspace)
+kapacitor import --cursor --cursor-all-workspaces # only Cursor, every workspace
+kapacitor import --cursor --cursor-workspace /path/to/proj
+```
+
+Cursor-specific notes: only Composer/Agent-mode sessions are imported — Chat (Ask), Inline Edit (Cmd+K), and Tab autocomplete don't fit the session model and are skipped. Sessions with bubbles still being generated are skipped until idle.
+
 Additional flags:
 
 ```bash
 kapacitor import --org --yes                      # skip the confirmation prompt
 kapacitor import --org --private                  # mark every imported session as Only Visible to You
-kapacitor import --codex --org                    # Codex rollouts from ~/.codex/sessions
 kapacitor import --org --since 2026-01-01         # only sessions on or after this date
 kapacitor import --org --cwd /path/to/project     # filter by working directory
 kapacitor import --org --session abc123           # single session
 ```
 
-Non-interactive runs (no TTY, e.g. CI) must pass both a scope flag and `--yes`. The command is idempotent and resumable — re-running with the same scope only uploads what's missing or incomplete.
-
-### Loading Cursor sessions
-
-Cursor IDE doesn't have a hook API, so its Composer/Agent-mode sessions are imported post-hoc from Cursor's local SQLite state:
-
-```bash
-kapacitor cursor import                          # the current directory's Cursor workspace
-kapacitor cursor import --workspace /path/to/proj
-kapacitor cursor import --all                    # every Cursor workspace
-```
-
-Only Composer/Agent-mode sessions are imported — Chat (Ask), Inline Edit (Cmd+K), and Tab autocomplete don't fit the session model and are skipped. Sessions with bubbles still being generated are skipped until idle. Re-running is safe: a server-side tracker deduplicates events on `(stream, eventId)` so previously-imported turns don't get re-appended.
+Non-interactive runs (no TTY, e.g. CI) must pass both a scope flag and `--yes`. The command is idempotent and resumable — re-running with the same scope only uploads what's missing or incomplete. A server-side tracker deduplicates events on `(stream, eventId)` so previously-imported turns don't get re-appended.
 
 ### Daemon
 
