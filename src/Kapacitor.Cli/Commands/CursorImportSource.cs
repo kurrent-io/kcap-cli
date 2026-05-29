@@ -321,7 +321,7 @@ internal sealed class CursorImportSource : IImportSource {
 
         try {
             using var content = new StringContent(payloadJson, Encoding.UTF8, "application/json");
-            var       resp    = await ctx.HttpClient.PostWithRetryAsync($"{ctx.BaseUrl}/hooks/cursor-import", content, ct: ct);
+            using var resp    = await ctx.HttpClient.PostWithRetryAsync($"{ctx.BaseUrl}/hooks/cursor-import", content, ct: ct);
 
             return resp.IsSuccessStatusCode ? ImportOutcome.Loaded : ImportOutcome.Failed;
         } catch {
@@ -364,7 +364,7 @@ internal sealed class CursorImportSource : IImportSource {
             CancellationToken ct
         ) {
         try {
-            var resp = await http.GetWithRetryAsync($"{baseUrl}/api/cursor/{composerId}/watermark", ct: ct);
+            using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/cursor/{composerId}/watermark", ct: ct);
 
             if (resp.StatusCode == HttpStatusCode.NotFound) return false;
 
