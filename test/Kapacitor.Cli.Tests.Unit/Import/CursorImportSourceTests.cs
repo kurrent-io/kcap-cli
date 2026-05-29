@@ -204,6 +204,168 @@ public class CursorImportSourceTests {
         }
     }
 
+    // ── Profile-level repo / path exclusions (Finding 1) ─────────────────────
+
+    [Test]
+    public async Task classify_marks_session_excluded_when_cli_repo_is_in_excluded_repos() {
+        // Seed an agent-mode composer so we get past the unifiedMode and
+        // in-flight guards and into the exclusion checks.
+        var (_, paths) = CursorTestFixtures.WorkspaceWithOneComposer("comp-excl-repo");
+
+        try {
+            var src = new CursorImportSource(paths);
+
+            // DiscoveredSession with CliOwner/CliRepo populated (as Discover does
+            // once per workspace). The session's repo key is "excluded/repo";
+            // ExcludedRepos contains the same key (case-insensitive match).
+            var session = new DiscoveredSession(
+                SessionId:      "compexclrepo",
+                Vendor:         "cursor",
+                Cwd:            paths.UserDir,
+                FirstTimestamp: null,
+                SourceMeta:     new Dictionary<string, object?> {
+                    ["ComposerId"]    = "comp-excl-repo",
+                    ["WorkspacePath"] = paths.UserDir,
+                    ["GlobalDbPath"]  = paths.GlobalStateDb,
+                    ["CliOwner"]      = "Excluded",
+                    ["CliRepo"]       = "Repo",
+                });
+
+            var ctx = new ClassifyContext(
+                new HttpClient(),
+                "http://localhost",
+                MinLines:      0,
+                ExcludedRepos: ["excluded/repo"],
+                ExcludedPaths: null);
+
+            var result = await src.ClassifyAsync([session], ctx, default);
+
+            await Assert.That(result.Count).IsEqualTo(1);
+            // We mirror TranscriptFileClassification: status stays New/Partial
+            // and the exclusion is signalled via ExcludedRepoKey. The orchestrator
+            // groups by ExcludedRepoKey to drive the "include excluded repo?" prompt.
+            await Assert.That(result[0].ExcludedRepoKey).IsEqualTo("Excluded/Repo");
+        } finally {
+            try { Directory.Delete(paths.UserDir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Test]
+    public async Task classify_marks_session_excluded_when_cwd_under_excluded_path() {
+        var (_, paths) = CursorTestFixtures.WorkspaceWithOneComposer("comp-excl-path");
+
+        try {
+            var src = new CursorImportSource(paths);
+
+            // The fixture's workspace folder == paths.UserDir. Excluding the parent
+            // of that path should match (PathExclusion treats descendants as excluded).
+            var parent = Path.GetDirectoryName(paths.UserDir)!;
+
+            var session = new DiscoveredSession(
+                SessionId:      "compexclpath",
+                Vendor:         "cursor",
+                Cwd:            paths.UserDir,
+                FirstTimestamp: null,
+                SourceMeta:     new Dictionary<string, object?> {
+                    ["ComposerId"]    = "comp-excl-path",
+                    ["WorkspacePath"] = paths.UserDir,
+                    ["GlobalDbPath"]  = paths.GlobalStateDb,
+                    ["CliOwner"]      = (string?)null,
+                    ["CliRepo"]       = (string?)null,
+                });
+
+            var ctx = new ClassifyContext(
+                new HttpClient(),
+                "http://localhost",
+                MinLines:      0,
+                ExcludedRepos: null,
+                ExcludedPaths: [parent]);
+
+            var result = await src.ClassifyAsync([session], ctx, default);
+
+            await Assert.That(result.Count).IsEqualTo(1);
+            await Assert.That(result[0].ExcludedPathKey).IsNotNull();
+            // ExcludedPathKey is the normalized form of the matching excluded entry.
+            await Assert.That(result[0].ExcludedPathKey!).IsEqualTo(PathExclusion.Normalize(parent));
+        } finally {
+            try { Directory.Delete(paths.UserDir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    // ── Discovery filters: --cwd, --since (Finding 2) ────────────────────────
+
+    [Test]
+    public async Task discover_filters_by_cwd_to_one_workspace() {
+        // Build a fixture with TWO workspaces under the same Cursor user dir.
+        // Then run discovery twice: once unfiltered (both should be returned),
+        // once with FilterCwd pointing at workspace A (only A should be returned).
+        var paths = CursorTestFixturesExtra.TwoWorkspaces(out var folderA, out var folderB);
+
+        try {
+            var src = new CursorImportSource(paths);
+
+            // Baseline: --cursor-all-workspaces returns both.
+            var allFilters = new DiscoveryFilters(
+                FilterCwd:           null,
+                FilterSession:       null,
+                Since:               null,
+                MinLines:            0,
+                CursorWorkspace:     null,
+                CursorAllWorkspaces: true);
+
+            var all = await src.DiscoverAsync(allFilters, CancellationToken.None);
+            await Assert.That(all.Count).IsEqualTo(2);
+
+            // --cwd <folderA> narrows to A only.
+            var cwdFilters = new DiscoveryFilters(
+                FilterCwd:           folderA,
+                FilterSession:       null,
+                Since:               null,
+                MinLines:            0,
+                CursorWorkspace:     null,
+                CursorAllWorkspaces: true);
+
+            var only = await src.DiscoverAsync(cwdFilters, CancellationToken.None);
+            await Assert.That(only.Count).IsEqualTo(1);
+            await Assert.That(only[0].Cwd).IsEqualTo(folderA);
+        } finally {
+            try { Directory.Delete(paths.UserDir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Test]
+    public async Task discover_filters_by_since_using_header_timestamp() {
+        // Two composers in one workspace: composer-old has createdAt before the
+        // cutoff, composer-new after. --since cutoffDate should return only "new".
+        // Also asserts that DiscoveredSession.FirstTimestamp is populated from
+        // the header (so the orchestrator's post-classify mtime fallback never
+        // has to touch a Cursor row).
+        var oldMs = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
+        var newMs = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
+        var paths = CursorTestFixturesExtra.WorkspaceWithTwoComposersByTimestamp("comp-old", oldMs, "comp-new", newMs);
+
+        try {
+            var src     = new CursorImportSource(paths);
+            var cutoff  = new DateOnly(2025, 6, 1);
+            var filters = new DiscoveryFilters(
+                FilterCwd:           null,
+                FilterSession:       null,
+                Since:               cutoff,
+                MinLines:            0,
+                CursorWorkspace:     null,
+                CursorAllWorkspaces: true);
+
+            var result = await src.DiscoverAsync(filters, CancellationToken.None);
+
+            await Assert.That(result.Count).IsEqualTo(1);
+            await Assert.That((string)result[0].SourceMeta["ComposerId"]!).IsEqualTo("comp-new");
+            await Assert.That(result[0].FirstTimestamp).IsNotNull();
+            await Assert.That(result[0].FirstTimestamp!.Value.ToUnixTimeMilliseconds()).IsEqualTo(newMs);
+        } finally {
+            try { Directory.Delete(paths.UserDir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
     // ── Wire payload assertion (Nit #4) ──────────────────────────────────────
 
     [Test]

@@ -59,7 +59,23 @@ internal sealed class CursorImportSource : IImportSource {
     public async Task<IReadOnlyList<DiscoveredSession>> DiscoverAsync(DiscoveryFilters filters, CancellationToken ct) {
         var workspaces = ResolveWorkspaces(_paths, filters.CursorWorkspace, filters.CursorAllWorkspaces).ToList();
 
+        // Apply --cwd as an additional workspace filter on top of --cursor-workspace
+        // / --cursor-all-workspaces / the implicit current-cwd default. The user
+        // intent is "only consider sessions under this directory" — for Cursor
+        // that translates to "only workspaces whose folder matches".
+        if (filters.FilterCwd is { } filterCwd) {
+            var normalized = filterCwd.TrimEnd('/');
+            workspaces = workspaces
+                .Where(w => w.FolderPath.TrimEnd('/').Equals(normalized, StringComparison.Ordinal))
+                .ToList();
+        }
+
         var sessionFilter = filters.FilterSession is { } sf ? NormalizeCursorSessionId(sf) : null;
+
+        // --since cutoff in UTC ms (matches the header's lastUpdatedAt / createdAt units).
+        long? sinceMs = filters.Since is { } sinceCutoff
+            ? new DateTimeOffset(sinceCutoff.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), TimeSpan.Zero).ToUnixTimeMilliseconds()
+            : null;
 
         var result = new List<DiscoveredSession>();
 
@@ -96,11 +112,36 @@ internal sealed class CursorImportSource : IImportSource {
                     continue;
                 }
 
+                // Pre-prune by --since at discovery so the orchestrator's
+                // post-classify mtime fallback stays Claude-only (Cursor has no
+                // transcript file to stat). Also stamp FirstTimestamp from the
+                // header so downstream consumers don't have to re-read SQLite.
+                DateTimeOffset? firstTimestamp = null;
+
+                try {
+                    var header = await CursorStateReader.GetComposerHeaderAsync(_paths.GlobalStateDb, composerId, ct);
+
+                    if (header is not null) {
+                        if (header.CreatedAtMs > 0) {
+                            firstTimestamp = DateTimeOffset.FromUnixTimeMilliseconds(header.CreatedAtMs);
+                        }
+
+                        if (sinceMs is { } cutoffMs && header.CreatedAtMs > 0 && header.CreatedAtMs < cutoffMs) {
+                            continue;
+                        }
+                    }
+                } catch {
+                    // Best-effort — fall through with firstTimestamp left null.
+                    // If --since is in effect and the header can't be read,
+                    // err on the side of including the composer so classification
+                    // can surface a ProbeError later, rather than silently dropping it.
+                }
+
                 result.Add(new DiscoveredSession(
                     SessionId:      dashless,
                     Vendor:         Vendor,
                     Cwd:            folderPath,
-                    FirstTimestamp: null,
+                    FirstTimestamp: firstTimestamp,
                     SourceMeta:     new Dictionary<string, object?> {
                         ["ComposerId"]    = composerId,
                         ["WorkspacePath"] = folderPath,
@@ -200,18 +241,49 @@ internal sealed class CursorImportSource : IImportSource {
                 ? DateTimeOffset.FromUnixTimeMilliseconds(header.LastUpdatedAtMs)
                 : null;
 
+            // Apply profile-level repo / path exclusions. Mirrors
+            // TranscriptFileClassification.ClassifyOneCoreAsync so Cursor sessions
+            // funnel through the same "do you want to include excluded repo/path?"
+            // prompt the orchestrator drives off ExcludedRepoKey / ExcludedPathKey.
+            //
+            // Repo key is computed from CliOwner / CliRepo in SourceMeta (already
+            // resolved once per workspace during Discover), so we avoid re-running
+            // git remote detection here.
+            var cliOwner = (string?)s.SourceMeta["CliOwner"];
+            var cliRepo  = (string?)s.SourceMeta["CliRepo"];
+            var repoKey  = cliOwner is not null && cliRepo is not null ? $"{cliOwner}/{cliRepo}" : null;
+
+            string? excludedRepoKey = null;
+            string? excludedPathKey = null;
+
+            if (repoKey is not null && ctx.ExcludedRepos is { Count: > 0 } repos
+             && repos.Any(r => string.Equals(r, repoKey, StringComparison.OrdinalIgnoreCase))) {
+                excludedRepoKey = repoKey;
+            }
+
+            if (s.Cwd is { } cwd && ctx.ExcludedPaths is { Count: > 0 } paths) {
+                foreach (var entry in paths) {
+                    if (PathExclusion.IsExcluded(cwd, [entry])) {
+                        excludedPathKey = PathExclusion.Normalize(entry);
+                        break;
+                    }
+                }
+            }
+
             var status = await IsWatermarkCurrentAsync(ctx.HttpClient, ctx.BaseUrl, composerId, header.LastUpdatedAtMs, ct)
                 ? ImportCommand.ClassificationStatus.AlreadyLoaded
                 : ImportCommand.ClassificationStatus.New;
 
             results.Add(new() {
-                SessionId  = s.SessionId,
-                FilePath   = "",
-                EncodedCwd = "",
-                Meta       = meta,
-                Status     = status,
-                Vendor     = Vendor,
-                SourceMeta = s.SourceMeta,
+                SessionId       = s.SessionId,
+                FilePath        = "",
+                EncodedCwd      = "",
+                Meta            = meta,
+                Status          = status,
+                Vendor          = Vendor,
+                ExcludedRepoKey = excludedRepoKey,
+                ExcludedPathKey = excludedPathKey,
+                SourceMeta      = s.SourceMeta,
             });
         }
 

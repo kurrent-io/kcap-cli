@@ -67,6 +67,18 @@ public class VendorSelectionTests {
     }
 
     [Test]
+    public async Task cursor_workspace_at_end_of_args_is_handled() {
+        // Pin the trailing-flag case: --cursor-workspace at the very end of args
+        // (no value present) must not throw, must still imply cursor selection,
+        // and must not produce an error in the vendor-selection layer. The
+        // user-visible "requires a path value" error is Program.cs's
+        // responsibility, not VendorSelection's.
+        var r = VendorSelection.Parse(["--cursor-workspace"]);
+        await Assert.That(r.HasError).IsFalse();
+        await Assert.That(r.Vendors.Contains("cursor")).IsTrue();
+    }
+
+    [Test]
     public async Task cursor_workspace_does_not_swallow_neighbouring_vendor_flag() {
         var r = VendorSelection.Parse(["--cursor-workspace", "--codex"]);
         await Assert.That(r.HasError).IsFalse();

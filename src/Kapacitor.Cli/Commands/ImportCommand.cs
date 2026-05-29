@@ -450,16 +450,16 @@ static class ImportCommand {
 
         var totalDiscovered = discoveriesPerSource.Sum(d => d.Count);
         if (totalDiscovered == 0) {
+            // When --session was given but nothing matched, surface the legacy
+            // not-found error instead of the friendly "No transcript files" exit.
+            // Keep the message aligned with the dead branch lower in this method
+            // (cleanup follow-up) so downstream tooling sees consistent output.
+            if (filterSession is not null) {
+                await Console.Error.WriteLineAsync($"Session not found: {NormalizeGuid(filterSession)}");
+                return 1;
+            }
             display.Line("No transcript files found.");
             return 0;
-        }
-
-        // If --session was specified and nothing matched, surface the same
-        // not-found exit as the legacy path. Per-vendor null counts are fine —
-        // only the aggregate-zero case is an error.
-        if (filterSession is not null && totalDiscovered == 0) {
-            await Console.Error.WriteLineAsync($"Session not found: {NormalizeGuid(filterSession)}");
-            return 1;
         }
 
         // Build a vendor → source map for downstream lookups.
