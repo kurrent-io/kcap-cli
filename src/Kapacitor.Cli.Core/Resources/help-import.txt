@@ -1,6 +1,21 @@
-kapacitor import — Import local transcript history to server
+kapacitor import — Import local sessions from every detected coding agent
 
-Usage: kapacitor import [scope] [options]
+Discovers Claude, Codex, and Cursor sessions on this machine and imports them
+in a single run. Each agent's sessions live in a different format (Claude/Codex
+keep .jsonl transcripts under ~/.claude/projects and ~/.codex/sessions; Cursor
+stores Composer/Agent state in a local SQLite DB) — kapacitor handles all
+three transparently.
+
+Usage: kapacitor import [vendor-filters] [scope] [options]
+
+By default every available agent is imported. The vendor filters below let you
+narrow the run to a subset; passing one or more vendor filters means ONLY those
+vendors run.
+
+Vendor filters (additive — pass one or more to restrict the run):
+  --claude                Import Claude transcripts
+  --codex                 Import Codex rollouts
+  --cursor                Import Cursor Composer/Agent sessions
 
 Scope (one of, required for non-interactive use):
   --all                   Import every discovered session
@@ -13,13 +28,15 @@ Without a scope flag on an interactive terminal, an interactive picker is shown.
 Options:
   --yes, -y               Skip the confirmation prompt
   --private               Mark every imported session as Only Visible to You
-  --codex                 Import Codex rollouts from ~/.codex/sessions instead of Claude
   --since YYYY-MM-DD      Only import sessions started on or after this date
   --cwd <path>            Filter by working directory (composes with scope)
   --session <id>          Import a specific session only (composes with scope)
   --min-lines <n>         Skip sessions shorter than n lines (default: 15)
   --generate-summaries    Also generate per-session what's-done summaries
 
-See also:
-  kapacitor cursor import   Import Cursor IDE Composer/Agent sessions (separate subcommand
-                            — Cursor sessions live in a local SQLite, not transcript files)
+Cursor-specific narrowing (composes with --cursor):
+  --cursor-workspace <path>   Import only the named Cursor workspace
+  --cursor-all-workspaces     Import every detected Cursor workspace
+
+Re-running the same command is idempotent — a server-side tracker dedupes
+already-imported turns so nothing is double-loaded.

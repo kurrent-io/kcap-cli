@@ -39,7 +39,7 @@ Session:
   validate-plan [id]               Validate plan completion for a session
   eval [--model N] [--chain] [id]  Run LLM-as-judge evaluation over a session
   generate-whats-done [--codex] <id>  Generate what's-done summary (--codex uses `codex exec`)
-  import [--codex] [options]       Import local transcripts (--codex imports Codex rollouts)
+  import [vendor-filters] [options]   Import local sessions (Claude, Codex, Cursor)
   set-title <title>                Set session title
   disable                          Stop recording and delete session data
   hide                             Hide session (owner-only visibility)
@@ -53,9 +53,6 @@ MCP servers (stdio):
 Plugin:
   plugin install [--project] [--codex]   Register hooks (Claude or --codex for Codex)
   plugin remove  [--project] [--codex]   Remove hooks (Claude or --codex for Codex)
-
-Import:
-  cursor import [--workspace P] [--all]  Import Cursor IDE Composer/Agent sessions
 
 Maintenance:
   update                           Check for and install updates

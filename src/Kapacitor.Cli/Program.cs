@@ -409,35 +409,37 @@ switch (command) {
         return 0;
     }
     case "import": {
+        // Vendor selection first — quick exit on parse errors so we don't do other work.
+        var vsel = VendorSelection.Parse(args);
+        if (vsel.HasError) {
+            Console.Error.WriteLine(vsel.Error);
+            return 1;
+        }
+
         string?   filterCwd     = null;
         string?   filterSession = null;
         var       minLines      = 15;
         DateOnly? since         = null;
-        var       codex         = args.Contains("--codex");
-        var       cwdArgIdx     = Array.IndexOf(args, "--cwd");
 
+        var cwdArgIdx = Array.IndexOf(args, "--cwd");
         if (cwdArgIdx >= 0 && cwdArgIdx + 1 < args.Length) {
             filterCwd = args[cwdArgIdx + 1];
         }
 
         var sessionArgIdx = Array.IndexOf(args, "--session");
-
         if (sessionArgIdx >= 0 && sessionArgIdx + 1 < args.Length) {
             filterSession = args[sessionArgIdx + 1];
         }
 
         var minLinesIdx = Array.IndexOf(args, "--min-lines");
-
         if (minLinesIdx >= 0 && minLinesIdx + 1 < args.Length && int.TryParse(args[minLinesIdx + 1], out var parsed)) {
             minLines = parsed;
         }
 
         var sinceIdx = Array.IndexOf(args, "--since");
-
         if (sinceIdx >= 0 && sinceIdx + 1 < args.Length) {
             if (!DateOnly.TryParseExact(args[sinceIdx + 1], "yyyy-MM-dd", out var parsedSince)) {
                 Console.Error.WriteLine("--since must be YYYY-MM-DD");
-
                 return 1;
             }
 
@@ -445,6 +447,33 @@ switch (command) {
         }
 
         var generateSummaries = args.Contains("--generate-summaries");
+
+        // Cursor-specific args. --cursor-workspace REQUIRES a non-flag value;
+        // otherwise `kapacitor import --cursor --cursor-workspace --all` would
+        // silently capture `--all` as a fake path, mismatch every workspace,
+        // and drop Cursor from the run.
+        var cursorWorkspaceIdx = Array.IndexOf(args, "--cursor-workspace");
+        string? cursorWorkspace = null;
+        if (cursorWorkspaceIdx >= 0) {
+            if (cursorWorkspaceIdx + 1 >= args.Length || args[cursorWorkspaceIdx + 1].StartsWith("--")) {
+                Console.Error.WriteLine("--cursor-workspace requires a path value.");
+                return 1;
+            }
+            cursorWorkspace = args[cursorWorkspaceIdx + 1];
+        }
+        var cursorAllWorkspaces = args.Contains("--cursor-all-workspaces");
+        var cursorArgs = new ImportCommand.CursorWorkspaceArgs(cursorWorkspace, cursorAllWorkspaces);
+
+        // Build sources
+        var explicitVendorSelection = vsel.Vendors.Count > 0;
+        var allSources = new IImportSource[] {
+            new ClaudeImportSource(),
+            new CodexImportSource(),
+            new CursorImportSource(),
+        };
+        IReadOnlyList<IImportSource> sources = explicitVendorSelection
+            ? allSources.Where(s => vsel.Vendors.Contains(s.Vendor)).ToList()
+            : allSources;
 
         // --- Scope resolution (AI-613) ---
         var profileConfig = await AppConfig.LoadProfileConfig();
@@ -473,13 +502,15 @@ switch (command) {
             filterSession,
             minLines,
             generateSummaries,
-            codex,
-            since,
-            scope:            resolveResult.Scope,     // null => HandleImport runs picker
-            skipConfirmation: resolveResult.Yes,
-            forcePrivate:     resolveResult.Private,
-            activeProfile:    activeProfile,
-            currentRepo:      currentRepo);
+            sources:                 sources,
+            explicitVendorSelection: explicitVendorSelection,
+            cursorArgs:              cursorArgs,
+            since:                   since,
+            scope:                   resolveResult.Scope, // null => HandleImport runs picker
+            skipConfirmation:        resolveResult.Yes,
+            forcePrivate:            resolveResult.Private,
+            activeProfile:           activeProfile,
+            currentRepo:             currentRepo);
     }
     case "watch" when args.Length < 3:
         Console.Error.WriteLine("Usage: kapacitor watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex]");
@@ -571,7 +602,9 @@ switch (command) {
     case "codex-hook":
         return await CodexHookCommand.Handle(baseUrl!, Console.In);
     case "cursor":
-        return await CursorCommand.RunAsync(args[1..], baseUrl!);
+        await Console.Error.WriteLineAsync(
+            "kapacitor cursor import has been removed. Use 'kapacitor import --cursor' instead.");
+        return 2;
 }
 
 if (!hookCommands.Contains(command)) {

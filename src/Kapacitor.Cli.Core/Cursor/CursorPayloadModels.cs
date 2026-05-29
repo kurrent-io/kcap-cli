@@ -10,6 +10,8 @@ public sealed record CursorImportPayload {
     [JsonPropertyName("composerData")]        public required CursorComposerData            ComposerData        { get; init; }
     [JsonPropertyName("bubbles")]             public required IReadOnlyList<CursorBubble>   Bubbles             { get; init; }
     [JsonPropertyName("contentBlobs")]        public required IReadOnlyDictionary<string,string> ContentBlobs   { get; init; }
+    [JsonPropertyName("cli_owner")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? CliOwner { get; init; }
+    [JsonPropertyName("cli_repo")]  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? CliRepo  { get; init; }
 }
 
 public sealed record CursorSchemaVersion {

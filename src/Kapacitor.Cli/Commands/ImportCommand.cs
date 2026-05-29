@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -19,7 +18,7 @@ static class ImportCommand {
     /// </summary>
     const int ImportWorkerCount = 4;
 
-    readonly struct ImportDisplay {
+    internal readonly struct ImportDisplay {
         public bool Tty { get; init; }
 
         public void Line(string plain, string? markup = null) {
@@ -36,8 +35,42 @@ static class ImportCommand {
             }
         }
 
-        public void WritePlanGrid(ClassificationCounts c) {
+        public void WritePlanGrid(
+                ClassificationCounts                              c,
+                IReadOnlyDictionary<string, ClassificationCounts>? bySource = null
+            ) {
             if (Tty) {
+                if (bySource is { Count: > 1 }) {
+                    AnsiConsole.Write(new Rule("[yellow]By source[/]").LeftJustified());
+
+                    var sub = new Grid()
+                        .AddColumn().AddColumn().AddColumn().AddColumn().AddColumn().AddColumn().AddColumn();
+                    sub.AddRow(
+                        "[dim]Source[/]",
+                        "[dim]New[/]",
+                        "[dim]Resumable[/]",
+                        "[dim]Already loaded[/]",
+                        "[dim]Too short[/]",
+                        "[dim]Excluded[/]",
+                        "[dim]Probe errors[/]"
+                    );
+
+                    foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
+                        var sc = kv.Value;
+                        sub.AddRow(
+                            $"[bold]{Markup.Escape(kv.Key)}[/]",
+                            sc.New.ToString(),
+                            sc.Partial.ToString(),
+                            sc.AlreadyLoaded.ToString(),
+                            sc.TooShort.ToString(),
+                            sc.Excluded.ToString(),
+                            sc.ProbeError > 0 ? $"[red]{sc.ProbeError}[/]" : "0"
+                        );
+                    }
+
+                    AnsiConsole.Write(sub);
+                }
+
                 var grid = new Grid().AddColumn().AddColumn();
                 grid.AddRow("[bold]New[/]", c.New.ToString());
                 grid.AddRow("[bold]Resumable[/]", c.Partial.ToString());
@@ -47,6 +80,22 @@ static class ImportCommand {
                 if (c.ProbeError > 0) grid.AddRow("[bold]Probe errors[/]", $"[red]{c.ProbeError}[/]");
                 AnsiConsole.Write(grid);
             } else {
+                if (bySource is { Count: > 1 }) {
+                    Console.WriteLine();
+                    Console.WriteLine("== By source ==");
+                    foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
+                        var sc = kv.Value;
+                        Console.WriteLine($"  [{kv.Key}]");
+                        Console.WriteLine($"    New               {sc.New}");
+                        Console.WriteLine($"    Resumable         {sc.Partial}");
+                        Console.WriteLine($"    Already loaded    {sc.AlreadyLoaded}");
+                        Console.WriteLine($"    Too short         {sc.TooShort}");
+                        Console.WriteLine($"    Excluded          {sc.Excluded}");
+                        if (sc.ProbeError > 0) Console.WriteLine($"    Probe errors      {sc.ProbeError}");
+                    }
+                    Console.WriteLine();
+                }
+
                 Console.WriteLine($"  New               {c.New}");
                 Console.WriteLine($"  Resumable         {c.Partial}");
                 Console.WriteLine($"  Already loaded    {c.AlreadyLoaded}");
@@ -56,8 +105,47 @@ static class ImportCommand {
             }
         }
 
-        public void WriteDoneGrid(FinalCounts f) {
+        public void WriteDoneGrid(
+                FinalCounts                              f,
+                IReadOnlyDictionary<string, FinalCounts>? bySource = null
+            ) {
             if (Tty) {
+                AnsiConsole.Write(new Rule("[green]Done[/]").LeftJustified());
+
+                if (bySource is { Count: > 1 }) {
+                    AnsiConsole.Write(new Rule("[green]By source[/]").LeftJustified());
+
+                    var sub = new Grid()
+                        .AddColumn().AddColumn().AddColumn().AddColumn()
+                        .AddColumn().AddColumn().AddColumn().AddColumn();
+                    sub.AddRow(
+                        "[dim]Source[/]",
+                        "[dim]Loaded[/]",
+                        "[dim]Resumed[/]",
+                        "[dim]Already loaded[/]",
+                        "[dim]Too short[/]",
+                        "[dim]Excluded[/]",
+                        "[dim]Probe errors[/]",
+                        "[dim]Errored[/]"
+                    );
+
+                    foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
+                        var sf = kv.Value;
+                        sub.AddRow(
+                            $"[bold]{Markup.Escape(kv.Key)}[/]",
+                            sf.Loaded.ToString(),
+                            sf.Resumed.ToString(),
+                            sf.AlreadyLoaded.ToString(),
+                            sf.TooShort.ToString(),
+                            sf.Excluded.ToString(),
+                            sf.ProbeError > 0 ? $"[red]{sf.ProbeError}[/]" : "0",
+                            sf.Errored    > 0 ? $"[red]{sf.Errored}[/]"    : "0"
+                        );
+                    }
+
+                    AnsiConsole.Write(sub);
+                }
+
                 var grid = new Grid().AddColumn().AddColumn();
                 grid.AddRow("[bold]Loaded[/]", f.Loaded.ToString());
                 grid.AddRow("[bold]Resumed[/]", f.Resumed.ToString());
@@ -74,11 +162,28 @@ static class ImportCommand {
                         grid.AddRow("[bold]Summaries[/]", $"{f.SummariesGenerated} generated, {f.SummariesFailed} failed");
                 }
 
-                AnsiConsole.Write(new Rule("[green]Done[/]").LeftJustified());
                 AnsiConsole.Write(grid);
             } else {
                 Console.WriteLine();
                 Console.WriteLine("== Done ==");
+
+                if (bySource is { Count: > 1 }) {
+                    Console.WriteLine();
+                    Console.WriteLine("== By source ==");
+                    foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
+                        var sf = kv.Value;
+                        Console.WriteLine($"  [{kv.Key}]");
+                        Console.WriteLine($"    Loaded              {sf.Loaded}");
+                        Console.WriteLine($"    Resumed             {sf.Resumed}");
+                        Console.WriteLine($"    Already loaded      {sf.AlreadyLoaded}");
+                        if (sf.TooShort   > 0) Console.WriteLine($"    Too short           {sf.TooShort}");
+                        if (sf.Excluded   > 0) Console.WriteLine($"    Excluded            {sf.Excluded}");
+                        if (sf.ProbeError > 0) Console.WriteLine($"    Probe errors        {sf.ProbeError}");
+                        if (sf.Errored    > 0) Console.WriteLine($"    Errored             {sf.Errored}");
+                    }
+                    Console.WriteLine();
+                }
+
                 Console.WriteLine($"  Loaded              {f.Loaded}");
                 Console.WriteLine($"  Resumed             {f.Resumed}");
                 Console.WriteLine($"  Already loaded      {f.AlreadyLoaded}");
@@ -159,6 +264,15 @@ static class ImportCommand {
 
         /// <summary>Total transcript line count (cached so we don't re-read the file downstream).</summary>
         public int TotalLines { get; init; }
+
+        /// <summary>
+        /// Source-specific opaque metadata attached during DiscoverAsync.
+        /// Claude/Codex sources don't need this (their fields live in FilePath/EncodedCwd).
+        /// Cursor uses it to carry ComposerId, WorkspacePath, GlobalDbPath, CliOwner, CliRepo.
+        /// The orchestrator does not inspect this dictionary; only the originating
+        /// IImportSource reads it back in ImportSessionAsync.
+        /// </summary>
+        public IReadOnlyDictionary<string, object?>? SourceMeta { get; init; }
     }
 
     internal sealed record ClassificationCounts(
@@ -169,6 +283,85 @@ static class ImportCommand {
             int Excluded,
             int ProbeError
         );
+
+    /// <summary>
+    /// Cursor-specific discovery args. Threaded into <see cref="DiscoveryFilters"/>
+    /// so the Cursor source can honour <c>--cursor-workspace</c> and
+    /// <c>--cursor-all-workspaces</c> without leaking those flags into the
+    /// shared discovery surface.
+    /// </summary>
+    internal sealed record CursorWorkspaceArgs(string? Workspace, bool AllWorkspaces);
+
+    /// <summary>
+    /// Aggregate a per-source slice of classifications into a Plan-grid row.
+    /// </summary>
+    static ClassificationCounts ComputeCounts(IReadOnlyList<SessionClassification> classifications) =>
+        new(
+            New:           classifications.Count(c => c.Status == ClassificationStatus.New),
+            Partial:       classifications.Count(c => c.Status == ClassificationStatus.Partial),
+            AlreadyLoaded: classifications.Count(c => c.Status == ClassificationStatus.AlreadyLoaded),
+            TooShort:      classifications.Count(c => c.Status == ClassificationStatus.TooShort),
+            Excluded:      classifications.Count(c => c.Status == ClassificationStatus.Excluded),
+            ProbeError:    classifications.Count(c => c.Status == ClassificationStatus.ProbeError)
+        );
+
+    /// <summary>
+    /// Compute the per-source Done-grid row for a single vendor.
+    /// </summary>
+    /// <param name="classifications">All classifications for this vendor (already filtered).</param>
+    /// <param name="imported">Count of sessions in <paramref name="classifications"/> whose SessionId appears in importedSessionIds (i.e. chain-phase imports).</param>
+    /// <param name="routedOutcomes">Per-vendor routed-phase outcomes, or null if this vendor ran through the chain phase only.</param>
+    /// <remarks>
+    /// Routed-phase vendors (Cursor today) get exact attribution: <c>routedOutcomes.Skipped</c>
+    /// folds into Excluded (server said "already current"), <c>routedOutcomes.Failed</c> into Errored.
+    /// Chain-phase vendors (Claude/Codex) still use the best-effort approximation:
+    /// imported sessions → Loaded; (New+Partial)−imported → Errored — because the chain worker
+    /// doesn't record per-session outcome by vendor yet.
+    /// </remarks>
+    internal static FinalCounts ComputePerSourceFinalCounts(
+            IReadOnlyList<SessionClassification>      classifications,
+            int                                       imported,
+            (int Loaded, int Skipped, int Failed)?    routedOutcomes
+        ) {
+        var counts = ComputeCounts(classifications);
+
+        if (routedOutcomes is { } r) {
+            // Routed-phase vendor: take exact counts from the per-vendor tracker.
+            return new FinalCounts(
+                Loaded:             r.Loaded,
+                Resumed:            0,
+                AlreadyLoaded:      counts.AlreadyLoaded,
+                TooShort:           counts.TooShort,
+                Excluded:           counts.Excluded + r.Skipped,
+                ProbeError:         counts.ProbeError,
+                Errored:            r.Failed,
+                TitlesGenerated:    0,
+                TitlesSkipped:      0,
+                TitlesFailed:       0,
+                SummariesGenerated: 0,
+                SummariesFailed:    0,
+                RanBackground:      false,
+                RequestedSummaries: false);
+        }
+
+        // Chain-phase vendor: best-effort approximation because the chain worker
+        // doesn't record per-session outcome by vendor yet.
+        return new FinalCounts(
+            Loaded:             imported,
+            Resumed:            0,
+            AlreadyLoaded:      counts.AlreadyLoaded,
+            TooShort:           counts.TooShort,
+            Excluded:           counts.Excluded,
+            ProbeError:         counts.ProbeError,
+            Errored:            classifications.Count(c => c.Status is ClassificationStatus.New or ClassificationStatus.Partial) - imported,
+            TitlesGenerated:    0,
+            TitlesSkipped:      0,
+            TitlesFailed:       0,
+            SummariesGenerated: 0,
+            SummariesFailed:    0,
+            RanBackground:      false,
+            RequestedSummaries: false);
+    }
 
     internal sealed record FinalCounts(
             int  Loaded,
@@ -188,88 +381,159 @@ static class ImportCommand {
         );
 
     public static async Task<int> HandleImport(
-            string       baseUrl,
-            string?      filterCwd,
-            string?      filterSession     = null,
-            int          minLines          = 15,
-            bool         generateSummaries = false,
-            bool         codex             = false,
-            DateOnly?    since             = null,
-            ImportScope? scope             = null,
-            bool         skipConfirmation  = false,
-            bool         forcePrivate      = false,
-            string       activeProfile     = "default",
-            (string Owner, string Name)? currentRepo = null
+            string                       baseUrl,
+            string?                      filterCwd,
+            string?                      filterSession           = null,
+            int                          minLines                = 15,
+            bool                         generateSummaries       = false,
+            IReadOnlyList<IImportSource>? sources                 = null,
+            bool                         explicitVendorSelection = false,
+            CursorWorkspaceArgs?         cursorArgs              = null,
+            DateOnly?                    since                   = null,
+            ImportScope?                 scope                   = null,
+            bool                         skipConfirmation        = false,
+            bool                         forcePrivate            = false,
+            string                       activeProfile           = "default",
+            (string Owner, string Name)? currentRepo             = null
         ) {
         using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
         var       display    = ImportDisplay.Create();
-        var       vendor     = codex ? "codex" : "claude";
 
-        // --- Discover ---
-        display.BeginPhase("Discovering");
-        List<(string SessionId, string FilePath, string EncodedCwd)> transcriptFiles;
+        // --- Sources ---
+        // Back-compat: a null caller (legacy or test) means "Claude only". Once
+        // Program.cs migrates in E3, every production caller passes sources
+        // explicitly.
+        sources    ??= [new ClaudeImportSource()];
+        cursorArgs ??= new CursorWorkspaceArgs(null, false);
 
-        if (codex) {
-            if (!Directory.Exists(CodexPaths.Sessions)) {
-                display.Line("No Codex sessions directory found.");
+        // --- No-source exit policy ---
+        var available = sources.Where(s => s.IsAvailable).ToList();
+        var missing   = sources.Where(s => !s.IsAvailable).Select(s => s.Vendor).ToList();
 
-                return 0;
+        if (available.Count == 0) {
+            if (explicitVendorSelection) {
+                var flagList = string.Join(", ", missing.Select(v => "--" + v));
+                await Console.Error.WriteLineAsync(
+                    $"{flagList} specified but no matching installation detected on this machine.");
+                return 1;
             }
-
-            transcriptFiles = CodexPaths.Discover(since: since);
-        } else {
-            var projectsDir = ClaudePaths.Projects;
-
-            if (!Directory.Exists(projectsDir)) {
-                display.Line("No Claude Code projects directory found.");
-
-                return 0;
-            }
-
-            transcriptFiles = DiscoverTranscripts(projectsDir);
-        }
-
-        if (transcriptFiles.Count == 0) {
-            display.Line("No transcript files found.");
-
+            display.Line("No coding-agent sessions found. Install Claude, Codex, or Cursor and try again.");
             return 0;
         }
 
-        if (filterSession is not null) {
-            var normalized = NormalizeGuid(filterSession);
-            transcriptFiles = [.. transcriptFiles.Where(t => t.SessionId == normalized)];
-
-            if (transcriptFiles.Count == 0) {
-                await Console.Error.WriteLineAsync($"Session not found: {normalized}");
-
-                return 1;
+        if (explicitVendorSelection) {
+            foreach (var v in missing) {
+                await Console.Error.WriteLineAsync($"Skipping {v} (not detected on this machine).");
             }
         }
 
-        if (filterCwd is not null) {
-            var normalizedFilter = filterCwd.TrimEnd('/');
+        sources = available;
 
-            transcriptFiles = [
-                .. transcriptFiles.Where(t => {
-                        var cwd = ExtractCwdFromTranscript(t.FilePath, codex);
+        // --- Discovery (parallel fan-out) ---
+        display.BeginPhase("Discovering");
 
-                        return cwd?.TrimEnd('/').Equals(normalizedFilter, StringComparison.Ordinal) == true;
-                    }
-                )
-            ];
+        var filters = new DiscoveryFilters(
+            FilterCwd:           filterCwd,
+            FilterSession:       filterSession,
+            Since:               since,
+            MinLines:            minLines,
+            CursorWorkspace:     cursorArgs.Workspace,
+            CursorAllWorkspaces: cursorArgs.AllWorkspaces);
+
+        var discoveriesPerSource = await Task.WhenAll(
+            sources.Select(s => s.DiscoverAsync(filters, CancellationToken.None)));
+
+        for (var i = 0; i < sources.Count; i++) {
+            var count = discoveriesPerSource[i].Count;
+            display.Line($"Found {count} {sources[i].Vendor} session{(count == 1 ? "" : "s")}.");
         }
 
-        var projectCount = transcriptFiles.Select(t => t.EncodedCwd).Distinct().Count();
-        display.Line($"Found {transcriptFiles.Count} {vendor} session{(transcriptFiles.Count == 1 ? "" : "s")} in {projectCount} project{(projectCount == 1 ? "" : "s")}");
+        var totalDiscovered = discoveriesPerSource.Sum(d => d.Count);
+        if (totalDiscovered == 0) {
+            // When --session was given but nothing matched, surface the legacy
+            // not-found error instead of the friendly "No transcript files" exit.
+            // Keep the message aligned with the dead branch lower in this method
+            // (cleanup follow-up) so downstream tooling sees consistent output.
+            if (filterSession is not null) {
+                await Console.Error.WriteLineAsync($"Session not found: {NormalizeGuid(filterSession)}");
+                return 1;
+            }
+            display.Line("No transcript files found.");
+            return 0;
+        }
 
+        // Build a vendor → source map for downstream lookups.
+        var byVendor = sources.ToDictionary(s => s.Vendor, StringComparer.Ordinal);
+
+        // --- Cwd resolution for scope filtering ---
+        // For file-based sources (Claude/Codex) extract cwd from the transcript.
+        // For Cursor the workspace folder is already populated in DiscoveredSession.Cwd.
+        // ResolveTranscriptReposAsync still operates on file tuples so we adapt
+        // per-source: file-based sources project their DiscoveredSessions into
+        // (SessionId, FilePath, EncodedCwd) tuples; for Cursor we resolve cwd→repo
+        // directly here.
+        var allFileTuples = new List<(string SessionId, string FilePath, string EncodedCwd, string Vendor)>();
+        var cursorCwds    = new Dictionary<string, string?>(StringComparer.Ordinal); // sessionId → workspace path
+
+        for (var i = 0; i < sources.Count; i++) {
+            var src = sources[i];
+            foreach (var s in discoveriesPerSource[i]) {
+                var fp = s.SourceMeta.TryGetValue("FilePath",   out var f) ? f as string : null;
+                var ec = s.SourceMeta.TryGetValue("EncodedCwd", out var e) ? e as string : null;
+                if (fp is not null && ec is not null) {
+                    allFileTuples.Add((s.SessionId, fp, ec, src.Vendor));
+                } else {
+                    // Cursor or other future non-file source.
+                    cursorCwds[s.SessionId] = s.Cwd;
+                }
+            }
+        }
+
+        // Run file-based repo resolution. The helper takes a single codex bool;
+        // since Claude and Codex differ only in cwd-extraction, run it per
+        // vendor and merge.
+        var resolved = new Dictionary<string, (string Owner, string Name)?>(StringComparer.Ordinal);
+        foreach (var vendor in new[] { "claude", "codex" }) {
+            var slice = allFileTuples
+                .Where(t => t.Vendor == vendor)
+                .Select(t => (t.SessionId, t.FilePath, t.EncodedCwd))
+                .ToList();
+            if (slice.Count == 0) continue;
+
+            var partial = await ResolveTranscriptReposAsync(slice, codex: vendor == "codex", display);
+            foreach (var kv in partial) resolved[kv.Key] = kv.Value;
+        }
+
+        // Resolve Cursor sessions in parallel by workspace path (dedup like
+        // ResolveTranscriptReposAsync).
+        if (cursorCwds.Count > 0) {
+            var uniqueWorkspaces = cursorCwds.Values
+                .Where(c => c is not null)
+                .Cast<string>()
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+            var repoByCwd = new ConcurrentDictionary<string, (string Owner, string Name)?>(StringComparer.Ordinal);
+
+            if (uniqueWorkspaces.Count > 0) {
+                var opts = new ParallelOptions { MaxDegreeOfParallelism = 8 };
+                await Parallel.ForEachAsync(uniqueWorkspaces, opts, async (cwd, _) => {
+                    try {
+                        var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
+                        repoByCwd[cwd] = repo is { Owner: { } o, RepoName: { } n } ? (o, n) : null;
+                    } catch {
+                        repoByCwd[cwd] = null;
+                    }
+                });
+            }
+
+            foreach (var (sid, cwd) in cursorCwds) {
+                resolved[sid] = cwd is not null && repoByCwd.TryGetValue(cwd, out var r) ? r : null;
+            }
+        }
+
+        // --- Scope picker ---
         var kapacitorConfig = await AppConfig.Load();
-
-        // --- Scope: pre-detect repos for the filter and (if needed) the picker ---
-        // Resolve all transcript → repo mappings up front, in parallel and deduped by
-        // cwd. With many sessions sharing a cwd, sequential per-session detection
-        // (git config + `gh pr view`) could take minutes; that silent gap made
-        // `kapacitor import` look frozen (see AI-692).
-        var resolved = await ResolveTranscriptReposAsync(transcriptFiles, codex, display);
 
         if (scope is null) {
             var distinct = resolved.Values
@@ -286,13 +550,32 @@ static class ImportCommand {
             }
         }
 
-        transcriptFiles = await ImportScopeFilter.Apply(
-            transcriptFiles,
-            scope,
-            (t, _) => new ValueTask<(string?, string?)>(
-                resolved.TryGetValue(t.SessionId, out var v) && v is { } x ? (x.Owner, x.Name) : (null, null)));
+        // --- Per-source scope filtering ---
+        // ImportScopeFilter.Apply needs (SessionId, FilePath, EncodedCwd) tuples.
+        // For file-based sources we already have those; for Cursor we project a
+        // tuple with empty FilePath/EncodedCwd (the filter only consults the
+        // injected resolver, which reads from `resolved`).
+        var filteredPerSource = new List<DiscoveredSession>[sources.Count];
 
-        if (transcriptFiles.Count == 0) {
+        for (var i = 0; i < sources.Count; i++) {
+            var src = sources[i];
+            var disc = discoveriesPerSource[i];
+
+            var tuples = disc.Select(s => (s.SessionId, FilePath: "", EncodedCwd: "")).ToList();
+
+            var keptIds = (await ImportScopeFilter.Apply(
+                    tuples,
+                    scope,
+                    (t, _) => new ValueTask<(string?, string?)>(
+                        resolved.TryGetValue(t.SessionId, out var v) && v is { } x ? (x.Owner, x.Name) : (null, null))))
+                .Select(t => t.SessionId)
+                .ToHashSet(StringComparer.Ordinal);
+
+            filteredPerSource[i] = [.. disc.Where(s => keptIds.Contains(s.SessionId))];
+        }
+
+        var totalAfterScope = filteredPerSource.Sum(d => d.Count);
+        if (totalAfterScope == 0) {
             display.Line("No sessions match the selected scope.");
             return 0;
         }
@@ -301,9 +584,11 @@ static class ImportCommand {
         var sampleRepos = new List<string>();
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var t in transcriptFiles) {
-                if (!resolved.TryGetValue(t.SessionId, out var v) || v is not { } x) continue;
-                if (seen.Add($"{x.Owner}/{x.Name}")) sampleRepos.Add($"{x.Owner}/{x.Name}");
+            foreach (var disc in filteredPerSource) {
+                foreach (var s in disc) {
+                    if (!resolved.TryGetValue(s.SessionId, out var v) || v is not { } x) continue;
+                    if (seen.Add($"{x.Owner}/{x.Name}")) sampleRepos.Add($"{x.Owner}/{x.Name}");
+                }
             }
         }
 
@@ -312,62 +597,81 @@ static class ImportCommand {
             : $"{kapacitorConfig?.DefaultVisibility ?? "org_public"} (from profile)";
 
         if (!ImportScopePrompt.PromptConfirm(
-                scope, transcriptFiles.Count, sampleRepos, visibilityDesc, skipConfirmation)) {
+                scope, totalAfterScope, sampleRepos, visibilityDesc, skipConfirmation)) {
             await Console.Error.WriteLineAsync("Import cancelled.");
             return 0;
         }
 
-        // --- Classify (parallel probes) ---
-        var                         excludedRepos = kapacitorConfig?.ExcludedRepos;
-        var                         excludedPaths = (await AppConfig.GetActiveProfileAsync())?.ExcludedPaths;
-        List<SessionClassification> classifications;
+        // --- Classification (parallel fan-out per source) ---
+        var excludedRepos = kapacitorConfig?.ExcludedRepos;
+        var excludedPaths = (await AppConfig.GetActiveProfileAsync())?.ExcludedPaths;
+
+        var classifyCtx = new ClassifyContext(
+            HttpClient:    httpClient,
+            BaseUrl:       baseUrl,
+            MinLines:      minLines,
+            ExcludedRepos: excludedRepos,
+            ExcludedPaths: excludedPaths);
+
+        IReadOnlyList<SessionClassification>[] classificationsPerSource;
 
         if (display.Tty) {
-            var tmp = new List<SessionClassification>();
+            classificationsPerSource = new IReadOnlyList<SessionClassification>[sources.Count];
 
             await AnsiConsole.Progress()
                 .AutoClear(true)
                 .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new PercentageColumn())
                 .StartAsync(async ctx => {
-                        var bar = ctx.AddTask("[yellow]Probing[/]", maxValue: transcriptFiles.Count);
+                    var bar = ctx.AddTask("[yellow]Probing[/]", maxValue: totalAfterScope);
 
-                        var results = await ClassifyAsync(
-                            httpClient,
-                            baseUrl,
-                            transcriptFiles,
-                            minLines,
-                            excludedRepos,
-                            CancellationToken.None,
-                            vendor,
-                            onProbed: () => bar.Increment(1),
-                            excludedPaths: excludedPaths
-                        );
-                        tmp.AddRange(results);
-                    }
-                );
-            classifications = tmp;
+                    var probeTasks = sources.Select(async (s, idx) => {
+                        var slice = filteredPerSource[idx];
+                        var res   = await s.ClassifyAsync(slice, classifyCtx, CancellationToken.None);
+                        // Per-source progress accounting: each ClassifyAsync produces
+                        // one classification per discovered session, so we tick the
+                        // bar by the slice size when the task completes. Per-probe
+                        // ticks would require threading a callback through the
+                        // IImportSource interface — we punt that to a follow-up.
+                        bar.Increment(slice.Count);
+                        return (idx, res);
+                    }).ToArray();
+
+                    var all = await Task.WhenAll(probeTasks);
+                    foreach (var (idx, res) in all) classificationsPerSource[idx] = res;
+                });
         } else {
-            display.Line($"Probing {transcriptFiles.Count} sessions...");
-            classifications = await ClassifyAsync(httpClient, baseUrl, transcriptFiles, minLines, excludedRepos, CancellationToken.None, vendor, excludedPaths: excludedPaths);
+            display.Line($"Probing {totalAfterScope} sessions...");
+            classificationsPerSource = await Task.WhenAll(
+                sources.Select(async (s, idx) =>
+                    (IReadOnlyList<SessionClassification>)await s.ClassifyAsync(
+                        filteredPerSource[idx], classifyCtx, CancellationToken.None)));
         }
 
-        // --- --since filter (Claude path only — Codex pruned at discovery) ---
-        if (since is { } sinceCutoff && !codex) {
+        // --- --since filter (file-based sources only — Codex pruned at discovery, Cursor n/a) ---
+        if (since is { } sinceCutoff) {
             var cutoff = sinceCutoff.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
 
-            classifications = [
-                .. classifications.Where(c => {
-                        var ts = c.Meta.FirstTimestamp?.UtcDateTime;
+            for (var i = 0; i < sources.Count; i++) {
+                // Skip Codex (already pruned in CodexPaths.Discover) and Cursor
+                // (no FilePath to stat). Only Claude needs the post-classify mtime
+                // fallback. Detect this by vendor string to keep the orchestrator
+                // agnostic of source-implementation details.
+                if (sources[i].Vendor != "claude") continue;
 
+                classificationsPerSource[i] = [
+                    .. classificationsPerSource[i].Where(c => {
+                        var ts = c.Meta.FirstTimestamp?.UtcDateTime;
                         if (ts is null) {
                             try { ts = File.GetLastWriteTimeUtc(c.FilePath); } catch { return true; }
                         }
-
                         return ts >= cutoff;
-                    }
-                )
-            ];
+                    })
+                ];
+            }
         }
+
+        // Flatten classifications.
+        var classifications = classificationsPerSource.SelectMany(c => c).ToList();
 
         // --- Resolve excluded-repo / excluded-path prompts (TTY only; non-TTY auto-skips) ---
         // Repo and path exclusions are independent gates: a session is included only when
@@ -423,19 +727,29 @@ static class ImportCommand {
         }
 
         // --- Plan grid ---
-        var planCounts = new ClassificationCounts(
-            New: classifications.Count(c => c.Status           == ClassificationStatus.New),
-            Partial: classifications.Count(c => c.Status       == ClassificationStatus.Partial),
-            AlreadyLoaded: classifications.Count(c => c.Status == ClassificationStatus.AlreadyLoaded),
-            TooShort: classifications.Count(c => c.Status      == ClassificationStatus.TooShort),
-            Excluded: classifications.Count(c => c.Status      == ClassificationStatus.Excluded),
-            ProbeError: classifications.Count(c => c.Status    == ClassificationStatus.ProbeError)
-        );
+        // Re-slice classifications by vendor for the sub-grid AFTER any
+        // post-classification mutations (--since prune, excluded-repo flips).
+        // The classifications list reflects every per-source-array entry by
+        // reference identity, but the per-source arrays were captured before
+        // the excluded-repo prompt — so rebuild from the flat list.
+        var planCounts = ComputeCounts(classifications);
+
+        Dictionary<string, ClassificationCounts>? planBySource = null;
+        if (sources.Count > 1) {
+            planBySource = classifications
+                .GroupBy(c => c.Vendor, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => ComputeCounts(g.ToList()), StringComparer.Ordinal);
+        }
 
         display.BeginPhase("Plan");
-        display.WritePlanGrid(planCounts);
+        display.WritePlanGrid(planCounts, planBySource);
 
         // --- Build chains + set continuation predecessors ---
+        // Chain workers operate on file-based classifications (Claude/Codex);
+        // they read FilePath to send transcript batches. Source-routed
+        // classifications (Cursor — empty FilePath) go through a separate
+        // parallel import phase that calls source.ImportSessionAsync per
+        // session.
         var continuationMap = BuildContinuationMapFromClassifications(classifications);
 
         classifications = [
@@ -443,7 +757,12 @@ static class ImportCommand {
                 continuationMap.TryGetValue(c.SessionId, out var prev) ? c with { PreviousSessionId = prev } : c
             )
         ];
-        var chains = BuildImportChains(classifications);
+
+        var fileBased = classifications.Where(c => !string.IsNullOrEmpty(c.FilePath)).ToList();
+        var routed    = classifications.Where(c =>  string.IsNullOrEmpty(c.FilePath)
+                                                 && c.Status is ClassificationStatus.New or ClassificationStatus.Partial).ToList();
+
+        var chains = BuildImportChains(fileBased);
 
         // --- Import ---
         // ConcurrentBag rather than List: OnTitleTaskReady / OnBackgroundWorkReady
@@ -487,6 +806,13 @@ static class ImportCommand {
             },
             OnTitleTaskReady = t => {
                 var (sid, fp, _, vnd) = t;
+
+                // Don't schedule a title task for a source that doesn't support it.
+                // Cursor sets SupportsTitleGeneration=false because the composer
+                // header carries a name that the server maps to a
+                // SessionTitleCreatedEvent at ingest time.
+                if (byVendor.TryGetValue(vnd, out var src) && !src.SupportsTitleGeneration) return;
+
                 Interlocked.Increment(ref titleTaskCount);
 
                 backgroundTasks.Add(
@@ -540,6 +866,25 @@ static class ImportCommand {
         };
 
         ImportChainsResult importResult;
+        // Counts for routed-source imports (Cursor). These add on top of the
+        // chain-worker counts when both phases run.
+        var routedLoaded   = 0;
+        var routedErrored  = 0;
+        var routedExcluded = 0;
+        // Per-vendor routed outcomes for the Done sub-grid. Aggregate
+        // routedLoaded/routedExcluded/routedErrored above remain authoritative
+        // for the totals row; this tracker is what feeds doneBySource so the
+        // sub-grid attributes Skipped-at-import to Excluded (not Errored).
+        var routedOutcomesByVendor = new ConcurrentDictionary<string, (int Loaded, int Skipped, int Failed)>(StringComparer.Ordinal);
+
+        static (int Loaded, int Skipped, int Failed) AddRoutedOutcome(
+            (int Loaded, int Skipped, int Failed) prev,
+            ImportOutcome                          outcome
+        ) => outcome switch {
+            ImportOutcome.Loaded or ImportOutcome.Resumed => (prev.Loaded + 1, prev.Skipped,     prev.Failed),
+            ImportOutcome.Skipped                         => (prev.Loaded,     prev.Skipped + 1, prev.Failed),
+            _                                             => (prev.Loaded,     prev.Skipped,     prev.Failed + 1),
+        };
 
         if (chains.Count > 0) {
             display.BeginPhase($"Importing {chains.Sum(c => c.Count)} sessions");
@@ -643,6 +988,100 @@ static class ImportCommand {
             importResult = new(0, 0, 0);
         }
 
+        // --- Routed-source import phase (Cursor) ---
+        // Sessions without a FilePath are imported directly via the source's
+        // ImportSessionAsync. They share the 4-worker concurrency budget with
+        // the chain phase but run sequentially after it; the TTY renderer is
+        // hard-sized to 4 slots and concurrent chain-and-routed pools would
+        // collide visually.
+        if (routed.Count > 0) {
+            display.BeginPhase($"Importing {routed.Count} routed session{(routed.Count == 1 ? "" : "s")}");
+
+            var importCtx = new ImportContext(
+                HttpClient:   httpClient,
+                BaseUrl:      baseUrl,
+                ForcePrivate: forcePrivate);
+
+            async Task<ImportOutcome> ImportOne(SessionClassification c) {
+                if (!byVendor.TryGetValue(c.Vendor, out var src)) {
+                    return ImportOutcome.Failed;
+                }
+                try {
+                    return await src.ImportSessionAsync(c, importCtx, CancellationToken.None);
+                } catch {
+                    return ImportOutcome.Failed;
+                }
+            }
+
+            if (display.Tty) {
+                await AnsiConsole.Progress()
+                    .AutoClear(false)
+                    .HideCompleted(false)
+                    .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new PercentageColumn())
+                    .StartAsync(async ctx => {
+                        var bar = ctx.AddTask("[green]Importing[/]", maxValue: routed.Count);
+
+                        await Parallel.ForEachAsync(
+                            routed,
+                            new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount },
+                            async (c, _) => {
+                                var outcome = await ImportOne(c);
+                                routedOutcomesByVendor.AddOrUpdate(
+                                    c.Vendor,
+                                    addValueFactory:    _ => AddRoutedOutcome((0, 0, 0), outcome),
+                                    updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome));
+                                switch (outcome) {
+                                    case ImportOutcome.Loaded:
+                                    case ImportOutcome.Resumed:
+                                        Interlocked.Increment(ref routedLoaded);
+                                        importedSessionIds.Add(c.SessionId);
+                                        AnsiConsole.MarkupLine(
+                                            $"[green]✓[/] Loading [cyan]{Markup.Escape(c.SessionId)}[/] ({Markup.Escape(c.Vendor)})");
+                                        break;
+                                    case ImportOutcome.Skipped:
+                                        Interlocked.Increment(ref routedExcluded);
+                                        AnsiConsole.MarkupLine(
+                                            $"[yellow]~[/] Skipping [cyan]{Markup.Escape(c.SessionId)}[/] (already current)");
+                                        break;
+                                    case ImportOutcome.Failed:
+                                        Interlocked.Increment(ref routedErrored);
+                                        AnsiConsole.MarkupLine(
+                                            $"[red]✗[/] Failed [cyan]{Markup.Escape(c.SessionId)}[/]");
+                                        break;
+                                }
+                                bar.Increment(1);
+                            });
+                    });
+            } else {
+                await Parallel.ForEachAsync(
+                    routed,
+                    new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount },
+                    async (c, _) => {
+                        var outcome = await ImportOne(c);
+                        routedOutcomesByVendor.AddOrUpdate(
+                            c.Vendor,
+                            addValueFactory:    _ => AddRoutedOutcome((0, 0, 0), outcome),
+                            updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome));
+                        switch (outcome) {
+                            case ImportOutcome.Loaded:
+                            case ImportOutcome.Resumed:
+                                Interlocked.Increment(ref routedLoaded);
+                                importedSessionIds.Add(c.SessionId);
+                                display.Line($"Loading {c.SessionId} ({c.Vendor})");
+                                break;
+                            case ImportOutcome.Skipped:
+                                Interlocked.Increment(ref routedExcluded);
+                                display.Line($"Skipping {c.SessionId} (already current)");
+                                break;
+                            case ImportOutcome.Failed:
+                                Interlocked.Increment(ref routedErrored);
+                                display.Line($"Failed {c.SessionId}");
+                                break;
+                        }
+                    });
+            }
+        }
+
         // --- --private: mark all imported sessions owner-only ---
         if (forcePrivate && !importedSessionIds.IsEmpty) {
             display.BeginPhase("Marking imported sessions private");
@@ -712,14 +1151,18 @@ static class ImportCommand {
         }
 
         // --- Done ---
+        // Aggregate chain + routed outcomes. Routed-source successes are folded
+        // into Loaded (Cursor maps Loaded/Resumed to the same observable
+        // outcome); routed Skipped is folded into Excluded (the watermark
+        // already covered them).
         var final = new FinalCounts(
-            Loaded: importResult.Loaded,
+            Loaded: importResult.Loaded + routedLoaded,
             Resumed: importResult.Resumed,
             AlreadyLoaded: planCounts.AlreadyLoaded,
             TooShort: planCounts.TooShort,
-            Excluded: planCounts.Excluded,
+            Excluded: planCounts.Excluded + routedExcluded,
             ProbeError: planCounts.ProbeError,
-            Errored: importResult.Errored,
+            Errored: importResult.Errored + routedErrored,
             TitlesGenerated: titlesGenerated,
             TitlesSkipped: titlesSkipped,
             TitlesFailed: titlesFailed,
@@ -728,7 +1171,32 @@ static class ImportCommand {
             RanBackground: ranBackground,
             RequestedSummaries: summaryTaskCount > 0
         );
-        display.WriteDoneGrid(final);
+
+        // Per-source FinalCounts. With a single source there's no sub-grid;
+        // with N sources we attribute Loaded/Resumed/Errored from the imported
+        // SessionIds back to their vendor.
+        Dictionary<string, FinalCounts>? doneBySource = null;
+        if (sources.Count > 1) {
+            var importedSet = importedSessionIds.ToHashSet(StringComparer.Ordinal);
+
+            doneBySource = classifications
+                .GroupBy(c => c.Vendor, StringComparer.Ordinal)
+                .ToDictionary(
+                    g => g.Key,
+                    g => {
+                        var slice    = g.ToList();
+                        var imported = slice.Count(c => importedSet.Contains(c.SessionId));
+                        routedOutcomesByVendor.TryGetValue(g.Key, out var routed);
+                        var hasRouted = routedOutcomesByVendor.ContainsKey(g.Key);
+                        return ComputePerSourceFinalCounts(
+                            slice,
+                            imported,
+                            hasRouted ? routed : null);
+                    },
+                    StringComparer.Ordinal);
+        }
+
+        display.WriteDoneGrid(final, doneBySource);
 
         return 0;
     }
@@ -879,7 +1347,7 @@ static class ImportCommand {
         return null;
     }
 
-    static string? ExtractCwdFromTranscript(string filePath, bool codex = false) {
+    internal static string? ExtractCwdFromTranscript(string filePath, bool codex = false) {
         try {
             using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var reader = new StreamReader(stream);
@@ -1155,7 +1623,7 @@ static class ImportCommand {
     /// Normalize a GUID string to dashless format (matching the live CLI's NormalizeGuidField).
     /// Non-GUID strings are returned as-is.
     /// </summary>
-    static string NormalizeGuid(string value) =>
+    internal static string NormalizeGuid(string value) =>
         Guid.TryParse(value, out var guid) ? guid.ToString("N") : value;
 
     static async Task<TitleResult> GenerateTitleForImportAsync(HttpClient httpClient, string baseUrl, string sessionId, string filePath, string vendor) {
@@ -1493,252 +1961,6 @@ static class ImportCommand {
         if (c.ExcludedPathKey is { } pathKey && !includedPathKeys.Contains(pathKey)) return true;
 
         return false;
-    }
-
-    internal static async Task<List<SessionClassification>> ClassifyAsync(
-            HttpClient                                                   httpClient,
-            string                                                       baseUrl,
-            List<(string SessionId, string FilePath, string EncodedCwd)> transcripts,
-            int                                                          minLines,
-            string[]?                                                    excludedRepos,
-            CancellationToken                                            ct,
-            string                                                       vendor        = "claude",
-            Action?                                                      onProbed      = null,
-            string[]?                                                    excludedPaths = null
-        ) {
-        using var probeGate = new SemaphoreSlim(8);
-        var       tasks     = new List<Task<SessionClassification>>(transcripts.Count);
-
-        foreach (var (sessionId, filePath, encodedCwd) in transcripts) {
-            tasks.Add(ClassifyOneAsync(httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, excludedPaths, probeGate, vendor, onProbed, ct));
-        }
-
-        var results = await Task.WhenAll(tasks);
-
-        return [.. results];
-    }
-
-    static async Task<SessionClassification> ClassifyOneAsync(
-            HttpClient        httpClient,
-            string            baseUrl,
-            string            sessionId,
-            string            filePath,
-            string            encodedCwd,
-            int               minLines,
-            string[]?         excludedRepos,
-            string[]?         excludedPaths,
-            SemaphoreSlim     probeGate,
-            string            vendor,
-            Action?           onProbed,
-            CancellationToken ct
-        ) {
-        try {
-            return await ClassifyOneCoreAsync(httpClient, baseUrl, sessionId, filePath, encodedCwd, minLines, excludedRepos, excludedPaths, probeGate, vendor, ct);
-        } finally {
-            onProbed?.Invoke();
-        }
-    }
-
-    static async Task<SessionClassification> ClassifyOneCoreAsync(
-            HttpClient        httpClient,
-            string            baseUrl,
-            string            sessionId,
-            string            filePath,
-            string            encodedCwd,
-            int               minLines,
-            string[]?         excludedRepos,
-            string[]?         excludedPaths,
-            SemaphoreSlim     probeGate,
-            string            vendor,
-            CancellationToken ct
-        ) {
-        var isCodex = vendor == "codex";
-        var meta    = isCodex ? ExtractCodexSessionMetadata(filePath) : ExtractSessionMetadata(filePath);
-
-        // Short-circuit: kapacitor's own sub-sessions (title / what's-done) never get imported.
-        // Codex rollouts have no analog, so the check is Claude-only.
-        if (!isCodex && TitleGenerator.IsKapacitorSubSession(filePath)) {
-            return new() {
-                SessionId  = sessionId,
-                FilePath   = filePath,
-                EncodedCwd = encodedCwd,
-                Meta       = meta,
-                Status     = ClassificationStatus.InternalSubSession,
-                Vendor     = vendor,
-            };
-        }
-
-        // Codex rollouts carry the session id in two places — the trailing UUID in the
-        // filename (which the rest of the pipeline trusts as the canonical id used for
-        // probe URLs and hook payloads) and `session_meta.payload.id`. Validate they
-        // agree so a renamed/copied file can't import under the wrong server session.
-        if (isCodex && meta.SessionId is { } innerId
-         && Guid.TryParse(innerId, out var innerGuid)
-         && innerGuid.ToString("N") != sessionId) {
-            return new() {
-                SessionId        = sessionId,
-                FilePath         = filePath,
-                EncodedCwd       = encodedCwd,
-                Meta             = meta,
-                Status           = ClassificationStatus.ProbeError,
-                Vendor           = vendor,
-                ProbeErrorReason = "codex session id mismatch (filename vs session_meta.payload.id)",
-            };
-        }
-
-        // Probe the server BEFORE scanning the file. On re-runs the probe returns
-        // 204 (AlreadyLoaded) quickly and we never need to read the transcript.
-        ClassificationStatus status;
-        var                  resumeFromLine   = 0;
-        string?              probeErrorReason = null;
-
-        await probeGate.WaitAsync(ct);
-
-        try {
-            using var resp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct: ct);
-
-            switch (resp.StatusCode) {
-                case HttpStatusCode.NotFound:
-                    status = ClassificationStatus.New;
-
-                    break;
-                case HttpStatusCode.NoContent:
-                    status = ClassificationStatus.AlreadyLoaded;
-
-                    break;
-                default:
-                    if (resp.IsSuccessStatusCode) {
-                        var       json = await resp.Content.ReadAsStringAsync(ct);
-                        using var doc  = JsonDocument.Parse(json);
-
-                        if (doc.RootElement.Num("last_line_number") is { } lastLine) {
-                            resumeFromLine = (int)lastLine + 1;
-                            status         = ClassificationStatus.Partial;
-                        } else {
-                            status = ClassificationStatus.AlreadyLoaded;
-                        }
-                    } else {
-                        status           = ClassificationStatus.ProbeError;
-                        probeErrorReason = $"HTTP {(int)resp.StatusCode}";
-                    }
-
-                    break;
-            }
-        } catch (HttpRequestException ex) {
-            status           = ClassificationStatus.ProbeError;
-            probeErrorReason = ex.Message;
-        } finally {
-            probeGate.Release();
-        }
-
-        // Read enough of the local transcript to satisfy two checks at once:
-        //   1. TooShort — fewer lines than minLines.
-        //   2. False Partial — server says last_line_number = N but the local
-        //      transcript has no lines past index N (resumeFromLine would be
-        //      N+1 with nothing to send).
-        // CountLinesUpTo early-exits at the threshold, so the read cost is
-        // bounded by Math.Max(minLines, resumeFromLine + 1) lines.
-        if (status is ClassificationStatus.New or ClassificationStatus.Partial) {
-            var threshold = Math.Max(
-                minLines,
-                status == ClassificationStatus.Partial ? resumeFromLine + 1 : 0
-            );
-
-            if (threshold > 0) {
-                var observedLines = CountLinesUpTo(filePath, threshold);
-
-                if (minLines > 0 && observedLines < minLines) {
-                    return new() {
-                        SessionId  = sessionId,
-                        FilePath   = filePath,
-                        EncodedCwd = encodedCwd,
-                        Meta       = meta,
-                        Status     = ClassificationStatus.TooShort,
-                        TotalLines = observedLines,
-                        Vendor     = vendor,
-                    };
-                }
-
-                // Server has lines >= the local transcript — nothing to resume.
-                if (status == ClassificationStatus.Partial && observedLines <= resumeFromLine) {
-                    status         = ClassificationStatus.AlreadyLoaded;
-                    resumeFromLine = 0;
-                }
-            }
-        }
-
-        // Flag excluded repos/paths for New/Partial sessions. Resolution (include or skip?)
-        // happens later in HandleImport, where we can batch prompts by key.
-        string? excludedRepoKey = null;
-        string? excludedPathKey = null;
-
-        if (status is ClassificationStatus.New or ClassificationStatus.Partial) {
-            var cwd = meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(encodedCwd);
-
-            if (cwd is not null) {
-                if (excludedRepos is { Length: > 0 }) {
-                    var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
-
-                    if (repo?.Owner is not null && repo.RepoName is not null) {
-                        var key = $"{repo.Owner}/{repo.RepoName}";
-
-                        if (excludedRepos.Contains(key, StringComparer.OrdinalIgnoreCase)) {
-                            excludedRepoKey = key;
-                        }
-                    }
-                }
-
-                if (excludedPathKey is null && excludedPaths is { Length: > 0 }) {
-                    foreach (var entry in excludedPaths) {
-                        if (PathExclusion.IsExcluded(cwd, [entry])) {
-                            excludedPathKey = PathExclusion.Normalize(entry);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        // TotalLines is only meaningful for TooShort sessions (where we know the exact
-        // count because it's below the threshold). Leave it at 0 for other statuses —
-        // we only read enough of the file to confirm the TooShort filter didn't apply.
-        return new SessionClassification {
-            SessionId        = sessionId,
-            FilePath         = filePath,
-            EncodedCwd       = encodedCwd,
-            Meta             = meta,
-            Status           = status,
-            ResumeFromLine   = resumeFromLine,
-            ProbeErrorReason = probeErrorReason,
-            ExcludedRepoKey  = excludedRepoKey,
-            ExcludedPathKey  = excludedPathKey,
-            Vendor           = vendor,
-        };
-    }
-
-    /// <summary>
-    /// Count transcript lines with an early exit once <paramref name="threshold"/> lines
-    /// have been observed. The caller only needs to distinguish "below threshold" from
-    /// "at or above"; scanning further would be wasted I/O on large transcripts.
-    /// Returns the exact count when below threshold, or exactly <paramref name="threshold"/>
-    /// once the threshold is reached.
-    /// </summary>
-    static int CountLinesUpTo(string path, int threshold) {
-        try {
-            if (!File.Exists(path)) return 0;
-
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var reader = new StreamReader(stream);
-            var       count  = 0;
-            while (count < threshold && reader.ReadLine() is not null) count++;
-
-            return count;
-        } catch {
-            // On transient I/O errors (locked file, permissions hiccup) treat the
-            // transcript as "not too short" so the caller proceeds to probe/import
-            // rather than silently classifying it as TooShort and skipping forever.
-            return threshold;
-        }
     }
 
     /// <summary>
