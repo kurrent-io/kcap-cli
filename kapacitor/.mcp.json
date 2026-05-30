@@ -3,7 +3,7 @@
     "kapacitor-review": {
       "command": "kapacitor",
       "args": ["mcp", "review"],
-      "description": "PR review context tools — query implementation session transcripts to understand why code was changed"
+      "description": "PR review context tools — query implementation session transcripts to understand why code was changed. Pass the target PR as a `pr` argument to each tool (e.g. 'owner/repo#123' or a github.com URL) or run from a branch with an open PR for auto-detection."
     },
     "kapacitor-sessions": {
       "command": "kapacitor",
