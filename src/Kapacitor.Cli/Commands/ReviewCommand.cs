@@ -22,7 +22,8 @@ static class ReviewCommand {
         using var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
 
         try {
-            var response = await client.GetAsync($"{baseUrl}/api/review/{owner}/{repo}/pulls/{prNumber}");
+            var response = await client.GetAsync(
+                $"{baseUrl}/api/review/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(repo)}/pulls/{prNumber}");
 
             if (!response.IsSuccessStatusCode) {
                 var status = (int)response.StatusCode;

@@ -20,16 +20,16 @@ Repo-aware: it resolves the cwd to a repo hash at startup, so `search_sessions` 
 
 ### `kapacitor-review`
 
-PR review context tools, available automatically when the agent is on a branch with an open PR. The MCP server auto-detects the current repo and PR from git; if you're not on a PR branch, the tools return a helpful message suggesting `kapacitor review <pr>`.
+PR review context tools. Each PR-scoped tool accepts an optional `pr` argument (`"owner/repo#123"` or a GitHub PR URL), so you can review any PR from any branch — no need to check it out first. When `pr` is omitted, the server falls back to the PR passed at startup (set by `kapacitor review <pr>`) or to git auto-detection against the current branch.
 
-| Tool | Description |
-|------|-------------|
-| `get_pr_summary` | Overview: sessions, files changed, test runs |
-| `list_pr_files` | Files changed with session links and event counts |
-| `get_file_context` | Why a specific file was changed, with transcript excerpts |
-| `search_context` | Free-text search across session transcripts |
-| `list_sessions` | Sessions that contributed to the PR |
-| `get_transcript` | Full transcript of a specific session |
+| Tool | Description | `pr` arg |
+|------|-------------|----------|
+| `get_pr_summary` | Overview: sessions, files changed, test runs | optional |
+| `list_pr_files` | Files changed with session links and event counts | optional |
+| `get_file_context` | Why a specific file was changed, with transcript excerpts | optional |
+| `search_context` | Free-text search across session transcripts | optional |
+| `list_sessions` | Sessions that contributed to the PR | optional |
+| `get_transcript` | Full transcript of a specific session | n/a (keys off `session_id`) |
 
 `kapacitor mcp judge` is intentionally not auto-registered. Add it with `claude mcp add kapacitor-judge -- kapacitor mcp judge` if you want it.
 

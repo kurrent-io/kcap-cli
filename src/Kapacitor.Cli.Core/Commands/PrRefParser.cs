@@ -15,6 +15,8 @@ public static partial class PrRefParser {
 
         if (string.IsNullOrWhiteSpace(input)) return false;
 
+        input = input.Trim();
+
         var urlMatch = UrlPattern().Match(input);
 
         if (urlMatch.Success) {
@@ -38,9 +40,13 @@ public static partial class PrRefParser {
         return false;
     }
 
-    [GeneratedRegex(@"^https?://github\.com/([^/]+)/([^/]+)/pull/(\d+)(?:/.*)?$")]
+    // Accept any of: trailing `/...`, `?query`, `#fragment` — browser-copied
+    // GitHub URLs commonly include these suffixes.
+    [GeneratedRegex(@"^https?://github\.com/([^/]+)/([^/]+)/pull/(\d+)(?:[/?#].*)?$")]
     private static partial Regex UrlPattern();
 
-    [GeneratedRegex(@"^([^/]+)/([^#]+)#(\d+)$")]
+    // Repo group forbids `/` — GitHub repo names can't contain it, and allowing
+    // it would let `owner/foo/bar#42` parse into a malformed API URL segment.
+    [GeneratedRegex(@"^([^/]+)/([^/#]+)#(\d+)$")]
     private static partial Regex ShorthandPattern();
 }

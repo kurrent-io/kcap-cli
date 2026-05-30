@@ -11,11 +11,18 @@ Subcommands:
                           inspect past Kurrent Capacitor sessions.
 
 Options for review:
-  --owner <owner>         Repository owner
-  --repo <repo>           Repository name
-  --pr <number>           PR number
+  --owner <owner>         Repository owner (session default)
+  --repo <repo>           Repository name (session default)
+  --pr <number>           PR number (session default)
 
-If --owner/--repo/--pr are omitted, auto-detects from git.
+Per-tool PR override: each PR-scoped tool (`get_pr_summary`,
+`list_pr_files`, `get_file_context`, `search_context`, `list_sessions`)
+accepts an optional `pr` argument (`"owner/repo#123"` or a GitHub URL),
+so a single MCP server can answer about any PR from any branch.
+
+Resolution order per tool call: tool `pr` arg → startup `--owner/--repo/--pr`
+→ git auto-detect from current branch. `get_transcript` keys off
+`session_id` and doesn't need `pr`.
 
 Options for judge:
   --session <sessionId>   Bind the judge to a specific session

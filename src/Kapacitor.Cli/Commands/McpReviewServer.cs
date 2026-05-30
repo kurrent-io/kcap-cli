@@ -135,7 +135,9 @@ static class McpReviewServer {
             PrIdentity? pr
         ) {
         try {
-            var prBase = pr is null ? null : $"{baseUrl}/api/review/{pr.Owner}/{pr.Repo}/pulls/{pr.PrNumber}";
+            var prBase = pr is null
+                ? null
+                : $"{baseUrl}/api/review/{Uri.EscapeDataString(pr.Owner)}/{Uri.EscapeDataString(pr.Repo)}/pulls/{pr.PrNumber}";
 
             var httpResponse = toolName switch {
                 "get_pr_summary"   => await client.GetAsync(prBase),
