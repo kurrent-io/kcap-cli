@@ -202,10 +202,12 @@ Expect ~1-3 minutes total depending on the model and session size — judges run
 ### PR review with full context
 
 ```bash
-kapacitor review <pr-url>
+kapacitor review <pr-url-or-owner/repo#number>
 ```
 
 Launches a Claude Code session equipped with MCP tools that query the implementation transcripts. Reviewers can ask *why* code was changed, understand design decisions, check what alternatives were considered, and verify test coverage — all grounded in what actually happened during development.
+
+The same MCP server (`kapacitor-review`) is also auto-registered by the Kapacitor plugin and available in any Claude Code session, not just ones launched via `kapacitor review`. Each PR-scoped tool (`get_pr_summary`, `list_pr_files`, `get_file_context`, `search_context`, `list_sessions`) accepts an optional `pr` argument — pass `"owner/repo#123"` or a GitHub PR URL to review any PR from any branch. When omitted, the server falls back to the PR passed at startup (set by `kapacitor review <pr>`) or to git auto-detection against the current branch. `get_transcript` keys off `session_id` and doesn't need a `pr` argument.
 
 ### Sessions MCP server (for agents)
 

@@ -5,34 +5,32 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using Kapacitor.Cli.Core;
+using Kapacitor.Cli.Core.Commands;
 
 namespace Kapacitor.Cli.Commands;
 
 static class McpReviewServer {
     /// <summary>
-    /// Run with explicit PR context (used by `kapacitor review`).
+    /// Run with an explicit session-default PR (used by <c>kapacitor review &lt;pr&gt;</c>).
+    /// Tool calls may still override the default by passing a <c>pr</c> argument.
     /// </summary>
     public static Task<int> RunAsync(string baseUrl, string owner, string repo, int prNumber)
-        => RunCoreAsync(baseUrl, owner, repo, prNumber);
+        => RunCoreAsync(baseUrl, new PrIdentity(owner, repo, prNumber));
 
     /// <summary>
-    /// Run with auto-detection from git/gh in current directory (used by plugin MCP server).
+    /// Run without an explicit session default (used by the plugin's argless MCP
+    /// registration). PR identity comes from each tool call's <c>pr</c> argument,
+    /// or as a fallback from git auto-detection against the current branch.
     /// </summary>
-    public static Task<int> RunAutoAsync(string baseUrl) => RunCoreAsync(baseUrl, null, null, null);
+    public static Task<int> RunAutoAsync(string baseUrl) => RunCoreAsync(baseUrl, null);
 
-    static async Task<int> RunCoreAsync(string baseUrl, string? owner, string? repo, int? prNumber) {
+    static async Task<int> RunCoreAsync(string baseUrl, PrIdentity? startupDefault) {
         using var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
 
-        // Auto-detect from git if not provided
-        if (owner is null || repo is null || prNumber is null) {
-            var detected = await DetectPrFromGitAsync();
-
-            if (detected is not null) {
-                owner    ??= detected.Value.Owner;
-                repo     ??= detected.Value.Repo;
-                prNumber ??= detected.Value.PrNumber;
-            }
-        }
+        // Compute the session default once: explicit startup args win; otherwise
+        // try git auto-detect. Result is cached for the lifetime of the server
+        // and used as the fallback when a tool call doesn't carry an explicit `pr`.
+        var sessionDefault = startupDefault ?? await DetectPrFromGitAsync();
 
         var tools = BuildToolsList();
 
@@ -61,24 +59,12 @@ static class McpReviewServer {
             // Notifications have no id — don't send a response
             if (id is null) continue;
 
-            string response;
-
-            if (method == "tools/call" && (owner is null || repo is null || prNumber is null)) {
-                response = BuildToolResult(
-                    id,
-                    "No PR detected for current branch. Either:\n"                      +
-                    "- Switch to a branch with an open PR and restart the MCP server\n" +
-                    "- Use `kapacitor review <pr>` to launch a dedicated review session",
-                    isError: true
-                );
-            } else {
-                response = method switch {
-                    "initialize" => BuildInitializeResponse(id),
-                    "tools/list" => BuildToolsListResponse(id, tools),
-                    "tools/call" => await HandleToolCallAsync(id, request, client, baseUrl, owner!, repo!, prNumber!.Value),
-                    _            => BuildErrorResponse(id, -32601, $"Method not found: {method}")
-                };
-            }
+            var response = method switch {
+                "initialize" => BuildInitializeResponse(id),
+                "tools/list" => BuildToolsListResponse(id, tools),
+                "tools/call" => await HandleToolCallAsync(id, request, client, baseUrl, sessionDefault),
+                _            => BuildErrorResponse(id, -32601, $"Method not found: {method}")
+            };
 
             await writer.WriteLineAsync(response);
         }
@@ -86,13 +72,13 @@ static class McpReviewServer {
         return 0;
     }
 
-    static async Task<(string Owner, string Repo, int PrNumber)?> DetectPrFromGitAsync() {
+    static async Task<PrIdentity?> DetectPrFromGitAsync() {
         try {
             var cwd      = Directory.GetCurrentDirectory();
             var repoInfo = await RepositoryDetection.DetectRepositoryAsync(cwd);
 
             if (repoInfo?.Owner is not null && repoInfo.RepoName is not null && repoInfo.PrNumber is not null) {
-                return (repoInfo.Owner, repoInfo.RepoName, repoInfo.PrNumber.Value);
+                return new PrIdentity(repoInfo.Owner, repoInfo.RepoName, repoInfo.PrNumber.Value);
             }
 
             return null;
@@ -112,13 +98,11 @@ static class McpReviewServer {
         ToResponse(id, new McpToolsResult(tools), McpJsonContext.Default.McpToolsResult);
 
     static async Task<string> HandleToolCallAsync(
-            JsonNode   id,
-            JsonObject request,
-            HttpClient client,
-            string     baseUrl,
-            string     owner,
-            string     repo,
-            int        prNumber
+            JsonNode    id,
+            JsonObject  request,
+            HttpClient  client,
+            string      baseUrl,
+            PrIdentity? sessionDefault
         ) {
         var paramsNode = request["params"]?.AsObject();
         var toolName   = paramsNode?["name"]?.GetValue<string>();
@@ -128,8 +112,32 @@ static class McpReviewServer {
             return BuildErrorResponse(id, -32602, "Missing params.name");
         }
 
+        // get_transcript keys off session_id, not PR — skip PR resolution.
+        if (toolName == "get_transcript") {
+            return await DispatchAsync(id, toolName, arguments, client, baseUrl, pr: null);
+        }
+
+        var resolution = PrResolution.Resolve(arguments, sessionDefault);
+
+        if (resolution.Identity is null) {
+            return BuildToolResult(id, resolution.Error!, isError: true);
+        }
+
+        return await DispatchAsync(id, toolName, arguments, client, baseUrl, resolution.Identity);
+    }
+
+    static async Task<string> DispatchAsync(
+            JsonNode    id,
+            string      toolName,
+            JsonObject? arguments,
+            HttpClient  client,
+            string      baseUrl,
+            PrIdentity? pr
+        ) {
         try {
-            var prBase = $"{baseUrl}/api/review/{owner}/{repo}/pulls/{prNumber}";
+            var prBase = pr is null
+                ? null
+                : $"{baseUrl}/api/review/{Uri.EscapeDataString(pr.Owner)}/{Uri.EscapeDataString(pr.Repo)}/pulls/{pr.PrNumber}";
 
             var httpResponse = toolName switch {
                 "get_pr_summary"   => await client.GetAsync(prBase),
@@ -209,55 +217,117 @@ static class McpReviewServer {
         return envelope.ToJsonString();
     }
 
-    static McpTool[] BuildToolsList() => [
-        new(
-            "get_pr_summary",
-            "Get an overview of the PR: which Claude Code sessions contributed, which files were changed (with event counts), and what test commands were run with their pass/fail outcomes. Call this first to orient yourself.",
-            new("object", [], [])
-        ),
-        new(
-            "list_pr_files",
-            "List all files changed in the PR with aggregated metadata: change types (read/edit/create), how many sessions touched each file, and total event count. Use this to understand the scope of changes.",
-            new("object", [], [])
-        ),
-        new(
-            "get_file_context",
-            "Get deep context for a specific file: which sessions modified it, when, and relevant transcript excerpts where the file was discussed or changed. Use this when a reviewer asks 'why was this file changed?'",
+    static McpTool[] BuildToolsList() {
+        const string PrArgDescription =
+            "Optional PR reference (e.g. 'owner/repo#123' or a github.com PR URL). " +
+            "Defaults to the session's PR if launched via `kapacitor review`, otherwise auto-detected from current branch.";
+
+        return [
             new(
-                "object",
-                new() { ["file_path"] = new("string", "Path of the file to get context for") },
-                ["file_path"]
-            )
-        ),
-        new(
-            "search_context",
-            "Full-text search across all session transcripts linked to this PR. Returns ranked excerpts with speaker (user/assistant/tool), content, and highlighted snippets. Use for 'why' questions: 'why retry logic', 'what alternatives', 'error handling rationale'.",
+                "get_pr_summary",
+                "Get an overview of the PR: which Claude Code sessions contributed, which files were changed (with event counts), and what test commands were run with their pass/fail outcomes. Call this first to orient yourself.",
+                new("object", new() { ["pr"] = new("string", PrArgDescription) }, [])
+            ),
             new(
-                "object",
-                new() { ["query"] = new("string", "Free-text search query") },
-                ["query"]
-            )
-        ),
-        new(
-            "list_sessions",
-            "List all Claude Code sessions that contributed to this PR, with session IDs, titles, timestamps, and models used. Use this to understand the work timeline and pick sessions to drill into with get_transcript.",
-            new("object", [], [])
-        ),
-        new(
-            "get_transcript",
-            "Get the full transcript of a specific session: user messages, assistant reasoning, tool calls, and results. Paginated (default 100 events). Use file_path filter to scope to events mentioning a specific file. This is the deepest level of detail — use when you need to trace the exact reasoning chain.",
+                "list_pr_files",
+                "List all files changed in the PR with aggregated metadata: change types (read/edit/create), how many sessions touched each file, and total event count. Use this to understand the scope of changes.",
+                new("object", new() { ["pr"] = new("string", PrArgDescription) }, [])
+            ),
             new(
-                "object",
-                new() {
-                    ["session_id"] = new("string", "Session ID to retrieve the transcript for"),
-                    ["file_path"]  = new("string", "Optional file path to filter transcript events"),
-                    ["skip"]       = new("integer", "Number of events to skip (for pagination)"),
-                    ["take"]       = new("integer", "Number of events to return (for pagination)")
-                },
-                ["session_id"]
+                "get_file_context",
+                "Get deep context for a specific file: which sessions modified it, when, and relevant transcript excerpts where the file was discussed or changed. Use this when a reviewer asks 'why was this file changed?'",
+                new(
+                    "object",
+                    new() {
+                        ["file_path"] = new("string", "Path of the file to get context for"),
+                        ["pr"]        = new("string", PrArgDescription)
+                    },
+                    ["file_path"]
+                )
+            ),
+            new(
+                "search_context",
+                "Full-text search across all session transcripts linked to this PR. Returns ranked excerpts with speaker (user/assistant/tool), content, and highlighted snippets. Use for 'why' questions: 'why retry logic', 'what alternatives', 'error handling rationale'.",
+                new(
+                    "object",
+                    new() {
+                        ["query"] = new("string", "Free-text search query"),
+                        ["pr"]    = new("string", PrArgDescription)
+                    },
+                    ["query"]
+                )
+            ),
+            new(
+                "list_sessions",
+                "List all Claude Code sessions that contributed to this PR, with session IDs, titles, timestamps, and models used. Use this to understand the work timeline and pick sessions to drill into with get_transcript.",
+                new("object", new() { ["pr"] = new("string", PrArgDescription) }, [])
+            ),
+            new(
+                "get_transcript",
+                "Get the full transcript of a specific session: user messages, assistant reasoning, tool calls, and results. Paginated (default 100 events). Use file_path filter to scope to events mentioning a specific file. This is the deepest level of detail — use when you need to trace the exact reasoning chain.",
+                new(
+                    "object",
+                    new() {
+                        ["session_id"] = new("string", "Session ID to retrieve the transcript for"),
+                        ["file_path"]  = new("string", "Optional file path to filter transcript events"),
+                        ["skip"]       = new("integer", "Number of events to skip (for pagination)"),
+                        ["take"]       = new("integer", "Number of events to return (for pagination)")
+                    },
+                    ["session_id"]
+                )
             )
-        )
-    ];
+        ];
+    }
+}
+
+/// <summary>
+/// PR identity resolved from one of: a tool call's <c>pr</c> argument, the
+/// server's startup args, or git auto-detection at startup.
+/// </summary>
+record PrIdentity(string Owner, string Repo, int PrNumber);
+
+/// <summary>
+/// Resolves a tool call's effective PR identity. Tool args take precedence
+/// over the session default. Returning a <c>null</c> identity carries an
+/// error message ready to surface to the LLM.
+/// </summary>
+static class PrResolution {
+    public readonly record struct Result(PrIdentity? Identity, string? Error);
+
+    public static Result Resolve(JsonObject? toolArgs, PrIdentity? sessionDefault) {
+        if (TryGetStringArg(toolArgs, "pr", out var prRef)) {
+            if (PrRefParser.TryParse(prRef, out var owner, out var repo, out var prNumber)) {
+                return new Result(new PrIdentity(owner, repo, prNumber), null);
+            }
+
+            return new Result(
+                null,
+                $"Could not parse `pr` argument: '{prRef}'. Use 'owner/repo#123' or a github.com PR URL."
+            );
+        }
+
+        if (sessionDefault is not null) {
+            return new Result(sessionDefault, null);
+        }
+
+        return new Result(
+            null,
+            "This tool needs a PR reference. Pass `pr` as a tool argument " +
+            "(e.g. 'owner/repo#123' or a github.com PR URL), or run from a " +
+            "branch with an open PR for auto-detection."
+        );
+    }
+
+    static bool TryGetStringArg(JsonObject? args, string name, out string value) {
+        value = "";
+
+        if (args?[name] is not JsonValue node) return false;
+        if (!node.TryGetValue<string>(out var s) || string.IsNullOrWhiteSpace(s)) return false;
+
+        value = s;
+
+        return true;
+    }
 }
 
 // MCP protocol types — serialized with source-generated McpJsonContext for AOT compatibility

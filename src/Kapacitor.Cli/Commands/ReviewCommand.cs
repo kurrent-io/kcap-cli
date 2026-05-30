@@ -1,14 +1,13 @@
 using System.Diagnostics;
-using System.Text.RegularExpressions;
 using Kapacitor.Cli.Core;
 using Kapacitor.Cli.Core.Commands;
 
 namespace Kapacitor.Cli.Commands;
 
-static partial class ReviewCommand {
+static class ReviewCommand {
     public static async Task<int> HandleReview(string baseUrl, string prIdentifier) {
         // Parse PR identifier
-        if (!TryParsePr(prIdentifier, out var owner, out var repo, out var prNumber)) {
+        if (!PrRefParser.TryParse(prIdentifier, out var owner, out var repo, out var prNumber)) {
             await Console.Error.WriteLineAsync($"Could not parse PR identifier: {prIdentifier}");
             await Console.Error.WriteLineAsync("Expected formats:");
             await Console.Error.WriteLineAsync("  URL:       https://github.com/owner/repo/pull/123");
@@ -23,7 +22,8 @@ static partial class ReviewCommand {
         using var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
 
         try {
-            var response = await client.GetAsync($"{baseUrl}/api/review/{owner}/{repo}/pulls/{prNumber}");
+            var response = await client.GetAsync(
+                $"{baseUrl}/api/review/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(repo)}/pulls/{prNumber}");
 
             if (!response.IsSuccessStatusCode) {
                 var status = (int)response.StatusCode;
@@ -80,39 +80,4 @@ static partial class ReviewCommand {
         }
     }
 
-    static bool TryParsePr(string input, out string owner, out string repo, out int prNumber) {
-        owner    = "";
-        repo     = "";
-        prNumber = 0;
-
-        // Try URL format: https://github.com/owner/repo/pull/123
-        var urlMatch = UrlPattern().Match(input);
-
-        if (urlMatch.Success) {
-            owner    = urlMatch.Groups[1].Value;
-            repo     = urlMatch.Groups[2].Value;
-            prNumber = int.Parse(urlMatch.Groups[3].Value);
-
-            return true;
-        }
-
-        // Try shorthand format: owner/repo#123
-        var shortMatch = ShorthandPattern().Match(input);
-
-        if (shortMatch.Success) {
-            owner    = shortMatch.Groups[1].Value;
-            repo     = shortMatch.Groups[2].Value;
-            prNumber = int.Parse(shortMatch.Groups[3].Value);
-
-            return true;
-        }
-
-        return false;
-    }
-
-    [GeneratedRegex(@"^https?://github\.com/([^/]+)/([^/]+)/pull/(\d+)(?:/.*)?$")]
-    private static partial Regex UrlPattern();
-
-    [GeneratedRegex(@"^([^/]+)/([^#]+)#(\d+)$")]
-    private static partial Regex ShorthandPattern();
 }
