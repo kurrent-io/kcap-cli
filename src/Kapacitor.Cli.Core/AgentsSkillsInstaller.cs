@@ -76,14 +76,29 @@ public static class AgentsSkillsInstaller {
     }
 
     /// <summary>
-    /// True when <see cref="MarkerFileName"/> exists in <paramref name="targetDir"/>.
-    /// Indicates the user has previously installed kapacitor skills via setup or
-    /// <c>kapacitor plugin install --skills</c>. The npm postinstall hook uses
-    /// this to decide whether to refresh on upgrade (it does) vs. install for
-    /// the first time (it doesn't — that's setup's job).
+    /// True when the user has previously installed kapacitor skills via setup
+    /// or <c>kapacitor plugin install --skills</c>. The npm postinstall hook
+    /// uses this to decide whether to refresh on upgrade (it does) vs. install
+    /// for the first time (it doesn't — that's setup's job).
     /// </summary>
-    public static bool IsInstalled(string targetDir) =>
-        File.Exists(Path.Combine(targetDir, MarkerFileName));
+    /// <remarks>
+    /// Detection is the marker file OR any owned <c>kapacitor-&lt;name&gt;</c>
+    /// folder under <paramref name="targetDir"/>. The folder fallback covers
+    /// users whose install predates the marker — without it, the very first
+    /// upgrade onto a marker-aware build would no-op and leave stale skills
+    /// untouched, defeating the auto-refresh entirely. After a successful
+    /// refresh <see cref="Install"/> writes the marker, so subsequent upgrades
+    /// take the fast path.
+    /// </remarks>
+    public static bool IsInstalled(string targetDir) {
+        if (File.Exists(Path.Combine(targetDir, MarkerFileName))) return true;
+        if (!Directory.Exists(targetDir)) return false;
+
+        foreach (var name in SourceNames) {
+            if (Directory.Exists(Path.Combine(targetDir, "kapacitor-" + name))) return true;
+        }
+        return false;
+    }
 
     /// <summary>
     /// Returns the version string from the marker file, or null when the

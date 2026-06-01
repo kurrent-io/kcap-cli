@@ -311,6 +311,26 @@ public class AgentsSkillsInstallerTests {
     }
 
     [Test]
+    public async Task IsInstalled_returns_true_for_pre_marker_install() {
+        // Regression: users whose skills were installed before the marker
+        // existed must still be detected as "installed" so the first upgrade
+        // onto a marker-aware build refreshes them instead of no-opping.
+        using var dst = new InstallerTempDir();
+        Directory.CreateDirectory(Path.Combine(dst.Path, "kapacitor-recap"));
+
+        await Assert.That(AgentsSkillsInstaller.IsInstalled(dst.Path)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsInstalled_returns_false_when_only_unrelated_folders_present() {
+        using var dst = new InstallerTempDir();
+        Directory.CreateDirectory(Path.Combine(dst.Path, "user-skill"));
+        Directory.CreateDirectory(Path.Combine(dst.Path, "kapacitor-something-else"));
+
+        await Assert.That(AgentsSkillsInstaller.IsInstalled(dst.Path)).IsFalse();
+    }
+
+    [Test]
     public async Task Install_failure_does_not_write_marker() {
         using var src = new InstallerTempDir();
         using var dst = new InstallerTempDir();

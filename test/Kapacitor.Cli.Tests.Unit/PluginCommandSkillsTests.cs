@@ -159,6 +159,60 @@ public class PluginCommandSkillsTests {
     }
 
     [Test]
+    public async Task Install_skills_with_if_installed_refreshes_pre_marker_install() {
+        // Regression: an existing install from a pre-marker build has owned
+        // kapacitor-* folders but no marker file. The first upgrade-time
+        // postinstall must still refresh it (and stamp the marker so future
+        // upgrades take the marker-fast-path).
+        var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-skills-test-");
+        var originalHome = Environment.GetEnvironmentVariable("HOME");
+        var pluginPath   = Directory.CreateTempSubdirectory("kapacitor-plugin-src-");
+        var originalPlug = Environment.GetEnvironmentVariable("KAPACITOR_PLUGIN_DIR");
+
+        try {
+            var skillsSrc = Path.Combine(pluginPath.FullName, "skills");
+            Directory.CreateDirectory(skillsSrc);
+            foreach (var name in AgentsSkillsInstaller.SourceNames) {
+                Directory.CreateDirectory(Path.Combine(skillsSrc, name));
+                await File.WriteAllTextAsync(
+                    Path.Combine(skillsSrc, name, "SKILL.md"),
+                    $"---\nname: {name}\ndescription: fresh\n---\nfresh body");
+            }
+
+            // Pre-marker install: kapacitor-* folder exists, no marker file.
+            var target = Path.Combine(fakeHome.FullName, ".agents", "skills");
+            var staleSkill = Path.Combine(target, "kapacitor-recap");
+            Directory.CreateDirectory(staleSkill);
+            await File.WriteAllTextAsync(
+                Path.Combine(staleSkill, "SKILL.md"),
+                "---\nname: kapacitor-recap\n---\nstale body");
+            await Assert.That(File.Exists(Path.Combine(target, AgentsSkillsInstaller.MarkerFileName))).IsFalse();
+
+            Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
+            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", pluginPath.FullName);
+
+            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--skills", "--if-installed"]);
+            await Assert.That(exit).IsEqualTo(0);
+
+            // All skills present + freshly written.
+            foreach (var name in AgentsSkillsInstaller.SourceNames) {
+                await Assert.That(Directory.Exists(Path.Combine(target, $"kapacitor-{name}"))).IsTrue();
+            }
+            var refreshed = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-recap", "SKILL.md"));
+            await Assert.That(refreshed).Contains("fresh body");
+            await Assert.That(refreshed).DoesNotContain("stale body");
+
+            // Marker now stamped so the next upgrade takes the fast path.
+            await Assert.That(File.Exists(Path.Combine(target, AgentsSkillsInstaller.MarkerFileName))).IsTrue();
+        } finally {
+            Environment.SetEnvironmentVariable("HOME", originalHome);
+            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", originalPlug);
+            fakeHome.Delete(recursive: true);
+            pluginPath.Delete(recursive: true);
+        }
+    }
+
+    [Test]
     public async Task Install_skills_with_if_installed_swallows_plugin_resolution_failure() {
         var fakeHome      = Directory.CreateTempSubdirectory("kapacitor-plugin-skills-test-");
         var originalHome  = Environment.GetEnvironmentVariable("HOME");
