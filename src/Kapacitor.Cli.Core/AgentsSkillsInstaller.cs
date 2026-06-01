@@ -1,5 +1,3 @@
-using System.Reflection;
-
 namespace Kapacitor.Cli.Core;
 
 /// <summary>
@@ -128,10 +126,7 @@ public static class AgentsSkillsInstaller {
     /// Exposed so callers can short-circuit a refresh when the marker already
     /// matches.
     /// </summary>
-    public static string CurrentVersion() =>
-        typeof(AgentsSkillsInstaller).Assembly
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion ?? "unknown";
+    public static string CurrentVersion() => KapacitorVersion.Current();
 
     /// <summary>
     /// Deletes every <c>kapacitor-&lt;name&gt;</c> folder this installer owns
