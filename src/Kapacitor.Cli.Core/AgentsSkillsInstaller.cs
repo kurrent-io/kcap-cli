@@ -1,3 +1,5 @@
+using System.Reflection;
+
 namespace Kapacitor.Cli.Core;
 
 /// <summary>
@@ -8,6 +10,12 @@ namespace Kapacitor.Cli.Core;
 /// folders left by prior installer versions.
 /// </summary>
 public static class AgentsSkillsInstaller {
+    /// <summary>
+    /// File name written into the target directory after a successful install.
+    /// Holds the CLI version that produced the skills, used by the npm
+    /// postinstall hook to detect when an upgrade-time refresh is needed.
+    /// </summary>
+    public const string MarkerFileName = ".kapacitor-version";
     /// <summary>
     /// Source folder names under <c>kapacitor/skills/</c>. On install each
     /// becomes <c>kapacitor-&lt;name&gt;</c> under the target directory.
@@ -58,12 +66,52 @@ public static class AgentsSkillsInstaller {
                 if (Directory.Exists(dst)) Directory.Delete(dst, recursive: true);
                 CopyDirectoryWithFrontmatterRewrite(src, dst, prefix);
             }
+
+            WriteMarker(targetDir);
             return true;
         } catch (Exception ex) {
             Console.Error.WriteLine($"Could not install agent skills: {ex.Message}");
             return false;
         }
     }
+
+    /// <summary>
+    /// True when <see cref="MarkerFileName"/> exists in <paramref name="targetDir"/>.
+    /// Indicates the user has previously installed kapacitor skills via setup or
+    /// <c>kapacitor plugin install --skills</c>. The npm postinstall hook uses
+    /// this to decide whether to refresh on upgrade (it does) vs. install for
+    /// the first time (it doesn't — that's setup's job).
+    /// </summary>
+    public static bool IsInstalled(string targetDir) =>
+        File.Exists(Path.Combine(targetDir, MarkerFileName));
+
+    /// <summary>
+    /// Returns the version string from the marker file, or null when the
+    /// marker is absent or unreadable.
+    /// </summary>
+    public static string? ReadMarker(string targetDir) {
+        var path = Path.Combine(targetDir, MarkerFileName);
+        try {
+            return File.Exists(path) ? File.ReadAllText(path).Trim() : null;
+        } catch {
+            return null;
+        }
+    }
+
+    static void WriteMarker(string targetDir) {
+        try {
+            File.WriteAllText(Path.Combine(targetDir, MarkerFileName), CurrentVersion());
+        } catch {
+            // Best effort — failure to stamp the marker is non-fatal. The
+            // worst case is that the next CLI upgrade re-runs the install
+            // unconditionally, which is idempotent.
+        }
+    }
+
+    static string CurrentVersion() =>
+        typeof(AgentsSkillsInstaller).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "unknown";
 
     /// <summary>
     /// Deletes every <c>kapacitor-&lt;name&gt;</c> folder this installer owns
@@ -87,6 +135,14 @@ public static class AgentsSkillsInstaller {
                 errors = true;
             }
         }
+
+        // Drop the marker so the next upgrade doesn't silently re-install
+        // skills the user just removed.
+        var marker = Path.Combine(targetDir, MarkerFileName);
+        if (File.Exists(marker)) {
+            try { File.Delete(marker); } catch { /* non-fatal */ }
+        }
+
         return new RemovalResult(removed, errors);
     }
 

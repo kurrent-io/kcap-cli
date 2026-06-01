@@ -249,6 +249,88 @@ public class AgentsSkillsInstallerTests {
     }
 
     [Test]
+    public async Task Install_writes_version_marker_at_target_root() {
+        using var src = new InstallerTempDir();
+        using var dst = new InstallerTempDir();
+        await SeedSourceSkills(src.Path);
+
+        AgentsSkillsInstaller.Install(src.Path, dst.Path);
+
+        var marker = Path.Combine(dst.Path, AgentsSkillsInstaller.MarkerFileName);
+        await Assert.That(File.Exists(marker)).IsTrue();
+
+        var content = (await File.ReadAllTextAsync(marker)).Trim();
+        await Assert.That(content).IsNotEmpty();
+    }
+
+    [Test]
+    public async Task IsInstalled_is_false_before_install_and_true_after() {
+        using var src = new InstallerTempDir();
+        using var dst = new InstallerTempDir();
+        await SeedSourceSkills(src.Path);
+
+        await Assert.That(AgentsSkillsInstaller.IsInstalled(dst.Path)).IsFalse();
+
+        AgentsSkillsInstaller.Install(src.Path, dst.Path);
+
+        await Assert.That(AgentsSkillsInstaller.IsInstalled(dst.Path)).IsTrue();
+    }
+
+    [Test]
+    public async Task ReadMarker_returns_null_when_marker_missing() {
+        using var dst = new InstallerTempDir();
+        var marker = AgentsSkillsInstaller.ReadMarker(dst.Path);
+        await Assert.That(marker).IsNull();
+    }
+
+    [Test]
+    public async Task ReadMarker_returns_written_version_after_install() {
+        using var src = new InstallerTempDir();
+        using var dst = new InstallerTempDir();
+        await SeedSourceSkills(src.Path);
+
+        AgentsSkillsInstaller.Install(src.Path, dst.Path);
+
+        var version = AgentsSkillsInstaller.ReadMarker(dst.Path);
+        await Assert.That(version).IsNotNull();
+        await Assert.That(version!).IsNotEmpty();
+    }
+
+    [Test]
+    public async Task Remove_deletes_version_marker() {
+        using var src = new InstallerTempDir();
+        using var dst = new InstallerTempDir();
+        await SeedSourceSkills(src.Path);
+
+        AgentsSkillsInstaller.Install(src.Path, dst.Path);
+        await Assert.That(AgentsSkillsInstaller.IsInstalled(dst.Path)).IsTrue();
+
+        AgentsSkillsInstaller.Remove(dst.Path);
+
+        await Assert.That(AgentsSkillsInstaller.IsInstalled(dst.Path)).IsFalse();
+    }
+
+    [Test]
+    public async Task Install_failure_does_not_write_marker() {
+        using var src = new InstallerTempDir();
+        using var dst = new InstallerTempDir();
+        // Empty source — Install should fail.
+
+        var ok = AgentsSkillsInstaller.Install(src.Path, dst.Path);
+        await Assert.That(ok).IsFalse();
+        await Assert.That(AgentsSkillsInstaller.IsInstalled(dst.Path)).IsFalse();
+    }
+
+    static async Task SeedSourceSkills(string sourcePath) {
+        foreach (var name in SourceNames) {
+            Directory.CreateDirectory(Path.Combine(sourcePath, name));
+            await File.WriteAllTextAsync(
+                Path.Combine(sourcePath, name, "SKILL.md"),
+                $"---\nname: {name}\ndescription: x\n---\nbody\n");
+        }
+    }
+
+    [Test]
     public async Task Install_failure_does_not_trigger_legacy_cleanup() {
         // Asserts the contract: install runs first, legacy cleanup runs only on success.
         // The contract lives in PluginCommand (caller); here we verify the unit

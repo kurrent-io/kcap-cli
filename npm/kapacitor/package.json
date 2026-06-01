@@ -10,6 +10,9 @@
   "bin": {
     "kapacitor": "bin/kapacitor.js"
   },
+  "scripts": {
+    "postinstall": "node bin/postinstall.js"
+  },
   "optionalDependencies": {
     "@kurrent/kapacitor-darwin-arm64": "0.0.0",
     "@kurrent/kapacitor-linux-x64": "0.0.0",
