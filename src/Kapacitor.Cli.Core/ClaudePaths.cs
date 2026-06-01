@@ -1,11 +1,15 @@
 namespace Kapacitor.Cli.Core;
 
 static class ClaudePaths {
-    static readonly string Home = Path.Combine(PathHelpers.HomeDirectory, ".claude");
+    // Lazy: HOME may be mutated at runtime (tests inject a fake home), so
+    // these must re-evaluate on every access, the same way AgentsPaths does.
+    // A static-readonly initializer would bake in HOME at first touch and
+    // ignore subsequent changes.
+    static string Home => Path.Combine(PathHelpers.HomeDirectory, ".claude");
 
-    public static string Projects     { get; } = Path.Combine(Home, "projects");
-    public static string Plans        { get; } = Path.Combine(Home, "plans");
-    public static string UserSettings { get; } = Path.Combine(Home, "settings.json");
+    public static string Projects     => Path.Combine(Home, "projects");
+    public static string Plans        => Path.Combine(Home, "plans");
+    public static string UserSettings => Path.Combine(Home, "settings.json");
 
     /// <summary>
     /// Returns the project directory for a given repo path.

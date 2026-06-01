@@ -64,26 +64,44 @@ public static class PluginCommand {
     }
 
     static async Task<int> InstallClaude(string[] args) {
-        var pluginPath = SetupCommand.ResolvePluginPath();
-
-        if (pluginPath is null) {
-            await Console.Error.WriteLineAsync("Plugin directory not found. Re-install kapacitor via npm:");
-            await Console.Error.WriteLineAsync("  npm install -g @kurrent/kapacitor");
-
-            return 1;
-        }
-
         var scope = args.Contains("--project") ? "project" : "user";
 
         var settingsPath = scope == "project"
             ? Path.Combine(Environment.CurrentDirectory, ".claude", "settings.local.json")
             : ClaudePaths.UserSettings;
 
+        // --if-installed: refresh-only mode used by the npm postinstall hook.
+        // Skip when the user never opted in; short-circuit when the marker
+        // already matches the current CLI version.
+        var refreshOnly = args.Contains("--if-installed");
+
+        if (refreshOnly && !ClaudePluginInstaller.IsInstalled(settingsPath)) {
+            return 0;
+        }
+
+        if (refreshOnly &&
+            ClaudePluginInstaller.ReadMarker(settingsPath) == KapacitorVersion.Current()) {
+            return 0;
+        }
+
+        var pluginPath = SetupCommand.ResolvePluginPath();
+
+        if (pluginPath is null) {
+            if (refreshOnly) return 0;
+            await Console.Error.WriteLineAsync("Plugin directory not found. Re-install kapacitor via npm:");
+            await Console.Error.WriteLineAsync("  npm install -g @kurrent/kapacitor");
+
+            return 1;
+        }
+
         var installed = SetupCommand.InstallPlugin(settingsPath, pluginPath);
 
         if (installed) {
-            await Console.Out.WriteLineAsync($"Plugin installed ({scope}: {settingsPath})");
+            await Console.Out.WriteLineAsync(refreshOnly
+                ? $"Plugin refreshed ({scope}: {settingsPath})"
+                : $"Plugin installed ({scope}: {settingsPath})");
         } else {
+            if (refreshOnly) return 0;
             await Console.Error.WriteLineAsync("Could not update settings file.");
 
             return 1;
@@ -128,6 +146,7 @@ public static class PluginCommand {
 
             if (changed) {
                 await File.WriteAllTextAsync(settingsPath, root.ToJsonString(WriteOpts));
+                ClaudePluginInstaller.DeleteMarker(settingsPath);
                 await Console.Out.WriteLineAsync($"Plugin removed ({scope}: {settingsPath})");
             } else {
                 await Console.Out.WriteLineAsync("Plugin was not installed.");
