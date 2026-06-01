@@ -223,6 +223,33 @@ public static class PluginCommand {
             ? Path.Combine(Environment.CurrentDirectory, ".codex", "hooks.json")
             : CodexPaths.UserHooksJson;
 
+        // --if-installed: refresh-only mode used by the npm postinstall hook.
+        // Skip when the user never opted in; short-circuit when the marker
+        // already matches the current CLI version. Skills are NOT touched
+        // here — `--skills --if-installed` is its own postinstall call.
+        var refreshOnly = args.Contains("--if-installed");
+
+        if (refreshOnly && !CodexHooksInstaller.IsInstalled(hooksPath)) {
+            return 0;
+        }
+
+        if (refreshOnly &&
+            CodexHooksInstaller.ReadMarker(hooksPath) == KapacitorVersion.Current()) {
+            return 0;
+        }
+
+        if (refreshOnly) {
+            // Hooks-only refresh: rewrite the kapacitor entries in hooks.json,
+            // stamp the marker, exit. No skills, no plugin folder needed.
+            if (!InstallCodexHooks(hooksPath)) {
+                // Never fail the npm install path.
+                return 0;
+            }
+
+            await Console.Out.WriteLineAsync($"Codex hooks refreshed ({scope}: {hooksPath})");
+            return 0;
+        }
+
         // `--codex` is an atomic hooks AND skills contract. Resolve the
         // skills source BEFORE writing hooks so a missing plugin folder
         // doesn't leave the user with hooks pointing at a binary whose
