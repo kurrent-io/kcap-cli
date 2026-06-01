@@ -1,3 +1,5 @@
+using System.Reflection;
+
 namespace Kapacitor.Cli.Core;
 
 /// <summary>
@@ -8,6 +10,12 @@ namespace Kapacitor.Cli.Core;
 /// folders left by prior installer versions.
 /// </summary>
 public static class AgentsSkillsInstaller {
+    /// <summary>
+    /// File name written into the target directory after a successful install.
+    /// Holds the CLI version that produced the skills, used by the npm
+    /// postinstall hook to detect when an upgrade-time refresh is needed.
+    /// </summary>
+    public const string MarkerFileName = ".kapacitor-version";
     /// <summary>
     /// Source folder names under <c>kapacitor/skills/</c>. On install each
     /// becomes <c>kapacitor-&lt;name&gt;</c> under the target directory.
@@ -58,12 +66,72 @@ public static class AgentsSkillsInstaller {
                 if (Directory.Exists(dst)) Directory.Delete(dst, recursive: true);
                 CopyDirectoryWithFrontmatterRewrite(src, dst, prefix);
             }
+
+            WriteMarker(targetDir);
             return true;
         } catch (Exception ex) {
             Console.Error.WriteLine($"Could not install agent skills: {ex.Message}");
             return false;
         }
     }
+
+    /// <summary>
+    /// True when the user has previously installed kapacitor skills via setup
+    /// or <c>kapacitor plugin install --skills</c>. The npm postinstall hook
+    /// uses this to decide whether to refresh on upgrade (it does) vs. install
+    /// for the first time (it doesn't — that's setup's job).
+    /// </summary>
+    /// <remarks>
+    /// Detection is the marker file OR any owned <c>kapacitor-&lt;name&gt;</c>
+    /// folder under <paramref name="targetDir"/>. The folder fallback covers
+    /// users whose install predates the marker — without it, the very first
+    /// upgrade onto a marker-aware build would no-op and leave stale skills
+    /// untouched, defeating the auto-refresh entirely. After a successful
+    /// refresh <see cref="Install"/> writes the marker, so subsequent upgrades
+    /// take the fast path.
+    /// </remarks>
+    public static bool IsInstalled(string targetDir) {
+        if (File.Exists(Path.Combine(targetDir, MarkerFileName))) return true;
+        if (!Directory.Exists(targetDir)) return false;
+
+        foreach (var name in SourceNames) {
+            if (Directory.Exists(Path.Combine(targetDir, "kapacitor-" + name))) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Returns the version string from the marker file, or null when the
+    /// marker is absent or unreadable.
+    /// </summary>
+    public static string? ReadMarker(string targetDir) {
+        var path = Path.Combine(targetDir, MarkerFileName);
+        try {
+            return File.Exists(path) ? File.ReadAllText(path).Trim() : null;
+        } catch {
+            return null;
+        }
+    }
+
+    static void WriteMarker(string targetDir) {
+        try {
+            File.WriteAllText(Path.Combine(targetDir, MarkerFileName), CurrentVersion());
+        } catch {
+            // Best effort — failure to stamp the marker is non-fatal. The
+            // worst case is that the next CLI upgrade re-runs the install
+            // unconditionally, which is idempotent.
+        }
+    }
+
+    /// <summary>
+    /// The version string stamped into the marker on a successful install.
+    /// Exposed so callers can short-circuit a refresh when the marker already
+    /// matches.
+    /// </summary>
+    public static string CurrentVersion() =>
+        typeof(AgentsSkillsInstaller).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "unknown";
 
     /// <summary>
     /// Deletes every <c>kapacitor-&lt;name&gt;</c> folder this installer owns
@@ -87,6 +155,14 @@ public static class AgentsSkillsInstaller {
                 errors = true;
             }
         }
+
+        // Drop the marker so the next upgrade doesn't silently re-install
+        // skills the user just removed.
+        var marker = Path.Combine(targetDir, MarkerFileName);
+        if (File.Exists(marker)) {
+            try { File.Delete(marker); } catch { /* non-fatal */ }
+        }
+
         return new RemovalResult(removed, errors);
     }
 

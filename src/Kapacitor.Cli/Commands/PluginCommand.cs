@@ -141,10 +141,30 @@ public static class PluginCommand {
         }
     }
 
-    static async Task<int> InstallSkills(string[] _) {
+    static async Task<int> InstallSkills(string[] args) {
+        // --if-installed: only refresh when a marker file shows the user has
+        // previously installed skills. Used by the npm postinstall hook to
+        // keep existing installs up to date without forcing skills onto users
+        // who haven't run `kapacitor setup` yet.
+        var refreshOnly = args.Contains("--if-installed");
+
+        if (refreshOnly && !AgentsSkillsInstaller.IsInstalled(AgentsPaths.UserSkillsDir)) {
+            return 0;
+        }
+
+        // Fast path: marker already matches the current build, no point
+        // re-copying every skill on a same-version reinstall (e.g. `npm
+        // install -g` of the version already on disk).
+        if (refreshOnly &&
+            AgentsSkillsInstaller.ReadMarker(AgentsPaths.UserSkillsDir) ==
+                AgentsSkillsInstaller.CurrentVersion()) {
+            return 0;
+        }
+
         var pluginPath = SetupCommand.ResolvePluginPath();
 
         if (pluginPath is null) {
+            if (refreshOnly) return 0;
             await Console.Error.WriteLineAsync(
                 "Cannot install agent skills: kapacitor plugin folder not found. " +
                 "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor");
@@ -154,6 +174,7 @@ public static class PluginCommand {
         var skillsSource = Path.Combine(pluginPath, "skills");
 
         if (!Directory.Exists(skillsSource)) {
+            if (refreshOnly) return 0;
             await Console.Error.WriteLineAsync(
                 $"Cannot install agent skills: 'skills' folder missing from {pluginPath}. " +
                 "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor");
@@ -161,11 +182,14 @@ public static class PluginCommand {
         }
 
         if (!AgentsSkillsInstaller.Install(skillsSource, AgentsPaths.UserSkillsDir)) {
+            if (refreshOnly) return 0;
             await Console.Error.WriteLineAsync("Could not install agent skills.");
             return 1;
         }
 
-        await Console.Out.WriteLineAsync($"Agent skills installed (user: {AgentsPaths.UserSkillsDir})");
+        await Console.Out.WriteLineAsync(refreshOnly
+            ? $"Agent skills refreshed (user: {AgentsPaths.UserSkillsDir})"
+            : $"Agent skills installed (user: {AgentsPaths.UserSkillsDir})");
 
         AgentsSkillsInstaller.CleanLegacyCodexSkills(Path.Combine(CodexPaths.Home, "skills"));
         return 0;
