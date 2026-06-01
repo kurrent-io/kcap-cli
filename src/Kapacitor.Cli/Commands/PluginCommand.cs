@@ -385,6 +385,8 @@ public static class PluginCommand {
             Directory.CreateDirectory(Path.GetDirectoryName(hooksPath)!);
             File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
 
+            CodexHooksInstaller.WriteMarker(hooksPath);
+
             return true;
         } catch {
             return false;
@@ -425,6 +427,7 @@ public static class PluginCommand {
 
             if (changed) {
                 File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
+                CodexHooksInstaller.DeleteMarker(hooksPath);
             }
 
             return changed;

@@ -345,6 +345,33 @@ public class PluginCommandCodexTests {
         await Assert.That(result.RemovedAny).IsFalse();
     }
 
+    [Test]
+    public async Task InstallCodexHooks_stamps_marker_on_success() {
+        using var tmp  = new TempDir();
+        var       path = Path.Combine(tmp.Path, "hooks.json");
+
+        var ok = PluginCommand.InstallCodexHooks(path);
+        await Assert.That(ok).IsTrue();
+
+        var marker = Path.Combine(tmp.Path, CodexHooksInstaller.MarkerFileName);
+        await Assert.That(File.Exists(marker)).IsTrue();
+        await Assert.That((await File.ReadAllTextAsync(marker)).Trim())
+            .IsEqualTo(KapacitorVersion.Current());
+    }
+
+    [Test]
+    public async Task RemoveCodexHooks_deletes_marker_when_kapacitor_entries_were_removed() {
+        using var tmp  = new TempDir();
+        var       path = Path.Combine(tmp.Path, "hooks.json");
+
+        PluginCommand.InstallCodexHooks(path);
+        await Assert.That(File.Exists(Path.Combine(tmp.Path, CodexHooksInstaller.MarkerFileName))).IsTrue();
+
+        var changed = PluginCommand.RemoveCodexHooks(path);
+        await Assert.That(changed).IsTrue();
+        await Assert.That(File.Exists(Path.Combine(tmp.Path, CodexHooksInstaller.MarkerFileName))).IsFalse();
+    }
+
     static void WriteSkill(string root, string name, string body) {
         var dir = Path.Combine(root, name);
         Directory.CreateDirectory(dir);
