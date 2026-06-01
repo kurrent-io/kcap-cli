@@ -1,6 +1,6 @@
 # AI-669 — Cursor IDE realtime ingest via Cursor hooks
 
-**Status:** design proposed (rev 6 — vendor-agnostic `kapacitor hook --cursor` surface, harmonization follow-ups AI-732 / AI-733 filed), supersedes the watch-based proposal
+**Status:** design proposed (rev 7 — AI-734 postinstall hook auto-refresh sequenced first; AI-732 / AI-733 simplified to clean breaks with no alias-keeping), supersedes the watch-based proposal
 **Linear:** [AI-669](https://linear.app/kurrent/issue/AI-669/cursor-ide-realtime-ingest-cursor-hooks-integration) (umbrella) → [AI-730](https://linear.app/kurrent/issue/AI-730/cli-cursor-hooks-dispatcher-and-setup-wiring) (CLI), [AI-731](https://linear.app/kurrent/issue/AI-731/server-cursor-hooks-ingest-routes-and-transcript-line-dedup) (Server) — must ship together
 **Related:** [AI-661](https://linear.app/kurrent/issue/AI-661/cursor-session-ingest-milestone-a-post-hoc-cli-import) (post-hoc SQLite import), [AI-680](https://linear.app/kurrent/issue/AI-680/cursor-cli-daemon-support-for-hosted-agents), [AI-682](https://linear.app/kurrent/issue/AI-682/acp-support-for-live-agent-integrations)
 **Supersedes:** `docs/superpowers/specs/2026-05-25-ai-669-cursor-watch-design.md` (foreground SQLite/WAL poll watcher)
@@ -370,9 +370,22 @@ Additive. Existing `kapacitor import --cursor` users are unaffected. Setup gains
 
 ## Follow-ups (separate issues)
 
-Two harmonization tickets, both gated on AI-669 / AI-730 landing first so the `kapacitor hook --<vendor>` pattern is proven before migrating existing surfaces:
+Three follow-up tickets. The first is a **prerequisite**; the other two depend on it and on AI-730.
 
-- **AI-732 — Migrate Codex from `kapacitor codex-hook` to `kapacitor hook --codex`.** Replace `CodexHookCommand` constant in `PluginCommand.cs:10` with the unified form. Extend `CodexHooksParser.EntryReferencesKapacitorCodexHook` (`CodexHooksParser.cs:32`) to match both the new and legacy command strings so re-running setup after migration cleans up old entries. Keep the legacy `codex-hook` command alias for one release for backward compatibility with un-migrated user hooks.json files.
-- **AI-733 — Migrate Claude from 7 per-event top-level commands to `kapacitor hook --claude`.** Replace the command list in `Program.cs:15` with a single dispatcher behind `kapacitor hook --claude` that branches on Claude's `hook_event_name`. Update `.claude/settings.local.json` (or user-scope settings.json) writer to emit the new command. Keep the per-event commands as aliases for one release; ensure `KAPACITOR_SKIP=1` recognition (`Program.cs:44`) still works under the new form.
+- **AI-734 — Auto-refresh hooks on npm upgrade.** Extends the postinstall script added in PR #102 (`6114f0505`, currently skills-only) to also refresh per-vendor hook configurations. Each hooks installer writes a `.kapacitor-hooks-version` marker on first install; postinstall calls per-vendor `--if-installed` commands that detect the marker (or pre-existing kapacitor entries in hooks config) and rewrite hooks.json / settings.local.json to the current CLI version's command strings. Same safeguards as the skills path: global-install gate, timeout, fail-open. **Lands before AI-730** so AI-730 can write the marker from day one.
+- **AI-732 — Migrate Codex from `kapacitor codex-hook` to `kapacitor hook --codex`.** Replace `CodexHookCommand` constant in `PluginCommand.cs:10` with the unified form. Extend `CodexHooksParser.EntryReferencesKapacitorCodexHook` (`CodexHooksParser.cs:32`) to match both the new and legacy command strings so AI-734's postinstall replaces old entries. **Clean break — no legacy command alias.** The old `codex-hook` case in `Program.cs` is removed in the same PR; AI-734's postinstall rewrites every Codex user's `hooks.json` to the new command string synchronously inside `npm install`, before Codex's next hook fires.
+- **AI-733 — Migrate Claude from 7 per-event top-level commands to `kapacitor hook --claude`.** Replace the command list in `Program.cs:15` with a single `ClaudeHookCommand.Handle` dispatcher behind `kapacitor hook --claude` that branches on Claude's `hook_event_name`. Update the Claude settings writer to emit the new command form. Update `KAPACITOR_SKIP=1` recognition (`Program.cs:44`). **Clean break — no per-event aliases.** AI-734's postinstall rewrites every Claude user's settings on upgrade.
 
-Both follow-ups are pure refactors with no behavior change — the same hooks fire, the same payloads are POSTed to the same server routes, only the CLI surface changes. They unblock the long-term goal of one vendor-agnostic `kapacitor hook --<vendor>` surface across the project.
+All three follow-ups are pure refactors with no behavior change — the same hooks fire, the same payloads are POSTed to the same server routes, only the CLI surface changes. They unblock the long-term goal of one vendor-agnostic `kapacitor hook --<vendor>` surface across the project.
+
+### Sequence
+
+```
+[A] AI-734            → npm postinstall hook auto-refresh        (prerequisite)
+[0] Design PR         → this document on main                    (parallel to [A])
+[1] AI-731            → kapacitor-server: routes + transcript ingest + dedup
+[2] AI-730            → kapacitor-cli: CursorHookCommand + setup wiring + spool + backfill
+                        (writes the cursor-hooks marker AI-734 needs)
+[3] Soak              → ~one Cursor minor for telemetry on delivery, dedup, attachments merge
+[4] AI-732 + AI-733   → parallel Codex / Claude migrations, clean breaks
+```
