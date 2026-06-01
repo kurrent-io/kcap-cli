@@ -213,6 +213,57 @@ public class PluginCommandSkillsTests {
     }
 
     [Test]
+    public async Task Install_skills_with_if_installed_is_noop_when_marker_matches_current_version() {
+        // Fast path: same-version reinstalls (e.g. `npm install -g @kurrent/kapacitor`
+        // when the same version is already installed) must not re-copy every skill.
+        var fakeHome      = Directory.CreateTempSubdirectory("kapacitor-plugin-skills-test-");
+        var originalHome  = Environment.GetEnvironmentVariable("HOME");
+        var pluginPath    = Directory.CreateTempSubdirectory("kapacitor-plugin-src-");
+        var originalPlug  = Environment.GetEnvironmentVariable("KAPACITOR_PLUGIN_DIR");
+
+        try {
+            var skillsSrc = Path.Combine(pluginPath.FullName, "skills");
+            Directory.CreateDirectory(skillsSrc);
+            foreach (var name in AgentsSkillsInstaller.SourceNames) {
+                Directory.CreateDirectory(Path.Combine(skillsSrc, name));
+                await File.WriteAllTextAsync(
+                    Path.Combine(skillsSrc, name, "SKILL.md"),
+                    $"---\nname: {name}\n---\nfresh body");
+            }
+
+            // Pre-seed: marker holds the *current* CLI version.
+            var target = Path.Combine(fakeHome.FullName, ".agents", "skills");
+            Directory.CreateDirectory(target);
+            await File.WriteAllTextAsync(
+                Path.Combine(target, AgentsSkillsInstaller.MarkerFileName),
+                AgentsSkillsInstaller.CurrentVersion());
+
+            // Pre-seed one skill folder with a sentinel that the installer
+            // would otherwise overwrite. If the short-circuit fires, this
+            // file should survive untouched.
+            Directory.CreateDirectory(Path.Combine(target, "kapacitor-recap"));
+            await File.WriteAllTextAsync(
+                Path.Combine(target, "kapacitor-recap", "SKILL.md"),
+                "stale body — must NOT be overwritten");
+
+            Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
+            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", pluginPath.FullName);
+
+            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--skills", "--if-installed"]);
+            await Assert.That(exit).IsEqualTo(0);
+
+            // Sentinel still intact → installer did not run.
+            var preserved = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-recap", "SKILL.md"));
+            await Assert.That(preserved).IsEqualTo("stale body — must NOT be overwritten");
+        } finally {
+            Environment.SetEnvironmentVariable("HOME", originalHome);
+            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", originalPlug);
+            fakeHome.Delete(recursive: true);
+            pluginPath.Delete(recursive: true);
+        }
+    }
+
+    [Test]
     public async Task Install_skills_with_if_installed_swallows_plugin_resolution_failure() {
         var fakeHome      = Directory.CreateTempSubdirectory("kapacitor-plugin-skills-test-");
         var originalHome  = Environment.GetEnvironmentVariable("HOME");

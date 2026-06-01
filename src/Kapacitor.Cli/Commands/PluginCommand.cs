@@ -152,6 +152,15 @@ public static class PluginCommand {
             return 0;
         }
 
+        // Fast path: marker already matches the current build, no point
+        // re-copying every skill on a same-version reinstall (e.g. `npm
+        // install -g` of the version already on disk).
+        if (refreshOnly &&
+            AgentsSkillsInstaller.ReadMarker(AgentsPaths.UserSkillsDir) ==
+                AgentsSkillsInstaller.CurrentVersion()) {
+            return 0;
+        }
+
         var pluginPath = SetupCommand.ResolvePluginPath();
 
         if (pluginPath is null) {

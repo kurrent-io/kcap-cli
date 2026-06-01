@@ -123,7 +123,12 @@ public static class AgentsSkillsInstaller {
         }
     }
 
-    static string CurrentVersion() =>
+    /// <summary>
+    /// The version string stamped into the marker on a successful install.
+    /// Exposed so callers can short-circuit a refresh when the marker already
+    /// matches.
+    /// </summary>
+    public static string CurrentVersion() =>
         typeof(AgentsSkillsInstaller).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
             ?.InformationalVersion ?? "unknown";

@@ -289,9 +289,10 @@ Hosted Codex agents require the Codex hook surface — if you said yes during `k
 Codex CLI 0.81+ exports `CODEX_THREAD_ID`; kapacitor reads it the same way it reads `KAPACITOR_SESSION_ID` for Claude sessions — no manual session ID needed for any of the Codex skills (`kapacitor-recap`, `kapacitor-errors`, `kapacitor-hide`, `kapacitor-disable`, `kapacitor-validate-plan`).
 
 ```bash
-kapacitor plugin install --codex            # user scope (~/.codex/hooks.json + ~/.agents/skills/)
-kapacitor plugin install --codex --project  # project scope (<repo>/.codex/hooks.json), skills still user-wide
-kapacitor plugin install --skills           # skills only (~/.agents/skills/), no Codex hooks
+kapacitor plugin install --codex                          # user scope (~/.codex/hooks.json + ~/.agents/skills/)
+kapacitor plugin install --codex --project                # project scope (<repo>/.codex/hooks.json), skills still user-wide
+kapacitor plugin install --skills                         # skills only (~/.agents/skills/), no Codex hooks
+kapacitor plugin install --skills --if-installed          # refresh only if skills were previously installed (used by npm postinstall, harmless to call by hand)
 ```
 
 Installing with `--codex` (or `--skills`) writes five skills under `~/.agents/skills/`:
