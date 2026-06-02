@@ -41,7 +41,12 @@ var command = args[0];
 // ResolveServerUrl can shell out to `git remote -v` and emit warnings, and
 // the update-check task hits the npm registry — both pure noise inside a
 // nested headless invocation.
-if (Environment.GetEnvironmentVariable("KAPACITOR_SKIP") is "1" && hookCommands.Contains(command)) {
+if (Environment.GetEnvironmentVariable("KAPACITOR_SKIP") is "1"
+ && (hookCommands.Contains(command) || command == "hook")) {
+    // `hook` is intentionally not in hookCommands (that list drives the
+    // templated help for Claude's per-event commands), but it MUST honour
+    // the same skip semantics so nested headless invocations don't loop
+    // Cursor hook payloads back into kapacitor.
     return 0;
 }
 
