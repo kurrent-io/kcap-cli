@@ -53,10 +53,10 @@ All captures land in `~/kapacitor-cursor-hook-probe/`:
 While the probe captures are still on disk, in the same workspace:
 
 ```sh
-kapacitor import --cursor --cursor-workspace "$(pwd)"
+kapacitor import --cursor --cwd "$(pwd)"
 ```
 
-Compare `sessionStart.stdin.json` → `session_id` against the composer IDs the
+Compare `sessionStart.stdin.json` → `session_id` against the session IDs the
 import emits (look for log lines from `CursorImportSource`). If they match
 after `NormalizeCursorSessionId` (dashless), we're done. If they don't, the
 spec needs a translation table.

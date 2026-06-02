@@ -139,8 +139,36 @@ public class CursorImportSourceTests {
 
         await Assert.That(classified.Count).IsEqualTo(1);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
-        await Assert.That(classified[0].FilePath).IsEqualTo(jsonl);
+        // FilePath stays empty so ImportCommand routes Cursor through the
+        // routed phase (ImportSessionAsync) instead of the Claude/Codex chain
+        // worker. Transcript path lives in SourceMeta.
+        await Assert.That(classified[0].FilePath).IsEqualTo("");
+        await Assert.That((string)classified[0].SourceMeta!["TranscriptPath"]!).IsEqualTo(jsonl);
         await Assert.That(classified[0].TotalLines).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task classify_keeps_file_path_empty_so_orchestrator_routes_to_ImportSessionAsync() {
+        // Qodo P1 regression test: ImportCommand splits classifications into
+        // file-based (chain worker, /hooks/session-start sans vendor suffix —
+        // server defaults to claude) and routed (ImportSessionAsync —
+        // Cursor's path). Non-empty FilePath misroutes Cursor sessions
+        // through the Claude-shaped lifecycle.
+        using var fx = new ProjectsDirFixture();
+        fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n{}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+        using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
+        using var client  = new HttpClient(handler);
+
+        var classified = await src.ClassifyAsync(
+            await src.DiscoverAsync(Filters(), CancellationToken.None),
+            Ctx(client, minLines: 0),
+            CancellationToken.None);
+
+        foreach (var c in classified) {
+            await Assert.That(c.FilePath).IsEqualTo("");
+        }
     }
 
     [Test]
@@ -388,6 +416,27 @@ public class CursorImportSourceTests {
         var got = await src.DiscoverAsync(Filters(filterCwd: "/users/me/dev/myproj"), CancellationToken.None);
 
         await Assert.That(got.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task discover_since_filter_uses_file_creation_time_not_last_write() {
+        // Qodo P2 regression test: a session whose JSONL was created BEFORE
+        // the cutoff but appended to AFTER it must still be excluded by
+        // --since. Cursor JSONL has no in-band timestamps, so the file
+        // creation time is the closest proxy for session-start.
+        using var fx = new ProjectsDirFixture();
+        var jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
+
+        // Set creation = 30 days ago, last write = today.
+        var thirtyDaysAgo = DateTime.UtcNow.AddDays(-30);
+        File.SetCreationTimeUtc(jsonl, thirtyDaysAgo);
+        File.SetLastWriteTimeUtc(jsonl, DateTime.UtcNow);
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+        var since = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-7));
+        var got = await src.DiscoverAsync(Filters(since: since), CancellationToken.None);
+
+        await Assert.That(got.Count).IsEqualTo(0);
     }
 
     [Test]

@@ -131,6 +131,16 @@ internal sealed class CursorImportSource : IImportSource {
                 if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
                     continue;
 
+                // Use the JSONL file's creation time as the session-start
+                // proxy. Cursor's transcript JSONL lines carry no timestamp
+                // field (Anthropic content-block format without metadata),
+                // and the file is created when the session starts and
+                // appended throughout — so birth-time on supported
+                // filesystems (APFS, ext4, NTFS) is the closest proxy.
+                //
+                // `--since` MUST gate on session-start, not last-modified,
+                // or any old session appended to after the cutoff would be
+                // re-imported.
                 DateTimeOffset? firstTimestamp = null;
                 try {
                     firstTimestamp = File.GetCreationTimeUtc(jsonl);
@@ -138,14 +148,8 @@ internal sealed class CursorImportSource : IImportSource {
                     // Best effort.
                 }
 
-                if (sinceUtc is { } cutoff) {
-                    DateTimeOffset lastWrite;
-                    try {
-                        lastWrite = File.GetLastWriteTimeUtc(jsonl);
-                    } catch {
-                        lastWrite = DateTimeOffset.MinValue;
-                    }
-                    if (lastWrite < cutoff) continue;
+                if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) {
+                    continue;
                 }
 
                 result.Add(new DiscoveredSession(
@@ -253,7 +257,15 @@ internal sealed class CursorImportSource : IImportSource {
 
             results.Add(new ImportCommand.SessionClassification {
                 SessionId       = s.SessionId,
-                FilePath        = transcriptPath,
+                // FilePath stays empty: ImportCommand routes sessions with an
+                // empty FilePath through the routed phase (ImportSessionAsync),
+                // and sessions with a populated FilePath through the chain
+                // worker — which assumes Claude/Codex-shaped lifecycle hooks
+                // (/hooks/session-start without a vendor suffix, defaulting to
+                // vendor=claude on the server). Cursor needs the routed phase
+                // so the transcript posts via /hooks/transcript with
+                // vendor:"cursor". The transcript path lives in SourceMeta.
+                FilePath        = "",
                 EncodedCwd      = "",
                 Meta            = meta,
                 Status          = status,
@@ -309,7 +321,9 @@ internal sealed class CursorImportSource : IImportSource {
         string?                            probeErrorReason = null
     ) => new() {
         SessionId        = s.SessionId,
-        FilePath         = (string)s.SourceMeta!["TranscriptPath"]!,
+        // See FilePath note in ClassifyAsync — empty keeps Cursor on the
+        // routed phase.
+        FilePath         = "",
         EncodedCwd       = "",
         Meta             = meta,
         Status           = status,
