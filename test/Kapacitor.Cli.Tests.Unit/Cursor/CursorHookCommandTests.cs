@@ -32,6 +32,7 @@ public class CursorHookCommandTests {
     }
 
     [Test]
+    [NotInParallel("KapacitorAgentIdEnvVar")]
     public async Task home_dir_and_agent_host_id_are_injected() {
         Environment.SetEnvironmentVariable("KAPACITOR_AGENT_ID", "host-42");
         try {
