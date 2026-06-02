@@ -1,6 +1,6 @@
 # AI-669 - Cursor session ingest milestone B: periodic poll watcher
 
-**Status:** design proposed, pending implementation plan
+**Status:** superseded by `docs/superpowers/specs/2026-06-01-ai-669-cursor-hooks-ingest-design.md`. Cursor shipped a hooks API that delivers the events this watcher was emulating by polling; the watch command is no longer needed. This document is kept for design history only.
 **Linear:** [AI-669](https://linear.app/kurrent/issue/AI-669/cursor-session-ingest-milestone-b-periodic-poll-watcher)
 **Related:** [AI-661](https://linear.app/kurrent/issue/AI-661/cursor-session-ingest-milestone-a-post-hoc-cli-import), [AI-680](https://linear.app/kurrent/issue/AI-680/cursor-cli-daemon-support-for-hosted-agents)
 **Source spec:** `docs/superpowers/specs/2026-05-20-cursor-session-ingest-feasibility.md` in the `kurrent-io/kapacitor-server` repo ([view on GitHub](https://github.com/kurrent-io/kapacitor-server/blob/main/docs/superpowers/specs/2026-05-20-cursor-session-ingest-feasibility.md))

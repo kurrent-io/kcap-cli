@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart":       [{ "command": "./kapacitor-hook-probe.sh sessionStart" }],
+    "sessionEnd":         [{ "command": "./kapacitor-hook-probe.sh sessionEnd" }],
+    "beforeSubmitPrompt": [{ "command": "./kapacitor-hook-probe.sh beforeSubmitPrompt" }],
+    "afterAgentResponse": [{ "command": "./kapacitor-hook-probe.sh afterAgentResponse" }],
+    "afterAgentThought":  [{ "command": "./kapacitor-hook-probe.sh afterAgentThought" }],
+    "preToolUse":         [{ "command": "./kapacitor-hook-probe.sh preToolUse" }],
+    "postToolUse":        [{ "command": "./kapacitor-hook-probe.sh postToolUse" }],
+    "postToolUseFailure": [{ "command": "./kapacitor-hook-probe.sh postToolUseFailure" }]
+  }
+}
