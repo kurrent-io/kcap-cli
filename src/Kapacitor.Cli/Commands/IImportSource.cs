@@ -2,16 +2,13 @@ namespace Kapacitor.Cli.Commands;
 
 /// <summary>
 /// Cross-cutting filters applied to every IImportSource's discovery phase.
-/// Sources that don't honour a given filter (e.g. Codex's --since handled
-/// at discovery, Cursor's --cursor-workspace) ignore the irrelevant fields.
+/// Sources that don't honour a given filter ignore the irrelevant fields.
 /// </summary>
 internal sealed record DiscoveryFilters(
     string?   FilterCwd,
     string?   FilterSession,
     DateOnly? Since,
-    int       MinLines,
-    string?   CursorWorkspace,
-    bool      CursorAllWorkspaces);
+    int       MinLines);
 
 /// <summary>
 /// A session candidate after DiscoverAsync. The orchestrator never inspects

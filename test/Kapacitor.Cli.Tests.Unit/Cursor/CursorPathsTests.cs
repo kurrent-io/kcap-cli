@@ -8,7 +8,6 @@ public class CursorPathsTests {
         var p = CursorPaths.Resolve(home: "/Users/me", platform: OsPlatform.MacOs);
         await Assert.That(p.UserDir).IsEqualTo("/Users/me/Library/Application Support/Cursor/User");
         await Assert.That(p.WorkspaceStorageDir).IsEqualTo("/Users/me/Library/Application Support/Cursor/User/workspaceStorage");
-        await Assert.That(p.GlobalStateDb).IsEqualTo("/Users/me/Library/Application Support/Cursor/User/globalStorage/state.vscdb");
     }
 
     [Test]
@@ -21,5 +20,10 @@ public class CursorPathsTests {
     public async Task Windows_default_dir_under_appdata() {
         var p = CursorPaths.Resolve(home: @"C:\Users\me", platform: OsPlatform.Windows, appData: @"C:\Users\me\AppData\Roaming");
         await Assert.That(p.UserDir).IsEqualTo(@"C:\Users\me\AppData\Roaming\Cursor\User");
+    }
+
+    [Test]
+    public async Task ProjectsDir_is_under_dot_cursor_on_every_platform() {
+        await Assert.That(CursorPaths.ProjectsDir(home: "/Users/me")).IsEqualTo("/Users/me/.cursor/projects");
     }
 }

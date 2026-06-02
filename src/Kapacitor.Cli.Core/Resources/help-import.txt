@@ -1,10 +1,11 @@
 kapacitor import — Import local sessions from every detected coding agent
 
 Discovers Claude, Codex, and Cursor sessions on this machine and imports them
-in a single run. Each agent's sessions live in a different format (Claude/Codex
-keep .jsonl transcripts under ~/.claude/projects and ~/.codex/sessions; Cursor
-stores Composer/Agent state in a local SQLite DB) — kapacitor handles all
-three transparently.
+in a single run. Each agent ships a per-session .jsonl transcript:
+  Claude — ~/.claude/projects/<encoded-cwd>/<sid>.jsonl
+  Codex  — ~/.codex/sessions/.../rollout-<sid>.jsonl
+  Cursor — ~/.cursor/projects/<sanitized-workspace>/agent-transcripts/<sid>/<sid>.jsonl
+kapacitor walks all three the same way.
 
 Usage: kapacitor import [vendor-filters] [scope] [options]
 
@@ -15,7 +16,7 @@ vendors run.
 Vendor filters (additive — pass one or more to restrict the run):
   --claude                Import Claude transcripts
   --codex                 Import Codex rollouts
-  --cursor                Import Cursor Composer/Agent sessions
+  --cursor                Import Cursor agent-session transcripts
 
 Scope (one of, required for non-interactive use):
   --all                   Import every discovered session
@@ -34,9 +35,5 @@ Options:
   --min-lines <n>         Skip sessions shorter than n lines (default: 15)
   --generate-summaries    Also generate per-session what's-done summaries
 
-Cursor-specific narrowing (composes with --cursor):
-  --cursor-workspace <path>   Import only the named Cursor workspace
-  --cursor-all-workspaces     Import every detected Cursor workspace
-
-Re-running the same command is idempotent — a server-side tracker dedupes
-already-imported turns so nothing is double-loaded.
+Re-running the same command is idempotent — a server-side watermark dedupes
+already-imported lines so nothing is double-loaded.

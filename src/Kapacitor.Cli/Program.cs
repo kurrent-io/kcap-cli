@@ -453,22 +453,6 @@ switch (command) {
 
         var generateSummaries = args.Contains("--generate-summaries");
 
-        // Cursor-specific args. --cursor-workspace REQUIRES a non-flag value;
-        // otherwise `kapacitor import --cursor --cursor-workspace --all` would
-        // silently capture `--all` as a fake path, mismatch every workspace,
-        // and drop Cursor from the run.
-        var cursorWorkspaceIdx = Array.IndexOf(args, "--cursor-workspace");
-        string? cursorWorkspace = null;
-        if (cursorWorkspaceIdx >= 0) {
-            if (cursorWorkspaceIdx + 1 >= args.Length || args[cursorWorkspaceIdx + 1].StartsWith("--")) {
-                Console.Error.WriteLine("--cursor-workspace requires a path value.");
-                return 1;
-            }
-            cursorWorkspace = args[cursorWorkspaceIdx + 1];
-        }
-        var cursorAllWorkspaces = args.Contains("--cursor-all-workspaces");
-        var cursorArgs = new ImportCommand.CursorWorkspaceArgs(cursorWorkspace, cursorAllWorkspaces);
-
         // Build sources
         var explicitVendorSelection = vsel.Vendors.Count > 0;
         var allSources = new IImportSource[] {
@@ -509,7 +493,6 @@ switch (command) {
             generateSummaries,
             sources:                 sources,
             explicitVendorSelection: explicitVendorSelection,
-            cursorArgs:              cursorArgs,
             since:                   since,
             scope:                   resolveResult.Scope, // null => HandleImport runs picker
             skipConfirmation:        resolveResult.Yes,

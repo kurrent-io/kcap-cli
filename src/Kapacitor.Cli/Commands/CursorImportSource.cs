@@ -1,5 +1,4 @@
 using System.Net;
-using System.Text;
 using System.Text.Json;
 using Kapacitor.Cli.Core;
 using Kapacitor.Cli.Core.Cursor;
@@ -7,153 +6,136 @@ using Kapacitor.Cli.Core.Cursor;
 namespace Kapacitor.Cli.Commands;
 
 /// <summary>
-/// Discover + classify + import Cursor IDE Composer/Agent sessions. Unlike
-/// Claude / Codex (which read <c>.jsonl</c> transcript files), Cursor stores
-/// state in two SQLite DBs: a per-workspace <c>state.vscdb</c> that lists
-/// composer ids, and a global <c>state.vscdb</c> that holds the composer
-/// headers, bubbles, and content blobs.
+/// Discover + classify + import historical Cursor agent sessions from
+/// <c>~/.cursor/projects/&lt;sanitized&gt;/agent-transcripts/&lt;sid&gt;/&lt;sid&gt;.jsonl</c>.
+/// Each JSONL file is one session in Anthropic content-block format — the same
+/// shape the live hook path ships per line via
+/// <see cref="CursorTranscriptBackfill"/>, so historical and live import
+/// converge on a single canonical-event stream on the server.
 ///
 /// <para>
-/// Discovery walks the workspace storage directory, picks the workspaces
-/// matching <c>--cursor-workspace</c> / <c>--cursor-all-workspaces</c> / the
-/// current cwd, enumerates composer ids per workspace, and detects each
-/// workspace's git remote ONCE (the result is reused for every composer in
-/// that workspace).
-/// </para>
-///
-/// <para>
-/// Classification queries <c>GET /api/cursor/{composerId}/watermark</c> per
-/// composer and marks it <c>AlreadyLoaded</c> when the server's high-water
-/// mark covers the header's <c>lastUpdatedAtMs</c>, otherwise <c>New</c>.
-/// </para>
-///
-/// <para>
-/// ImportSessionAsync assembles a <see cref="CursorImportPayload"/> from the
-/// SQLite state, stamps <c>cli_owner</c>/<c>cli_repo</c> (recovered from the
-/// workspace's git remote during Discover), and POSTs to
-/// <c>/hooks/cursor-import</c>.
+/// The <c>&lt;sanitized&gt;</c> path segment is Cursor's encoding of the
+/// workspace folder (leading slash stripped, remaining separators rewritten
+/// as <c>-</c>). The encoding is lossy — folder names that contain <c>-</c>
+/// produce ambiguous reversals — so we don't try to invert it. Instead we
+/// derive a sanitized-name → real-folder lookup by walking
+/// <c>workspaceStorage/&lt;hash&gt;/workspace.json</c> and applying the same
+/// forward encoding. Sessions whose <c>&lt;sanitized&gt;</c> doesn't match any
+/// known workspace are still imported, just without <c>cwd</c> / git owner+repo
+/// — the orchestrator's repo / path exclusion machinery is the only feature
+/// that loses fidelity there.
 /// </para>
 /// </summary>
 internal sealed class CursorImportSource : IImportSource {
-    readonly CursorPaths _paths;
-    readonly int         _payloadHardCapBytes;
+    readonly string                                     _projectsDir;
+    readonly string                                     _workspaceStorageDir;
+    readonly Lazy<IReadOnlyDictionary<string, string>>  _sanitizedToFolder;
 
-    public CursorImportSource(CursorPaths? pathsOverride = null, int? payloadHardCapBytes = null) {
-        _paths               = pathsOverride ?? CursorPaths.Resolve();
-        _payloadHardCapBytes = payloadHardCapBytes ?? CursorPayloadAssembler.PayloadHardCapBytes;
+    public CursorImportSource(string? projectsDirOverride = null, string? workspaceStorageDirOverride = null) {
+        _projectsDir         = projectsDirOverride         ?? CursorPaths.ProjectsDir();
+        _workspaceStorageDir = workspaceStorageDirOverride ?? CursorPaths.Resolve().WorkspaceStorageDir;
+        _sanitizedToFolder   = new Lazy<IReadOnlyDictionary<string, string>>(BuildSanitizedToFolderMap);
     }
 
     public string Vendor => "cursor";
 
-    public bool IsAvailable => File.Exists(_paths.GlobalStateDb);
+    public bool IsAvailable => Directory.Exists(_projectsDir);
 
+    /// <summary>
+    /// False — Cursor sessions ship a transcript-derived title via the live
+    /// hook path. The historical importer feeds the same transcript route, so
+    /// the server's title pipeline handles naming without help from the CLI.
+    /// </summary>
     public bool SupportsTitleGeneration => false;
 
     /// <summary>
-    /// Normalize a Cursor composer id by stripping dashes. The server stores
-    /// Cursor sessions under <c>AgentSession-{dashless}</c> streams, so the
-    /// <c>--session</c> filter must compare dashless on both sides.
+    /// Strip dashes from a Cursor session id. The server stores Cursor sessions
+    /// under <c>AgentSession-{dashless}</c> streams, so the <c>--session</c>
+    /// filter must compare dashless on both sides.
     /// </summary>
     public static string NormalizeCursorSessionId(string id) => id.Replace("-", "");
 
-    public async Task<IReadOnlyList<DiscoveredSession>> DiscoverAsync(DiscoveryFilters filters, CancellationToken ct) {
-        var workspaces = ResolveWorkspaces(_paths, filters.CursorWorkspace, filters.CursorAllWorkspaces).ToList();
+    /// <summary>
+    /// Apply Cursor's workspace-path encoding: strip the leading separator and
+    /// replace remaining ones with <c>-</c>. The reverse direction is ambiguous
+    /// (folder names can contain <c>-</c>) so we go forward only.
+    /// </summary>
+    internal static string EncodeWorkspacePath(string folder) {
+        var trimmed = folder.TrimStart('/', '\\');
+        return trimmed.Replace('/', '-').Replace('\\', '-');
+    }
 
-        // Apply --cwd as an additional workspace filter on top of --cursor-workspace
-        // / --cursor-all-workspaces / the implicit current-cwd default. The user
-        // intent is "only consider sessions under this directory" — for Cursor
-        // that translates to "only workspaces whose folder matches".
-        if (filters.FilterCwd is { } filterCwd) {
-            var normalized = filterCwd.TrimEnd('/');
-            workspaces = workspaces
-                .Where(w => w.FolderPath.TrimEnd('/').Equals(normalized, StringComparison.Ordinal))
-                .ToList();
-        }
+    public Task<IReadOnlyList<DiscoveredSession>> DiscoverAsync(DiscoveryFilters filters, CancellationToken ct) {
+        if (!Directory.Exists(_projectsDir))
+            return Task.FromResult<IReadOnlyList<DiscoveredSession>>([]);
 
         var sessionFilter = filters.FilterSession is { } sf ? NormalizeCursorSessionId(sf) : null;
+        var normalizedCwd = filters.FilterCwd?.TrimEnd('/');
+        var sinceUtc      = filters.Since is { } since
+            ? new DateTimeOffset(since.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), TimeSpan.Zero)
+            : (DateTimeOffset?)null;
 
-        // --since cutoff in UTC ms (matches the header's lastUpdatedAt / createdAt units).
-        long? sinceMs = filters.Since is { } sinceCutoff
-            ? new DateTimeOffset(sinceCutoff.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), TimeSpan.Zero).ToUnixTimeMilliseconds()
-            : null;
+        var sanitizedMap = _sanitizedToFolder.Value;
+        var result       = new List<DiscoveredSession>();
 
-        var result = new List<DiscoveredSession>();
+        foreach (var sanitizedDir in Directory.EnumerateDirectories(_projectsDir)) {
+            var sanitized      = Path.GetFileName(sanitizedDir);
+            var transcriptsDir = Path.Combine(sanitizedDir, "agent-transcripts");
 
-        foreach (var (folderPath, wsDbPath) in workspaces) {
-            if (!File.Exists(wsDbPath)) continue;
+            if (!Directory.Exists(transcriptsDir)) continue;
 
-            IReadOnlyList<string> composerIds;
+            sanitizedMap.TryGetValue(sanitized, out var workspaceFolder);
 
-            try {
-                composerIds = await CursorStateReader.ListWorkspaceComposerIdsAsync(wsDbPath, ct);
-            } catch {
+            if (normalizedCwd is not null
+             && (workspaceFolder is null
+              || !workspaceFolder.TrimEnd('/').Equals(normalizedCwd, StringComparison.Ordinal))) {
                 continue;
             }
 
-            if (composerIds.Count == 0) continue;
+            foreach (var sessionDir in Directory.EnumerateDirectories(transcriptsDir)) {
+                var sessionDirName = Path.GetFileName(sessionDir);
+                var jsonl          = Path.Combine(sessionDir, sessionDirName + ".jsonl");
 
-            // Detect git remote once per workspace (not per composer). Null when
-            // the workspace folder isn't a git repo with a parseable origin.
-            string? cliOwner = null;
-            string? cliRepo  = null;
+                if (!File.Exists(jsonl)) continue;
 
-            try {
-                var repo = await RepositoryDetection.DetectRepositoryAsync(folderPath);
-                cliOwner = repo?.Owner;
-                cliRepo  = repo?.RepoName;
-            } catch {
-                // Best-effort — leave nulls.
-            }
+                var dashless = NormalizeCursorSessionId(sessionDirName);
 
-            foreach (var composerId in composerIds) {
-                var dashless = NormalizeCursorSessionId(composerId);
-
-                if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal)) {
+                if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
                     continue;
+
+                DateTimeOffset? firstTimestamp = null;
+                try {
+                    firstTimestamp = File.GetCreationTimeUtc(jsonl);
+                } catch {
+                    // Best effort.
                 }
 
-                // Pre-prune by --since at discovery so the orchestrator's
-                // post-classify mtime fallback stays Claude-only (Cursor has no
-                // transcript file to stat). Also stamp FirstTimestamp from the
-                // header so downstream consumers don't have to re-read SQLite.
-                DateTimeOffset? firstTimestamp = null;
-
-                try {
-                    var header = await CursorStateReader.GetComposerHeaderAsync(_paths.GlobalStateDb, composerId, ct);
-
-                    if (header is not null) {
-                        if (header.CreatedAtMs > 0) {
-                            firstTimestamp = DateTimeOffset.FromUnixTimeMilliseconds(header.CreatedAtMs);
-                        }
-
-                        if (sinceMs is { } cutoffMs && header.CreatedAtMs > 0 && header.CreatedAtMs < cutoffMs) {
-                            continue;
-                        }
+                if (sinceUtc is { } cutoff) {
+                    DateTimeOffset lastWrite;
+                    try {
+                        lastWrite = File.GetLastWriteTimeUtc(jsonl);
+                    } catch {
+                        lastWrite = DateTimeOffset.MinValue;
                     }
-                } catch {
-                    // Best-effort — fall through with firstTimestamp left null.
-                    // If --since is in effect and the header can't be read,
-                    // err on the side of including the composer so classification
-                    // can surface a ProbeError later, rather than silently dropping it.
+                    if (lastWrite < cutoff) continue;
                 }
 
                 result.Add(new DiscoveredSession(
                     SessionId:      dashless,
                     Vendor:         Vendor,
-                    Cwd:            folderPath,
+                    Cwd:            workspaceFolder,
                     FirstTimestamp: firstTimestamp,
                     SourceMeta:     new Dictionary<string, object?> {
-                        ["ComposerId"]    = composerId,
-                        ["WorkspacePath"] = folderPath,
-                        ["GlobalDbPath"]  = _paths.GlobalStateDb,
-                        ["CliOwner"]      = cliOwner,
-                        ["CliRepo"]       = cliRepo,
-                    }
-                ));
+                        ["TranscriptPath"]  = jsonl,
+                        ["WorkspaceFolder"] = workspaceFolder,
+                        ["SanitizedDir"]    = sanitized,
+                    }));
             }
+
+            ct.ThrowIfCancellationRequested();
         }
 
-        return result;
+        return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
     }
 
     public async Task<IReadOnlyList<ImportCommand.SessionClassification>> ClassifyAsync(
@@ -164,125 +146,75 @@ internal sealed class CursorImportSource : IImportSource {
         var results = new List<ImportCommand.SessionClassification>(sessions.Count);
 
         foreach (var s in sessions) {
-            var composerId   = (string)s.SourceMeta["ComposerId"]!;
-            var globalDbPath = (string)s.SourceMeta["GlobalDbPath"]!;
+            var transcriptPath = (string)s.SourceMeta!["TranscriptPath"]!;
 
             var meta = new SessionMetadata {
-                SessionId = s.SessionId,
-                Cwd       = s.Cwd,
+                SessionId      = s.SessionId,
+                Cwd            = s.Cwd,
+                FirstTimestamp = s.FirstTimestamp,
             };
 
-            RawComposerHeader? header = null;
+            int? lastNonBlankIndex;
+            int  nonBlankCount;
+            try {
+                (lastNonBlankIndex, nonBlankCount) = await ReadTranscriptStatsAsync(transcriptPath, ct);
+            } catch {
+                results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, totalLines: 0,
+                                               probeErrorReason: "transcript read failed"));
+                continue;
+            }
+
+            if (lastNonBlankIndex is null) {
+                results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, totalLines: 0,
+                                               probeErrorReason: "empty transcript"));
+                continue;
+            }
+
+            if (nonBlankCount < ctx.MinLines) {
+                results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.TooShort, totalLines: nonBlankCount));
+                continue;
+            }
+
+            int? serverLastLine;
+            try {
+                serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, ct);
+            } catch {
+                results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, totalLines: nonBlankCount,
+                                               probeErrorReason: "watermark probe failed"));
+                continue;
+            }
 
             try {
-                header = await CursorStateReader.GetComposerHeaderAsync(globalDbPath, composerId, ct);
+                meta.LastTimestamp = File.GetLastWriteTimeUtc(transcriptPath);
             } catch {
-                // Treat read failure as ProbeError so the orchestrator surfaces it.
+                // Best effort.
             }
 
-            if (header is null) {
-                results.Add(new() {
-                    SessionId        = s.SessionId,
-                    FilePath         = "",
-                    EncodedCwd       = "",
-                    Meta             = meta,
-                    Status           = ImportCommand.ClassificationStatus.ProbeError,
-                    Vendor           = Vendor,
-                    ProbeErrorReason = "no composer header",
-                    SourceMeta       = s.SourceMeta,
-                });
-                continue;
-            }
+            var (excludedRepoKey, excludedPathKey) = ResolveExclusions(s.Cwd, ctx);
 
-            // Skip non-agent composers (chat / inline / ask). These are not agent sessions
-            // and shouldn't be ingested. ProbeErrorReason is kept short ("mode={X}") so a
-            // future Plan-grid sub-row can render it.
-            if (!IsAgentMode(header)) {
-                results.Add(new() {
-                    SessionId        = s.SessionId,
-                    FilePath         = "",
-                    EncodedCwd       = "",
-                    Meta             = meta,
-                    Status           = ImportCommand.ClassificationStatus.Excluded,
-                    Vendor           = Vendor,
-                    ProbeErrorReason = $"mode={header.UnifiedMode}",
-                    SourceMeta       = s.SourceMeta,
-                });
-                continue;
-            }
+            var status       = ImportCommand.ClassificationStatus.New;
+            var resumeFromLn = 0;
 
-            // Skip composers with non-empty generatingBubbleIds (an LLM is actively writing).
-            // Importing now would push a mid-write payload.
-            string? composerDataRaw;
-            try {
-                composerDataRaw = await CursorStateReader.GetComposerDataAsync(globalDbPath, composerId, ct);
-            } catch {
-                composerDataRaw = null;  // best-effort; let downstream BuildPayload re-attempt
-            }
-
-            if (HasInFlightBubbles(composerDataRaw)) {
-                results.Add(new() {
-                    SessionId        = s.SessionId,
-                    FilePath         = "",
-                    EncodedCwd       = "",
-                    Meta             = meta,
-                    Status           = ImportCommand.ClassificationStatus.Excluded,
-                    Vendor           = Vendor,
-                    ProbeErrorReason = "in-flight bubbles",
-                    SourceMeta       = s.SourceMeta,
-                });
-                continue;
-            }
-
-            meta.FirstTimestamp = header.CreatedAtMs > 0
-                ? DateTimeOffset.FromUnixTimeMilliseconds(header.CreatedAtMs)
-                : null;
-            meta.LastTimestamp = header.LastUpdatedAtMs > 0
-                ? DateTimeOffset.FromUnixTimeMilliseconds(header.LastUpdatedAtMs)
-                : null;
-
-            // Apply profile-level repo / path exclusions. Mirrors
-            // TranscriptFileClassification.ClassifyOneCoreAsync so Cursor sessions
-            // funnel through the same "do you want to include excluded repo/path?"
-            // prompt the orchestrator drives off ExcludedRepoKey / ExcludedPathKey.
-            //
-            // Repo key is computed from CliOwner / CliRepo in SourceMeta (already
-            // resolved once per workspace during Discover), so we avoid re-running
-            // git remote detection here.
-            var cliOwner = (string?)s.SourceMeta["CliOwner"];
-            var cliRepo  = (string?)s.SourceMeta["CliRepo"];
-            var repoKey  = cliOwner is not null && cliRepo is not null ? $"{cliOwner}/{cliRepo}" : null;
-
-            string? excludedRepoKey = null;
-            string? excludedPathKey = null;
-
-            if (repoKey is not null && ctx.ExcludedRepos is { Count: > 0 } repos
-             && repos.Any(r => string.Equals(r, repoKey, StringComparison.OrdinalIgnoreCase))) {
-                excludedRepoKey = repoKey;
-            }
-
-            if (s.Cwd is { } cwd && ctx.ExcludedPaths is { Count: > 0 } paths) {
-                foreach (var entry in paths) {
-                    if (PathExclusion.IsExcluded(cwd, [entry])) {
-                        excludedPathKey = PathExclusion.Normalize(entry);
-                        break;
-                    }
+            if (serverLastLine is { } srv) {
+                if (srv >= lastNonBlankIndex.Value) {
+                    status = ImportCommand.ClassificationStatus.AlreadyLoaded;
+                } else {
+                    status       = ImportCommand.ClassificationStatus.Partial;
+                    resumeFromLn = srv + 1;
                 }
             }
 
-            var status = await IsWatermarkCurrentAsync(ctx.HttpClient, ctx.BaseUrl, composerId, header.LastUpdatedAtMs, ct)
-                ? ImportCommand.ClassificationStatus.AlreadyLoaded
-                : ImportCommand.ClassificationStatus.New;
-
-            results.Add(new() {
+            results.Add(new ImportCommand.SessionClassification {
                 SessionId       = s.SessionId,
-                FilePath        = "",
+                FilePath        = transcriptPath,
                 EncodedCwd      = "",
                 Meta            = meta,
                 Status          = status,
                 Vendor          = Vendor,
+                ResumeFromLine  = resumeFromLn,
                 ExcludedRepoKey = excludedRepoKey,
                 ExcludedPathKey = excludedPathKey,
+                TotalLines      = nonBlankCount,
                 SourceMeta      = s.SourceMeta,
             });
         }
@@ -295,334 +227,152 @@ internal sealed class CursorImportSource : IImportSource {
             ImportContext                       ctx,
             CancellationToken                   ct
         ) {
-        // Direct casts on required keys so a refactor renaming a SourceMeta key throws
-        // loudly rather than silently swallowing the rename via `as string ?? ""`.
-        var composerId    = (string)classification.SourceMeta!["ComposerId"]!;
-        var workspacePath = (string)classification.SourceMeta!["WorkspacePath"]!;
-        var globalDbPath  = (string)classification.SourceMeta!["GlobalDbPath"]!;
-        var cliOwner      = (string?)classification.SourceMeta!["CliOwner"];
-        var cliRepo       = (string?)classification.SourceMeta!["CliRepo"];
+        var transcriptPath = (string)classification.SourceMeta!["TranscriptPath"]!;
 
-        CursorImportPayload payload;
+        if (!File.Exists(transcriptPath)) return ImportOutcome.Failed;
 
+        var startLine = classification.Status == ImportCommand.ClassificationStatus.Partial
+            ? classification.ResumeFromLine
+            : 0;
+
+        int sent;
         try {
-            payload = await BuildPayload(globalDbPath, composerId, workspacePath, ct);
+            sent = await SessionImporter.SendTranscriptBatches(
+                httpClient: ctx.HttpClient,
+                baseUrl:    ctx.BaseUrl,
+                sessionId:  classification.SessionId,
+                filePath:   transcriptPath,
+                agentId:    null,
+                startLine:  startLine,
+                vendor:     Vendor);
         } catch {
             return ImportOutcome.Failed;
         }
 
-        payload = payload with { CliOwner = cliOwner, CliRepo = cliRepo };
+        if (sent == 0) return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
 
-        var payloadJson = JsonSerializer.Serialize(payload, CursorJsonContext.Default.CursorImportPayload);
-
-        if (Encoding.UTF8.GetByteCount(payloadJson) > _payloadHardCapBytes) {
-            return ImportOutcome.Failed;
-        }
-
-        try {
-            using var content = new StringContent(payloadJson, Encoding.UTF8, "application/json");
-            using var resp    = await ctx.HttpClient.PostWithRetryAsync($"{ctx.BaseUrl}/hooks/cursor-import", content, ct: ct);
-
-            return resp.IsSuccessStatusCode ? ImportOutcome.Loaded : ImportOutcome.Failed;
-        } catch {
-            return ImportOutcome.Failed;
-        }
+        return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
     }
 
-    /// <summary>
-    /// True when the composer header's <c>unifiedMode</c> is "agent" (case-insensitive).
-    /// Cursor chat / inline / ask composers are not agent sessions and shouldn't be ingested.
-    /// </summary>
-    internal static bool IsAgentMode(RawComposerHeader header) =>
-        string.Equals(header.UnifiedMode, "agent", StringComparison.OrdinalIgnoreCase);
+    static ImportCommand.SessionClassification MakeClassification(
+        DiscoveredSession                  s,
+        SessionMetadata                    meta,
+        ImportCommand.ClassificationStatus status,
+        int                                totalLines,
+        string?                            probeErrorReason = null
+    ) => new() {
+        SessionId        = s.SessionId,
+        FilePath         = (string)s.SourceMeta!["TranscriptPath"]!,
+        EncodedCwd       = "",
+        Meta             = meta,
+        Status           = status,
+        Vendor           = "cursor",
+        ProbeErrorReason = probeErrorReason,
+        TotalLines       = totalLines,
+        SourceMeta       = s.SourceMeta,
+    };
 
     /// <summary>
-    /// True when the composer's <c>composerData</c> JSON has non-empty <c>generatingBubbleIds</c>,
-    /// i.e. an LLM is actively writing. Returns <c>false</c> on null input or parse failure
-    /// (best-effort — the import path will re-attempt the parse downstream).
+    /// Single-pass read returning the largest line index of a non-blank line
+    /// (matches the server's <c>last_line_number</c> convention — only non-blank
+    /// lines get accepted and counted) and the non-blank line count for
+    /// <c>--min-lines</c> filtering.
     /// </summary>
-    internal static bool HasInFlightBubbles(string? composerDataRaw) {
-        if (composerDataRaw is null) return false;
-
-        try {
-            using var doc           = JsonDocument.Parse(composerDataRaw);
-            var       generatingIds = doc.RootElement.TryGetProperty("generatingBubbleIds", out var gb)
-                ? gb.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList()
-                : [];
-
-            return generatingIds.Count > 0;
-        } catch {
-            return false;
-        }
-    }
-
-    static async Task<bool> IsWatermarkCurrentAsync(
-            HttpClient        http,
-            string            baseUrl,
-            string            composerId,
-            long              headerLastUpdatedAtMs,
-            CancellationToken ct
-        ) {
-        try {
-            using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/cursor/{composerId}/watermark", ct: ct);
-
-            if (resp.StatusCode == HttpStatusCode.NotFound) return false;
-
-            if (!resp.IsSuccessStatusCode) return false;
-
-            var body = await resp.Content.ReadAsStringAsync(ct);
-
-            using var doc = JsonDocument.Parse(body);
-
-            if (doc.RootElement.TryGetProperty("last_updated_at_ms", out var lv)) {
-                var serverMs = lv.GetInt64();
-
-                return serverMs >= headerLastUpdatedAtMs;
-            }
-
-            return false;
-        } catch {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Assembles a <see cref="CursorImportPayload"/> from the SQLite state.
-    /// </summary>
-    static async Task<CursorImportPayload> BuildPayload(
-            string            globalDbPath,
-            string            composerId,
-            string            workspaceFolder,
-            CancellationToken ct
-        ) {
-        var composerDataRaw = await CursorStateReader.GetComposerDataAsync(globalDbPath, composerId, ct);
-
-        CursorComposerData composerData;
-
-        if (composerDataRaw is not null) {
-            using var doc  = JsonDocument.Parse(composerDataRaw);
-            var       root = doc.RootElement;
-
-            var modelConfig = new CursorModelConfig {
-                ModelName      = root.TryGetProperty("modelConfig", out var mc) && mc.TryGetProperty("modelName", out var mn) && mn.ValueKind == JsonValueKind.String ? mn.GetString() : null,
-                SelectedModels = root.TryGetProperty("modelConfig", out var mc2) && mc2.TryGetProperty("selectedModels", out var sm)
-                    ? sm.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList()
-                    : null
-            };
-
-            var headers = root.TryGetProperty("fullConversationHeadersOnly", out var hdrsEl)
-                ? hdrsEl.EnumerateArray()
-                    .Where(h => h.ValueKind == JsonValueKind.Object)
-                    .Select(h => new CursorTurnHeader {
-                        BubbleId = h.TryGetProperty("bubbleId", out var bidEl) && bidEl.ValueKind == JsonValueKind.String ? bidEl.GetString()! : "",
-                        Type     = h.TryGetProperty("type",     out var tyEl)  && tyEl.ValueKind  == JsonValueKind.Number ? tyEl.GetInt32()    : 0
-                    }).ToList<CursorTurnHeader>()
-                : [];
-
-            var generatingIds = root.TryGetProperty("generatingBubbleIds", out var gbEl)
-                ? gbEl.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList()
-                : [];
-
-            var status = root.TryGetProperty("status", out var stEl) && stEl.ValueKind == JsonValueKind.String ? stEl.GetString() : null;
-
-            composerData = new CursorComposerData {
-                ModelConfig                 = modelConfig,
-                FullConversationHeadersOnly = headers,
-                GeneratingBubbleIds         = generatingIds,
-                Status                      = status
-            };
-        } else {
-            composerData = new CursorComposerData {
-                ModelConfig                 = new CursorModelConfig { ModelName = null, SelectedModels = null },
-                FullConversationHeadersOnly = [],
-                GeneratingBubbleIds         = [],
-                Status                      = null
-            };
-        }
-
-        var rawBubbles = await CursorStateReader.ListBubblesAsync(globalDbPath, composerId, ct);
-
-        // Build a position map from fullConversationHeadersOnly so bubbles are
-        // ordered as the conversation prescribes, not by SQLite storage order.
-        var orderMap = new Dictionary<string, int>(StringComparer.Ordinal);
-        if (composerDataRaw is not null) {
-            try {
-                using var ordDoc  = JsonDocument.Parse(composerDataRaw);
-                var       ordRoot = ordDoc.RootElement;
-                if (ordRoot.TryGetProperty("fullConversationHeadersOnly", out var headersArr)
-                    && headersArr.ValueKind == JsonValueKind.Array) {
-                    var i = 0;
-                    foreach (var h in headersArr.EnumerateArray()) {
-                        if (h.TryGetProperty("bubbleId", out var bid) && bid.ValueKind == JsonValueKind.String)
-                            orderMap[bid.GetString()!] = i++;
-                    }
-                }
-            } catch {
-                // Best-effort.
-            }
-        }
-
-        var assembledBubbles = new List<CursorBubble>(rawBubbles.Count);
-
-        foreach (var (_, bubbleJson) in rawBubbles) {
-            assembledBubbles.Add(CursorPayloadAssembler.AssembleBubble(bubbleJson, workspaceFolder));
-        }
-
-        var orderedBubbles = orderMap.Count > 0
-            ? assembledBubbles
-                .Where(b => orderMap.ContainsKey(b.BubbleId))
-                .OrderBy(b => orderMap[b.BubbleId])
-                .ToList()
-            : assembledBubbles;
-
-        var contentBlobKeys = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (var bubble in orderedBubbles) {
-            if (bubble.ToolFormerData is { Name: "edit_file_v2", Result: { } resultJson }) {
-                try {
-                    using var doc  = JsonDocument.Parse(resultJson);
-                    var       root = doc.RootElement;
-
-                    if (root.TryGetProperty("beforeContentId", out var bci)) {
-                        var key = bci.GetString();
-                        if (!string.IsNullOrEmpty(key)) contentBlobKeys.Add(key);
-                    }
-
-                    if (root.TryGetProperty("afterContentId", out var aci)) {
-                        var key = aci.GetString();
-                        if (!string.IsNullOrEmpty(key)) contentBlobKeys.Add(key);
-                    }
-                } catch {
-                    // Best-effort.
-                }
-            }
-        }
-
-        var fetchedBlobs = await CursorStateReader.GetContentBlobsAsync(globalDbPath, contentBlobKeys, ct);
-        var contentBlobs = new Dictionary<string, string>(StringComparer.Ordinal);
-
-        foreach (var (key, blob) in fetchedBlobs) {
-            var (k, v) = CursorPayloadAssembler.MaybeTruncateBlob(key, blob);
-            contentBlobs[k] = v;
-        }
-
-        var header = await CursorStateReader.GetComposerHeaderAsync(globalDbPath, composerId, ct);
-
-        var trackedRepos = header!.TrackedGitRepos?
-            .Select(r => new CursorTrackedRepo {
-                RepoPath = r.RepoPath,
-                Branches = r.BranchNames?.Select(b => new CursorTrackedBranch { BranchName = b }).ToList()
-            })
-            .ToList();
-
-        var cursorHeader = new CursorHeader {
-            Name              = header.Name,
-            UnifiedMode       = header.UnifiedMode,
-            CreatedAtMs       = header.CreatedAtMs,
-            LastUpdatedAtMs   = header.LastUpdatedAtMs,
-            TrackedGitRepos   = trackedRepos,
-            TotalLinesAdded   = header.TotalLinesAdded,
-            TotalLinesRemoved = header.TotalLinesRemoved,
-            FilesChangedCount = header.FilesChangedCount,
-            Subtitle          = header.Subtitle
-        };
-
-        return new CursorImportPayload {
-            Vendor              = "cursor",
-            ComposerId          = composerId,
-            SchemaSourceVersion = new CursorSchemaVersion { ComposerData = 1, Bubble = 1 },
-            Header              = cursorHeader,
-            ComposerData        = composerData,
-            Bubbles             = orderedBubbles,
-            ContentBlobs        = contentBlobs
-        };
-    }
-
-    /// <summary>
-    /// Walks <see cref="CursorPaths.WorkspaceStorageDir"/>, reads each subdir's
-    /// <c>workspace.json</c> for a <c>folder</c> URI, and yields
-    /// <c>(folderPath, wsDbPath)</c> tuples.
-    /// </summary>
-    private static IEnumerable<(string FolderPath, string WsDbPath)> ResolveWorkspaces(
-        CursorPaths paths,
-        string?     selectedWorkspace,
-        bool        all
+    static async Task<(int? LastNonBlankIndex, int NonBlankCount)> ReadTranscriptStatsAsync(
+        string transcriptPath, CancellationToken ct
     ) {
-        if (!Directory.Exists(paths.WorkspaceStorageDir)) yield break;
+        await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var       reader = new StreamReader(stream);
 
-        var cwd = Environment.CurrentDirectory;
+        int? lastIdx = null;
+        var  count   = 0;
+        var  lineIdx = 0;
 
-        foreach (var subdir in Directory.EnumerateDirectories(paths.WorkspaceStorageDir)) {
-            var wsJsonPath = Path.Combine(subdir, "workspace.json");
+        while (await reader.ReadLineAsync(ct) is { } line) {
+            if (!string.IsNullOrWhiteSpace(line)) {
+                lastIdx = lineIdx;
+                count++;
+            }
+            lineIdx++;
+        }
+        return (lastIdx, count);
+    }
 
-            string? folderPath = null;
+    static async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct) {
+        using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct: ct);
 
-            if (File.Exists(wsJsonPath)) {
-                try {
-                    var json = File.ReadAllText(wsJsonPath);
+        if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
+        if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
 
-                    using var doc = JsonDocument.Parse(json);
+        var       body = await resp.Content.ReadAsStringAsync(ct);
+        using var doc  = JsonDocument.Parse(body);
 
-                    if (doc.RootElement.TryGetProperty("folder", out var folderEl)) {
-                        var uri = folderEl.GetString();
+        return doc.RootElement.TryGetProperty("last_line_number", out var ln) && ln.ValueKind == JsonValueKind.Number
+            ? ln.GetInt32()
+            : null;
+    }
 
-                        if (uri is not null) {
-                            // Strip file:// prefix and URI-decode
-                            folderPath = StripFileUri(uri);
-                        }
-                    }
-                } catch {
-                    // If we can't read workspace.json, skip this directory
-                    continue;
+    static (string? ExcludedRepoKey, string? ExcludedPathKey) ResolveExclusions(string? cwd, ClassifyContext ctx) {
+        // Repo exclusion is applied later by the orchestrator once it has
+        // resolved owner/repo per session (ImportCommand.ResolveCursorRepos
+        // walks each cwd into RepositoryDetection). Path exclusion needs only
+        // the cwd, so we apply it inline here.
+        string? excludedPathKey = null;
+        if (cwd is not null && ctx.ExcludedPaths is { Count: > 0 } paths) {
+            foreach (var entry in paths) {
+                if (PathExclusion.IsExcluded(cwd, [entry])) {
+                    excludedPathKey = PathExclusion.Normalize(entry);
+                    break;
                 }
             }
+        }
+        return (ExcludedRepoKey: null, ExcludedPathKey: excludedPathKey);
+    }
 
-            if (folderPath is null) continue;
+    IReadOnlyDictionary<string, string> BuildSanitizedToFolderMap() {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
 
-            // Normalize once so downstream consumers (path-redaction in particular)
-            // see a canonical native form, not whatever shape workspace.json used.
-            string normalizedFolder;
+        if (!Directory.Exists(_workspaceStorageDir)) return map;
+
+        foreach (var subdir in Directory.EnumerateDirectories(_workspaceStorageDir)) {
+            var wsJson = Path.Combine(subdir, "workspace.json");
+            if (!File.Exists(wsJson)) continue;
+
+            string? folder;
             try {
-                normalizedFolder = NormalizePath(folderPath);
-            } catch (Exception ex) {
-                Console.Error.WriteLine($"[cursor] Skipping workspace {subdir}: invalid folder path '{folderPath}' ({ex.Message})");
+                using var doc = JsonDocument.Parse(File.ReadAllText(wsJson));
+                folder = doc.RootElement.TryGetProperty("folder", out var f) ? f.GetString() : null;
+            } catch {
                 continue;
             }
 
-            var wsDbPath = Path.Combine(subdir, "state.vscdb");
+            if (folder is null) continue;
 
-            if (all) {
-                yield return (normalizedFolder, wsDbPath);
-
+            var    stripped = StripFileUri(folder);
+            string normalized;
+            try {
+                normalized = Path.GetFullPath(stripped).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            } catch {
                 continue;
             }
 
-            var target = selectedWorkspace ?? cwd;
-            var normalizedTarget = NormalizePath(target);
-
-            if (string.Equals(normalizedTarget, normalizedFolder, StringComparison.OrdinalIgnoreCase)) {
-                yield return (normalizedFolder, wsDbPath);
-            }
-        }
-    }
-
-    private static string StripFileUri(string uri) {
-        if (uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase)) {
-            // file:///path → /path  or  file://host/path (rare)
-            var path = uri.Substring("file://".Length);
-
-            // On Windows the URI is file:///C:/... → strip leading /
-            // On Unix the URI is file:///home/... → strip two leading slashes leaving /
-            if (path.StartsWith('/') && path.Length > 2 && path[2] == ':') {
-                path = path.TrimStart('/'); // Windows: /C:/foo → C:/foo
-            }
-
-            return Uri.UnescapeDataString(path);
+            var sanitized = EncodeWorkspacePath(normalized);
+            map[sanitized] = normalized;
         }
 
-        return uri;
+        return map;
     }
 
-    private static string NormalizePath(string path) =>
-        Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    static string StripFileUri(string uri) {
+        if (!uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase)) return uri;
+
+        var path = uri["file://".Length..];
+
+        // Windows: file:///C:/foo → /C:/foo → C:/foo
+        if (path.StartsWith('/') && path.Length > 2 && path[2] == ':') {
+            path = path.TrimStart('/');
+        }
+
+        return Uri.UnescapeDataString(path);
+    }
 }

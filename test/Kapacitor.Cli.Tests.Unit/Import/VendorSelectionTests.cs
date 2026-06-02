@@ -44,46 +44,20 @@ public class VendorSelectionTests {
     }
 
     [Test]
-    public async Task cursor_workspace_implies_cursor() {
+    public async Task legacy_cursor_workspace_flag_is_rejected() {
+        // --cursor-workspace and --cursor-all-workspaces were dropped in AI-737
+        // when the SQLite import path was retired. The JSONL walker doesn't need
+        // workspace filtering, so these flags now surface as unknown source options.
         var r = VendorSelection.Parse(["--cursor-workspace", "/some/path"]);
-        await Assert.That(r.HasError).IsFalse();
-        await Assert.That(r.Vendors.Count).IsEqualTo(1);
-        await Assert.That(r.Vendors.Contains("cursor")).IsTrue();
-    }
-
-    [Test]
-    public async Task cursor_all_workspaces_implies_cursor() {
-        var r = VendorSelection.Parse(["--cursor-all-workspaces"]);
-        await Assert.That(r.HasError).IsFalse();
-        await Assert.That(r.Vendors.Count).IsEqualTo(1);
-        await Assert.That(r.Vendors.Contains("cursor")).IsTrue();
-    }
-
-    [Test]
-    public async Task cursor_workspace_and_all_workspaces_together_is_error() {
-        var r = VendorSelection.Parse(["--cursor-workspace", "/p", "--cursor-all-workspaces"]);
         await Assert.That(r.HasError).IsTrue();
-        await Assert.That(r.Error!).Contains("mutually exclusive");
+        await Assert.That(r.Error!).Contains("--cursor-workspace");
     }
 
     [Test]
-    public async Task cursor_workspace_at_end_of_args_is_handled() {
-        // Pin the trailing-flag case: --cursor-workspace at the very end of args
-        // (no value present) must not throw, must still imply cursor selection,
-        // and must not produce an error in the vendor-selection layer. The
-        // user-visible "requires a path value" error is Program.cs's
-        // responsibility, not VendorSelection's.
-        var r = VendorSelection.Parse(["--cursor-workspace"]);
-        await Assert.That(r.HasError).IsFalse();
-        await Assert.That(r.Vendors.Contains("cursor")).IsTrue();
-    }
-
-    [Test]
-    public async Task cursor_workspace_does_not_swallow_neighbouring_vendor_flag() {
-        var r = VendorSelection.Parse(["--cursor-workspace", "--codex"]);
-        await Assert.That(r.HasError).IsFalse();
-        await Assert.That(r.Vendors.Contains("cursor")).IsTrue();
-        await Assert.That(r.Vendors.Contains("codex")).IsTrue();
+    public async Task legacy_cursor_all_workspaces_flag_is_rejected() {
+        var r = VendorSelection.Parse(["--cursor-all-workspaces"]);
+        await Assert.That(r.HasError).IsTrue();
+        await Assert.That(r.Error!).Contains("--cursor-all-workspaces");
     }
 
     [Test]
@@ -91,7 +65,6 @@ public class VendorSelectionTests {
         var r = VendorSelection.Parse(["--cursor-worskpace", "/p"]);
         await Assert.That(r.HasError).IsTrue();
         await Assert.That(r.Error!).Contains("--cursor-worskpace");
-        await Assert.That(r.Error!).Contains("Did you mean");
     }
 
     [Test]
