@@ -41,7 +41,12 @@ var command = args[0];
 // ResolveServerUrl can shell out to `git remote -v` and emit warnings, and
 // the update-check task hits the npm registry — both pure noise inside a
 // nested headless invocation.
-if (Environment.GetEnvironmentVariable("KAPACITOR_SKIP") is "1" && hookCommands.Contains(command)) {
+if (Environment.GetEnvironmentVariable("KAPACITOR_SKIP") is "1"
+ && (hookCommands.Contains(command) || command == "hook")) {
+    // `hook` is intentionally not in hookCommands (that list drives the
+    // templated help for Claude's per-event commands), but it MUST honour
+    // the same skip semantics so nested headless invocations don't loop
+    // Cursor hook payloads back into kapacitor.
     return 0;
 }
 
@@ -601,6 +606,13 @@ switch (command) {
     }
     case "codex-hook":
         return await CodexHookCommand.Handle(baseUrl!, Console.In);
+    case "hook": {
+        if (args.Contains("--cursor")) {
+            return await CursorHookCommand.Handle(baseUrl!, Console.In);
+        }
+        Console.Error.WriteLine("kapacitor hook requires a vendor flag (e.g. --cursor)");
+        return 1;
+    }
     case "cursor":
         await Console.Error.WriteLineAsync(
             "kapacitor cursor import has been removed. Use 'kapacitor import --cursor' instead.");
@@ -1034,7 +1046,7 @@ async Task<int> PrintCommandHelp(string cmd) {
     if (text is not null) {
         await Console.Out.WriteAsync(text);
     } else if (hookCommands.Contains(cmd)) {
-        var hookText = EmbeddedResources.Load("help-hook.txt").Replace("{cmd}", cmd);
+        var hookText = EmbeddedResources.Load("help-hook-event.txt").Replace("{cmd}", cmd);
         await Console.Out.WriteAsync(hookText);
     } else {
         Console.Error.WriteLine($"Unknown command: {cmd}");

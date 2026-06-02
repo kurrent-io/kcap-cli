@@ -139,6 +139,37 @@ public static class HttpClientExtensions {
             EnsureAbsolute(url);
             return SendWithRetryAsync(() => client.DeleteAsync(url, ct), timeout ?? DefaultTimeout, ct);
         }
+
+        /// <summary>
+        /// Single-attempt POST with a hard per-call timeout. No retry, no
+        /// backoff. Used by hook-path call sites where retries would burst
+        /// the shared dispatcher budget. <paramref name="ct"/> is honoured;
+        /// expiry of <paramref name="timeout"/> surfaces as
+        /// <see cref="OperationCanceledException"/>.
+        /// </summary>
+        public async Task<HttpResponseMessage> PostOnceAsync(
+                string            url,
+                HttpContent       content,
+                TimeSpan          timeout,
+                CancellationToken ct = default
+            ) {
+            EnsureAbsolute(url);
+            using var timeoutCts = new CancellationTokenSource(timeout);
+            using var linkedCts  = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            return await client.PostAsync(url, content, linkedCts.Token);
+        }
+
+        /// <summary>Single-attempt GET — see <see cref="PostOnceAsync"/>.</summary>
+        public async Task<HttpResponseMessage> GetOnceAsync(
+                string            url,
+                TimeSpan          timeout,
+                CancellationToken ct = default
+            ) {
+            EnsureAbsolute(url);
+            using var timeoutCts = new CancellationTokenSource(timeout);
+            using var linkedCts  = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            return await client.GetAsync(url, linkedCts.Token);
+        }
     }
 
     /// <summary>

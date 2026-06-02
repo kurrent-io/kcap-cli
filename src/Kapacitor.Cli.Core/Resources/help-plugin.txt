@@ -1,4 +1,4 @@
-kapacitor plugin — Manage hooks and skills for Claude Code, Codex CLI, and other agents
+kapacitor plugin — Manage hooks and skills for Claude Code, Codex CLI, Cursor, and other agents
 
 Usage: kapacitor plugin <subcommand> [options]
 
@@ -10,6 +10,9 @@ Options:
   --project           Apply hooks to current project only (default: user-wide).
                       Skills are always user-wide; --project only affects hooks.
   --codex             Target Codex CLI: install hooks AND agent skills.
+  --cursor            Target Cursor IDE: install hooks to ~/.cursor/hooks.json.
+                      Detected by user-dir presence, not PATH, so users without
+                      the cursor shell command are covered.
   --skills            Install only the agent-agnostic skills to ~/.agents/skills/.
                       Use this if you only have Cursor (or another agent that
                       reads ~/.agents/skills/) and don't want Codex hooks.
@@ -29,6 +32,10 @@ Notes:
   with --project). MCP server registration is handled separately by the Codex
   plugin manifest and is not affected by this command.
 
+  --cursor writes all 8 supported hooks to ~/.cursor/hooks.json (merged with
+  any existing entries). Cursor uses a single user-scope hooks.json — there
+  is no project-scope variant, so --project has no effect with --cursor.
+
   install --codex and install --skills both clean up legacy ~/.codex/skills/kapacitor-*
   folders from prior installer versions.
 
@@ -40,8 +47,10 @@ Examples:
   kapacitor plugin install --skills              # Install agent skills only (~/.agents/skills/)
   kapacitor plugin install --codex               # Install Codex hooks + agent skills (user)
   kapacitor plugin install --project --codex     # Codex hooks in <repo>/.codex/hooks.json, skills user-wide
+  kapacitor plugin install --cursor              # Install Cursor hooks (~/.cursor/hooks.json)
   kapacitor plugin install --skills --if-installed   # Refresh skills if previously installed (used by npm postinstall)
   kapacitor plugin install --codex --if-installed    # Refresh Codex hooks if previously installed (used by npm postinstall)
   kapacitor plugin install --if-installed            # Refresh Claude plugin registration if previously installed
   kapacitor plugin remove --codex                # Remove Codex hooks + agent skills + legacy ~/.codex/skills
+  kapacitor plugin remove --cursor               # Remove Cursor hooks from ~/.cursor/hooks.json
   kapacitor plugin remove --skills               # Remove agent skills + legacy ~/.codex/skills

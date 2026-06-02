@@ -1,13 +1,15 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Kapacitor.Cli.Core;
+using Kapacitor.Cli.Core.Cursor;
 
 namespace Kapacitor.Cli.Commands;
 
 public static class PluginCommand {
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
-    const string CodexHookCommand = "kapacitor codex-hook";
+    const string CodexHookCommand   = "kapacitor codex-hook";
+    const string CursorHookCommand  = "kapacitor hook --cursor";
 
     // PermissionRequest must wait for the dashboard's decision; the daemon-side
     // bridge call is intentionally infinite. 86400s = 24h keeps Codex from
@@ -30,36 +32,32 @@ public static class PluginCommand {
     }
 
     static async Task<int> Install(string[] args) {
-        if (args.Contains("--codex") && args.Contains("--skills")) {
-            await Console.Error.WriteLineAsync("--codex and --skills cannot be used together.");
+        if ((args.Contains("--codex")  && args.Contains("--skills"))
+         || (args.Contains("--cursor") && args.Contains("--skills"))
+         || (args.Contains("--cursor") && args.Contains("--codex"))) {
+            await Console.Error.WriteLineAsync(
+                "--cursor, --codex, and --skills are mutually exclusive.");
             return 1;
         }
 
-        if (args.Contains("--skills")) {
-            return await InstallSkills(args);
-        }
-
-        if (args.Contains("--codex")) {
-            return await InstallCodex(args);
-        }
-
+        if (args.Contains("--skills")) return await InstallSkills(args);
+        if (args.Contains("--codex"))  return await InstallCodex(args);
+        if (args.Contains("--cursor")) return await InstallCursor(args);
         return await InstallClaude(args);
     }
 
     static async Task<int> Remove(string[] args) {
-        if (args.Contains("--codex") && args.Contains("--skills")) {
-            await Console.Error.WriteLineAsync("--codex and --skills cannot be used together.");
+        if ((args.Contains("--codex")  && args.Contains("--skills"))
+         || (args.Contains("--cursor") && args.Contains("--skills"))
+         || (args.Contains("--cursor") && args.Contains("--codex"))) {
+            await Console.Error.WriteLineAsync(
+                "--cursor, --codex, and --skills are mutually exclusive.");
             return 1;
         }
 
-        if (args.Contains("--skills")) {
-            return await RemoveSkills(args);
-        }
-
-        if (args.Contains("--codex")) {
-            return await RemoveCodex(args);
-        }
-
+        if (args.Contains("--skills")) return await RemoveSkills(args);
+        if (args.Contains("--codex"))  return await RemoveCodex(args);
+        if (args.Contains("--cursor")) return await RemoveCursor(args);
         return await RemoveClaude(args);
     }
 
@@ -482,8 +480,140 @@ public static class PluginCommand {
         }
     }
 
+    static async Task<int> InstallCursor(string[] args) {
+        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? CursorPaths.UserHooksJson();
+
+        var refreshOnly = args.Contains("--if-installed");
+
+        if (refreshOnly && !CursorHooksInstaller.IsInstalled(hooksPath)) return 0;
+        if (refreshOnly &&
+            CursorHooksInstaller.ReadMarker(hooksPath) == KapacitorVersion.Current()) {
+            return 0;
+        }
+
+        // PATH precheck on the non-postinstall path. hooks.json writes the bare
+        // `kapacitor hook --cursor` command; we must verify Cursor will actually
+        // find it. Skip the precheck on the postinstall (--if-installed) path so
+        // an in-flight npm install doesn't fail just because the new symlink
+        // isn't on the child process's PATH yet.
+        if (!refreshOnly && !AgentDetector.IsInstalled("kapacitor")) {
+            await Console.Error.WriteLineAsync(
+                "Cannot install Cursor hooks: 'kapacitor' is not on PATH. "
+                + "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor");
+            return 1;
+        }
+
+        if (!InstallCursorHooks(hooksPath)) {
+            if (refreshOnly) return 0;
+            await Console.Error.WriteLineAsync("Could not write Cursor hooks file.");
+            return 1;
+        }
+
+        await Console.Out.WriteLineAsync(refreshOnly
+            ? $"Cursor hooks refreshed ({hooksPath})"
+            : $"Cursor hooks installed ({hooksPath})");
+        return 0;
+    }
+
+    static async Task<int> RemoveCursor(string[] args) {
+        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? CursorPaths.UserHooksJson();
+        if (!File.Exists(hooksPath)) {
+            await Console.Out.WriteLineAsync("Nothing to remove — Cursor hooks file not found.");
+            return 0;
+        }
+        var removed = RemoveCursorHooks(hooksPath);
+        await Console.Out.WriteLineAsync(removed
+            ? $"Cursor hooks removed ({hooksPath})"
+            : "Cursor hooks were not installed.");
+        return 0;
+    }
+
+    /// <summary>
+    /// Writes (or merges into) <paramref name="hooksPath"/> a Cursor hooks.json
+    /// invoking <c>kapacitor hook --cursor</c> for every event. Preserves
+    /// user-authored entries; replaces existing kapacitor entries.
+    /// </summary>
+    public static bool InstallCursorHooks(string hooksPath) {
+        try {
+            JsonObject root = [];
+            if (File.Exists(hooksPath)) {
+                try { if (JsonNode.Parse(File.ReadAllText(hooksPath)) is JsonObject obj) root = obj; }
+                catch { /* Malformed — start fresh */ }
+            }
+
+            if (root["version"] is null) root["version"] = 1;
+            if (root["hooks"] is not JsonObject hooks) { hooks = []; root["hooks"] = hooks; }
+
+            foreach (var evt in CursorHooksParser.CursorHookEvents) {
+                var kapacitorEntry = new JsonObject {
+                    ["command"] = CursorHookCommand
+                };
+
+                if (hooks[evt] is not JsonArray entries) {
+                    hooks[evt] = new JsonArray(kapacitorEntry);
+                    continue;
+                }
+
+                var preserved = new JsonArray();
+                foreach (var entry in entries) {
+                    if (entry is null) continue;
+                    if (!CursorHooksParser.EntryReferencesKapacitorCursorHook(entry)) {
+                        preserved.Add(entry.DeepClone());
+                    }
+                }
+                preserved.Add((JsonNode)kapacitorEntry);
+                hooks[evt] = preserved;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(hooksPath)!);
+            File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
+            CursorHooksInstaller.WriteMarker(hooksPath);
+            return true;
+        } catch { return false; }
+    }
+
+    /// <summary>
+    /// Removes every entry in <paramref name="hooksPath"/> whose command
+    /// invokes <c>kapacitor hook --cursor</c>. Other entries are preserved.
+    /// Returns true if any entries were removed.
+    /// </summary>
+    public static bool RemoveCursorHooks(string hooksPath) {
+        try {
+            if (!File.Exists(hooksPath)) return false;
+            if (JsonNode.Parse(File.ReadAllText(hooksPath)) is not JsonObject root) return false;
+            if (root["hooks"] is not JsonObject hooks) return false;
+
+            var changed = false;
+            foreach (var evt in CursorHooksParser.CursorHookEvents) {
+                if (hooks[evt] is not JsonArray entries) continue;
+                var preserved = new JsonArray();
+                foreach (var entry in entries) {
+                    if (entry is null) continue;
+                    if (CursorHooksParser.EntryReferencesKapacitorCursorHook(entry)) {
+                        changed = true;
+                    } else {
+                        preserved.Add(entry.DeepClone());
+                    }
+                }
+                hooks[evt] = preserved;
+            }
+
+            if (changed) {
+                File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
+                CursorHooksInstaller.DeleteMarker(hooksPath);
+            }
+            return changed;
+        } catch { return false; }
+    }
+
+    static string? GetArg(string[] args, string flag) {
+        var idx = Array.IndexOf(args, flag);
+        return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
+    }
+
     static int PrintUsage() {
-        Console.Error.WriteLine("Usage: kapacitor plugin <install|remove> [--project] [--codex|--skills] [--if-installed]");
+        Console.Error.WriteLine(
+            "Usage: kapacitor plugin <install|remove> [--project] [--codex|--cursor|--skills] [--if-installed]");
 
         return 1;
     }

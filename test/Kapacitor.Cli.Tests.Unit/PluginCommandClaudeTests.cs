@@ -21,6 +21,7 @@ public class PluginCommandClaudeTests {
     }
 
     [Test]
+    [NotInParallel("HomeEnvVarMutation")]
     public async Task Install_claude_with_if_installed_is_noop_when_no_marker_and_no_entries() {
         var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-claude-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
@@ -39,6 +40,7 @@ public class PluginCommandClaudeTests {
     }
 
     [Test]
+    [NotInParallel("HomeEnvVarMutation")]
     public async Task Install_claude_with_if_installed_refreshes_pre_marker_install() {
         var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-claude-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
@@ -78,6 +80,7 @@ public class PluginCommandClaudeTests {
     }
 
     [Test]
+    [NotInParallel("HomeEnvVarMutation")]
     public async Task Install_claude_with_if_installed_is_noop_when_marker_matches_current_version() {
         var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-claude-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
@@ -106,7 +109,7 @@ public class PluginCommandClaudeTests {
     }
 
     [Test]
-    [NotInParallel("ConsoleStreams")]
+    [NotInParallel(["ConsoleStreams", "HomeEnvVarMutation"])]
     public async Task Install_claude_with_if_installed_swallows_plugin_resolution_failure() {
         var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-claude-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
@@ -139,6 +142,7 @@ public class PluginCommandClaudeTests {
     }
 
     [Test]
+    [NotInParallel("HomeEnvVarMutation")]
     public async Task Remove_claude_deletes_marker() {
         var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-claude-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");

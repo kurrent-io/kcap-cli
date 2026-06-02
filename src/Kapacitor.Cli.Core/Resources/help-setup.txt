@@ -13,12 +13,16 @@ Options:
                               the claude CLI is detected on PATH.
   --skip-codex-hooks          Don't install Codex CLI hooks/skills even if
                               the codex CLI is detected on PATH.
+  --skip-cursor-hooks         Don't install Cursor hooks even if the Cursor
+                              user-dir is detected (~/.cursor/).
 
-The setup wizard detects every supported coding agent on PATH (claude, codex)
-and asks one yes/no per detected agent. Hooks are installed user-wide. For
-project-scope or post-setup re-installs, use:
+The setup wizard detects every supported coding agent: Claude Code and Codex CLI
+via PATH; Cursor via user-dir presence (~/.cursor/) so IDE-only users without
+the cursor shell command are covered. One yes/no prompt is shown per detected
+agent. Hooks are installed user-wide. For project-scope or post-setup
+re-installs, use:
 
-  kapacitor plugin install [--codex] [--project]
+  kapacitor plugin install [--codex] [--cursor] [--project]
 
 Legacy:
   --plugin-scope <user|project|skip>

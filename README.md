@@ -36,7 +36,7 @@ The setup wizard walks you through:
 1. **Server URL** — enter the URL your admin provided
 2. **Login** — authenticates via GitHub Device Flow (if the server requires auth)
 3. **Default visibility** — choose how your sessions are visible to others
-4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH` and offers to install hooks/skills for each (user-wide)
+4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH`, and Cursor by user-dir presence (`~/.cursor/`), then offers to install hooks/skills for each (user-wide)
 5. **Daemon** — configure the daemon name for remote agent execution
 
 Verify with `kapacitor whoami` and `kapacitor status`.
@@ -47,10 +47,10 @@ For non-interactive environments:
 kapacitor setup --server-url https://my-tenant.kapacitor.ai --default-visibility org_public --no-prompt
 ```
 
-In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks` and/or `--skip-codex-hooks`.
+In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, and/or `--skip-cursor-hooks`.
 
 > **Need hooks for an agent installed after setup, or scoped to a single repo?**
-> Run `kapacitor plugin install [--codex] [--project]`. Use `--skills` instead of `--codex` if you only want the agent skills (Cursor, etc.) without Codex hooks. After installing Codex hooks, run `/hooks` inside Codex and trust each kapacitor entry — Codex doesn't execute hooks until each is explicitly trusted. After a `--project` install, also run `codex` once in the repo and accept the trust prompt. Re-running after a kapacitor upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kapacitor`.
+> Run `kapacitor plugin install [--codex|--cursor]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, run `/hooks` inside Codex and trust each kapacitor entry — Codex doesn't execute hooks until each is explicitly trusted. After a `--project` install, also run `codex` once in the repo and accept the trust prompt. Re-running after a kapacitor upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kapacitor`.
 
 > **Need at least one agent to capture sessions:** the setup wizard runs to completion without an agent CLI on `PATH` (it'll still configure your profile, auth, and daemon), but kapacitor only records work once Claude Code or Codex CLI is installed and the hooks are in place.
 
@@ -95,13 +95,14 @@ kapacitor setup                                   # interactive wizard
 kapacitor setup --server-url <url> --no-prompt    # CI / scripted
 ```
 
-The setup wizard detects every supported coding agent on `PATH` — Claude Code and Codex CLI — and offers to install hooks for each, then configures the daemon. Re-run any time to update the configuration.
+The setup wizard detects every supported coding agent and offers to install hooks for each, then configures the daemon. Claude Code and Codex CLI are detected via `PATH`; Cursor is detected by user-dir presence (`~/.cursor/`), so IDE users without the `cursor` shell command are covered. Re-run any time to update the configuration.
 
 In `--no-prompt` mode, hooks install for every detected agent by default. Opt out per agent:
 
 ```bash
-kapacitor setup --server-url <url> --no-prompt --skip-codex-hooks   # only Claude
-kapacitor setup --server-url <url> --no-prompt --skip-claude-hooks  # only Codex
+kapacitor setup --server-url <url> --no-prompt --skip-codex-hooks --skip-cursor-hooks   # only Claude
+kapacitor setup --server-url <url> --no-prompt --skip-claude-hooks --skip-cursor-hooks  # only Codex
+kapacitor setup --server-url <url> --no-prompt --skip-claude-hooks --skip-codex-hooks   # only Cursor
 ```
 
 After installing Codex hooks, run `/hooks` inside Codex and trust each kapacitor entry — Codex does not execute hooks until each is explicitly trusted. For project-scope installs (a single repo), use `kapacitor plugin install [--codex] --project` after setup.
@@ -316,6 +317,25 @@ The daemon starts Codex with `--sandbox workspace-write` and `--ask-for-approval
 > **Upgrading from an earlier version of kapacitor?** The npm postinstall hook refreshes all user-scope kapacitor installations on every `npm install -g @kurrent/kapacitor`, so you always pick up the current CLI version's skills (`~/.agents/skills/kapacitor-*`), Codex hook commands (`~/.codex/hooks.json`), and Claude plugin registration (`~/.claude/settings.json`). Each refresh is gated on a marker file written by your previous setup — fresh systems that never opted in are left untouched. Project-scope installs (`--project`) are not auto-refreshed; re-run `kapacitor plugin install [--codex] --project` after upgrading if you want the latest config for a specific repo.
 
 PR review for hosted Codex agents is not yet supported (tracked in AI-632). The sandbox and approval-mode selectors in the launch dialog are also planned as a follow-up (AI-633).
+
+#### Cursor IDE hooks
+
+Cursor is detected by the presence of `~/.cursor/` — you don't need the `cursor` shell command on `PATH`. If `kapacitor setup` found Cursor and you said yes, hooks are already in place. To install or remove later:
+
+```bash
+kapacitor plugin install --cursor                # writes ~/.cursor/hooks.json
+kapacitor plugin remove --cursor                 # remove Cursor hooks
+```
+
+Cursor uses a single user-scope `hooks.json`; there is no project-scope variant.
+
+`kapacitor setup` writes all 8 supported Cursor hook entries. Use `--skip-cursor-hooks` to opt out during setup:
+
+```bash
+kapacitor setup --server-url <url> --no-prompt --skip-cursor-hooks
+```
+
+Legacy SQLite import (`kapacitor import --cursor`) is unchanged.
 
 #### Daemon config settings
 
