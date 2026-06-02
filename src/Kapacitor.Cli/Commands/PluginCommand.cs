@@ -483,7 +483,7 @@ public static class PluginCommand {
     }
 
     static int PrintUsage() {
-        Console.Error.WriteLine("Usage: kapacitor plugin <install|remove> [--project] [--codex|--skills]");
+        Console.Error.WriteLine("Usage: kapacitor plugin <install|remove> [--project] [--codex|--skills] [--if-installed]");
 
         return 1;
     }

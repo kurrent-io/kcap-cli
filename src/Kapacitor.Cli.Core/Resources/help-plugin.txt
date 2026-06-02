@@ -13,6 +13,12 @@ Options:
   --skills            Install only the agent-agnostic skills to ~/.agents/skills/.
                       Use this if you only have Cursor (or another agent that
                       reads ~/.agents/skills/) and don't want Codex hooks.
+  --if-installed      Refresh-only mode: no-op unless the user has previously
+                      installed the target (marker file or pre-marker entry
+                      detected). Used by the npm postinstall hook to refresh
+                      command strings + plugin paths on upgrade without forcing
+                      installs onto fresh systems. Errors are swallowed so npm
+                      install never fails. Harmless to call by hand.
 
 Notes:
   Skills install to ~/.agents/skills/kapacitor-{recap,errors,hide,disable,validate-plan}/.
@@ -26,10 +32,16 @@ Notes:
   install --codex and install --skills both clean up legacy ~/.codex/skills/kapacitor-*
   folders from prior installer versions.
 
+  --if-installed is scoped to user-wide installs only — the npm postinstall hook
+  does not refresh --project installs.
+
 Examples:
   kapacitor plugin install                       # Install Claude Code plugin (user)
   kapacitor plugin install --skills              # Install agent skills only (~/.agents/skills/)
   kapacitor plugin install --codex               # Install Codex hooks + agent skills (user)
   kapacitor plugin install --project --codex     # Codex hooks in <repo>/.codex/hooks.json, skills user-wide
+  kapacitor plugin install --skills --if-installed   # Refresh skills if previously installed (used by npm postinstall)
+  kapacitor plugin install --codex --if-installed    # Refresh Codex hooks if previously installed (used by npm postinstall)
+  kapacitor plugin install --if-installed            # Refresh Claude plugin registration if previously installed
   kapacitor plugin remove --codex                # Remove Codex hooks + agent skills + legacy ~/.codex/skills
   kapacitor plugin remove --skills               # Remove agent skills + legacy ~/.codex/skills

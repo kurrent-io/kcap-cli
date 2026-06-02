@@ -41,6 +41,30 @@ public class ClaudePluginInstallerTests {
     }
 
     [Test]
+    public async Task IsInstalled_true_when_legacy_enabledPlugins_kurrent_key_present() {
+        // Pre-rename installs used the "kapacitor@kurrent" key. The installer
+        // and remover both treat it as a kapacitor-owned stale entry, so the
+        // refresh gate must detect it too — otherwise users on a pre-marker
+        // pre-rename config would never get migrated.
+        using var tmp = new TempDir();
+        var settingsPath = Path.Combine(tmp.Path, "settings.json");
+        await File.WriteAllTextAsync(settingsPath, """
+            { "enabledPlugins": { "kapacitor@kurrent": true } }
+            """);
+        await Assert.That(ClaudePluginInstaller.IsInstalled(settingsPath)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsInstalled_true_when_legacy_marketplace_kurrent_key_present() {
+        using var tmp = new TempDir();
+        var settingsPath = Path.Combine(tmp.Path, "settings.json");
+        await File.WriteAllTextAsync(settingsPath, """
+            { "extraKnownMarketplaces": { "kurrent": { "source": { "source": "directory", "path": "/some/path" } } } }
+            """);
+        await Assert.That(ClaudePluginInstaller.IsInstalled(settingsPath)).IsTrue();
+    }
+
+    [Test]
     public async Task IsInstalled_false_when_settings_has_unrelated_keys_only() {
         using var tmp = new TempDir();
         var settingsPath = Path.Combine(tmp.Path, "settings.json");
