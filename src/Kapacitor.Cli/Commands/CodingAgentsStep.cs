@@ -22,6 +22,7 @@ internal static class CodingAgentsStep {
         Func<string /*settingsPath*/, string /*pluginDir*/, bool> InstallClaudePlugin,
         Func<string /*hooksPath*/, bool>                          InstallCodexHooks,
         Func<string /*hooksPath*/, bool>                          InstallCursorHooks,
+        Func<bool>                                                KapacitorOnPath,
         Func<string /*srcDir*/, string /*dstDir*/, bool>          InstallAgentSkills,
         Func<string /*legacyDir*/, bool>                          CleanLegacyCodexSkills);
     internal record Result(
@@ -141,6 +142,16 @@ internal static class CodingAgentsStep {
         var shouldInstall = options.NoPrompt || prompt("Install Cursor IDE hooks?");
         if (!shouldInstall) {
             writeLine("  [dim]· Cursor hooks not installed (you can run kapacitor plugin install --cursor later)[/]");
+            return false;
+        }
+
+        // hooks.json writes the bare "kapacitor hook --cursor" command and
+        // relies on Cursor finding it on PATH. If kapacitor isn't on PATH
+        // we'd write a config Cursor can't execute — surface a setup error
+        // instead. Mirror of PluginCommand.InstallCursor's precheck.
+        if (!installers.KapacitorOnPath()) {
+            writeLine("  [yellow]⚠[/] Cursor hooks not installed — 'kapacitor' is not on PATH.");
+            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kapacitor[/]");
             return false;
         }
 

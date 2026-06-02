@@ -469,6 +469,23 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write Cursor hooks"));
     }
 
+    [Test]
+    public async Task Cursor_kapacitor_not_on_path_aborts_install_without_writing_hooks() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { KapacitorOnPathReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CursorHooksInstalled).IsFalse();
+        await Assert.That(calls.KapacitorOnPathCalled).IsTrue();
+        await Assert.That(calls.CursorHooksCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("'kapacitor' is not on PATH"));
+    }
+
     static CodingAgentsStep.Paths TestPaths() => new(
         ClaudeSettingsPath:   "/fake/.claude/settings.json",
         ClaudeScopeLabel:     "user",
@@ -497,6 +514,9 @@ public class CodingAgentsStepTests {
         public string? CursorHooksArg     { get; private set; }
         public bool    CursorHooksReturns { get; set; } = true;
 
+        public bool KapacitorOnPathCalled  { get; private set; }
+        public bool KapacitorOnPathReturns { get; set; } = true;
+
         public bool                      AgentSkillsCalled  { get; private set; }
         public (string Src, string Dst)? AgentSkillsArgs    { get; private set; }
         public bool                      AgentSkillsReturns { get; set; } = true;
@@ -523,6 +543,10 @@ public class CodingAgentsStepTests {
                 CursorHooksArg    = h;
 
                 return CursorHooksReturns;
+            },
+            KapacitorOnPath: () => {
+                KapacitorOnPathCalled = true;
+                return KapacitorOnPathReturns;
             },
             InstallAgentSkills: (s, d) => {
                 AgentSkillsCalled = true;

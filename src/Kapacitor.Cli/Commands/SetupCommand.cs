@@ -194,6 +194,7 @@ public static class SetupCommand {
             InstallClaudePlugin:    InstallPlugin,
             InstallCodexHooks:      PluginCommand.InstallCodexHooks,
             InstallCursorHooks:     PluginCommand.InstallCursorHooks,
+            KapacitorOnPath:        () => AgentDetector.IsInstalled("kapacitor"),
             InstallAgentSkills:     Kapacitor.Cli.Core.AgentsSkillsInstaller.Install,
             CleanLegacyCodexSkills: legacyDir => Kapacitor.Cli.Core.AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny);
 
