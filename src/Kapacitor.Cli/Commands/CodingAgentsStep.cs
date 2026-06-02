@@ -8,26 +8,32 @@ namespace Kapacitor.Cli.Commands;
 /// can drive every branch without touching ~/.claude, ~/.codex, or AnsiConsole.
 /// </summary>
 internal static class CodingAgentsStep {
-    internal record Options(bool SkipClaude, bool SkipCodex, bool NoPrompt);
-    internal record DetectedAgents(bool Claude, bool Codex);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool NoPrompt);
+    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor);
     internal record Paths(
         string ClaudeSettingsPath,
         string ClaudeScopeLabel,
         string? PluginDir,
         string CodexHooksPath,
+        string CursorHooksPath,
         string AgentsSkillsDir,
         string LegacyCodexSkillsDir);
     internal record Installers(
         Func<string /*settingsPath*/, string /*pluginDir*/, bool> InstallClaudePlugin,
         Func<string /*hooksPath*/, bool>                          InstallCodexHooks,
+        Func<string /*hooksPath*/, bool>                          InstallCursorHooks,
         Func<string /*srcDir*/, string /*dstDir*/, bool>          InstallAgentSkills,
         Func<string /*legacyDir*/, bool>                          CleanLegacyCodexSkills);
-    internal record Result(bool ClaudeInstalled, bool CodexHooksInstalled, bool CodexSkillsInstalled);
+    internal record Result(
+        bool ClaudeInstalled,
+        bool CodexHooksInstalled,
+        bool CodexSkillsInstalled,
+        bool CursorHooksInstalled);
 
     /// <summary>
     /// Drives the agent-detection branches and dispatches to the installer
     /// delegates. Subsequent tasks fill in Claude, Codex hooks, Codex skills,
-    /// and neither-detected behaviour.
+    /// Cursor hooks, and neither-detected behaviour.
     /// </summary>
     internal static Task<Result> RunAsync(
         Options options,
@@ -41,12 +47,14 @@ internal static class CodingAgentsStep {
         var codexSkillsInstalled = codexHooksInstalled
             ? HandleCodexSkills(paths, installers, writeLine)
             : false;
+        var cursorHooksInstalled = HandleCursorHooks(options, detected, paths, installers, prompt, writeLine);
 
-        if (!detected.Claude && !detected.Codex) {
-            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code or Codex CLI to start capturing sessions.");
+        if (!detected.Claude && !detected.Codex && !detected.Cursor) {
+            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, or Cursor to start capturing sessions.");
         }
 
-        return Task.FromResult(new Result(claudeInstalled, codexHooksInstalled, codexSkillsInstalled));
+        return Task.FromResult(new Result(
+            claudeInstalled, codexHooksInstalled, codexSkillsInstalled, cursorHooksInstalled));
     }
 
     static bool HandleCodexSkills(
@@ -108,6 +116,41 @@ internal static class CodingAgentsStep {
         writeLine($"  [green]✓[/] Codex hooks installed (user: {Markup.Escape(paths.CodexHooksPath)})");
         writeLine("  [dim]  Next: run /hooks inside Codex and trust each kapacitor entry —[/]");
         writeLine("  [dim]  Codex won't execute hooks until each is explicitly trusted.[/]");
+        return true;
+    }
+
+    static bool HandleCursorHooks(
+        Options options,
+        DetectedAgents detected,
+        Paths paths,
+        Installers installers,
+        Func<string, bool> prompt,
+        Action<string> writeLine) {
+        if (!detected.Cursor) {
+            writeLine("  [dim]· Cursor not detected — skipping[/]");
+            return false;
+        }
+
+        writeLine("  [green]✓[/] Cursor detected");
+
+        if (options.SkipCursor) {
+            writeLine("  [dim]· Cursor hooks skipped by flag[/]");
+            return false;
+        }
+
+        var shouldInstall = options.NoPrompt || prompt("Install Cursor IDE hooks?");
+        if (!shouldInstall) {
+            writeLine("  [dim]· Cursor hooks not installed (you can run kapacitor plugin install --cursor later)[/]");
+            return false;
+        }
+
+        var ok = installers.InstallCursorHooks(paths.CursorHooksPath);
+        if (!ok) {
+            writeLine("  [yellow]⚠[/] Could not write Cursor hooks file.");
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] Cursor hooks installed ({Markup.Escape(paths.CursorHooksPath)})");
         return true;
     }
 

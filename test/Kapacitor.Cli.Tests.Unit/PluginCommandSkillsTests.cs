@@ -14,7 +14,7 @@ public class PluginCommandSkillsTests {
             Console.SetError(capturedErr);
             var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex", "--skills"]);
             await Assert.That(exit).IsEqualTo(1);
-            await Assert.That(capturedErr.ToString()).Contains("cannot be used together");
+            await Assert.That(capturedErr.ToString()).Contains("mutually exclusive");
         } finally {
             Console.SetError(originalErr);
         }
@@ -29,7 +29,7 @@ public class PluginCommandSkillsTests {
             Console.SetError(capturedErr);
             var exit = await PluginCommand.HandleAsync(["plugin", "remove", "--codex", "--skills"]);
             await Assert.That(exit).IsEqualTo(1);
-            await Assert.That(capturedErr.ToString()).Contains("cannot be used together");
+            await Assert.That(capturedErr.ToString()).Contains("mutually exclusive");
         } finally {
             Console.SetError(originalErr);
         }

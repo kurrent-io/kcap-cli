@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Kapacitor.Cli.Core;
 using Kapacitor.Cli.Core.Auth;
 using Kapacitor.Cli.Core.Config;
+using Kapacitor.Cli.Core.Cursor;
 using Spectre.Console;
 using Profile = Kapacitor.Cli.Core.Config.Profile;
 
@@ -15,6 +16,7 @@ public static class SetupCommand {
         var forceDevice      = args.Contains("--device");
         var skipClaudeFlag   = args.Contains("--skip-claude-hooks");
         var skipCodexFlag    = args.Contains("--skip-codex-hooks");
+        var skipCursorFlag   = args.Contains("--skip-cursor-hooks");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
@@ -164,7 +166,8 @@ public static class SetupCommand {
         var pluginPath = ResolvePluginPath();
         var detected   = new CodingAgentsStep.DetectedAgents(
             Claude: AgentDetector.IsInstalled("claude"),
-            Codex:  AgentDetector.IsInstalled("codex"));
+            Codex:  AgentDetector.IsInstalled("codex"),
+            Cursor: CursorPaths.IsInstalled());
 
         // gitRoot is guaranteed non-null here when legacyProjectScope is true (the early
         // guard at the top of HandleAsync returns 1 otherwise).
@@ -175,6 +178,7 @@ public static class SetupCommand {
         var stepOptions = new CodingAgentsStep.Options(
             SkipClaude: skipClaude,
             SkipCodex:  skipCodexFlag,
+            SkipCursor: skipCursorFlag,
             NoPrompt:   noPrompt);
 
         var stepPaths = new CodingAgentsStep.Paths(
@@ -182,12 +186,14 @@ public static class SetupCommand {
             ClaudeScopeLabel:     legacyProjectScope ? "project" : "user",
             PluginDir:            pluginPath,
             CodexHooksPath:       CodexPaths.UserHooksJson,
+            CursorHooksPath:      CursorPaths.UserHooksJson(),
             AgentsSkillsDir:      AgentsPaths.UserSkillsDir,
             LegacyCodexSkillsDir: Path.Combine(CodexPaths.Home, "skills"));
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
             InstallCodexHooks:      PluginCommand.InstallCodexHooks,
+            InstallCursorHooks:     PluginCommand.InstallCursorHooks,
             InstallAgentSkills:     Kapacitor.Cli.Core.AgentsSkillsInstaller.Install,
             CleanLegacyCodexSkills: legacyDir => Kapacitor.Cli.Core.AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny);
 
