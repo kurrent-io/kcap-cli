@@ -105,10 +105,56 @@ public class CursorHookCommandTests {
     }
 
     [Test]
+    public async Task sessionEnd_drains_transcript_before_posting_terminal_hook() {
+        // Server's HandleSessionEnd clears the CursorAttachmentsFifo as soon
+        // as it accepts the /hooks/session-end/cursor POST. If the CLI posted
+        // sessionEnd first and only then ran the transcript backfill, the
+        // final user line in the transcript would be normalized AFTER the
+        // FIFO was wiped and any queued beforeSubmitPrompt attachments would
+        // be lost. Verify the order is: transcript batch → session-end.
+        using var fx = new Fixture();
+        await fx.WriteTranscript($$$"""
+            {"role":"user","message":{"content":[{"type":"text","text":"final prompt"}]}}
+            """);
+        await fx.HandleAsync($$$"""
+            {"hook_event_name":"sessionEnd","session_id":"{{{Sid}}}","transcript_path":"{{{fx.TranscriptPathEscaped}}}"}
+            """);
+
+        var transcriptIdx = fx.RouteOrder.FindIndex(r => r == "transcript");
+        var sessionEndIdx = fx.RouteOrder.FindIndex(r => r == "session-end/cursor");
+
+        await Assert.That(transcriptIdx).IsGreaterThanOrEqualTo(0);
+        await Assert.That(sessionEndIdx).IsGreaterThanOrEqualTo(0);
+        await Assert.That(transcriptIdx).IsLessThan(sessionEndIdx);
+    }
+
+    [Test]
+    public async Task non_sessionEnd_events_still_post_before_backfill() {
+        // Regression guard: only sessionEnd swaps the order. Other events
+        // (here: beforeSubmitPrompt) must keep the existing post-then-backfill
+        // ordering so lifecycle metadata reaches the server before any new
+        // transcript context.
+        using var fx = new Fixture();
+        await fx.WriteTranscript($$$"""
+            {"role":"user","message":{"content":[{"type":"text","text":"hello"}]}}
+            """);
+        await fx.HandleAsync($$$"""
+            {"hook_event_name":"beforeSubmitPrompt","session_id":"{{{Sid}}}","prompt":"hello","transcript_path":"{{{fx.TranscriptPathEscaped}}}"}
+            """);
+
+        var transcriptIdx = fx.RouteOrder.FindIndex(r => r == "transcript");
+        var promptIdx     = fx.RouteOrder.FindIndex(r => r == "user-prompt/cursor");
+
+        await Assert.That(promptIdx).IsGreaterThanOrEqualTo(0);
+        await Assert.That(transcriptIdx).IsGreaterThanOrEqualTo(0);
+        await Assert.That(promptIdx).IsLessThan(transcriptIdx);
+    }
+
+    [Test]
     public async Task null_transcript_path_does_not_trigger_backfill() {
         using var fx = new Fixture();
         await fx.HandleAsync("""{"hook_event_name":"sessionStart","session_id":"abc","transcript_path":null}""");
-        await Assert.That(fx.AllSentTo("transcript-line/cursor")).IsEmpty();
+        await Assert.That(fx.AllSentTo("transcript")).IsEmpty();
     }
 
     [Test]
@@ -183,8 +229,13 @@ public class CursorHookCommandTests {
         public CursorHookSpool Spool   { get; }
         public TimeSpan HoldOnPost     { get; set; } = TimeSpan.Zero;
         readonly string _spoolPath;
+        readonly string _transcriptPath;
         readonly HttpClient _client;
         public HttpClient Client => _client;
+        public string TranscriptPathEscaped => _transcriptPath.Replace(@"\", @"\\");
+
+        public Task WriteTranscript(string content) =>
+            File.WriteAllTextAsync(_transcriptPath, content);
 
         public IEnumerable<string> SpoolFiles =>
             Directory.Exists(_spoolPath) ? Directory.EnumerateFiles(_spoolPath, "*.jsonl") : [];
@@ -192,6 +243,7 @@ public class CursorHookCommandTests {
         public Fixture(HttpStatusCode postStatus = HttpStatusCode.OK) {
             Directory.CreateDirectory(_tmpHome);
             _spoolPath = Path.Combine(_tmpHome, "spool");
+            _transcriptPath = Path.Combine(_tmpHome, "transcript.jsonl");
             Spool = new CursorHookSpool(_spoolPath);
             var handler = new StubHandler(async req => {
                 var body = req.Content is null ? "" : await req.Content.ReadAsStringAsync();

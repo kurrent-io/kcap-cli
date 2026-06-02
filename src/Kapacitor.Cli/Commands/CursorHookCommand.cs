@@ -136,6 +136,34 @@ public static class CursorHookCommand {
                 return 0;
             }
 
+            var transcriptPath = TryGetString(node, "transcript_path");
+
+            // For sessionEnd the server's HandleSessionEnd clears the per-session
+            // CursorAttachmentsFifo before transcript_line normalization could
+            // consume any still-queued beforeSubmitPrompt attachments. Drain the
+            // transcript BEFORE posting the terminal hook so the FIFO survives
+            // long enough for the final user line to attach. For every other
+            // event we keep post-then-backfill so lifecycle metadata reaches the
+            // server before any new transcript context.
+            var drainBeforePost = eventName == "sessionEnd"
+                               && sessionId is not null
+                               && !string.IsNullOrEmpty(transcriptPath);
+
+            if (drainBeforePost && !BudgetExpired()) {
+                await CursorTranscriptBackfill.RunAsync(
+                    client, baseUrl, sessionId!, transcriptPath,
+                    budget: BudgetExpired, ct);
+            }
+
+            if (BudgetExpired()) {
+                // Drain consumed the budget; preserve the unposted sessionEnd
+                // so the next invocation (if any) can still deliver it.
+                if (mapping.SpoolOnFailure && sessionId is not null) {
+                    spool.Append(sessionId, eventName, normalized);
+                }
+                return 0;
+            }
+
             var posted = await TryPostHookAsync(client, baseUrl, mapping.RouteSegment, normalized, ct);
             if (!posted && mapping.SpoolOnFailure && sessionId is not null) {
                 spool.Append(sessionId, eventName, normalized);
@@ -145,13 +173,10 @@ public static class CursorHookCommand {
                 spool.DeleteSession(sessionId);
             }
 
-            if (!BudgetExpired() && sessionId is not null) {
-                var transcriptPath = TryGetString(node, "transcript_path");
-                if (!string.IsNullOrEmpty(transcriptPath)) {
-                    await CursorTranscriptBackfill.RunAsync(
-                        client, baseUrl, sessionId, transcriptPath,
-                        budget: BudgetExpired, ct);
-                }
+            if (!drainBeforePost && !BudgetExpired() && sessionId is not null && !string.IsNullOrEmpty(transcriptPath)) {
+                await CursorTranscriptBackfill.RunAsync(
+                    client, baseUrl, sessionId, transcriptPath,
+                    budget: BudgetExpired, ct);
             }
 
             return 0;
