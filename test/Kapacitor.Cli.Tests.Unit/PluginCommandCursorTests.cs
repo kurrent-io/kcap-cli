@@ -3,6 +3,7 @@ using Kapacitor.Cli.Core;
 
 namespace Kapacitor.Cli.Tests.Unit;
 
+[NotInParallel("HomeEnvVarMutation")]
 public class PluginCommandCursorTests {
     [Test]
     public async Task install_cursor_if_installed_noops_when_marker_absent() {
