@@ -124,6 +124,32 @@ public class CursorHookCommandTests {
         await Assert.That(exit).IsEqualTo(0);
     }
 
+    [Test]
+    public async Task fresh_canonical_event_is_spooled_when_drain_consumes_budget() {
+        // Drain blocks past the budget by parking the POST handler. The
+        // dispatcher must spool the fresh sessionEnd that hasn't been
+        // POSTed yet instead of losing it.
+        using var fx = new Fixture();
+        fx.HoldOnPost = TimeSpan.FromMilliseconds(50);
+
+        fx.Spool.Append(Sid, "sessionStart", $$$"""{"hook_event_name":"sessionStart","session_id":"{{{Sid}}}"}""");
+
+        // 30 ms budget — first drained POST eats most of it, BudgetExpired flips
+        // before the fresh event can post. The fresh sessionEnd must land back
+        // in the spool, replacing the just-delivered sessionStart line.
+        var exit = await CursorHookCommand.HandleCore(
+            fx.Client, "http://localhost",
+            new StringReader($$$"""{"hook_event_name":"sessionEnd","session_id":"{{{Sid}}}"}"""),
+            fx.Spool, TimeSpan.FromMilliseconds(30));
+
+        await Assert.That(exit).IsEqualTo(0);
+
+        var spoolPath = fx.SpoolFiles.SingleOrDefault();
+        await Assert.That(spoolPath).IsNotNull();
+        var spoolContent = await File.ReadAllTextAsync(spoolPath!);
+        await Assert.That(spoolContent).Contains("sessionEnd");
+    }
+
     sealed class Fixture : IDisposable {
         readonly string _tmpHome = Path.Combine(
             Path.GetTempPath(), $"kapacitor-cursor-hook-test-{Guid.NewGuid().ToString("N")[..8]}");
@@ -131,6 +157,7 @@ public class CursorHookCommandTests {
         public List<string> Sent       { get; } = new();
         public List<string> RouteOrder { get; } = new();
         public CursorHookSpool Spool   { get; }
+        public TimeSpan HoldOnPost     { get; set; } = TimeSpan.Zero;
         readonly string _spoolPath;
         readonly HttpClient _client;
         public HttpClient Client => _client;
@@ -152,6 +179,9 @@ public class CursorHookCommandTests {
                 // GET watermark — return 404 so transcript backfill is a no-op without
                 // tripping the fail-open path.
                 if (req.Method == HttpMethod.Get) return new HttpResponseMessage(HttpStatusCode.NotFound);
+                if (HoldOnPost > TimeSpan.Zero) {
+                    await Task.Delay(HoldOnPost);
+                }
                 return new HttpResponseMessage(postStatus);
             });
             _client = new HttpClient(handler);

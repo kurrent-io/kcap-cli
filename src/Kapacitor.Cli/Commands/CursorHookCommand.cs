@@ -20,15 +20,31 @@ public static class CursorHookCommand {
     static readonly TimeSpan HookPostTimeout  = TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// Production entry point. Resolves the home-dir spool and
-    /// authenticated <see cref="HttpClient"/>, then delegates to
-    /// <see cref="HandleCore"/>.
+    /// Production entry point. The 2 s wall-clock budget covers EVERYTHING —
+    /// auth/client setup included. <see cref="HttpClientExtensions.CreateAuthenticatedClientAsync"/>
+    /// hits <c>/auth/config</c> on an unauthenticated <see cref="HttpClient"/>
+    /// with no per-call timeout; an unreachable-but-hanging server would
+    /// otherwise block Cursor before <see cref="HandleCore"/> even starts
+    /// its budget clock.
     /// </summary>
     public static async Task<int> Handle(string baseUrl, TextReader stdin) {
-        using var client = await HttpClientExtensions.CreateAuthenticatedClientAsync();
-        var spool = new CursorHookSpool(CursorPaths.SpoolDir());
-        spool.ReapOlderThan(TimeSpan.FromDays(30));
-        return await HandleCore(client, baseUrl, stdin, spool, DispatcherBudget);
+        var sw = Stopwatch.StartNew();
+        using var cts = new CancellationTokenSource(DispatcherBudget);
+        HttpClient? client = null;
+        try {
+            client = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, cts.Token);
+            var spool = new CursorHookSpool(CursorPaths.SpoolDir());
+            spool.ReapOlderThan(TimeSpan.FromDays(30));
+            var remaining = DispatcherBudget - sw.Elapsed;
+            if (remaining <= TimeSpan.Zero) return 0;
+            return await HandleCore(client, baseUrl, stdin, spool, remaining);
+        } catch {
+            // Fail-open contract: never crash Cursor. Covers auth timeout,
+            // unreachable server, malformed config, etc.
+            return 0;
+        } finally {
+            client?.Dispose();
+        }
     }
 
     /// <summary>
@@ -78,7 +94,7 @@ public static class CursorHookCommand {
 
             if (sessionId is not null) {
                 await foreach (var entry in spool.DrainAsync(sessionId, ct)) {
-                    if (BudgetExpired()) return 0;
+                    if (BudgetExpired()) break;
                     if (!CursorHookEventMap.TryResolve(entry.EventName, out var entryMapping)) {
                         await entry.MarkDeliveredAsync();
                         continue;
@@ -89,7 +105,16 @@ public static class CursorHookCommand {
                 }
             }
 
-            if (BudgetExpired()) return 0;
+            if (BudgetExpired()) {
+                // Drain consumed the budget; preserve the fresh event so the
+                // next invocation can still deliver it. Without this the new
+                // canonical event would be lost when the spool replay backlog
+                // is large or the server is slow.
+                if (mapping.SpoolOnFailure && sessionId is not null) {
+                    spool.Append(sessionId, eventName, normalized);
+                }
+                return 0;
+            }
 
             var posted = await TryPostHookAsync(client, baseUrl, mapping.RouteSegment, normalized, ct);
             if (!posted && mapping.SpoolOnFailure && sessionId is not null) {
@@ -110,8 +135,10 @@ public static class CursorHookCommand {
             }
 
             return 0;
-        } catch (OperationCanceledException) {
-            // Budget expired or external cancellation — fail-open per design.
+        } catch {
+            // Fail-open per design: any exception (budget cancellation,
+            // transcript-file IO race, JSON quirk we missed) must never
+            // crash Cursor's agent loop.
             return 0;
         }
     }
