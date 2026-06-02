@@ -33,8 +33,8 @@ Notes:
   plugin manifest and is not affected by this command.
 
   --cursor writes all 8 supported hooks to ~/.cursor/hooks.json (merged with
-  any existing entries). Project-scope (--project) writes to
-  <repo>/.cursor/hooks.json instead.
+  any existing entries). Cursor uses a single user-scope hooks.json — there
+  is no project-scope variant, so --project has no effect with --cursor.
 
   install --codex and install --skills both clean up legacy ~/.codex/skills/kapacitor-*
   folders from prior installer versions.
@@ -48,7 +48,6 @@ Examples:
   kapacitor plugin install --codex               # Install Codex hooks + agent skills (user)
   kapacitor plugin install --project --codex     # Codex hooks in <repo>/.codex/hooks.json, skills user-wide
   kapacitor plugin install --cursor              # Install Cursor hooks (~/.cursor/hooks.json)
-  kapacitor plugin install --project --cursor    # Cursor hooks in <repo>/.cursor/hooks.json
   kapacitor plugin install --skills --if-installed   # Refresh skills if previously installed (used by npm postinstall)
   kapacitor plugin install --codex --if-installed    # Refresh Codex hooks if previously installed (used by npm postinstall)
   kapacitor plugin install --if-installed            # Refresh Claude plugin registration if previously installed

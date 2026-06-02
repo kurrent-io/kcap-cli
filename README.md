@@ -50,7 +50,7 @@ kapacitor setup --server-url https://my-tenant.kapacitor.ai --default-visibility
 In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, and/or `--skip-cursor-hooks`.
 
 > **Need hooks for an agent installed after setup, or scoped to a single repo?**
-> Run `kapacitor plugin install [--codex] [--cursor] [--project]`. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. After installing Codex hooks, run `/hooks` inside Codex and trust each kapacitor entry — Codex doesn't execute hooks until each is explicitly trusted. After a `--project` install, also run `codex` once in the repo and accept the trust prompt. Re-running after a kapacitor upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kapacitor`.
+> Run `kapacitor plugin install [--codex|--cursor]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, run `/hooks` inside Codex and trust each kapacitor entry — Codex doesn't execute hooks until each is explicitly trusted. After a `--project` install, also run `codex` once in the repo and accept the trust prompt. Re-running after a kapacitor upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kapacitor`.
 
 > **Need at least one agent to capture sessions:** the setup wizard runs to completion without an agent CLI on `PATH` (it'll still configure your profile, auth, and daemon), but kapacitor only records work once Claude Code or Codex CLI is installed and the hooks are in place.
 
@@ -323,10 +323,11 @@ PR review for hosted Codex agents is not yet supported (tracked in AI-632). The 
 Cursor is detected by the presence of `~/.cursor/` — you don't need the `cursor` shell command on `PATH`. If `kapacitor setup` found Cursor and you said yes, hooks are already in place. To install or remove later:
 
 ```bash
-kapacitor plugin install --cursor                # user scope (~/.cursor/hooks.json)
-kapacitor plugin install --cursor --project      # project scope (<repo>/.cursor/hooks.json)
+kapacitor plugin install --cursor                # writes ~/.cursor/hooks.json
 kapacitor plugin remove --cursor                 # remove Cursor hooks
 ```
+
+Cursor uses a single user-scope `hooks.json`; there is no project-scope variant.
 
 `kapacitor setup` writes all 8 supported Cursor hook entries. Use `--skip-cursor-hooks` to opt out during setup:
 
