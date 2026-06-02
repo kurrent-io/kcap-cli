@@ -20,17 +20,23 @@ public sealed class CursorHookSpool {
         _capBytes = capBytes;
     }
 
-    string PathFor(string sessionId) => Path.Combine(_spoolDir, $"{sessionId}.jsonl");
+    static readonly System.Text.RegularExpressions.Regex SafeSessionId =
+        new("^[0-9a-fA-F]{32}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    string? PathFor(string sessionId) =>
+        SafeSessionId.IsMatch(sessionId)
+            ? Path.Combine(_spoolDir, $"{sessionId}.jsonl")
+            : null;
 
     public void Append(string sessionId, string eventName, string rawPayloadJson) {
+        var path = PathFor(sessionId);
+        if (path is null) return;
         try {
             Directory.CreateDirectory(_spoolDir);
             var line = new JsonObject {
                 ["hook_event_name"] = eventName,
                 ["body"]            = rawPayloadJson
             }.ToJsonString();
-
-            var path = PathFor(sessionId);
             EnsureUnderCap(path, line.Length + 1);
             File.AppendAllText(path, line + "\n");
         } catch { /* best effort */ }
@@ -69,7 +75,7 @@ public sealed class CursorHookSpool {
             [EnumeratorCancellation] CancellationToken ct
         ) {
         var path = PathFor(sessionId);
-        if (!File.Exists(path)) yield break;
+        if (path is null || !File.Exists(path)) yield break;
 
         string[] lines;
         try { lines = await File.ReadAllLinesAsync(path, ct); }
@@ -89,8 +95,10 @@ public sealed class CursorHookSpool {
             } catch { eventName = null; body = null; }
 
             if (eventName is null || body is null) {
-                delivered = i + 1;
-                continue;
+                // Malformed line — could be a partially-written tail from a racing
+                // Append. Stop draining; leave the file as-is so the next invocation
+                // can re-read once the writer finishes.
+                yield break;
             }
 
             var capturedDelivered = delivered;
@@ -122,6 +130,7 @@ public sealed class CursorHookSpool {
 
     public void DeleteSession(string sessionId) {
         var path = PathFor(sessionId);
+        if (path is null) return;
         try { if (File.Exists(path)) File.Delete(path); } catch { }
     }
 
