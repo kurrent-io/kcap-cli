@@ -1041,7 +1041,7 @@ async Task<int> PrintCommandHelp(string cmd) {
     if (text is not null) {
         await Console.Out.WriteAsync(text);
     } else if (hookCommands.Contains(cmd)) {
-        var hookText = EmbeddedResources.Load("help-hook.txt").Replace("{cmd}", cmd);
+        var hookText = EmbeddedResources.Load("help-hook-event.txt").Replace("{cmd}", cmd);
         await Console.Out.WriteAsync(hookText);
     } else {
         Console.Error.WriteLine($"Unknown command: {cmd}");
