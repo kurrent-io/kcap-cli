@@ -3,12 +3,12 @@
 // Runs after `npm install -g @kurrent/kapacitor` (including upgrades).
 //
 // Refreshes user-scope kapacitor agent installations so users pick up
-// new or updated skills, Codex hook commands, and Claude plugin
-// registration without manually re-running `kapacitor setup`.
+// new or updated skills, Codex hook commands, Cursor hook commands, and
+// Claude plugin registration without manually re-running `kapacitor setup`.
 //
 // Contract:
 // - Only runs on global installs. Skipping non-global installs avoids
-//   touching ~/.agents/, ~/.codex/, or ~/.claude/ during unrelated
+//   touching ~/.agents/, ~/.codex/, ~/.cursor/, or ~/.claude/ during unrelated
 //   local/transitive installs on already-opted-in machines.
 // - Each refresh uses `--if-installed`, which no-ops unless the user
 //   has previously opted in (marker file present OR pre-marker install
@@ -35,6 +35,7 @@ const launcher = path.join(__dirname, "kapacitor.js");
 const refreshes = [
   ["plugin", "install", "--skills", "--if-installed"],
   ["plugin", "install", "--codex",  "--if-installed"],
+  ["plugin", "install", "--cursor", "--if-installed"],
   ["plugin", "install",             "--if-installed"], // Claude
 ];
 
