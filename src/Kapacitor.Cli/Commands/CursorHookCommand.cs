@@ -20,14 +20,34 @@ public static class CursorHookCommand {
     static readonly TimeSpan HookPostTimeout  = TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// Production entry point. The 2 s wall-clock budget covers EVERYTHING —
-    /// auth/client setup included. <see cref="HttpClientExtensions.CreateAuthenticatedClientAsync"/>
-    /// hits <c>/auth/config</c> on an unauthenticated <see cref="HttpClient"/>
-    /// with no per-call timeout; an unreachable-but-hanging server would
-    /// otherwise block Cursor before <see cref="HandleCore"/> even starts
-    /// its budget clock.
+    /// Production entry point. Two layers of budget enforcement:
+    ///   1. A linked <see cref="CancellationTokenSource"/> threaded into every
+    ///      call that honours it (auth-config discovery, HTTP POSTs in
+    ///      <see cref="HandleCore"/>, transcript backfill).
+    ///   2. A hard <see cref="Task.WhenAny"/> ceiling around the whole pipeline
+    ///      because some paths inside <c>TokenStore</c> (refresh against
+    ///      <c>/auth/refresh</c> or Auth0's token endpoint) don't honour a
+    ///      <see cref="CancellationToken"/> and would otherwise sit on the
+    ///      default 100 s <see cref="HttpClient"/> timeout. If the hard
+    ///      ceiling fires we abandon the inner task — the process exits 0
+    ///      and the OS reclaims the socket. Cursor's agent loop is
+    ///      unblocked even when the auth path hangs.
     /// </summary>
-    public static async Task<int> Handle(string baseUrl, TextReader stdin) {
+    public static Task<int> Handle(string baseUrl, TextReader stdin) =>
+        WithHardCap(HandleInternal(baseUrl, stdin), DispatcherBudget);
+
+    /// <summary>
+    /// Test seam for the hard-cap race. Returns 0 if the budget fires
+    /// before <paramref name="inner"/> completes; otherwise returns
+    /// <paramref name="inner"/>'s result.
+    /// </summary>
+    internal static async Task<int> WithHardCap(Task<int> inner, TimeSpan budget) {
+        var winner = await Task.WhenAny(inner, Task.Delay(budget));
+        if (winner != inner) return 0;
+        return await inner;
+    }
+
+    static async Task<int> HandleInternal(string baseUrl, TextReader stdin) {
         var sw = Stopwatch.StartNew();
         using var cts = new CancellationTokenSource(DispatcherBudget);
         HttpClient? client = null;

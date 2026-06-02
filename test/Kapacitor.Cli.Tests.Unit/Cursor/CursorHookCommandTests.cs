@@ -125,6 +125,30 @@ public class CursorHookCommandTests {
     }
 
     [Test]
+    public async Task hard_cap_returns_zero_when_inner_ignores_cancellation() {
+        // Simulates an uncancellable hang inside TokenStore.RefreshAsync's
+        // HttpClient.PostAsync — no CT plumbed through, default 100s timeout.
+        // The Task.WhenAny ceiling in CursorHookCommand.Handle must beat that.
+        var inner = Task.Run(async () => {
+            await Task.Delay(TimeSpan.FromSeconds(10));
+            return 42;
+        });
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var exit = await CursorHookCommand.WithHardCap(inner, TimeSpan.FromMilliseconds(50));
+        sw.Stop();
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
+    }
+
+    [Test]
+    public async Task hard_cap_returns_inner_result_when_inner_finishes_first() {
+        var inner = Task.FromResult(7);
+        var exit = await CursorHookCommand.WithHardCap(inner, TimeSpan.FromSeconds(2));
+        await Assert.That(exit).IsEqualTo(7);
+    }
+
+    [Test]
     public async Task fresh_canonical_event_is_spooled_when_drain_consumes_budget() {
         // Drain blocks past the budget by parking the POST handler. The
         // dispatcher must spool the fresh sessionEnd that hasn't been
