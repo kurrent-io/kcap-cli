@@ -70,10 +70,10 @@ The CLI uses these route strings. AI-731 owns the server side; reconcile before 
 | `postToolUse` | `post-tool-use/cursor` | `POST {baseUrl}/hooks/post-tool-use/cursor` |
 | `postToolUseFailure` | `post-tool-use-failure/cursor` | `POST {baseUrl}/hooks/post-tool-use-failure/cursor` |
 
-Transcript backfill (one line per POST):
+Transcript backfill (one batched POST per invocation):
 
-* Watermark GET: `GET {baseUrl}/api/cursor-sessions/{sessionId}/transcript-watermark` — returns `{"last_line_number": N}` on hit, 404 when no lines accepted yet. <500ms server budget.
-* Transcript-line POST: `POST {baseUrl}/hooks/transcript-line/cursor` with body `{"session_id": "...", "line_index": N, "line": "<raw JSONL line>"}`. ~1s server budget per line.
+* Watermark GET: `GET {baseUrl}/api/sessions/{sessionId}/last-line` — the shared transcript watermark route used by every transcript-driven normalizer (Claude/Codex/Cursor). Returns `{"last_line_number": N}` on 200, 204 NoContent when the stream exists but no lines yet, 404 when the stream doesn't exist. <500ms server budget.
+* Transcript batch POST: `POST {baseUrl}/hooks/transcript` with the existing `TranscriptBatch` payload (`{session_id, lines[], line_numbers[], vendor: "cursor"}`). The server's `INormalizerSelector` routes `vendor: "cursor"` to `CursorTranscriptNormalizer`. ~1.5s budget for the batched call. (Earlier plan revisions described a per-line route under `/hooks/transcript-line/cursor`; that was discarded once the server merge reused the shared batch route.)
 
 ---
 

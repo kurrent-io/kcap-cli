@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json.Nodes;
 using Kapacitor.Cli.Commands;
 
 namespace Kapacitor.Cli.Tests.Unit.Cursor;
@@ -19,21 +20,22 @@ public class CursorTranscriptBackfillTests {
     }
 
     [Test]
-    public async Task RunAsync_resumes_from_last_line_number_plus_one() {
+    public async Task RunAsync_resumes_from_last_line_number_plus_one_and_posts_single_batch() {
         using var tmp = new TempDir();
         var transcript = Path.Combine(tmp.Path, "t.jsonl");
         await File.WriteAllLinesAsync(transcript, new[] { "line0", "line1", "line2", "line3" });
 
-        var posted = new List<(int Index, string Line)>();
+        var postedBody = (string?)null;
+        var postedPath = (string?)null;
         using var handler = new RecordingHandler(
-            getResponse: req => req.RequestUri!.AbsolutePath.EndsWith("/transcript-watermark")
+            getResponse: req => req.RequestUri!.AbsolutePath.EndsWith("/last-line")
                 ? new HttpResponseMessage(HttpStatusCode.OK) {
                     Content = new StringContent("""{"last_line_number":1}""")
                 }
                 : null,
             postCapture: (req, body) => {
-                var node = System.Text.Json.Nodes.JsonNode.Parse(body)!;
-                posted.Add(((int)node["line_index"]!.GetValue<int>(), node["line"]!.GetValue<string>()));
+                postedPath = req.RequestUri!.AbsolutePath;
+                postedBody = body;
                 return new HttpResponseMessage(HttpStatusCode.OK);
             });
         using var client = new HttpClient(handler);
@@ -43,21 +45,53 @@ public class CursorTranscriptBackfillTests {
             transcriptPath: transcript, budget: () => false, CancellationToken.None);
 
         await Assert.That(stats.LinesPosted).IsEqualTo(2);
-        await Assert.That(posted[0]).IsEqualTo((2, "line2"));
-        await Assert.That(posted[1]).IsEqualTo((3, "line3"));
+        await Assert.That(postedPath).IsEqualTo("/hooks/transcript");
+
+        var node = JsonNode.Parse(postedBody!)!;
+        await Assert.That(node["session_id"]!.GetValue<string>()).IsEqualTo("abc");
+        await Assert.That(node["vendor"]!.GetValue<string>()).IsEqualTo("cursor");
+        var lines = node["lines"]!.AsArray();
+        var lineNumbers = node["line_numbers"]!.AsArray();
+        await Assert.That(lines.Count).IsEqualTo(2);
+        await Assert.That(lines[0]!.GetValue<string>()).IsEqualTo("line2");
+        await Assert.That(lines[1]!.GetValue<string>()).IsEqualTo("line3");
+        await Assert.That((int)lineNumbers[0]!.GetValue<int>()).IsEqualTo(2);
+        await Assert.That((int)lineNumbers[1]!.GetValue<int>()).IsEqualTo(3);
     }
 
     [Test]
-    public async Task RunAsync_stops_when_budget_expires() {
+    public async Task RunAsync_treats_204_NoContent_watermark_as_resume_from_zero() {
+        // /api/sessions/{sid}/last-line returns 204 when the session stream
+        // exists but no lines have been accepted yet. Treat as resumeFrom=0,
+        // not as failure.
         using var tmp = new TempDir();
         var transcript = Path.Combine(tmp.Path, "t.jsonl");
-        await File.WriteAllLinesAsync(transcript, Enumerable.Range(0, 50).Select(i => $"line{i}"));
+        await File.WriteAllLinesAsync(transcript, new[] { "line0", "line1" });
 
-        var posted = 0;
+        using var handler = new RecordingHandler(
+            getResponse: _ => new HttpResponseMessage(HttpStatusCode.NoContent),
+            postCapture: (_, _) => new HttpResponseMessage(HttpStatusCode.OK));
+        using var client = new HttpClient(handler);
+
+        var stats = await CursorTranscriptBackfill.RunAsync(
+            client, "http://localhost", sessionId: "abc",
+            transcriptPath: transcript, budget: () => false, CancellationToken.None);
+
+        await Assert.That(stats.LinesPosted).IsEqualTo(2);
+        await Assert.That(stats.Failed).IsFalse();
+    }
+
+    [Test]
+    public async Task RunAsync_does_not_post_when_budget_already_expired() {
+        using var tmp = new TempDir();
+        var transcript = Path.Combine(tmp.Path, "t.jsonl");
+        await File.WriteAllLinesAsync(transcript, new[] { "a", "b", "c" });
+
+        var postCount = 0;
         using var handler = new RecordingHandler(
             getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound),
-            postCapture: (req, body) => {
-                posted++;
+            postCapture: (_, _) => {
+                postCount++;
                 return new HttpResponseMessage(HttpStatusCode.OK);
             });
         using var client = new HttpClient(handler);
@@ -65,37 +99,36 @@ public class CursorTranscriptBackfillTests {
         var stats = await CursorTranscriptBackfill.RunAsync(
             client, "http://localhost", sessionId: "abc",
             transcriptPath: transcript,
-            budget: () => posted >= 3,
+            budget: () => true,
             CancellationToken.None);
 
-        await Assert.That(stats.LinesPosted).IsEqualTo(3);
+        // Budget already burnt before the batch POST — nothing posted, no failure.
+        await Assert.That(stats.LinesPosted).IsEqualTo(0);
+        await Assert.That(stats.Failed).IsFalse();
+        await Assert.That(postCount).IsEqualTo(0);
     }
 
     [Test]
-    public async Task RunAsync_stops_on_first_POST_failure() {
+    public async Task RunAsync_returns_failed_on_POST_non_2xx() {
         using var tmp = new TempDir();
         var transcript = Path.Combine(tmp.Path, "t.jsonl");
         await File.WriteAllLinesAsync(transcript, new[] { "a", "b", "c" });
 
-        var posted = 0;
         using var handler = new RecordingHandler(
             getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound),
-            postCapture: (req, body) => {
-                posted++;
-                return new HttpResponseMessage(posted < 2 ? HttpStatusCode.OK : HttpStatusCode.InternalServerError);
-            });
+            postCapture: (_, _) => new HttpResponseMessage(HttpStatusCode.InternalServerError));
         using var client = new HttpClient(handler);
 
         var stats = await CursorTranscriptBackfill.RunAsync(
             client, "http://localhost", sessionId: "abc",
             transcriptPath: transcript, budget: () => false, CancellationToken.None);
 
-        await Assert.That(stats.LinesPosted).IsEqualTo(1);
+        await Assert.That(stats.LinesPosted).IsEqualTo(0);
         await Assert.That(stats.Failed).IsTrue();
     }
 
     [Test]
-    public async Task RunAsync_fails_open_on_watermark_GET_failure() {
+    public async Task RunAsync_fails_open_on_watermark_GET_5xx() {
         using var tmp = new TempDir();
         var transcript = Path.Combine(tmp.Path, "t.jsonl");
         await File.WriteAllLinesAsync(transcript, new[] { "a", "b" });

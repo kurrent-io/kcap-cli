@@ -1,22 +1,22 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Kapacitor.Cli.Core;
 
 namespace Kapacitor.Cli.Commands;
 
 /// <summary>
-/// One-shot transcript-line backfill. Reads the watermark for
-/// <paramref name="sessionId"/>, opens the transcript JSONL, and POSTs
-/// each line whose index is past <c>last_line_number</c> until the
-/// dispatcher budget expires (signalled via <paramref name="budget"/>) or
-/// the transcript is fully drained or a POST fails. No internal retry —
-/// the next hook invocation re-reads the (advanced) watermark.
+/// One-shot transcript-line backfill. Reads the shared transcript watermark
+/// for <paramref name="sessionId"/> (<c>GET /api/sessions/{sid}/last-line</c>
+/// — the same route every transcript-driven normalizer uses), opens the
+/// JSONL transcript file, and POSTs every line past the watermark as a
+/// single batch to <c>POST /hooks/transcript</c> with
+/// <c>Vendor: "cursor"</c>. No internal retry — the next hook invocation
+/// re-reads the (advanced) server watermark and resumes from the new HWM.
 /// </summary>
 public static class CursorTranscriptBackfill {
     static readonly TimeSpan WatermarkTimeout = TimeSpan.FromMilliseconds(500);
-    static readonly TimeSpan LinePostTimeout  = TimeSpan.FromSeconds(1);
+    static readonly TimeSpan BatchPostTimeout = TimeSpan.FromMilliseconds(1500);
 
     public readonly record struct Stats(int LinesPosted, bool Failed);
 
@@ -35,9 +35,13 @@ public static class CursorTranscriptBackfill {
         int resumeFrom;
         try {
             using var resp = await client.GetOnceAsync(
-                $"{baseUrl}/api/cursor-sessions/{sessionId}/transcript-watermark",
+                $"{baseUrl}/api/sessions/{sessionId}/last-line",
                 WatermarkTimeout, ct);
-            if (resp.StatusCode == HttpStatusCode.NotFound) {
+
+            // 200 — body has last_line_number; 204 — stream exists but no
+            // lines yet (resume from 0); 404 — stream doesn't exist (resume
+            // from 0); any other non-2xx — fail-open, retry next hook.
+            if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) {
                 resumeFrom = 0;
             } else if (!resp.IsSuccessStatusCode) {
                 return new Stats(0, Failed: true);
@@ -50,36 +54,50 @@ public static class CursorTranscriptBackfill {
             }
         } catch { return new Stats(0, Failed: true); }
 
-        var posted = 0;
+        // Read every line past the watermark into the batch. Cursor's JSONL
+        // is bounded by the agent turn count — practical sizes are dozens of
+        // lines, not thousands; the server's HandleTranscript ingests them
+        // in one shot.
+        var lines       = new List<string>();
+        var lineNumbers = new List<int>();
+        try {
+            using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            var lineIndex = 0;
+            string? line;
+            while ((line = await reader.ReadLineAsync(ct)) is not null) {
+                if (lineIndex >= resumeFrom && !string.IsNullOrWhiteSpace(line)) {
+                    lines.Add(line);
+                    lineNumbers.Add(lineIndex);
+                }
+                lineIndex++;
+            }
+        } catch { return new Stats(0, Failed: true); }
 
-        using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using var reader = new StreamReader(stream);
-        var lineIndex = 0;
-        string? line;
-        while ((line = await reader.ReadLineAsync(ct)) is not null) {
-            if (lineIndex < resumeFrom) { lineIndex++; continue; }
-            if (budget()) return new Stats(posted, Failed: false);
-            ct.ThrowIfCancellationRequested();
+        if (lines.Count == 0) return new Stats(0, Failed: false);
+        if (budget()) return new Stats(0, Failed: false);
 
-            var payload = new JsonObject {
-                ["session_id"] = sessionId,
-                ["line_index"] = lineIndex,
-                ["line"]       = line
-            }.ToJsonString();
+        var batch = new TranscriptBatch {
+            SessionId   = sessionId,
+            Lines       = [..lines],
+            LineNumbers = [..lineNumbers],
+            Vendor      = "cursor",
+        };
 
-            HttpResponseMessage? resp = null;
-            try {
-                using var content = new StringContent(payload, Encoding.UTF8, "application/json");
-                resp = await client.PostOnceAsync(
-                    $"{baseUrl}/hooks/transcript-line/cursor", content, LinePostTimeout, ct);
-                if (!resp.IsSuccessStatusCode) return new Stats(posted, Failed: true);
-                posted++;
-            } catch { return new Stats(posted, Failed: true); }
-            finally { resp?.Dispose(); }
+        var json = JsonSerializer.Serialize(batch, KapacitorJsonContext.Default.TranscriptBatch);
 
-            lineIndex++;
+        HttpResponseMessage? resp2 = null;
+        try {
+            using var content = new StringContent(json, Encoding.UTF8, "application/json");
+            resp2 = await client.PostOnceAsync(
+                $"{baseUrl}/hooks/transcript", content, BatchPostTimeout, ct);
+            return resp2.IsSuccessStatusCode
+                ? new Stats(lines.Count, Failed: false)
+                : new Stats(0, Failed: true);
+        } catch {
+            return new Stats(0, Failed: true);
+        } finally {
+            resp2?.Dispose();
         }
-
-        return new Stats(posted, Failed: false);
     }
 }
