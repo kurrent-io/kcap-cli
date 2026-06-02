@@ -47,68 +47,73 @@ public static class CursorHookCommand {
         var ct = cts.Token;
         bool BudgetExpired() => sw.Elapsed >= budgetTotal;
 
-        var body = await stdin.ReadToEndAsync(ct);
-        JsonNode? node;
-        try { node = JsonNode.Parse(body); }
-        catch { return 0; }
-        if (node is null) return 0;
+        try {
+            var body = await stdin.ReadToEndAsync(ct);
+            JsonNode? node;
+            try { node = JsonNode.Parse(body); }
+            catch { return 0; }
+            if (node is null) return 0;
 
-        var eventName = TryGetString(node, "hook_event_name");
-        if (string.IsNullOrWhiteSpace(eventName)) return 0;
-        if (!CursorHookEventMap.TryResolve(eventName, out var mapping)) return 0;
+            var eventName = TryGetString(node, "hook_event_name");
+            if (string.IsNullOrWhiteSpace(eventName)) return 0;
+            if (!CursorHookEventMap.TryResolve(eventName, out var mapping)) return 0;
 
-        NormalizeGuidField(node, "session_id");
-        node["home_dir"] = PathHelpers.HomeDirectory;
-        var agentHostId = Environment.GetEnvironmentVariable("KAPACITOR_AGENT_ID");
-        if (agentHostId is not null) node["agent_host_id"] = agentHostId;
+            NormalizeGuidField(node, "session_id");
+            node["home_dir"] = PathHelpers.HomeDirectory;
+            var agentHostId = Environment.GetEnvironmentVariable("KAPACITOR_AGENT_ID");
+            if (agentHostId is not null) node["agent_host_id"] = agentHostId;
 
-        if (eventName == "afterAgentThought") {
-            var sid = TryGetString(node, "session_id") ?? "";
-            var gen = TryGetString(node, "generation_id") ?? "";
-            var txt = TryGetString(node, "text") ?? "";
-            node["canonical_event_id"] = StableThoughtId(sid, gen, txt);
-        }
+            if (eventName == "afterAgentThought") {
+                var sid = TryGetString(node, "session_id") ?? "";
+                var gen = TryGetString(node, "generation_id") ?? "";
+                var txt = TryGetString(node, "text") ?? "";
+                node["canonical_event_id"] = StableThoughtId(sid, gen, txt);
+            }
 
-        var sessionId = TryGetString(node, "session_id");
+            var sessionId = TryGetString(node, "session_id");
 
-        if (sessionId is not null && DisabledSessions.IsDisabled(sessionId)) return 0;
+            if (sessionId is not null && DisabledSessions.IsDisabled(sessionId)) return 0;
 
-        var normalized = node.ToJsonString();
+            var normalized = node.ToJsonString();
 
-        if (sessionId is not null) {
-            await foreach (var entry in spool.DrainAsync(sessionId, ct)) {
-                if (BudgetExpired()) return 0;
-                if (!CursorHookEventMap.TryResolve(entry.EventName, out var entryMapping)) {
+            if (sessionId is not null) {
+                await foreach (var entry in spool.DrainAsync(sessionId, ct)) {
+                    if (BudgetExpired()) return 0;
+                    if (!CursorHookEventMap.TryResolve(entry.EventName, out var entryMapping)) {
+                        await entry.MarkDeliveredAsync();
+                        continue;
+                    }
+                    var ok = await TryPostHookAsync(client, baseUrl, entryMapping.RouteSegment, entry.Body, ct);
+                    if (!ok) break;
                     await entry.MarkDeliveredAsync();
-                    continue;
                 }
-                var ok = await TryPostHookAsync(client, baseUrl, entryMapping.RouteSegment, entry.Body, ct);
-                if (!ok) break;
-                await entry.MarkDeliveredAsync();
             }
-        }
 
-        if (BudgetExpired()) return 0;
+            if (BudgetExpired()) return 0;
 
-        var posted = await TryPostHookAsync(client, baseUrl, mapping.RouteSegment, normalized, ct);
-        if (!posted && mapping.SpoolOnFailure && sessionId is not null) {
-            spool.Append(sessionId, eventName, normalized);
-        }
-
-        if (posted && eventName == "sessionEnd" && sessionId is not null) {
-            spool.DeleteSession(sessionId);
-        }
-
-        if (!BudgetExpired() && sessionId is not null) {
-            var transcriptPath = TryGetString(node, "transcript_path");
-            if (!string.IsNullOrEmpty(transcriptPath)) {
-                await CursorTranscriptBackfill.RunAsync(
-                    client, baseUrl, sessionId, transcriptPath,
-                    budget: BudgetExpired, ct);
+            var posted = await TryPostHookAsync(client, baseUrl, mapping.RouteSegment, normalized, ct);
+            if (!posted && mapping.SpoolOnFailure && sessionId is not null) {
+                spool.Append(sessionId, eventName, normalized);
             }
-        }
 
-        return 0;
+            if (posted && eventName == "sessionEnd" && sessionId is not null) {
+                spool.DeleteSession(sessionId);
+            }
+
+            if (!BudgetExpired() && sessionId is not null) {
+                var transcriptPath = TryGetString(node, "transcript_path");
+                if (!string.IsNullOrEmpty(transcriptPath)) {
+                    await CursorTranscriptBackfill.RunAsync(
+                        client, baseUrl, sessionId, transcriptPath,
+                        budget: BudgetExpired, ct);
+                }
+            }
+
+            return 0;
+        } catch (OperationCanceledException) {
+            // Budget expired or external cancellation — fail-open per design.
+            return 0;
+        }
     }
 
     static async Task<bool> TryPostHookAsync(

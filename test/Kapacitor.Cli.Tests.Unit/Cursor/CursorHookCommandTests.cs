@@ -6,6 +6,7 @@ using Kapacitor.Cli.Commands;
 namespace Kapacitor.Cli.Tests.Unit.Cursor;
 
 public class CursorHookCommandTests {
+    const string Sid = "8c3276c2c8f743ce98898c2becf5240a";
     [Test]
     public async Task malformed_stdin_returns_zero() {
         using var fx = new Fixture();
@@ -70,17 +71,17 @@ public class CursorHookCommandTests {
     [Test]
     public async Task canonical_events_spool_on_POST_failure() {
         using var fx = new Fixture(postStatus: HttpStatusCode.InternalServerError);
-        await fx.HandleAsync("""{"hook_event_name":"sessionEnd","session_id":"abc"}""");
+        await fx.HandleAsync($$$"""{"hook_event_name":"sessionEnd","session_id":"{{{Sid}}}"}""");
         var files = fx.SpoolFiles.ToList();
         await Assert.That(files.Count).IsEqualTo(1);
-        await Assert.That(files[0]).EndsWith("abc.jsonl");
+        await Assert.That(files[0]).EndsWith(Sid + ".jsonl");
     }
 
     [Test]
     public async Task spool_drain_runs_before_current_event_under_budget() {
         using var fx = new Fixture();
-        fx.Spool.Append("abc", "sessionStart", """{"hook_event_name":"sessionStart","session_id":"abc"}""");
-        await fx.HandleAsync("""{"hook_event_name":"sessionEnd","session_id":"abc"}""");
+        fx.Spool.Append(Sid, "sessionStart", $$$"""{"hook_event_name":"sessionStart","session_id":"{{{Sid}}}"}""");
+        await fx.HandleAsync($$$"""{"hook_event_name":"sessionEnd","session_id":"{{{Sid}}}"}""");
         await Assert.That(fx.RouteOrder).IsEquivalentTo(new[] { "session-start/cursor", "session-end/cursor" });
     }
 
@@ -104,6 +105,19 @@ public class CursorHookCommandTests {
         await Assert.That(fx.AllSentTo("transcript-line/cursor")).IsEmpty();
     }
 
+    [Test]
+    public async Task expired_budget_returns_zero_not_throws() {
+        using var fx = new Fixture();
+        // budgetTotal=0 forces BudgetExpired() true on first check, which can also
+        // propagate as OperationCanceledException from stdin/HTTP. Either way the
+        // dispatcher must fail-open with return 0, never bubble the exception.
+        var exit = await CursorHookCommand.HandleCore(
+            fx.Client, "http://localhost",
+            new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
+            fx.Spool, TimeSpan.Zero);
+        await Assert.That(exit).IsEqualTo(0);
+    }
+
     sealed class Fixture : IDisposable {
         readonly string _tmpHome = Path.Combine(
             Path.GetTempPath(), $"kapacitor-cursor-hook-test-{Guid.NewGuid().ToString("N")[..8]}");
@@ -113,6 +127,7 @@ public class CursorHookCommandTests {
         public CursorHookSpool Spool   { get; }
         readonly string _spoolPath;
         readonly HttpClient _client;
+        public HttpClient Client => _client;
 
         public IEnumerable<string> SpoolFiles =>
             Directory.Exists(_spoolPath) ? Directory.EnumerateFiles(_spoolPath, "*.jsonl") : [];
