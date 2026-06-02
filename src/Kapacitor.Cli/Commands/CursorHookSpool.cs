@@ -1,0 +1,139 @@
+using System.Runtime.CompilerServices;
+using System.Text.Json.Nodes;
+
+namespace Kapacitor.Cli.Commands;
+
+/// <summary>
+/// Per-session JSONL spool for canonical-event hooks whose POST failed.
+/// File layout: <c>{spoolDir}/&lt;dashless-sid&gt;.jsonl</c>, one
+/// <c>{"hook_event_name": "...", "body": &lt;raw payload string&gt;}</c>
+/// object per line, in arrival order.
+/// </summary>
+public sealed class CursorHookSpool {
+    public const int DefaultCapBytes = 1_048_576; // 1 MB per session file
+
+    readonly string _spoolDir;
+    readonly int    _capBytes;
+
+    public CursorHookSpool(string spoolDir, int capBytes = DefaultCapBytes) {
+        _spoolDir = spoolDir;
+        _capBytes = capBytes;
+    }
+
+    string PathFor(string sessionId) => Path.Combine(_spoolDir, $"{sessionId}.jsonl");
+
+    public void Append(string sessionId, string eventName, string rawPayloadJson) {
+        try {
+            Directory.CreateDirectory(_spoolDir);
+            var line = new JsonObject {
+                ["hook_event_name"] = eventName,
+                ["body"]            = rawPayloadJson
+            }.ToJsonString();
+
+            var path = PathFor(sessionId);
+            EnsureUnderCap(path, line.Length + 1);
+            File.AppendAllText(path, line + "\n");
+        } catch { /* best effort */ }
+    }
+
+    void EnsureUnderCap(string path, int incomingBytes) {
+        try {
+            if (!File.Exists(path)) return;
+            var size = new FileInfo(path).Length;
+            if (size + incomingBytes <= _capBytes) return;
+
+            var lines = File.ReadAllLines(path).ToList();
+            while (lines.Count > 0 && lines.Sum(l => l.Length + 1) + incomingBytes > _capBytes) {
+                lines.RemoveAt(0);
+            }
+            File.WriteAllLines(path, lines);
+        } catch { }
+    }
+
+    public readonly struct Entry {
+        public string EventName { get; init; }
+        public string Body      { get; init; }
+        internal int  Index     { get; init; }
+        internal Func<Task> Deliver { get; init; }
+
+        public Task MarkDeliveredAsync() => Deliver();
+    }
+
+    /// <summary>
+    /// FIFO drain. Yields one entry per call. Caller MUST invoke
+    /// <see cref="Entry.MarkDeliveredAsync"/> after a successful POST.
+    /// Stop iterating to leave the rest of the queue for next time.
+    /// </summary>
+    public async IAsyncEnumerable<Entry> DrainAsync(
+            string sessionId,
+            [EnumeratorCancellation] CancellationToken ct
+        ) {
+        var path = PathFor(sessionId);
+        if (!File.Exists(path)) yield break;
+
+        string[] lines;
+        try { lines = await File.ReadAllLinesAsync(path, ct); }
+        catch { yield break; }
+
+        var delivered = 0;
+        for (var i = 0; i < lines.Length; i++) {
+            ct.ThrowIfCancellationRequested();
+
+            var line = lines[i];
+            string? eventName;
+            string? body;
+            try {
+                var node = JsonNode.Parse(line);
+                eventName = node?["hook_event_name"]?.GetValue<string>();
+                body      = node?["body"]?.GetValue<string>();
+            } catch { eventName = null; body = null; }
+
+            if (eventName is null || body is null) {
+                delivered = i + 1;
+                continue;
+            }
+
+            var capturedDelivered = delivered;
+            yield return new Entry {
+                EventName = eventName,
+                Body      = body,
+                Index     = i,
+                Deliver   = () => {
+                    delivered = capturedDelivered + 1;
+                    return WriteRemainingAsync(path, lines, delivered);
+                }
+            };
+        }
+
+        if (delivered == lines.Length) {
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    static async Task WriteRemainingAsync(string path, string[] lines, int delivered) {
+        try {
+            if (delivered >= lines.Length) {
+                File.Delete(path);
+                return;
+            }
+            await File.WriteAllLinesAsync(path, lines.Skip(delivered));
+        } catch { }
+    }
+
+    public void DeleteSession(string sessionId) {
+        var path = PathFor(sessionId);
+        try { if (File.Exists(path)) File.Delete(path); } catch { }
+    }
+
+    public void ReapOlderThan(TimeSpan age) {
+        try {
+            if (!Directory.Exists(_spoolDir)) return;
+            var cutoff = DateTime.UtcNow - age;
+            foreach (var file in Directory.EnumerateFiles(_spoolDir, "*.jsonl")) {
+                try {
+                    if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file);
+                } catch { }
+            }
+        } catch { }
+    }
+}
