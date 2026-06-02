@@ -399,6 +399,8 @@ public static class SetupCommand {
             Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
             File.WriteAllText(settingsPath, root.ToJsonString(WriteOpts));
 
+            ClaudePluginInstaller.WriteMarker(settingsPath);
+
             return true;
         } catch {
             return false;

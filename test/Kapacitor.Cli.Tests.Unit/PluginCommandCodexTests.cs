@@ -345,6 +345,125 @@ public class PluginCommandCodexTests {
         await Assert.That(result.RemovedAny).IsFalse();
     }
 
+    [Test]
+    [NotInParallel("HomeEnvVarMutation")]
+    public async Task Install_codex_with_if_installed_is_noop_when_no_marker_and_no_existing_entries() {
+        var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-codex-test-");
+        var originalHome = Environment.GetEnvironmentVariable("HOME");
+        try {
+            Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
+
+            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex", "--if-installed"]);
+            await Assert.That(exit).IsEqualTo(0);
+
+            // hooks.json must NOT exist — user never opted in.
+            var hooksPath = Path.Combine(fakeHome.FullName, ".codex", "hooks.json");
+            await Assert.That(File.Exists(hooksPath)).IsFalse();
+        } finally {
+            Environment.SetEnvironmentVariable("HOME", originalHome);
+            fakeHome.Delete(recursive: true);
+        }
+    }
+
+    [Test]
+    [NotInParallel("HomeEnvVarMutation")]
+    public async Task Install_codex_with_if_installed_refreshes_pre_marker_install() {
+        var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-codex-test-");
+        var originalHome = Environment.GetEnvironmentVariable("HOME");
+        try {
+            // Seed hooks.json with a stale 5-second PermissionRequest timeout
+            // and NO marker. This is the pre-marker scenario.
+            var codexDir = Path.Combine(fakeHome.FullName, ".codex");
+            Directory.CreateDirectory(codexDir);
+            var hooksPath = Path.Combine(codexDir, "hooks.json");
+            await File.WriteAllTextAsync(hooksPath, """
+                {
+                  "hooks": {
+                    "PermissionRequest": [
+                      { "hooks": [{ "type": "command", "command": "kapacitor codex-hook", "timeout": 5 }] }
+                    ]
+                  }
+                }
+                """);
+            Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
+
+            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex", "--if-installed"]);
+            await Assert.That(exit).IsEqualTo(0);
+
+            // PermissionRequest timeout must have been refreshed to 86400.
+            var root = JsonNode.Parse(await File.ReadAllTextAsync(hooksPath))!.AsObject();
+            var entries = root["hooks"]!["PermissionRequest"]!.AsArray();
+            var kapacitor = entries.First(e =>
+                (e!["hooks"] as JsonArray)!.Any(h =>
+                    h?["command"] is JsonValue v && v.TryGetValue<string>(out var s) && s.Contains("kapacitor codex-hook")));
+            await Assert.That(kapacitor!["hooks"]!.AsArray()[0]!["timeout"]!.GetValue<int>())
+                .IsEqualTo(86400);
+
+            // Marker now stamped → next upgrade takes the fast path.
+            await Assert.That(File.Exists(Path.Combine(codexDir, CodexHooksInstaller.MarkerFileName))).IsTrue();
+        } finally {
+            Environment.SetEnvironmentVariable("HOME", originalHome);
+            fakeHome.Delete(recursive: true);
+        }
+    }
+
+    [Test]
+    [NotInParallel("HomeEnvVarMutation")]
+    public async Task Install_codex_with_if_installed_is_noop_when_marker_matches_current_version() {
+        var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-codex-test-");
+        var originalHome = Environment.GetEnvironmentVariable("HOME");
+        try {
+            var codexDir = Path.Combine(fakeHome.FullName, ".codex");
+            Directory.CreateDirectory(codexDir);
+
+            // Pre-seed hooks.json with sentinel content + matching marker.
+            var hooksPath = Path.Combine(codexDir, "hooks.json");
+            await File.WriteAllTextAsync(hooksPath, """{"sentinel": "must-survive"}""");
+            await File.WriteAllTextAsync(
+                Path.Combine(codexDir, CodexHooksInstaller.MarkerFileName),
+                KapacitorVersion.Current());
+            Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
+
+            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex", "--if-installed"]);
+            await Assert.That(exit).IsEqualTo(0);
+
+            // Sentinel intact → installer short-circuited.
+            var root = JsonNode.Parse(await File.ReadAllTextAsync(hooksPath))!.AsObject();
+            await Assert.That(root["sentinel"]!.GetValue<string>()).IsEqualTo("must-survive");
+            await Assert.That(root["hooks"]).IsNull();
+        } finally {
+            Environment.SetEnvironmentVariable("HOME", originalHome);
+            fakeHome.Delete(recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task InstallCodexHooks_stamps_marker_on_success() {
+        using var tmp  = new TempDir();
+        var       path = Path.Combine(tmp.Path, "hooks.json");
+
+        var ok = PluginCommand.InstallCodexHooks(path);
+        await Assert.That(ok).IsTrue();
+
+        var marker = Path.Combine(tmp.Path, CodexHooksInstaller.MarkerFileName);
+        await Assert.That(File.Exists(marker)).IsTrue();
+        await Assert.That((await File.ReadAllTextAsync(marker)).Trim())
+            .IsEqualTo(KapacitorVersion.Current());
+    }
+
+    [Test]
+    public async Task RemoveCodexHooks_deletes_marker_when_kapacitor_entries_were_removed() {
+        using var tmp  = new TempDir();
+        var       path = Path.Combine(tmp.Path, "hooks.json");
+
+        PluginCommand.InstallCodexHooks(path);
+        await Assert.That(File.Exists(Path.Combine(tmp.Path, CodexHooksInstaller.MarkerFileName))).IsTrue();
+
+        var changed = PluginCommand.RemoveCodexHooks(path);
+        await Assert.That(changed).IsTrue();
+        await Assert.That(File.Exists(Path.Combine(tmp.Path, CodexHooksInstaller.MarkerFileName))).IsFalse();
+    }
+
     static void WriteSkill(string root, string name, string body) {
         var dir = Path.Combine(root, name);
         Directory.CreateDirectory(dir);

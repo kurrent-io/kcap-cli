@@ -64,26 +64,44 @@ public static class PluginCommand {
     }
 
     static async Task<int> InstallClaude(string[] args) {
-        var pluginPath = SetupCommand.ResolvePluginPath();
-
-        if (pluginPath is null) {
-            await Console.Error.WriteLineAsync("Plugin directory not found. Re-install kapacitor via npm:");
-            await Console.Error.WriteLineAsync("  npm install -g @kurrent/kapacitor");
-
-            return 1;
-        }
-
         var scope = args.Contains("--project") ? "project" : "user";
 
         var settingsPath = scope == "project"
             ? Path.Combine(Environment.CurrentDirectory, ".claude", "settings.local.json")
             : ClaudePaths.UserSettings;
 
+        // --if-installed: refresh-only mode used by the npm postinstall hook.
+        // Skip when the user never opted in; short-circuit when the marker
+        // already matches the current CLI version.
+        var refreshOnly = args.Contains("--if-installed");
+
+        if (refreshOnly && !ClaudePluginInstaller.IsInstalled(settingsPath)) {
+            return 0;
+        }
+
+        if (refreshOnly &&
+            ClaudePluginInstaller.ReadMarker(settingsPath) == KapacitorVersion.Current()) {
+            return 0;
+        }
+
+        var pluginPath = SetupCommand.ResolvePluginPath();
+
+        if (pluginPath is null) {
+            if (refreshOnly) return 0;
+            await Console.Error.WriteLineAsync("Plugin directory not found. Re-install kapacitor via npm:");
+            await Console.Error.WriteLineAsync("  npm install -g @kurrent/kapacitor");
+
+            return 1;
+        }
+
         var installed = SetupCommand.InstallPlugin(settingsPath, pluginPath);
 
         if (installed) {
-            await Console.Out.WriteLineAsync($"Plugin installed ({scope}: {settingsPath})");
+            await Console.Out.WriteLineAsync(refreshOnly
+                ? $"Plugin refreshed ({scope}: {settingsPath})"
+                : $"Plugin installed ({scope}: {settingsPath})");
         } else {
+            if (refreshOnly) return 0;
             await Console.Error.WriteLineAsync("Could not update settings file.");
 
             return 1;
@@ -128,6 +146,7 @@ public static class PluginCommand {
 
             if (changed) {
                 await File.WriteAllTextAsync(settingsPath, root.ToJsonString(WriteOpts));
+                ClaudePluginInstaller.DeleteMarker(settingsPath);
                 await Console.Out.WriteLineAsync($"Plugin removed ({scope}: {settingsPath})");
             } else {
                 await Console.Out.WriteLineAsync("Plugin was not installed.");
@@ -222,6 +241,33 @@ public static class PluginCommand {
         var hooksPath = scope == "project"
             ? Path.Combine(Environment.CurrentDirectory, ".codex", "hooks.json")
             : CodexPaths.UserHooksJson;
+
+        // --if-installed: refresh-only mode used by the npm postinstall hook.
+        // Skip when the user never opted in; short-circuit when the marker
+        // already matches the current CLI version. Skills are NOT touched
+        // here — `--skills --if-installed` is its own postinstall call.
+        var refreshOnly = args.Contains("--if-installed");
+
+        if (refreshOnly && !CodexHooksInstaller.IsInstalled(hooksPath)) {
+            return 0;
+        }
+
+        if (refreshOnly &&
+            CodexHooksInstaller.ReadMarker(hooksPath) == KapacitorVersion.Current()) {
+            return 0;
+        }
+
+        if (refreshOnly) {
+            // Hooks-only refresh: rewrite the kapacitor entries in hooks.json,
+            // stamp the marker, exit. No skills, no plugin folder needed.
+            if (!InstallCodexHooks(hooksPath)) {
+                // Never fail the npm install path.
+                return 0;
+            }
+
+            await Console.Out.WriteLineAsync($"Codex hooks refreshed ({scope}: {hooksPath})");
+            return 0;
+        }
 
         // `--codex` is an atomic hooks AND skills contract. Resolve the
         // skills source BEFORE writing hooks so a missing plugin folder
@@ -385,6 +431,8 @@ public static class PluginCommand {
             Directory.CreateDirectory(Path.GetDirectoryName(hooksPath)!);
             File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
 
+            CodexHooksInstaller.WriteMarker(hooksPath);
+
             return true;
         } catch {
             return false;
@@ -425,6 +473,7 @@ public static class PluginCommand {
 
             if (changed) {
                 File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
+                CodexHooksInstaller.DeleteMarker(hooksPath);
             }
 
             return changed;
@@ -434,7 +483,7 @@ public static class PluginCommand {
     }
 
     static int PrintUsage() {
-        Console.Error.WriteLine("Usage: kapacitor plugin <install|remove> [--project] [--codex|--skills]");
+        Console.Error.WriteLine("Usage: kapacitor plugin <install|remove> [--project] [--codex|--skills] [--if-installed]");
 
         return 1;
     }

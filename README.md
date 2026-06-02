@@ -50,7 +50,7 @@ kapacitor setup --server-url https://my-tenant.kapacitor.ai --default-visibility
 In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks` and/or `--skip-codex-hooks`.
 
 > **Need hooks for an agent installed after setup, or scoped to a single repo?**
-> Run `kapacitor plugin install [--codex] [--project]`. Use `--skills` instead of `--codex` if you only want the agent skills (Cursor, etc.) without Codex hooks. After installing Codex hooks, run `/hooks` inside Codex and trust each kapacitor entry — Codex doesn't execute hooks until each is explicitly trusted. After a `--project` install, also run `codex` once in the repo and accept the trust prompt.
+> Run `kapacitor plugin install [--codex] [--project]`. Use `--skills` instead of `--codex` if you only want the agent skills (Cursor, etc.) without Codex hooks. After installing Codex hooks, run `/hooks` inside Codex and trust each kapacitor entry — Codex doesn't execute hooks until each is explicitly trusted. After a `--project` install, also run `codex` once in the repo and accept the trust prompt. Re-running after a kapacitor upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kapacitor`.
 
 > **Need at least one agent to capture sessions:** the setup wizard runs to completion without an agent CLI on `PATH` (it'll still configure your profile, auth, and daemon), but kapacitor only records work once Claude Code or Codex CLI is installed and the hooks are in place.
 
@@ -295,6 +295,8 @@ kapacitor plugin install --codex                          # user scope (~/.codex
 kapacitor plugin install --codex --project                # project scope (<repo>/.codex/hooks.json), skills still user-wide
 kapacitor plugin install --skills                         # skills only (~/.agents/skills/), no Codex hooks
 kapacitor plugin install --skills --if-installed          # refresh only if skills were previously installed (used by npm postinstall, harmless to call by hand)
+kapacitor plugin install --codex --if-installed           # refresh Codex hooks only if previously installed (used by npm postinstall)
+kapacitor plugin install --if-installed                   # refresh Claude plugin registration only if previously installed (used by npm postinstall)
 ```
 
 Installing with `--codex` (or `--skills`) writes five skills under `~/.agents/skills/`:
@@ -311,7 +313,7 @@ All five auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionI
 
 The daemon starts Codex with `--sandbox workspace-write` and `--ask-for-approval on-request`. This lets Codex edit files in the agent's worktree but escalates sensitive operations (e.g. network calls, shell commands outside the worktree) through the daemon's permission bridge to the dashboard.
 
-> **Upgrading from an earlier version of kapacitor?** Agent skills under `~/.agents/skills/kapacitor-*` are refreshed automatically by the npm postinstall hook every time you run `npm install -g @kurrent/kapacitor`, so you'll always pick up new and updated skills. Codex *hooks* (`~/.codex/hooks.json`) are not auto-refreshed — re-run `kapacitor plugin install --codex` after upgrading if you want the latest hook config. (Older installs used a 30-second timeout on the `PermissionRequest` hook, which would cause Codex to kill the hook before the dashboard could send back an approval or denial; the current install writes a 24-hour timeout.)
+> **Upgrading from an earlier version of kapacitor?** The npm postinstall hook refreshes all user-scope kapacitor installations on every `npm install -g @kurrent/kapacitor`, so you always pick up the current CLI version's skills (`~/.agents/skills/kapacitor-*`), Codex hook commands (`~/.codex/hooks.json`), and Claude plugin registration (`~/.claude/settings.json`). Each refresh is gated on a marker file written by your previous setup — fresh systems that never opted in are left untouched. Project-scope installs (`--project`) are not auto-refreshed; re-run `kapacitor plugin install [--codex] --project` after upgrading if you want the latest config for a specific repo.
 
 PR review for hosted Codex agents is not yet supported (tracked in AI-632). The sandbox and approval-mode selectors in the launch dialog are also planned as a follow-up (AI-633).
 
