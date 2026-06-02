@@ -27,14 +27,39 @@ namespace Kapacitor.Cli.Commands;
 /// </para>
 /// </summary>
 internal sealed class CursorImportSource : IImportSource {
-    readonly string                                     _projectsDir;
-    readonly string                                     _workspaceStorageDir;
-    readonly Lazy<IReadOnlyDictionary<string, string>>  _sanitizedToFolder;
+    readonly string                                      _projectsDir;
+    readonly string                                      _workspaceStorageDir;
+    readonly Lazy<IReadOnlyDictionary<string, string?>>  _sanitizedToFolder;
+    readonly Func<string, Task<RepositoryPayload?>>      _repoDetector;
 
-    public CursorImportSource(string? projectsDirOverride = null, string? workspaceStorageDirOverride = null) {
+    public CursorImportSource(
+        string?                                  projectsDirOverride         = null,
+        string?                                  workspaceStorageDirOverride = null,
+        Func<string, Task<RepositoryPayload?>>?  repoDetector                = null
+    ) {
         _projectsDir         = projectsDirOverride         ?? CursorPaths.ProjectsDir();
         _workspaceStorageDir = workspaceStorageDirOverride ?? CursorPaths.Resolve().WorkspaceStorageDir;
-        _sanitizedToFolder   = new Lazy<IReadOnlyDictionary<string, string>>(BuildSanitizedToFolderMap);
+        _sanitizedToFolder   = new Lazy<IReadOnlyDictionary<string, string?>>(BuildSanitizedToFolderMap);
+        _repoDetector        = repoDetector ?? RepositoryDetection.DetectRepositoryAsync;
+    }
+
+    /// <summary>
+    /// On Windows and macOS the filesystem is case-insensitive; on Linux it
+    /// isn't. The workspace.json scan and Cursor's sanitized path segment both
+    /// preserve case, but two equally-valid folder paths can differ only in
+    /// case on the case-insensitive platforms, so we compare cwd accordingly.
+    /// </summary>
+    static StringComparison PathComparison =>
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+    static string NormalizeForComparison(string path) {
+        try {
+            return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        } catch {
+            return path.TrimEnd('/', '\\');
+        }
     }
 
     public string Vendor => "cursor";
@@ -70,7 +95,7 @@ internal sealed class CursorImportSource : IImportSource {
             return Task.FromResult<IReadOnlyList<DiscoveredSession>>([]);
 
         var sessionFilter = filters.FilterSession is { } sf ? NormalizeCursorSessionId(sf) : null;
-        var normalizedCwd = filters.FilterCwd?.TrimEnd('/');
+        var normalizedCwd = filters.FilterCwd is { } cwd ? NormalizeForComparison(cwd) : null;
         var sinceUtc      = filters.Since is { } since
             ? new DateTimeOffset(since.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), TimeSpan.Zero)
             : (DateTimeOffset?)null;
@@ -84,11 +109,14 @@ internal sealed class CursorImportSource : IImportSource {
 
             if (!Directory.Exists(transcriptsDir)) continue;
 
+            // sanitizedMap value is null when the sanitized key collided with
+            // multiple distinct workspace folders (lossy encoding) — treat as
+            // unknown rather than misattributing to one of them.
             sanitizedMap.TryGetValue(sanitized, out var workspaceFolder);
 
             if (normalizedCwd is not null
              && (workspaceFolder is null
-              || !workspaceFolder.TrimEnd('/').Equals(normalizedCwd, StringComparison.Ordinal))) {
+              || !workspaceFolder.Equals(normalizedCwd, PathComparison))) {
                 continue;
             }
 
@@ -145,6 +173,12 @@ internal sealed class CursorImportSource : IImportSource {
         ) {
         var results = new List<ImportCommand.SessionClassification>(sessions.Count);
 
+        // Per-workspace repo cache so we only run RepositoryDetection once per
+        // unique cwd in this Classify call — sessions cluster heavily inside
+        // the same workspace folder.
+        var repoCache    = new Dictionary<string, string?>(StringComparer.Ordinal); // cwd → "owner/repo" or null
+        var hasExcludes  = ctx.ExcludedRepos is { Count: > 0 };
+
         foreach (var s in sessions) {
             var transcriptPath = (string)s.SourceMeta!["TranscriptPath"]!;
 
@@ -190,7 +224,20 @@ internal sealed class CursorImportSource : IImportSource {
                 // Best effort.
             }
 
-            var (excludedRepoKey, excludedPathKey) = ResolveExclusions(s.Cwd, ctx);
+            string? repoKey = null;
+            if (hasExcludes && s.Cwd is { } cwd) {
+                if (!repoCache.TryGetValue(cwd, out repoKey)) {
+                    try {
+                        var repo = await _repoDetector(cwd);
+                        repoKey = repo is { Owner: { } o, RepoName: { } n } ? $"{o}/{n}" : null;
+                    } catch {
+                        repoKey = null;
+                    }
+                    repoCache[cwd] = repoKey;
+                }
+            }
+
+            var (excludedRepoKey, excludedPathKey) = ResolveExclusions(s.Cwd, repoKey, ctx);
 
             var status       = ImportCommand.ClassificationStatus.New;
             var resumeFromLn = 0;
@@ -312,11 +359,15 @@ internal sealed class CursorImportSource : IImportSource {
             : null;
     }
 
-    static (string? ExcludedRepoKey, string? ExcludedPathKey) ResolveExclusions(string? cwd, ClassifyContext ctx) {
-        // Repo exclusion is applied later by the orchestrator once it has
-        // resolved owner/repo per session (ImportCommand.ResolveCursorRepos
-        // walks each cwd into RepositoryDetection). Path exclusion needs only
-        // the cwd, so we apply it inline here.
+    static (string? ExcludedRepoKey, string? ExcludedPathKey) ResolveExclusions(
+        string? cwd, string? repoKey, ClassifyContext ctx
+    ) {
+        string? excludedRepoKey = null;
+        if (repoKey is not null && ctx.ExcludedRepos is { Count: > 0 } repos
+         && repos.Any(r => string.Equals(r, repoKey, StringComparison.OrdinalIgnoreCase))) {
+            excludedRepoKey = repoKey;
+        }
+
         string? excludedPathKey = null;
         if (cwd is not null && ctx.ExcludedPaths is { Count: > 0 } paths) {
             foreach (var entry in paths) {
@@ -326,11 +377,18 @@ internal sealed class CursorImportSource : IImportSource {
                 }
             }
         }
-        return (ExcludedRepoKey: null, ExcludedPathKey: excludedPathKey);
+        return (excludedRepoKey, excludedPathKey);
     }
 
-    IReadOnlyDictionary<string, string> BuildSanitizedToFolderMap() {
-        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+    IReadOnlyDictionary<string, string?> BuildSanitizedToFolderMap() {
+        // EncodeWorkspacePath is lossy — "/foo/bar" and "/foo-bar" both encode
+        // to "foo-bar". When two distinct workspaces collide on the same
+        // sanitized key we can't tell which one a given JSONL session belongs
+        // to, so we mark the key ambiguous (null) and let discovery treat the
+        // affected sessions as having no resolvable cwd. Picking one
+        // arbitrarily would misattribute git owner+repo and risk applying the
+        // wrong excluded-repo gating.
+        var map = new Dictionary<string, string?>(StringComparer.Ordinal);
 
         if (!Directory.Exists(_workspaceStorageDir)) return map;
 
@@ -357,7 +415,18 @@ internal sealed class CursorImportSource : IImportSource {
             }
 
             var sanitized = EncodeWorkspacePath(normalized);
-            map[sanitized] = normalized;
+
+            if (map.TryGetValue(sanitized, out var existing)) {
+                // Already ambiguous (null) — leave it. Otherwise: if the new
+                // folder matches the existing one (case-insensitive on
+                // macOS/Windows), keep the existing entry; if it differs,
+                // collapse to ambiguous.
+                if (existing is not null && !existing.Equals(normalized, PathComparison)) {
+                    map[sanitized] = null;
+                }
+            } else {
+                map[sanitized] = normalized;
+            }
         }
 
         return map;
