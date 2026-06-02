@@ -5,6 +5,12 @@ using Kapacitor.Cli.Commands;
 
 namespace Kapacitor.Cli.Tests.Unit.Cursor;
 
+// Several tests here read HOME-derived paths (DisabledSessions marker dir,
+// PathHelpers.HomeDirectory injection into the outgoing payload) and one
+// mutates KAPACITOR_AGENT_ID. Serialise against every other test that
+// mutates HOME so a racing HOME-setter from PluginCommand* tests can't
+// land our marker writes in the wrong directory.
+[NotInParallel("HomeEnvVarMutation")]
 public class CursorHookCommandTests {
     const string Sid = "8c3276c2c8f743ce98898c2becf5240a";
     [Test]
