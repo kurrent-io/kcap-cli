@@ -601,6 +601,13 @@ switch (command) {
     }
     case "codex-hook":
         return await CodexHookCommand.Handle(baseUrl!, Console.In);
+    case "hook": {
+        if (args.Contains("--cursor")) {
+            return await CursorHookCommand.Handle(baseUrl!, Console.In);
+        }
+        Console.Error.WriteLine("kapacitor hook requires a vendor flag (e.g. --cursor)");
+        return 1;
+    }
     case "cursor":
         await Console.Error.WriteLineAsync(
             "kapacitor cursor import has been removed. Use 'kapacitor import --cursor' instead.");
