@@ -309,6 +309,14 @@ public class CursorImportSourceTests {
         // creation/last-write time so the server records canonical
         // SessionStarted/SessionEnded with the real timestamps, not
         // import-time wall clock.
+        //
+        // Linux ext4 has no usable birth-time round-trip via .NET's File
+        // APIs — SetCreationTimeUtc is a no-op, GetCreationTimeUtc returns
+        // mtime — so on Linux started_at and ended_at collapse to the same
+        // value. The test verifies the macOS/Windows contract; Linux gets
+        // degraded-but-functional behavior in production.
+        if (OperatingSystem.IsLinux()) return;
+
         using var fx = new ProjectsDirFixture();
         var jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
 
@@ -626,6 +634,14 @@ public class CursorImportSourceTests {
         // the cutoff but appended to AFTER it must still be excluded by
         // --since. Cursor JSONL has no in-band timestamps, so the file
         // creation time is the closest proxy for session-start.
+        //
+        // Linux ext4 doesn't expose btime through .NET's File APIs:
+        // SetCreationTimeUtc is a silent no-op and GetCreationTimeUtc falls
+        // back to mtime. This test exercises a macOS/Windows-only filesystem
+        // contract; on Linux the production code degrades to gating on mtime,
+        // which is documented but not asserted here.
+        if (OperatingSystem.IsLinux()) return;
+
         using var fx = new ProjectsDirFixture();
         var jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
 

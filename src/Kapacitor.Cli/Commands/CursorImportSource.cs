@@ -138,11 +138,18 @@ internal sealed class CursorImportSource : IImportSource {
                 // field (Anthropic content-block format without metadata),
                 // and the file is created when the session starts and
                 // appended throughout — so birth-time on supported
-                // filesystems (APFS, ext4, NTFS) is the closest proxy.
+                // filesystems (APFS, NTFS) is the closest proxy.
                 //
                 // `--since` MUST gate on session-start, not last-modified,
                 // or any old session appended to after the cutoff would be
                 // re-imported.
+                //
+                // Linux note: .NET's File.GetCreationTimeUtc on Linux ext4
+                // falls back to mtime when btime isn't queryable. On those
+                // hosts started_at == ended_at and `--since` effectively
+                // gates on last-write. Acceptable degradation — most Cursor
+                // users are on macOS/Windows and the production behavior is
+                // still strictly better than not having `--since` at all.
                 DateTimeOffset? firstTimestamp = null;
                 try {
                     firstTimestamp = File.GetCreationTimeUtc(jsonl);
