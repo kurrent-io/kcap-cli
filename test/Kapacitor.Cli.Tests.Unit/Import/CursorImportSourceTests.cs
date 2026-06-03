@@ -304,6 +304,50 @@ public class CursorImportSourceTests {
     }
 
     [Test]
+    public async Task import_session_populates_started_at_and_ended_at_from_file_times() {
+        // AI-739: synthetic lifecycle hooks must carry the JSONL file's
+        // creation/last-write time so the server records canonical
+        // SessionStarted/SessionEnded with the real timestamps, not
+        // import-time wall clock.
+        using var fx = new ProjectsDirFixture();
+        var jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
+
+        var created  = new DateTime(2026, 3, 14, 9, 27, 0, DateTimeKind.Utc);
+        var modified = new DateTime(2026, 3, 14, 10, 27, 0, DateTimeKind.Utc);
+        File.SetCreationTimeUtc(jsonl, created);
+        File.SetLastWriteTimeUtc(jsonl, modified);
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        var posted = new List<(string Path, string Body)>();
+        using var handler = new StubHandler(
+            postCapture: (req, body) => { posted.Add((req.RequestUri!.AbsolutePath, body)); return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var client = new HttpClient(handler);
+
+        var classification = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.New,
+            Vendor     = "cursor",
+            SourceMeta = new Dictionary<string, object?> { ["TranscriptPath"] = jsonl },
+        };
+
+        await src.ImportSessionAsync(classification, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        var startNode = JsonNode.Parse(posted.First(p => p.Path == "/hooks/session-start/cursor").Body)!;
+        var endNode   = JsonNode.Parse(posted.First(p => p.Path == "/hooks/session-end/cursor").Body)!;
+
+        var startedAt = DateTimeOffset.Parse(startNode["started_at"]!.GetValue<string>());
+        var endedAt   = DateTimeOffset.Parse(endNode["ended_at"]!.GetValue<string>());
+
+        await Assert.That(startedAt.UtcDateTime).IsEqualTo(created);
+        await Assert.That(endedAt.UtcDateTime).IsEqualTo(modified);
+        await Assert.That((long)endNode["duration_ms"]!).IsEqualTo(3_600_000L);  // 1h
+    }
+
+    [Test]
     public async Task import_session_omits_workspace_roots_when_cwd_unresolved() {
         using var fx = new ProjectsDirFixture();
         var jsonl = fx.AddSession("unknown-workspace", "11111111-1111-1111-1111-111111111111", "{}\n");

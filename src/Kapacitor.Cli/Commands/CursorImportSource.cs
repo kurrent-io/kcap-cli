@@ -308,9 +308,10 @@ internal sealed class CursorImportSource : IImportSource {
         // canonical event id on (composerId, "SessionStarted"), so re-emitting
         // is idempotent — safe to fire on every import (including Partial
         // resumes after a previous import or live hooks already fired).
+        var (createdUtc, modifiedUtc) = TryGetTranscriptTimes(transcriptPath);
         await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-start/cursor",
-            BuildSessionStartPayload(classification.SessionId, workspaceFolder, transcriptPath),
+            BuildSessionStartPayload(classification.SessionId, workspaceFolder, transcriptPath, createdUtc),
             ct);
 
         int sent;
@@ -331,10 +332,12 @@ internal sealed class CursorImportSource : IImportSource {
         // Server's canonical-event id is (composerId, "SessionEnded") — also
         // idempotent on replay. Reason "historical-import" lets operators
         // distinguish synthetic ends from live-hook ends in event metadata.
-        var durationMs = ComputeHistoricalDurationMs(transcriptPath);
+        var durationMs = createdUtc is { } c && modifiedUtc is { } m && m >= c
+            ? (long?)(m - c).TotalMilliseconds
+            : null;
         await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-end/cursor",
-            BuildSessionEndPayload(classification.SessionId, transcriptPath, durationMs),
+            BuildSessionEndPayload(classification.SessionId, transcriptPath, durationMs, modifiedUtc),
             ct);
 
         if (sent == 0) return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
@@ -342,7 +345,9 @@ internal sealed class CursorImportSource : IImportSource {
         return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
     }
 
-    static JsonObject BuildSessionStartPayload(string sessionId, string? workspaceFolder, string transcriptPath) {
+    static JsonObject BuildSessionStartPayload(
+        string sessionId, string? workspaceFolder, string transcriptPath, DateTimeOffset? startedAt
+    ) {
         var payload = new JsonObject {
             ["hook_event_name"]     = "sessionStart",
             ["session_id"]          = sessionId,
@@ -352,10 +357,19 @@ internal sealed class CursorImportSource : IImportSource {
         if (workspaceFolder is not null) {
             payload["workspace_roots"] = new JsonArray(workspaceFolder);
         }
+        // AI-739: server prefers started_at over UtcNow when present, so
+        // historical sessions surface with their real start time. Use an
+        // ISO-8601 round-trip ("O") string — DateTimeOffset? on the server
+        // record deserialises that shape directly.
+        if (startedAt is { } ts) {
+            payload["started_at"] = ts.ToString("O");
+        }
         return payload;
     }
 
-    static JsonObject BuildSessionEndPayload(string sessionId, string transcriptPath, long? durationMs) {
+    static JsonObject BuildSessionEndPayload(
+        string sessionId, string transcriptPath, long? durationMs, DateTimeOffset? endedAt
+    ) {
         var payload = new JsonObject {
             ["hook_event_name"] = "sessionEnd",
             ["session_id"]      = sessionId,
@@ -365,17 +379,17 @@ internal sealed class CursorImportSource : IImportSource {
         if (durationMs is { } d) {
             payload["duration_ms"] = d;
         }
+        if (endedAt is { } ts) {
+            payload["ended_at"] = ts.ToString("O");
+        }
         return payload;
     }
 
-    static long? ComputeHistoricalDurationMs(string transcriptPath) {
+    static (DateTimeOffset? Created, DateTimeOffset? Modified) TryGetTranscriptTimes(string transcriptPath) {
         try {
-            var created  = File.GetCreationTimeUtc(transcriptPath);
-            var modified = File.GetLastWriteTimeUtc(transcriptPath);
-            var delta    = (long)(modified - created).TotalMilliseconds;
-            return delta >= 0 ? delta : null;
+            return (File.GetCreationTimeUtc(transcriptPath), File.GetLastWriteTimeUtc(transcriptPath));
         } catch {
-            return null;
+            return (null, null);
         }
     }
 
