@@ -1,0 +1,10 @@
+kcap hide — Hide session from other users
+
+Usage: kcap hide [sessionId]
+
+Sets the current session's visibility to owner-only. Other users
+will no longer see this session in the dashboard.
+
+Arguments:
+  sessionId               Session ID (defaults to KAPACITOR_SESSION_ID
+                          on Claude or CODEX_THREAD_ID on Codex 0.81+)

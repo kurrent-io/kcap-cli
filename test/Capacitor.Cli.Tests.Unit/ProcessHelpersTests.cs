@@ -1,0 +1,91 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+
+namespace Capacitor.Cli.Tests.Unit;
+
+public class ProcessHelpersTests {
+    [Test]
+    public async Task IsProcessAlive_returns_true_for_current_process() {
+        var alive = ProcessHelpers.IsProcessAlive(Environment.ProcessId);
+
+        await Assert.That(alive).IsTrue();
+    }
+
+    [Test]
+    public async Task IsProcessAlive_returns_false_for_pid_zero_or_one() {
+        // pid 0 is invalid; pid 1 is init/launchd which we treat as "no parent" by convention.
+        await Assert.That(ProcessHelpers.IsProcessAlive(0)).IsFalse();
+        await Assert.That(ProcessHelpers.IsProcessAlive(1)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsProcessAlive_returns_false_for_negative_pid() {
+        await Assert.That(ProcessHelpers.IsProcessAlive(-1)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsProcessAlive_transitions_to_false_after_child_exits() {
+        // Use a long-running child and Kill() it explicitly: a fast-exit command can be
+        // reaped by .NET's SIGCHLD handler before the alive assertion runs on a busy CI
+        // scheduler, making `kill(pid, 0)` return ESRCH and the test fail intermittently.
+        // Spawn the binary directly (no shell wrapper) so there's no descendant to orphan
+        // when we kill the tracked pid.
+        var psi = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+            ? new ProcessStartInfo("ping", "-n 30 127.0.0.1")
+            : new ProcessStartInfo("/bin/sleep", "30");
+
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError  = true;
+        psi.UseShellExecute        = false;
+
+        using var process = new Process();
+        process.StartInfo = psi;
+        process.Start();
+        var pid = process.Id;
+
+        await Assert.That(ProcessHelpers.IsProcessAlive(pid)).IsTrue();
+
+        process.Kill(entireProcessTree: true);
+        await process.WaitForExitAsync();
+
+        // After .NET reaps the killed child, kill(pid, 0) returns ESRCH. Poll briefly
+        // in case the reaper runs slightly later than WaitForExitAsync's completion.
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+
+        while (DateTime.UtcNow < deadline && ProcessHelpers.IsProcessAlive(pid)) {
+            await Task.Delay(50);
+        }
+
+        await Assert.That(ProcessHelpers.IsProcessAlive(pid)).IsFalse();
+    }
+
+    [Test]
+    public async Task GetParentPid_returns_a_live_process() {
+        var ppid = ProcessHelpers.GetParentPid();
+
+        await Assert.That(ppid).IsNotNull();
+        await Assert.That(ProcessHelpers.IsProcessAlive(ppid!.Value)).IsTrue();
+    }
+
+    [Test]
+    public async Task GetCodingAgentPid_returns_a_live_process() {
+        // The whole point of GetCodingAgentPid is to identify a process that's
+        // still alive when the watcher boots up — i.e. the long-lived coding
+        // agent, not the short-lived hook executor. Anything it returns must
+        // therefore answer "yes" to IsProcessAlive at the moment of the call.
+        var pid = ProcessHelpers.GetCodingAgentPid();
+
+        await Assert.That(pid).IsNotNull();
+        await Assert.That(ProcessHelpers.IsProcessAlive(pid!.Value)).IsTrue();
+    }
+
+    [Test]
+    public async Task GetCodingAgentPid_does_not_return_own_pid() {
+        // Self-monitoring would let the watcher self-terminate as soon as it
+        // starts. The Unix branch falls back to getppid when the process group
+        // leader is the calling process itself.
+        var pid = ProcessHelpers.GetCodingAgentPid();
+
+        await Assert.That(pid).IsNotEqualTo(Environment.ProcessId);
+    }
+}

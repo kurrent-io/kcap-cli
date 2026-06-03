@@ -1,0 +1,21 @@
+kcap profile — Manage server profiles
+
+Usage: kcap profile <subcommand> [options]
+
+Subcommands:
+  add <name> --server-url <url> [--remote <pattern>]...
+                            Add a new profile
+  list                      Show all profiles
+  remove <name>             Remove a profile
+  show [name]               Show profile details (defaults to active)
+
+Options for 'add':
+  --server-url <url>        Server URL (required)
+  --remote <pattern>        Git remote pattern for auto-matching (repeatable)
+
+Examples:
+  kcap profile add work --server-url https://cap.example.com
+  kcap profile add oss --server-url https://cap.oss.dev --remote github.com/myorg
+  kcap profile list
+  kcap profile show work
+  kcap profile remove work

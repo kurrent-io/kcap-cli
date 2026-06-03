@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "kcap",
+  "owner": {
+    "name": "Kurrent",
+    "email": "support@kurrent.io"
+  },
+  "plugins": [
+    {
+      "name": "kcap",
+      "description": "Records and visualizes Claude Code sessions via kcap CLI hooks",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

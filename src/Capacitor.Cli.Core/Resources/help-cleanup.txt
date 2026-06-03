@@ -1,0 +1,3 @@
+kcap cleanup — Kill all orphaned watcher processes
+
+Usage: kcap cleanup

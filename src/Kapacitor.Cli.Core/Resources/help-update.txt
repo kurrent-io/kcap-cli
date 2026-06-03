@@ -1,3 +1,0 @@
-kapacitor update — Check for and install updates
-
-Usage: kapacitor update

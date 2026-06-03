@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src\Capacitor.Cli.Core\Capacitor.Cli.Core.csproj" />
+    <Project Path="src\Capacitor.Cli.Daemon\Capacitor.Cli.Daemon.csproj" />
+    <Project Path="src\Capacitor.Cli\Capacitor.Cli.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test\Capacitor.Cli.Tests.Integration\Capacitor.Cli.Tests.Integration.csproj" />
+    <Project Path="test\Capacitor.Cli.Tests.Unit\Capacitor.Cli.Tests.Unit.csproj" />
+  </Folder>
+</Solution>

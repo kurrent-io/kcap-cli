@@ -1,5 +1,0 @@
-kapacitor {cmd} — Hook command (internal)
-
-Usage: echo '<json>' | kapacitor {cmd}
-
-Used internally by the Claude Code plugin. Reads JSON from stdin.

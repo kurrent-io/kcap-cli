@@ -1,13 +1,13 @@
 {
   "version": 1,
   "hooks": {
-    "sessionStart":       [{ "command": "./kapacitor-hook-probe.sh sessionStart" }],
-    "sessionEnd":         [{ "command": "./kapacitor-hook-probe.sh sessionEnd" }],
-    "beforeSubmitPrompt": [{ "command": "./kapacitor-hook-probe.sh beforeSubmitPrompt" }],
-    "afterAgentResponse": [{ "command": "./kapacitor-hook-probe.sh afterAgentResponse" }],
-    "afterAgentThought":  [{ "command": "./kapacitor-hook-probe.sh afterAgentThought" }],
-    "preToolUse":         [{ "command": "./kapacitor-hook-probe.sh preToolUse" }],
-    "postToolUse":        [{ "command": "./kapacitor-hook-probe.sh postToolUse" }],
-    "postToolUseFailure": [{ "command": "./kapacitor-hook-probe.sh postToolUseFailure" }]
+    "sessionStart":       [{ "command": "./kcap-hook-probe.sh sessionStart" }],
+    "sessionEnd":         [{ "command": "./kcap-hook-probe.sh sessionEnd" }],
+    "beforeSubmitPrompt": [{ "command": "./kcap-hook-probe.sh beforeSubmitPrompt" }],
+    "afterAgentResponse": [{ "command": "./kcap-hook-probe.sh afterAgentResponse" }],
+    "afterAgentThought":  [{ "command": "./kcap-hook-probe.sh afterAgentThought" }],
+    "preToolUse":         [{ "command": "./kcap-hook-probe.sh preToolUse" }],
+    "postToolUse":        [{ "command": "./kcap-hook-probe.sh postToolUse" }],
+    "postToolUseFailure": [{ "command": "./kcap-hook-probe.sh postToolUseFailure" }]
   }
 }

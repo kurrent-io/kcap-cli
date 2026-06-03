@@ -28,7 +28,7 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Build solution
-        run: dotnet build Kapacitor.slnx
+        run: dotnet build Capacitor.slnx
 
       - name: Run unit tests
         # --maximum-parallel-tests 1 serializes the entire unit suite.
@@ -41,10 +41,10 @@ jobs:
         # the affected tests are refactored to inject paths/streams
         # rather than mutate Environment/Console, run serially. Local dev
         # runs stay parallel (the flag lives only in CI).
-        run: dotnet run --project test/Kapacitor.Cli.Tests.Unit/Kapacitor.Cli.Tests.Unit.csproj -- --maximum-parallel-tests 1
+        run: dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj -- --maximum-parallel-tests 1
 
       - name: Run integration tests
-        run: dotnet run --project test/Kapacitor.Cli.Tests.Integration/Kapacitor.Cli.Tests.Integration.csproj
+        run: dotnet run --project test/Capacitor.Cli.Tests.Integration/Capacitor.Cli.Tests.Integration.csproj
 
   aot-check:
     name: AOT publish check
@@ -53,8 +53,8 @@ jobs:
       fail-fast: false
       matrix:
         project:
-          - src/Kapacitor.Cli/Kapacitor.Cli.csproj
-          - src/Kapacitor.Cli.Daemon/Kapacitor.Cli.Daemon.csproj
+          - src/Capacitor.Cli/Capacitor.Cli.csproj
+          - src/Capacitor.Cli.Daemon/Capacitor.Cli.Daemon.csproj
 
     steps:
       - uses: actions/checkout@v6

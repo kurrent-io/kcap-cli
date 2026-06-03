@@ -1,0 +1,6 @@
+{
+  "name": "kcap",
+  "version": "1.6.0",
+  "description": "Records and visualizes Codex CLI sessions via kcap CLI hooks",
+  "mcpServers": "./.codex-mcp.json"
+}

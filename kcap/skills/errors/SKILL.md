@@ -1,0 +1,68 @@
+---
+name: errors
+description: >-
+  This skill should be used when the user asks to "show errors", "extract errors",
+  "what went wrong", "find tool errors", "review errors from session",
+  "check session errors", "list failures", "what failed in session X",
+  "error report", "show mistakes", or wants to review tool call errors
+  from a recorded session. Provides instructions for extracting tool errors
+  via the kcap CLI.
+---
+
+# Session Errors
+
+Extract tool call errors from an agent session recorded by Kurrent Capacitor. The output lists each failed tool call — bash commands, file reads/writes, agent delegations, etc. — along with the error message and the tool that caused it.
+
+## Usage
+
+Run `kcap errors` via the Bash tool. `kcap errors` resolves the current session id from the environment when the host agent CLI exposes one. If no session id is available, pass it explicitly: `kcap errors <sessionId>`.
+
+```bash
+# Errors from the current session
+kcap errors
+
+# Errors from the full continuation chain
+kcap errors --chain
+
+# Explicit session ID (overrides env var)
+kcap errors <sessionId>
+kcap errors --chain <sessionId>
+```
+
+## Output Format
+
+Each error is printed as a block with:
+
+- **Session ID** and optional **agent ID** (if the error occurred in a subagent)
+- **Event number** and **timestamp**
+- **Tool name** — the tool that failed (e.g., Bash, Read, Edit, Write, Grep, Glob, Task)
+- **Error message** — the error output or failure reason
+
+When using `--chain`, errors from all sessions in the continuation chain are included, ordered chronologically.
+
+## When to Use Each Flag
+
+- **No flag** (`kcap errors`) — reviewing errors from the current session
+- **`--chain`** (`kcap errors --chain`) — reviewing errors across a full task that spanned multiple sessions
+
+## Practical Applications
+
+- **End-of-session review** — run after finishing a session to identify recurring mistakes and add avoidance rules to the project's agent instructions file (e.g. `AGENTS.md`).
+- **Debugging** — quickly find what went wrong in a session without scrolling through the full timeline
+- **Pattern detection** — use `--chain` across a multi-session task to spot repeated error patterns (e.g., wrong file paths, incorrect API usage)
+
+## Environment
+
+The `KCAP_URL` environment variable overrides the default server URL (`http://localhost:5108`).
+
+## Tips
+
+- After extracting errors, look for patterns: the same tool failing repeatedly, or the same type of mistake across sessions.
+- Propose concrete avoidance rules based on the errors found — these can be added to the project's agent instructions file.
+- The `kcap` CLI must be available on PATH (typically installed at `~/.local/bin/kcap`).
+
+## Error Handling
+
+- If the session is not found, the command prints an error and exits with code 1.
+- If no errors are found, the command prints "No errors found." — this is a good outcome.
+- If the Kurrent Capacitor server is unreachable, the command prints an HTTP error. Ensure the server is running.

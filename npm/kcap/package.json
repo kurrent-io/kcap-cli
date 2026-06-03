@@ -1,0 +1,28 @@
+{
+  "name": "@kurrent/kcap",
+  "version": "0.0.0",
+  "description": "CLI companion for Kurrent Capacitor — records and visualizes Claude Code sessions",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kurrent-io/kcap-cli.git"
+  },
+  "bin": {
+    "kcap": "bin/kcap.js"
+  },
+  "scripts": {
+    "postinstall": "node bin/postinstall.js"
+  },
+  "optionalDependencies": {
+    "@kurrent/kcap-darwin-arm64": "0.0.0",
+    "@kurrent/kcap-linux-x64": "0.0.0",
+    "@kurrent/kcap-linux-arm64": "0.0.0",
+    "@kurrent/kcap-linux-musl-x64": "0.0.0",
+    "@kurrent/kcap-linux-musl-arm64": "0.0.0",
+    "@kurrent/kcap-win-x64": "0.0.0"
+  },
+  "files": [
+    "bin/",
+    "kcap/"
+  ]
+}

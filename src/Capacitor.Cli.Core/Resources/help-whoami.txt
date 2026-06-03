@@ -1,0 +1,3 @@
+kcap whoami — Show current authenticated user
+
+Usage: kcap whoami

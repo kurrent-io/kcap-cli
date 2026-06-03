@@ -1,3 +1,0 @@
-kapacitor logout — Remove stored credentials
-
-Usage: kapacitor logout

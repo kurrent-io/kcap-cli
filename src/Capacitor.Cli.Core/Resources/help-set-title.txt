@@ -1,0 +1,10 @@
+kcap set-title — Set session title
+
+Usage: kcap set-title <title>
+
+Arguments:
+  title                   Session title (max 120 characters)
+
+Environment:
+  Session ID is auto-resolved from KAPACITOR_SESSION_ID (Claude)
+  or CODEX_THREAD_ID (Codex 0.81+).

@@ -1,5 +1,0 @@
-kapacitor permission-request — Handle permission request (internal)
-
-Usage: echo '<json>' | kapacitor permission-request
-
-Used by the Claude Code PermissionRequest hook. Reads JSON from stdin.

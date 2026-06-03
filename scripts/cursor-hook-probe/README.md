@@ -6,7 +6,7 @@ questions for [AI-669](../../docs/superpowers/specs/2026-06-01-ai-669-cursor-hoo
 
 1. Does Cursor pass the event name as argv, env var, or somewhere else?
 2. Does `sessionStart.session_id` equal the dashless composer ID that
-   `kapacitor import --cursor` uses?
+   `kcap import --cursor` uses?
 
 ## Install
 
@@ -15,10 +15,10 @@ questions for [AI-669](../../docs/superpowers/specs/2026-06-01-ai-669-cursor-hoo
 cp -n ~/.cursor/hooks.json ~/.cursor/hooks.json.bak 2>/dev/null || true
 
 # 2. Place the probe in ~/.cursor/ (Cursor docs: user hooks run from there,
-#    so relative `./kapacitor-hook-probe.sh` resolves correctly)
+#    so relative `./kcap-hook-probe.sh` resolves correctly)
 mkdir -p ~/.cursor
-cp scripts/cursor-hook-probe/cursor-hook-probe.sh ~/.cursor/kapacitor-hook-probe.sh
-chmod +x ~/.cursor/kapacitor-hook-probe.sh
+cp scripts/cursor-hook-probe/cursor-hook-probe.sh ~/.cursor/kcap-hook-probe.sh
+chmod +x ~/.cursor/kcap-hook-probe.sh
 
 # 3. Install the hooks config (overwrites — back up first if you have one)
 cp scripts/cursor-hook-probe/hooks.json.example ~/.cursor/hooks.json
@@ -38,7 +38,7 @@ mind probing:
    `afterAgentThought` fires.
 4. End / close the conversation → `sessionEnd` fires.
 
-All captures land in `~/kapacitor-cursor-hook-probe/`:
+All captures land in `~/kcap-cursor-hook-probe/`:
 
 ```
 20260601T143012Z-sessionStart-12345.stdin.json
@@ -53,7 +53,7 @@ All captures land in `~/kapacitor-cursor-hook-probe/`:
 While the probe captures are still on disk, in the same workspace:
 
 ```sh
-kapacitor import --cursor --cwd "$(pwd)"
+kcap import --cursor --cwd "$(pwd)"
 ```
 
 Compare `sessionStart.stdin.json` → `session_id` against the session IDs the
@@ -70,7 +70,7 @@ Paste or attach:
   afterAgentThought if you triggered one).
 - The matching `.meta.txt` for `sessionStart` (the most useful one for the
   argv/env contract question).
-- The `composer_id` you observed in the `kapacitor import --cursor` output
+- The `composer_id` you observed in the `kcap import --cursor` output
   for the same session.
 
 Five to ten files total — enough to close both open questions.
@@ -80,6 +80,6 @@ Five to ten files total — enough to close both open questions.
 ```sh
 mv ~/.cursor/hooks.json.bak ~/.cursor/hooks.json 2>/dev/null \
   || rm ~/.cursor/hooks.json
-rm ~/.cursor/kapacitor-hook-probe.sh
-rm -rf ~/kapacitor-cursor-hook-probe
+rm ~/.cursor/kcap-hook-probe.sh
+rm -rf ~/kcap-cursor-hook-probe
 ```

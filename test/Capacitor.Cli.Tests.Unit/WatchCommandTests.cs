@@ -1,0 +1,305 @@
+using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
+
+namespace Capacitor.Cli.Tests.Unit;
+
+public class TryExtractUserTextTests {
+    [Test]
+    [Arguments("""{"type":"user","message":{"content":"hello world"}}""", "hello world")]
+    [Arguments("""{"type":"user","message":{"content":"fix the bug"}}""", "fix the bug")]
+    public async Task StringContent_ReturnsText(string line, string expected) {
+        var result = WatchCommand.TryExtractUserText(line);
+        await Assert.That(result).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task ArrayContent_ReturnsFirstTextElement() {
+        const string line   = """{"type":"user","message":{"content":[{"type":"text","text":"from array"}]}}""";
+        var          result = WatchCommand.TryExtractUserText(line);
+        await Assert.That(result).IsEqualTo("from array");
+    }
+
+    [Test]
+    public async Task ArrayContent_SkipsNonTextElements() {
+        const string line   = """{"type":"user","message":{"content":[{"type":"image","url":"x"},{"type":"text","text":"second"}]}}""";
+        var          result = WatchCommand.TryExtractUserText(line);
+        await Assert.That(result).IsEqualTo("second");
+    }
+
+    [Test]
+    [Arguments("""{"type":"assistant","message":{"content":"hi"}}""")]
+    [Arguments("""{"type":"system","message":{"content":"hi"}}""")]
+    [Arguments("""{"type":"user","isMeta":true,"message":{"content":"meta stuff"}}""")]
+    [Arguments("""{"type":"user","message":{"content":"<local-command-stdout>some output"}}""")]
+    [Arguments("""{"type":"user","message":{"content":[{"type":"text","text":"<local-command-stdout>output"}]}}""")]
+    [Arguments("not json at all")]
+    [Arguments("")]
+    [Arguments("{}")]
+    [Arguments("""{"type":"user"}""")]
+    [Arguments("""{"type":"user","message":{}}""")]
+    [Arguments("""{"type":"user","message":{"content":[]}}""")]
+    public async Task ReturnsNull_ForInvalidOrFilteredInput(string line) {
+        var result = WatchCommand.TryExtractUserText(line);
+        await Assert.That(result).IsNull();
+    }
+}
+
+public class StripSystemInstructionsTests {
+    [Test]
+    [Arguments("Hello <system_instructions>secret stuff</system_instructions> world", "Hello  world")]
+    [Arguments("<system-instructions>block</system-instructions>actual prompt", "actual prompt")]
+    [Arguments("<system-reminder>reminder content</system-reminder>do the thing", "do the thing")]
+    [Arguments("<system_reminder>stuff</system_reminder>real text", "real text")]
+    [Arguments("<SYSTEM_INSTRUCTIONS>loud</SYSTEM_INSTRUCTIONS>quiet", "quiet")]
+    public async Task Strips_KnownSystemTags(string input, string expected) {
+        var result = WatchCommand.StripSystemInstructions(input);
+        await Assert.That(result).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task PreservesText_WithNoSystemTags() {
+        var result = WatchCommand.StripSystemInstructions("just a normal prompt");
+        await Assert.That(result).IsEqualTo("just a normal prompt");
+    }
+
+    [Test]
+    public async Task ReturnsNull_WhenOnlySystemInstructions() {
+        var result = WatchCommand.StripSystemInstructions("<system_instructions>everything is instructions</system_instructions>");
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task ReturnsNull_ForNullInput() {
+        var result = WatchCommand.StripSystemInstructions(null);
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task Strips_MultipleBlocks() {
+        const string input  = "<system_instructions>first</system_instructions>middle<system-reminder>second</system-reminder>end";
+        var          result = WatchCommand.StripSystemInstructions(input);
+        await Assert.That(result).IsEqualTo("middleend");
+    }
+
+    [Test]
+    public async Task Strips_MultilineContent() {
+        const string input  = "<system_instructions>\nline1\nline2\nline3\n</system_instructions>actual request";
+        var          result = WatchCommand.StripSystemInstructions(input);
+        await Assert.That(result).IsEqualTo("actual request");
+    }
+
+    [Test]
+    public async Task CaseInsensitive_MixedCase() {
+        var result = WatchCommand.StripSystemInstructions("<System_Instructions>stuff</System_Instructions>prompt");
+        await Assert.That(result).IsEqualTo("prompt");
+    }
+}
+
+public class TryExtractUserTextWithSystemInstructionsTests {
+    [Test]
+    public async Task Strips_SystemInstructions_FromStringContent() {
+        const string line   = """{"type":"user","message":{"content":"<system_instructions>secret</system_instructions>fix the bug"}}""";
+        var          result = WatchCommand.TryExtractUserText(line);
+        await Assert.That(result).IsEqualTo("fix the bug");
+    }
+
+    [Test]
+    public async Task ReturnsNull_WhenOnlySystemInstructions_InContent() {
+        const string line   = """{"type":"user","message":{"content":"<system_instructions>only instructions here</system_instructions>"}}""";
+        var          result = WatchCommand.TryExtractUserText(line);
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task Strips_SystemInstructions_FromArrayContent() {
+        const string line   = """{"type":"user","message":{"content":[{"type":"text","text":"<system-reminder>reminder</system-reminder>do stuff"}]}}""";
+        var          result = WatchCommand.TryExtractUserText(line);
+        await Assert.That(result).IsEqualTo("do stuff");
+    }
+}
+
+public class RepoPayloadChangedTests {
+    static RepositoryPayload MakePayload(
+            string owner    = "o",
+            string repo     = "r",
+            string branch   = "main",
+            int?   prNumber = 1,
+            string prUrl    = "u",
+            string prTitle  = "t"
+        ) => new() { Owner = owner, RepoName = repo, Branch = branch, PrNumber = prNumber, PrUrl = prUrl, PrTitle = prTitle };
+
+    [Test]
+    public async Task NullCurrent_ReturnsFalse() =>
+        await Assert.That(WatchCommand.RepoPayloadChanged(null, MakePayload())).IsFalse();
+
+    [Test]
+    public async Task NullLastSent_ReturnsTrue() =>
+        await Assert.That(WatchCommand.RepoPayloadChanged(MakePayload(), null)).IsTrue();
+
+    [Test]
+    public async Task BothNull_ReturnsFalse() =>
+        await Assert.That(WatchCommand.RepoPayloadChanged(null, null)).IsFalse();
+
+    [Test]
+    public async Task SameValues_ReturnsFalse() =>
+        await Assert.That(WatchCommand.RepoPayloadChanged(MakePayload(), MakePayload())).IsFalse();
+
+    [Test]
+    [Arguments("Owner")]
+    [Arguments("RepoName")]
+    [Arguments("Branch")]
+    [Arguments("PrNumber")]
+    [Arguments("PrUrl")]
+    [Arguments("PrTitle")]
+    public async Task DifferentField_ReturnsTrue(string field) {
+        var a = MakePayload();
+
+        var b = field switch {
+            "Owner"    => a with { Owner = "x" },
+            "RepoName" => a with { RepoName = "x" },
+            "Branch"   => a with { Branch = "x" },
+            "PrNumber" => a with { PrNumber = 99 },
+            "PrUrl"    => a with { PrUrl = "x" },
+            "PrTitle"  => a with { PrTitle = "x" },
+            _          => a
+        };
+        await Assert.That(WatchCommand.RepoPayloadChanged(a, b)).IsTrue();
+    }
+
+    [Test]
+    public async Task NonComparedFields_DoNotTriggerChange() {
+        var a = MakePayload() with { UserName = "alice" };
+        var b = MakePayload() with { UserName = "bob" };
+        await Assert.That(WatchCommand.RepoPayloadChanged(a, b)).IsFalse();
+    }
+}
+
+public class CountFileLinesTests {
+    [Test]
+    [Arguments("line1\nline2\nline3\n", 3)]
+    [Arguments("single", 1)]
+    [Arguments("", 0)]
+    public async Task CountsLines(string content, int expected) {
+        var path = Path.GetTempFileName();
+
+        try {
+            await File.WriteAllTextAsync(path, content);
+            await Assert.That(WatchCommand.CountFileLines(path)).IsEqualTo(expected);
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task MissingFile_ReturnsZero() =>
+        await Assert.That(WatchCommand.CountFileLines("/tmp/nonexistent_" + Guid.NewGuid())).IsEqualTo(0);
+}
+
+public class WatchCommandTests {
+    [Test]
+    public async Task RunWatch_signature_accepts_vendor_arg() {
+        // We can't run a real watcher in a unit test (it'd open SignalR). The
+        // hook round-trip integration test exercises the wire path; this guards
+        // the signature.
+        var method      = typeof(WatchCommand).GetMethod(nameof(WatchCommand.RunWatch))!;
+        var vendorParam = method.GetParameters().FirstOrDefault(p => p.Name == "vendor");
+        await Assert.That(vendorParam).IsNotNull();
+        await Assert.That(vendorParam!.HasDefaultValue).IsTrue();
+        await Assert.That(vendorParam.DefaultValue).IsEqualTo("claude");
+    }
+}
+
+public class CodexTranscriptExtractionTests {
+    // Codex wraps every event in a response_item envelope; user prompts are
+    // role:"user" message payloads with input_text blocks. See TitleGenerator
+    // for the offline-import analog of this extraction.
+
+    [Test]
+    public async Task UserText_Extracts_InputText_FromResponseItem() {
+        const string line = """
+            {"type":"response_item","payload":{"type":"message","role":"user",
+             "content":[{"type":"input_text","text":"fix the bug"}]}}
+            """;
+
+        var result = WatchCommand.TryExtractUserText(line, "codex");
+
+        await Assert.That(result).IsEqualTo("fix the bug");
+    }
+
+    [Test]
+    [Arguments("<environment_context>\nworkspace=/tmp\n</environment_context>")]
+    [Arguments("# AGENTS.md instructions for /tmp\n\nUse pnpm.")]
+    [Arguments("<turn_aborted>user pressed esc</turn_aborted>")]
+    public async Task UserText_Skips_CodexInjectedPreludes(string preludeText) {
+        var encoded = System.Text.Json.JsonSerializer.Serialize(preludeText);
+        var line    = "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":" + encoded + "}]}}";
+
+        var result = WatchCommand.TryExtractUserText(line, "codex");
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    [Arguments("""{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}}""")]
+    [Arguments("""{"type":"response_item","payload":{"type":"reasoning","summary":[]}}""")]
+    [Arguments("""{"type":"response_item","payload":{"type":"message","role":"user","content":[]}}""")]
+    [Arguments("""{"type":"user","message":{"content":"claude-shape"}}""")]
+    [Arguments("not json")]
+    public async Task UserText_ReturnsNull_ForUnrelatedCodexLines(string line) {
+        var result = WatchCommand.TryExtractUserText(line, "codex");
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task AssistantText_Extracts_OutputText_FromResponseItem() {
+        const string line = """
+            {"type":"response_item","payload":{"type":"message","role":"assistant",
+             "content":[{"type":"output_text","text":"Sure, let me look into that"}]}}
+            """;
+
+        var result = WatchCommand.TryExtractAssistantText(line, "codex");
+
+        await Assert.That(result).IsEqualTo("Sure, let me look into that");
+    }
+
+    [Test]
+    [Arguments("""{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt"}]}}""")]
+    [Arguments("""{"type":"response_item","payload":{"type":"reasoning"}}""")]
+    [Arguments("""{"type":"assistant","message":{"content":[{"type":"text","text":"claude-shape"}]}}""")]
+    public async Task AssistantText_ReturnsNull_ForUnrelatedCodexLines(string line) {
+        var result = WatchCommand.TryExtractAssistantText(line, "codex");
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    [Arguments("""{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}""", true)]
+    [Arguments("""{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}""", true)]
+    [Arguments("""{"type":"response_item","payload":{"type":"reasoning"}}""", false)]
+    [Arguments("""{"type":"response_item","payload":{"type":"function_call"}}""", false)]
+    [Arguments("""{"type":"user","message":{"content":"claude shape"}}""", false)]
+    [Arguments("""{"type":"response_item","payload":{"type":"message","role":"user","content":[]}}""", false)]
+    public async Task IsEvent_Codex_OnlyCountsMessagePayloads(string line, bool expected) {
+        var result = WatchCommand.IsEvent(line, "codex");
+
+        await Assert.That(result).IsEqualTo(expected);
+    }
+
+    // Critical: prelude user-role payloads must NOT count toward the 5-event
+    // title threshold. Otherwise a fresh Codex session with a few injected
+    // <environment_context>/AGENTS.md entries before any real prompt can trip
+    // the threshold and produce a title from prelude content alone.
+    [Test]
+    [Arguments("<environment_context>\nworkspace=/tmp\n</environment_context>")]
+    [Arguments("# AGENTS.md instructions for /tmp\n\nUse pnpm.")]
+    [Arguments("<turn_aborted>user pressed esc</turn_aborted>")]
+    public async Task IsEvent_Codex_SkipsInjectedUserPreludes(string preludeText) {
+        var encoded = System.Text.Json.JsonSerializer.Serialize(preludeText);
+        var line    = "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":" + encoded + "}]}}";
+
+        var result = WatchCommand.IsEvent(line, "codex");
+
+        await Assert.That(result).IsFalse();
+    }
+}

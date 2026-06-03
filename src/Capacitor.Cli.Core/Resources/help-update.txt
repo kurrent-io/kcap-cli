@@ -1,0 +1,3 @@
+kcap update — Check for and install updates
+
+Usage: kcap update

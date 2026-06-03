@@ -1,0 +1,10 @@
+kcap review — Launch Claude with PR review context
+
+Usage: kcap review <pr-url-or-shorthand>
+
+Arguments:
+  pr                      PR URL or shorthand (e.g., owner/repo#123)
+
+Examples:
+  kcap review https://github.com/owner/repo/pull/123
+  kcap review owner/repo#123

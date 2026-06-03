@@ -1,3 +1,0 @@
-kapacitor whoami — Show current authenticated user
-
-Usage: kapacitor whoami

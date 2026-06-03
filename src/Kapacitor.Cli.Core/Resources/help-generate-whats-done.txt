@@ -1,9 +1,0 @@
-kapacitor generate-whats-done — Generate what's-done summary
-
-Usage: kapacitor generate-whats-done <sessionId> [--codex]
-
-Arguments:
-  sessionId               Session ID (required)
-
-Options:
-  --codex                 Use codex exec (instead of claude -p) to generate the summary

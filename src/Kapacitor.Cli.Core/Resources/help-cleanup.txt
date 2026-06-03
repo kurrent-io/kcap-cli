@@ -1,3 +1,0 @@
-kapacitor cleanup — Kill all orphaned watcher processes
-
-Usage: kapacitor cleanup

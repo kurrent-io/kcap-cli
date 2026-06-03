@@ -1,0 +1,14 @@
+Usage: kcap repos [add|remove] [path]
+
+Manage known repository paths for the daemon launch dialog.
+
+Subcommands:
+  (none)         List known repos (sorted by last used)
+  add <path>     Add a repo path (supports "." for current directory)
+  remove <path>  Remove a repo path
+
+Examples:
+  kcap repos              # list known repos
+  kcap repos add .        # add current directory
+  kcap repos add ~/dev/my-project
+  kcap repos remove ~/dev/old-project

@@ -1,0 +1,16 @@
+kcap use — Switch active profile
+
+Usage: kcap use <profile-name> [options]
+
+Switches the active profile globally or binds it to a directory.
+Without --global, binds the profile to the git repo root, or the current
+directory if not inside a git repository.
+
+Options:
+  --global                  Set as the global active profile
+  --save                    Write .kcap.json to the bind directory (for team sharing)
+
+Examples:
+  kcap use work                  Bind 'work' profile to current repo/directory
+  kcap use work --global         Set 'work' as the global default
+  kcap use oss --save            Bind and write .kcap.json

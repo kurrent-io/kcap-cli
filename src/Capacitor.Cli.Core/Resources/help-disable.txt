@@ -1,0 +1,10 @@
+kcap disable — Stop recording and delete all session data
+
+Usage: kcap disable [sessionId]
+
+Stops the watcher, prevents future hook events from being sent,
+and deletes all session data from the server (streams + read models).
+
+Arguments:
+  sessionId               Session ID (defaults to KAPACITOR_SESSION_ID
+                          on Claude or CODEX_THREAD_ID on Codex 0.81+)

@@ -1,0 +1,12 @@
+{
+  "mcp_servers": {
+    "kcap-review": {
+      "command": "kcap",
+      "args": ["mcp", "review"]
+    },
+    "kcap-sessions": {
+      "command": "kcap",
+      "args": ["mcp", "sessions"]
+    }
+  }
+}

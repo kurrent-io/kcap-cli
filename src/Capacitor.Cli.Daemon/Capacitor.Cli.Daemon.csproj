@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <AssemblyName>kcap-daemon</AssemblyName>
+
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <PublishAot>true</PublishAot>
+        <PublishTrimmed>true</PublishTrimmed>
+        <InvariantGlobalization>true</InvariantGlobalization>
+        <DebuggerSupport>false</DebuggerSupport>
+        <TrimMode>full</TrimMode>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    </PropertyGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\Capacitor.Cli.Core\Capacitor.Cli.Core.csproj" />
+    </ItemGroup>
+    <ItemGroup>
+        <InternalsVisibleTo Include="Capacitor.Cli.Tests.Unit" />
+        <InternalsVisibleTo Include="Capacitor.Cli.Tests.Integration" />
+        <!-- Used when referenced as a submodule from the server repo -->
+        <InternalsVisibleTo Include="Capacitor.Server.TestHelpers" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.Agents" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.Auth" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.Chat" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.Evals" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.Ingest" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.Notify" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.Read" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.UI" />
+    </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+        <PackageReference Include="Microsoft.Extensions.Hosting" />
+        <PackageReference Include="Microsoft.Extensions.Http" />
+        <PackageReference Include="Tomlyn" />
+    </ItemGroup>
+
+    <!-- NativeAOT on macOS needs Homebrew library paths for keg-only packages (openssl, brotli) -->
+    <ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+        <LinkerArg Condition="Exists('/opt/homebrew/opt/openssl@3/lib')" Include="-L/opt/homebrew/opt/openssl@3/lib" />
+        <LinkerArg Condition="Exists('/opt/homebrew/opt/brotli/lib')" Include="-L/opt/homebrew/opt/brotli/lib" />
+        <!-- Intel Mac Homebrew paths -->
+        <LinkerArg Condition="Exists('/usr/local/opt/openssl@3/lib')" Include="-L/usr/local/opt/openssl@3/lib" />
+        <LinkerArg Condition="Exists('/usr/local/opt/brotli/lib')" Include="-L/usr/local/opt/brotli/lib" />
+    </ItemGroup>
+
+    <!-- Compile the PTY shim on macOS (needed for ARM64 variadic ioctl workaround) -->
+    <Target Name="CompilePtyShim" BeforeTargets="Build" Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+        <Exec Command="cc -shared -o $(OutputPath)libpty_shim.dylib Native/pty_shim.c" />
+    </Target>
+    <ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+        <None Include="$(OutputPath)libpty_shim.dylib" CopyToOutputDirectory="PreserveNewest" Link="libpty_shim.dylib" />
+    </ItemGroup>
+</Project>
