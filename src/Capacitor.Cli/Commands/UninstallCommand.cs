@@ -1,0 +1,226 @@
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Cursor;
+
+namespace Capacitor.Cli.Commands;
+
+/// <summary>
+/// Completely removes kapacitor from the local machine: stops daemons, kills
+/// watcher processes, strips kapacitor entries from user-level Claude / Codex /
+/// Cursor hook files, removes agent skills (and legacy Codex skills), and
+/// deletes the kapacitor config directory.
+///
+/// With <c>--project</c>, also strips kapacitor entries from the cwd's git-root
+/// <c>.claude/settings.local.json</c> and <c>.codex/hooks.json</c>. Project-scope
+/// Cursor hooks are not a thing — Cursor only reads its user-scope hooks.json.
+/// Per-agent selective cleanup is intentionally out of scope here; this command
+/// covers all known agents.
+/// </summary>
+public static class UninstallCommand {
+    public static async Task<int> HandleAsync(string[] args) {
+        var skipPrompt     = args.Contains("--yes") || args.Contains("-y");
+        var keepConfig     = args.Contains("--keep-config");
+        var includeProject = args.Contains("--project");
+
+        string? projectRoot = null;
+
+        if (includeProject) {
+            projectRoot = GitRepository.FindRoot(Environment.CurrentDirectory);
+
+            if (projectRoot is null) {
+                await Console.Error.WriteLineAsync(
+                    $"--project requires a git working tree, but '{Environment.CurrentDirectory}' is not inside one.");
+                await Console.Error.WriteLineAsync(
+                    "Re-run from inside your repo, or drop --project to only remove user-level configuration.");
+
+                return 1;
+            }
+        }
+
+        var configDir = ResolveConfigDir();
+
+        await Console.Out.WriteLineAsync("This will remove kapacitor from your machine:");
+        await Console.Out.WriteLineAsync("  • Stop any running daemons and watcher processes");
+        await Console.Out.WriteLineAsync($"  • Remove kapacitor entries from {ClaudePaths.UserSettings}");
+        await Console.Out.WriteLineAsync($"  • Remove kapacitor entries from {CodexPaths.UserHooksJson}");
+        await Console.Out.WriteLineAsync($"  • Remove kapacitor entries from {CursorPaths.UserHooksJson()}");
+        await Console.Out.WriteLineAsync($"  • Remove agent skills under {AgentsPaths.UserSkillsDir}");
+
+        if (projectRoot is not null) {
+            await Console.Out.WriteLineAsync(
+                $"  • Remove kapacitor entries from {Path.Combine(projectRoot, ".claude", "settings.local.json")}");
+            await Console.Out.WriteLineAsync(
+                $"  • Remove kapacitor entries from {Path.Combine(projectRoot, ".codex", "hooks.json")}");
+        }
+
+        if (!keepConfig) {
+            await Console.Out.WriteLineAsync($"  • Delete the kapacitor config directory ({configDir})");
+        }
+
+        if (!skipPrompt) {
+            await Console.Out.WriteAsync("Proceed? [y/N] ");
+            var reply = await Console.In.ReadLineAsync();
+
+            if (!string.Equals(reply?.Trim(), "y", StringComparison.OrdinalIgnoreCase)) {
+                await Console.Out.WriteLineAsync("Cancelled.");
+
+                return 0;
+            }
+        }
+
+        // Track every step's success so we can surface failures in the exit
+        // code AND keep ~/.config/kapacitor in place when something went wrong
+        // (so the user can re-run rather than losing local state on a partial
+        // removal). Individual remove commands keep printing their own output
+        // — this flag captures the boolean for the final decision only.
+        var hadFailures = false;
+
+        // Stop daemons first — they hold lock files inside the config dir we're
+        // about to delete. --yes silences the multi-daemon confirmation so this
+        // works non-interactively. A non-zero exit code means at least one
+        // daemon couldn't be stopped; we leave the config dir alone in that case.
+        if (await DaemonCommands.HandleAsync(["daemon", "stop", "--yes"]) != 0) hadFailures = true;
+
+        // Kill any orphaned watcher PIDs that the daemon stop didn't catch.
+        if (await CleanupCommand.HandleCleanup() != 0) hadFailures = true;
+
+        // User-level agent integrations. Each remove command is idempotent and
+        // no-ops if the target file doesn't exist, so it's safe to call all of
+        // them unconditionally without sniffing which agents are installed.
+        if (await PluginCommand.HandleAsync(["plugin", "remove"]) != 0) hadFailures = true;            // Claude
+        if (await PluginCommand.HandleAsync(["plugin", "remove", "--codex"]) != 0) hadFailures = true; // Codex hooks + skills + legacy
+        if (await PluginCommand.HandleAsync(["plugin", "remove", "--cursor"]) != 0) hadFailures = true;
+
+        // Skills are removed by --codex above, but call --skills explicitly in
+        // case the user only ever installed Cursor / agent-agnostic skills and
+        // never had Codex hooks (the --codex path short-circuits on a missing
+        // hooks file).
+        if (await PluginCommand.HandleAsync(["plugin", "remove", "--skills"]) != 0) hadFailures = true;
+
+        // Belt-and-braces marker cleanup. Plugin remove deletes the marker
+        // only when JSON entries changed; if the user manually pruned the
+        // entries earlier (or installed via a pre-marker build that later
+        // wrote a marker on first refresh), the marker survives and IsInstalled
+        // still reports kapacitor as installed. uninstall promises a full
+        // wipe, so always nuke the markers regardless of what the JSON state
+        // looked like going in.
+        ClaudePluginInstaller.DeleteMarker(ClaudePaths.UserSettings);
+        CodexHooksInstaller.DeleteMarker(CodexPaths.UserHooksJson);
+        CursorHooksInstaller.DeleteMarker(CursorPaths.UserHooksJson());
+
+        // Skill installer Remove uses the current SourceNames list, so any
+        // kapacitor-* folder from an older release (renamed/retired skill)
+        // would survive. Sweep the directory for our prefix to catch those.
+        // Same for legacy ~/.codex/skills/.
+        if (!SweepKapacitorPrefixedDirs(AgentsPaths.UserSkillsDir))            hadFailures = true;
+        if (!SweepKapacitorPrefixedDirs(Path.Combine(CodexPaths.Home, "skills"))) hadFailures = true;
+
+        if (projectRoot is not null) {
+            var claudeProject = Path.Combine(projectRoot, ".claude", "settings.local.json");
+            var codexProject  = Path.Combine(projectRoot, ".codex", "hooks.json");
+
+            try {
+                var claudeOutcome = PluginCommand.RemoveClaudePlugin(claudeProject);
+
+                if (claudeOutcome == PluginCommand.ClaudeRemovalOutcome.Removed) {
+                    await Console.Out.WriteLineAsync($"Plugin removed (project: {claudeProject})");
+                }
+            } catch (Exception ex) {
+                await Console.Error.WriteLineAsync($"Could not update {claudeProject}: {ex.Message}");
+                hadFailures = true;
+            }
+
+            if (File.Exists(codexProject)) {
+                try {
+                    if (PluginCommand.RemoveCodexHooks(codexProject)) {
+                        await Console.Out.WriteLineAsync($"Codex hooks removed (project: {codexProject})");
+                    }
+                } catch (Exception ex) {
+                    await Console.Error.WriteLineAsync($"Could not update Codex hooks at {codexProject}: {ex.Message}");
+                    hadFailures = true;
+                }
+            }
+
+            // Same marker-survives-after-manual-edit story as the user scope.
+            ClaudePluginInstaller.DeleteMarker(claudeProject);
+            CodexHooksInstaller.DeleteMarker(codexProject);
+        }
+
+        if (!keepConfig) {
+            if (hadFailures) {
+                await Console.Error.WriteLineAsync(
+                    $"Skipping config-directory delete because earlier steps failed: {configDir}");
+                await Console.Error.WriteLineAsync(
+                    "Investigate the errors above, then re-run `kapacitor uninstall` to finish.");
+            } else if (Directory.Exists(configDir)) {
+                try {
+                    Directory.Delete(configDir, recursive: true);
+                    await Console.Out.WriteLineAsync($"Removed config directory: {configDir}");
+                } catch (Exception ex) {
+                    await Console.Error.WriteLineAsync($"Could not remove config directory {configDir}: {ex.Message}");
+                    hadFailures = true;
+                }
+            }
+        }
+
+        if (hadFailures) {
+            await Console.Error.WriteLineAsync("kapacitor uninstall finished with errors — see above.");
+
+            return 1;
+        }
+
+        await Console.Out.WriteLineAsync("kapacitor uninstalled.");
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Resolves the kapacitor config directory the same way
+    /// <see cref="PathHelpers"/> would on a fresh process — read
+    /// <c>KAPACITOR_CONFIG_DIR</c> first, fall back to
+    /// <c>$HOME/.config/kapacitor</c>. Re-evaluates every call so tests that
+    /// override <c>HOME</c> see the override even after <c>PathHelpers</c>
+    /// has captured a different value into its static cache.
+    /// </summary>
+    static string ResolveConfigDir() {
+        var env = Environment.GetEnvironmentVariable("KAPACITOR_CONFIG_DIR");
+
+        return !string.IsNullOrWhiteSpace(env)
+            ? env
+            : Path.Combine(PathHelpers.HomeDirectory, ".config", "kapacitor");
+    }
+
+    /// <summary>
+    /// Deletes every <c>kapacitor-*</c> directory directly under
+    /// <paramref name="root"/>. Catches the cases where the installer's
+    /// fixed name list doesn't match what's on disk: a skill renamed,
+    /// retired, or added between releases. <c>kapacitor-</c> is our
+    /// namespace prefix so this is safe; user-authored folders without it
+    /// are untouched. Returns true on full success, false when any deletion
+    /// (or the enumeration itself) failed — callers feed the result into
+    /// their failure aggregator so a stuck folder doesn't get masked by
+    /// a "kapacitor uninstalled." exit.
+    /// </summary>
+    static bool SweepKapacitorPrefixedDirs(string root) {
+        if (!Directory.Exists(root)) return true;
+
+        IEnumerable<string> dirs;
+        try {
+            dirs = Directory.EnumerateDirectories(root, "kapacitor-*").ToArray();
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"Could not enumerate {root}: {ex.Message}");
+            return false;
+        }
+
+        var ok = true;
+        foreach (var dir in dirs) {
+            try {
+                Directory.Delete(dir, recursive: true);
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"Could not remove {dir}: {ex.Message}");
+                ok = false;
+            }
+        }
+
+        return ok;
+    }
+}
