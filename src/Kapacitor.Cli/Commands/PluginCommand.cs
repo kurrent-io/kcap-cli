@@ -122,32 +122,18 @@ public static class PluginCommand {
         }
 
         try {
-            var text = await File.ReadAllTextAsync(settingsPath);
+            var outcome = RemoveClaudePlugin(settingsPath);
 
-            if (JsonNode.Parse(text) is not JsonObject root) {
-                await Console.Out.WriteLineAsync("Nothing to remove.");
-
-                return 0;
-            }
-
-            var changed = false;
-
-            if (root["enabledPlugins"] is JsonObject enabled) {
-                changed |= enabled.Remove("kapacitor@kapacitor");
-                changed |= enabled.Remove("kapacitor@kurrent");
-            }
-
-            if (root["extraKnownMarketplaces"] is JsonObject marketplaces) {
-                changed |= marketplaces.Remove("kapacitor");
-                changed |= marketplaces.Remove("kurrent");
-            }
-
-            if (changed) {
-                await File.WriteAllTextAsync(settingsPath, root.ToJsonString(WriteOpts));
-                ClaudePluginInstaller.DeleteMarker(settingsPath);
-                await Console.Out.WriteLineAsync($"Plugin removed ({scope}: {settingsPath})");
-            } else {
-                await Console.Out.WriteLineAsync("Plugin was not installed.");
+            switch (outcome) {
+                case ClaudeRemovalOutcome.Removed:
+                    await Console.Out.WriteLineAsync($"Plugin removed ({scope}: {settingsPath})");
+                    break;
+                case ClaudeRemovalOutcome.NotInstalled:
+                    await Console.Out.WriteLineAsync("Plugin was not installed.");
+                    break;
+                case ClaudeRemovalOutcome.Malformed:
+                    await Console.Out.WriteLineAsync("Nothing to remove.");
+                    break;
             }
 
             return 0;
@@ -156,6 +142,47 @@ public static class PluginCommand {
 
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Removes kapacitor's marketplace + enabledPlugins entries (including the
+    /// legacy <c>kurrent</c> keys) from the Claude Code settings file at
+    /// <paramref name="settingsPath"/>, and deletes the version marker. Non-kapacitor
+    /// settings are preserved. Throws on I/O failure so callers can decide how to
+    /// report it; returns <see cref="ClaudeRemovalOutcome.NotInstalled"/> when the
+    /// file exists but contains no kapacitor entries.
+    /// </summary>
+    public static ClaudeRemovalOutcome RemoveClaudePlugin(string settingsPath) {
+        if (!File.Exists(settingsPath)) return ClaudeRemovalOutcome.NotInstalled;
+
+        var text = File.ReadAllText(settingsPath);
+
+        if (JsonNode.Parse(text) is not JsonObject root) return ClaudeRemovalOutcome.Malformed;
+
+        var changed = false;
+
+        if (root["enabledPlugins"] is JsonObject enabled) {
+            changed |= enabled.Remove("kapacitor@kapacitor");
+            changed |= enabled.Remove("kapacitor@kurrent");
+        }
+
+        if (root["extraKnownMarketplaces"] is JsonObject marketplaces) {
+            changed |= marketplaces.Remove("kapacitor");
+            changed |= marketplaces.Remove("kurrent");
+        }
+
+        if (!changed) return ClaudeRemovalOutcome.NotInstalled;
+
+        File.WriteAllText(settingsPath, root.ToJsonString(WriteOpts));
+        ClaudePluginInstaller.DeleteMarker(settingsPath);
+
+        return ClaudeRemovalOutcome.Removed;
+    }
+
+    public enum ClaudeRemovalOutcome {
+        Removed,
+        NotInstalled,
+        Malformed
     }
 
     static async Task<int> InstallSkills(string[] args) {
@@ -346,7 +373,17 @@ public static class PluginCommand {
             ? Path.Combine(Environment.CurrentDirectory, ".codex", "hooks.json")
             : CodexPaths.UserHooksJson;
 
-        var hooksRemoved = File.Exists(hooksPath) && RemoveCodexHooks(hooksPath);
+        var hooksRemoved = false;
+        var hooksFailed  = false;
+
+        if (File.Exists(hooksPath)) {
+            try {
+                hooksRemoved = RemoveCodexHooks(hooksPath);
+            } catch (Exception ex) {
+                await Console.Error.WriteLineAsync($"Could not update Codex hooks at {hooksPath}: {ex.Message}");
+                hooksFailed = true;
+            }
+        }
 
         if (hooksRemoved) {
             await Console.Out.WriteLineAsync($"Codex hooks removed ({scope}: {hooksPath})");
@@ -360,9 +397,9 @@ public static class PluginCommand {
 
         var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(Path.Combine(CodexPaths.Home, "skills"));
 
-        if (agents.HadErrors || legacy.HadErrors) {
+        if (hooksFailed || agents.HadErrors || legacy.HadErrors) {
             await Console.Out.WriteLineAsync("Removal incomplete — see errors above.");
-            return 0;
+            return 1;
         }
 
         if (!hooksRemoved && !agents.RemovedAny && !legacy.RemovedAny) {
@@ -440,44 +477,42 @@ public static class PluginCommand {
     /// <summary>
     /// Removes every entry in <paramref name="hooksPath"/> whose command
     /// invokes <c>kapacitor codex-hook</c>. Other entries are preserved.
-    /// Returns true if any entries were removed.
+    /// Returns true if any entries were removed. Throws on I/O failure
+    /// (caller decides how to surface partial writes); returns false only
+    /// when there was genuinely nothing to remove.
     /// </summary>
     public static bool RemoveCodexHooks(string hooksPath) {
-        try {
-            if (!File.Exists(hooksPath)) return false;
+        if (!File.Exists(hooksPath)) return false;
 
-            if (JsonNode.Parse(File.ReadAllText(hooksPath)) is not JsonObject root) return false;
-            if (root["hooks"] is not JsonObject hooks) return false;
+        if (JsonNode.Parse(File.ReadAllText(hooksPath)) is not JsonObject root) return false;
+        if (root["hooks"] is not JsonObject hooks) return false;
 
-            var changed = false;
+        var changed = false;
 
-            foreach (var evt in CodexHooksParser.CodexHookEvents) {
-                if (hooks[evt] is not JsonArray entries) continue;
+        foreach (var evt in CodexHooksParser.CodexHookEvents) {
+            if (hooks[evt] is not JsonArray entries) continue;
 
-                var preserved = new JsonArray();
+            var preserved = new JsonArray();
 
-                foreach (var entry in entries) {
-                    if (entry is null) continue;
+            foreach (var entry in entries) {
+                if (entry is null) continue;
 
-                    if (CodexHooksParser.EntryReferencesKapacitorCodexHook(entry)) {
-                        changed = true;
-                    } else {
-                        preserved.Add(entry.DeepClone());
-                    }
+                if (CodexHooksParser.EntryReferencesKapacitorCodexHook(entry)) {
+                    changed = true;
+                } else {
+                    preserved.Add(entry.DeepClone());
                 }
-
-                hooks[evt] = preserved;
             }
 
-            if (changed) {
-                File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
-                CodexHooksInstaller.DeleteMarker(hooksPath);
-            }
-
-            return changed;
-        } catch {
-            return false;
+            hooks[evt] = preserved;
         }
+
+        if (changed) {
+            File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
+            CodexHooksInstaller.DeleteMarker(hooksPath);
+        }
+
+        return changed;
     }
 
     static async Task<int> InstallCursor(string[] args) {
@@ -521,11 +556,17 @@ public static class PluginCommand {
             await Console.Out.WriteLineAsync("Nothing to remove — Cursor hooks file not found.");
             return 0;
         }
-        var removed = RemoveCursorHooks(hooksPath);
-        await Console.Out.WriteLineAsync(removed
-            ? $"Cursor hooks removed ({hooksPath})"
-            : "Cursor hooks were not installed.");
-        return 0;
+
+        try {
+            var removed = RemoveCursorHooks(hooksPath);
+            await Console.Out.WriteLineAsync(removed
+                ? $"Cursor hooks removed ({hooksPath})"
+                : "Cursor hooks were not installed.");
+            return 0;
+        } catch (Exception ex) {
+            await Console.Error.WriteLineAsync($"Could not update Cursor hooks at {hooksPath}: {ex.Message}");
+            return 1;
+        }
     }
 
     /// <summary>
@@ -575,35 +616,35 @@ public static class PluginCommand {
     /// <summary>
     /// Removes every entry in <paramref name="hooksPath"/> whose command
     /// invokes <c>kapacitor hook --cursor</c>. Other entries are preserved.
-    /// Returns true if any entries were removed.
+    /// Returns true if any entries were removed. Throws on I/O failure
+    /// (caller decides how to surface partial writes); returns false only
+    /// when there was genuinely nothing to remove.
     /// </summary>
     public static bool RemoveCursorHooks(string hooksPath) {
-        try {
-            if (!File.Exists(hooksPath)) return false;
-            if (JsonNode.Parse(File.ReadAllText(hooksPath)) is not JsonObject root) return false;
-            if (root["hooks"] is not JsonObject hooks) return false;
+        if (!File.Exists(hooksPath)) return false;
+        if (JsonNode.Parse(File.ReadAllText(hooksPath)) is not JsonObject root) return false;
+        if (root["hooks"] is not JsonObject hooks) return false;
 
-            var changed = false;
-            foreach (var evt in CursorHooksParser.CursorHookEvents) {
-                if (hooks[evt] is not JsonArray entries) continue;
-                var preserved = new JsonArray();
-                foreach (var entry in entries) {
-                    if (entry is null) continue;
-                    if (CursorHooksParser.EntryReferencesKapacitorCursorHook(entry)) {
-                        changed = true;
-                    } else {
-                        preserved.Add(entry.DeepClone());
-                    }
+        var changed = false;
+        foreach (var evt in CursorHooksParser.CursorHookEvents) {
+            if (hooks[evt] is not JsonArray entries) continue;
+            var preserved = new JsonArray();
+            foreach (var entry in entries) {
+                if (entry is null) continue;
+                if (CursorHooksParser.EntryReferencesKapacitorCursorHook(entry)) {
+                    changed = true;
+                } else {
+                    preserved.Add(entry.DeepClone());
                 }
-                hooks[evt] = preserved;
             }
+            hooks[evt] = preserved;
+        }
 
-            if (changed) {
-                File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
-                CursorHooksInstaller.DeleteMarker(hooksPath);
-            }
-            return changed;
-        } catch { return false; }
+        if (changed) {
+            File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
+            CursorHooksInstaller.DeleteMarker(hooksPath);
+        }
+        return changed;
     }
 
     static string? GetArg(string[] args, string flag) {

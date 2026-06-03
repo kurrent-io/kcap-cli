@@ -436,6 +436,23 @@ kapacitor ignore --remove ~/code/secret-project
 
 Entries are stored on the **active profile**, so switching profiles with `kapacitor use` switches the ignore list too. Symlinks are resolved on both the stored entry and the session's reported cwd, so a worktree symlink and its target match.
 
+### Uninstalling
+
+To remove kapacitor from this machine, run:
+
+```bash
+kapacitor uninstall                  # interactive, user-scope removal
+kapacitor uninstall --yes            # non-interactive
+kapacitor uninstall --project --yes  # also strip project-scope hooks in cwd's repo
+kapacitor uninstall --keep-config    # remove integrations, keep ~/.config/kapacitor
+```
+
+`uninstall` covers every supported agent: it stops running daemons and watcher processes, strips kapacitor entries from user-level Claude Code, Codex CLI, and Cursor hook files (preserving any non-kapacitor entries), removes agent skills under `~/.agents/skills/` (plus the legacy `~/.codex/skills/kapacitor-*` folders), and deletes `~/.config/kapacitor/`.
+
+`--project` additionally cleans up `<repo>/.claude/settings.local.json` and `<repo>/.codex/hooks.json` in the current git working tree (errors if you're not inside one). Cursor only has a user-scope `hooks.json`, so `--project` does not affect it. Project-scope hooks in other repos are not touched — re-run from each repo that has them.
+
+Use `--keep-config` to preserve profiles, tokens, and ignore lists when you plan to reinstall. Per-agent selective cleanup is not exposed here — use `kapacitor plugin remove [--codex|--cursor|--skills]` for finer-grained removal.
+
 ### Other commands
 
 ```bash

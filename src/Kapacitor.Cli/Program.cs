@@ -52,8 +52,11 @@ if (Environment.GetEnvironmentVariable("KAPACITOR_SKIP") is "1"
 
 var baseUrl = await AppConfig.ResolveServerUrl(args);
 
-// Fire-and-forget update check (prints hint to stderr after command finishes)
-var   noUpdateCheck   = args.Contains("--no-update-check");
+// Fire-and-forget update check (prints hint to stderr after command finishes).
+// Skipped for `uninstall` — the check writes ~/.config/kapacitor/update-check.json,
+// which would race with uninstall's `rm -rf` of the config dir and recreate it
+// after the command has reported success.
+var   noUpdateCheck   = args.Contains("--no-update-check") || command == "uninstall";
 Task? updateCheckTask = null;
 
 if (!noUpdateCheck) {
@@ -72,7 +75,7 @@ if (args.Skip(1).Any(a => a is "--help" or "-h")) {
 }
 
 // Commands that don't need a server URL
-string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "update", "plugin", "profile", "use", "repos", "login", "ignore"];
+string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "update", "plugin", "profile", "use", "repos", "login", "ignore", "uninstall"];
 
 if (baseUrl is null && !offlineCommands.Contains(command)) {
     Console.Error.WriteLine("No server configured. Run `kapacitor setup` or set KAPACITOR_URL.");
@@ -309,6 +312,8 @@ switch (command) {
     }
     case "cleanup":
         return await CleanupCommand.HandleCleanup();
+    case "uninstall":
+        return await UninstallCommand.HandleAsync(args);
     case "disable": {
         // The sessionId is consumed as a filesystem path component
         // (watcher PID files, disabled marker file). Validate strictly as a
