@@ -747,8 +747,19 @@ static class ImportCommand {
         ];
 
         var fileBased = classifications.Where(c => !string.IsNullOrEmpty(c.FilePath)).ToList();
+        // AlreadyLoaded gets routed too so vendor-specific sources (Cursor) can
+        // re-assert lifecycle hooks on already-ingested sessions. The legacy
+        // contract was New/Partial only — but if a previous import advanced
+        // the transcript watermark while a lifecycle POST failed, the session
+        // is forever lifecycle-less under the old filter. Server-side
+        // idempotency (canonical event ids per AI-731) makes re-emission safe;
+        // CursorImportSource.ImportSessionAsync short-circuits the transcript
+        // batch when there's nothing past the watermark and just fires the
+        // lifecycle hooks.
         var routed    = classifications.Where(c =>  string.IsNullOrEmpty(c.FilePath)
-                                                 && c.Status is ClassificationStatus.New or ClassificationStatus.Partial).ToList();
+                                                 && c.Status is ClassificationStatus.New
+                                                              or ClassificationStatus.Partial
+                                                              or ClassificationStatus.AlreadyLoaded).ToList();
 
         var chains = BuildImportChains(fileBased);
 

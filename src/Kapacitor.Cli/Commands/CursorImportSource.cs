@@ -292,27 +292,35 @@ internal sealed class CursorImportSource : IImportSource {
 
         if (!File.Exists(transcriptPath)) return ImportOutcome.Failed;
 
-        var startLine = classification.Status == ImportCommand.ClassificationStatus.Partial
-            ? classification.ResumeFromLine
-            : 0;
-
         var workspaceFolder = classification.SourceMeta!.TryGetValue("WorkspaceFolder", out var wfObj)
             ? wfObj as string
             : null;
 
-        // Synthesize the sessionStart hook so the server appends a Cursor-shaped
-        // SessionStarted with the CursorSessionExtension (vendor + workspace
-        // metadata). Without this the read-model would have only transcript
-        // turn events and the session would surface as a generic, vendor-less
-        // active session per SessionProjector.cs:193. The server keys the
-        // canonical event id on (composerId, "SessionStarted"), so re-emitting
-        // is idempotent — safe to fire on every import (including Partial
-        // resumes after a previous import or live hooks already fired).
         var (createdUtc, modifiedUtc) = TryGetTranscriptTimes(transcriptPath);
-        await PostSyntheticHookAsync(
+
+        // sessionStart MUST succeed before transcript advances the server
+        // watermark — otherwise a transient lifecycle failure plus a successful
+        // transcript would leave the session permanently lifecycle-less
+        // (next run sees AlreadyLoaded and never re-emits). Treat lifecycle
+        // POST failure as a hard import failure; the orchestrator surfaces
+        // Errored and the user re-runs, which is idempotent on the server
+        // (canonical event ids are deterministic — AI-731).
+        var startOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-start/cursor",
             BuildSessionStartPayload(classification.SessionId, workspaceFolder, transcriptPath, createdUtc),
             ct);
+        if (!startOk) return ImportOutcome.Failed;
+
+        // Partial → resume from server watermark + 1. AlreadyLoaded → nothing
+        // past the watermark, so SendTranscriptBatches returns 0 immediately.
+        // The routed-phase filter at ImportCommand.cs:749 now includes
+        // AlreadyLoaded for Cursor so legacy lifecycle-less sessions get
+        // re-synced; the transcript leg becomes a no-op in that case.
+        var startLine = classification.Status switch {
+            ImportCommand.ClassificationStatus.Partial       => classification.ResumeFromLine,
+            ImportCommand.ClassificationStatus.AlreadyLoaded => classification.TotalLines,
+            _                                                => 0,
+        };
 
         int sent;
         try {
@@ -328,17 +336,16 @@ internal sealed class CursorImportSource : IImportSource {
             return ImportOutcome.Failed;
         }
 
-        // sessionEnd seals the session so the read-model marks it ended.
-        // Server's canonical-event id is (composerId, "SessionEnded") — also
-        // idempotent on replay. Reason "historical-import" lets operators
-        // distinguish synthetic ends from live-hook ends in event metadata.
+        // sessionEnd: same hard-fail contract — if it can't be appended, the
+        // session would otherwise look perpetually "active" in the read-model.
         var durationMs = createdUtc is { } c && modifiedUtc is { } m && m >= c
             ? (long?)(m - c).TotalMilliseconds
             : null;
-        await PostSyntheticHookAsync(
+        var endOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-end/cursor",
             BuildSessionEndPayload(classification.SessionId, transcriptPath, durationMs, modifiedUtc),
             ct);
+        if (!endOk) return ImportOutcome.Failed;
 
         if (sent == 0) return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
 
@@ -393,18 +400,15 @@ internal sealed class CursorImportSource : IImportSource {
         }
     }
 
-    static async Task PostSyntheticHookAsync(
+    static async Task<bool> PostSyntheticHookAsync(
         HttpClient client, string baseUrl, string routeSegment, JsonObject payload, CancellationToken ct
     ) {
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _       = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, ct: ct);
-            // Outcome is intentionally ignored: server idempotency makes
-            // re-tries safe, and transcript-line ingest is the primary
-            // payload — a missing lifecycle event is a degraded but
-            // recoverable state (next re-import re-emits).
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, ct: ct);
+            return resp.IsSuccessStatusCode;
         } catch {
-            // Best effort; do not fail the whole import for a lifecycle POST.
+            return false;
         }
     }
 

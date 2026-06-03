@@ -348,6 +348,113 @@ public class CursorImportSourceTests {
     }
 
     [Test]
+    public async Task import_session_returns_failed_when_session_start_post_fails() {
+        // Reviewer P2a: lifecycle POST failure must hard-fail the import so
+        // the user re-runs. Otherwise transcript success + lifecycle failure
+        // leaves the session permanently lifecycle-less on the server.
+        using var fx = new ProjectsDirFixture();
+        var jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        var posted = new List<string>();
+        using var handler = new StubHandler(
+            postCapture: (req, _) => {
+                var path = req.RequestUri!.AbsolutePath;
+                posted.Add(path);
+                return path == "/hooks/session-start/cursor"
+                    ? new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                    : new HttpResponseMessage(HttpStatusCode.OK);
+            });
+        using var client = new HttpClient(handler);
+
+        var outcome = await src.ImportSessionAsync(
+            new ImportCommand.SessionClassification {
+                SessionId  = "11111111111111111111111111111111",
+                FilePath   = "",
+                EncodedCwd = "",
+                Meta       = new SessionMetadata(),
+                Status     = ImportCommand.ClassificationStatus.New,
+                Vendor     = "cursor",
+                SourceMeta = new Dictionary<string, object?> { ["TranscriptPath"] = jsonl },
+            },
+            new ImportContext(client, "http://localhost", ForcePrivate: false),
+            CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+        // Transcript MUST NOT be posted when session-start failed —
+        // otherwise the watermark advances and next-run sees AlreadyLoaded.
+        await Assert.That(posted).DoesNotContain("/hooks/transcript");
+    }
+
+    [Test]
+    public async Task import_session_returns_failed_when_session_end_post_fails() {
+        using var fx = new ProjectsDirFixture();
+        var jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        using var handler = new StubHandler(
+            postCapture: (req, _) => req.RequestUri!.AbsolutePath == "/hooks/session-end/cursor"
+                ? new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                : new HttpResponseMessage(HttpStatusCode.OK));
+        using var client = new HttpClient(handler);
+
+        var outcome = await src.ImportSessionAsync(
+            new ImportCommand.SessionClassification {
+                SessionId  = "11111111111111111111111111111111",
+                FilePath   = "",
+                EncodedCwd = "",
+                Meta       = new SessionMetadata(),
+                Status     = ImportCommand.ClassificationStatus.New,
+                Vendor     = "cursor",
+                SourceMeta = new Dictionary<string, object?> { ["TranscriptPath"] = jsonl },
+            },
+            new ImportContext(client, "http://localhost", ForcePrivate: false),
+            CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+    }
+
+    [Test]
+    public async Task import_session_emits_lifecycle_only_for_already_loaded_status() {
+        // Reviewer P2a (backfill case): re-running import on an already-loaded
+        // Cursor session re-asserts lifecycle without resending transcript.
+        // The orchestrator's routed-phase filter now includes AlreadyLoaded
+        // for this exact case; ImportSessionAsync must short-circuit the
+        // transcript batch but still emit session-start + session-end.
+        using var fx = new ProjectsDirFixture();
+        var jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111",
+                                  "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        var posted = new List<string>();
+        using var handler = new StubHandler(
+            postCapture: (req, _) => { posted.Add(req.RequestUri!.AbsolutePath); return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var client = new HttpClient(handler);
+
+        var outcome = await src.ImportSessionAsync(
+            new ImportCommand.SessionClassification {
+                SessionId  = "11111111111111111111111111111111",
+                FilePath   = "",
+                EncodedCwd = "",
+                Meta       = new SessionMetadata(),
+                Status     = ImportCommand.ClassificationStatus.AlreadyLoaded,
+                TotalLines = 3,
+                Vendor     = "cursor",
+                SourceMeta = new Dictionary<string, object?> { ["TranscriptPath"] = jsonl },
+            },
+            new ImportContext(client, "http://localhost", ForcePrivate: false),
+            CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Resumed);
+        await Assert.That(posted).Contains("/hooks/session-start/cursor");
+        await Assert.That(posted).Contains("/hooks/session-end/cursor");
+        await Assert.That(posted).DoesNotContain("/hooks/transcript");
+    }
+
+    [Test]
     public async Task import_session_omits_workspace_roots_when_cwd_unresolved() {
         using var fx = new ProjectsDirFixture();
         var jsonl = fx.AddSession("unknown-workspace", "11111111-1111-1111-1111-111111111111", "{}\n");
