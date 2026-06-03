@@ -2,7 +2,7 @@ namespace Kapacitor.Cli.Core.Cursor;
 
 public enum OsPlatform { MacOs, Linux, Windows }
 
-public sealed record CursorPaths(string UserDir, string WorkspaceStorageDir, string GlobalStateDb) {
+public sealed record CursorPaths(string UserDir, string WorkspaceStorageDir) {
     public static CursorPaths Resolve(string? home = null, OsPlatform? platform = null, string? appData = null) {
         home     ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         platform ??= OperatingSystem.IsMacOS()   ? OsPlatform.MacOs
@@ -18,8 +18,7 @@ public sealed record CursorPaths(string UserDir, string WorkspaceStorageDir, str
         };
         return new CursorPaths(
             UserDir:             userDir,
-            WorkspaceStorageDir: userDir + sep + "workspaceStorage",
-            GlobalStateDb:       userDir + sep + "globalStorage" + sep + "state.vscdb");
+            WorkspaceStorageDir: userDir + sep + "workspaceStorage");
     }
 
     static string Join(char sep, string root, params string[] parts)
@@ -60,5 +59,16 @@ public sealed record CursorPaths(string UserDir, string WorkspaceStorageDir, str
     public static string SpoolDir(string? home = null) {
         home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return Path.Combine(home, ".cursor", "kapacitor-pending");
+    }
+
+    /// <summary>
+    /// Per-session JSONL transcript root at <c>~/.cursor/projects/</c>. Each
+    /// session lives at <c>&lt;projectsDir&gt;/&lt;sanitized-workspace&gt;/agent-transcripts/&lt;session-id&gt;/&lt;session-id&gt;.jsonl</c>
+    /// in Anthropic content-block format. Same on every OS — Cursor uses the
+    /// user's home dir, not the per-platform Electron user dir.
+    /// </summary>
+    public static string ProjectsDir(string? home = null) {
+        home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return Path.Combine(home, ".cursor", "projects");
     }
 }

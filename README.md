@@ -57,13 +57,13 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 ### 3. Import existing sessions (optional)
 
 ```bash
-kapacitor import                                 # every detected agent (Claude, Codex, Cursor)
-kapacitor import --org                           # sessions for the org bound to your active profile
-kapacitor import --repo owner/repo               # sessions for one specific repo
-kapacitor import --cursor --cursor-all-workspaces   # only Cursor, every workspace
+kapacitor import                     # every detected agent (Claude, Codex, Cursor)
+kapacitor import --org               # sessions for the org bound to your active profile
+kapacitor import --repo owner/repo   # sessions for one specific repo
+kapacitor import --cursor            # only Cursor
 ```
 
-This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), and Cursor's local SQLite so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, or `--cursor` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
+This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), and `~/.cursor/projects/.../agent-transcripts/` (Cursor) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, or `--cursor` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
 
 You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org` uses the active profile name as the GitHub org login — it works out of the box when the profile was created by `kapacitor setup` (which names it after the picked tenant), and errors otherwise. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
@@ -228,7 +228,7 @@ The server is repo-aware — it resolves the current working directory to a repo
 
 ### Loading historical sessions
 
-Backfill older sessions from every detected coding agent in a single run. Claude and Codex sessions come from local `.jsonl` transcripts (`~/.claude/projects/`, `~/.codex/sessions/`); Cursor Composer/Agent sessions come from Cursor's local SQLite state. All three are discovered automatically and the command requires an explicit scope so personal/private repos aren't uploaded by accident:
+Backfill older sessions from every detected coding agent in a single run. All three agents ship per-session `.jsonl` transcripts (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/<sanitized-workspace>/agent-transcripts/`). They're discovered automatically and the command requires an explicit scope so personal/private repos aren't uploaded by accident:
 
 ```bash
 kapacitor import --all                            # every discovered session from every agent
@@ -246,12 +246,11 @@ By default every available agent is imported. Pass one or more vendor filters to
 ```bash
 kapacitor import --claude --org                   # only Claude transcripts
 kapacitor import --codex --org                    # only Codex rollouts
-kapacitor import --cursor                         # only Cursor (current cwd's workspace)
-kapacitor import --cursor --cursor-all-workspaces # only Cursor, every workspace
-kapacitor import --cursor --cursor-workspace /path/to/proj
+kapacitor import --cursor --all                   # only Cursor — every discovered transcript
+kapacitor import --cursor --cwd /path/to/proj     # only Cursor sessions whose workspace folder matches
 ```
 
-Cursor-specific notes: only Composer/Agent-mode sessions are imported — Chat (Ask), Inline Edit (Cmd+K), and Tab autocomplete don't fit the session model and are skipped. Sessions with bubbles still being generated are skipped until idle.
+Cursor historical import walks every JSONL transcript under `~/.cursor/projects/*/agent-transcripts/*/*.jsonl` and posts each line through the same `POST /hooks/transcript` route the live hook path uses, so live and historical ingest converge on one canonical event stream. The walker resolves each session's working directory by matching its sanitized workspace name against `~/Library/Application Support/Cursor/User/workspaceStorage/*/workspace.json` (on Linux: `~/.config/Cursor/User/...`); sessions whose workspace can't be resolved are still imported, just without `cwd` and git owner/repo enrichment.
 
 Additional flags:
 
@@ -334,8 +333,6 @@ Cursor uses a single user-scope `hooks.json`; there is no project-scope variant.
 ```bash
 kapacitor setup --server-url <url> --no-prompt --skip-cursor-hooks
 ```
-
-Legacy SQLite import (`kapacitor import --cursor`) is unchanged.
 
 #### Daemon config settings
 

@@ -1,7 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
-using Kapacitor.Cli.Core.Cursor;
 
 namespace Kapacitor.Cli.Core;
 
@@ -536,10 +535,6 @@ public record RepoEntry {
     UseStringEnumConverter = true
 )]
 partial class KapacitorJsonContext : JsonSerializerContext;
-
-[JsonSerializable(typeof(CursorImportPayload))]
-[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
-internal partial class CursorJsonContext : JsonSerializerContext;
 
 /// <summary>
 /// Decision returned by the server's <c>RequestPermission</c> SignalR hub method.

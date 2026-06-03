@@ -285,14 +285,6 @@ static class ImportCommand {
         );
 
     /// <summary>
-    /// Cursor-specific discovery args. Threaded into <see cref="DiscoveryFilters"/>
-    /// so the Cursor source can honour <c>--cursor-workspace</c> and
-    /// <c>--cursor-all-workspaces</c> without leaking those flags into the
-    /// shared discovery surface.
-    /// </summary>
-    internal sealed record CursorWorkspaceArgs(string? Workspace, bool AllWorkspaces);
-
-    /// <summary>
     /// Aggregate a per-source slice of classifications into a Plan-grid row.
     /// </summary>
     static ClassificationCounts ComputeCounts(IReadOnlyList<SessionClassification> classifications) =>
@@ -388,7 +380,6 @@ static class ImportCommand {
             bool                         generateSummaries       = false,
             IReadOnlyList<IImportSource>? sources                 = null,
             bool                         explicitVendorSelection = false,
-            CursorWorkspaceArgs?         cursorArgs              = null,
             DateOnly?                    since                   = null,
             ImportScope?                 scope                   = null,
             bool                         skipConfirmation        = false,
@@ -403,8 +394,7 @@ static class ImportCommand {
         // Back-compat: a null caller (legacy or test) means "Claude only". Once
         // Program.cs migrates in E3, every production caller passes sources
         // explicitly.
-        sources    ??= [new ClaudeImportSource()];
-        cursorArgs ??= new CursorWorkspaceArgs(null, false);
+        sources ??= [new ClaudeImportSource()];
 
         // --- No-source exit policy ---
         var available = sources.Where(s => s.IsAvailable).ToList();
@@ -433,12 +423,10 @@ static class ImportCommand {
         display.BeginPhase("Discovering");
 
         var filters = new DiscoveryFilters(
-            FilterCwd:           filterCwd,
-            FilterSession:       filterSession,
-            Since:               since,
-            MinLines:            minLines,
-            CursorWorkspace:     cursorArgs.Workspace,
-            CursorAllWorkspaces: cursorArgs.AllWorkspaces);
+            FilterCwd:     filterCwd,
+            FilterSession: filterSession,
+            Since:         since,
+            MinLines:      minLines);
 
         var discoveriesPerSource = await Task.WhenAll(
             sources.Select(s => s.DiscoverAsync(filters, CancellationToken.None)));
@@ -759,8 +747,19 @@ static class ImportCommand {
         ];
 
         var fileBased = classifications.Where(c => !string.IsNullOrEmpty(c.FilePath)).ToList();
+        // AlreadyLoaded gets routed too so vendor-specific sources (Cursor) can
+        // re-assert lifecycle hooks on already-ingested sessions. The legacy
+        // contract was New/Partial only — but if a previous import advanced
+        // the transcript watermark while a lifecycle POST failed, the session
+        // is forever lifecycle-less under the old filter. Server-side
+        // idempotency (canonical event ids per AI-731) makes re-emission safe;
+        // CursorImportSource.ImportSessionAsync short-circuits the transcript
+        // batch when there's nothing past the watermark and just fires the
+        // lifecycle hooks.
         var routed    = classifications.Where(c =>  string.IsNullOrEmpty(c.FilePath)
-                                                 && c.Status is ClassificationStatus.New or ClassificationStatus.Partial).ToList();
+                                                 && c.Status is ClassificationStatus.New
+                                                              or ClassificationStatus.Partial
+                                                              or ClassificationStatus.AlreadyLoaded).ToList();
 
         var chains = BuildImportChains(fileBased);
 

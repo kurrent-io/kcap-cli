@@ -31,7 +31,17 @@ jobs:
         run: dotnet build Kapacitor.slnx
 
       - name: Run unit tests
-        run: dotnet run --project test/Kapacitor.Cli.Tests.Unit/Kapacitor.Cli.Tests.Unit.csproj
+        # --maximum-parallel-tests 1 serializes the entire unit suite.
+        # The codebase has many tests that mutate process-global state
+        # (Environment.SetEnvironmentVariable on HOME/PATH/KAPACITOR_*,
+        # Console.SetOut/SetError) and rely on [NotInParallel(group)] to
+        # serialize among themselves. Cross-group parallel execution still
+        # races the shared process state intermittently on the slower
+        # Linux CI runner, producing a different flake every run. Until
+        # the affected tests are refactored to inject paths/streams
+        # rather than mutate Environment/Console, run serially. Local dev
+        # runs stay parallel (the flag lives only in CI).
+        run: dotnet run --project test/Kapacitor.Cli.Tests.Unit/Kapacitor.Cli.Tests.Unit.csproj -- --maximum-parallel-tests 1
 
       - name: Run integration tests
         run: dotnet run --project test/Kapacitor.Cli.Tests.Integration/Kapacitor.Cli.Tests.Integration.csproj

@@ -11,7 +11,6 @@
         <ProjectReference Include="../../src/Kapacitor.Cli.Daemon/Kapacitor.Cli.Daemon.csproj" />
     </ItemGroup>
     <ItemGroup>
-        <PackageReference Include="Microsoft.Data.Sqlite" />
         <PackageReference Include="TUnit" />
         <PackageReference Include="Tomlyn" />
         <PackageReference Include="WireMock.Net" />

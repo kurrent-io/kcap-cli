@@ -7,11 +7,12 @@ using WireMock.Server;
 namespace Kapacitor.Cli.Tests.Unit.Codex;
 
 public class CodexHookCommandTests : IDisposable {
-    // Shared NotInParallel group for every test that mutates global state —
-    // Console.Out and the KAPACITOR_DAEMON_URL env var. Without a single
-    // shared group, parallel tests against the same process-wide writer or
-    // env var corrupt each other's assertions nondeterministically.
-    const string ConsoleSerialGroup = nameof(CodexHookCommandTests) + ".Console";
+    // Every test that mutates Console.Out or the KAPACITOR_DAEMON_URL env
+    // var is decorated [NotInParallel] (no group) so it runs strictly alone.
+    // A group key was insufficient: parallel tests in *other* files (e.g.
+    // ImportDisplayGridTests / CliResolverTests) still mutate the same
+    // process-global state under different group keys, and the cross-group
+    // race nondeterministically corrupted Console captures (AI-737 CI).
 
     readonly WireMockServer _server = WireMockServer.Start();
 
@@ -171,7 +172,7 @@ public class CodexHookCommandTests : IDisposable {
     // the recording endpoint is slow. We cap the HTTP client at 2 s and
     // swallow the resulting TaskCanceledException — guard against future
     // regressions where someone reintroduces an unbounded await.
-    [Test, NotInParallel(ConsoleSerialGroup)]
+    [Test, NotInParallel]
     public async Task PermissionRequest_returns_quickly_when_server_is_slow() {
         _server.Given(Request.Create().WithPath("/hooks/permission-record").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
@@ -215,7 +216,7 @@ public class CodexHookCommandTests : IDisposable {
     // group and raced against the ConsoleSerialGroup tests, occasionally
     // causing both this test and the unrelated stdout-asserting ones to
     // observe a stale Console.Out writer.
-    [Test, NotInParallel(ConsoleSerialGroup)]
+    [Test, NotInParallel]
     public async Task PermissionRequest_returns_quickly_when_auth_discovery_is_slow() {
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
@@ -344,7 +345,7 @@ public class CodexHookCommandTests : IDisposable {
     // Globally sequential: this test captures Console.Out, and shares the
     // same NotInParallel(ConsoleSerialGroup) lock as every other
     // stdout-redirecting test in the suite.
-    [Test, NotInParallel(ConsoleSerialGroup)]
+    [Test, NotInParallel]
     public async Task Handle_skips_dispatch_when_session_is_disabled() {
         // session_id without dashes — NormalizeGuidField is a no-op on this
         // shape, so the value written to disk matches the value the hook
@@ -399,7 +400,7 @@ public class CodexHookCommandTests : IDisposable {
     // to Codex's own approval prompt). The tests below cover the new
     // daemon-bridge branch added in AI-68.
 
-    [Test, NotInParallel(ConsoleSerialGroup)]
+    [Test, NotInParallel]
     public async Task PermissionRequest_with_daemon_url_set_posts_to_bridge_and_forwards_response_to_stdout() {
         using var bridge = WireMockServer.Start();
         var       token  = "abc123";
@@ -432,7 +433,7 @@ public class CodexHookCommandTests : IDisposable {
         }
     }
 
-    [Test, NotInParallel(ConsoleSerialGroup)]
+    [Test, NotInParallel]
     public async Task PermissionRequest_with_daemon_url_emits_deny_and_exits_nonzero_on_500() {
         using var bridge = WireMockServer.Start();
         var       token  = "abc123";
@@ -461,7 +462,7 @@ public class CodexHookCommandTests : IDisposable {
         }
     }
 
-    [Test, NotInParallel(ConsoleSerialGroup)]
+    [Test, NotInParallel]
     public async Task PermissionRequest_with_daemon_url_emits_deny_on_connection_refused() {
         // Use a deliberately-unreachable port (e.g. 1) so the connection fails immediately.
         var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
@@ -485,7 +486,7 @@ public class CodexHookCommandTests : IDisposable {
         }
     }
 
-    [Test, NotInParallel(ConsoleSerialGroup)]
+    [Test, NotInParallel]
     public async Task PermissionRequest_with_non_loopback_daemon_url_emits_deny_without_posting() {
         using var bridge      = WireMockServer.Start();
         var       previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
@@ -511,7 +512,7 @@ public class CodexHookCommandTests : IDisposable {
         }
     }
 
-    [Test, NotInParallel(ConsoleSerialGroup)]
+    [Test, NotInParallel]
     public async Task PermissionRequest_with_https_daemon_url_emits_deny_without_posting() {
         using var bridge      = WireMockServer.Start();
         var       previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
@@ -536,7 +537,7 @@ public class CodexHookCommandTests : IDisposable {
         }
     }
 
-    [Test, NotInParallel(ConsoleSerialGroup)]
+    [Test, NotInParallel]
     public async Task PermissionRequest_with_daemon_url_does_not_double_post_to_server_hooks_endpoint() {
         using var bridge = WireMockServer.Start();
         using var server = WireMockServer.Start();
