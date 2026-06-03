@@ -328,6 +328,68 @@ public class UninstallCommandTests {
         }
     }
 
+    [Test]
+    public async Task Cursor_hooks_write_failure_propagates_to_exit_code() {
+        // Cursor's RemoveCursor previously returned 0 even when the helper's
+        // inner try/catch swallowed a write failure. The helper now throws,
+        // RemoveCursor catches + returns 1, and uninstall aggregates that
+        // into hadFailures.
+        if (OperatingSystem.IsWindows()) return;
+
+        await using var fixture = await Fixture.CreateAsync();
+
+        var cursorDir = Path.Combine(fixture.Home, ".cursor");
+        Directory.CreateDirectory(cursorDir);
+        var hooksPath = Path.Combine(cursorDir, "hooks.json");
+        await File.WriteAllTextAsync(hooksPath, """
+            {"version":1,"hooks":{"sessionStart":[{"command":"kapacitor hook --cursor"}]}}
+            """);
+        File.SetUnixFileMode(hooksPath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+
+        try {
+            var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes"]);
+
+            await Assert.That(exit).IsEqualTo(1);
+            // Failure path skips the config-dir delete so the user can re-run.
+            await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
+        } finally {
+            File.SetUnixFileMode(hooksPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [Test]
+    public async Task Sweep_failure_propagates_to_exit_code() {
+        // SweepKapacitorPrefixedDirs previously logged Directory.Delete errors
+        // but never flipped hadFailures, so a stuck kapacitor-* folder under
+        // ~/.agents/skills/ would leave uninstall claiming success.
+        if (OperatingSystem.IsWindows()) return;
+
+        await using var fixture = await Fixture.CreateAsync();
+
+        var skillsDir = Path.Combine(fixture.Home, ".agents", "skills");
+        Directory.CreateDirectory(skillsDir);
+        Directory.CreateDirectory(Path.Combine(skillsDir, "kapacitor-stuck"));
+
+        // Strip write permission on the parent. Directory.Delete on a child
+        // needs write+exec on the parent on every Unix; without write the
+        // unlink fails with EACCES and Directory.Delete surfaces it.
+        File.SetUnixFileMode(skillsDir,
+            UnixFileMode.UserRead | UnixFileMode.UserExecute |
+            UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+            UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+
+        try {
+            var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes"]);
+
+            await Assert.That(exit).IsEqualTo(1);
+            await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
+        } finally {
+            // Restore so the fixture can be cleaned up.
+            File.SetUnixFileMode(skillsDir,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
     sealed class Fixture : IAsyncDisposable {
         public required string Home      { get; init; }
         public required string ConfigDir { get; init; }

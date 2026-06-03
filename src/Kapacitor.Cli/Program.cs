@@ -52,8 +52,11 @@ if (Environment.GetEnvironmentVariable("KAPACITOR_SKIP") is "1"
 
 var baseUrl = await AppConfig.ResolveServerUrl(args);
 
-// Fire-and-forget update check (prints hint to stderr after command finishes)
-var   noUpdateCheck   = args.Contains("--no-update-check");
+// Fire-and-forget update check (prints hint to stderr after command finishes).
+// Skipped for `uninstall` — the check writes ~/.config/kapacitor/update-check.json,
+// which would race with uninstall's `rm -rf` of the config dir and recreate it
+// after the command has reported success.
+var   noUpdateCheck   = args.Contains("--no-update-check") || command == "uninstall";
 Task? updateCheckTask = null;
 
 if (!noUpdateCheck) {

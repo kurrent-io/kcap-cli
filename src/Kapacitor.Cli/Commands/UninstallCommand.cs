@@ -111,8 +111,8 @@ public static class UninstallCommand {
         // kapacitor-* folder from an older release (renamed/retired skill)
         // would survive. Sweep the directory for our prefix to catch those.
         // Same for legacy ~/.codex/skills/.
-        SweepKapacitorPrefixedDirs(AgentsPaths.UserSkillsDir);
-        SweepKapacitorPrefixedDirs(Path.Combine(CodexPaths.Home, "skills"));
+        if (!SweepKapacitorPrefixedDirs(AgentsPaths.UserSkillsDir))            hadFailures = true;
+        if (!SweepKapacitorPrefixedDirs(Path.Combine(CodexPaths.Home, "skills"))) hadFailures = true;
 
         if (projectRoot is not null) {
             var claudeProject = Path.Combine(projectRoot, ".claude", "settings.local.json");
@@ -129,8 +129,15 @@ public static class UninstallCommand {
                 hadFailures = true;
             }
 
-            if (File.Exists(codexProject) && PluginCommand.RemoveCodexHooks(codexProject)) {
-                await Console.Out.WriteLineAsync($"Codex hooks removed (project: {codexProject})");
+            if (File.Exists(codexProject)) {
+                try {
+                    if (PluginCommand.RemoveCodexHooks(codexProject)) {
+                        await Console.Out.WriteLineAsync($"Codex hooks removed (project: {codexProject})");
+                    }
+                } catch (Exception ex) {
+                    await Console.Error.WriteLineAsync($"Could not update Codex hooks at {codexProject}: {ex.Message}");
+                    hadFailures = true;
+                }
             }
 
             // Same marker-survives-after-manual-edit story as the user scope.
@@ -188,17 +195,32 @@ public static class UninstallCommand {
     /// fixed name list doesn't match what's on disk: a skill renamed,
     /// retired, or added between releases. <c>kapacitor-</c> is our
     /// namespace prefix so this is safe; user-authored folders without it
-    /// are untouched.
+    /// are untouched. Returns true on full success, false when any deletion
+    /// (or the enumeration itself) failed — callers feed the result into
+    /// their failure aggregator so a stuck folder doesn't get masked by
+    /// a "kapacitor uninstalled." exit.
     /// </summary>
-    static void SweepKapacitorPrefixedDirs(string root) {
-        if (!Directory.Exists(root)) return;
+    static bool SweepKapacitorPrefixedDirs(string root) {
+        if (!Directory.Exists(root)) return true;
 
-        foreach (var dir in Directory.EnumerateDirectories(root, "kapacitor-*")) {
+        IEnumerable<string> dirs;
+        try {
+            dirs = Directory.EnumerateDirectories(root, "kapacitor-*").ToArray();
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"Could not enumerate {root}: {ex.Message}");
+            return false;
+        }
+
+        var ok = true;
+        foreach (var dir in dirs) {
             try {
                 Directory.Delete(dir, recursive: true);
             } catch (Exception ex) {
                 Console.Error.WriteLine($"Could not remove {dir}: {ex.Message}");
+                ok = false;
             }
         }
+
+        return ok;
     }
 }
