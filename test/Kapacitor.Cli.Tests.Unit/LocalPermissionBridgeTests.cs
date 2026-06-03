@@ -4,7 +4,6 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Kapacitor.Cli.Core;
-using Kapacitor.Cli.Daemon;
 using Kapacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -12,8 +11,8 @@ namespace Kapacitor.Cli.Tests.Unit;
 
 public class LocalPermissionBridgeTests {
     static (LocalPermissionBridge bridge, FakeServerConnection server) CreateBridge(
-        Func<string, string?, JsonElement?, JsonElement?, CancellationToken, Task<PermissionDecision>>? respond = null
-    ) {
+            Func<string, string?, JsonElement?, JsonElement?, CancellationToken, Task<PermissionDecision>>? respond = null
+        ) {
         var server = new FakeServerConnection(respond);
         var bridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance);
 
@@ -28,6 +27,7 @@ public class LocalPermissionBridgeTests {
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task StartAsync_ExposesLoopbackBaseUrlWithToken() {
         var (bridge, _) = CreateBridge();
+
         try {
             await bridge.StartAsync(CancellationToken.None);
 
@@ -49,6 +49,7 @@ public class LocalPermissionBridgeTests {
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task PostingToWrongTokenReturns404() {
         var (bridge, _) = CreateBridge();
+
         try {
             await bridge.StartAsync(CancellationToken.None);
 
@@ -67,6 +68,7 @@ public class LocalPermissionBridgeTests {
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task PostingToWrongPathReturns404() {
         var (bridge, _) = CreateBridge();
+
         try {
             await bridge.StartAsync(CancellationToken.None);
 
@@ -82,6 +84,7 @@ public class LocalPermissionBridgeTests {
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task GetReturns404() {
         var (bridge, _) = CreateBridge();
+
         try {
             await bridge.StartAsync(CancellationToken.None);
 
@@ -97,6 +100,7 @@ public class LocalPermissionBridgeTests {
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task MalformedJsonReturns400() {
         var (bridge, _) = CreateBridge();
+
         try {
             await bridge.StartAsync(CancellationToken.None);
 
@@ -113,6 +117,7 @@ public class LocalPermissionBridgeTests {
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task MissingSessionIdReturns400() {
         var (bridge, _) = CreateBridge();
+
         try {
             await bridge.StartAsync(CancellationToken.None);
 
@@ -135,11 +140,12 @@ public class LocalPermissionBridgeTests {
             await bridge.StartAsync(CancellationToken.None);
 
             using var client = CreateClient();
-            var       payload = new {
+
+            var payload = new {
                 session_id             = "11111111-2222-3333-4444-555555555555",
                 tool_name              = "Bash",
                 tool_input             = new { command = "ls" },
-                permission_suggestions = new { reason = "ok" }
+                permission_suggestions = new { reason  = "ok" }
             };
             using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", JsonContent.Create(payload));
 
@@ -168,8 +174,8 @@ public class LocalPermissionBridgeTests {
             using var client   = CreateClient();
             using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", JsonContent.Create(new { session_id = "abc" }));
 
-            var body = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(body);
+            var       body = await response.Content.ReadAsStringAsync();
+            using var doc  = JsonDocument.Parse(body);
 
             var hookOutput = doc.RootElement.GetProperty("hookSpecificOutput");
             await Assert.That(hookOutput.GetProperty("hookEventName").GetString()).IsEqualTo("PermissionRequest");
@@ -194,8 +200,8 @@ public class LocalPermissionBridgeTests {
             using var client   = CreateClient();
             using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", JsonContent.Create(new { session_id = "abc" }));
 
-            var body = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(body);
+            var       body = await response.Content.ReadAsStringAsync();
+            using var doc  = JsonDocument.Parse(body);
 
             var decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
             await Assert.That(decision.GetProperty("applyPermissions").GetProperty("allow")[0].GetString()).IsEqualTo("Bash(ls:*)");
@@ -219,8 +225,8 @@ public class LocalPermissionBridgeTests {
 
             await Assert.That((int)response.StatusCode).IsEqualTo(200);
 
-            var body = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(body);
+            var       body = await response.Content.ReadAsStringAsync();
+            using var doc  = JsonDocument.Parse(body);
 
             var decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
             await Assert.That(decision.GetProperty("behavior").GetString()).IsEqualTo("deny");
@@ -232,6 +238,7 @@ public class LocalPermissionBridgeTests {
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task StopAsyncReleasesPort() {
         var (bridge, _) = CreateBridge();
+
         try {
             await bridge.StartAsync(CancellationToken.None);
 
@@ -241,6 +248,7 @@ public class LocalPermissionBridgeTests {
             // After stop, the port should accept a fresh bind. If StopAsync didn't release
             // it, this would either throw or hang.
             var probe = new TcpListener(IPAddress.Loopback, port);
+
             try {
                 probe.Start();
             } finally {
@@ -272,11 +280,11 @@ public class LocalPermissionBridgeTests {
 
             await Assert.That((int)response.StatusCode).IsEqualTo(200);
 
-            var body = await response.Content.ReadAsStringAsync();
-            using var doc    = JsonDocument.Parse(body);
+            var       body     = await response.Content.ReadAsStringAsync();
+            using var doc      = JsonDocument.Parse(body);
             var       decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
             await Assert.That(decision.TryGetProperty("applyPermissions", out _)).IsTrue();
-            await Assert.That(decision.TryGetProperty("updatedInput",     out _)).IsTrue();
+            await Assert.That(decision.TryGetProperty("updatedInput", out _)).IsTrue();
         } finally {
             await bridge.DisposeAsync();
         }
@@ -299,12 +307,12 @@ public class LocalPermissionBridgeTests {
 
             await Assert.That((int)response.StatusCode).IsEqualTo(200);
 
-            var body = await response.Content.ReadAsStringAsync();
-            using var doc    = JsonDocument.Parse(body);
+            var       body     = await response.Content.ReadAsStringAsync();
+            using var doc      = JsonDocument.Parse(body);
             var       decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
             await Assert.That(decision.GetProperty("behavior").GetString()).IsEqualTo("allow");
             await Assert.That(decision.TryGetProperty("applyPermissions", out _)).IsFalse();
-            await Assert.That(decision.TryGetProperty("updatedInput",     out _)).IsFalse();
+            await Assert.That(decision.TryGetProperty("updatedInput", out _)).IsFalse();
         } finally {
             await bridge.DisposeAsync();
         }
@@ -313,6 +321,7 @@ public class LocalPermissionBridgeTests {
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task Legacy_path_without_vendor_returns_404() {
         var (bridge, _) = CreateBridge();
+
         try {
             await bridge.StartAsync(CancellationToken.None);
 
@@ -328,6 +337,7 @@ public class LocalPermissionBridgeTests {
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task Unknown_vendor_returns_404() {
         var (bridge, _) = CreateBridge();
+
         try {
             await bridge.StartAsync(CancellationToken.None);
 
@@ -348,6 +358,7 @@ public class LocalPermissionBridgeTests {
         // binder would reject any extra argument the server hub method doesn't
         // declare. The proof of correct vendor routing is the response shape.
         var (bridge, server) = CreateBridge();
+
         try {
             await bridge.StartAsync(CancellationToken.None);
 
@@ -358,12 +369,12 @@ public class LocalPermissionBridgeTests {
             await Assert.That(server.Calls.Count).IsEqualTo(1);
 
             // Codex hook schema: hookSpecificOutput.decision.behavior, no applyPermissions / updatedInput.
-            var body = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(body);
-            var decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
+            var       body     = await response.Content.ReadAsStringAsync();
+            using var doc      = JsonDocument.Parse(body);
+            var       decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
             await Assert.That(decision.GetProperty("behavior").GetString()).IsEqualTo("allow");
             await Assert.That(decision.TryGetProperty("applyPermissions", out _)).IsFalse();
-            await Assert.That(decision.TryGetProperty("updatedInput",     out _)).IsFalse();
+            await Assert.That(decision.TryGetProperty("updatedInput", out _)).IsFalse();
         } finally {
             await bridge.DisposeAsync();
         }
@@ -374,6 +385,7 @@ public class LocalPermissionBridgeTests {
         // Mirror of the Codex test: vendor is local-only state in the bridge, used
         // to pick the Claude-flavoured hookSpecificOutput envelope. Not on the wire.
         var (bridge, server) = CreateBridge();
+
         try {
             await bridge.StartAsync(CancellationToken.None);
 
@@ -383,9 +395,9 @@ public class LocalPermissionBridgeTests {
             await Assert.That((int)response.StatusCode).IsEqualTo(200);
             await Assert.That(server.Calls.Count).IsEqualTo(1);
 
-            var body = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(body);
-            var hookOutput = doc.RootElement.GetProperty("hookSpecificOutput");
+            var       body       = await response.Content.ReadAsStringAsync();
+            using var doc        = JsonDocument.Parse(body);
+            var       hookOutput = doc.RootElement.GetProperty("hookSpecificOutput");
             await Assert.That(hookOutput.GetProperty("hookEventName").GetString()).IsEqualTo("PermissionRequest");
             await Assert.That(hookOutput.GetProperty("decision").GetProperty("behavior").GetString()).IsEqualTo("allow");
         } finally {
@@ -409,9 +421,9 @@ public class LocalPermissionBridgeTests {
 
             await Assert.That((int)response.StatusCode).IsEqualTo(200);
 
-            var body = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(body);
-            var decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
+            var       body     = await response.Content.ReadAsStringAsync();
+            using var doc      = JsonDocument.Parse(body);
+            var       decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
             await Assert.That(decision.TryGetProperty("applyPermissions", out _)).IsFalse();
         } finally {
             await bridge.DisposeAsync();
@@ -423,14 +435,15 @@ public class LocalPermissionBridgeTests {
         // Verify that the bridge accepts POSTs at the /{token}/claude/permission-request URL
         // that the CLI's PermissionRequestCommand now targets (Task 10 migration).
         var (bridge, server) = CreateBridge();
+
         try {
             await bridge.StartAsync(CancellationToken.None);
 
             // Simulate the URL that PermissionRequestCommand builds:
             // {KAPACITOR_DAEMON_URL}/claude/permission-request
-            var targetUrl = $"{bridge.BaseUrl}/claude/permission-request";
-            using var client   = CreateClient();
-            using var response = await client.PostAsync(targetUrl, JsonContent.Create(new { session_id = "abc", tool_name = "Bash" }));
+            var       targetUrl = $"{bridge.BaseUrl}/claude/permission-request";
+            using var client    = CreateClient();
+            using var response  = await client.PostAsync(targetUrl, JsonContent.Create(new { session_id = "abc", tool_name = "Bash" }));
 
             await Assert.That((int)response.StatusCode).IsEqualTo(200);
             await Assert.That(server.Calls.Count).IsEqualTo(1);
@@ -445,20 +458,13 @@ public class LocalPermissionBridgeTests {
 /// Bypasses ServerConnection's HubConnection plumbing so the bridge can be exercised
 /// without a real server. RequestPermissionAsync is virtual on the base class.
 /// </summary>
-sealed class FakeServerConnection : ServerConnection {
-    readonly Func<string, string?, JsonElement?, JsonElement?, CancellationToken, Task<PermissionDecision>>? _respond;
-
-    public List<Call> Calls { get; } = [];
-
-    public FakeServerConnection(
-        Func<string, string?, JsonElement?, JsonElement?, CancellationToken, Task<PermissionDecision>>? respond
-    ) : base(
-        new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" },
+sealed class FakeServerConnection(Func<string, string?, JsonElement?, JsonElement?, CancellationToken, Task<PermissionDecision>>? respond)
+    : ServerConnection(
+        new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
         NullLoggerFactory.Instance,
         NullLogger<ServerConnection>.Instance
     ) {
-        _respond = respond;
-    }
+    public List<Call> Calls { get; } = [];
 
     public override Task<PermissionDecision> RequestPermissionAsync(
             string            sessionId,
@@ -469,9 +475,9 @@ sealed class FakeServerConnection : ServerConnection {
         ) {
         Calls.Add(new Call(sessionId, toolName, toolInput, suggestions));
 
-        return _respond is null
+        return respond is null
             ? Task.FromResult(new PermissionDecision("allow", null, null))
-            : _respond(sessionId, toolName, toolInput, suggestions, ct);
+            : respond(sessionId, toolName, toolInput, suggestions, ct);
     }
 
     public sealed record Call(string SessionId, string? ToolName, JsonElement? ToolInput, JsonElement? Suggestions);

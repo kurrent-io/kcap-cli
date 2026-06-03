@@ -46,11 +46,13 @@ public static class DaemonCommands {
     /// </summary>
     static FileStream? TryAcquireStartLock(string daemonName) {
         try {
-            Kapacitor.Cli.Core.DaemonLockPaths.EnsureDirectory();
+            DaemonLockPaths.EnsureDirectory();
 
-            return new FileStream(
-                Kapacitor.Cli.Core.DaemonLockPaths.StartLockPath(daemonName),
-                FileMode.OpenOrCreate, FileAccess.Write, FileShare.None
+            return new(
+                DaemonLockPaths.StartLockPath(daemonName),
+                FileMode.OpenOrCreate,
+                FileAccess.Write,
+                FileShare.None
             );
         } catch (IOException) {
             return null;
@@ -65,7 +67,7 @@ public static class DaemonCommands {
         if (startLock is null) {
             await Console.Error.WriteLineAsync(
                 $"Another `kapacitor daemon start --name {name}` is already in progress or holds the daemon lock. "
-                + $"Run `kapacitor daemon stop --name {name}` first or wait for the other start to complete."
+              + $"Run `kapacitor daemon stop --name {name}` first or wait for the other start to complete."
             );
 
             return 1;
@@ -75,7 +77,7 @@ public static class DaemonCommands {
             if (ReadPidFile(name) is { } existing && IsOurDaemon(existing.Pid, existing.StartTicks)) {
                 await Console.Error.WriteLineAsync(
                     $"Daemon '{name}' already running (PID {existing.Pid}). "
-                    + $"Use `kapacitor daemon stop --name {name}` first."
+                  + $"Use `kapacitor daemon stop --name {name}` first."
                 );
 
                 return 1;
@@ -123,7 +125,7 @@ public static class DaemonCommands {
         } finally {
             try {
                 if (ReadPidFile(name) is { } current && current.Pid == process.Id) {
-                    File.Delete(Kapacitor.Cli.Core.DaemonLockPaths.PidPath(name));
+                    File.Delete(DaemonLockPaths.PidPath(name));
                 }
             } catch {
                 /* best-effort */
@@ -139,7 +141,7 @@ public static class DaemonCommands {
         if (startLock is null) {
             Console.Error.WriteLine(
                 $"Another `kapacitor daemon start --name {name}` is already in progress or holds the daemon lock. "
-                + $"Run `kapacitor daemon stop --name {name}` first or wait for the other start to complete."
+              + $"Run `kapacitor daemon stop --name {name}` first or wait for the other start to complete."
             );
 
             return 1;
@@ -150,7 +152,7 @@ public static class DaemonCommands {
         if (ReadPidFile(name) is { } existing && IsOurDaemon(existing.Pid, existing.StartTicks)) {
             Console.Error.WriteLine(
                 $"Daemon '{name}' already running (PID {existing.Pid}). "
-                + $"Use `kapacitor daemon stop --name {name}` first."
+              + $"Use `kapacitor daemon stop --name {name}` first."
             );
 
             return 1;
@@ -198,7 +200,7 @@ public static class DaemonCommands {
         if (process.WaitForExit(1500)) {
             Console.Error.WriteLine(
                 $"Daemon '{name}' failed to start (exit code {process.ExitCode}). "
-                + $"Check `kapacitor daemon doctor` to see whether the name is held by another process."
+              + $"Check `kapacitor daemon doctor` to see whether the name is held by another process."
             );
 
             // Translate the daemon's flock-conflict exit code straight
@@ -221,12 +223,15 @@ public static class DaemonCommands {
 
     static async Task<int> StopAsync(string[] args) {
         string? name;
+
         try {
             name = ExtractFlagValue(args, "--name");
         } catch (ArgumentException ex) {
             await Console.Error.WriteLineAsync(ex.Message);
+
             return 1;
         }
+
         var yes = args.Contains("--yes") || args.Contains("-y");
 
         if (name is not null) return StopByName(name);
@@ -234,13 +239,14 @@ public static class DaemonCommands {
         // No --name: enumerate all running daemons.
         var candidates = EnumerateRunningNames();
 
-        if (candidates.Count == 0) {
-            await Console.Out.WriteLineAsync("No daemons are running.");
+        switch (candidates.Count) {
+            case 0:
+                await Console.Out.WriteLineAsync("No daemons are running.");
 
-            return 0;
+                return 0;
+            case 1:
+                return StopByName(candidates[0]);
         }
-
-        if (candidates.Count == 1) return StopByName(candidates[0]);
 
         await Console.Out.WriteLineAsync($"Found {candidates.Count} running daemons:");
 
@@ -278,7 +284,7 @@ public static class DaemonCommands {
         try {
             if (!IsOurDaemon(entry.Pid, entry.StartTicks)) {
                 Console.Out.WriteLine($"Daemon '{name}' was not running (stale PID file).");
-                File.Delete(Kapacitor.Cli.Core.DaemonLockPaths.PidPath(name));
+                File.Delete(DaemonLockPaths.PidPath(name));
 
                 return 0;
             }
@@ -290,7 +296,9 @@ public static class DaemonCommands {
             Console.Out.WriteLine($"Daemon '{name}' was not running.");
         }
 
-        try { File.Delete(Kapacitor.Cli.Core.DaemonLockPaths.PidPath(name)); } catch { /* best-effort */ }
+        try { File.Delete(DaemonLockPaths.PidPath(name)); } catch {
+            /* best-effort */
+        }
 
         return 0;
     }
@@ -299,10 +307,12 @@ public static class DaemonCommands {
 
     static async Task<int> Status(string[] args) {
         string? explicitName;
+
         try {
             explicitName = ExtractFlagValue(args, "--name");
         } catch (ArgumentException ex) {
             await Console.Error.WriteLineAsync(ex.Message);
+
             return 1;
         }
 
@@ -325,7 +335,10 @@ public static class DaemonCommands {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': running (PID {entry.Pid})");
             } else {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': not running (stale PID file)");
-                try { File.Delete(Kapacitor.Cli.Core.DaemonLockPaths.PidPath(name)); } catch { /* best-effort */ }
+
+                try { File.Delete(DaemonLockPaths.PidPath(name)); } catch {
+                    /* best-effort */
+                }
             }
         }
 
@@ -345,31 +358,33 @@ public static class DaemonCommands {
     static async Task<int> DoctorAsync(string[] args) {
         var clean = args.Contains("--clean");
 
-        Kapacitor.Cli.Core.DaemonLockPaths.EnsureDirectory();
+        DaemonLockPaths.EnsureDirectory();
 
-        var names = Kapacitor.Cli.Core.DaemonLockPaths.EnumerateNames();
+        var names = DaemonLockPaths.EnumerateNames();
 
         if (names.Count == 0) {
-            await Console.Out.WriteLineAsync($"No daemon files found under {Kapacitor.Cli.Core.DaemonLockPaths.Directory}.");
+            await Console.Out.WriteLineAsync($"No daemon files found under {DaemonLockPaths.Directory}.");
 
             return 0;
         }
 
-        await Console.Out.WriteLineAsync($"Inspecting {Kapacitor.Cli.Core.DaemonLockPaths.Directory}\n");
+        await Console.Out.WriteLineAsync($"Inspecting {DaemonLockPaths.Directory}\n");
         var staleCount = 0;
         var heldCount  = 0;
 
         foreach (var name in names) {
-            var lockPath = Kapacitor.Cli.Core.DaemonLockPaths.LockPath(name);
-            var pidPath  = Kapacitor.Cli.Core.DaemonLockPaths.PidPath(name);
+            var lockPath = DaemonLockPaths.LockPath(name);
+            var pidPath  = DaemonLockPaths.PidPath(name);
 
             var hasLock = File.Exists(lockPath);
-            var hasPid  = File.Exists(pidPath);
+            File.Exists(pidPath);
 
             string? instanceId = null;
+
             if (hasLock) {
-                try { instanceId = File.ReadAllText(lockPath).Trim().Split('\n', 2)[0]; }
-                catch { /* best-effort */ }
+                try { instanceId = (await File.ReadAllTextAsync(lockPath)).Trim().Split('\n', 2)[0]; } catch {
+                    /* best-effort */
+                }
             }
 
             var instancePrefix = instanceId is { Length: >= 8 } ? instanceId[..8] : instanceId ?? "(unknown)";
@@ -391,29 +406,51 @@ public static class DaemonCommands {
                 }
             }
 
-            if (probe is null && hasLock) {
-                heldCount++;
-                var pidEntry = ReadPidFile(name);
-                var alive    = pidEntry is { } e && IsOurDaemon(e.Pid, e.StartTicks);
-                var pidStr   = pidEntry is { } e2 ? e2.Pid.ToString() : "?";
-                var aliveStr = alive ? $"PID {pidStr}" : pidEntry is null ? "(no pid file)" : "(stale pid)";
-                await Console.Out.WriteLineAsync($"  {name,-20}  HELD     instance={instancePrefix}  {aliveStr}");
-            } else if (probe is null) {
-                // No .lock file at all but a .pid is present — orphan.
-                staleCount++;
-                await Console.Out.WriteLineAsync($"  {name,-20}  STALE    instance=(none)   (orphan pid file, no lock)");
+            switch (probe) {
+                case null when hasLock: {
+                    heldCount++;
+                    var pidEntry = ReadPidFile(name);
+                    var alive    = pidEntry is { } e && IsOurDaemon(e.Pid, e.StartTicks);
+                    var pidStr   = pidEntry is { } e2 ? e2.Pid.ToString() : "?";
 
-                if (clean) {
-                    try { File.Delete(pidPath); } catch { /* best-effort */ }
+                    var aliveStr = alive
+                        ? $"PID {pidStr}"
+                        : pidEntry is null
+                            ? "(no pid file)"
+                            : "(stale pid)";
+                    await Console.Out.WriteLineAsync($"  {name,-20}  HELD     instance={instancePrefix}  {aliveStr}");
+
+                    break;
                 }
-            } else {
-                probe.Dispose();
-                staleCount++;
-                await Console.Out.WriteLineAsync($"  {name,-20}  STALE    instance={instancePrefix}  (no holder)");
+                case null: {
+                    // No .lock file at all but a .pid is present — orphan.
+                    staleCount++;
+                    await Console.Out.WriteLineAsync($"  {name,-20}  STALE    instance=(none)   (orphan pid file, no lock)");
 
-                if (clean) {
-                    try { File.Delete(lockPath); } catch { /* best-effort */ }
-                    try { File.Delete(pidPath); }  catch { /* best-effort */ }
+                    if (clean) {
+                        try { File.Delete(pidPath); } catch {
+                            /* best-effort */
+                        }
+                    }
+
+                    break;
+                }
+                default: {
+                    await probe.DisposeAsync();
+                    staleCount++;
+                    await Console.Out.WriteLineAsync($"  {name,-20}  STALE    instance={instancePrefix}  (no holder)");
+
+                    if (clean) {
+                        try { File.Delete(lockPath); } catch {
+                            /* best-effort */
+                        }
+
+                        try { File.Delete(pidPath); } catch {
+                            /* best-effort */
+                        }
+                    }
+
+                    break;
                 }
             }
         }
@@ -432,8 +469,8 @@ public static class DaemonCommands {
     record struct PidEntry(int Pid, long? StartTicks);
 
     static void WritePidFile(string daemonName, Process process) {
-        var pidPath = Kapacitor.Cli.Core.DaemonLockPaths.PidPath(daemonName);
-        Kapacitor.Cli.Core.DaemonLockPaths.EnsureDirectory();
+        var pidPath = DaemonLockPaths.PidPath(daemonName);
+        DaemonLockPaths.EnsureDirectory();
 
         long? startTicks = null;
 
@@ -453,7 +490,7 @@ public static class DaemonCommands {
     }
 
     static PidEntry? ReadPidFile(string daemonName) {
-        var pidPath = Kapacitor.Cli.Core.DaemonLockPaths.PidPath(daemonName);
+        var pidPath = DaemonLockPaths.PidPath(daemonName);
 
         if (!File.Exists(pidPath)) return null;
 
@@ -493,7 +530,8 @@ public static class DaemonCommands {
             // Legacy PID file (no StartTime recorded) or StartTime unreadable:
             // best-effort match by process image name.
             var daemonPath = ResolveDaemonBinary();
-            var ourName    = daemonPath is not null
+
+            var ourName = daemonPath is not null
                 ? Path.GetFileNameWithoutExtension(daemonPath)
                 : "kapacitor-daemon";
 
@@ -509,9 +547,10 @@ public static class DaemonCommands {
     /// <c>daemon stop</c> / <c>daemon status</c> without <c>--name</c>.
     /// </summary>
     static List<string> EnumerateRunningNames() {
-        Kapacitor.Cli.Core.DaemonLockPaths.EnsureDirectory();
+        DaemonLockPaths.EnsureDirectory();
 
-        var dir = Kapacitor.Cli.Core.DaemonLockPaths.Directory;
+        var dir = DaemonLockPaths.Directory;
+
         if (!Directory.Exists(dir)) return [];
 
         return [
@@ -542,6 +581,7 @@ public static class DaemonCommands {
 
             if (i + 1 >= args.Length || string.IsNullOrEmpty(args[i + 1]) || args[i + 1].StartsWith('-')) {
                 var got = i + 1 < args.Length ? $"'{args[i + 1]}'" : "<end of args>";
+
                 throw new ArgumentException(
                     $"{flag} requires a value (got {got}). " +
                     "Pass a value (e.g. --name laptop) or omit the flag entirely."
@@ -577,8 +617,8 @@ public static class DaemonCommands {
     /// Resolve the kapacitor-daemon executable shipped alongside this binary.
     /// </summary>
     static string? ResolveDaemonBinary() {
-        var dir = AppContext.BaseDirectory;
-        var ext = OperatingSystem.IsWindows() ? ".exe" : "";
+        var dir     = AppContext.BaseDirectory;
+        var ext     = OperatingSystem.IsWindows() ? ".exe" : "";
         var sibling = Path.Combine(dir, $"kapacitor-daemon{ext}");
 
         return File.Exists(sibling) ? sibling : null;

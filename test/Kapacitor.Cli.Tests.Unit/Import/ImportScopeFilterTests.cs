@@ -18,7 +18,7 @@ public class ImportScopeFilterTests {
 
         var kept = await ImportScopeFilter.Apply(transcripts, new ImportScope.All(), resolver);
 
-        await Assert.That(kept.Select(x => x.SessionId).ToArray()).IsEquivalentTo(new[] { "a", "b", "c" });
+        await Assert.That(kept.Select(x => x.SessionId).ToArray()).IsEquivalentTo(["a", "b", "c"]);
     }
 
     [Test]
@@ -32,7 +32,7 @@ public class ImportScopeFilterTests {
 
         var kept = await ImportScopeFilter.Apply(transcripts, new ImportScope.Org("EventStore"), resolver);
 
-        await Assert.That(kept.Select(x => x.SessionId).ToArray()).IsEquivalentTo(new[] { "a", "c" });
+        await Assert.That(kept.Select(x => x.SessionId).ToArray()).IsEquivalentTo(["a", "c"]);
     }
 
     [Test]
@@ -67,6 +67,6 @@ public class ImportScopeFilterTests {
         var kept = await ImportScopeFilter.Apply(
             transcripts, new ImportScope.Repo("EventStore", "kapacitor"), resolver);
 
-        await Assert.That(kept.Select(x => x.SessionId).ToArray()).IsEquivalentTo(new[] { "a", "c" });
+        await Assert.That(kept.Select(x => x.SessionId).ToArray()).IsEquivalentTo(["a", "c"]);
     }
 }

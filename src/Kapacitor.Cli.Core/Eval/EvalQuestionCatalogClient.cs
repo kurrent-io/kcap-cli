@@ -33,9 +33,7 @@ internal static class EvalQuestionCatalogClient {
                 observer.OnFailed("eval question catalog is empty");
                 return null;
             }
-            if (Enumerable.Any<EvalQuestionDto>(
-                    parsed,
-                    q => string.IsNullOrWhiteSpace(q.Category)
+            if (parsed.Any<EvalQuestionDto>(q => string.IsNullOrWhiteSpace(q.Category)
                  || string.IsNullOrWhiteSpace(q.Id)
                  || string.IsNullOrWhiteSpace(q.Prompt))) {
                 observer.OnFailed("eval question catalog contains a malformed entry (missing category, id, or prompt)");

@@ -1,6 +1,4 @@
-using Kapacitor.Cli;
-
-namespace kapacitor.Tests.Integration;
+namespace Kapacitor.Cli.Tests.Integration;
 
 [NotInParallel]
 public class WatcherLifecycleTests {

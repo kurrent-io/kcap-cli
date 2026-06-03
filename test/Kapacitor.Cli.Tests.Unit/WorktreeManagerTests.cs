@@ -54,6 +54,7 @@ public class WorktreeManagerTests {
         };
         using var proc = Process.Start(psi)!;
         proc.WaitForExit();
+
         if (proc.ExitCode != 0) {
             throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {proc.StandardError.ReadToEnd()}");
         }
@@ -67,15 +68,14 @@ public class WorktreeManagerTests {
         };
         using var proc = Process.Start(psi)!;
         proc.WaitForExit();
-        if (proc.ExitCode != 0) {
-            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {proc.StandardError.ReadToEnd()}");
-        }
-        return proc.StandardOutput.ReadToEnd();
+
+        return proc.ExitCode != 0 ? throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {proc.StandardError.ReadToEnd()}") : proc.StandardOutput.ReadToEnd();
     }
 
     [Test]
     public async Task CreateAsync_WithBaseRef_WorktreeHeadMatchesFetchedCommit() {
         var (upstream, clone) = MakeUpstreamWithSideRef("refs/pull/42/head", out var sideSha);
+
         try {
             var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance);
             var worktree = await manager.CreateAsync(clone, name: "review-pr-42", baseRef: "refs/pull/42/head");
@@ -89,14 +89,20 @@ public class WorktreeManagerTests {
                 await WorktreeManager.RemoveAsync(worktree);
             }
         } finally {
-            try { Directory.Delete(upstream, true); } catch { /* best-effort */ }
-            try { Directory.Delete(clone,    true); } catch { /* best-effort */ }
+            try { Directory.Delete(upstream, true); } catch {
+                /* best-effort */
+            }
+
+            try { Directory.Delete(clone, true); } catch {
+                /* best-effort */
+            }
         }
     }
 
     [Test]
     public async Task CreateAsync_WithoutBaseRef_StillWorks() {
         var (upstream, clone) = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
+
         try {
             var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance);
             var worktree = await manager.CreateAsync(clone);
@@ -108,8 +114,13 @@ public class WorktreeManagerTests {
                 await WorktreeManager.RemoveAsync(worktree);
             }
         } finally {
-            try { Directory.Delete(upstream, true); } catch { /* best-effort */ }
-            try { Directory.Delete(clone,    true); } catch { /* best-effort */ }
+            try { Directory.Delete(upstream, true); } catch {
+                /* best-effort */
+            }
+
+            try { Directory.Delete(clone, true); } catch {
+                /* best-effort */
+            }
         }
     }
 
@@ -129,7 +140,7 @@ public class WorktreeManagerTests {
 
         Git(upstream, "init", "-q");
         Git(upstream, "config", "user.email", "test@example.com");
-        Git(upstream, "config", "user.name",  "Test");
+        Git(upstream, "config", "user.name", "Test");
         File.WriteAllText(Path.Combine(upstream, "main.txt"), "main");
         Git(upstream, "add", "-A");
         Git(upstream, "commit", "-q", "-m", "initial");
@@ -139,7 +150,7 @@ public class WorktreeManagerTests {
         // Build 5 distinct side commits, each saved as its own ref so the clone
         // can fetch them as if they were PR heads.
         const int concurrency = 5;
-        var refs = new (string RefName, string Sha)[concurrency];
+        var       refs        = new (string RefName, string Sha)[concurrency];
 
         for (var i = 0; i < concurrency; i++) {
             var refName = $"refs/pull/{100 + i}/head";
@@ -161,10 +172,13 @@ public class WorktreeManagerTests {
             var manager   = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance);
             var worktrees = new WorktreeInfo[concurrency];
 
-            await Task.WhenAll(Enumerable.Range(0, concurrency).Select(async i => {
-                        worktrees[i] = await manager.CreateAsync(clone, name: $"review-{i}", baseRef: refs[i].RefName);
-                    }
-                ));
+            await Task.WhenAll(
+                Enumerable.Range(0, concurrency)
+                    .Select(async i => {
+                            worktrees[i] = await manager.CreateAsync(clone, name: $"review-{i}", baseRef: refs[i].RefName);
+                        }
+                    )
+            );
 
             try {
                 for (var i = 0; i < concurrency; i++) {
@@ -178,8 +192,13 @@ public class WorktreeManagerTests {
                 }
             }
         } finally {
-            try { Directory.Delete(upstream, true); } catch { /* best-effort */ }
-            try { Directory.Delete(clone,    true); } catch { /* best-effort */ }
+            try { Directory.Delete(upstream, true); } catch {
+                /* best-effort */
+            }
+
+            try { Directory.Delete(clone, true); } catch {
+                /* best-effort */
+            }
         }
     }
 
@@ -191,6 +210,7 @@ public class WorktreeManagerTests {
     [Test]
     public async Task RemoveAsync_DeletesFetchedRef() {
         var (upstream, clone) = MakeUpstreamWithSideRef("refs/pull/77/head", out _);
+
         try {
             var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance);
             var worktree = await manager.CreateAsync(clone, name: "review-77", baseRef: "refs/pull/77/head");
@@ -206,8 +226,13 @@ public class WorktreeManagerTests {
             var afterRefs = GitCapture(clone, "for-each-ref", "refs/kapacitor/review/").Trim();
             await Assert.That(afterRefs).IsEmpty();
         } finally {
-            try { Directory.Delete(upstream, true); } catch { /* best-effort */ }
-            try { Directory.Delete(clone,    true); } catch { /* best-effort */ }
+            try { Directory.Delete(upstream, true); } catch {
+                /* best-effort */
+            }
+
+            try { Directory.Delete(clone, true); } catch {
+                /* best-effort */
+            }
         }
     }
 }

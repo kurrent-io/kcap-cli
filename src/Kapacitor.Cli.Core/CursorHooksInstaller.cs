@@ -31,8 +31,9 @@ public static class CursorHooksInstaller {
 
             foreach (var (_, entries) in hooks) {
                 if (entries is not JsonArray arr) continue;
-                foreach (var entry in arr) {
-                    if (CursorHooksParser.EntryReferencesKapacitorCursorHook(entry)) return true;
+
+                if (arr.Any(CursorHooksParser.EntryReferencesKapacitorCursorHook)) {
+                    return true;
                 }
             }
         } catch { /* Malformed → treat as not installed. */ }

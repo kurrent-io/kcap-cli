@@ -1,6 +1,5 @@
 using System.Net;
 using System.Text.Json.Nodes;
-using Kapacitor.Cli;
 using Kapacitor.Cli.Commands;
 
 namespace Kapacitor.Cli.Tests.Unit.Cursor;
@@ -13,18 +12,19 @@ namespace Kapacitor.Cli.Tests.Unit.Cursor;
 [NotInParallel("HomeEnvVarMutation")]
 public class CursorHookCommandTests {
     const string Sid = "8c3276c2c8f743ce98898c2becf5240a";
+
     [Test]
     public async Task malformed_stdin_returns_zero() {
-        using var fx = new Fixture();
-        var exit = await fx.HandleAsync("not a json payload");
+        using var fx   = new Fixture();
+        var       exit = await fx.HandleAsync("not a json payload");
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(fx.Sent).IsEmpty();
     }
 
     [Test]
     public async Task missing_hook_event_name_returns_zero() {
-        using var fx = new Fixture();
-        var exit = await fx.HandleAsync("""{"session_id":"abc"}""");
+        using var fx   = new Fixture();
+        var       exit = await fx.HandleAsync("""{"session_id":"abc"}""");
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(fx.Sent).IsEmpty();
     }
@@ -34,6 +34,7 @@ public class CursorHookCommandTests {
         using var fx = new Fixture();
         await fx.HandleAsync("""{"hook_event_name":"sessionStart","session_id":"8c3276c2-c8f7-43ce-9889-8c2becf5240a"}""");
         var sent = fx.SentToHook("session-start/cursor");
+
         await Assert.That(JsonNode.Parse(sent)!["session_id"]!.GetValue<string>())
             .IsEqualTo("8c3276c2c8f743ce98898c2becf5240a");
     }
@@ -42,6 +43,7 @@ public class CursorHookCommandTests {
     [NotInParallel("KapacitorAgentIdEnvVar")]
     public async Task home_dir_and_agent_host_id_are_injected() {
         Environment.SetEnvironmentVariable("KAPACITOR_AGENT_ID", "host-42");
+
         try {
             using var fx = new Fixture();
             await fx.HandleAsync("""{"hook_event_name":"sessionStart","session_id":"abc"}""");
@@ -58,6 +60,7 @@ public class CursorHookCommandTests {
     public async Task disabled_session_suppresses_POST() {
         var sid = Guid.NewGuid().ToString("N");
         DisabledSessions.Mark(sid);
+
         try {
             using var fx = new Fixture();
             await fx.HandleAsync($$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""");
@@ -77,7 +80,7 @@ public class CursorHookCommandTests {
     [Test]
     public async Task canonical_events_spool_on_POST_failure() {
         using var fx = new Fixture(postStatus: HttpStatusCode.InternalServerError);
-        await fx.HandleAsync($$$"""{"hook_event_name":"sessionEnd","session_id":"{{{Sid}}}"}""");
+        await fx.HandleAsync($$"""{"hook_event_name":"sessionEnd","session_id":"{{Sid}}"}""");
         var files = fx.SpoolFiles.ToList();
         await Assert.That(files.Count).IsEqualTo(1);
         await Assert.That(files[0]).EndsWith(Sid + ".jsonl");
@@ -86,17 +89,18 @@ public class CursorHookCommandTests {
     [Test]
     public async Task spool_drain_runs_before_current_event_under_budget() {
         using var fx = new Fixture();
-        fx.Spool.Append(Sid, "sessionStart", $$$"""{"hook_event_name":"sessionStart","session_id":"{{{Sid}}}"}""");
-        await fx.HandleAsync($$$"""{"hook_event_name":"sessionEnd","session_id":"{{{Sid}}}"}""");
-        await Assert.That(fx.RouteOrder).IsEquivalentTo(new[] { "session-start/cursor", "session-end/cursor" });
+        fx.Spool.Append(Sid, "sessionStart", $$"""{"hook_event_name":"sessionStart","session_id":"{{Sid}}"}""");
+        await fx.HandleAsync($$"""{"hook_event_name":"sessionEnd","session_id":"{{Sid}}"}""");
+        await Assert.That(fx.RouteOrder).IsEquivalentTo(["session-start/cursor", "session-end/cursor"]);
     }
 
     [Test]
     public async Task afterAgentThought_canonical_id_is_stable_across_replays() {
-        using var fx = new Fixture();
-        var body = """{"hook_event_name":"afterAgentThought","session_id":"abc","generation_id":"gen1","text":"hello"}""";
+        using var fx   = new Fixture();
+        var       body = """{"hook_event_name":"afterAgentThought","session_id":"abc","generation_id":"gen1","text":"hello"}""";
         await fx.HandleAsync(body);
         await fx.HandleAsync(body);
+
         var ids = fx.AllSentTo("agent-thought/cursor")
             .Select(b => JsonNode.Parse(b)!["canonical_event_id"]!.GetValue<string>())
             .Distinct()
@@ -113,12 +117,16 @@ public class CursorHookCommandTests {
         // FIFO was wiped and any queued beforeSubmitPrompt attachments would
         // be lost. Verify the order is: transcript batch → session-end.
         using var fx = new Fixture();
-        await fx.WriteTranscript($$$"""
-            {"role":"user","message":{"content":[{"type":"text","text":"final prompt"}]}}
-            """);
-        await fx.HandleAsync($$$"""
-            {"hook_event_name":"sessionEnd","session_id":"{{{Sid}}}","transcript_path":"{{{fx.TranscriptPathEscaped}}}"}
-            """);
+
+        await fx.WriteTranscript(
+            """{"role":"user","message":{"content":[{"type":"text","text":"final prompt"}]}}"""
+        );
+
+        await fx.HandleAsync(
+            $$"""
+               {"hook_event_name":"sessionEnd","session_id":"{{Sid}}","transcript_path":"{{fx.TranscriptPathEscaped}}"}
+               """
+        );
 
         var transcriptIdx = fx.RouteOrder.FindIndex(r => r == "transcript");
         var sessionEndIdx = fx.RouteOrder.FindIndex(r => r == "session-end/cursor");
@@ -135,12 +143,16 @@ public class CursorHookCommandTests {
         // ordering so lifecycle metadata reaches the server before any new
         // transcript context.
         using var fx = new Fixture();
-        await fx.WriteTranscript($$$"""
-            {"role":"user","message":{"content":[{"type":"text","text":"hello"}]}}
-            """);
-        await fx.HandleAsync($$$"""
-            {"hook_event_name":"beforeSubmitPrompt","session_id":"{{{Sid}}}","prompt":"hello","transcript_path":"{{{fx.TranscriptPathEscaped}}}"}
-            """);
+
+        await fx.WriteTranscript(
+            """{"role":"user","message":{"content":[{"type":"text","text":"hello"}]}}"""
+        );
+
+        await fx.HandleAsync(
+            $$"""
+               {"hook_event_name":"beforeSubmitPrompt","session_id":"{{Sid}}","prompt":"hello","transcript_path":"{{fx.TranscriptPathEscaped}}"}
+               """
+        );
 
         var transcriptIdx = fx.RouteOrder.FindIndex(r => r == "transcript");
         var promptIdx     = fx.RouteOrder.FindIndex(r => r == "user-prompt/cursor");
@@ -160,13 +172,17 @@ public class CursorHookCommandTests {
     [Test]
     public async Task expired_budget_returns_zero_not_throws() {
         using var fx = new Fixture();
+
         // budgetTotal=0 forces BudgetExpired() true on first check, which can also
         // propagate as OperationCanceledException from stdin/HTTP. Either way the
         // dispatcher must fail-open with return 0, never bubble the exception.
         var exit = await CursorHookCommand.HandleCore(
-            fx.Client, "http://localhost",
+            fx.Client,
+            "http://localhost",
             new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
-            fx.Spool, TimeSpan.Zero);
+            fx.Spool,
+            TimeSpan.Zero
+        );
         await Assert.That(exit).IsEqualTo(0);
     }
 
@@ -176,10 +192,12 @@ public class CursorHookCommandTests {
         // HttpClient.PostAsync — no CT plumbed through, default 100s timeout.
         // The Task.WhenAny ceiling in CursorHookCommand.Handle must beat that.
         var inner = Task.Run(async () => {
-            await Task.Delay(TimeSpan.FromSeconds(10));
-            return 42;
-        });
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+                await Task.Delay(TimeSpan.FromSeconds(10));
+
+                return 42;
+            }
+        );
+        var sw   = System.Diagnostics.Stopwatch.StartNew();
         var exit = await CursorHookCommand.WithHardCap(inner, TimeSpan.FromMilliseconds(50));
         sw.Stop();
 
@@ -190,7 +208,7 @@ public class CursorHookCommandTests {
     [Test]
     public async Task hard_cap_returns_inner_result_when_inner_finishes_first() {
         var inner = Task.FromResult(7);
-        var exit = await CursorHookCommand.WithHardCap(inner, TimeSpan.FromSeconds(2));
+        var exit  = await CursorHookCommand.WithHardCap(inner, TimeSpan.FromSeconds(2));
         await Assert.That(exit).IsEqualTo(7);
     }
 
@@ -202,15 +220,18 @@ public class CursorHookCommandTests {
         using var fx = new Fixture();
         fx.HoldOnPost = TimeSpan.FromMilliseconds(50);
 
-        fx.Spool.Append(Sid, "sessionStart", $$$"""{"hook_event_name":"sessionStart","session_id":"{{{Sid}}}"}""");
+        fx.Spool.Append(Sid, "sessionStart", $$"""{"hook_event_name":"sessionStart","session_id":"{{Sid}}"}""");
 
         // 30 ms budget — first drained POST eats most of it, BudgetExpired flips
         // before the fresh event can post. The fresh sessionEnd must land back
         // in the spool, replacing the just-delivered sessionStart line.
         var exit = await CursorHookCommand.HandleCore(
-            fx.Client, "http://localhost",
-            new StringReader($$$"""{"hook_event_name":"sessionEnd","session_id":"{{{Sid}}}"}"""),
-            fx.Spool, TimeSpan.FromMilliseconds(30));
+            fx.Client,
+            "http://localhost",
+            new StringReader($$"""{"hook_event_name":"sessionEnd","session_id":"{{Sid}}"}"""),
+            fx.Spool,
+            TimeSpan.FromMilliseconds(30)
+        );
 
         await Assert.That(exit).IsEqualTo(0);
 
@@ -222,17 +243,20 @@ public class CursorHookCommandTests {
 
     sealed class Fixture : IDisposable {
         readonly string _tmpHome = Path.Combine(
-            Path.GetTempPath(), $"kapacitor-cursor-hook-test-{Guid.NewGuid().ToString("N")[..8]}");
+            Path.GetTempPath(),
+            $"kapacitor-cursor-hook-test-{Guid.NewGuid().ToString("N")[..8]}"
+        );
 
-        public List<string> Sent       { get; } = new();
-        public List<string> RouteOrder { get; } = new();
-        public CursorHookSpool Spool   { get; }
-        public TimeSpan HoldOnPost     { get; set; } = TimeSpan.Zero;
         readonly string _spoolPath;
         readonly string _transcriptPath;
-        readonly HttpClient _client;
-        public HttpClient Client => _client;
-        public string TranscriptPathEscaped => _transcriptPath.Replace(@"\", @"\\");
+
+        public List<string>    Sent       { get; } = [];
+        public List<string>    RouteOrder { get; } = [];
+        public CursorHookSpool Spool      { get; }
+        public TimeSpan        HoldOnPost { get; set; } = TimeSpan.Zero;
+
+        public HttpClient Client                { get; }
+        public string     TranscriptPathEscaped => _transcriptPath.Replace(@"\", @"\\");
 
         public Task WriteTranscript(string content) =>
             File.WriteAllTextAsync(_transcriptPath, content);
@@ -242,31 +266,41 @@ public class CursorHookCommandTests {
 
         public Fixture(HttpStatusCode postStatus = HttpStatusCode.OK) {
             Directory.CreateDirectory(_tmpHome);
-            _spoolPath = Path.Combine(_tmpHome, "spool");
+            _spoolPath      = Path.Combine(_tmpHome, "spool");
             _transcriptPath = Path.Combine(_tmpHome, "transcript.jsonl");
-            Spool = new CursorHookSpool(_spoolPath);
+            Spool           = new CursorHookSpool(_spoolPath);
+
             var handler = new StubHandler(async req => {
-                var body = req.Content is null ? "" : await req.Content.ReadAsStringAsync();
-                var path = req.RequestUri!.AbsolutePath;
-                Sent.Add($"{path}|{body}");
-                if (path.StartsWith("/hooks/")) {
-                    RouteOrder.Add(path.Replace("/hooks/", ""));
+                    var body = req.Content is null ? "" : await req.Content.ReadAsStringAsync();
+                    var path = req.RequestUri!.AbsolutePath;
+                    Sent.Add($"{path}|{body}");
+
+                    if (path.StartsWith("/hooks/")) {
+                        RouteOrder.Add(path.Replace("/hooks/", ""));
+                    }
+
+                    // GET watermark — return 404 so transcript backfill is a no-op without
+                    // tripping the fail-open path.
+                    if (req.Method == HttpMethod.Get) return new HttpResponseMessage(HttpStatusCode.NotFound);
+
+                    if (HoldOnPost > TimeSpan.Zero) {
+                        await Task.Delay(HoldOnPost);
+                    }
+
+                    return new HttpResponseMessage(postStatus);
                 }
-                // GET watermark — return 404 so transcript backfill is a no-op without
-                // tripping the fail-open path.
-                if (req.Method == HttpMethod.Get) return new HttpResponseMessage(HttpStatusCode.NotFound);
-                if (HoldOnPost > TimeSpan.Zero) {
-                    await Task.Delay(HoldOnPost);
-                }
-                return new HttpResponseMessage(postStatus);
-            });
-            _client = new HttpClient(handler);
+            );
+            Client = new HttpClient(handler);
         }
 
         public Task<int> HandleAsync(string stdin) =>
             CursorHookCommand.HandleCore(
-                _client, baseUrl: "http://localhost", stdin: new StringReader(stdin),
-                spool: Spool, budgetTotal: TimeSpan.FromSeconds(2));
+                Client,
+                baseUrl: "http://localhost",
+                stdin: new StringReader(stdin),
+                spool: Spool,
+                budgetTotal: TimeSpan.FromSeconds(2)
+            );
 
         public string SentToHook(string segment) =>
             Sent.First(s => s.StartsWith($"/hooks/{segment}")).Split('|', 2)[1];
@@ -275,7 +309,7 @@ public class CursorHookCommandTests {
             Sent.Where(s => s.StartsWith($"/hooks/{segment}")).Select(s => s.Split('|', 2)[1]);
 
         public void Dispose() {
-            _client.Dispose();
+            Client.Dispose();
             try { Directory.Delete(_tmpHome, true); } catch { }
         }
     }

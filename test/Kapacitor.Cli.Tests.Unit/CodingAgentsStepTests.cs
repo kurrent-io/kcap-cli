@@ -1,4 +1,3 @@
-using Kapacitor.Cli.Commands;
 using static Kapacitor.Cli.Commands.CodingAgentsStep;
 
 namespace Kapacitor.Cli.Tests.Unit;
@@ -486,7 +485,7 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("'kapacitor' is not on PATH"));
     }
 
-    static CodingAgentsStep.Paths TestPaths() => new(
+    static Paths TestPaths() => new(
         ClaudeSettingsPath:   "/fake/.claude/settings.json",
         ClaudeScopeLabel:     "user",
         PluginDir:            "/fake/plugin",
@@ -525,7 +524,7 @@ public class CodingAgentsStepTests {
         public string? LegacyCleanupArg     { get; private set; }
         public bool    LegacyCleanupReturns { get; set; } = true;
 
-        public CodingAgentsStep.Installers AsInstallers() => new(
+        public Installers AsInstallers() => new(
             InstallClaudePlugin: (s, p) => {
                 ClaudeCalled = true;
                 ClaudeArgs   = (s, p);

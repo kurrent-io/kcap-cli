@@ -8,7 +8,7 @@ namespace Kapacitor.Cli.Tests.Unit.Import;
 public class CursorImportSourceTests {
     [Test]
     public async Task vendor_is_cursor() {
-        using var fx = new ProjectsDirFixture();
+        using var fx  = new ProjectsDirFixture();
         var       src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
         await Assert.That(src.Vendor).IsEqualTo("cursor");
     }
@@ -126,13 +126,18 @@ public class CursorImportSourceTests {
     [Test]
     public async Task classify_marks_new_when_server_has_no_state() {
         using var fx = new ProjectsDirFixture();
-        var jsonl    = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111",
-                                    "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
-        var src      = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        var jsonl = fx.AddSession(
+            "Users-me-proj",
+            "11111111-1111-1111-1111-111111111111",
+            "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"
+        );
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
 
         using var handler = new StubHandler(
-            getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
-        using var client  = new HttpClient(handler);
+            getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+        );
+        using var client = new HttpClient(handler);
 
         var discovered = await src.DiscoverAsync(Filters(), CancellationToken.None);
         var classified = await src.ClassifyAsync(discovered, Ctx(client, minLines: 1), CancellationToken.None);
@@ -157,14 +162,15 @@ public class CursorImportSourceTests {
         using var fx = new ProjectsDirFixture();
         fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n{}\n");
 
-        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+        var       src     = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
         using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var client  = new HttpClient(handler);
 
         var classified = await src.ClassifyAsync(
             await src.DiscoverAsync(Filters(), CancellationToken.None),
             Ctx(client, minLines: 0),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         foreach (var c in classified) {
             await Assert.That(c.FilePath).IsEqualTo("");
@@ -174,21 +180,27 @@ public class CursorImportSourceTests {
     [Test]
     public async Task classify_marks_already_loaded_when_server_at_or_past_last_non_blank_line() {
         using var fx = new ProjectsDirFixture();
-        fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111",
-                      "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
+
+        fx.AddSession(
+            "Users-me-proj",
+            "11111111-1111-1111-1111-111111111111",
+            "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"
+        );
         var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
 
         // Three non-blank lines at indexes 0,1,2 → last_line_number=2 means fully loaded.
         using var handler = new StubHandler(
             getResponse: _ => new HttpResponseMessage(HttpStatusCode.OK) {
                 Content = new StringContent("""{"last_line_number":2}""")
-            });
+            }
+        );
         using var client = new HttpClient(handler);
 
         var classified = await src.ClassifyAsync(
             await src.DiscoverAsync(Filters(), CancellationToken.None),
             Ctx(client, minLines: 1),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
     }
@@ -196,20 +208,26 @@ public class CursorImportSourceTests {
     [Test]
     public async Task classify_marks_partial_with_resume_from_when_server_mid_file() {
         using var fx = new ProjectsDirFixture();
-        fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111",
-                      "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
+
+        fx.AddSession(
+            "Users-me-proj",
+            "11111111-1111-1111-1111-111111111111",
+            "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"
+        );
         var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
 
         using var handler = new StubHandler(
             getResponse: _ => new HttpResponseMessage(HttpStatusCode.OK) {
                 Content = new StringContent("""{"last_line_number":0}""")
-            });
+            }
+        );
         using var client = new HttpClient(handler);
 
         var classified = await src.ClassifyAsync(
             await src.DiscoverAsync(Filters(), CancellationToken.None),
             Ctx(client, minLines: 1),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
         await Assert.That(classified[0].ResumeFromLine).IsEqualTo(1);
@@ -227,7 +245,8 @@ public class CursorImportSourceTests {
         var classified = await src.ClassifyAsync(
             await src.DiscoverAsync(Filters(), CancellationToken.None),
             Ctx(client, minLines: 5),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.TooShort);
     }
@@ -235,8 +254,12 @@ public class CursorImportSourceTests {
     [Test]
     public async Task classify_returns_probe_error_when_watermark_returns_5xx() {
         using var fx = new ProjectsDirFixture();
-        fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111",
-                      "{\"a\":1}\n{\"b\":2}\n");
+
+        fx.AddSession(
+            "Users-me-proj",
+            "11111111-1111-1111-1111-111111111111",
+            "{\"a\":1}\n{\"b\":2}\n"
+        );
         var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
 
         using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
@@ -245,7 +268,8 @@ public class CursorImportSourceTests {
         var classified = await src.ClassifyAsync(
             await src.DiscoverAsync(Filters(), CancellationToken.None),
             Ctx(client, minLines: 1),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.ProbeError);
     }
@@ -253,14 +277,24 @@ public class CursorImportSourceTests {
     [Test]
     public async Task import_session_posts_lifecycle_then_transcript_then_session_end() {
         using var fx = new ProjectsDirFixture();
-        var jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111",
-                                  "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
+
+        var jsonl = fx.AddSession(
+            "Users-me-proj",
+            "11111111-1111-1111-1111-111111111111",
+            "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"
+        );
 
         var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
 
         var posted = new List<(string Path, string Body)>();
+
         using var handler = new StubHandler(
-            postCapture: (req, body) => { posted.Add((req.RequestUri!.AbsolutePath, body)); return new HttpResponseMessage(HttpStatusCode.OK); });
+            postCapture: (req, body) => {
+                posted.Add((req.RequestUri!.AbsolutePath, body));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        );
         using var client = new HttpClient(handler);
 
         var classification = new ImportCommand.SessionClassification {
@@ -317,8 +351,8 @@ public class CursorImportSourceTests {
         // degraded-but-functional behavior in production.
         if (OperatingSystem.IsLinux()) return;
 
-        using var fx = new ProjectsDirFixture();
-        var jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
+        using var fx    = new ProjectsDirFixture();
+        var       jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
 
         var created  = new DateTime(2026, 3, 14, 9, 27, 0, DateTimeKind.Utc);
         var modified = new DateTime(2026, 3, 14, 10, 27, 0, DateTimeKind.Utc);
@@ -328,8 +362,14 @@ public class CursorImportSourceTests {
         var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
 
         var posted = new List<(string Path, string Body)>();
+
         using var handler = new StubHandler(
-            postCapture: (req, body) => { posted.Add((req.RequestUri!.AbsolutePath, body)); return new HttpResponseMessage(HttpStatusCode.OK); });
+            postCapture: (req, body) => {
+                posted.Add((req.RequestUri!.AbsolutePath, body));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        );
         using var client = new HttpClient(handler);
 
         var classification = new ImportCommand.SessionClassification {
@@ -352,7 +392,7 @@ public class CursorImportSourceTests {
 
         await Assert.That(startedAt.UtcDateTime).IsEqualTo(created);
         await Assert.That(endedAt.UtcDateTime).IsEqualTo(modified);
-        await Assert.That((long)endNode["duration_ms"]!).IsEqualTo(3_600_000L);  // 1h
+        await Assert.That((long)endNode["duration_ms"]!).IsEqualTo(3_600_000L); // 1h
     }
 
     [Test]
@@ -360,20 +400,23 @@ public class CursorImportSourceTests {
         // Reviewer P2a: lifecycle POST failure must hard-fail the import so
         // the user re-runs. Otherwise transcript success + lifecycle failure
         // leaves the session permanently lifecycle-less on the server.
-        using var fx = new ProjectsDirFixture();
-        var jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
+        using var fx    = new ProjectsDirFixture();
+        var       jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
 
         var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
 
         var posted = new List<string>();
+
         using var handler = new StubHandler(
             postCapture: (req, _) => {
                 var path = req.RequestUri!.AbsolutePath;
                 posted.Add(path);
+
                 return path == "/hooks/session-start/cursor"
                     ? new HttpResponseMessage(HttpStatusCode.InternalServerError)
                     : new HttpResponseMessage(HttpStatusCode.OK);
-            });
+            }
+        );
         using var client = new HttpClient(handler);
 
         var outcome = await src.ImportSessionAsync(
@@ -387,7 +430,8 @@ public class CursorImportSourceTests {
                 SourceMeta = new Dictionary<string, object?> { ["TranscriptPath"] = jsonl },
             },
             new ImportContext(client, "http://localhost", ForcePrivate: false),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
         // Transcript MUST NOT be posted when session-start failed —
@@ -397,15 +441,16 @@ public class CursorImportSourceTests {
 
     [Test]
     public async Task import_session_returns_failed_when_session_end_post_fails() {
-        using var fx = new ProjectsDirFixture();
-        var jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
+        using var fx    = new ProjectsDirFixture();
+        var       jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
 
         var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
 
         using var handler = new StubHandler(
             postCapture: (req, _) => req.RequestUri!.AbsolutePath == "/hooks/session-end/cursor"
                 ? new HttpResponseMessage(HttpStatusCode.InternalServerError)
-                : new HttpResponseMessage(HttpStatusCode.OK));
+                : new HttpResponseMessage(HttpStatusCode.OK)
+        );
         using var client = new HttpClient(handler);
 
         var outcome = await src.ImportSessionAsync(
@@ -419,7 +464,8 @@ public class CursorImportSourceTests {
                 SourceMeta = new Dictionary<string, object?> { ["TranscriptPath"] = jsonl },
             },
             new ImportContext(client, "http://localhost", ForcePrivate: false),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
     }
@@ -432,14 +478,24 @@ public class CursorImportSourceTests {
         // for this exact case; ImportSessionAsync must short-circuit the
         // transcript batch but still emit session-start + session-end.
         using var fx = new ProjectsDirFixture();
-        var jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111",
-                                  "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
+
+        var jsonl = fx.AddSession(
+            "Users-me-proj",
+            "11111111-1111-1111-1111-111111111111",
+            "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"
+        );
 
         var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
 
         var posted = new List<string>();
+
         using var handler = new StubHandler(
-            postCapture: (req, _) => { posted.Add(req.RequestUri!.AbsolutePath); return new HttpResponseMessage(HttpStatusCode.OK); });
+            postCapture: (req, _) => {
+                posted.Add(req.RequestUri!.AbsolutePath);
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        );
         using var client = new HttpClient(handler);
 
         var outcome = await src.ImportSessionAsync(
@@ -454,7 +510,8 @@ public class CursorImportSourceTests {
                 SourceMeta = new Dictionary<string, object?> { ["TranscriptPath"] = jsonl },
             },
             new ImportContext(client, "http://localhost", ForcePrivate: false),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Resumed);
         await Assert.That(posted).Contains("/hooks/session-start/cursor");
@@ -464,14 +521,20 @@ public class CursorImportSourceTests {
 
     [Test]
     public async Task import_session_omits_workspace_roots_when_cwd_unresolved() {
-        using var fx = new ProjectsDirFixture();
-        var jsonl = fx.AddSession("unknown-workspace", "11111111-1111-1111-1111-111111111111", "{}\n");
+        using var fx    = new ProjectsDirFixture();
+        var       jsonl = fx.AddSession("unknown-workspace", "11111111-1111-1111-1111-111111111111", "{}\n");
 
         var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
 
         var posted = new List<(string Path, string Body)>();
+
         using var handler = new StubHandler(
-            postCapture: (req, body) => { posted.Add((req.RequestUri!.AbsolutePath, body)); return new HttpResponseMessage(HttpStatusCode.OK); });
+            postCapture: (req, body) => {
+                posted.Add((req.RequestUri!.AbsolutePath, body));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        );
         using var client = new HttpClient(handler);
 
         var classification = new ImportCommand.SessionClassification {
@@ -496,14 +559,24 @@ public class CursorImportSourceTests {
     [Test]
     public async Task import_session_resumes_from_resume_line_for_partial_status() {
         using var fx = new ProjectsDirFixture();
-        var jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111",
-                                  "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
+
+        var jsonl = fx.AddSession(
+            "Users-me-proj",
+            "11111111-1111-1111-1111-111111111111",
+            "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"
+        );
 
         var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
 
         var posted = new List<(string Path, string Body)>();
+
         using var handler = new StubHandler(
-            postCapture: (req, body) => { posted.Add((req.RequestUri!.AbsolutePath, body)); return new HttpResponseMessage(HttpStatusCode.OK); });
+            postCapture: (req, body) => {
+                posted.Add((req.RequestUri!.AbsolutePath, body));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        );
         using var client = new HttpClient(handler);
 
         var classification = new ImportCommand.SessionClassification {
@@ -536,24 +609,35 @@ public class CursorImportSourceTests {
         // ExcludedRepoKey so ImportCommand's auto-skip/prompt logic applies.
         using var fx = new ProjectsDirFixture();
         fx.AddWorkspaceJson("hash-aaa", "file:///Users/me/dev/secret");
-        fx.AddSession("Users-me-dev-secret", "11111111-1111-1111-1111-111111111111",
-                      "{\"a\":1}\n{\"b\":2}\n");
+
+        fx.AddSession(
+            "Users-me-dev-secret",
+            "11111111-1111-1111-1111-111111111111",
+            "{\"a\":1}\n{\"b\":2}\n"
+        );
 
         var src = new CursorImportSource(
             fx.ProjectsDir,
             fx.WorkspaceStorageDir,
             repoDetector: _ => Task.FromResult<RepositoryPayload?>(
-                new RepositoryPayload { Owner = "acme", RepoName = "secret" }));
+                new RepositoryPayload { Owner = "acme", RepoName = "secret" }
+            )
+        );
 
         using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var client  = new HttpClient(handler);
 
         var classified = await src.ClassifyAsync(
             await src.DiscoverAsync(Filters(), CancellationToken.None),
-            new ClassifyContext(client, "http://localhost", MinLines: 1,
-                                ExcludedRepos: new[] { "acme/secret" },
-                                ExcludedPaths: null),
-            CancellationToken.None);
+            new ClassifyContext(
+                client,
+                "http://localhost",
+                MinLines: 1,
+                ExcludedRepos: new[] { "acme/secret" },
+                ExcludedPaths: null
+            ),
+            CancellationToken.None
+        );
 
         await Assert.That(classified[0].ExcludedRepoKey).IsEqualTo("acme/secret");
     }
@@ -565,10 +649,16 @@ public class CursorImportSourceTests {
         fx.AddSession("Users-me-dev-foo", "11111111-1111-1111-1111-111111111111", "{}\n");
 
         var detectorCalls = 0;
+
         var src = new CursorImportSource(
             fx.ProjectsDir,
             fx.WorkspaceStorageDir,
-            repoDetector: _ => { detectorCalls++; return Task.FromResult<RepositoryPayload?>(null); });
+            repoDetector: _ => {
+                detectorCalls++;
+
+                return Task.FromResult<RepositoryPayload?>(null);
+            }
+        );
 
         using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var client  = new HttpClient(handler);
@@ -576,7 +666,8 @@ public class CursorImportSourceTests {
         await src.ClassifyAsync(
             await src.DiscoverAsync(Filters(), CancellationToken.None),
             Ctx(client, minLines: 0),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         await Assert.That(detectorCalls).IsEqualTo(0);
     }
@@ -590,23 +681,31 @@ public class CursorImportSourceTests {
         fx.AddSession("Users-me-dev-shared", "33333333-3333-3333-3333-333333333333", "{}\n");
 
         var detectorCalls = 0;
+
         var src = new CursorImportSource(
             fx.ProjectsDir,
             fx.WorkspaceStorageDir,
             repoDetector: _ => {
                 detectorCalls++;
+
                 return Task.FromResult<RepositoryPayload?>(new RepositoryPayload { Owner = "o", RepoName = "r" });
-            });
+            }
+        );
 
         using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var client  = new HttpClient(handler);
 
         await src.ClassifyAsync(
             await src.DiscoverAsync(Filters(), CancellationToken.None),
-            new ClassifyContext(client, "http://localhost", MinLines: 0,
-                                ExcludedRepos: new[] { "o/r" },
-                                ExcludedPaths: null),
-            CancellationToken.None);
+            new ClassifyContext(
+                client,
+                "http://localhost",
+                MinLines: 0,
+                ExcludedRepos: new[] { "o/r" },
+                ExcludedPaths: null
+            ),
+            CancellationToken.None
+        );
 
         await Assert.That(detectorCalls).IsEqualTo(1);
     }
@@ -642,17 +741,17 @@ public class CursorImportSourceTests {
         // which is documented but not asserted here.
         if (OperatingSystem.IsLinux()) return;
 
-        using var fx = new ProjectsDirFixture();
-        var jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
+        using var fx    = new ProjectsDirFixture();
+        var       jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
 
         // Set creation = 30 days ago, last write = today.
         var thirtyDaysAgo = DateTime.UtcNow.AddDays(-30);
         File.SetCreationTimeUtc(jsonl, thirtyDaysAgo);
         File.SetLastWriteTimeUtc(jsonl, DateTime.UtcNow);
 
-        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+        var src   = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
         var since = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-7));
-        var got = await src.DiscoverAsync(Filters(since: since), CancellationToken.None);
+        var got   = await src.DiscoverAsync(Filters(since: since), CancellationToken.None);
 
         await Assert.That(got.Count).IsEqualTo(0);
     }
@@ -696,6 +795,7 @@ public class CursorImportSourceTests {
             Directory.CreateDirectory(dir);
             var jsonl = Path.Combine(dir, sessionId + ".jsonl");
             File.WriteAllText(jsonl, jsonlContent);
+
             return jsonl;
         }
 
@@ -705,26 +805,23 @@ public class CursorImportSourceTests {
             File.WriteAllText(Path.Combine(dir, "workspace.json"), $$"""{"folder":"{{folderUri}}"}""");
         }
 
-        public void Dispose() { try { Directory.Delete(Root, recursive: true); } catch { } }
+        public void Dispose() {
+            try { Directory.Delete(Root, recursive: true); } catch { }
+        }
     }
 
-    sealed class StubHandler : HttpMessageHandler {
-        readonly Func<HttpRequestMessage, HttpResponseMessage>?         _get;
-        readonly Func<HttpRequestMessage, string, HttpResponseMessage>? _post;
-
-        public StubHandler(
+    sealed class StubHandler(
             Func<HttpRequestMessage, HttpResponseMessage>?         getResponse = null,
-            Func<HttpRequestMessage, string, HttpResponseMessage>? postCapture = null) {
-            _get  = getResponse;
-            _post = postCapture;
-        }
-
+            Func<HttpRequestMessage, string, HttpResponseMessage>? postCapture = null
+        )
+        : HttpMessageHandler {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             if (request.Method == HttpMethod.Get)
-                return _get?.Invoke(request) ?? new HttpResponseMessage(HttpStatusCode.NotFound);
+                return getResponse?.Invoke(request) ?? new HttpResponseMessage(HttpStatusCode.NotFound);
 
             var body = request.Content is null ? "" : await request.Content.ReadAsStringAsync(ct);
-            return _post?.Invoke(request, body) ?? new HttpResponseMessage(HttpStatusCode.OK);
+
+            return postCapture?.Invoke(request, body) ?? new HttpResponseMessage(HttpStatusCode.OK);
         }
     }
 }

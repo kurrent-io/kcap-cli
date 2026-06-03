@@ -5,7 +5,7 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 
-namespace kapacitor.Tests.Integration;
+namespace Kapacitor.Cli.Tests.Integration;
 
 /// <summary>
 /// End-to-end stdio JSON-RPC tests for <c>kapacitor mcp sessions</c>.
@@ -19,7 +19,7 @@ public class McpSessionsServerTests : IDisposable {
     readonly WireMockServer _server            = WireMockServer.Start();
     readonly string         _cfgDir            = Path.Combine(Path.GetTempPath(), $"kapacitor-mcp-cfg-{Guid.NewGuid():N}");
     readonly string         _cwdDir            = Path.Combine(Path.GetTempPath(), $"kapacitor-mcp-cwd-{Guid.NewGuid():N}");
-    readonly List<Process>  _spawnedProcesses  = new();
+    readonly List<Process>  _spawnedProcesses  = [];
 
     public McpSessionsServerTests() {
         Directory.CreateDirectory(_cfgDir);

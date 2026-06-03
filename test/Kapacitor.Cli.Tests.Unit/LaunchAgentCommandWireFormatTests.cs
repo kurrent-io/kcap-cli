@@ -38,7 +38,7 @@ public class LaunchAgentCommandWireFormatTests {
         );
 
         var wire   = JsonSerializer.Serialize(cmd, ServerWireOptions);
-        var parsed = JsonSerializer.Deserialize(wire, Kapacitor.Cli.Core.KapacitorJsonContext.Default.LaunchAgentCommand);
+        var parsed = JsonSerializer.Deserialize(wire, KapacitorJsonContext.Default.LaunchAgentCommand);
 
         await Assert.That(parsed.Kind).IsEqualTo(LaunchKind.Default);
         await Assert.That(parsed.AgentId).IsEqualTo("abc12345");
@@ -60,7 +60,7 @@ public class LaunchAgentCommandWireFormatTests {
         );
 
         var wire   = JsonSerializer.Serialize(cmd, ServerWireOptions);
-        var parsed = JsonSerializer.Deserialize(wire, Kapacitor.Cli.Core.KapacitorJsonContext.Default.LaunchAgentCommand);
+        var parsed = JsonSerializer.Deserialize(wire, KapacitorJsonContext.Default.LaunchAgentCommand);
 
         await Assert.That(parsed.Kind).IsEqualTo(LaunchKind.Review);
         await Assert.That(parsed.Review).IsNotNull();
@@ -101,8 +101,8 @@ public class LaunchAgentCommandWireFormatTests {
             Vendor:        "codex"
         );
 
-        var json = JsonSerializer.Serialize(cmd, Kapacitor.Cli.Core.KapacitorJsonContext.Default.LaunchAgentCommand);
-        var back = JsonSerializer.Deserialize<LaunchAgentCommand>(json, Kapacitor.Cli.Core.KapacitorJsonContext.Default.LaunchAgentCommand);
+        var json = JsonSerializer.Serialize(cmd, KapacitorJsonContext.Default.LaunchAgentCommand);
+        var back = JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.LaunchAgentCommand);
 
         await Assert.That(back.Vendor).IsEqualTo("codex");
     }
@@ -118,7 +118,7 @@ public class LaunchAgentCommandWireFormatTests {
             Vendor: "codex"
         );
 
-        var json = JsonSerializer.Serialize(evt, Kapacitor.Cli.Core.KapacitorJsonContext.Default.AgentRunStarted);
+        var json = JsonSerializer.Serialize(evt, KapacitorJsonContext.Default.AgentRunStarted);
         await Assert.That(json).Contains("codex");
         await Assert.That(json.ToLowerInvariant()).Contains("\"vendor\"");
     }

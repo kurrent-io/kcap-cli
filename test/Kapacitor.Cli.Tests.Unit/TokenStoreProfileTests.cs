@@ -57,7 +57,7 @@ public class TokenStoreProfileTests {
 
         await File.WriteAllTextAsync(
             LegacyPath,
-            System.Text.Json.JsonSerializer.Serialize(MakeTokens("legacy"), Kapacitor.Cli.Core.KapacitorJsonContext.Default.StoredTokens)
+            System.Text.Json.JsonSerializer.Serialize(MakeTokens("legacy"), KapacitorJsonContext.Default.StoredTokens)
         );
 
         await TokenStore.SaveAsync("acme", MakeTokens("alice"));

@@ -11,6 +11,4 @@ namespace Kapacitor.Cli.Daemon.Services;
 /// the exception's message; the user sees an actionable instruction to run
 /// <c>kapacitor plugin install --codex</c>.
 /// </summary>
-internal sealed class CodexHooksNotInstalledException : Exception {
-    public CodexHooksNotInstalledException(string message) : base(message) { }
-}
+internal sealed class CodexHooksNotInstalledException(string message) : Exception(message);

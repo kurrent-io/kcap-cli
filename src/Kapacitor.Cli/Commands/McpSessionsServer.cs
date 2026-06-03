@@ -62,7 +62,9 @@ static class McpSessionsServer {
             }
         } finally {
             if (clientLazy.IsValueCreated) {
-                try { (await clientLazy.Value).Dispose(); } catch { /* swallow — best-effort cleanup */ }
+                try { (await clientLazy.Value).Dispose(); } catch {
+                    /* swallow — best-effort cleanup */
+                }
             }
         }
 
@@ -161,31 +163,6 @@ static class McpSessionsServer {
         return await send(client);
     }
 
-    /// <summary>
-    /// Test hook: execute a tool-call handler and return the JSON-RPC envelope.
-    /// </summary>
-    internal static async Task<string> HandleToolCallForTests(
-            string      toolName,
-            JsonObject  arguments,
-            HttpClient  client,
-            string      baseUrl,
-            string?     cwdRepoHash
-        ) {
-        JsonNode id = 1;
-
-        var request = new JsonObject {
-            ["jsonrpc"] = "2.0",
-            ["id"]      = id.DeepClone(),
-            ["method"]  = "tools/call",
-            ["params"] = new JsonObject {
-                ["name"]      = toolName,
-                ["arguments"] = arguments.DeepClone()
-            }
-        };
-
-        return await HandleToolCallAsync(id, request, client, baseUrl, cwdRepoHash);
-    }
-
     internal static string BuildSearchUrl(string baseUrl, JsonObject? args, string? cwdRepoHash) {
         var url = $"{baseUrl}/api/sessions/search";
         var qs  = new List<string>();
@@ -205,9 +182,9 @@ static class McpSessionsServer {
         // repo: explicit value > cwd-derived hash > omit. Sentinel "all" means cross-repo (omit param).
         // Normalise empty/whitespace explicit repo to null so the cwd fallback runs — otherwise
         // `repo: ""` produced `repo=` in the URL and silently broadened search to all visible repos.
-        var explicitRepo = args?["repo"]?.GetValue<string>();
+        var explicitRepo                                          = args?["repo"]?.GetValue<string>();
         if (string.IsNullOrWhiteSpace(explicitRepo)) explicitRepo = null;
-        var repo         = explicitRepo ?? cwdRepoHash;
+        var repo                                                  = explicitRepo ?? cwdRepoHash;
 
         if (repo is not null && !string.Equals(explicitRepo, "all", StringComparison.OrdinalIgnoreCase)) {
             qs.Add($"repo={Uri.EscapeDataString(repo)}");
@@ -226,14 +203,14 @@ static class McpSessionsServer {
 
     static string BuildSummaryUrl(string baseUrl, JsonObject? args) {
         var id = args?["session_id"]?.GetValue<string>()
-              ?? throw new ArgumentException("Missing required argument: session_id");
+         ?? throw new ArgumentException("Missing required argument: session_id");
 
         return $"{baseUrl}/api/sessions/{Uri.EscapeDataString(id)}/recap?chain=false";
     }
 
     static string BuildTranscriptUrl(string baseUrl, JsonObject? args) {
         var id = args?["session_id"]?.GetValue<string>()
-              ?? throw new ArgumentException("Missing required argument: session_id");
+         ?? throw new ArgumentException("Missing required argument: session_id");
 
         var url = $"{baseUrl}/api/sessions/{Uri.EscapeDataString(id)}/transcript";
         var qs  = new List<string>();
@@ -295,22 +272,25 @@ static class McpSessionsServer {
             return false; // wrong shape (object/array)
         }
 
-        if (v.TryGetValue<int>(out value)) return true;
+        if (v.TryGetValue(out value)) return true;
 
         if (v.TryGetValue<long>(out var lv)) {
-            if (lv < int.MinValue || lv > int.MaxValue)
+            if (lv is < int.MinValue or > int.MaxValue)
                 throw new ArgumentException($"'{key}' value {lv} is out of range for int.");
 
             value = (int)lv;
+
             return true;
         }
 
         if (v.TryGetValue<double>(out var dv)) {
             var rounded = (long)dv;
+
             if (rounded < int.MinValue || rounded > int.MaxValue || rounded != dv)
                 throw new ArgumentException($"'{key}' value {dv} is out of range or non-integer for int.");
 
             value = (int)rounded;
+
             return true;
         }
 
@@ -336,8 +316,13 @@ static class McpSessionsServer {
             return false; // wrong shape (object/array)
         }
 
-        if (v.TryGetValue<long>(out value)) return true;
-        if (v.TryGetValue<int>(out var iv)) { value = iv; return true; }
+        if (v.TryGetValue(out value)) return true;
+
+        if (v.TryGetValue<int>(out var iv)) {
+            value = iv;
+
+            return true;
+        }
 
         if (v.TryGetValue<double>(out var dv)) {
             // long.MaxValue (9.22e18) is not exactly representable as double; the smallest double
@@ -347,6 +332,7 @@ static class McpSessionsServer {
                 throw new ArgumentException($"'{key}' value {dv} is out of range or non-integer for long.");
 
             value = (long)dv;
+
             return true;
         }
 
@@ -382,10 +368,11 @@ static class McpSessionsServer {
 
                     if (content is null) continue;
 
-                    if (type == "whats_done") {
-                        summaryText = content;
-                    } else if (type == "plan") {
-                        plan = content;
+                    switch (type) {
+                        case "whats_done":
+                            summaryText = content; break;
+                        case "plan":
+                            plan = content; break;
                     }
                 }
             }
@@ -447,12 +434,12 @@ static class McpSessionsServer {
             new(
                 "object",
                 new() {
-                    ["query"]            = new("string",  "Free-text FTS query. Empty allowed when author is set."),
-                    ["author"]           = new("string",  "Optional: GitHub username or display name. Fuzzy match."),
+                    ["query"] = new("string", "Free-text FTS query. Empty allowed when author is set."),
+                    ["author"] = new("string", "Optional: GitHub username or display name. Fuzzy match."),
                     ["author_github_id"] = new("integer", "Optional: explicit GitHub numeric id. Takes precedence over `author`."),
-                    ["repo"]             = new("string",  "Optional: \"all\" for cross-repo, \"<owner>/<name>\", or a 16-hex repo hash. Defaults to the current repo (resolved from cwd at server startup)."),
-                    ["limit"]            = new("integer", "Default 10, max 50."),
-                    ["offset"]           = new("integer", "Default 0, max 500.")
+                    ["repo"] = new("string", "Optional: \"all\" for cross-repo, \"<owner>/<name>\", or a 16-hex repo hash. Defaults to the current repo (resolved from cwd at server startup)."),
+                    ["limit"] = new("integer", "Default 10, max 50."),
+                    ["offset"] = new("integer", "Default 0, max 500.")
                 },
                 []
             )
@@ -472,9 +459,9 @@ static class McpSessionsServer {
             new(
                 "object",
                 new() {
-                    ["session_id"]       = new("string",  "Session ID."),
+                    ["session_id"]       = new("string", "Session ID."),
                     ["around_event"]     = new("integer", "Center the window around this event index."),
-                    ["agent_id"]         = new("string",  "When the search hit was in a subagent stream, the agent_id returned alongside hit_event_index."),
+                    ["agent_id"]         = new("string", "When the search hit was in a subagent stream, the agent_id returned alongside hit_event_index."),
                     ["before"]           = new("integer", "Events before around_event. Default 5."),
                     ["after"]            = new("integer", "Events after around_event. Default 15."),
                     ["limit"]            = new("integer", "When around_event is unset. Default 50."),

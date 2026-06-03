@@ -11,12 +11,8 @@ namespace Kapacitor.Cli.Commands;
 /// with <c>vendor = "codex"</c>. <see cref="ImportSessionAsync"/> is a stub —
 /// the orchestrator will wire chain workers in E2.
 /// </summary>
-internal sealed class CodexImportSource : IImportSource {
-    readonly string _sessionsDir;
-
-    public CodexImportSource(string? rootOverride = null) {
-        _sessionsDir = rootOverride ?? CodexPaths.Sessions;
-    }
+internal sealed class CodexImportSource(string? rootOverride = null) : IImportSource {
+    readonly string _sessionsDir = rootOverride ?? CodexPaths.Sessions;
 
     public string Vendor => "codex";
 
@@ -50,11 +46,11 @@ internal sealed class CodexImportSource : IImportSource {
 
         IReadOnlyList<DiscoveredSession> result = [
             .. transcripts.Select(t => new DiscoveredSession(
-                    SessionId:      t.SessionId,
-                    Vendor:         Vendor,
-                    Cwd:            null,
+                    SessionId: t.SessionId,
+                    Vendor: Vendor,
+                    Cwd: null,
                     FirstTimestamp: null,
-                    SourceMeta:     new Dictionary<string, object?> {
+                    SourceMeta: new Dictionary<string, object?> {
                         ["FilePath"]   = t.FilePath,
                         ["EncodedCwd"] = t.EncodedCwd,
                     }
@@ -67,13 +63,13 @@ internal sealed class CodexImportSource : IImportSource {
 
     public async Task<IReadOnlyList<ImportCommand.SessionClassification>> ClassifyAsync(
             IReadOnlyList<DiscoveredSession> sessions,
-            ClassifyContext                   ctx,
-            CancellationToken                 ct
+            ClassifyContext                  ctx,
+            CancellationToken                ct
         ) {
         var transcripts = new List<(string SessionId, string FilePath, string EncodedCwd)>(sessions.Count);
 
         foreach (var s in sessions) {
-            var filePath   = s.SourceMeta.TryGetValue("FilePath",   out var fp) ? fp as string ?? "" : "";
+            var filePath   = s.SourceMeta.TryGetValue("FilePath", out var fp) ? fp as string   ?? "" : "";
             var encodedCwd = s.SourceMeta.TryGetValue("EncodedCwd", out var ec) ? ec as string ?? "" : "";
             transcripts.Add((s.SessionId, filePath, encodedCwd));
         }

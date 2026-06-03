@@ -7,19 +7,18 @@ public static class IgnoreCommand {
         // args[0] == "ignore"; --help / -h is handled by the dispatcher in Program.cs.
         if (args.Length < 2) return Usage();
 
-        if (args[1] == "--list") return await List();
-
-        if (args[1] == "--remove") {
-            if (args.Length < 3) {
+        switch (args[1]) {
+            case "--list":
+                return await List();
+            case "--remove" when args.Length < 3:
                 await Console.Error.WriteLineAsync("Usage: kapacitor ignore --remove <path>");
 
                 return 1;
-            }
-
-            return await Remove(args[2]);
+            case "--remove":
+                return await Remove(args[2]);
+            default:
+                return await Add(args[1]);
         }
-
-        return await Add(args[1]);
     }
 
     static async Task<int> Add(string path) {
@@ -91,7 +90,7 @@ public static class IgnoreCommand {
 
     static async Task<int> List() {
         var (_, profileName, profile) = await LoadActive();
-        var paths                     = Current(profile);
+        var paths = Current(profile);
 
         if (paths.Length == 0) {
             await Console.Out.WriteLineAsync($"No ignored paths (profile: {profileName}).");
@@ -132,7 +131,8 @@ public static class IgnoreCommand {
     public static Profile ApplyRemove(Profile profile, string path) {
         var normalized = PathExclusion.Normalize(path);
         var current    = Current(profile);
-        var remaining  = current
+
+        var remaining = current
             .Where(existing => SafeNormalize(existing) != normalized)
             .ToArray();
 

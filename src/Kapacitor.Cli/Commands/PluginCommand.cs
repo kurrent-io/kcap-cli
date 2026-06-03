@@ -8,8 +8,8 @@ namespace Kapacitor.Cli.Commands;
 public static class PluginCommand {
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
-    const string CodexHookCommand   = "kapacitor codex-hook";
-    const string CursorHookCommand  = "kapacitor hook --cursor";
+    const string CodexHookCommand  = "kapacitor codex-hook";
+    const string CursorHookCommand = "kapacitor hook --cursor";
 
     // PermissionRequest must wait for the dashboard's decision; the daemon-side
     // bridge call is intentionally infinite. 86400s = 24h keeps Codex from
@@ -36,13 +36,16 @@ public static class PluginCommand {
          || (args.Contains("--cursor") && args.Contains("--skills"))
          || (args.Contains("--cursor") && args.Contains("--codex"))) {
             await Console.Error.WriteLineAsync(
-                "--cursor, --codex, and --skills are mutually exclusive.");
+                "--cursor, --codex, and --skills are mutually exclusive."
+            );
+
             return 1;
         }
 
         if (args.Contains("--skills")) return await InstallSkills(args);
-        if (args.Contains("--codex"))  return await InstallCodex(args);
+        if (args.Contains("--codex")) return await InstallCodex(args);
         if (args.Contains("--cursor")) return await InstallCursor(args);
+
         return await InstallClaude(args);
     }
 
@@ -51,13 +54,16 @@ public static class PluginCommand {
          || (args.Contains("--cursor") && args.Contains("--skills"))
          || (args.Contains("--cursor") && args.Contains("--codex"))) {
             await Console.Error.WriteLineAsync(
-                "--cursor, --codex, and --skills are mutually exclusive.");
+                "--cursor, --codex, and --skills are mutually exclusive."
+            );
+
             return 1;
         }
 
         if (args.Contains("--skills")) return await RemoveSkills(args);
-        if (args.Contains("--codex"))  return await RemoveCodex(args);
+        if (args.Contains("--codex")) return await RemoveCodex(args);
         if (args.Contains("--cursor")) return await RemoveCursor(args);
+
         return await RemoveClaude(args);
     }
 
@@ -73,19 +79,18 @@ public static class PluginCommand {
         // already matches the current CLI version.
         var refreshOnly = args.Contains("--if-installed");
 
-        if (refreshOnly && !ClaudePluginInstaller.IsInstalled(settingsPath)) {
-            return 0;
-        }
-
-        if (refreshOnly &&
-            ClaudePluginInstaller.ReadMarker(settingsPath) == KapacitorVersion.Current()) {
-            return 0;
+        switch (refreshOnly) {
+            case true when !ClaudePluginInstaller.IsInstalled(settingsPath):
+            case true when
+                ClaudePluginInstaller.ReadMarker(settingsPath) == KapacitorVersion.Current():
+                return 0;
         }
 
         var pluginPath = SetupCommand.ResolvePluginPath();
 
         if (pluginPath is null) {
             if (refreshOnly) return 0;
+
             await Console.Error.WriteLineAsync("Plugin directory not found. Re-install kapacitor via npm:");
             await Console.Error.WriteLineAsync("  npm install -g @kurrent/kapacitor");
 
@@ -95,11 +100,14 @@ public static class PluginCommand {
         var installed = SetupCommand.InstallPlugin(settingsPath, pluginPath);
 
         if (installed) {
-            await Console.Out.WriteLineAsync(refreshOnly
-                ? $"Plugin refreshed ({scope}: {settingsPath})"
-                : $"Plugin installed ({scope}: {settingsPath})");
+            await Console.Out.WriteLineAsync(
+                refreshOnly
+                    ? $"Plugin refreshed ({scope}: {settingsPath})"
+                    : $"Plugin installed ({scope}: {settingsPath})"
+            );
         } else {
             if (refreshOnly) return 0;
+
             await Console.Error.WriteLineAsync("Could not update settings file.");
 
             return 1;
@@ -127,12 +135,15 @@ public static class PluginCommand {
             switch (outcome) {
                 case ClaudeRemovalOutcome.Removed:
                     await Console.Out.WriteLineAsync($"Plugin removed ({scope}: {settingsPath})");
+
                     break;
                 case ClaudeRemovalOutcome.NotInstalled:
                     await Console.Out.WriteLineAsync("Plugin was not installed.");
+
                     break;
                 case ClaudeRemovalOutcome.Malformed:
                     await Console.Out.WriteLineAsync("Nothing to remove.");
+
                     break;
             }
 
@@ -192,26 +203,27 @@ public static class PluginCommand {
         // who haven't run `kapacitor setup` yet.
         var refreshOnly = args.Contains("--if-installed");
 
-        if (refreshOnly && !AgentsSkillsInstaller.IsInstalled(AgentsPaths.UserSkillsDir)) {
-            return 0;
-        }
-
-        // Fast path: marker already matches the current build, no point
-        // re-copying every skill on a same-version reinstall (e.g. `npm
-        // install -g` of the version already on disk).
-        if (refreshOnly &&
-            AgentsSkillsInstaller.ReadMarker(AgentsPaths.UserSkillsDir) ==
-                AgentsSkillsInstaller.CurrentVersion()) {
-            return 0;
+        switch (refreshOnly) {
+            case true when !AgentsSkillsInstaller.IsInstalled(AgentsPaths.UserSkillsDir):
+            // Fast path: marker already matches the current build, no point
+            // re-copying every skill on a same-version reinstall (e.g. `npm
+            // install -g` of the version already on disk).
+            case true when
+                AgentsSkillsInstaller.ReadMarker(AgentsPaths.UserSkillsDir) ==
+                AgentsSkillsInstaller.CurrentVersion():
+                return 0;
         }
 
         var pluginPath = SetupCommand.ResolvePluginPath();
 
         if (pluginPath is null) {
             if (refreshOnly) return 0;
+
             await Console.Error.WriteLineAsync(
                 "Cannot install agent skills: kapacitor plugin folder not found. " +
-                "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor");
+                "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
+            );
+
             return 1;
         }
 
@@ -219,23 +231,31 @@ public static class PluginCommand {
 
         if (!Directory.Exists(skillsSource)) {
             if (refreshOnly) return 0;
+
             await Console.Error.WriteLineAsync(
                 $"Cannot install agent skills: 'skills' folder missing from {pluginPath}. " +
-                "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor");
+                "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
+            );
+
             return 1;
         }
 
         if (!AgentsSkillsInstaller.Install(skillsSource, AgentsPaths.UserSkillsDir)) {
             if (refreshOnly) return 0;
+
             await Console.Error.WriteLineAsync("Could not install agent skills.");
+
             return 1;
         }
 
-        await Console.Out.WriteLineAsync(refreshOnly
-            ? $"Agent skills refreshed (user: {AgentsPaths.UserSkillsDir})"
-            : $"Agent skills installed (user: {AgentsPaths.UserSkillsDir})");
+        await Console.Out.WriteLineAsync(
+            refreshOnly
+                ? $"Agent skills refreshed (user: {AgentsPaths.UserSkillsDir})"
+                : $"Agent skills installed (user: {AgentsPaths.UserSkillsDir})"
+        );
 
         AgentsSkillsInstaller.CleanLegacyCodexSkills(Path.Combine(CodexPaths.Home, "skills"));
+
         return 0;
     }
 
@@ -250,6 +270,7 @@ public static class PluginCommand {
 
         if (agents.HadErrors || legacy.HadErrors) {
             await Console.Out.WriteLineAsync("Removal incomplete — see errors above.");
+
             return 0;
         }
 
@@ -273,25 +294,18 @@ public static class PluginCommand {
         // here — `--skills --if-installed` is its own postinstall call.
         var refreshOnly = args.Contains("--if-installed");
 
-        if (refreshOnly && !CodexHooksInstaller.IsInstalled(hooksPath)) {
-            return 0;
-        }
-
-        if (refreshOnly &&
-            CodexHooksInstaller.ReadMarker(hooksPath) == KapacitorVersion.Current()) {
-            return 0;
-        }
-
-        if (refreshOnly) {
+        switch (refreshOnly) {
+            case true when !CodexHooksInstaller.IsInstalled(hooksPath):
+            case true when CodexHooksInstaller.ReadMarker(hooksPath) == KapacitorVersion.Current():
             // Hooks-only refresh: rewrite the kapacitor entries in hooks.json,
             // stamp the marker, exit. No skills, no plugin folder needed.
-            if (!InstallCodexHooks(hooksPath)) {
-                // Never fail the npm install path.
+            // Never fail the npm install path.
+            case true when !InstallCodexHooks(hooksPath):
                 return 0;
-            }
+            case true:
+                await Console.Out.WriteLineAsync($"Codex hooks refreshed ({scope}: {hooksPath})");
 
-            await Console.Out.WriteLineAsync($"Codex hooks refreshed ({scope}: {hooksPath})");
-            return 0;
+                return 0;
         }
 
         // `--codex` is an atomic hooks AND skills contract. Resolve the
@@ -305,6 +319,7 @@ public static class PluginCommand {
                 "Cannot install Codex plugin: kapacitor plugin folder not found. " +
                 "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
             );
+
             return 1;
         }
 
@@ -315,6 +330,7 @@ public static class PluginCommand {
                 $"Cannot install Codex plugin: 'skills' folder missing from {pluginPath}. " +
                 "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
             );
+
             return 1;
         }
 
@@ -325,11 +341,14 @@ public static class PluginCommand {
         var missingSkills = AgentsSkillsInstaller.SourceNames
             .Where(name => !Directory.Exists(Path.Combine(skillsSource, name)))
             .ToList();
+
         if (missingSkills.Count > 0) {
             await Console.Error.WriteLineAsync(
                 $"Cannot install Codex plugin: missing skill folder(s) under {skillsSource}: "
-                + string.Join(", ", missingSkills)
-                + ". Re-install kapacitor via npm: npm install -g @kurrent/kapacitor");
+              + string.Join(", ", missingSkills)
+              + ". Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
+            );
+
             return 1;
         }
 
@@ -340,6 +359,7 @@ public static class PluginCommand {
         }
 
         await Console.Out.WriteLineAsync($"Codex hooks installed ({scope}: {hooksPath})");
+
         await Console.Out.WriteLineAsync(
             "Next: run /hooks inside Codex and trust each kapacitor entry — " +
             "Codex won't execute hooks until each is explicitly trusted."
@@ -349,6 +369,7 @@ public static class PluginCommand {
         // work across Codex and other compatible agents.
         if (!AgentsSkillsInstaller.Install(skillsSource, AgentsPaths.UserSkillsDir)) {
             await Console.Error.WriteLineAsync("Could not install agent skills.");
+
             return 1;
         }
 
@@ -399,6 +420,7 @@ public static class PluginCommand {
 
         if (hooksFailed || agents.HadErrors || legacy.HadErrors) {
             await Console.Out.WriteLineAsync("Removal incomplete — see errors above.");
+
             return 1;
         }
 
@@ -433,7 +455,8 @@ public static class PluginCommand {
             }
 
             foreach (var evt in CodexHooksParser.CodexHookEvents) {
-                var timeout        = evt == "PermissionRequest" ? PermissionRequestTimeout : DefaultHookTimeout;
+                var timeout = evt == "PermissionRequest" ? PermissionRequestTimeout : DefaultHookTimeout;
+
                 var kapacitorEntry = new JsonObject {
                     ["hooks"] = new JsonArray(
                         new JsonObject {
@@ -446,6 +469,7 @@ public static class PluginCommand {
 
                 if (hooks[evt] is not JsonArray entries) {
                     hooks[evt] = new JsonArray(kapacitorEntry);
+
                     continue;
                 }
 
@@ -520,51 +544,63 @@ public static class PluginCommand {
 
         var refreshOnly = args.Contains("--if-installed");
 
-        if (refreshOnly && !CursorHooksInstaller.IsInstalled(hooksPath)) return 0;
-        if (refreshOnly &&
-            CursorHooksInstaller.ReadMarker(hooksPath) == KapacitorVersion.Current()) {
-            return 0;
-        }
+        switch (refreshOnly) {
+            case true when !CursorHooksInstaller.IsInstalled(hooksPath):
+            case true when CursorHooksInstaller.ReadMarker(hooksPath) == KapacitorVersion.Current():
+                return 0;
+            // PATH precheck on the non-postinstall path. hooks.json writes the bare
+            // `kapacitor hook --cursor` command; we must verify Cursor will actually
+            // find it. Skip the precheck on the postinstall (--if-installed) path so
+            // an in-flight npm install doesn't fail just because the new symlink
+            // isn't on the child process's PATH yet.
+            case false when !AgentDetector.IsInstalled("kapacitor"):
+                await Console.Error.WriteLineAsync(
+                    "Cannot install Cursor hooks: 'kapacitor' is not on PATH. "
+                  + "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
+                );
 
-        // PATH precheck on the non-postinstall path. hooks.json writes the bare
-        // `kapacitor hook --cursor` command; we must verify Cursor will actually
-        // find it. Skip the precheck on the postinstall (--if-installed) path so
-        // an in-flight npm install doesn't fail just because the new symlink
-        // isn't on the child process's PATH yet.
-        if (!refreshOnly && !AgentDetector.IsInstalled("kapacitor")) {
-            await Console.Error.WriteLineAsync(
-                "Cannot install Cursor hooks: 'kapacitor' is not on PATH. "
-                + "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor");
-            return 1;
+                return 1;
         }
 
         if (!InstallCursorHooks(hooksPath)) {
             if (refreshOnly) return 0;
+
             await Console.Error.WriteLineAsync("Could not write Cursor hooks file.");
+
             return 1;
         }
 
-        await Console.Out.WriteLineAsync(refreshOnly
-            ? $"Cursor hooks refreshed ({hooksPath})"
-            : $"Cursor hooks installed ({hooksPath})");
+        await Console.Out.WriteLineAsync(
+            refreshOnly
+                ? $"Cursor hooks refreshed ({hooksPath})"
+                : $"Cursor hooks installed ({hooksPath})"
+        );
+
         return 0;
     }
 
     static async Task<int> RemoveCursor(string[] args) {
         var hooksPath = GetArg(args, "--cursor-hooks-path") ?? CursorPaths.UserHooksJson();
+
         if (!File.Exists(hooksPath)) {
             await Console.Out.WriteLineAsync("Nothing to remove — Cursor hooks file not found.");
+
             return 0;
         }
 
         try {
             var removed = RemoveCursorHooks(hooksPath);
-            await Console.Out.WriteLineAsync(removed
-                ? $"Cursor hooks removed ({hooksPath})"
-                : "Cursor hooks were not installed.");
+
+            await Console.Out.WriteLineAsync(
+                removed
+                    ? $"Cursor hooks removed ({hooksPath})"
+                    : "Cursor hooks were not installed."
+            );
+
             return 0;
         } catch (Exception ex) {
             await Console.Error.WriteLineAsync($"Could not update Cursor hooks at {hooksPath}: {ex.Message}");
+
             return 1;
         }
     }
@@ -577,13 +613,21 @@ public static class PluginCommand {
     public static bool InstallCursorHooks(string hooksPath) {
         try {
             JsonObject root = [];
+
             if (File.Exists(hooksPath)) {
-                try { if (JsonNode.Parse(File.ReadAllText(hooksPath)) is JsonObject obj) root = obj; }
-                catch { /* Malformed — start fresh */ }
+                try {
+                    if (JsonNode.Parse(File.ReadAllText(hooksPath)) is JsonObject obj) root = obj;
+                } catch {
+                    /* Malformed — start fresh */
+                }
             }
 
             if (root["version"] is null) root["version"] = 1;
-            if (root["hooks"] is not JsonObject hooks) { hooks = []; root["hooks"] = hooks; }
+
+            if (root["hooks"] is not JsonObject hooks) {
+                hooks         = [];
+                root["hooks"] = hooks;
+            }
 
             foreach (var evt in CursorHooksParser.CursorHookEvents) {
                 var kapacitorEntry = new JsonObject {
@@ -592,16 +636,20 @@ public static class PluginCommand {
 
                 if (hooks[evt] is not JsonArray entries) {
                     hooks[evt] = new JsonArray(kapacitorEntry);
+
                     continue;
                 }
 
                 var preserved = new JsonArray();
+
                 foreach (var entry in entries) {
                     if (entry is null) continue;
+
                     if (!CursorHooksParser.EntryReferencesKapacitorCursorHook(entry)) {
                         preserved.Add(entry.DeepClone());
                     }
                 }
+
                 preserved.Add((JsonNode)kapacitorEntry);
                 hooks[evt] = preserved;
             }
@@ -609,6 +657,7 @@ public static class PluginCommand {
             Directory.CreateDirectory(Path.GetDirectoryName(hooksPath)!);
             File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
             CursorHooksInstaller.WriteMarker(hooksPath);
+
             return true;
         } catch { return false; }
     }
@@ -626,17 +675,22 @@ public static class PluginCommand {
         if (root["hooks"] is not JsonObject hooks) return false;
 
         var changed = false;
+
         foreach (var evt in CursorHooksParser.CursorHookEvents) {
             if (hooks[evt] is not JsonArray entries) continue;
+
             var preserved = new JsonArray();
+
             foreach (var entry in entries) {
                 if (entry is null) continue;
+
                 if (CursorHooksParser.EntryReferencesKapacitorCursorHook(entry)) {
                     changed = true;
                 } else {
                     preserved.Add(entry.DeepClone());
                 }
             }
+
             hooks[evt] = preserved;
         }
 
@@ -644,17 +698,20 @@ public static class PluginCommand {
             File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
             CursorHooksInstaller.DeleteMarker(hooksPath);
         }
+
         return changed;
     }
 
     static string? GetArg(string[] args, string flag) {
         var idx = Array.IndexOf(args, flag);
+
         return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
     }
 
     static int PrintUsage() {
         Console.Error.WriteLine(
-            "Usage: kapacitor plugin <install|remove> [--project] [--codex|--cursor|--skills] [--if-installed]");
+            "Usage: kapacitor plugin <install|remove> [--project] [--codex|--cursor|--skills] [--if-installed]"
+        );
 
         return 1;
     }

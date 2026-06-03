@@ -650,7 +650,7 @@ public class EvalServiceTests {
               "source_session_id":"s","source_eval_run_id":"r","retained_at":"2026-05-13T00:00:00Z"}]
             """;
 
-        var facts = JsonSerializer.Deserialize(newServerJson, Kapacitor.Cli.Core.KapacitorJsonContext.Default.ListJudgeFact)!;
+        var facts = JsonSerializer.Deserialize(newServerJson, KapacitorJsonContext.Default.ListJudgeFact)!;
 
         await Assert.That(facts.Count).IsEqualTo(1);
         await Assert.That(facts[0].FactHash).IsEqualTo("h1");
@@ -664,7 +664,7 @@ public class EvalServiceTests {
               "retained_at":"2026-05-13T00:00:00Z"}]
             """;
 
-        var facts = JsonSerializer.Deserialize(oldServerJson, Kapacitor.Cli.Core.KapacitorJsonContext.Default.ListJudgeFact)!;
+        var facts = JsonSerializer.Deserialize(oldServerJson, KapacitorJsonContext.Default.ListJudgeFact)!;
 
         await Assert.That(facts.Count).IsEqualTo(1);
         await Assert.That(facts[0].FactHash).IsNull();
@@ -711,8 +711,8 @@ public class EvalServiceTests {
         var snapshot = EvalService.BuildFactsUsedSnapshot(pool);
 
         await Assert.That(snapshot.Count).IsEqualTo(2);
-        await Assert.That(snapshot.Any(s => s.FactHash == "h-A" && s.Category == "safety")).IsTrue();
-        await Assert.That(snapshot.Any(s => s.FactHash == "h-C" && s.Category == "plan_adherence")).IsTrue();
+        await Assert.That(snapshot.Any(s => s is { FactHash: "h-A", Category: "safety" })).IsTrue();
+        await Assert.That(snapshot.Any(s => s is { FactHash: "h-C", Category: "plan_adherence" })).IsTrue();
         await Assert.That(snapshot.All(s => s.Fact != "fact-B-no-hash")).IsTrue();
     }
 

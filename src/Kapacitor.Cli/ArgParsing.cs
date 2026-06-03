@@ -40,10 +40,7 @@ static class ArgParsing {
             return kapacitor.Replace("-", "");
 
         var codex = Environment.GetEnvironmentVariable("CODEX_THREAD_ID");
-        if (!string.IsNullOrWhiteSpace(codex))
-            return codex.Replace("-", "");
-
-        return null;
+        return !string.IsNullOrWhiteSpace(codex) ? codex.Replace("-", "") : null;
     }
 
     /// <summary>

@@ -20,8 +20,8 @@ namespace Kapacitor.Cli.Daemon.Services;
 /// spawning <c>git</c> on rapid re-clicks.
 /// </summary>
 internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> logger) {
-    static readonly TimeSpan CacheTtl    = TimeSpan.FromSeconds(60);
-    const           int      MaxWalkUp   = 10;
+    static readonly TimeSpan CacheTtl     = TimeSpan.FromSeconds(60);
+    const           int      MaxWalkUp    = 10;
     const           int      GitTimeoutMs = 5_000;
 
     readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
@@ -31,9 +31,12 @@ internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> log
 
         var candidates = await MergeCandidatesAsync(serverCandidates);
         var matches    = new List<string>();
-        var seenRoots  = new HashSet<string>(RepoPathStore.PathComparison == StringComparison.Ordinal
-            ? StringComparer.Ordinal
-            : StringComparer.OrdinalIgnoreCase);
+
+        var seenRoots = new HashSet<string>(
+            RepoPathStore.PathComparison == StringComparison.Ordinal
+                ? StringComparer.Ordinal
+                : StringComparer.OrdinalIgnoreCase
+        );
 
         foreach (var candidate in candidates) {
             ct.ThrowIfCancellationRequested();
@@ -81,6 +84,7 @@ internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> log
             if (string.IsNullOrWhiteSpace(path)) return;
 
             var normalized = TryNormalize(path);
+
             if (normalized is null) return;
 
             if (seen.Add(normalized)) merged.Add(normalized);
@@ -148,7 +152,7 @@ internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> log
             return cached.NormalizedRemote;
         }
 
-        var raw = await RunGitCaptureAsync(repoRoot, ["remote", "get-url", "origin"], ct);
+        var raw        = await RunGitCaptureAsync(repoRoot, ["remote", "get-url", "origin"], ct);
         var normalized = raw is null ? null : RemoteMatcher.NormalizeRemoteUrl(raw.Trim());
 
         _cache[repoRoot] = new CacheEntry(now + CacheTtl, normalized);
@@ -173,10 +177,12 @@ internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> log
             WorkingDirectory       = cwd,
             RedirectStandardOutput = true,
             RedirectStandardError  = true,
-            CreateNoWindow         = true
+            CreateNoWindow         = true,
+            Environment = {
+                ["GIT_TERMINAL_PROMPT"] = "0",
+                ["GCM_INTERACTIVE"]     = "Never"
+            }
         };
-        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
-        psi.Environment["GCM_INTERACTIVE"]     = "Never";
 
         using var proc = Process.Start(psi);
 
@@ -188,7 +194,9 @@ internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> log
         try {
             await proc.WaitForExitAsync(timeoutCts.Token);
         } catch (OperationCanceledException) {
-            try { proc.Kill(true); } catch { /* best-effort */ }
+            try { proc.Kill(true); } catch {
+                /* best-effort */
+            }
 
             if (ct.IsCancellationRequested) throw;
 

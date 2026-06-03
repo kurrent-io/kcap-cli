@@ -94,7 +94,7 @@ public static class HttpClientExtensions {
     /// </summary>
     public static bool IsAcceptableUrl(string url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
-        (uri.Scheme == "http" || uri.Scheme == "https");
+        uri.Scheme is "http" or "https";
 
     /// <summary>
     /// Fails fast with an actionable message if <paramref name="url"/> is not

@@ -165,12 +165,11 @@ public static class CursorHookCommand {
             }
 
             var posted = await TryPostHookAsync(client, baseUrl, mapping.RouteSegment, normalized, ct);
-            if (!posted && mapping.SpoolOnFailure && sessionId is not null) {
-                spool.Append(sessionId, eventName, normalized);
-            }
-
-            if (posted && eventName == "sessionEnd" && sessionId is not null) {
-                spool.DeleteSession(sessionId);
+            switch (posted) {
+                case false when mapping.SpoolOnFailure && sessionId is not null:
+                    spool.Append(sessionId, eventName, normalized); break;
+                case true when eventName == "sessionEnd" && sessionId is not null:
+                    spool.DeleteSession(sessionId); break;
             }
 
             if (!drainBeforePost && !BudgetExpired() && sessionId is not null && !string.IsNullOrEmpty(transcriptPath)) {

@@ -106,7 +106,9 @@ public static class ServerUrlNormalizer {
     }
 
     static async Task<bool> HttpProbeAsync(string url, TimeSpan timeout, CancellationToken ct) {
-        using var http = new HttpClient { Timeout = timeout };
+        // ReSharper disable once ShortLivedHttpClient
+        using var http = new HttpClient();
+        http.Timeout = timeout;
 
         try {
             using var resp = await http.GetAsync($"{url}/auth/config", ct);

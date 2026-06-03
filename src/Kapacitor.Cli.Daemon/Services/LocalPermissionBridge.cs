@@ -22,8 +22,8 @@ namespace Kapacitor.Cli.Daemon.Services;
 /// agent so the CLI <c>permission-request</c> command can detect and use it.
 /// </summary>
 internal sealed partial class LocalPermissionBridge(
-        ServerConnection                server,
-        ILogger<LocalPermissionBridge>  logger
+        ServerConnection               server,
+        ILogger<LocalPermissionBridge> logger
     ) : IHostedService, IAsyncDisposable {
     const int    MaxBindAttempts = 8;
     const string PathSuffix      = "/permission-request";
@@ -57,6 +57,7 @@ internal sealed partial class LocalPermissionBridge(
                 _listener = listener;
                 _token    = token;
                 BaseUrl   = $"http://127.0.0.1:{port}/{token}";
+
                 break;
             } catch (HttpListenerException ex) when (attempt < MaxBindAttempts && IsAddressInUse(ex)) {
                 LogBindRetry(logger, attempt, port, ex.Message);
@@ -67,7 +68,7 @@ internal sealed partial class LocalPermissionBridge(
         if (_listener is null)
             throw new InvalidOperationException($"Failed to bind LocalPermissionBridge after {MaxBindAttempts} attempts");
 
-        _cts        = new CancellationTokenSource();
+        _cts        = new();
         _acceptLoop = Task.Run(() => AcceptLoopAsync(_cts.Token), _cts.Token);
         LogBridgeStarted(logger, BaseUrl!);
 
@@ -90,7 +91,9 @@ internal sealed partial class LocalPermissionBridge(
         if (_acceptLoop is not null) {
             try {
                 await _acceptLoop.WaitAsync(TimeSpan.FromSeconds(2), cancellationToken);
-            } catch { /* shutting down */ }
+            } catch {
+                /* shutting down */
+            }
         }
     }
 
@@ -107,13 +110,13 @@ internal sealed partial class LocalPermissionBridge(
         // the race is benign — port collisions are vanishingly rare.
         var probe = new TcpListener(IPAddress.Loopback, 0);
         probe.Start();
-        try { return ((IPEndPoint)probe.LocalEndpoint).Port; }
-        finally { probe.Stop(); }
+        try { return ((IPEndPoint)probe.LocalEndpoint).Port; } finally { probe.Stop(); }
     }
 
     async Task AcceptLoopAsync(CancellationToken ct) {
         while (!ct.IsCancellationRequested && _listener!.IsListening) {
             HttpListenerContext context;
+
             try {
                 context = await _listener.GetContextAsync();
             } catch (ObjectDisposedException) {
@@ -136,21 +139,23 @@ internal sealed partial class LocalPermissionBridge(
             var path = context.Request.Url?.AbsolutePath;
 
             if (path is null
-                || !path.StartsWith($"/{_token}/", StringComparison.Ordinal)
-                || !path.EndsWith(PathSuffix, StringComparison.Ordinal)
-                || context.Request.HttpMethod != "POST") {
+             || !path.StartsWith($"/{_token}/", StringComparison.Ordinal)
+             || !path.EndsWith(PathSuffix, StringComparison.Ordinal)
+             || context.Request.HttpMethod != "POST") {
                 context.Response.StatusCode = 404;
                 context.Response.Close();
+
                 return;
             }
 
-            var vendorStart = _token!.Length + 2;  // skip "/{token}/"
-            var vendorEnd   = path.Length - PathSuffix.Length;
+            var vendorStart = _token!.Length + 2; // skip "/{token}/"
+            var vendorEnd   = path.Length    - PathSuffix.Length;
             var vendor      = vendorEnd > vendorStart ? path[vendorStart..vendorEnd] : "";
 
             if (vendor is not ("claude" or "codex")) {
                 context.Response.StatusCode = 404;
                 context.Response.Close();
+
                 return;
             }
 
@@ -158,6 +163,7 @@ internal sealed partial class LocalPermissionBridge(
             var       body   = await reader.ReadToEndAsync(ct);
 
             JsonNode? node;
+
             try {
                 node = JsonNode.Parse(body);
             } catch (JsonException) {
@@ -166,12 +172,14 @@ internal sealed partial class LocalPermissionBridge(
                 // would mislabel client-side parse errors as server faults.
                 context.Response.StatusCode = 400;
                 context.Response.Close();
+
                 return;
             }
 
             if (node is null) {
                 context.Response.StatusCode = 400;
                 context.Response.Close();
+
                 return;
             }
 
@@ -183,6 +191,7 @@ internal sealed partial class LocalPermissionBridge(
             if (sessionId is null) {
                 context.Response.StatusCode = 400;
                 context.Response.Close();
+
                 return;
             }
 
@@ -208,8 +217,8 @@ internal sealed partial class LocalPermissionBridge(
             var responseJson = BuildHookResponseJson(decision, vendor);
             var bytes        = Encoding.UTF8.GetBytes(responseJson);
 
-            context.Response.ContentType   = "application/json";
-            context.Response.StatusCode    = 200;
+            context.Response.ContentType     = "application/json";
+            context.Response.StatusCode      = 200;
             context.Response.ContentLength64 = bytes.LongLength;
             await context.Response.OutputStream.WriteAsync(bytes, ct);
             context.Response.Close();
@@ -219,18 +228,22 @@ internal sealed partial class LocalPermissionBridge(
             try {
                 context.Response.StatusCode = 500;
                 context.Response.Close();
-            } catch { /* response already closed */ }
+            } catch {
+                /* response already closed */
+            }
         }
     }
 
     static JsonElement? ExtractElement(JsonNode root, string property) {
         var child = root[property];
+
         if (child is null) return null;
 
         // JsonNode → JsonElement via raw JSON is the AOT-safe path; child.GetValue<JsonElement>()
         // is finicky on JsonObject children. Dispose the document — Clone() copies the buffer
         // so the returned element stays valid.
         using var doc = JsonDocument.Parse(child.ToJsonString());
+
         return doc.RootElement.Clone();
     }
 
@@ -248,7 +261,7 @@ internal sealed partial class LocalPermissionBridge(
         var decisionNode = new JsonObject { ["behavior"] = decision.Behavior };
 
         if (decision.ApplyPermissions is { } ap) decisionNode["applyPermissions"] = JsonNode.Parse(ap.GetRawText());
-        if (decision.UpdatedInput is { } ui)     decisionNode["updatedInput"]     = JsonNode.Parse(ui.GetRawText());
+        if (decision.UpdatedInput is { } ui) decisionNode["updatedInput"]         = JsonNode.Parse(ui.GetRawText());
 
         var payload = new JsonObject {
             ["hookSpecificOutput"] = new JsonObject {

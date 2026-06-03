@@ -137,7 +137,7 @@ static partial class WatchCommand {
             )
             .WithAutomaticReconnect(new InfiniteRetryPolicy())
             .AddJsonProtocol(options => {
-                    options.PayloadSerializerOptions.TypeInfoResolverChain.Insert(0, Kapacitor.Cli.Core.KapacitorJsonContext.Default);
+                    options.PayloadSerializerOptions.TypeInfoResolverChain.Insert(0, KapacitorJsonContext.Default);
                     options.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
                 }
             )
@@ -343,7 +343,7 @@ static partial class WatchCommand {
 
             if (repository is not null) {
                 endHook["repository"] = JsonNode.Parse(
-                    JsonSerializer.Serialize(repository, Kapacitor.Cli.Core.KapacitorJsonContext.Default.RepositoryPayload)
+                    JsonSerializer.Serialize(repository, KapacitorJsonContext.Default.RepositoryPayload)
                 );
             }
 
@@ -565,7 +565,7 @@ static partial class WatchCommand {
 
             // Serialize repository payload to JSON string for the hub method
             var repoJson = repoToSend is not null
-                ? JsonSerializer.Serialize(repoToSend, Kapacitor.Cli.Core.KapacitorJsonContext.Default.RepositoryPayload)
+                ? JsonSerializer.Serialize(repoToSend, KapacitorJsonContext.Default.RepositoryPayload)
                 : null;
 
             try {

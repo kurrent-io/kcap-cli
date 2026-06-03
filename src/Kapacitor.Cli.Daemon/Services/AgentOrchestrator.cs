@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Kapacitor.Cli.Core;
@@ -129,9 +130,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.OnReconnectedCallback    += ReRegisterAgents;
         _server.FindRepoForRemoteHandler =  HandleFindRepoForRemote;
 
-        _server.GetLiveAgentIds = () => [.. _agents
-            .Where(kvp => kvp.Value.Status is "Starting" or "Running")
-            .Select(kvp => kvp.Key)];
+        _server.GetLiveAgentIds = () => [
+            .. _agents
+                .Where(kvp => kvp.Value.Status is "Starting" or "Running")
+                .Select(kvp => kvp.Key)
+        ];
 
         // Start heartbeat loops
         _ = RunHeartbeatLoopAsync(_shutdownCts.Token);
@@ -392,10 +395,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 WorkingDirectory       = repoPath,
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
-                CreateNoWindow         = true
+                CreateNoWindow         = true,
+                Environment = {
+                    ["GIT_TERMINAL_PROMPT"] = "0",
+                    ["GCM_INTERACTIVE"]     = "Never"
+                }
             };
-            psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
-            psi.Environment["GCM_INTERACTIVE"]     = "Never";
 
             using var proc = Process.Start(psi);
 
@@ -1033,9 +1038,7 @@ internal sealed class NoopPtyProcess : IPtyProcess {
     public Task TerminateAsync(TimeSpan?   timeout = null) => Task.CompletedTask;
 
 #pragma warning disable CS1998
-    public async IAsyncEnumerable<byte[]> ReadOutputAsync(
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default
-        ) {
+    public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
         yield break;
     }
 #pragma warning restore CS1998

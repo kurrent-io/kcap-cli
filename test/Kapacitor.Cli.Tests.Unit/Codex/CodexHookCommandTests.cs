@@ -505,7 +505,7 @@ public class CodexHookCommandTests : IDisposable {
 
             await Assert.That(exit).IsEqualTo(1);
             await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"deny\"");
-            await Assert.That(bridge.LogEntries.Count()).IsEqualTo(0);
+            await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);
         } finally {
             Console.SetOut(originalOut);
             Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
@@ -530,7 +530,7 @@ public class CodexHookCommandTests : IDisposable {
 
             await Assert.That(exit).IsEqualTo(1);
             await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"deny\"");
-            await Assert.That(bridge.LogEntries.Count()).IsEqualTo(0);
+            await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);
         } finally {
             Console.SetOut(originalOut);
             Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);

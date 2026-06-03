@@ -44,7 +44,7 @@ static class WhatsDoneCommand {
             }
 
             var json    = await resp.Content.ReadAsStringAsync();
-            var entries = JsonSerializer.Deserialize(json, Kapacitor.Cli.Core.KapacitorJsonContext.Default.ListRecapEntry);
+            var entries = JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.ListRecapEntry);
 
             if (entries is null || entries.Count == 0) {
                 log("No recap entries found, skipping summary generation");
@@ -96,7 +96,7 @@ static class WhatsDoneCommand {
             CacheWriteTokens = result.CacheWriteTokens
         };
 
-        var       payloadJson = JsonSerializer.Serialize(payload, Kapacitor.Cli.Core.KapacitorJsonContext.Default.WhatsDonePayload);
+        var       payloadJson = JsonSerializer.Serialize(payload, KapacitorJsonContext.Default.WhatsDonePayload);
         using var httpContent = new StringContent(payloadJson, Encoding.UTF8, "application/json");
 
         try {

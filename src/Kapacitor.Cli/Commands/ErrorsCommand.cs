@@ -35,7 +35,7 @@ static class ErrorsCommand {
         }
 
         var json   = await resp.Content.ReadAsStringAsync();
-        var errors = JsonSerializer.Deserialize(json, Kapacitor.Cli.Core.KapacitorJsonContext.Default.ListErrorEntry);
+        var errors = JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.ListErrorEntry);
 
         if (errors is null || errors.Count == 0) {
             await Console.Out.WriteLineAsync("No errors found.");

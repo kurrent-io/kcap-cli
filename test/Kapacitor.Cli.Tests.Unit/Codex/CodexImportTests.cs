@@ -249,7 +249,7 @@ public class CodexImportTests {
             Vendor    = null,
         };
 
-        var json = JsonSerializer.Serialize(batch, Kapacitor.Cli.Core.KapacitorJsonContext.Default.TranscriptBatch);
+        var json = JsonSerializer.Serialize(batch, KapacitorJsonContext.Default.TranscriptBatch);
 
         await Assert.That(json.Contains("\"vendor\"")).IsFalse();
     }
@@ -344,7 +344,7 @@ public class CodexImportTests {
             Vendor    = "codex",
         };
 
-        var json = JsonSerializer.Serialize(batch, Kapacitor.Cli.Core.KapacitorJsonContext.Default.TranscriptBatch);
+        var json = JsonSerializer.Serialize(batch, KapacitorJsonContext.Default.TranscriptBatch);
 
         await Assert.That(json.Contains("\"vendor\":\"codex\"")).IsTrue();
     }

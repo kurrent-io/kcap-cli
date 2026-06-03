@@ -11,12 +11,11 @@ namespace Kapacitor.Cli.Core.Auth;
 public static class Clipboard {
     public static bool TryCopy(string text) {
         try {
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))     return RunWithStdin("pbcopy", "", text);
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return RunWithStdin("pbcopy", "", text);
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return RunWithStdin("clip", "", text);
 
             // Linux: prefer Wayland, fall back to X11
-            if (RunWithStdin("wl-copy", "", text)) return true;
-            return RunWithStdin("xclip", "-selection clipboard", text);
+            return RunWithStdin("wl-copy", "", text) || RunWithStdin("xclip", "-selection clipboard", text);
         } catch {
             return false;
         }
@@ -31,16 +30,22 @@ public static class Clipboard {
             };
 
             using var p = Process.Start(psi);
+
             if (p is null) return false;
+
             p.StandardInput.Write(stdin);
             p.StandardInput.Close();
 
             // Bound the wait so a hung helper (e.g. an X server prompting for auth) can't
             // wedge the login flow; kill on timeout to avoid leaking child processes.
             if (!p.WaitForExit(2000)) {
-                try { p.Kill(); } catch { /* best-effort */ }
+                try { p.Kill(); } catch {
+                    /* best-effort */
+                }
+
                 return false;
             }
+
             return p.ExitCode == 0;
         } catch {
             return false;

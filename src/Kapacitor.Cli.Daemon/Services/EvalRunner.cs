@@ -52,14 +52,25 @@ internal sealed class EvalRunner {
 
         try {
             var ctx = await EvalService.PrepareAsync(
-                _baseUrl, httpClient, cmd.SessionId, cmd.Questions,
-                cmd.Chain, cmd.ThresholdBytes, observer, _shutdownToken, cmd.Model, cmd.EvalRunId
+                _baseUrl,
+                httpClient,
+                cmd.SessionId,
+                cmd.Questions,
+                cmd.Chain,
+                cmd.ThresholdBytes,
+                observer,
+                _shutdownToken,
+                cmd.Model,
+                cmd.EvalRunId
             );
-            if (ctx is null) return new PrepareResult(false, "context load failed", null, 0, 0, 0, 0, 0);
+
+            if (ctx is null) return new(false, "context load failed", null, 0, 0, 0, 0, 0);
 
             _cache.Put(cmd.EvalRunId, ctx);
-            return new PrepareResult(
-                true, null,
+
+            return new(
+                true,
+                null,
                 ctx.SessionId,
                 ctx.ContextResult.Trace.Count,
                 ctx.TraceJson.Length,
@@ -69,12 +80,14 @@ internal sealed class EvalRunner {
             );
         } catch (Exception ex) {
             _logger.LogError(ex, "PrepareEval failed for {RunId}", cmd.EvalRunId);
+
             return new(false, $"{ex.GetType().Name}: {ex.Message}", null, 0, 0, 0, 0, 0);
         }
     }
 
     async Task<QuestionResult> HandleRunQuestionAsync(RunQuestionCommand cmd) {
         var ctx = _cache.Get(cmd.EvalRunId);
+
         if (ctx is null) return new(false, null, "context not cached (prepare missing or expired)", 0, 0);
 
         using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync(_baseUrl, _shutdownToken);
@@ -84,22 +97,34 @@ internal sealed class EvalRunner {
             // Model is carried on the cached EvalContext (set during Prepare) —
             // the per-question wire format doesn't repeat it.
             var verdict = await EvalService.RunQuestionAsync(
-                ctx, httpClient, _baseUrl, cmd.Question, ctx.Model,
-                cmd.Index, cmd.Total, observer, _shutdownToken
+                ctx,
+                httpClient,
+                _baseUrl,
+                cmd.Question,
+                ctx.Model,
+                cmd.Index,
+                cmd.Total,
+                observer,
+                _shutdownToken
             );
-            return verdict is null ? new((bool)false, (EvalQuestionVerdict?)null, "verdict null", 0, 0) :
+
+            return verdict is null
+                ? new(false, null, "verdict null", 0, 0)
+                :
                 // Token counts are emitted by EvalService via the observer;
                 // daemon no longer owns that accounting. Report 0 here unless
                 // we surface them on the verdict type directly (future change).
                 new QuestionResult(true, verdict, null, 0, 0);
         } catch (Exception ex) {
             _logger.LogError(ex, "RunQuestion failed for {RunId}/{QuestionId}", cmd.EvalRunId, cmd.Question.Id);
+
             return new(false, null, $"{ex.GetType().Name}: {ex.Message}", 0, 0);
         }
     }
 
     async Task<FinalizeResult> HandleFinalizeAsync(FinalizeEvalCommand cmd) {
         var ctx = _cache.Get(cmd.EvalRunId);
+
         if (ctx is null) return new(false, "context not cached", null);
 
         using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync(_baseUrl, _shutdownToken);
@@ -109,12 +134,19 @@ internal sealed class EvalRunner {
             // FinalizeAsync signature was updated in Task 6.5 — the taxonomy is
             // carried on ctx.Questions, not passed separately.
             var aggregate = await EvalService.FinalizeAsync(
-                ctx, httpClient, _baseUrl, cmd.Verdicts, cmd.Model,
-                observer, _shutdownToken
+                ctx,
+                httpClient,
+                _baseUrl,
+                cmd.Verdicts,
+                cmd.Model,
+                observer,
+                _shutdownToken
             );
+
             return new(aggregate is not null, aggregate is null ? "finalize failed" : null, aggregate);
         } catch (Exception ex) {
             _logger.LogError(ex, "FinalizeEval failed for {RunId}", cmd.EvalRunId);
+
             return new(false, $"{ex.GetType().Name}: {ex.Message}", null);
         } finally {
             // Always evict — a finalize throw must not leak the cached context.
@@ -125,6 +157,7 @@ internal sealed class EvalRunner {
     Task HandleCancelAsync(CancelEvalCommand cmd) {
         _cache.Remove(cmd.EvalRunId);
         _logger.LogInformation("Cancelled eval {RunId}", cmd.EvalRunId);
+
         return Task.CompletedTask;
     }
 }
@@ -177,7 +210,12 @@ sealed class DaemonEvalObserver(
     public void OnQuestionCompleted(int index, int total, EvalQuestionVerdict verdict, long inputTokens, long outputTokens) {
         logger.LogInformation(
             "[eval {Run}] [{Index}/{Total}] {Question} -> {Score} ({Verdict})",
-            evalRunId, index, total, verdict.QuestionId, verdict.Score, verdict.Verdict
+            evalRunId,
+            index,
+            total,
+            verdict.QuestionId,
+            verdict.Score,
+            verdict.Verdict
         );
         Relay(() => connection.EvalQuestionCompletedAsync(evalRunId, sessionId, index, total, verdict.Category, verdict.QuestionId, verdict.Score, verdict.Verdict), "EvalQuestionCompleted");
     }
@@ -217,14 +255,16 @@ sealed class DaemonEvalObserver(
 
     void Relay(Func<Task> send, string eventName) {
         _ = Task.Run(async () => {
-            await _relayLock.WaitAsync();
-            try {
-                await send();
-            } catch (Exception ex) {
-                logger.LogWarning(ex, "Failed to relay {Event} for eval {Run}", eventName, evalRunId);
-            } finally {
-                _relayLock.Release();
+                await _relayLock.WaitAsync();
+
+                try {
+                    await send();
+                } catch (Exception ex) {
+                    logger.LogWarning(ex, "Failed to relay {Event} for eval {Run}", eventName, evalRunId);
+                } finally {
+                    _relayLock.Release();
+                }
             }
-        });
+        );
     }
 }

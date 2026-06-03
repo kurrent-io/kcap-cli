@@ -47,14 +47,7 @@ public static class CodexHooksParser {
         foreach (var evt in events) {
             if (hooks[evt] is not JsonArray entries) return false;
 
-            var any = false;
-
-            foreach (var entry in entries) {
-                if (EntryReferencesKapacitorCodexHook(entry)) {
-                    any = true;
-                    break;
-                }
-            }
+            var any = entries.Any(EntryReferencesKapacitorCodexHook);
 
             if (!any) return false;
         }

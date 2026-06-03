@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Kapacitor.Cli.Core;
 using Kapacitor.Cli.Daemon;
@@ -31,7 +32,9 @@ public class AgentOrchestratorVendorTests {
         Git(repoPath, "commit", "-q", "-m", "initial");
 
         return (repoPath, () => {
-            try { Directory.Delete(repoPath, true); } catch { /* best-effort */ }
+            try { Directory.Delete(repoPath, true); } catch {
+                /* best-effort */
+            }
         });
     }
 
@@ -43,16 +46,17 @@ public class AgentOrchestratorVendorTests {
         };
         using var proc = Process.Start(psi)!;
         proc.WaitForExit();
+
         if (proc.ExitCode != 0) {
             throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {proc.StandardError.ReadToEnd()}");
         }
     }
 
     static AgentOrchestrator BuildOrchestrator(
-            CaptureServerConnection                   server,
-            IPtyProcessFactory                        ptyFactory,
+            CaptureServerConnection                           server,
+            IPtyProcessFactory                                ptyFactory,
             IReadOnlyDictionary<string, IHostedAgentLauncher> launchers,
-            string?                                   allowedRepoPath = null
+            string?                                           allowedRepoPath = null
         ) {
         var config = new DaemonConfig {
             Name                = "test",
@@ -101,14 +105,14 @@ public class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, ptyFactory, launchers);
 
         var cmd = new LaunchAgentCommand(
-            AgentId:       "agent-bogus",
-            Prompt:        "hi",
-            Model:         "opus",
-            Effort:        null,
-            RepoPath:      "/tmp/does-not-matter",
-            Tools:         null,
+            AgentId: "agent-bogus",
+            Prompt: "hi",
+            Model: "opus",
+            Effort: null,
+            RepoPath: "/tmp/does-not-matter",
+            Tools: null,
             AttachmentIds: null,
-            Vendor:        "bogus"
+            Vendor: "bogus"
         );
 
         await orch.HandleLaunchAgentForTest(cmd);
@@ -122,12 +126,14 @@ public class AgentOrchestratorVendorTests {
     [Test]
     public async Task Launch_with_vendor_claude_calls_claude_launcher() {
         var (repoPath, cleanup) = CreateGitRepo();
+
         try {
             var server     = new CaptureServerConnection();
             var ptyFactory = new SpyPtyProcessFactory();
             var claudeSpy  = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
-            var codexSpy   = new SpyHostedAgentLauncher("codex",  cliPath: "spy-codex");
-            var launchers  = new Dictionary<string, IHostedAgentLauncher> {
+            var codexSpy   = new SpyHostedAgentLauncher("codex", cliPath: "spy-codex");
+
+            var launchers = new Dictionary<string, IHostedAgentLauncher> {
                 ["claude"] = claudeSpy,
                 ["codex"]  = codexSpy
             };
@@ -135,14 +141,14 @@ public class AgentOrchestratorVendorTests {
             await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
             var cmd = new LaunchAgentCommand(
-                AgentId:       "agent-c1",
-                Prompt:        "do work",
-                Model:         "opus",
-                Effort:        null,
-                RepoPath:      repoPath,
-                Tools:         null,
+                AgentId: "agent-c1",
+                Prompt: "do work",
+                Model: "opus",
+                Effort: null,
+                RepoPath: repoPath,
+                Tools: null,
                 AttachmentIds: null,
-                Vendor:        "claude"
+                Vendor: "claude"
             );
 
             await orch.HandleLaunchAgentForTest(cmd);
@@ -163,12 +169,14 @@ public class AgentOrchestratorVendorTests {
     [Test]
     public async Task Launch_with_vendor_codex_calls_codex_launcher() {
         var (repoPath, cleanup) = CreateGitRepo();
+
         try {
             var server     = new CaptureServerConnection();
             var ptyFactory = new SpyPtyProcessFactory();
             var claudeSpy  = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
-            var codexSpy   = new SpyHostedAgentLauncher("codex",  cliPath: "spy-codex");
-            var launchers  = new Dictionary<string, IHostedAgentLauncher> {
+            var codexSpy   = new SpyHostedAgentLauncher("codex", cliPath: "spy-codex");
+
+            var launchers = new Dictionary<string, IHostedAgentLauncher> {
                 ["claude"] = claudeSpy,
                 ["codex"]  = codexSpy
             };
@@ -176,14 +184,14 @@ public class AgentOrchestratorVendorTests {
             await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
             var cmd = new LaunchAgentCommand(
-                AgentId:       "agent-x1",
-                Prompt:        "do work",
-                Model:         "gpt-5",
-                Effort:        null,
-                RepoPath:      repoPath,
-                Tools:         null,
+                AgentId: "agent-x1",
+                Prompt: "do work",
+                Model: "gpt-5",
+                Effort: null,
+                RepoPath: repoPath,
+                Tools: null,
                 AttachmentIds: null,
-                Vendor:        "codex"
+                Vendor: "codex"
             );
 
             await orch.HandleLaunchAgentForTest(cmd);
@@ -205,23 +213,24 @@ public class AgentOrchestratorVendorTests {
         var server     = new CaptureServerConnection();
         var ptyFactory = new SpyPtyProcessFactory();
         var codexSpy   = new SpyHostedAgentLauncher("codex", cliPath: "spy-codex");
-        var launchers  = new Dictionary<string, IHostedAgentLauncher> {
+
+        var launchers = new Dictionary<string, IHostedAgentLauncher> {
             ["codex"] = codexSpy
         };
 
         await using var orch = BuildOrchestrator(server, ptyFactory, launchers);
 
         var cmd = new LaunchAgentCommand(
-            AgentId:       "agent-r1",
-            Prompt:        null,
-            Model:         "gpt-5",
-            Effort:        null,
-            RepoPath:      "/tmp/whatever",
-            Tools:         null,
+            AgentId: "agent-r1",
+            Prompt: null,
+            Model: "gpt-5",
+            Effort: null,
+            RepoPath: "/tmp/whatever",
+            Tools: null,
             AttachmentIds: null,
-            Vendor:        "codex",
-            Kind:          LaunchKind.Review,
-            Review:        new ReviewLaunchInfo("acme", "widgets", 42)
+            Vendor: "codex",
+            Kind: LaunchKind.Review,
+            Review: new ReviewLaunchInfo("acme", "widgets", 42)
         );
 
         await orch.HandleLaunchAgentForTest(cmd);
@@ -237,12 +246,15 @@ public class AgentOrchestratorVendorTests {
     [Test]
     public async Task Codex_hooks_not_installed_exception_during_prepare_yields_actionable_launch_failed() {
         var (repoPath, cleanup) = CreateGitRepo();
+
         try {
             var server     = new CaptureServerConnection();
             var ptyFactory = new SpyPtyProcessFactory();
-            var codexSpy   = new SpyHostedAgentLauncher("codex", cliPath: "spy-codex") {
+
+            var codexSpy = new SpyHostedAgentLauncher("codex", cliPath: "spy-codex") {
                 PrepareThrow = new CodexHooksNotInstalledException("Run plugin install --codex")
             };
+
             var launchers = new Dictionary<string, IHostedAgentLauncher> {
                 ["codex"] = codexSpy
             };
@@ -250,14 +262,14 @@ public class AgentOrchestratorVendorTests {
             await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
             var cmd = new LaunchAgentCommand(
-                AgentId:       "agent-h1",
-                Prompt:        "go",
-                Model:         "gpt-5",
-                Effort:        null,
-                RepoPath:      repoPath,
-                Tools:         null,
+                AgentId: "agent-h1",
+                Prompt: "go",
+                Model: "gpt-5",
+                Effort: null,
+                RepoPath: repoPath,
+                Tools: null,
                 AttachmentIds: null,
-                Vendor:        "codex"
+                Vendor: "codex"
             );
 
             await orch.HandleLaunchAgentForTest(cmd);
@@ -279,20 +291,22 @@ public class AgentOrchestratorVendorTests {
         public string Vendor  { get; } = vendor;
         public string CliPath { get; } = cliPath;
 
-        public int                 PrepareCalls   { get; private set; }
-        public int                 BuildArgsCalls { get; private set; }
-        public int                 CleanupCalls   { get; private set; }
-        public Exception?          PrepareThrow   { get; init; }
+        public int        PrepareCalls   { get; private set; }
+        public int        BuildArgsCalls { get; private set; }
+        public int        CleanupCalls   { get; private set; }
+        public Exception? PrepareThrow   { get; init; }
 
         public bool IsAvailable() => true;
 
         public void Prepare(LauncherContext ctx) {
             PrepareCalls++;
+
             if (PrepareThrow is not null) throw PrepareThrow;
         }
 
         public LaunchArgs BuildArgs(LauncherContext ctx) {
             BuildArgsCalls++;
+
             return new LaunchArgs(Args: [], McpConfigPath: null);
         }
 
@@ -305,10 +319,17 @@ public class AgentOrchestratorVendorTests {
         public int     SpawnCalls  { get; private set; }
         public string? LastCommand { get; private set; }
 
-        public IPtyProcess Spawn(string command, string[] args, string cwd,
-                                 Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40) {
+        public IPtyProcess Spawn(
+                string                      command,
+                string[]                    args,
+                string                      cwd,
+                Dictionary<string, string>? extraEnv = null,
+                ushort                      cols     = 120,
+                ushort                      rows     = 40
+            ) {
             SpawnCalls++;
             LastCommand = command;
+
             return new StubPtyProcess();
         }
     }
@@ -323,21 +344,19 @@ public class AgentOrchestratorVendorTests {
         public bool HasExited => true;
         public int? ExitCode  => 0;
 
-        public ValueTask DisposeAsync()                  => default;
-        public Task      WaitForExitAsync(TimeSpan? _)   => Task.CompletedTask;
-        public Task      TerminateAsync(TimeSpan?  _)    => Task.CompletedTask;
+        public ValueTask DisposeAsync() => default;
+        public Task WaitForExitAsync(TimeSpan? _) => Task.CompletedTask;
+        public Task TerminateAsync(TimeSpan?   _) => Task.CompletedTask;
 
 #pragma warning disable CS1998
-        public async IAsyncEnumerable<byte[]> ReadOutputAsync(
-                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken _ = default
-            ) {
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken _ = default) {
             yield break;
         }
 #pragma warning restore CS1998
 
-        public Task WriteAsync(string  _) => Task.CompletedTask;
-        public Task WriteAsync(byte[]  _) => Task.CompletedTask;
-        public void Resize(ushort _, ushort __) { }
+        public Task WriteAsync(string _) => Task.CompletedTask;
+        public Task WriteAsync(byte[] _) => Task.CompletedTask;
+        public void Resize(ushort     _, ushort __) { }
         public void SendInterrupt() { }
     }
 
@@ -354,6 +373,7 @@ public class AgentOrchestratorVendorTests {
 
         public override Task LaunchFailedAsync(string agentId, string reason) {
             LaunchFailedCalls.Add((agentId, reason));
+
             return Task.CompletedTask;
         }
 

@@ -5,7 +5,7 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 
-namespace kapacitor.Tests.Integration;
+namespace Kapacitor.Cli.Tests.Integration;
 
 /// <summary>
 /// Validates the CLI's HTTP contract with the Capacitor server.

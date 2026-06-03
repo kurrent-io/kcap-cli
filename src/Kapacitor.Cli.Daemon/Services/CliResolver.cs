@@ -30,20 +30,15 @@ internal static class CliResolver {
         // sufficient; we don't need to handle quoted PATH entries because
         // POSIX disallows them and Windows tolerates raw paths in PATH.
         var pathEnv = Environment.GetEnvironmentVariable("PATH");
+
         if (string.IsNullOrEmpty(pathEnv)) return false;
 
         var extensions = OperatingSystem.IsWindows()
             ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.CMD;.BAT;.COM").Split(';', StringSplitOptions.RemoveEmptyEntries)
             : [""];
 
-        foreach (var dir in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)) {
-            foreach (var ext in extensions) {
-                var candidate = Path.Combine(dir, cliPath + ext);
-                if (IsExecutable(candidate)) return true;
-            }
-        }
-
-        return false;
+        return pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Any(dir => extensions.Select(ext => Path.Combine(dir, cliPath + ext)).Any(IsExecutable));
     }
 
     /// <summary>
@@ -57,6 +52,7 @@ internal static class CliResolver {
 
         const UnixFileMode anyExecute =
             UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+
         try {
             return (File.GetUnixFileMode(path) & anyExecute) != 0;
         } catch {

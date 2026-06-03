@@ -27,7 +27,7 @@ internal sealed class EvalContextCache : IDisposable {
     static readonly TimeSpan SweepInterval = TimeSpan.FromMinutes(5);
 
     public EvalContextCache() {
-        _sweepTimer = new Timer(_ => Sweep(), null, SweepInterval, SweepInterval);
+        _sweepTimer = new(_ => Sweep(), null, SweepInterval, SweepInterval);
     }
 
     public void Put(string evalRunId, EvalService.EvalContext ctx) =>
@@ -35,15 +35,20 @@ internal sealed class EvalContextCache : IDisposable {
 
     public EvalService.EvalContext? Get(string evalRunId) {
         if (!_entries.TryGetValue(evalRunId, out var entry)) return null;
+
         var now = DateTimeOffset.UtcNow;
+
         if (now - entry.LastAccessed > MaxIdle) {
             _entries.TryRemove(new(evalRunId, entry));
+
             return null;
         }
+
         // Refresh last-access so sequential per-question dispatches don't
         // age out a still-active run. Race-safe via TryUpdate — concurrent
         // Get or Remove just loses the refresh, which is benign.
         _entries.TryUpdate(evalRunId, entry with { LastAccessed = now }, entry);
+
         return entry.Context;
     }
 
@@ -53,6 +58,7 @@ internal sealed class EvalContextCache : IDisposable {
 
     void Sweep() {
         var now = DateTimeOffset.UtcNow;
+
         foreach (var kvp in _entries) {
             if (now - kvp.Value.LastAccessed > MaxIdle) {
                 _entries.TryRemove(kvp);

@@ -19,7 +19,7 @@ namespace Kapacitor.Cli.Daemon;
 ///
 /// <para>The acquisition guards against the AI-630 scenario: two daemons
 /// under the same name on the same machine (regardless of
-/// <c>KAPACITOR_CONFIG_DIR</c> — <see cref="Kapacitor.Cli.Core.DaemonLockPaths"/> uses a fixed
+/// <c>KAPACITOR_CONFIG_DIR</c> — <see cref="DaemonLockPaths"/> uses a fixed
 /// directory). Two daemons with <i>different</i> names are allowed to
 /// coexist; the lock file is per-name.</para>
 /// </summary>

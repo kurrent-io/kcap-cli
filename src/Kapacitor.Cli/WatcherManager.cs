@@ -39,7 +39,7 @@ static class WatcherManager {
             arguments += " --skip-title";
         }
 
-        if (parentPid is { } ppid && ppid > 1) {
+        if (parentPid is { } ppid and > 1) {
             arguments += $" --parent-pid {ppid}";
         }
 
@@ -312,7 +312,7 @@ static class WatcherManager {
                 Vendor      = vendor == "claude" ? null : vendor
             };
 
-            var       batchJson = JsonSerializer.Serialize(batch, Kapacitor.Cli.Core.KapacitorJsonContext.Default.TranscriptBatch);
+            var       batchJson = JsonSerializer.Serialize(batch, KapacitorJsonContext.Default.TranscriptBatch);
             using var content   = new StringContent(batchJson, Encoding.UTF8, "application/json");
 
             try {

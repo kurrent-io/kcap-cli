@@ -33,10 +33,13 @@ public static class CursorTranscriptBackfill {
         }
 
         int resumeFrom;
+
         try {
             using var resp = await client.GetOnceAsync(
                 $"{baseUrl}/api/sessions/{sessionId}/last-line",
-                WatermarkTimeout, ct);
+                WatermarkTimeout,
+                ct
+            );
 
             // 200 — body has last_line_number; 204 — stream exists but no
             // lines yet (resume from 0); 404 — stream doesn't exist (resume
@@ -46,8 +49,9 @@ public static class CursorTranscriptBackfill {
             } else if (!resp.IsSuccessStatusCode) {
                 return new Stats(0, Failed: true);
             } else {
-                var body = await resp.Content.ReadAsStringAsync(ct);
-                using var doc = JsonDocument.Parse(body);
+                var       body = await resp.Content.ReadAsStringAsync(ct);
+                using var doc  = JsonDocument.Parse(body);
+
                 resumeFrom = doc.RootElement.TryGetProperty("last_line_number", out var ln) && ln.ValueKind == JsonValueKind.Number
                     ? ln.GetInt32() + 1
                     : 0;
@@ -60,22 +64,23 @@ public static class CursorTranscriptBackfill {
         // in one shot.
         var lines       = new List<string>();
         var lineNumbers = new List<int>();
+
         try {
-            using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var reader = new StreamReader(stream);
-            var lineIndex = 0;
-            string? line;
-            while ((line = await reader.ReadLineAsync(ct)) is not null) {
+            await using var stream    = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var       reader    = new StreamReader(stream);
+            var             lineIndex = 0;
+
+            while (await reader.ReadLineAsync(ct) is { } line) {
                 if (lineIndex >= resumeFrom && !string.IsNullOrWhiteSpace(line)) {
                     lines.Add(line);
                     lineNumbers.Add(lineIndex);
                 }
+
                 lineIndex++;
             }
-        } catch { return new Stats(0, Failed: true); }
+        } catch { return new(0, Failed: true); }
 
-        if (lines.Count == 0) return new Stats(0, Failed: false);
-        if (budget()) return new Stats(0, Failed: false);
+        if (lines.Count == 0 || budget()) return new(0, Failed: false);
 
         var batch = new TranscriptBatch {
             SessionId   = sessionId,
@@ -87,13 +92,18 @@ public static class CursorTranscriptBackfill {
         var json = JsonSerializer.Serialize(batch, KapacitorJsonContext.Default.TranscriptBatch);
 
         HttpResponseMessage? resp2 = null;
+
         try {
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
+
             resp2 = await client.PostOnceAsync(
-                $"{baseUrl}/hooks/transcript", content, BatchPostTimeout, ct);
-            return resp2.IsSuccessStatusCode
-                ? new Stats(lines.Count, Failed: false)
-                : new Stats(0, Failed: true);
+                $"{baseUrl}/hooks/transcript",
+                content,
+                BatchPostTimeout,
+                ct
+            );
+
+            return resp2.IsSuccessStatusCode ? new(lines.Count, Failed: false) : new Stats(0, Failed: true);
         } catch {
             return new Stats(0, Failed: true);
         } finally {

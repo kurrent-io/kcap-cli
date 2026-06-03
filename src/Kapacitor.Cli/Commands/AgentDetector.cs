@@ -13,20 +13,12 @@ public static class AgentDetector {
     /// true on the first <paramref name="isExecutable"/> hit.
     /// </summary>
     internal static bool IsInstalled(
-        string binaryName,
-        IEnumerable<string> paths,
-        IEnumerable<string> extensions,
-        Func<string, bool> isExecutable) {
-        foreach (var dir in paths) {
-            if (string.IsNullOrEmpty(dir)) continue;
-
-            foreach (var ext in extensions) {
-                var candidate = Path.Combine(dir, binaryName + ext);
-                if (isExecutable(candidate)) return true;
-            }
-        }
-
-        return false;
+            string             binaryName,
+            string[]           paths,
+            string[]           extensions,
+            Func<string, bool> isExecutable
+        ) {
+        return paths.Where(dir => !string.IsNullOrEmpty(dir)).Any(dir => extensions.Select(ext => Path.Combine(dir, binaryName + ext)).Any(isExecutable));
     }
 
     /// <summary>
@@ -37,6 +29,7 @@ public static class AgentDetector {
     /// </summary>
     public static bool IsInstalled(string binaryName) {
         var pathEnv = Environment.GetEnvironmentVariable("PATH");
+
         if (string.IsNullOrEmpty(pathEnv)) return false;
 
         var paths      = pathEnv.Split(Path.PathSeparator);
@@ -62,6 +55,7 @@ public static class AgentDetector {
         // degrades to the same outcome as a runtime-broken binary.
         const UnixFileMode anyExecute =
             UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+
         try {
             return (File.GetUnixFileMode(path) & anyExecute) != 0;
         } catch {

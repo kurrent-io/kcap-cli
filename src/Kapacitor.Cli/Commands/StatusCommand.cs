@@ -39,9 +39,11 @@ public static class StatusCommand {
         } else {
             var rawTokens = await TokenStore.LoadAsync();
 
-            await Console.Out.WriteLineAsync(rawTokens is not null
-                ? $"{rawTokens.GitHubUsername} ({rawTokens.Provider}) ✗ token expired (run: kapacitor login)"
-                : "not authenticated (run: kapacitor login)");
+            await Console.Out.WriteLineAsync(
+                rawTokens is not null
+                    ? $"{rawTokens.GitHubUsername} ({rawTokens.Provider}) ✗ token expired (run: kapacitor login)"
+                    : "not authenticated (run: kapacitor login)"
+            );
         }
 
         // Hooks
@@ -50,9 +52,10 @@ public static class StatusCommand {
         var claudeInstalled = IsClaudePluginInstalled(ClaudePaths.UserSettings);
         var codexInstalled  = IsCodexHooksInstalled(CodexPaths.UserHooksJson);
 
-        var parts = new List<string>();
-        parts.Add(claudeInstalled ? "Claude ✓" : "Claude ✗");
-        parts.Add(codexInstalled ? "Codex ✓" : "Codex ✗");
+        var parts = new List<string> {
+            claudeInstalled ? "Claude ✓" : "Claude ✗",
+            codexInstalled ? "Codex ✓" : "Codex ✗"
+        };
 
         await Console.Out.WriteLineAsync(string.Join("  ", parts));
 
@@ -70,17 +73,19 @@ public static class StatusCommand {
     }
 
     static async Task WriteAgentStatusAsync() {
-        if (!Directory.Exists(Kapacitor.Cli.Core.DaemonLockPaths.Directory)) {
+        if (!Directory.Exists(DaemonLockPaths.Directory)) {
             await Console.Out.WriteLineAsync("not running");
+
             return;
         }
 
-        var pidFiles = Directory.EnumerateFiles(Kapacitor.Cli.Core.DaemonLockPaths.Directory, "*.pid")
+        var pidFiles = Directory.EnumerateFiles(DaemonLockPaths.Directory, "*.pid")
             .OrderBy(f => f)
             .ToList();
 
         if (pidFiles.Count == 0) {
             await Console.Out.WriteLineAsync("not running");
+
             return;
         }
 
@@ -88,6 +93,7 @@ public static class StatusCommand {
 
         foreach (var pidFile in pidFiles) {
             var name = Path.GetFileNameWithoutExtension(pidFile);
+
             if (string.IsNullOrEmpty(name)) continue;
 
             var firstLine = (await File.ReadAllTextAsync(pidFile))
@@ -97,6 +103,7 @@ public static class StatusCommand {
             if (!int.TryParse(firstLine, out var pid)) continue;
 
             var alive = false;
+
             try {
                 System.Diagnostics.Process.GetProcessById(pid);
                 alive = true;
@@ -109,22 +116,26 @@ public static class StatusCommand {
 
         var live = entries.Where(e => e.Alive).ToList();
 
-        if (live.Count == 0) {
-            await Console.Out.WriteLineAsync(
-                entries.Count == 0
-                    ? "not running"
-                    : "not running (stale PID files; `kapacitor daemon doctor --clean` to remove)"
-            );
-            return;
-        }
+        switch (live.Count) {
+            case 0:
+                await Console.Out.WriteLineAsync(
+                    entries.Count == 0
+                        ? "not running"
+                        : "not running (stale PID files; `kapacitor daemon doctor --clean` to remove)"
+                );
 
-        if (live.Count == 1) {
-            await Console.Out.WriteLineAsync($"running — {live[0].Name} (PID {live[0].Pid})");
-            return;
-        }
+                return;
+            case 1:
+                await Console.Out.WriteLineAsync($"running — {live[0].Name} (PID {live[0].Pid})");
 
-        var summary = string.Join(", ", live.Select(e => $"{e.Name} (PID {e.Pid})"));
-        await Console.Out.WriteLineAsync($"running ({live.Count}) — {summary}");
+                return;
+            default: {
+                var summary = string.Join(", ", live.Select(e => $"{e.Name} (PID {e.Pid})"));
+                await Console.Out.WriteLineAsync($"running ({live.Count}) — {summary}");
+
+                break;
+            }
+        }
     }
 
     /// <summary>

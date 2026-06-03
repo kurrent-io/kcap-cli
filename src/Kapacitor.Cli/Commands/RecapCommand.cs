@@ -43,7 +43,7 @@ static class RecapCommand {
         }
 
         var json    = await resp.Content.ReadAsStringAsync();
-        var entries = JsonSerializer.Deserialize(json, Kapacitor.Cli.Core.KapacitorJsonContext.Default.ListRepoRecapEntry);
+        var entries = JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.ListRepoRecapEntry);
 
         if (entries is null || entries.Count == 0) {
             await Console.Out.WriteLineAsync($"No session summaries found for {repo.Owner}/{repo.RepoName}.");
@@ -109,7 +109,7 @@ static class RecapCommand {
         }
 
         var json    = await resp.Content.ReadAsStringAsync();
-        var entries = JsonSerializer.Deserialize(json, Kapacitor.Cli.Core.KapacitorJsonContext.Default.ListRecapEntry);
+        var entries = JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.ListRecapEntry);
 
         if (entries is null || entries.Count == 0) {
             await Console.Out.WriteLineAsync("No recap entries found.");

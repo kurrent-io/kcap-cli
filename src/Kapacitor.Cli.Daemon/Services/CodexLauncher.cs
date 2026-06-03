@@ -5,10 +5,9 @@ using Microsoft.Extensions.Logging;
 namespace Kapacitor.Cli.Daemon.Services;
 
 internal sealed partial class CodexLauncher(
-        DaemonConfig            config,
-        ILogger<CodexLauncher>  logger
+        DaemonConfig           config,
+        ILogger<CodexLauncher> logger
     ) : IHostedAgentLauncher {
-
     public string Vendor  => "codex";
     public string CliPath => config.CodexPath;
 
@@ -22,6 +21,7 @@ internal sealed partial class CodexLauncher(
         // the preflight in step 2. Best-effort.
         try {
             var sourceCodexDir = Path.Combine(ctx.SourceRepoPath, ".codex");
+
             if (Directory.Exists(sourceCodexDir)) {
                 FileSystemOverlay.OverlayDirectory(sourceCodexDir, Path.Combine(ctx.Worktree.Path, ".codex"));
             }
@@ -32,10 +32,11 @@ internal sealed partial class CodexLauncher(
         // Step 2: hook preflight (fail-fast). Either worktree-scope (after overlay)
         // OR user-scope is sufficient.
         var worktreeHooks = Path.Combine(ctx.Worktree.Path, ".codex", "hooks.json");
+
         if (!HooksInstalledIn(worktreeHooks) && !HooksInstalledIn(CodexPaths.UserHooksJson)) {
             throw new CodexHooksNotInstalledException(
                 "Codex hooks not installed. Run `kapacitor plugin install --codex` " +
-                "(user scope) or `kapacitor plugin install --codex --project` " +
+                "(user scope) or `kapacitor plugin install --codex --project` "      +
                 "(project scope) and try again."
             );
         }
@@ -53,16 +54,14 @@ internal sealed partial class CodexLauncher(
     }
 
     public LaunchArgs BuildArgs(LauncherContext ctx) {
-        var args = new List<string>();
-
-        args.Add("--cd");
-        args.Add(ctx.Worktree.Path);
-
-        args.Add("--sandbox");
-        args.Add("workspace-write");
-
-        args.Add("--ask-for-approval");
-        args.Add("on-request");
+        var args = new List<string> {
+            "--cd",
+            ctx.Worktree.Path,
+            "--sandbox",
+            "workspace-write",
+            "--ask-for-approval",
+            "on-request"
+        };
 
         if (!string.IsNullOrEmpty(ctx.Model)) {
             args.Add("-m");
@@ -70,6 +69,7 @@ internal sealed partial class CodexLauncher(
         }
 
         var effort = ctx.Effort;
+
         if (!string.IsNullOrEmpty(effort) && !string.Equals(effort, "auto", StringComparison.OrdinalIgnoreCase)) {
             var mapped = string.Equals(effort, "max", StringComparison.OrdinalIgnoreCase) ? "xhigh" : effort;
             args.Add("-c");
@@ -83,7 +83,7 @@ internal sealed partial class CodexLauncher(
             args.Add(ctx.Prompt);
         }
 
-        return new LaunchArgs(args.ToArray(), McpConfigPath: null);
+        return new([.. args], McpConfigPath: null);
     }
 
     public void Cleanup(AgentInstance agent) {
@@ -92,8 +92,10 @@ internal sealed partial class CodexLauncher(
 
     static bool HooksInstalledIn(string hooksPath) {
         if (!File.Exists(hooksPath)) return false;
+
         try {
             var root = JsonNode.Parse(File.ReadAllText(hooksPath)) as JsonObject;
+
             return root is not null && CodexHooksParser.HasKapacitorHooksFor(root, CriticalHookEvents);
         } catch {
             return false;

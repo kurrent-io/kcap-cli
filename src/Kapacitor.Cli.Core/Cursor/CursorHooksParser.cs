@@ -25,12 +25,9 @@ public static class CursorHooksParser {
     /// string contains <c>"kapacitor hook --cursor"</c>.
     /// </summary>
     public static bool EntryReferencesKapacitorCursorHook(JsonNode? entry) {
-        if (entry?["command"] is JsonValue jv &&
-            jv.TryGetValue<string>(out var cmd) &&
-            cmd.Contains("kapacitor hook --cursor")) {
-            return true;
-        }
-        return false;
+        return entry?["command"] is JsonValue jv &&
+            jv.TryGetValue<string>(out var cmd)  &&
+            cmd.Contains("kapacitor hook --cursor");
     }
 
     /// <summary>
@@ -43,13 +40,8 @@ public static class CursorHooksParser {
         foreach (var evt in events) {
             if (hooks[evt] is not JsonArray entries) return false;
 
-            var any = false;
-            foreach (var entry in entries) {
-                if (EntryReferencesKapacitorCursorHook(entry)) {
-                    any = true;
-                    break;
-                }
-            }
+            var any = entries.Any(EntryReferencesKapacitorCursorHook);
+
             if (!any) return false;
         }
         return true;

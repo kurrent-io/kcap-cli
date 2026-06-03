@@ -38,7 +38,8 @@ public class ProcessHelpersTests {
         psi.RedirectStandardError  = true;
         psi.UseShellExecute        = false;
 
-        using var process = new Process { StartInfo = psi };
+        using var process = new Process();
+        process.StartInfo = psi;
         process.Start();
         var pid = process.Id;
 

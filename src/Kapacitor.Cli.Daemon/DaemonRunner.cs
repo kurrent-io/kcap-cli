@@ -12,8 +12,6 @@ using Microsoft.Extensions.Logging;
 namespace Kapacitor.Cli.Daemon;
 
 public static partial class DaemonRunner {
-    public static readonly string LogPath = PathHelpers.ConfigPath("daemon.log");
-
     /// <summary>
     /// Daemon binary version from <c>[AssemblyInformationalVersion]</c>,
     /// baked at build time by MSBuild's git-info integration. Surfaces on

@@ -36,7 +36,7 @@ static class ImportCommand {
         }
 
         public void WritePlanGrid(
-                ClassificationCounts                              c,
+                ClassificationCounts                               c,
                 IReadOnlyDictionary<string, ClassificationCounts>? bySource = null
             ) {
             if (Tty) {
@@ -44,7 +44,14 @@ static class ImportCommand {
                     AnsiConsole.Write(new Rule("[yellow]By source[/]").LeftJustified());
 
                     var sub = new Grid()
-                        .AddColumn().AddColumn().AddColumn().AddColumn().AddColumn().AddColumn().AddColumn();
+                        .AddColumn()
+                        .AddColumn()
+                        .AddColumn()
+                        .AddColumn()
+                        .AddColumn()
+                        .AddColumn()
+                        .AddColumn();
+
                     sub.AddRow(
                         "[dim]Source[/]",
                         "[dim]New[/]",
@@ -57,6 +64,7 @@ static class ImportCommand {
 
                     foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
                         var sc = kv.Value;
+
                         sub.AddRow(
                             $"[bold]{Markup.Escape(kv.Key)}[/]",
                             sc.New.ToString(),
@@ -83,6 +91,7 @@ static class ImportCommand {
                 if (bySource is { Count: > 1 }) {
                     Console.WriteLine();
                     Console.WriteLine("== By source ==");
+
                     foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
                         var sc = kv.Value;
                         Console.WriteLine($"  [{kv.Key}]");
@@ -93,6 +102,7 @@ static class ImportCommand {
                         Console.WriteLine($"    Excluded          {sc.Excluded}");
                         if (sc.ProbeError > 0) Console.WriteLine($"    Probe errors      {sc.ProbeError}");
                     }
+
                     Console.WriteLine();
                 }
 
@@ -106,7 +116,7 @@ static class ImportCommand {
         }
 
         public void WriteDoneGrid(
-                FinalCounts                              f,
+                FinalCounts                               f,
                 IReadOnlyDictionary<string, FinalCounts>? bySource = null
             ) {
             if (Tty) {
@@ -116,8 +126,15 @@ static class ImportCommand {
                     AnsiConsole.Write(new Rule("[green]By source[/]").LeftJustified());
 
                     var sub = new Grid()
-                        .AddColumn().AddColumn().AddColumn().AddColumn()
-                        .AddColumn().AddColumn().AddColumn().AddColumn();
+                        .AddColumn()
+                        .AddColumn()
+                        .AddColumn()
+                        .AddColumn()
+                        .AddColumn()
+                        .AddColumn()
+                        .AddColumn()
+                        .AddColumn();
+
                     sub.AddRow(
                         "[dim]Source[/]",
                         "[dim]Loaded[/]",
@@ -131,6 +148,7 @@ static class ImportCommand {
 
                     foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
                         var sf = kv.Value;
+
                         sub.AddRow(
                             $"[bold]{Markup.Escape(kv.Key)}[/]",
                             sf.Loaded.ToString(),
@@ -139,7 +157,7 @@ static class ImportCommand {
                             sf.TooShort.ToString(),
                             sf.Excluded.ToString(),
                             sf.ProbeError > 0 ? $"[red]{sf.ProbeError}[/]" : "0",
-                            sf.Errored    > 0 ? $"[red]{sf.Errored}[/]"    : "0"
+                            sf.Errored    > 0 ? $"[red]{sf.Errored}[/]" : "0"
                         );
                     }
 
@@ -170,6 +188,7 @@ static class ImportCommand {
                 if (bySource is { Count: > 1 }) {
                     Console.WriteLine();
                     Console.WriteLine("== By source ==");
+
                     foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
                         var sf = kv.Value;
                         Console.WriteLine($"  [{kv.Key}]");
@@ -181,6 +200,7 @@ static class ImportCommand {
                         if (sf.ProbeError > 0) Console.WriteLine($"    Probe errors        {sf.ProbeError}");
                         if (sf.Errored    > 0) Console.WriteLine($"    Errored             {sf.Errored}");
                     }
+
                     Console.WriteLine();
                 }
 
@@ -289,12 +309,12 @@ static class ImportCommand {
     /// </summary>
     static ClassificationCounts ComputeCounts(IReadOnlyList<SessionClassification> classifications) =>
         new(
-            New:           classifications.Count(c => c.Status == ClassificationStatus.New),
-            Partial:       classifications.Count(c => c.Status == ClassificationStatus.Partial),
+            New: classifications.Count(c => c.Status           == ClassificationStatus.New),
+            Partial: classifications.Count(c => c.Status       == ClassificationStatus.Partial),
             AlreadyLoaded: classifications.Count(c => c.Status == ClassificationStatus.AlreadyLoaded),
-            TooShort:      classifications.Count(c => c.Status == ClassificationStatus.TooShort),
-            Excluded:      classifications.Count(c => c.Status == ClassificationStatus.Excluded),
-            ProbeError:    classifications.Count(c => c.Status == ClassificationStatus.ProbeError)
+            TooShort: classifications.Count(c => c.Status      == ClassificationStatus.TooShort),
+            Excluded: classifications.Count(c => c.Status      == ClassificationStatus.Excluded),
+            ProbeError: classifications.Count(c => c.Status    == ClassificationStatus.ProbeError)
         );
 
     /// <summary>
@@ -311,48 +331,50 @@ static class ImportCommand {
     /// doesn't record per-session outcome by vendor yet.
     /// </remarks>
     internal static FinalCounts ComputePerSourceFinalCounts(
-            IReadOnlyList<SessionClassification>      classifications,
-            int                                       imported,
-            (int Loaded, int Skipped, int Failed)?    routedOutcomes
+            IReadOnlyList<SessionClassification>   classifications,
+            int                                    imported,
+            (int Loaded, int Skipped, int Failed)? routedOutcomes
         ) {
         var counts = ComputeCounts(classifications);
 
         if (routedOutcomes is { } r) {
             // Routed-phase vendor: take exact counts from the per-vendor tracker.
             return new FinalCounts(
-                Loaded:             r.Loaded,
-                Resumed:            0,
-                AlreadyLoaded:      counts.AlreadyLoaded,
-                TooShort:           counts.TooShort,
-                Excluded:           counts.Excluded + r.Skipped,
-                ProbeError:         counts.ProbeError,
-                Errored:            r.Failed,
-                TitlesGenerated:    0,
-                TitlesSkipped:      0,
-                TitlesFailed:       0,
+                Loaded: r.Loaded,
+                Resumed: 0,
+                AlreadyLoaded: counts.AlreadyLoaded,
+                TooShort: counts.TooShort,
+                Excluded: counts.Excluded + r.Skipped,
+                ProbeError: counts.ProbeError,
+                Errored: r.Failed,
+                TitlesGenerated: 0,
+                TitlesSkipped: 0,
+                TitlesFailed: 0,
                 SummariesGenerated: 0,
-                SummariesFailed:    0,
-                RanBackground:      false,
-                RequestedSummaries: false);
+                SummariesFailed: 0,
+                RanBackground: false,
+                RequestedSummaries: false
+            );
         }
 
         // Chain-phase vendor: best-effort approximation because the chain worker
         // doesn't record per-session outcome by vendor yet.
         return new FinalCounts(
-            Loaded:             imported,
-            Resumed:            0,
-            AlreadyLoaded:      counts.AlreadyLoaded,
-            TooShort:           counts.TooShort,
-            Excluded:           counts.Excluded,
-            ProbeError:         counts.ProbeError,
-            Errored:            classifications.Count(c => c.Status is ClassificationStatus.New or ClassificationStatus.Partial) - imported,
-            TitlesGenerated:    0,
-            TitlesSkipped:      0,
-            TitlesFailed:       0,
+            Loaded: imported,
+            Resumed: 0,
+            AlreadyLoaded: counts.AlreadyLoaded,
+            TooShort: counts.TooShort,
+            Excluded: counts.Excluded,
+            ProbeError: counts.ProbeError,
+            Errored: classifications.Count(c => c.Status is ClassificationStatus.New or ClassificationStatus.Partial) - imported,
+            TitlesGenerated: 0,
+            TitlesSkipped: 0,
+            TitlesFailed: 0,
             SummariesGenerated: 0,
-            SummariesFailed:    0,
-            RanBackground:      false,
-            RequestedSummaries: false);
+            SummariesFailed: 0,
+            RanBackground: false,
+            RequestedSummaries: false
+        );
     }
 
     internal sealed record FinalCounts(
@@ -373,19 +395,19 @@ static class ImportCommand {
         );
 
     public static async Task<int> HandleImport(
-            string                       baseUrl,
-            string?                      filterCwd,
-            string?                      filterSession           = null,
-            int                          minLines                = 15,
-            bool                         generateSummaries       = false,
+            string                        baseUrl,
+            string?                       filterCwd,
+            string?                       filterSession           = null,
+            int                           minLines                = 15,
+            bool                          generateSummaries       = false,
             IReadOnlyList<IImportSource>? sources                 = null,
-            bool                         explicitVendorSelection = false,
-            DateOnly?                    since                   = null,
-            ImportScope?                 scope                   = null,
-            bool                         skipConfirmation        = false,
-            bool                         forcePrivate            = false,
-            string                       activeProfile           = "default",
-            (string Owner, string Name)? currentRepo             = null
+            bool                          explicitVendorSelection = false,
+            DateOnly?                     since                   = null,
+            ImportScope?                  scope                   = null,
+            bool                          skipConfirmation        = false,
+            bool                          forcePrivate            = false,
+            string                        activeProfile           = "default",
+            (string Owner, string Name)?  currentRepo             = null
         ) {
         using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
         var       display    = ImportDisplay.Create();
@@ -403,11 +425,16 @@ static class ImportCommand {
         if (available.Count == 0) {
             if (explicitVendorSelection) {
                 var flagList = string.Join(", ", missing.Select(v => "--" + v));
+
                 await Console.Error.WriteLineAsync(
-                    $"{flagList} specified but no matching installation detected on this machine.");
+                    $"{flagList} specified but no matching installation detected on this machine."
+                );
+
                 return 1;
             }
+
             display.Line("No coding-agent sessions found. Install Claude, Codex, or Cursor and try again.");
+
             return 0;
         }
 
@@ -423,13 +450,15 @@ static class ImportCommand {
         display.BeginPhase("Discovering");
 
         var filters = new DiscoveryFilters(
-            FilterCwd:     filterCwd,
+            FilterCwd: filterCwd,
             FilterSession: filterSession,
-            Since:         since,
-            MinLines:      minLines);
+            Since: since,
+            MinLines: minLines
+        );
 
         var discoveriesPerSource = await Task.WhenAll(
-            sources.Select(s => s.DiscoverAsync(filters, CancellationToken.None)));
+            sources.Select(s => s.DiscoverAsync(filters, CancellationToken.None))
+        );
 
         for (var i = 0; i < sources.Count; i++) {
             var count = discoveriesPerSource[i].Count;
@@ -437,6 +466,7 @@ static class ImportCommand {
         }
 
         var totalDiscovered = discoveriesPerSource.Sum(d => d.Count);
+
         if (totalDiscovered == 0) {
             // When --session was given but nothing matched, surface the legacy
             // not-found error instead of the friendly "No transcript files" exit.
@@ -444,9 +474,12 @@ static class ImportCommand {
             // (cleanup follow-up) so downstream tooling sees consistent output.
             if (filterSession is not null) {
                 await Console.Error.WriteLineAsync($"Session not found: {NormalizeGuid(filterSession)}");
+
                 return 1;
             }
+
             display.Line("No transcript files found.");
+
             return 0;
         }
 
@@ -465,9 +498,11 @@ static class ImportCommand {
 
         for (var i = 0; i < sources.Count; i++) {
             var src = sources[i];
+
             foreach (var s in discoveriesPerSource[i]) {
-                var fp = s.SourceMeta.TryGetValue("FilePath",   out var f) ? f as string : null;
+                var fp = s.SourceMeta.TryGetValue("FilePath", out var f) ? f as string : null;
                 var ec = s.SourceMeta.TryGetValue("EncodedCwd", out var e) ? e as string : null;
+
                 if (fp is not null && ec is not null) {
                     allFileTuples.Add((s.SessionId, fp, ec, src.Vendor));
                 } else {
@@ -481,14 +516,16 @@ static class ImportCommand {
         // since Claude and Codex differ only in cwd-extraction, run it per
         // vendor and merge.
         var resolved = new Dictionary<string, (string Owner, string Name)?>(StringComparer.Ordinal);
+
         foreach (var vendor in new[] { "claude", "codex" }) {
             var slice = allFileTuples
                 .Where(t => t.Vendor == vendor)
                 .Select(t => (t.SessionId, t.FilePath, t.EncodedCwd))
                 .ToList();
+
             if (slice.Count == 0) continue;
 
-            var partial = await ResolveTranscriptReposAsync(slice, codex: vendor == "codex", display);
+            var partial                                  = await ResolveTranscriptReposAsync(slice, codex: vendor == "codex", display);
             foreach (var kv in partial) resolved[kv.Key] = kv.Value;
         }
 
@@ -505,14 +542,19 @@ static class ImportCommand {
 
             if (uniqueWorkspaces.Count > 0) {
                 var opts = new ParallelOptions { MaxDegreeOfParallelism = 8 };
-                await Parallel.ForEachAsync(uniqueWorkspaces, opts, async (cwd, _) => {
-                    try {
-                        var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
-                        repoByCwd[cwd] = repo is { Owner: { } o, RepoName: { } n } ? (o, n) : null;
-                    } catch {
-                        repoByCwd[cwd] = null;
+
+                await Parallel.ForEachAsync(
+                    uniqueWorkspaces,
+                    opts,
+                    async (cwd, _) => {
+                        try {
+                            var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
+                            repoByCwd[cwd] = repo is { Owner: { } o, RepoName: { } n } ? (o, n) : null;
+                        } catch {
+                            repoByCwd[cwd] = null;
+                        }
                     }
-                });
+                );
             }
 
             foreach (var (sid, cwd) in cursorCwds) {
@@ -530,6 +572,7 @@ static class ImportCommand {
                 .ToList();
 
             scope = ImportScopePrompt.RunPicker(activeProfile, currentRepo, distinct);
+
             if (scope is null) {
                 // RunPicker has already printed the specific reason (e.g. "Active profile
                 // has no org" or "No repositories detected in discovered sessions") via
@@ -546,7 +589,6 @@ static class ImportCommand {
         var filteredPerSource = new List<DiscoveredSession>[sources.Count];
 
         for (var i = 0; i < sources.Count; i++) {
-            var src = sources[i];
             var disc = discoveriesPerSource[i];
 
             var tuples = disc.Select(s => (s.SessionId, FilePath: "", EncodedCwd: "")).ToList();
@@ -555,7 +597,9 @@ static class ImportCommand {
                     tuples,
                     scope,
                     (t, _) => new ValueTask<(string?, string?)>(
-                        resolved.TryGetValue(t.SessionId, out var v) && v is { } x ? (x.Owner, x.Name) : (null, null))))
+                        resolved.TryGetValue(t.SessionId, out var v) && v is { } x ? (x.Owner, x.Name) : (null, null)
+                    )
+                ))
                 .Select(t => t.SessionId)
                 .ToHashSet(StringComparer.Ordinal);
 
@@ -563,18 +607,23 @@ static class ImportCommand {
         }
 
         var totalAfterScope = filteredPerSource.Sum(d => d.Count);
+
         if (totalAfterScope == 0) {
             display.Line("No sessions match the selected scope.");
+
             return 0;
         }
 
         // --- Confirmation ---
         var sampleRepos = new List<string>();
+
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             foreach (var disc in filteredPerSource) {
                 foreach (var s in disc) {
                     if (!resolved.TryGetValue(s.SessionId, out var v) || v is not { } x) continue;
+
                     if (seen.Add($"{x.Owner}/{x.Name}")) sampleRepos.Add($"{x.Owner}/{x.Name}");
                 }
             }
@@ -585,8 +634,14 @@ static class ImportCommand {
             : $"{kapacitorConfig?.DefaultVisibility ?? "org_public"} (from profile)";
 
         if (!ImportScopePrompt.PromptConfirm(
-                scope, totalAfterScope, sampleRepos, visibilityDesc, skipConfirmation)) {
+                scope,
+                totalAfterScope,
+                sampleRepos,
+                visibilityDesc,
+                skipConfirmation
+            )) {
             await Console.Error.WriteLineAsync("Import cancelled.");
+
             return 0;
         }
 
@@ -595,11 +650,12 @@ static class ImportCommand {
         var excludedPaths = (await AppConfig.GetActiveProfileAsync())?.ExcludedPaths;
 
         var classifyCtx = new ClassifyContext(
-            HttpClient:    httpClient,
-            BaseUrl:       baseUrl,
-            MinLines:      minLines,
+            HttpClient: httpClient,
+            BaseUrl: baseUrl,
+            MinLines: minLines,
             ExcludedRepos: excludedRepos,
-            ExcludedPaths: excludedPaths);
+            ExcludedPaths: excludedPaths
+        );
 
         IReadOnlyList<SessionClassification>[] classificationsPerSource;
 
@@ -610,29 +666,34 @@ static class ImportCommand {
                 .AutoClear(true)
                 .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new PercentageColumn())
                 .StartAsync(async ctx => {
-                    var bar = ctx.AddTask("[yellow]Probing[/]", maxValue: totalAfterScope);
+                        var bar = ctx.AddTask("[yellow]Probing[/]", maxValue: totalAfterScope);
 
-                    var probeTasks = sources.Select(async (s, idx) => {
-                        var slice = filteredPerSource[idx];
-                        var res   = await s.ClassifyAsync(slice, classifyCtx, CancellationToken.None);
-                        // Per-source progress accounting: each ClassifyAsync produces
-                        // one classification per discovered session, so we tick the
-                        // bar by the slice size when the task completes. Per-probe
-                        // ticks would require threading a callback through the
-                        // IImportSource interface — we punt that to a follow-up.
-                        bar.Increment(slice.Count);
-                        return (idx, res);
-                    }).ToArray();
+                        var probeTasks = sources.Select(async (s, idx) => {
+                                    var slice = filteredPerSource[idx];
+                                    var res   = await s.ClassifyAsync(slice, classifyCtx, CancellationToken.None);
+                                    // Per-source progress accounting: each ClassifyAsync produces
+                                    // one classification per discovered session, so we tick the
+                                    // bar by the slice size when the task completes. Per-probe
+                                    // ticks would require threading a callback through the
+                                    // IImportSource interface — we punt that to a follow-up.
+                                    bar.Increment(slice.Count);
 
-                    var all = await Task.WhenAll(probeTasks);
-                    foreach (var (idx, res) in all) classificationsPerSource[idx] = res;
-                });
+                                    return (idx, res);
+                                }
+                            )
+                            .ToArray();
+
+                        var all = await Task.WhenAll(probeTasks);
+
+                        foreach (var (idx, res) in all) classificationsPerSource[idx] = res;
+                    }
+                );
         } else {
             display.Line($"Probing {totalAfterScope} sessions...");
+
             classificationsPerSource = await Task.WhenAll(
-                sources.Select(async (s, idx) =>
-                    (IReadOnlyList<SessionClassification>)await s.ClassifyAsync(
-                        filteredPerSource[idx], classifyCtx, CancellationToken.None)));
+                sources.Select(async (s, idx) => await s.ClassifyAsync(filteredPerSource[idx], classifyCtx, CancellationToken.None))
+            );
         }
 
         // --- --since filter (file-based sources only — Codex pruned at discovery, Cursor n/a) ---
@@ -647,13 +708,17 @@ static class ImportCommand {
                 if (sources[i].Vendor != "claude") continue;
 
                 classificationsPerSource[i] = [
-                    .. classificationsPerSource[i].Where(c => {
-                        var ts = c.Meta.FirstTimestamp?.UtcDateTime;
-                        if (ts is null) {
-                            try { ts = File.GetLastWriteTimeUtc(c.FilePath); } catch { return true; }
-                        }
-                        return ts >= cutoff;
-                    })
+                    .. classificationsPerSource[i]
+                        .Where(c => {
+                                var ts = c.Meta.FirstTimestamp?.UtcDateTime;
+
+                                if (ts is null) {
+                                    try { ts = File.GetLastWriteTimeUtc(c.FilePath); } catch { return true; }
+                                }
+
+                                return ts >= cutoff;
+                            }
+                        )
                 ];
             }
         }
@@ -723,6 +788,7 @@ static class ImportCommand {
         var planCounts = ComputeCounts(classifications);
 
         Dictionary<string, ClassificationCounts>? planBySource = null;
+
         if (sources.Count > 1) {
             planBySource = classifications
                 .GroupBy(c => c.Vendor, StringComparer.Ordinal)
@@ -747,6 +813,7 @@ static class ImportCommand {
         ];
 
         var fileBased = classifications.Where(c => !string.IsNullOrEmpty(c.FilePath)).ToList();
+
         // AlreadyLoaded gets routed too so vendor-specific sources (Cursor) can
         // re-assert lifecycle hooks on already-ingested sessions. The legacy
         // contract was New/Partial only — but if a previous import advanced
@@ -756,10 +823,12 @@ static class ImportCommand {
         // CursorImportSource.ImportSessionAsync short-circuits the transcript
         // batch when there's nothing past the watermark and just fires the
         // lifecycle hooks.
-        var routed    = classifications.Where(c =>  string.IsNullOrEmpty(c.FilePath)
-                                                 && c.Status is ClassificationStatus.New
-                                                              or ClassificationStatus.Partial
-                                                              or ClassificationStatus.AlreadyLoaded).ToList();
+        var routed = classifications.Where(c => string.IsNullOrEmpty(c.FilePath)
+             && c.Status is ClassificationStatus.New
+                    or ClassificationStatus.Partial
+                    or ClassificationStatus.AlreadyLoaded
+            )
+            .ToList();
 
         var chains = BuildImportChains(fileBased);
 
@@ -768,7 +837,7 @@ static class ImportCommand {
         // callbacks fire from parallel chain-worker threads, so a plain List's
         // Add would race. No ordering guarantees needed — we only enumerate at
         // the end via Task.WhenAll.
-        var       backgroundTasks    = new System.Collections.Concurrent.ConcurrentBag<Task>();
+        var       backgroundTasks    = new ConcurrentBag<Task>();
         var       titleTaskCount     = 0;
         var       summaryTaskCount   = 0;
         using var concurrencyLimit   = new SemaphoreSlim(3);
@@ -777,9 +846,9 @@ static class ImportCommand {
         var       titlesFailed       = 0;
         var       summariesGenerated = 0;
         var       summariesFailed    = 0;
-        var       titleFailures      = new System.Collections.Concurrent.ConcurrentBag<(string SessionId, string Reason)>();
-        var       summaryFailures    = new System.Collections.Concurrent.ConcurrentBag<(string SessionId, string Reason)>();
-        var       importedSessionIds = new System.Collections.Concurrent.ConcurrentBag<string>();
+        var       titleFailures      = new ConcurrentBag<(string SessionId, string Reason)>();
+        var       summaryFailures    = new ConcurrentBag<(string SessionId, string Reason)>();
+        var       importedSessionIds = new ConcurrentBag<string>();
 
         var events = new ChainWorkerEvents {
             OnSessionStarted  = (_, _) => { },    // non-TTY: session start is silent; TTY overrides below
@@ -794,6 +863,7 @@ static class ImportCommand {
             ),
             OnSessionEnded = (_, c, outcome, lines) => {
                 importedSessionIds.Add(c.SessionId);
+
                 var verb = outcome == SessionImportOutcome.Resumed
                     ? $"resuming from line {c.ResumeFromLine}"
                     : "new";
@@ -877,12 +947,12 @@ static class ImportCommand {
         var routedOutcomesByVendor = new ConcurrentDictionary<string, (int Loaded, int Skipped, int Failed)>(StringComparer.Ordinal);
 
         static (int Loaded, int Skipped, int Failed) AddRoutedOutcome(
-            (int Loaded, int Skipped, int Failed) prev,
-            ImportOutcome                          outcome
-        ) => outcome switch {
-            ImportOutcome.Loaded or ImportOutcome.Resumed => (prev.Loaded + 1, prev.Skipped,     prev.Failed),
-            ImportOutcome.Skipped                         => (prev.Loaded,     prev.Skipped + 1, prev.Failed),
-            _                                             => (prev.Loaded,     prev.Skipped,     prev.Failed + 1),
+                (int Loaded, int Skipped, int Failed) prev,
+                ImportOutcome                         outcome
+            ) => outcome switch {
+            ImportOutcome.Loaded or ImportOutcome.Resumed => (prev.Loaded                            + 1, prev.Skipped, prev.Failed),
+            ImportOutcome.Skipped                         => (prev.Loaded, prev.Skipped              + 1, prev.Failed),
+            _                                             => (prev.Loaded, prev.Skipped, prev.Failed + 1),
         };
 
         if (chains.Count > 0) {
@@ -997,14 +1067,16 @@ static class ImportCommand {
             display.BeginPhase($"Importing {routed.Count} routed session{(routed.Count == 1 ? "" : "s")}");
 
             var importCtx = new ImportContext(
-                HttpClient:   httpClient,
-                BaseUrl:      baseUrl,
-                ForcePrivate: forcePrivate);
+                HttpClient: httpClient,
+                BaseUrl: baseUrl,
+                ForcePrivate: forcePrivate
+            );
 
             async Task<ImportOutcome> ImportOne(SessionClassification c) {
                 if (!byVendor.TryGetValue(c.Vendor, out var src)) {
                     return ImportOutcome.Failed;
                 }
+
                 try {
                     return await src.ImportSessionAsync(c, importCtx, CancellationToken.None);
                 } catch {
@@ -1018,66 +1090,88 @@ static class ImportCommand {
                     .HideCompleted(false)
                     .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new PercentageColumn())
                     .StartAsync(async ctx => {
-                        var bar = ctx.AddTask("[green]Importing[/]", maxValue: routed.Count);
+                            var bar = ctx.AddTask("[green]Importing[/]", maxValue: routed.Count);
 
-                        await Parallel.ForEachAsync(
-                            routed,
-                            new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount },
-                            async (c, _) => {
-                                var outcome = await ImportOne(c);
-                                routedOutcomesByVendor.AddOrUpdate(
-                                    c.Vendor,
-                                    addValueFactory:    _ => AddRoutedOutcome((0, 0, 0), outcome),
-                                    updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome));
-                                switch (outcome) {
-                                    case ImportOutcome.Loaded:
-                                    case ImportOutcome.Resumed:
-                                        Interlocked.Increment(ref routedLoaded);
-                                        importedSessionIds.Add(c.SessionId);
-                                        AnsiConsole.MarkupLine(
-                                            $"[green]✓[/] Loading [cyan]{Markup.Escape(c.SessionId)}[/] ({Markup.Escape(c.Vendor)})");
-                                        break;
-                                    case ImportOutcome.Skipped:
-                                        Interlocked.Increment(ref routedExcluded);
-                                        AnsiConsole.MarkupLine(
-                                            $"[yellow]~[/] Skipping [cyan]{Markup.Escape(c.SessionId)}[/] (already current)");
-                                        break;
-                                    case ImportOutcome.Failed:
-                                        Interlocked.Increment(ref routedErrored);
-                                        AnsiConsole.MarkupLine(
-                                            $"[red]✗[/] Failed [cyan]{Markup.Escape(c.SessionId)}[/]");
-                                        break;
+                            await Parallel.ForEachAsync(
+                                routed,
+                                new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount },
+                                async (c, _) => {
+                                    var outcome = await ImportOne(c);
+
+                                    routedOutcomesByVendor.AddOrUpdate(
+                                        c.Vendor,
+                                        addValueFactory: _ => AddRoutedOutcome((0, 0, 0), outcome),
+                                        updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome)
+                                    );
+
+                                    switch (outcome) {
+                                        case ImportOutcome.Loaded:
+                                        case ImportOutcome.Resumed:
+                                            Interlocked.Increment(ref routedLoaded);
+                                            importedSessionIds.Add(c.SessionId);
+
+                                            AnsiConsole.MarkupLine(
+                                                $"[green]✓[/] Loading [cyan]{Markup.Escape(c.SessionId)}[/] ({Markup.Escape(c.Vendor)})"
+                                            );
+
+                                            break;
+                                        case ImportOutcome.Skipped:
+                                            Interlocked.Increment(ref routedExcluded);
+
+                                            AnsiConsole.MarkupLine(
+                                                $"[yellow]~[/] Skipping [cyan]{Markup.Escape(c.SessionId)}[/] (already current)"
+                                            );
+
+                                            break;
+                                        case ImportOutcome.Failed:
+                                            Interlocked.Increment(ref routedErrored);
+
+                                            AnsiConsole.MarkupLine(
+                                                $"[red]✗[/] Failed [cyan]{Markup.Escape(c.SessionId)}[/]"
+                                            );
+
+                                            break;
+                                    }
+
+                                    bar.Increment(1);
                                 }
-                                bar.Increment(1);
-                            });
-                    });
+                            );
+                        }
+                    );
             } else {
                 await Parallel.ForEachAsync(
                     routed,
                     new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount },
                     async (c, _) => {
                         var outcome = await ImportOne(c);
+
                         routedOutcomesByVendor.AddOrUpdate(
                             c.Vendor,
-                            addValueFactory:    _ => AddRoutedOutcome((0, 0, 0), outcome),
-                            updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome));
+                            addValueFactory: _ => AddRoutedOutcome((0, 0, 0), outcome),
+                            updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome)
+                        );
+
                         switch (outcome) {
                             case ImportOutcome.Loaded:
                             case ImportOutcome.Resumed:
                                 Interlocked.Increment(ref routedLoaded);
                                 importedSessionIds.Add(c.SessionId);
                                 display.Line($"Loading {c.SessionId} ({c.Vendor})");
+
                                 break;
                             case ImportOutcome.Skipped:
                                 Interlocked.Increment(ref routedExcluded);
                                 display.Line($"Skipping {c.SessionId} (already current)");
+
                                 break;
                             case ImportOutcome.Failed:
                                 Interlocked.Increment(ref routedErrored);
                                 display.Line($"Failed {c.SessionId}");
+
                                 break;
                         }
-                    });
+                    }
+                );
             }
         }
 
@@ -1175,6 +1269,7 @@ static class ImportCommand {
         // with N sources we attribute Loaded/Resumed/Errored from the imported
         // SessionIds back to their vendor.
         Dictionary<string, FinalCounts>? doneBySource = null;
+
         if (sources.Count > 1) {
             var importedSet = importedSessionIds.ToHashSet(StringComparer.Ordinal);
 
@@ -1187,12 +1282,15 @@ static class ImportCommand {
                         var imported = slice.Count(c => importedSet.Contains(c.SessionId));
                         routedOutcomesByVendor.TryGetValue(g.Key, out var routed);
                         var hasRouted = routedOutcomesByVendor.ContainsKey(g.Key);
+
                         return ComputePerSourceFinalCounts(
                             slice,
                             imported,
-                            hasRouted ? routed : null);
+                            hasRouted ? routed : null
+                        );
                     },
-                    StringComparer.Ordinal);
+                    StringComparer.Ordinal
+                );
         }
 
         display.WriteDoneGrid(final, doneBySource);
@@ -1395,7 +1493,7 @@ static class ImportCommand {
     /// future Codex versions interleave more preludes.
     /// </summary>
     internal static SessionMetadata ExtractCodexSessionMetadata(string filePath) {
-        const int MaxLines = 50;
+        const int maxLines = 50;
 
         var meta             = new SessionMetadata();
         var sessionMetaFound = false;
@@ -1407,7 +1505,7 @@ static class ImportCommand {
 
             var linesChecked = 0;
 
-            while (reader.ReadLine() is { } line && linesChecked < MaxLines) {
+            while (reader.ReadLine() is { } line && linesChecked < maxLines) {
                 linesChecked++;
 
                 if (string.IsNullOrWhiteSpace(line)) continue;
@@ -1418,27 +1516,34 @@ static class ImportCommand {
 
                     var type = root.Str("type");
 
-                    if (!sessionMetaFound && type == "session_meta") {
-                        if (root.Obj("payload") is not { } payload) continue;
+                    switch (sessionMetaFound) {
+                        case false when type == "session_meta": {
+                            if (root.Obj("payload") is not { } payload) continue;
 
-                        meta.Cwd       = payload.Str("cwd");
-                        meta.Model     = payload.Str("model_provider");
-                        meta.SessionId = payload.Str("id");
+                            meta.Cwd       = payload.Str("cwd");
+                            meta.Model     = payload.Str("model_provider");
+                            meta.SessionId = payload.Str("id");
 
-                        if (payload.Str("timestamp") is { } tsStr
-                         && DateTimeOffset.TryParse(tsStr, out var ts)) {
-                            meta.FirstTimestamp = ts;
+                            if (payload.Str("timestamp") is { } tsStr
+                             && DateTimeOffset.TryParse(tsStr, out var ts)) {
+                                meta.FirstTimestamp = ts;
+                            }
+
+                            sessionMetaFound = true;
+
+                            break;
                         }
+                        case true when !turnModelFound && type == "turn_context": {
+                            // Only honor turn_context AFTER session_meta — a turn_context
+                            // that appears before the header (truncated/corrupt rollout) is
+                            // unreliable and would otherwise stamp a model name onto an
+                            // otherwise-empty meta.
+                            if (root.Obj("payload")?.Str("model") is { Length: > 0 } turnModel) {
+                                meta.Model     = turnModel;
+                                turnModelFound = true;
+                            }
 
-                        sessionMetaFound = true;
-                    } else if (sessionMetaFound && !turnModelFound && type == "turn_context") {
-                        // Only honor turn_context AFTER session_meta — a turn_context
-                        // that appears before the header (truncated/corrupt rollout) is
-                        // unreliable and would otherwise stamp a model name onto an
-                        // otherwise-empty meta.
-                        if (root.Obj("payload")?.Str("model") is { Length: > 0 } turnModel) {
-                            meta.Model     = turnModel;
-                            turnModelFound = true;
+                            break;
                         }
                     }
 
@@ -1506,10 +1611,12 @@ static class ImportCommand {
     /// </summary>
     static async Task<Dictionary<string, (string Owner, string Name)?>> ResolveTranscriptReposAsync(
             IReadOnlyList<(string SessionId, string FilePath, string EncodedCwd)> transcripts,
-            bool                                                                   codex,
-            ImportDisplay                                                          display) {
+            bool                                                                  codex,
+            ImportDisplay                                                         display
+        ) {
         // Extract cwd per transcript first (cheap: ≤20-line file read).
         var perTranscript = new (string SessionId, string? Cwd)[transcripts.Count];
+
         for (var i = 0; i < transcripts.Count; i++) {
             perTranscript[i] = (transcripts[i].SessionId, ExtractCwdFromTranscript(transcripts[i].FilePath, codex));
         }
@@ -1535,20 +1642,29 @@ static class ImportCommand {
 
             if (display.Tty) {
                 var statusLock = new Lock();
+
                 await AnsiConsole.Status()
                     .Spinner(Spinner.Known.Dots)
-                    .StartAsync($"Scanning repositories (0/{total})…", async ctx => {
-                        await Parallel.ForEachAsync(uniqueCwds, options, async (cwd, _) => {
-                            await DetectOne(cwd);
-                            var d = Interlocked.Increment(ref done);
-                            // Spectre's StatusContext isn't documented as thread-safe; serialize
-                            // the per-completion update so parallel workers can't race on the
-                            // status renderer.
-                            lock (statusLock) {
-                                ctx.Status($"Scanning repositories ({d}/{total})…");
-                            }
-                        });
-                    });
+                    .StartAsync(
+                        $"Scanning repositories (0/{total})…",
+                        async ctx => {
+                            await Parallel.ForEachAsync(
+                                uniqueCwds,
+                                options,
+                                async (cwd, _) => {
+                                    await DetectOne(cwd);
+                                    var d = Interlocked.Increment(ref done);
+
+                                    // Spectre's StatusContext isn't documented as thread-safe; serialize
+                                    // the per-completion update so parallel workers can't race on the
+                                    // status renderer.
+                                    lock (statusLock) {
+                                        ctx.Status($"Scanning repositories ({d}/{total})…");
+                                    }
+                                }
+                            );
+                        }
+                    );
             } else {
                 display.Line($"Scanning {total} repositor{(total == 1 ? "y" : "ies")}...");
                 await Parallel.ForEachAsync(uniqueCwds, options, async (cwd, _) => await DetectOne(cwd));
@@ -1556,9 +1672,11 @@ static class ImportCommand {
         }
 
         var resolved = new Dictionary<string, (string Owner, string Name)?>(StringComparer.Ordinal);
+
         foreach (var (sid, cwd) in perTranscript) {
             resolved[sid] = cwd is not null && repoByCwd.TryGetValue(cwd, out var r) ? r : null;
         }
+
         return resolved;
     }
 
@@ -1651,7 +1769,7 @@ static class ImportCommand {
                 CacheWriteTokens = result.CacheWriteTokens
             };
 
-            var       payloadJson = JsonSerializer.Serialize(payload, Kapacitor.Cli.Core.KapacitorJsonContext.Default.SessionTitlePayload);
+            var       payloadJson = JsonSerializer.Serialize(payload, KapacitorJsonContext.Default.SessionTitlePayload);
             using var content     = new StringContent(payloadJson, Encoding.UTF8, "application/json");
             using var titleResp   = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/session-title", content);
 
@@ -1820,7 +1938,7 @@ static class ImportCommand {
         var meta = session.Meta;
         var cwd  = meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(session.EncodedCwd);
 
-        var startHook = new System.Text.Json.Nodes.JsonObject {
+        var startHook = new JsonObject {
             ["session_id"]      = session.SessionId,
             ["transcript_path"] = session.FilePath,
             ["cwd"]             = cwd ?? "",
@@ -1843,17 +1961,19 @@ static class ImportCommand {
             var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
 
             if (repo is not null || codexRepo is not null) {
-                var repoNode = new System.Text.Json.Nodes.JsonObject();
+                var repoNode = new JsonObject();
 
                 if (repo?.UserName is not null) repoNode["user_name"]   = repo.UserName;
                 if (repo?.UserEmail is not null) repoNode["user_email"] = repo.UserEmail;
 
                 var remoteUrl = codexRepo?.RemoteUrl ?? repo?.RemoteUrl;
-                if (remoteUrl is not null) repoNode["remote_url"] = remoteUrl;
 
-                var (codexOwner, codexRepoName) = Kapacitor.Cli.Core.GitUrlParser.ParseRemoteUrl(codexRepo?.RemoteUrl);
-                var owner    = codexOwner    ?? repo?.Owner;
-                var repoName = codexRepoName ?? repo?.RepoName;
+                if (remoteUrl is not null)
+                    repoNode["remote_url"] = remoteUrl;
+
+                var (codexOwner, codexRepoName) = GitUrlParser.ParseRemoteUrl(codexRepo?.RemoteUrl);
+                var owner    = codexOwner        ?? repo?.Owner;
+                var repoName = codexRepoName     ?? repo?.RepoName;
                 var branch   = codexRepo?.Branch ?? repo?.Branch;
 
                 if (owner is not null) repoNode["owner"]        = owner;
@@ -1902,7 +2022,7 @@ static class ImportCommand {
 
         var lastTs = ExtractLastTimestamp(session.FilePath);
 
-        var endHook = new System.Text.Json.Nodes.JsonObject {
+        var endHook = new JsonObject {
             ["session_id"]      = session.SessionId,
             ["transcript_path"] = session.FilePath,
             ["cwd"]             = cwd ?? "",
@@ -1920,7 +2040,7 @@ static class ImportCommand {
             if (endResp.IsSuccessStatusCode) {
                 try {
                     var body = await endResp.Content.ReadAsStringAsync(ct);
-                    var node = System.Text.Json.Nodes.JsonNode.Parse(body);
+                    var node = JsonNode.Parse(body);
                     generateWhatsDone = node?["generate_whats_done"]?.GetValue<bool>() == true;
                 } catch {
                     /* best effort */
@@ -1968,22 +2088,29 @@ static class ImportCommand {
     /// succeeded; users can re-run `kapacitor hide` for any that failed.
     /// </summary>
     internal static async Task SetVisibilityNoneForAll(
-        HttpClient            httpClient,
-        string                baseUrl,
-        IReadOnlyList<string> sessionIds) {
+            HttpClient            httpClient,
+            string                baseUrl,
+            IReadOnlyList<string> sessionIds
+        ) {
         foreach (var sessionId in sessionIds) {
-            var payload = new JsonObject { ["visibility"] = "none" };
+            var       payload = new JsonObject { ["visibility"] = "none" };
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+
             try {
                 using var resp = await httpClient.PutWithRetryAsync(
-                    $"{baseUrl}/api/sessions/{sessionId}/visibility", content);
+                    $"{baseUrl}/api/sessions/{sessionId}/visibility",
+                    content
+                );
+
                 if (!resp.IsSuccessStatusCode) {
                     await Console.Error.WriteLineAsync(
-                        $"  ! visibility=none failed for {sessionId}: HTTP {(int)resp.StatusCode}");
+                        $"  ! visibility=none failed for {sessionId}: HTTP {(int)resp.StatusCode}"
+                    );
                 }
             } catch (Exception ex) {
                 await Console.Error.WriteLineAsync(
-                    $"  ! visibility=none failed for {sessionId}: {ex.Message}");
+                    $"  ! visibility=none failed for {sessionId}: {ex.Message}"
+                );
             }
         }
     }

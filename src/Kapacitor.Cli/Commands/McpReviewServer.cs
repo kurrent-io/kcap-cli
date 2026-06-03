@@ -108,13 +108,12 @@ static class McpReviewServer {
         var toolName   = paramsNode?["name"]?.GetValue<string>();
         var arguments  = paramsNode?["arguments"]?.AsObject();
 
-        if (toolName is null) {
-            return BuildErrorResponse(id, -32602, "Missing params.name");
-        }
-
-        // get_transcript keys off session_id, not PR — skip PR resolution.
-        if (toolName == "get_transcript") {
-            return await DispatchAsync(id, toolName, arguments, client, baseUrl, pr: null);
+        switch (toolName) {
+            case null:
+                return BuildErrorResponse(id, -32602, "Missing params.name");
+            // get_transcript keys off session_id, not PR — skip PR resolution.
+            case "get_transcript":
+                return await DispatchAsync(id, toolName, arguments, client, baseUrl, pr: null);
         }
 
         var resolution = PrResolution.Resolve(arguments, sessionDefault);
@@ -312,7 +311,7 @@ static class PrResolution {
 
         return new Result(
             null,
-            "This tool needs a PR reference. Pass `pr` as a tool argument " +
+            "This tool needs a PR reference. Pass `pr` as a tool argument "  +
             "(e.g. 'owner/repo#123' or a github.com PR URL), or run from a " +
             "branch with an open PR for auto-detection."
         );

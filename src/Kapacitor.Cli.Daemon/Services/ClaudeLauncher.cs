@@ -58,7 +58,7 @@ internal sealed partial class ClaudeLauncher(
         var args = new List<string>();
         string? mcpConfigPath = null;
 
-        if (ctx.IsReview && ctx.ReviewLaunch is { } launch) {
+        if (ctx is { IsReview: true, ReviewLaunch: { } launch }) {
             mcpConfigPath = launch.McpConfigPath;
 
             args.Add("--mcp-config");

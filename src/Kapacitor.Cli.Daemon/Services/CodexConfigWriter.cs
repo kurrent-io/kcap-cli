@@ -26,11 +26,13 @@ internal static class CodexConfigWriter {
             var configPath = Path.Combine(CodexPaths.Home, "config.toml");
 
             TomlTable root;
+
             if (File.Exists(configPath)) {
                 try {
                     root = TomlSerializer.Deserialize(File.ReadAllText(configPath), _tomlTypeInfo.TableInfo) ?? [];
                 } catch (Exception ex) {
                     logger.LogWarning(ex, "Failed to parse {Path}; aborting pre-trust", configPath);
+
                     return;
                 }
             } else {
@@ -38,8 +40,8 @@ internal static class CodexConfigWriter {
             }
 
             if (!root.TryGetValue("projects", out var projectsObj) || projectsObj is not TomlTable projects) {
-                projects          = new TomlTable();
-                root["projects"]  = projects;
+                projects         = new TomlTable();
+                root["projects"] = projects;
             }
 
             if (!projects.TryGetValue(worktreePath, out var entryObj) || entryObj is not TomlTable entry) {
@@ -48,8 +50,8 @@ internal static class CodexConfigWriter {
             }
 
             var alreadyTrusted = entry.TryGetValue("trust_level", out var existing) &&
-                                 existing is string s &&
-                                 string.Equals(s, "trusted", StringComparison.Ordinal);
+                existing is string s                                                &&
+                string.Equals(s, "trusted", StringComparison.Ordinal);
 
             if (alreadyTrusted) return;
 
@@ -72,7 +74,10 @@ internal static class CodexConfigWriter {
         try {
             File.Move(tmp, path, overwrite: true);
         } catch {
-            try { File.Delete(tmp); } catch { /* best-effort */ }
+            try { File.Delete(tmp); } catch {
+                /* best-effort */
+            }
+
             throw;
         }
     }
@@ -85,11 +90,7 @@ internal static class CodexConfigWriter {
     sealed class TomlTableTypeInfo : TomlSerializerContext {
         static readonly TomlSerializerOptions DefaultOptions = new();
 
-        public readonly TomlTypeInfo<TomlTable> TableInfo;
-
-        public TomlTableTypeInfo() {
-            TableInfo = GetBuiltInTypeInfo<TomlTable>(DefaultOptions)!;
-        }
+        public readonly TomlTypeInfo<TomlTable> TableInfo = GetBuiltInTypeInfo<TomlTable>(DefaultOptions)!;
 
         public override TomlTypeInfo? GetTypeInfo(Type type, TomlSerializerOptions options) =>
             type == typeof(TomlTable) ? TableInfo : null;

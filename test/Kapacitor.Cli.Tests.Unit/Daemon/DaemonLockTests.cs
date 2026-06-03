@@ -1,3 +1,4 @@
+using Kapacitor.Cli.Core;
 using Kapacitor.Cli.Daemon;
 
 namespace Kapacitor.Cli.Tests.Unit.Daemon;
@@ -7,22 +8,22 @@ namespace Kapacitor.Cli.Tests.Unit.Daemon;
 /// holds for its lifetime. Verifies the AI-630 protection: a second daemon
 /// acquiring the same name on the same machine fails fast.
 ///
-/// All tests redirect <see cref="Kapacitor.Cli.Core.DaemonLockPaths"/> to a temp directory so
+/// All tests redirect <see cref="DaemonLockPaths"/> to a temp directory so
 /// nothing touches the user's real <c>~/.config/kapacitor/daemons</c>. The
 /// per-class isolation pattern (unique subdir per test, restored at the
 /// end) keeps the tests independent of one another's failed/leaked locks.
 /// </summary>
-[NotInParallel(nameof(Kapacitor.Cli.Core.DaemonLockPaths) + ".OverrideDirectoryForTesting")]
+[NotInParallel(nameof(DaemonLockPaths) + ".OverrideDirectoryForTesting")]
 public class DaemonLockTests {
     static string CreateScratchDir() {
         var dir = Path.Combine(Path.GetTempPath(), "kapacitor-lock-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
-        Kapacitor.Cli.Core.DaemonLockPaths.OverrideDirectoryForTesting(dir);
+        Core.DaemonLockPaths.OverrideDirectoryForTesting(dir);
 
         return dir;
     }
 
-    static void Restore() => Kapacitor.Cli.Core.DaemonLockPaths.OverrideDirectoryForTesting(null);
+    static void Restore() => DaemonLockPaths.OverrideDirectoryForTesting(null);
 
     [Test]
     public async Task TryAcquire_OnFreshSlot_ReturnsLockWithFreshInstanceId() {
@@ -123,8 +124,8 @@ public class DaemonLockTests {
         var dir = CreateScratchDir();
 
         try {
-            var l = DaemonLock.TryAcquire("alpha")!;
-            var lockPath = Kapacitor.Cli.Core.DaemonLockPaths.LockPath("alpha");
+            var l        = DaemonLock.TryAcquire("alpha")!;
+            var lockPath = DaemonLockPaths.LockPath("alpha");
 
             await Assert.That(File.Exists(lockPath)).IsTrue();
 
@@ -148,8 +149,8 @@ public class DaemonLockTests {
         var dir = CreateScratchDir();
 
         try {
-            var l = DaemonLock.TryAcquire("alpha")!;
-            var pidPath = Kapacitor.Cli.Core.DaemonLockPaths.PidPath("alpha");
+            var l       = DaemonLock.TryAcquire("alpha")!;
+            var pidPath = DaemonLockPaths.PidPath("alpha");
 
             // Simulate a successor process that won the race after our
             // flock release and rewrote the PID file. We pick a PID that
@@ -174,8 +175,8 @@ public class DaemonLockTests {
             // Simulate a daemon that died without cleanup: lockfile exists,
             // but no process holds the kernel flock. Re-acquisition must
             // succeed — that's the whole point of flock semantics.
-            Kapacitor.Cli.Core.DaemonLockPaths.EnsureDirectory();
-            File.WriteAllText(Kapacitor.Cli.Core.DaemonLockPaths.LockPath("alpha"), "stale-instance-id");
+            DaemonLockPaths.EnsureDirectory();
+            File.WriteAllText(DaemonLockPaths.LockPath("alpha"), "stale-instance-id");
 
             using var l = DaemonLock.TryAcquire("alpha");
             await Assert.That(l).IsNotNull();

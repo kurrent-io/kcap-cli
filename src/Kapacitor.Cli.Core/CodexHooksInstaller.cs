@@ -46,8 +46,9 @@ public static class CodexHooksInstaller {
 
             foreach (var (_, entries) in hooks) {
                 if (entries is not JsonArray arr) continue;
-                foreach (var entry in arr) {
-                    if (CodexHooksParser.EntryReferencesKapacitorCodexHook(entry)) return true;
+
+                if (arr.Any(CodexHooksParser.EntryReferencesKapacitorCodexHook)) {
+                    return true;
                 }
             }
         } catch {

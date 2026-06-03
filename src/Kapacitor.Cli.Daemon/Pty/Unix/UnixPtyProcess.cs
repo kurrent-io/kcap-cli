@@ -6,17 +6,16 @@ namespace Kapacitor.Cli.Daemon.Pty.Unix;
 
 public sealed class UnixPtyProcess : IPtyProcess {
     readonly int                     _masterFd;
-    readonly int                     _childPid;
     readonly CancellationTokenSource _cts = new();
     bool                             _disposed;
 
-    public int  Pid       => _childPid;
+    public int  Pid       { get; }
     public bool HasExited { get; private set; }
     public int? ExitCode  { get; private set; }
 
     UnixPtyProcess(int masterFd, int childPid) {
         _masterFd = masterFd;
-        _childPid = childPid;
+        Pid = childPid;
     }
 
     public static UnixPtyProcess Spawn(
@@ -140,7 +139,7 @@ public sealed class UnixPtyProcess : IPtyProcess {
 
     public void SendInterrupt() {
         if (!HasExited) {
-            UnixPtyInterop.kill(_childPid, UnixPtyInterop.SIGINT);
+            UnixPtyInterop.kill(Pid, UnixPtyInterop.SIGINT);
         }
     }
 
@@ -149,7 +148,7 @@ public sealed class UnixPtyProcess : IPtyProcess {
             return;
         }
 
-        UnixPtyInterop.kill(_childPid, UnixPtyInterop.SIGTERM);
+        UnixPtyInterop.kill(Pid, UnixPtyInterop.SIGTERM);
 
         var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
 
@@ -161,7 +160,7 @@ public sealed class UnixPtyProcess : IPtyProcess {
         }
 
         if (!HasExited) {
-            UnixPtyInterop.kill(_childPid, UnixPtyInterop.SIGKILL);
+            UnixPtyInterop.kill(Pid, UnixPtyInterop.SIGKILL);
             CheckExited();
         }
     }
@@ -184,9 +183,9 @@ public sealed class UnixPtyProcess : IPtyProcess {
     }
 
     void CheckExited() {
-        var result = UnixPtyInterop.waitpid(_childPid, out var status, UnixPtyInterop.WNOHANG);
+        var result = UnixPtyInterop.waitpid(Pid, out var status, UnixPtyInterop.WNOHANG);
 
-        if (result == _childPid) {
+        if (result == Pid) {
             HasExited = true;
             ExitCode  = (status >> 8) & 0xFF;
         }

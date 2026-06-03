@@ -72,35 +72,34 @@ internal static class TranscriptFileClassification {
         var isCodex = vendor == "codex";
         var meta    = isCodex ? ImportCommand.ExtractCodexSessionMetadata(filePath) : ImportCommand.ExtractSessionMetadata(filePath);
 
-        // Short-circuit: kapacitor's own sub-sessions (title / what's-done) never get imported.
-        // Codex rollouts have no analog, so the check is Claude-only.
-        if (!isCodex && TitleGenerator.IsKapacitorSubSession(filePath)) {
-            return new() {
-                SessionId  = sessionId,
-                FilePath   = filePath,
-                EncodedCwd = encodedCwd,
-                Meta       = meta,
-                Status     = ImportCommand.ClassificationStatus.InternalSubSession,
-                Vendor     = vendor,
-            };
-        }
-
-        // Codex rollouts carry the session id in two places — the trailing UUID in the
-        // filename (which the rest of the pipeline trusts as the canonical id used for
-        // probe URLs and hook payloads) and `session_meta.payload.id`. Validate they
-        // agree so a renamed/copied file can't import under the wrong server session.
-        if (isCodex && meta.SessionId is { } innerId
-         && Guid.TryParse(innerId, out var innerGuid)
-         && innerGuid.ToString("N") != sessionId) {
-            return new() {
-                SessionId        = sessionId,
-                FilePath         = filePath,
-                EncodedCwd       = encodedCwd,
-                Meta             = meta,
-                Status           = ImportCommand.ClassificationStatus.ProbeError,
-                Vendor           = vendor,
-                ProbeErrorReason = "codex session id mismatch (filename vs session_meta.payload.id)",
-            };
+        switch (isCodex) {
+            // Short-circuit: kapacitor's own sub-sessions (title / what's-done) never get imported.
+            // Codex rollouts have no analog, so the check is Claude-only.
+            case false when TitleGenerator.IsKapacitorSubSession(filePath):
+                return new() {
+                    SessionId  = sessionId,
+                    FilePath   = filePath,
+                    EncodedCwd = encodedCwd,
+                    Meta       = meta,
+                    Status     = ImportCommand.ClassificationStatus.InternalSubSession,
+                    Vendor     = vendor,
+                };
+            // Codex rollouts carry the session id in two places — the trailing UUID in the
+            // filename (which the rest of the pipeline trusts as the canonical id used for
+            // probe URLs and hook payloads) and `session_meta.payload.id`. Validate they
+            // agree so a renamed/copied file can't import under the wrong server session.
+            case true when meta.SessionId is { } innerId
+             && Guid.TryParse(innerId, out var innerGuid)
+             && innerGuid.ToString("N") != sessionId:
+                return new() {
+                    SessionId        = sessionId,
+                    FilePath         = filePath,
+                    EncodedCwd       = encodedCwd,
+                    Meta             = meta,
+                    Status           = ImportCommand.ClassificationStatus.ProbeError,
+                    Vendor           = vendor,
+                    ProbeErrorReason = "codex session id mismatch (filename vs session_meta.payload.id)",
+                };
         }
 
         // Probe the server BEFORE scanning the file. On re-runs the probe returns

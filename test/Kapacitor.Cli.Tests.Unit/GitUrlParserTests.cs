@@ -15,7 +15,7 @@ public class GitUrlParserTests {
     [Arguments("https://github.com/owner/a.b.c", "owner", "a.b.c")]
     [Arguments("https://github.com/owner/a.b.c.git", "owner", "a.b.c")]
     public async Task ParseRemoteUrl_HttpsUrls_ReturnsOwnerAndRepo(string url, string expectedOwner, string expectedRepo) {
-        var (owner, repoName) = Kapacitor.Cli.Core.GitUrlParser.ParseRemoteUrl(url);
+        var (owner, repoName) = Core.GitUrlParser.ParseRemoteUrl(url);
 
         await Assert.That(owner).IsEqualTo(expectedOwner);
         await Assert.That(repoName).IsEqualTo(expectedRepo);
@@ -34,7 +34,7 @@ public class GitUrlParserTests {
     [Arguments("git@github.com:owner/a.b.c", "owner", "a.b.c")]
     [Arguments("git@github.com:owner/a.b.c.git", "owner", "a.b.c")]
     public async Task ParseRemoteUrl_SshUrls_ReturnsOwnerAndRepo(string url, string expectedOwner, string expectedRepo) {
-        var (owner, repoName) = Kapacitor.Cli.Core.GitUrlParser.ParseRemoteUrl(url);
+        var (owner, repoName) = Core.GitUrlParser.ParseRemoteUrl(url);
 
         await Assert.That(owner).IsEqualTo(expectedOwner);
         await Assert.That(repoName).IsEqualTo(expectedRepo);
@@ -42,7 +42,7 @@ public class GitUrlParserTests {
 
     [Test]
     public async Task ParseRemoteUrl_Null_ReturnsBothNull() {
-        var (owner, repoName) = Kapacitor.Cli.Core.GitUrlParser.ParseRemoteUrl(null);
+        var (owner, repoName) = Core.GitUrlParser.ParseRemoteUrl(null);
 
         await Assert.That(owner).IsNull();
         await Assert.That(repoName).IsNull();
@@ -55,7 +55,7 @@ public class GitUrlParserTests {
     [Arguments("https://")]
     [Arguments("git@")]
     public async Task ParseRemoteUrl_InvalidUrls_ReturnsBothNull(string url) {
-        var (owner, repoName) = Kapacitor.Cli.Core.GitUrlParser.ParseRemoteUrl(url);
+        var (owner, repoName) = Core.GitUrlParser.ParseRemoteUrl(url);
 
         await Assert.That(owner).IsNull();
         await Assert.That(repoName).IsNull();

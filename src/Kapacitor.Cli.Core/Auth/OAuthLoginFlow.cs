@@ -18,9 +18,6 @@ public static class AuthProvider {
 public enum GitHubFlow { Browser, Device }
 
 public static class OAuthLoginFlow {
-    public static Task<int> LoginWithDiscoveryAsync(string serverUrl)
-        => LoginWithDiscoveryAsync(serverUrl, forceDevice: false);
-
     public static async Task<int> LoginWithDiscoveryAsync(string serverUrl, bool forceDevice) {
         // ReSharper disable once ShortLivedHttpClient
         using var http = new HttpClient();
@@ -78,10 +75,12 @@ public static class OAuthLoginFlow {
 
         var deviceResponse = await http.PostAsync(
             "https://github.com/login/device/code",
-            new FormUrlEncodedContent(new Dictionary<string, string> {
-                ["client_id"] = clientId,
-                ["scope"]     = "read:user read:org"
-            })
+            new FormUrlEncodedContent(
+                new Dictionary<string, string> {
+                    ["client_id"] = clientId,
+                    ["scope"]     = "read:user read:org"
+                }
+            )
         );
 
         if (!deviceResponse.IsSuccessStatusCode) {
@@ -109,15 +108,17 @@ public static class OAuthLoginFlow {
         Console.Write("Waiting for authorization...");
 
         while (true) {
-            await Task.Delay(TimeSpan.FromSeconds((long)interval));
+            await Task.Delay(TimeSpan.FromSeconds(interval));
 
             var tokenResponse = await http.PostAsync(
                 "https://github.com/login/oauth/access_token",
-                new FormUrlEncodedContent(new Dictionary<string, string> {
-                    ["client_id"]   = clientId,
-                    ["device_code"] = device.DeviceCode,
-                    ["grant_type"]  = "urn:ietf:params:oauth:grant-type:device_code"
-                })
+                new FormUrlEncodedContent(
+                    new Dictionary<string, string> {
+                        ["client_id"]   = clientId,
+                        ["device_code"] = device.DeviceCode,
+                        ["grant_type"]  = "urn:ietf:params:oauth:grant-type:device_code"
+                    }
+                )
             );
 
             var tokenResult = (await tokenResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.GitHubTokenResponse))!;
@@ -130,9 +131,13 @@ public static class OAuthLoginFlow {
 
             switch (tokenResult.Error) {
                 case "authorization_pending":
-                    Console.Write("."); continue;
+                    Console.Write(".");
+
+                    continue;
                 case "slow_down":
-                    interval += 5; continue;
+                    interval += 5;
+
+                    continue;
                 default:
                     Console.Error.WriteLine($"\nError: {tokenResult.Error}");
 
@@ -177,14 +182,17 @@ public static class OAuthLoginFlow {
         using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromMinutes(5));
 
         HttpListenerContext context;
+
         while (true) {
             var getContext = listener.GetContextAsync();
+
             try {
                 context = await getContext.WaitAsync(cts.Token);
             } catch (OperationCanceledException) {
                 listener.Stop();
                 _ = getContext.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                 Console.Error.WriteLine("Timed out waiting for authorization. Re-run `kapacitor login` to try again.");
+
                 return null;
             }
 
@@ -201,6 +209,7 @@ public static class OAuthLoginFlow {
 
         if (callback.Code is null) {
             Console.Error.WriteLine($"Authorization failed: {callback.Error}");
+
             return null;
         }
 
@@ -214,47 +223,56 @@ public static class OAuthLoginFlow {
         };
 
         HttpResponseMessage tokenResponse;
+
         try {
             tokenResponse = await http.PostAsJsonAsync(
-                codeExchangeUrl, exchangeRequest, KapacitorJsonContext.Default.GitHubCodeExchangeRequest,
+                codeExchangeUrl,
+                exchangeRequest,
+                KapacitorJsonContext.Default.GitHubCodeExchangeRequest,
                 cancellationToken: cts.Token
             );
         } catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or UriFormatException or InvalidOperationException) {
             Console.Error.WriteLine($"Could not reach the code-exchange endpoint at {codeExchangeUrl}: {ex.Message}");
+
             return null;
         }
 
         if (!tokenResponse.IsSuccessStatusCode) {
             Console.Error.WriteLine($"Error exchanging code: {await tokenResponse.Content.ReadAsStringAsync()}");
+
             return null;
         }
 
         GitHubTokenResponse? tokenResult;
+
         try {
             tokenResult = await tokenResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.GitHubTokenResponse, cancellationToken: cts.Token);
         } catch (JsonException ex) {
             var raw = await tokenResponse.Content.ReadAsStringAsync(cts.Token);
             Console.Error.WriteLine($"Code-exchange response was not valid JSON ({ex.Message}): {raw}");
+
             return null;
         }
 
         if (tokenResult?.AccessToken is null) {
             Console.Error.WriteLine($"Error: {tokenResult?.Error ?? "no access_token in response"}");
+
             return null;
         }
 
         await Console.Out.WriteLineAsync("Authorization complete.");
+
         return tokenResult.AccessToken;
     }
 
     static async Task RespondCallbackAsync(HttpListenerContext ctx, CallbackResult callback) {
         var (status, message) = callback.Code is not null
-            ? ("Authentication successful!",  "You can close this window and return to the terminal.")
+            ? ("Authentication successful!", "You can close this window and return to the terminal.")
             : ($"Authentication failed: {callback.Error}", "Return to the terminal for details.");
 
         var html = $"<html><body style='font-family:system-ui;max-width:480px;margin:80px auto;text-align:center'>"
-                 + $"<h2>{System.Net.WebUtility.HtmlEncode(status)}</h2>"
-                 + $"<p>{System.Net.WebUtility.HtmlEncode(message)}</p></body></html>";
+          + $"<h2>{WebUtility.HtmlEncode(status)}</h2>"
+          + $"<p>{WebUtility.HtmlEncode(message)}</p></body></html>";
 
         var buffer = Encoding.UTF8.GetBytes(html);
         ctx.Response.ContentType     = "text/html";
@@ -286,12 +304,14 @@ public static class OAuthLoginFlow {
 
         var exchange = (await exchangeResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.TokenExchangeResponse))!;
 
-        await TokenStore.SaveAsync(new() {
-            AccessToken    = exchange.AccessToken,
-            ExpiresAt      = DateTimeOffset.UtcNow.AddSeconds(exchange.ExpiresIn),
-            GitHubUsername = exchange.Username,
-            Provider       = provider
-        });
+        await TokenStore.SaveAsync(
+            new() {
+                AccessToken    = exchange.AccessToken,
+                ExpiresAt      = DateTimeOffset.UtcNow.AddSeconds(exchange.ExpiresIn),
+                GitHubUsername = exchange.Username,
+                Provider       = provider
+            }
+        );
 
         await Console.Out.WriteLineAsync($"Logged in as {exchange.Username}");
 
@@ -305,11 +325,17 @@ public static class OAuthLoginFlow {
     /// </summary>
     public static async Task<int> ExchangeAndSaveAsync(string serverUrl, string githubAccessToken, string provider, string profile) {
         using var http = new HttpClient();
+
         return await ExchangeAndSaveAsync(http, serverUrl, githubAccessToken, provider, profile);
     }
 
     public static async Task<int> ExchangeAndSaveAsync(
-            HttpClient http, string serverUrl, string githubAccessToken, string provider, string profile) {
+            HttpClient http,
+            string     serverUrl,
+            string     githubAccessToken,
+            string     provider,
+            string     profile
+        ) {
         if (provider is not AuthProvider.GitHubApp and not AuthProvider.Auth0) {
             Console.Error.WriteLine($"Error: unknown auth provider '{provider}'");
 
@@ -330,12 +356,15 @@ public static class OAuthLoginFlow {
 
         var exchange = (await exchangeResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.TokenExchangeResponse))!;
 
-        await TokenStore.SaveAsync(profile, new StoredTokens {
-            AccessToken    = exchange.AccessToken,
-            ExpiresAt      = DateTimeOffset.UtcNow.AddSeconds(exchange.ExpiresIn),
-            GitHubUsername = exchange.Username,
-            Provider       = provider
-        });
+        await TokenStore.SaveAsync(
+            profile,
+            new StoredTokens {
+                AccessToken    = exchange.AccessToken,
+                ExpiresAt      = DateTimeOffset.UtcNow.AddSeconds(exchange.ExpiresIn),
+                GitHubUsername = exchange.Username,
+                Provider       = provider
+            }
+        );
 
         return 0;
     }
@@ -390,6 +419,7 @@ public static class OAuthLoginFlow {
 
     static async Task<int> HandleGitHubLogin(string serverUrl, AuthDiscoveryResponse config, bool forceDevice) {
         var accessToken = await AcquireGitHubTokenAsync(config.GithubClientId!, config.GithubCodeExchangeUrl, forceDevice);
+
         if (accessToken is null) return 1;
 
         return await ExchangeAndSaveAsync(serverUrl, accessToken, config.Provider);
@@ -402,9 +432,10 @@ public static class OAuthLoginFlow {
         if (choice == GitHubFlow.Browser) {
             try {
                 var token = await RunGitHubBrowserFlowAsync(clientId, codeExchangeUrl!);
-                if (token is not null) return token;
-                // Browser flow ran but user cancelled / state mismatch — don't silently fall back.
-                return null;
+
+                return token ??
+                    // Browser flow ran but user cancelled / state mismatch — don't silently fall back.
+                    null;
             } catch (HttpListenerException ex) {
                 Console.Error.WriteLine($"Could not bind loopback listener ({ex.Message}); falling back to device flow.");
             } catch (PlatformNotSupportedException ex) {
@@ -450,18 +481,20 @@ public static class OAuthLoginFlow {
             /* Browser open is best-effort — user can still copy the URL */
         }
 
-        var context = await listener.GetContextAsync();
-        var code    = context.Request.QueryString["code"];
+        var context       = await listener.GetContextAsync();
+        var code          = context.Request.QueryString["code"];
         var returnedState = context.Request.QueryString["state"];
+
         if (returnedState != state) {
             Console.Error.WriteLine("Error: state mismatch — possible CSRF. Aborting.");
             const string errHtml = "<html><body><h2>Authentication failed</h2><p>State mismatch — possible CSRF. Return to the terminal.</p></body></html>";
-            var errBuf = Encoding.UTF8.GetBytes(errHtml);
+            var          errBuf  = Encoding.UTF8.GetBytes(errHtml);
             context.Response.ContentType     = "text/html";
             context.Response.ContentLength64 = errBuf.Length;
             await context.Response.OutputStream.WriteAsync(errBuf);
             context.Response.Close();
             listener.Stop();
+
             return 1;
         }
 
@@ -536,29 +569,36 @@ public static class OAuthLoginFlow {
     // is treated as "no browser flow available" and the dispatcher falls back to device flow.
     internal static bool IsValidExchangeUrl(string? url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var parsed)
-        && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps);
+     && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps);
 
     internal static string BuildGitHubAuthorizeUrl(
-            string clientId, string redirectUri, string state, string codeChallenge) =>
-        "https://github.com/login/oauth/authorize?"             +
-        $"client_id={Uri.EscapeDataString(clientId)}"           +
-        $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"    +
-        $"&state={Uri.EscapeDataString(state)}"                 +
-        $"&scope={Uri.EscapeDataString("read:user read:org")}"  +
-        $"&code_challenge={Uri.EscapeDataString(codeChallenge)}"+
-        "&code_challenge_method=S256"                           +
+            string clientId,
+            string redirectUri,
+            string state,
+            string codeChallenge
+        ) =>
+        "https://github.com/login/oauth/authorize?"              +
+        $"client_id={Uri.EscapeDataString(clientId)}"            +
+        $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"     +
+        $"&state={Uri.EscapeDataString(state)}"                  +
+        $"&scope={Uri.EscapeDataString("read:user read:org")}"   +
+        $"&code_challenge={Uri.EscapeDataString(codeChallenge)}" +
+        "&code_challenge_method=S256"                            +
         "&response_type=code";
 
     internal static CallbackResult ParseCallback(string queryString, string expectedState) {
-        var qs    = queryString.TrimStart('?');
-        var parts = qs.Split('&', StringSplitOptions.RemoveEmptyEntries);
-        string? code = null, state = null, error = null;
+        var     qs    = queryString.TrimStart('?');
+        var     parts = qs.Split('&', StringSplitOptions.RemoveEmptyEntries);
+        string? code  = null, state = null, error = null;
 
         foreach (var part in parts) {
             var eq = part.IndexOf('=');
+
             if (eq < 0) continue;
+
             var key = part[..eq];
             var val = Uri.UnescapeDataString(part[(eq + 1)..]);
+
             switch (key) {
                 case "code":  code  = val; break;
                 case "state": state = val; break;
@@ -566,9 +606,10 @@ public static class OAuthLoginFlow {
             }
         }
 
-        if (state is null)            return new(null, "missing_state");
-        if (state != expectedState)   return new(null, "state_mismatch");
-        if (error is not null)        return new(null, error);
+        if (state is null) return new(null, "missing_state");
+        if (state != expectedState) return new(null, "state_mismatch");
+        if (error is not null) return new(null, error);
+
         return string.IsNullOrEmpty(code) ? new(null, "missing_code") : new(code, null);
     }
 

@@ -7,11 +7,11 @@ public class CursorHookSpoolTests {
 
     [Test]
     public async Task Append_creates_file_and_writes_one_line_per_call() {
-        using var tmp = new TempDir();
-        var spool = new CursorHookSpool(tmp.Path);
+        using var tmp   = new TempDir();
+        var       spool = new CursorHookSpool(tmp.Path);
 
-        spool.Append(Sid, "sessionStart", $$$"""{"hook_event_name":"sessionStart","session_id":"{{{Sid}}}"}""");
-        spool.Append(Sid, "sessionEnd",   $$$"""{"hook_event_name":"sessionEnd","session_id":"{{{Sid}}}"}""");
+        spool.Append(Sid, "sessionStart", $$"""{"hook_event_name":"sessionStart","session_id":"{{Sid}}"}""");
+        spool.Append(Sid, "sessionEnd", $$"""{"hook_event_name":"sessionEnd","session_id":"{{Sid}}"}""");
 
         var lines = await File.ReadAllLinesAsync(Path.Combine(tmp.Path, Sid + ".jsonl"));
         await Assert.That(lines.Length).IsEqualTo(2);
@@ -21,12 +21,13 @@ public class CursorHookSpoolTests {
 
     [Test]
     public async Task Drain_yields_entries_in_FIFO_order() {
-        using var tmp = new TempDir();
-        var spool = new CursorHookSpool(tmp.Path);
+        using var tmp   = new TempDir();
+        var       spool = new CursorHookSpool(tmp.Path);
         spool.Append(Sid, "sessionStart", """{"k":"a"}""");
-        spool.Append(Sid, "sessionEnd",   """{"k":"b"}""");
+        spool.Append(Sid, "sessionEnd", """{"k":"b"}""");
 
         var seen = new List<(string Event, string Body)>();
+
         await foreach (var entry in spool.DrainAsync(Sid, CancellationToken.None)) {
             seen.Add((entry.EventName, entry.Body));
             await entry.MarkDeliveredAsync();
@@ -40,10 +41,10 @@ public class CursorHookSpoolTests {
 
     [Test]
     public async Task Drain_stops_on_first_undelivered_and_preserves_remaining() {
-        using var tmp = new TempDir();
-        var spool = new CursorHookSpool(tmp.Path);
+        using var tmp   = new TempDir();
+        var       spool = new CursorHookSpool(tmp.Path);
         spool.Append(Sid, "sessionStart", """{"k":"a"}""");
-        spool.Append(Sid, "sessionEnd",   """{"k":"b"}""");
+        spool.Append(Sid, "sessionEnd", """{"k":"b"}""");
 
         await foreach (var entry in spool.DrainAsync(Sid, CancellationToken.None)) {
             if (entry.EventName == "sessionStart") {
@@ -60,9 +61,9 @@ public class CursorHookSpoolTests {
 
     [Test]
     public async Task Append_evicts_oldest_when_over_one_MB() {
-        using var tmp = new TempDir();
-        var spool = new CursorHookSpool(tmp.Path, capBytes: 4_096);
-        var big = new string('x', 1_500);
+        using var tmp   = new TempDir();
+        var       spool = new CursorHookSpool(tmp.Path, capBytes: 4_096);
+        var       big   = new string('x', 1_500);
         spool.Append(Sid, "afterAgentThought", $"\"{big}-first\"");
         spool.Append(Sid, "afterAgentThought", $"\"{big}-second\"");
         spool.Append(Sid, "afterAgentThought", $"\"{big}-third\"");
@@ -75,8 +76,8 @@ public class CursorHookSpoolTests {
 
     [Test]
     public async Task DeleteSession_removes_file_and_is_idempotent() {
-        using var tmp = new TempDir();
-        var spool = new CursorHookSpool(tmp.Path);
+        using var tmp   = new TempDir();
+        var       spool = new CursorHookSpool(tmp.Path);
         spool.Append(Sid, "sessionEnd", """{"k":"x"}""");
 
         spool.DeleteSession(Sid);
@@ -86,8 +87,8 @@ public class CursorHookSpoolTests {
 
     [Test]
     public async Task ReapOlderThan_deletes_old_files_only() {
-        using var tmp = new TempDir();
-        var spool = new CursorHookSpool(tmp.Path);
+        using var tmp   = new TempDir();
+        var       spool = new CursorHookSpool(tmp.Path);
         spool.Append("aaaabbbbccccddddeeeeffffaaaabbbb", "sessionEnd", """{"k":"o"}""");
         spool.Append("bbbbccccddddeeeeffffaaaabbbbcccc", "sessionEnd", """{"k":"n"}""");
 
@@ -102,8 +103,8 @@ public class CursorHookSpoolTests {
 
     [Test]
     public async Task unsafe_session_id_is_rejected_silently() {
-        using var tmp = new TempDir();
-        var spool = new CursorHookSpool(tmp.Path);
+        using var tmp   = new TempDir();
+        var       spool = new CursorHookSpool(tmp.Path);
 
         spool.Append("../escape", "sessionStart", """{"k":"v"}""");
         spool.Append("/etc/passwd", "sessionStart", """{"k":"v"}""");
@@ -112,7 +113,7 @@ public class CursorHookSpoolTests {
         // No files written anywhere — directory empty.
         var files = Directory.Exists(tmp.Path)
             ? Directory.EnumerateFiles(tmp.Path, "*", SearchOption.AllDirectories).ToList()
-            : new List<string>();
+            : [];
         await Assert.That(files).IsEmpty();
 
         // Drain on the same unsafe IDs yields nothing.
@@ -125,19 +126,24 @@ public class CursorHookSpoolTests {
 
     [Test]
     public async Task Drain_stops_on_malformed_line_and_preserves_remainder() {
-        using var tmp = new TempDir();
-        var spool = new CursorHookSpool(tmp.Path);
-        var spoolFile = Path.Combine(tmp.Path, Sid + ".jsonl");
+        using var tmp       = new TempDir();
+        var       spool     = new CursorHookSpool(tmp.Path);
+        var       spoolFile = Path.Combine(tmp.Path, Sid + ".jsonl");
 
         // Simulate a partial concurrent write: a malformed middle line.
         Directory.CreateDirectory(tmp.Path);
-        File.WriteAllLines(spoolFile, new[] {
-            """{"hook_event_name":"sessionStart","body":"{}"}""",
-            "{partial-write-here", // malformed
-            """{"hook_event_name":"sessionEnd","body":"{}"}"""
-        });
+
+        File.WriteAllLines(
+            spoolFile,
+            [
+                """{"hook_event_name":"sessionStart","body":"{}"}""",
+                "{partial-write-here", // malformed
+                """{"hook_event_name":"sessionEnd","body":"{}"}"""
+            ]
+        );
 
         var seen = new List<string>();
+
         await foreach (var entry in spool.DrainAsync(Sid, CancellationToken.None)) {
             seen.Add(entry.EventName);
             await entry.MarkDeliveredAsync();
@@ -146,7 +152,7 @@ public class CursorHookSpoolTests {
         // The first entry should have been delivered cleanly. The malformed
         // line and everything after it MUST remain so the next invocation
         // can retry.
-        await Assert.That(seen).IsEquivalentTo(new[] { "sessionStart" });
+        await Assert.That(seen).IsEquivalentTo(["sessionStart"]);
 
         var remaining = await File.ReadAllLinesAsync(spoolFile);
         await Assert.That(remaining.Length).IsEqualTo(2);
@@ -157,8 +163,12 @@ public class CursorHookSpoolTests {
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
-            $"kapacitor-cursor-spool-test-{Guid.NewGuid().ToString("N")[..8]}");
+            $"kapacitor-cursor-spool-test-{Guid.NewGuid().ToString("N")[..8]}"
+        );
         public TempDir() => Directory.CreateDirectory(Path);
-        public void Dispose() { try { Directory.Delete(Path, true); } catch { } }
+
+        public void Dispose() {
+            try { Directory.Delete(Path, true); } catch { }
+        }
     }
 }

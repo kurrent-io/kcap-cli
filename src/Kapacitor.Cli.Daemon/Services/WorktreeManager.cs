@@ -78,7 +78,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
 
         // Per-repo roots — scan each allowed repo for .capacitor/worktrees/
         foreach (var repoPath in config.AllowedRepoPaths) {
-            var cleanPath = repoPath.TrimEnd('/', '*');
+            var cleanPath   = repoPath.TrimEnd('/', '*');
             var perRepoRoot = Path.Combine(cleanPath, ".capacitor", "worktrees");
             CleanupDirectory(perRepoRoot, worktreePaths);
         }
@@ -100,21 +100,23 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     }
 
     /// <summary>Default timeout for local git operations (worktree add, init, commit, …).</summary>
-    static readonly TimeSpan GitTimeout   = TimeSpan.FromSeconds(60);
+    static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(60);
 
     /// <summary>Longer timeout for network git operations (fetch).</summary>
     static readonly TimeSpan FetchTimeout = TimeSpan.FromMinutes(2);
 
     static async Task<bool> IsGitRepoWithCommits(string path) {
         try {
-            var psi = NewGitPsi(path, ["rev-parse", "HEAD"]);
+            var       psi  = NewGitPsi(path, ["rev-parse", "HEAD"]);
             using var proc = Process.Start(psi)!;
             using var cts  = new CancellationTokenSource(GitTimeout);
 
             try {
                 await proc.WaitForExitAsync(cts.Token);
             } catch (OperationCanceledException) {
-                try { proc.Kill(true); } catch { /* best-effort */ }
+                try { proc.Kill(true); } catch {
+                    /* best-effort */
+                }
 
                 return false;
             }
@@ -124,14 +126,16 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
     }
 
     static async Task RunGit(string cwd, TimeSpan timeout, params string[] args) {
-        var psi = NewGitPsi(cwd, args);
+        var       psi  = NewGitPsi(cwd, args);
         using var proc = Process.Start(psi)!;
         using var cts  = new CancellationTokenSource(timeout);
 
         try {
             await proc.WaitForExitAsync(cts.Token);
         } catch (OperationCanceledException) {
-            try { proc.Kill(true); } catch { /* best-effort */ }
+            try { proc.Kill(true); } catch {
+                /* best-effort */
+            }
 
             throw new InvalidOperationException(
                 $"git {string.Join(' ', args)} timed out after {timeout.TotalSeconds:F0}s"
@@ -161,10 +165,13 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
             WorkingDirectory       = cwd,
             RedirectStandardOutput = true,
             RedirectStandardError  = true,
-            CreateNoWindow         = true
+            CreateNoWindow         = true,
+            Environment = {
+                ["GIT_TERMINAL_PROMPT"] = "0",
+                ["GCM_INTERACTIVE"]     = "Never"
+            }
         };
-        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
-        psi.Environment["GCM_INTERACTIVE"]     = "Never";
+
         return psi;
     }
 

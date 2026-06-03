@@ -1,12 +1,12 @@
 namespace Kapacitor.Cli.Tests.Unit.Import;
 
-using Kapacitor.Cli.Commands;
+using Commands;
 
 public class ImportDisplayGridTests {
     [Test, NotInParallel]
     public async Task plan_grid_renders_no_by_source_when_single_source() {
         var output = CaptureNonTtyOutput(d => d.WritePlanGrid(
-            new ImportCommand.ClassificationCounts(New: 5, Partial: 0, AlreadyLoaded: 0, TooShort: 0, Excluded: 0, ProbeError: 0),
+            new(New: 5, Partial: 0, AlreadyLoaded: 0, TooShort: 0, Excluded: 0, ProbeError: 0),
             bySource: new Dictionary<string, ImportCommand.ClassificationCounts> {
                 ["claude"] = new(New: 5, Partial: 0, AlreadyLoaded: 0, TooShort: 0, Excluded: 0, ProbeError: 0),
             }));
@@ -17,7 +17,7 @@ public class ImportDisplayGridTests {
     [Test, NotInParallel]
     public async Task plan_grid_renders_by_source_section_when_multiple_sources() {
         var output = CaptureNonTtyOutput(d => d.WritePlanGrid(
-            new ImportCommand.ClassificationCounts(New: 7, Partial: 0, AlreadyLoaded: 0, TooShort: 0, Excluded: 0, ProbeError: 0),
+            new(New: 7, Partial: 0, AlreadyLoaded: 0, TooShort: 0, Excluded: 0, ProbeError: 0),
             bySource: new Dictionary<string, ImportCommand.ClassificationCounts> {
                 ["claude"] = new(New: 4, Partial: 0, AlreadyLoaded: 0, TooShort: 0, Excluded: 0, ProbeError: 0),
                 ["codex"]  = new(New: 3, Partial: 0, AlreadyLoaded: 0, TooShort: 0, Excluded: 0, ProbeError: 0),
@@ -31,7 +31,7 @@ public class ImportDisplayGridTests {
     [Test, NotInParallel]
     public async Task plan_grid_renders_no_by_source_when_breakdown_null() {
         var output = CaptureNonTtyOutput(d => d.WritePlanGrid(
-            new ImportCommand.ClassificationCounts(New: 5, Partial: 0, AlreadyLoaded: 0, TooShort: 0, Excluded: 0, ProbeError: 0),
+            new(New: 5, Partial: 0, AlreadyLoaded: 0, TooShort: 0, Excluded: 0, ProbeError: 0),
             bySource: null));
 
         await Assert.That(output).DoesNotContain("By source");
@@ -93,7 +93,7 @@ public class ImportDisplayGridTests {
         var prevOut = Console.Out;
         Console.SetOut(sw);
         try {
-            render(new ImportCommand.ImportDisplay { Tty = false });
+            render(new() { Tty = false });
         } finally {
             Console.SetOut(prevOut);
         }

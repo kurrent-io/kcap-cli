@@ -14,6 +14,7 @@ public static class AgentsSkillsInstaller {
     /// postinstall hook to detect when an upgrade-time refresh is needed.
     /// </summary>
     public const string MarkerFileName = ".kapacitor-version";
+
     /// <summary>
     /// Source folder names under <c>kapacitor/skills/</c>. On install each
     /// becomes <c>kapacitor-&lt;name&gt;</c> under the target directory.
@@ -46,10 +47,13 @@ public static class AgentsSkillsInstaller {
         var missing = SourceNames
             .Where(n => !File.Exists(Path.Combine(sourceDir, n, "SKILL.md")))
             .ToList();
+
         if (missing.Count > 0) {
             Console.Error.WriteLine(
                 $"Cannot install agent skills: missing SKILL.md for skill(s) under {sourceDir}: "
-                + string.Join(", ", missing));
+              + string.Join(", ", missing)
+            );
+
             return false;
         }
 
@@ -66,9 +70,11 @@ public static class AgentsSkillsInstaller {
             }
 
             WriteMarker(targetDir);
+
             return true;
         } catch (Exception ex) {
             Console.Error.WriteLine($"Could not install agent skills: {ex.Message}");
+
             return false;
         }
     }
@@ -90,12 +96,8 @@ public static class AgentsSkillsInstaller {
     /// </remarks>
     public static bool IsInstalled(string targetDir) {
         if (File.Exists(Path.Combine(targetDir, MarkerFileName))) return true;
-        if (!Directory.Exists(targetDir)) return false;
 
-        foreach (var name in SourceNames) {
-            if (Directory.Exists(Path.Combine(targetDir, "kapacitor-" + name))) return true;
-        }
-        return false;
+        return Directory.Exists(targetDir) && SourceNames.Any(name => Directory.Exists(Path.Combine(targetDir, "kapacitor-" + name)));
     }
 
     /// <summary>
@@ -104,6 +106,7 @@ public static class AgentsSkillsInstaller {
     /// </summary>
     public static string? ReadMarker(string targetDir) {
         var path = Path.Combine(targetDir, MarkerFileName);
+
         try {
             return File.Exists(path) ? File.ReadAllText(path).Trim() : null;
         } catch {
@@ -139,9 +142,12 @@ public static class AgentsSkillsInstaller {
 
         var removed = false;
         var errors  = false;
+
         foreach (var name in SourceNames) {
             var dst = Path.Combine(targetDir, "kapacitor-" + name);
+
             if (!Directory.Exists(dst)) continue;
+
             try {
                 Directory.Delete(dst, recursive: true);
                 removed = true;
@@ -154,8 +160,11 @@ public static class AgentsSkillsInstaller {
         // Drop the marker so the next upgrade doesn't silently re-install
         // skills the user just removed.
         var marker = Path.Combine(targetDir, MarkerFileName);
+
         if (File.Exists(marker)) {
-            try { File.Delete(marker); } catch { /* non-fatal */ }
+            try { File.Delete(marker); } catch {
+                /* non-fatal */
+            }
         }
 
         return new RemovalResult(removed, errors);
@@ -174,9 +183,12 @@ public static class AgentsSkillsInstaller {
 
         var removed = false;
         var errors  = false;
+
         foreach (var name in LegacyCodexSkillNames) {
             var dst = Path.Combine(legacySkillsDir, name);
+
             if (!Directory.Exists(dst)) continue;
+
             try {
                 Directory.Delete(dst, recursive: true);
                 Console.Out.WriteLine($"Removed legacy Codex skill folder: {dst}");
@@ -205,6 +217,7 @@ public static class AgentsSkillsInstaller {
         foreach (var file in Directory.GetFiles(source)) {
             var fileName = Path.GetFileName(file);
             var dstPath  = Path.Combine(destination, fileName);
+
             if (fileName == "SKILL.md") {
                 File.WriteAllText(dstPath, RewriteNameFrontmatter(File.ReadAllText(file), targetName));
             } else {
@@ -225,15 +238,19 @@ public static class AgentsSkillsInstaller {
     /// </summary>
     internal static string RewriteNameFrontmatter(string content, string newName) {
         var lines = content.Replace("\r\n", "\n").Split('\n');
+
         if (lines.Length < 2 || lines[0].Trim() != "---") return content;
 
         for (var i = 1; i < lines.Length; i++) {
             if (lines[i].Trim() == "---") break;
+
             if (lines[i].StartsWith("name:", StringComparison.Ordinal)) {
                 lines[i] = $"name: {newName}";
+
                 break;
             }
         }
+
         return string.Join('\n', lines);
     }
 }

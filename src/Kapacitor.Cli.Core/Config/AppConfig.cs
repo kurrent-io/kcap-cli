@@ -244,18 +244,6 @@ public static class AppConfig {
         }
     }
 
-    public static async Task Save(KapacitorConfig config) {
-        var dir = Path.GetDirectoryName(ConfigPath)!;
-        Directory.CreateDirectory(dir);
-        var tempPath = $"{ConfigPath}.tmp";
-
-        await File.WriteAllBytesAsync(
-            tempPath,
-            JsonSerializer.SerializeToUtf8Bytes(config, ConfigJsonContextIndented.Default.KapacitorConfig)
-        );
-        File.Move(tempPath, ConfigPath, overwrite: true);
-    }
-
     public static async Task<ProfileConfig> LoadProfileConfig() {
         if (!File.Exists(ConfigPath))
             return new() { Profiles = new() { ["default"] = new() } };

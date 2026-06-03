@@ -3,7 +3,7 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 
-namespace kapacitor.Tests.Integration;
+namespace Kapacitor.Cli.Tests.Integration;
 
 public class ImportPrivateTests : IDisposable {
     readonly WireMockServer _server  = WireMockServer.Start();
@@ -31,11 +31,13 @@ public class ImportPrivateTests : IDisposable {
             .OrderBy(e => e.RequestMessage.Path)
             .ToArray();
 
-        await Assert.That(requests.Select(r => r.RequestMessage.Path).ToArray()).IsEquivalentTo(new[] {
+        await Assert.That(requests.Select(r => r.RequestMessage.Path).ToArray()).IsEquivalentTo(
+        [
             "/api/sessions/sess1/visibility",
             "/api/sessions/sess2/visibility",
-            "/api/sessions/sess3/visibility",
-        });
+            "/api/sessions/sess3/visibility"
+        ]
+        );
 
         foreach (var r in requests) {
             await Assert.That(r.RequestMessage.Body).IsEqualTo("""{"visibility":"none"}""");

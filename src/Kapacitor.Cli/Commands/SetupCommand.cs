@@ -195,8 +195,8 @@ public static class SetupCommand {
             InstallCodexHooks:      PluginCommand.InstallCodexHooks,
             InstallCursorHooks:     PluginCommand.InstallCursorHooks,
             KapacitorOnPath:        () => AgentDetector.IsInstalled("kapacitor"),
-            InstallAgentSkills:     Kapacitor.Cli.Core.AgentsSkillsInstaller.Install,
-            CleanLegacyCodexSkills: legacyDir => Kapacitor.Cli.Core.AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny);
+            InstallAgentSkills:     AgentsSkillsInstaller.Install,
+            CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny);
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });

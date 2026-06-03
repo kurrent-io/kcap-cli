@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Kapacitor.Cli.Core;
+// ReSharper disable ShortLivedHttpClient
 
 namespace Kapacitor.Cli.Commands;
 
@@ -76,7 +77,7 @@ static class CodexHookCommand {
             // Emit the session-scoped JSON Codex's Stop/SessionStart parsers expect,
             // then skip dispatch. (Claude's disabled branch also returns immediately
             // — see Program.cs around line 593.)
-            if (eventName == "Stop" || eventName == "SessionStart") {
+            if (eventName is "Stop" or "SessionStart") {
                 Console.Write(SessionScopedOutputJson);
             }
             return 0;
@@ -200,7 +201,8 @@ static class CodexHookCommand {
             return EmitDenyAndExitNonzero();
         }
 
-        using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        using var client = new HttpClient();
+        client.Timeout = Timeout.InfiniteTimeSpan;
 
         try {
             using var content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");

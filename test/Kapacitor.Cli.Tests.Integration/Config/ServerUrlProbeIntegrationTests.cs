@@ -3,7 +3,7 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 
-namespace kapacitor.Tests.Integration.Config;
+namespace Kapacitor.Cli.Tests.Integration.Config;
 
 /// <summary>
 /// End-to-end verification that the default HTTP probe issued by
@@ -23,8 +23,7 @@ public class ServerUrlProbeIntegrationTests : IDisposable {
         var port  = new Uri(_server.Url!).Port;
         var input = $"localhost:{port}";
 
-        var result = await ServerUrlNormalizer.NormalizeAsync(
-            input, skipProbe: false, CancellationToken.None);
+        var result = await ServerUrlNormalizer.NormalizeAsync(input, skipProbe: false, CancellationToken.None);
 
         await Assert.That(result.Url).IsEqualTo($"http://localhost:{port}");
         await Assert.That(result.Warning).IsNull();
@@ -36,7 +35,10 @@ public class ServerUrlProbeIntegrationTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var result = await ServerUrlNormalizer.NormalizeAsync(
-            _server.Url!, skipProbe: false, CancellationToken.None);
+            _server.Url!,
+            skipProbe: false,
+            CancellationToken.None
+        );
 
         await Assert.That(result.Url).IsEqualTo(_server.Url!.TrimEnd('/'));
         await Assert.That(result.Warning).IsNull();
@@ -51,7 +53,10 @@ public class ServerUrlProbeIntegrationTests : IDisposable {
         var input = "127.0.0.1:1";
 
         var result = await ServerUrlNormalizer.NormalizeAsync(
-            input, skipProbe: false, CancellationToken.None);
+            input,
+            skipProbe: false,
+            CancellationToken.None
+        );
 
         await Assert.That(result.Url).IsEqualTo("http://127.0.0.1:1");
         await Assert.That(result.Warning).IsNotNull();
