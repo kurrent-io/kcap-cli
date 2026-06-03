@@ -1,0 +1,37 @@
+kapacitor uninstall — Remove kapacitor configuration from this machine
+
+Usage: kapacitor uninstall [options]
+
+Stops any running daemons and watcher processes, strips kapacitor entries from
+user-level Claude Code, Codex CLI, and Cursor hook files, removes agent skills
+(and any legacy ~/.codex/skills/kapacitor-* folders), and deletes the kapacitor
+config directory.
+
+Non-kapacitor entries in shared files (settings.json, hooks.json) are preserved.
+
+Options:
+  --project           Also remove kapacitor entries from project-scope files
+                      under the current git working tree:
+                        <repo>/.claude/settings.local.json
+                        <repo>/.codex/hooks.json
+                      Errors if not inside a git repository. Cursor only has
+                      a user-scope hooks file, so --project does not affect it.
+  --keep-config       Don't delete the kapacitor config directory; only remove
+                      the agent-side integrations. Useful when reinstalling
+                      while preserving profiles, tokens, and ignore lists.
+  --yes, -y           Skip the confirmation prompt.
+
+Notes:
+  Per-agent selective cleanup is not exposed here — uninstall always touches
+  all known agents. Use `kapacitor plugin remove [--codex|--cursor|--skills]`
+  for finer-grained removal.
+
+  Project-scope hooks installed in a directory other than the cwd's git root
+  are not removed. Re-run uninstall --project from inside each repo that has
+  them.
+
+Examples:
+  kapacitor uninstall                    # User-level removal, interactive prompt
+  kapacitor uninstall --yes              # Non-interactive
+  kapacitor uninstall --project --yes    # Also strip project-scope hooks in cwd's repo
+  kapacitor uninstall --keep-config      # Remove integrations, keep ~/.config/kapacitor

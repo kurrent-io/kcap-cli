@@ -72,7 +72,7 @@ if (args.Skip(1).Any(a => a is "--help" or "-h")) {
 }
 
 // Commands that don't need a server URL
-string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "update", "plugin", "profile", "use", "repos", "login", "ignore"];
+string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "update", "plugin", "profile", "use", "repos", "login", "ignore", "uninstall"];
 
 if (baseUrl is null && !offlineCommands.Contains(command)) {
     Console.Error.WriteLine("No server configured. Run `kapacitor setup` or set KAPACITOR_URL.");
@@ -309,6 +309,8 @@ switch (command) {
     }
     case "cleanup":
         return await CleanupCommand.HandleCleanup();
+    case "uninstall":
+        return await UninstallCommand.HandleAsync(args);
     case "disable": {
         // The sessionId is consumed as a filesystem path component
         // (watcher PID files, disabled marker file). Validate strictly as a

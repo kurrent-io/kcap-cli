@@ -122,32 +122,18 @@ public static class PluginCommand {
         }
 
         try {
-            var text = await File.ReadAllTextAsync(settingsPath);
+            var outcome = RemoveClaudePlugin(settingsPath);
 
-            if (JsonNode.Parse(text) is not JsonObject root) {
-                await Console.Out.WriteLineAsync("Nothing to remove.");
-
-                return 0;
-            }
-
-            var changed = false;
-
-            if (root["enabledPlugins"] is JsonObject enabled) {
-                changed |= enabled.Remove("kapacitor@kapacitor");
-                changed |= enabled.Remove("kapacitor@kurrent");
-            }
-
-            if (root["extraKnownMarketplaces"] is JsonObject marketplaces) {
-                changed |= marketplaces.Remove("kapacitor");
-                changed |= marketplaces.Remove("kurrent");
-            }
-
-            if (changed) {
-                await File.WriteAllTextAsync(settingsPath, root.ToJsonString(WriteOpts));
-                ClaudePluginInstaller.DeleteMarker(settingsPath);
-                await Console.Out.WriteLineAsync($"Plugin removed ({scope}: {settingsPath})");
-            } else {
-                await Console.Out.WriteLineAsync("Plugin was not installed.");
+            switch (outcome) {
+                case ClaudeRemovalOutcome.Removed:
+                    await Console.Out.WriteLineAsync($"Plugin removed ({scope}: {settingsPath})");
+                    break;
+                case ClaudeRemovalOutcome.NotInstalled:
+                    await Console.Out.WriteLineAsync("Plugin was not installed.");
+                    break;
+                case ClaudeRemovalOutcome.Malformed:
+                    await Console.Out.WriteLineAsync("Nothing to remove.");
+                    break;
             }
 
             return 0;
@@ -156,6 +142,47 @@ public static class PluginCommand {
 
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Removes kapacitor's marketplace + enabledPlugins entries (including the
+    /// legacy <c>kurrent</c> keys) from the Claude Code settings file at
+    /// <paramref name="settingsPath"/>, and deletes the version marker. Non-kapacitor
+    /// settings are preserved. Throws on I/O failure so callers can decide how to
+    /// report it; returns <see cref="ClaudeRemovalOutcome.NotInstalled"/> when the
+    /// file exists but contains no kapacitor entries.
+    /// </summary>
+    public static ClaudeRemovalOutcome RemoveClaudePlugin(string settingsPath) {
+        if (!File.Exists(settingsPath)) return ClaudeRemovalOutcome.NotInstalled;
+
+        var text = File.ReadAllText(settingsPath);
+
+        if (JsonNode.Parse(text) is not JsonObject root) return ClaudeRemovalOutcome.Malformed;
+
+        var changed = false;
+
+        if (root["enabledPlugins"] is JsonObject enabled) {
+            changed |= enabled.Remove("kapacitor@kapacitor");
+            changed |= enabled.Remove("kapacitor@kurrent");
+        }
+
+        if (root["extraKnownMarketplaces"] is JsonObject marketplaces) {
+            changed |= marketplaces.Remove("kapacitor");
+            changed |= marketplaces.Remove("kurrent");
+        }
+
+        if (!changed) return ClaudeRemovalOutcome.NotInstalled;
+
+        File.WriteAllText(settingsPath, root.ToJsonString(WriteOpts));
+        ClaudePluginInstaller.DeleteMarker(settingsPath);
+
+        return ClaudeRemovalOutcome.Removed;
+    }
+
+    public enum ClaudeRemovalOutcome {
+        Removed,
+        NotInstalled,
+        Malformed
     }
 
     static async Task<int> InstallSkills(string[] args) {

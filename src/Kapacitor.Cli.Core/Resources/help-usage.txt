@@ -57,6 +57,7 @@ Plugin:
 Maintenance:
   update                           Check for and install updates
   cleanup                          Kill all orphaned watcher processes
+  uninstall [--project] [--yes]    Remove kapacitor config + all agent integrations
   --version                        Show version
   --help                           Show this help
 
