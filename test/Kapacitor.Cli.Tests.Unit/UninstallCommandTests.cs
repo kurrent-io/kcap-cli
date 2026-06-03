@@ -212,6 +212,122 @@ public class UninstallCommandTests {
         }
     }
 
+    [Test]
+    public async Task Marker_only_install_is_purged_even_when_json_has_no_kapacitor_entries() {
+        // Regression for the "marker survives manual JSON edit" leak: the
+        // upstream plugin removers delete the marker only when JSON entries
+        // changed. If a user removed kapacitor entries by hand earlier, the
+        // marker survives and IsInstalled keeps returning true. uninstall
+        // must always nuke the markers.
+        await using var fixture = await Fixture.CreateAsync();
+
+        var claudeDir = Path.Combine(fixture.Home, ".claude");
+        Directory.CreateDirectory(claudeDir);
+        // settings.json present but no kapacitor entries.
+        await File.WriteAllTextAsync(Path.Combine(claudeDir, "settings.json"), """{"userKey":"x"}""");
+        await File.WriteAllTextAsync(
+            Path.Combine(claudeDir, ClaudePluginInstaller.MarkerFileName),
+            KapacitorVersion.Current());
+
+        var codexDir = Path.Combine(fixture.Home, ".codex");
+        Directory.CreateDirectory(codexDir);
+        await File.WriteAllTextAsync(Path.Combine(codexDir, "hooks.json"), """{"hooks":{}}""");
+        await File.WriteAllTextAsync(
+            Path.Combine(codexDir, CodexHooksInstaller.MarkerFileName),
+            KapacitorVersion.Current());
+
+        var cursorDir = Path.Combine(fixture.Home, ".cursor");
+        Directory.CreateDirectory(cursorDir);
+        await File.WriteAllTextAsync(Path.Combine(cursorDir, "hooks.json"), """{"version":1,"hooks":{}}""");
+        await File.WriteAllTextAsync(
+            Path.Combine(cursorDir, CursorHooksInstaller.MarkerFileName),
+            KapacitorVersion.Current());
+
+        var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes", "--keep-config"]);
+        await Assert.That(exit).IsEqualTo(0);
+
+        await Assert.That(File.Exists(Path.Combine(claudeDir, ClaudePluginInstaller.MarkerFileName))).IsFalse();
+        await Assert.That(File.Exists(Path.Combine(codexDir,  CodexHooksInstaller.MarkerFileName))).IsFalse();
+        await Assert.That(File.Exists(Path.Combine(cursorDir, CursorHooksInstaller.MarkerFileName))).IsFalse();
+    }
+
+    [Test]
+    public async Task Sweep_removes_kapacitor_prefixed_skill_folders_not_in_current_source_list() {
+        // Regression for the "retired/renamed skill folder survives" leak:
+        // AgentsSkillsInstaller.Remove uses the current SourceNames list, so
+        // a kapacitor-* folder from an older release isn't matched. uninstall
+        // must sweep the directory for our prefix to catch those.
+        await using var fixture = await Fixture.CreateAsync();
+
+        var skillsDir = Path.Combine(fixture.Home, ".agents", "skills");
+        Directory.CreateDirectory(skillsDir);
+
+        // A skill from the current list (handled by Remove) and a retired one
+        // (only handled by the sweep). Plus a user-authored folder that must
+        // survive both.
+        var currentSkill = Path.Combine(skillsDir, $"kapacitor-{AgentsSkillsInstaller.SourceNames[0]}");
+        var retiredSkill = Path.Combine(skillsDir, "kapacitor-retired-from-v0.42");
+        var userSkill    = Path.Combine(skillsDir, "user-authored");
+        Directory.CreateDirectory(currentSkill);
+        Directory.CreateDirectory(retiredSkill);
+        Directory.CreateDirectory(userSkill);
+
+        // Legacy Codex skills dir: same story.
+        var legacyDir = Path.Combine(fixture.Home, ".codex", "skills");
+        Directory.CreateDirectory(legacyDir);
+        var legacyRetired = Path.Combine(legacyDir, "kapacitor-also-retired");
+        Directory.CreateDirectory(legacyRetired);
+
+        var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes", "--keep-config"]);
+        await Assert.That(exit).IsEqualTo(0);
+
+        await Assert.That(Directory.Exists(currentSkill)).IsFalse();
+        await Assert.That(Directory.Exists(retiredSkill)).IsFalse();
+        await Assert.That(Directory.Exists(legacyRetired)).IsFalse();
+        await Assert.That(Directory.Exists(userSkill)).IsTrue();
+    }
+
+    [Test]
+    public async Task Config_dir_is_preserved_when_user_level_steps_fail() {
+        // Regression for the "discarded return codes" issue: when a step
+        // returns non-zero, uninstall must NOT delete ~/.config/kapacitor —
+        // doing so destroys the only state that lets the user re-run and
+        // finish, and it would silently report success.
+        //
+        // Windows file ACLs would need an entirely different setup, so this
+        // case is Unix-only. The aggregation logic is the same on every
+        // platform; covering Unix is sufficient for regression purposes.
+        if (OperatingSystem.IsWindows()) return;
+
+        await using var fixture = await Fixture.CreateAsync();
+
+        // Force PluginCommand's Claude remove to return 1 by leaving a valid
+        // kapacitor entry behind a read-only file: File.Exists passes, JSON
+        // parses cleanly, then File.WriteAllText hits UnauthorizedAccessException
+        // — which the remover's catch translates into exit code 1.
+        var claudeDir = Path.Combine(fixture.Home, ".claude");
+        Directory.CreateDirectory(claudeDir);
+        var settingsPath = Path.Combine(claudeDir, "settings.json");
+        await File.WriteAllTextAsync(settingsPath, """
+            {"enabledPlugins": {"kapacitor@kapacitor": true}}
+            """);
+        File.SetUnixFileMode(settingsPath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+
+        var sentinel = Path.Combine(fixture.ConfigDir, "profiles.json");
+        await File.WriteAllTextAsync(sentinel, """{"sentinel":"survives-partial-failure"}""");
+
+        try {
+            var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes"]);
+
+            await Assert.That(exit).IsEqualTo(1);
+            await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
+            await Assert.That(await File.ReadAllTextAsync(sentinel)).Contains("survives-partial-failure");
+        } finally {
+            // Restore write so the test fixture can be deleted.
+            File.SetUnixFileMode(settingsPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
     sealed class Fixture : IAsyncDisposable {
         public required string Home      { get; init; }
         public required string ConfigDir { get; init; }
