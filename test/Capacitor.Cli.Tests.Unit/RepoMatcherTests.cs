@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// </summary>
 public class RepoMatcherTests {
     static string MakeTempRepo(string originUrl, string? subdir = null) {
-        var root = Path.Combine(Path.GetTempPath(), "kapacitor-repo-matcher-" + Guid.NewGuid().ToString("N")[..8]);
+        var root = Path.Combine(Path.GetTempPath(), "kcap-repo-matcher-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(root);
 
         Run(root, "init", "-q");
@@ -97,7 +97,7 @@ public class RepoMatcherTests {
 
     [Test]
     public async Task FindAsync_NonGitDirectory_Skipped() {
-        var dir = Path.Combine(Path.GetTempPath(), "kapacitor-not-a-repo-" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine(Path.GetTempPath(), "kcap-not-a-repo-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         try {
             var result = await NewMatcher().FindAsync("contoso", "widgets", [dir], CancellationToken.None);

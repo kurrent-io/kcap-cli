@@ -5,45 +5,45 @@ namespace Capacitor.Cli.Tests.Unit.Codex;
 
 public class CodexHooksParserTests {
     [Test]
-    public async Task EntryReferencesKapacitorCodexHook_returns_true_when_command_contains_marker() {
-        var entry = JsonNode.Parse("""{"hooks":[{"type":"command","command":"kapacitor codex-hook","timeout":30}]}""");
-        await Assert.That(CodexHooksParser.EntryReferencesKapacitorCodexHook(entry)).IsTrue();
+    public async Task EntryReferencesCapacitorCodexHook_returns_true_when_command_contains_marker() {
+        var entry = JsonNode.Parse("""{"hooks":[{"type":"command","command":"kcap codex-hook","timeout":30}]}""");
+        await Assert.That(CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)).IsTrue();
     }
 
     [Test]
-    public async Task EntryReferencesKapacitorCodexHook_returns_false_when_command_does_not_match() {
+    public async Task EntryReferencesCapacitorCodexHook_returns_false_when_command_does_not_match() {
         var entry = JsonNode.Parse("""{"hooks":[{"type":"command","command":"echo hi","timeout":30}]}""");
-        await Assert.That(CodexHooksParser.EntryReferencesKapacitorCodexHook(entry)).IsFalse();
+        await Assert.That(CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)).IsFalse();
     }
 
     [Test]
-    public async Task EntryReferencesKapacitorCodexHook_returns_false_for_null() {
-        await Assert.That(CodexHooksParser.EntryReferencesKapacitorCodexHook(null)).IsFalse();
+    public async Task EntryReferencesCapacitorCodexHook_returns_false_for_null() {
+        await Assert.That(CodexHooksParser.EntryReferencesCapacitorCodexHook(null)).IsFalse();
     }
 
     [Test]
-    public async Task HasKapacitorHooksFor_returns_true_when_all_events_have_kapacitor_entry() {
+    public async Task HasCapacitorHooksFor_returns_true_when_all_events_have_kcap_entry() {
         var root = JsonNode.Parse("""
             {"hooks":{
-                "SessionStart":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}],
-                "Stop":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}],
-                "PermissionRequest":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}]
+                "SessionStart":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}],
+                "Stop":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}],
+                "PermissionRequest":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}]
             }}
         """) as JsonObject;
         var events = new[] { "SessionStart", "Stop", "PermissionRequest" };
-        await Assert.That(CodexHooksParser.HasKapacitorHooksFor(root!, events)).IsTrue();
+        await Assert.That(CodexHooksParser.HasCapacitorHooksFor(root!, events)).IsTrue();
     }
 
     [Test]
-    public async Task HasKapacitorHooksFor_returns_false_when_one_event_missing() {
+    public async Task HasCapacitorHooksFor_returns_false_when_one_event_missing() {
         var root = JsonNode.Parse("""
             {"hooks":{
-                "SessionStart":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}],
+                "SessionStart":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}],
                 "Stop":[{"hooks":[{"type":"command","command":"echo something else"}]}]
             }}
         """) as JsonObject;
         var events = new[] { "SessionStart", "Stop", "PermissionRequest" };
-        await Assert.That(CodexHooksParser.HasKapacitorHooksFor(root!, events)).IsFalse();
+        await Assert.That(CodexHooksParser.HasCapacitorHooksFor(root!, events)).IsFalse();
     }
 
     [Test]

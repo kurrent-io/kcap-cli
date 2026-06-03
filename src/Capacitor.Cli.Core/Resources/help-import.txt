@@ -1,13 +1,13 @@
-kapacitor import — Import local sessions from every detected coding agent
+kcap import — Import local sessions from every detected coding agent
 
 Discovers Claude, Codex, and Cursor sessions on this machine and imports them
 in a single run. Each agent ships a per-session .jsonl transcript:
   Claude — ~/.claude/projects/<encoded-cwd>/<sid>.jsonl
   Codex  — ~/.codex/sessions/.../rollout-<sid>.jsonl
   Cursor — ~/.cursor/projects/<sanitized-workspace>/agent-transcripts/<sid>/<sid>.jsonl
-kapacitor walks all three the same way.
+kcap walks all three the same way.
 
-Usage: kapacitor import [vendor-filters] [scope] [options]
+Usage: kcap import [vendor-filters] [scope] [options]
 
 By default every available agent is imported. The vendor filters below let you
 narrow the run to a subset; passing one or more vendor filters means ONLY those

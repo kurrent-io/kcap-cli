@@ -26,7 +26,7 @@ public static class ProfileCommand {
     static async Task<int> HandleAdd(string configPath, string[] args) {
         if (args.Length < 3) {
             await Console.Error.WriteLineAsync(
-                "Usage: kapacitor profile add <name> --server-url <url> [--remote <pattern>]... [--no-probe]");
+                "Usage: kcap profile add <name> --server-url <url> [--remote <pattern>]... [--no-probe]");
 
             return 1;
         }
@@ -192,7 +192,7 @@ public static class ProfileCommand {
     }
 
     static async Task<int> PrintUsage() {
-        await Console.Error.WriteLineAsync("Usage: kapacitor profile <add|list|remove|show>");
+        await Console.Error.WriteLineAsync("Usage: kcap profile <add|list|remove|show>");
         await Console.Error.WriteLineAsync();
         await Console.Error.WriteLineAsync("  add <name> --server-url <url> [--remote <pattern>]... [--no-probe]");
         await Console.Error.WriteLineAsync("  list                          Show all profiles");

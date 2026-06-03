@@ -535,7 +535,7 @@ static class SessionImporter {
             Vendor = vendor == "claude" ? null : vendor
         };
 
-        var       json    = JsonSerializer.Serialize(batch, KapacitorJsonContext.Default.TranscriptBatch);
+        var       json    = JsonSerializer.Serialize(batch, CapacitorJsonContext.Default.TranscriptBatch);
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
         try {

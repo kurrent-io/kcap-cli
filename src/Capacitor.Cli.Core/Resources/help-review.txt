@@ -1,10 +1,10 @@
-kapacitor review — Launch Claude with PR review context
+kcap review — Launch Claude with PR review context
 
-Usage: kapacitor review <pr-url-or-shorthand>
+Usage: kcap review <pr-url-or-shorthand>
 
 Arguments:
   pr                      PR URL or shorthand (e.g., owner/repo#123)
 
 Examples:
-  kapacitor review https://github.com/owner/repo/pull/123
-  kapacitor review owner/repo#123
+  kcap review https://github.com/owner/repo/pull/123
+  kcap review owner/repo#123

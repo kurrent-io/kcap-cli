@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
 /// <paramref name="FetchedRef"/> is the per-worktree ref the daemon fetched
-/// the requested <c>baseRef</c> into (e.g. <c>refs/kapacitor/review/{name}</c>).
+/// the requested <c>baseRef</c> into (e.g. <c>refs/kcap/review/{name}</c>).
 /// Tracked so <see cref="WorktreeManager.RemoveAsync"/> can delete it on
 /// cleanup. Null for non-review launches.
 /// </summary>
@@ -29,7 +29,7 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
                 // so concurrent review launches in the same source repo can't
                 // race on each other's fetches. The unique ref carries the
                 // worktree name so it's traceable and easy to clean up.
-                var fetchedRef = $"refs/kapacitor/review/{name}";
+                var fetchedRef = $"refs/kcap/review/{name}";
                 await RunGit(repoPath, FetchTimeout, "fetch", "origin", $"{baseRef}:{fetchedRef}");
                 await RunGit(repoPath, GitTimeout, "worktree", "add", "-B", branch, worktreePath, fetchedRef);
 

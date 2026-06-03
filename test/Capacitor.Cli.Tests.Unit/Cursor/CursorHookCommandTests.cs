@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Tests.Unit.Cursor;
 
 // Several tests here read HOME-derived paths (DisabledSessions marker dir,
 // PathHelpers.HomeDirectory injection into the outgoing payload) and one
-// mutates KAPACITOR_AGENT_ID. Serialise against every other test that
+// mutates KCAP_AGENT_ID. Serialise against every other test that
 // mutates HOME so a racing HOME-setter from PluginCommand* tests can't
 // land our marker writes in the wrong directory.
 [NotInParallel("HomeEnvVarMutation")]
@@ -40,9 +40,9 @@ public class CursorHookCommandTests {
     }
 
     [Test]
-    [NotInParallel("KapacitorAgentIdEnvVar")]
+    [NotInParallel("CapacitorAgentIdEnvVar")]
     public async Task home_dir_and_agent_host_id_are_injected() {
-        Environment.SetEnvironmentVariable("KAPACITOR_AGENT_ID", "host-42");
+        Environment.SetEnvironmentVariable("KCAP_AGENT_ID", "host-42");
 
         try {
             using var fx = new Fixture();
@@ -52,7 +52,7 @@ public class CursorHookCommandTests {
             await Assert.That(node["home_dir"]?.GetValue<string>()).IsNotNull();
             await Assert.That(node["agent_host_id"]?.GetValue<string>()).IsEqualTo("host-42");
         } finally {
-            Environment.SetEnvironmentVariable("KAPACITOR_AGENT_ID", null);
+            Environment.SetEnvironmentVariable("KCAP_AGENT_ID", null);
         }
     }
 
@@ -244,7 +244,7 @@ public class CursorHookCommandTests {
     sealed class Fixture : IDisposable {
         readonly string _tmpHome = Path.Combine(
             Path.GetTempPath(),
-            $"kapacitor-cursor-hook-test-{Guid.NewGuid().ToString("N")[..8]}"
+            $"kcap-cursor-hook-test-{Guid.NewGuid().ToString("N")[..8]}"
         );
 
         readonly string _spoolPath;

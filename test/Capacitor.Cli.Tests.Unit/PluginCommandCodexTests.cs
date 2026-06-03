@@ -24,7 +24,7 @@ public class PluginCommandCodexTests {
             var inner           = entries[0]!["hooks"]!.AsArray();
             var expectedTimeout = evt == "PermissionRequest" ? 86400 : 30;
             await Assert.That(inner[0]!["type"]!.GetValue<string>()).IsEqualTo("command");
-            await Assert.That(inner[0]!["command"]!.GetValue<string>()).IsEqualTo("kapacitor codex-hook");
+            await Assert.That(inner[0]!["command"]!.GetValue<string>()).IsEqualTo("kcap codex-hook");
             await Assert.That(inner[0]!["timeout"]!.GetValue<int>()).IsEqualTo(expectedTimeout);
         }
     }
@@ -38,11 +38,11 @@ public class PluginCommandCodexTests {
 
         var root             = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
         var permissionEntries = root["hooks"]!["PermissionRequest"]!.AsArray();
-        var kapacitorEntry = permissionEntries.First(e =>
+        var kcapEntry = permissionEntries.First(e =>
             (e!["hooks"] as JsonArray)!.Any(h =>
-                h?["command"] is JsonValue v && v.TryGetValue<string>(out var s) && s.Contains("kapacitor codex-hook"))
+                h?["command"] is JsonValue v && v.TryGetValue<string>(out var s) && s.Contains("kcap codex-hook"))
         );
-        var timeout = kapacitorEntry!["hooks"]!.AsArray()[0]!["timeout"]!.GetValue<int>();
+        var timeout = kcapEntry!["hooks"]!.AsArray()[0]!["timeout"]!.GetValue<int>();
 
         // 86400 = 24h; must be >= 86400 so Codex cannot kill the hook
         // before the dashboard sends back an approval or denial.
@@ -64,7 +64,7 @@ public class PluginCommandCodexTests {
     }
 
     [Test]
-    public async Task InstallCodexHooks_overwrites_existing_kapacitor_entries() {
+    public async Task InstallCodexHooks_overwrites_existing_kcap_entries() {
         using var tmp  = new TempDir();
         var       path = Path.Combine(tmp.Path, "hooks.json");
 
@@ -72,7 +72,7 @@ public class PluginCommandCodexTests {
             {
               "hooks": {
                 "SessionStart": [
-                  { "hooks": [{ "type": "command", "command": "kapacitor codex-hook", "timeout": 5 }] },
+                  { "hooks": [{ "type": "command", "command": "kcap codex-hook", "timeout": 5 }] },
                   { "hooks": [{ "type": "command", "command": "/usr/local/bin/other", "timeout": 5 }] }
                 ]
               }
@@ -89,13 +89,13 @@ public class PluginCommandCodexTests {
             .Select(h => h!["command"]!.GetValue<string>())
             .ToList();
 
-        await Assert.That(commands).Contains("kapacitor codex-hook");
+        await Assert.That(commands).Contains("kcap codex-hook");
         await Assert.That(commands).Contains("/usr/local/bin/other");
-        await Assert.That(commands.Count(c => c == "kapacitor codex-hook")).IsEqualTo(1);
+        await Assert.That(commands.Count(c => c == "kcap codex-hook")).IsEqualTo(1);
     }
 
     [Test]
-    public async Task RemoveCodexHooks_clears_all_kapacitor_entries() {
+    public async Task RemoveCodexHooks_clears_all_kcap_entries() {
         using var tmp  = new TempDir();
         var       path = Path.Combine(tmp.Path, "hooks.json");
 
@@ -113,7 +113,7 @@ public class PluginCommandCodexTests {
                     .Select(h => h!["command"]!.GetValue<string>());
 
                 foreach (var cmd in commands) {
-                    await Assert.That(cmd).DoesNotContain("kapacitor codex-hook");
+                    await Assert.That(cmd).DoesNotContain("kcap codex-hook");
                 }
             }
         }
@@ -142,10 +142,10 @@ public class PluginCommandCodexTests {
         await Assert.That(ok).IsTrue();
 
         // The malformed entry (non-string command) must be preserved as a
-        // non-kapacitor entry, and the kapacitor entry must also appear.
+        // non-kcap entry, and the kcap entry must also appear.
         var root         = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
         var sessionStart = root["hooks"]!["SessionStart"]!.AsArray();
-        await Assert.That(sessionStart.Count).IsEqualTo(2); // preserved + kapacitor
+        await Assert.That(sessionStart.Count).IsEqualTo(2); // preserved + kcap
     }
 
     [Test]
@@ -153,13 +153,13 @@ public class PluginCommandCodexTests {
         using var tmp  = new TempDir();
         var       path = Path.Combine(tmp.Path, "hooks.json");
 
-        // Mix: a malformed entry (number command) and a real kapacitor entry.
+        // Mix: a malformed entry (number command) and a real kcap entry.
         await File.WriteAllTextAsync(path, """
             {
               "hooks": {
                 "SessionStart": [
                   { "hooks": [{ "type": "command", "command": 42, "timeout": 5 }] },
-                  { "hooks": [{ "type": "command", "command": "kapacitor codex-hook", "timeout": 30 }] }
+                  { "hooks": [{ "type": "command", "command": "kcap codex-hook", "timeout": 30 }] }
                 ]
               }
             }
@@ -168,33 +168,33 @@ public class PluginCommandCodexTests {
         var ok = PluginCommand.RemoveCodexHooks(path);
         await Assert.That(ok).IsTrue();
 
-        // Malformed entry must be preserved; kapacitor entry removed.
+        // Malformed entry must be preserved; kcap entry removed.
         var root         = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
         var sessionStart = root["hooks"]!["SessionStart"]!.AsArray();
         await Assert.That(sessionStart.Count).IsEqualTo(1);
     }
 
     [Test]
-    public async Task EntryReferencesKapacitorCodexHook_returns_false_for_numeric_command() {
+    public async Task EntryReferencesCapacitorCodexHook_returns_false_for_numeric_command() {
         var entry = JsonNode.Parse("""{"hooks":[{"type":"command","command":42}]}""");
-        await Assert.That(CodexHooksParser.EntryReferencesKapacitorCodexHook(entry)).IsFalse();
+        await Assert.That(CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)).IsFalse();
     }
 
     [Test]
-    public async Task EntryReferencesKapacitorCodexHook_returns_true_for_matching_string_command() {
-        var entry = JsonNode.Parse("""{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}""");
-        await Assert.That(CodexHooksParser.EntryReferencesKapacitorCodexHook(entry)).IsTrue();
+    public async Task EntryReferencesCapacitorCodexHook_returns_true_for_matching_string_command() {
+        var entry = JsonNode.Parse("""{"hooks":[{"type":"command","command":"kcap codex-hook"}]}""");
+        await Assert.That(CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)).IsTrue();
     }
 
     [Test]
-    public async Task EntryReferencesKapacitorCodexHook_returns_false_for_null() {
-        await Assert.That(CodexHooksParser.EntryReferencesKapacitorCodexHook(null)).IsFalse();
+    public async Task EntryReferencesCapacitorCodexHook_returns_false_for_null() {
+        await Assert.That(CodexHooksParser.EntryReferencesCapacitorCodexHook(null)).IsFalse();
     }
 
     // ---- Agent skill install / remove (via AgentsSkillsInstaller) ----
 
     [Test]
-    public async Task Install_copies_known_skills_with_kapacitor_prefix() {
+    public async Task Install_copies_known_skills_with_kcap_prefix() {
         using var tmp    = new TempDir();
         var       source = Path.Combine(tmp.Path, "skills");
         var       target = Path.Combine(tmp.Path, "agents-skills");
@@ -205,8 +205,8 @@ public class PluginCommandCodexTests {
         var ok = AgentsSkillsInstaller.Install(source, target);
         await Assert.That(ok).IsTrue();
 
-        var recap  = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-recap",  "SKILL.md"));
-        var errors = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-errors", "SKILL.md"));
+        var recap  = await File.ReadAllTextAsync(Path.Combine(target, "kcap-recap",  "SKILL.md"));
+        var errors = await File.ReadAllTextAsync(Path.Combine(target, "kcap-errors", "SKILL.md"));
         await Assert.That(recap).Contains("recap body");
         await Assert.That(errors).Contains("errors body");
     }
@@ -224,7 +224,7 @@ public class PluginCommandCodexTests {
         await Assert.That(ok).IsTrue();
 
         foreach (var name in AgentsSkillsInstaller.SourceNames) {
-            var path = Path.Combine(target, $"kapacitor-{name}", "SKILL.md");
+            var path = Path.Combine(target, $"kcap-{name}", "SKILL.md");
             await Assert.That(File.Exists(path)).IsTrue();
         }
     }
@@ -257,24 +257,24 @@ public class PluginCommandCodexTests {
         // Pre-existing target folder for one of the known skills. The preflight
         // must NOT delete it because the install is aborted before any destructive
         // step runs.
-        WriteSkill(target, "kapacitor-recap", "stale recap that must survive");
+        WriteSkill(target, "kcap-recap", "stale recap that must survive");
 
         var ok = AgentsSkillsInstaller.Install(source, target);
         await Assert.That(ok).IsFalse();
 
         // Pre-existing target folder unchanged — preflight bailed before deletion.
-        var preserved = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-recap", "SKILL.md"));
+        var preserved = await File.ReadAllTextAsync(Path.Combine(target, "kcap-recap", "SKILL.md"));
         await Assert.That(preserved).IsEqualTo("stale recap that must survive");
 
         // None of the other expected target folders were created.
-        await Assert.That(Directory.Exists(Path.Combine(target, "kapacitor-errors"))).IsFalse();
-        await Assert.That(Directory.Exists(Path.Combine(target, "kapacitor-hide"))).IsFalse();
-        await Assert.That(Directory.Exists(Path.Combine(target, "kapacitor-disable"))).IsFalse();
-        await Assert.That(Directory.Exists(Path.Combine(target, "kapacitor-validate-plan"))).IsFalse();
+        await Assert.That(Directory.Exists(Path.Combine(target, "kcap-errors"))).IsFalse();
+        await Assert.That(Directory.Exists(Path.Combine(target, "kcap-hide"))).IsFalse();
+        await Assert.That(Directory.Exists(Path.Combine(target, "kcap-disable"))).IsFalse();
+        await Assert.That(Directory.Exists(Path.Combine(target, "kcap-validate-plan"))).IsFalse();
     }
 
     [Test]
-    public async Task Install_overwrites_existing_kapacitor_skill() {
+    public async Task Install_overwrites_existing_kcap_skill() {
         using var tmp    = new TempDir();
         var       source = Path.Combine(tmp.Path, "skills");
         var       target = Path.Combine(tmp.Path, "agents-skills");
@@ -283,11 +283,11 @@ public class PluginCommandCodexTests {
         }
 
         // Pre-existing stale copy in target.
-        WriteSkill(target, "kapacitor-recap", "stale recap");
+        WriteSkill(target, "kcap-recap", "stale recap");
 
         AgentsSkillsInstaller.Install(source, target);
 
-        var recap = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-recap", "SKILL.md"));
+        var recap = await File.ReadAllTextAsync(Path.Combine(target, "kcap-recap", "SKILL.md"));
         await Assert.That(recap).Contains("new recap");
     }
 
@@ -323,15 +323,15 @@ public class PluginCommandCodexTests {
     public async Task Remove_deletes_known_skills_only() {
         using var tmp    = new TempDir();
         var       target = Path.Combine(tmp.Path, "agents-skills");
-        WriteSkill(target, "kapacitor-recap",  "recap");
-        WriteSkill(target, "kapacitor-errors", "errors");
+        WriteSkill(target, "kcap-recap",  "recap");
+        WriteSkill(target, "kcap-errors", "errors");
         WriteSkill(target, "user-skill",       "user content");
 
         var result = AgentsSkillsInstaller.Remove(target);
         await Assert.That(result.RemovedAny).IsTrue();
 
-        await Assert.That(Directory.Exists(Path.Combine(target, "kapacitor-recap"))).IsFalse();
-        await Assert.That(Directory.Exists(Path.Combine(target, "kapacitor-errors"))).IsFalse();
+        await Assert.That(Directory.Exists(Path.Combine(target, "kcap-recap"))).IsFalse();
+        await Assert.That(Directory.Exists(Path.Combine(target, "kcap-errors"))).IsFalse();
         await Assert.That(File.Exists(Path.Combine(target, "user-skill", "SKILL.md"))).IsTrue();
     }
 
@@ -348,7 +348,7 @@ public class PluginCommandCodexTests {
     [Test]
     [NotInParallel("HomeEnvVarMutation")]
     public async Task Install_codex_with_if_installed_is_noop_when_no_marker_and_no_existing_entries() {
-        var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-codex-test-");
+        var fakeHome     = Directory.CreateTempSubdirectory("kcap-plugin-codex-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         try {
             Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
@@ -368,7 +368,7 @@ public class PluginCommandCodexTests {
     [Test]
     [NotInParallel("HomeEnvVarMutation")]
     public async Task Install_codex_with_if_installed_refreshes_pre_marker_install() {
-        var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-codex-test-");
+        var fakeHome     = Directory.CreateTempSubdirectory("kcap-plugin-codex-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         try {
             // Seed hooks.json with a stale 5-second PermissionRequest timeout
@@ -380,7 +380,7 @@ public class PluginCommandCodexTests {
                 {
                   "hooks": {
                     "PermissionRequest": [
-                      { "hooks": [{ "type": "command", "command": "kapacitor codex-hook", "timeout": 5 }] }
+                      { "hooks": [{ "type": "command", "command": "kcap codex-hook", "timeout": 5 }] }
                     ]
                   }
                 }
@@ -393,10 +393,10 @@ public class PluginCommandCodexTests {
             // PermissionRequest timeout must have been refreshed to 86400.
             var root = JsonNode.Parse(await File.ReadAllTextAsync(hooksPath))!.AsObject();
             var entries = root["hooks"]!["PermissionRequest"]!.AsArray();
-            var kapacitor = entries.First(e =>
+            var kcap = entries.First(e =>
                 (e!["hooks"] as JsonArray)!.Any(h =>
-                    h?["command"] is JsonValue v && v.TryGetValue<string>(out var s) && s.Contains("kapacitor codex-hook")));
-            await Assert.That(kapacitor!["hooks"]!.AsArray()[0]!["timeout"]!.GetValue<int>())
+                    h?["command"] is JsonValue v && v.TryGetValue<string>(out var s) && s.Contains("kcap codex-hook")));
+            await Assert.That(kcap!["hooks"]!.AsArray()[0]!["timeout"]!.GetValue<int>())
                 .IsEqualTo(86400);
 
             // Marker now stamped → next upgrade takes the fast path.
@@ -410,7 +410,7 @@ public class PluginCommandCodexTests {
     [Test]
     [NotInParallel("HomeEnvVarMutation")]
     public async Task Install_codex_with_if_installed_is_noop_when_marker_matches_current_version() {
-        var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-codex-test-");
+        var fakeHome     = Directory.CreateTempSubdirectory("kcap-plugin-codex-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         try {
             var codexDir = Path.Combine(fakeHome.FullName, ".codex");
@@ -421,7 +421,7 @@ public class PluginCommandCodexTests {
             await File.WriteAllTextAsync(hooksPath, """{"sentinel": "must-survive"}""");
             await File.WriteAllTextAsync(
                 Path.Combine(codexDir, CodexHooksInstaller.MarkerFileName),
-                KapacitorVersion.Current());
+                CapacitorVersion.Current());
             Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
 
             var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex", "--if-installed"]);
@@ -448,11 +448,11 @@ public class PluginCommandCodexTests {
         var marker = Path.Combine(tmp.Path, CodexHooksInstaller.MarkerFileName);
         await Assert.That(File.Exists(marker)).IsTrue();
         await Assert.That((await File.ReadAllTextAsync(marker)).Trim())
-            .IsEqualTo(KapacitorVersion.Current());
+            .IsEqualTo(CapacitorVersion.Current());
     }
 
     [Test]
-    public async Task RemoveCodexHooks_deletes_marker_when_kapacitor_entries_were_removed() {
+    public async Task RemoveCodexHooks_deletes_marker_when_kcap_entries_were_removed() {
         using var tmp  = new TempDir();
         var       path = Path.Combine(tmp.Path, "hooks.json");
 
@@ -473,7 +473,7 @@ public class PluginCommandCodexTests {
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
-            $"kapacitor-test-{Guid.NewGuid().ToString("N")[..8]}"
+            $"kcap-test-{Guid.NewGuid().ToString("N")[..8]}"
         );
         public TempDir() => Directory.CreateDirectory(Path);
         public void Dispose() {
@@ -497,12 +497,12 @@ public class PluginCommandCodexInstallIntegrationTests {
     // In the test runner the process exe lives at
     //   <repo>/test/Capacitor.Cli.Tests.Unit/bin/Debug/net10.0/Capacitor.Cli.Tests.Unit
     // None of the resolver's fallbacks exist by default, so this helper plants
-    // a fake plugin tree at the "<exeDir>/../../kapacitor" path the resolver
-    // probes (= "<bin>/kapacitor"). The folder is cleaned up after the test
+    // a fake plugin tree at the "<exeDir>/../../kcap" path the resolver
+    // probes (= "<bin>/kcap"). The folder is cleaned up after the test
     // so it doesn't pollute subsequent runs that expect resolution to fail.
     static string ProbedPluginRoot() {
         var exeDir = Path.GetDirectoryName(Environment.ProcessPath)!;
-        return Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kapacitor"));
+        return Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kcap"));
     }
 
     static void PlantFakePlugin(string pluginRoot) {
@@ -608,10 +608,10 @@ public class PluginCommandCodexInstallIntegrationTests {
         }
     }
 
-    // AI-676 P2: when the kapacitor plugin folder cannot be resolved (e.g.,
-    // the binary was hand-copied and the sibling `kapacitor/` tree is gone),
+    // AI-676 P2: when the kcap plugin folder cannot be resolved (e.g.,
+    // the binary was hand-copied and the sibling `kcap/` tree is gone),
     // `plugin install --codex` must fail BEFORE writing hooks. Otherwise the
-    // user ends up with hook entries pointing at a kapacitor binary whose
+    // user ends up with hook entries pointing at a kcap binary whose
     // skills never installed, breaking the documented `--codex` contract.
     [Test, NotInParallel("CodexHookCommandTests.Console")]
     public async Task InstallCodex_fails_before_writing_hooks_when_plugin_folder_missing() {
@@ -653,7 +653,7 @@ public class PluginCommandCodexInstallIntegrationTests {
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
-            $"kapacitor-test-{Guid.NewGuid().ToString("N")[..8]}"
+            $"kcap-test-{Guid.NewGuid().ToString("N")[..8]}"
         );
         public TempDir() => Directory.CreateDirectory(Path);
         public void Dispose() {

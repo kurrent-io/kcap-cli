@@ -6,7 +6,7 @@ public class AgentsSkillsInstallerTests {
     static readonly string[] SourceNames = ["recap", "errors", "disable", "hide", "validate-plan"];
 
     [Test]
-    public async Task Install_copies_each_source_to_kapacitor_prefixed_target() {
+    public async Task Install_copies_each_source_to_kcap_prefixed_target() {
         using var src = new InstallerTempDir();
         using var dst = new InstallerTempDir();
 
@@ -21,13 +21,13 @@ public class AgentsSkillsInstallerTests {
         await Assert.That(ok).IsTrue();
 
         foreach (var name in SourceNames) {
-            var path = Path.Combine(dst.Path, $"kapacitor-{name}", "SKILL.md");
+            var path = Path.Combine(dst.Path, $"kcap-{name}", "SKILL.md");
             await Assert.That(File.Exists(path)).IsTrue();
         }
     }
 
     [Test]
-    public async Task Install_rewrites_name_frontmatter_to_kapacitor_prefix() {
+    public async Task Install_rewrites_name_frontmatter_to_kcap_prefix() {
         using var src = new InstallerTempDir();
         using var dst = new InstallerTempDir();
 
@@ -42,8 +42,8 @@ public class AgentsSkillsInstallerTests {
 
         AgentsSkillsInstaller.Install(src.Path, dst.Path);
 
-        var written = await File.ReadAllTextAsync(Path.Combine(dst.Path, "kapacitor-recap", "SKILL.md"));
-        await Assert.That(written).Contains("name: kapacitor-recap");
+        var written = await File.ReadAllTextAsync(Path.Combine(dst.Path, "kcap-recap", "SKILL.md"));
+        await Assert.That(written).Contains("name: kcap-recap");
         await Assert.That(written).DoesNotContain("name: recap\n");
         await Assert.That(written).Contains("description: |");
         await Assert.That(written).Contains("body content");
@@ -68,7 +68,7 @@ public class AgentsSkillsInstallerTests {
         AgentsSkillsInstaller.Install(src.Path, dst.Path);
 
         var copied = await File.ReadAllTextAsync(
-            Path.Combine(dst.Path, "kapacitor-recap", "references", "examples.md"));
+            Path.Combine(dst.Path, "kcap-recap", "references", "examples.md"));
         await Assert.That(copied).IsEqualTo("raw content $not-rewritten");
     }
 
@@ -94,11 +94,11 @@ public class AgentsSkillsInstallerTests {
     }
 
     [Test]
-    public async Task Install_replaces_existing_kapacitor_folder_atomically() {
+    public async Task Install_replaces_existing_kcap_folder_atomically() {
         using var src = new InstallerTempDir();
         using var dst = new InstallerTempDir();
 
-        var stale = Path.Combine(dst.Path, "kapacitor-recap");
+        var stale = Path.Combine(dst.Path, "kcap-recap");
         Directory.CreateDirectory(stale);
         await File.WriteAllTextAsync(Path.Combine(stale, "SKILL.md"), "old version");
         await File.WriteAllTextAsync(Path.Combine(stale, "leftover.md"), "delete me");
@@ -132,7 +132,7 @@ public class AgentsSkillsInstallerTests {
         var ok = AgentsSkillsInstaller.Install(src.Path, dst.Path);
 
         await Assert.That(ok).IsFalse();
-        await Assert.That(Directory.Exists(Path.Combine(dst.Path, "kapacitor-recap"))).IsFalse();
+        await Assert.That(Directory.Exists(Path.Combine(dst.Path, "kcap-recap"))).IsFalse();
     }
 
     [Test]
@@ -153,16 +153,16 @@ public class AgentsSkillsInstallerTests {
         var ok = AgentsSkillsInstaller.Install(src.Path, dst.Path);
         await Assert.That(ok).IsFalse();
         foreach (var name in SourceNames) {
-            await Assert.That(Directory.Exists(Path.Combine(dst.Path, $"kapacitor-{name}"))).IsFalse();
+            await Assert.That(Directory.Exists(Path.Combine(dst.Path, $"kcap-{name}"))).IsFalse();
         }
     }
 
     [Test]
-    public async Task Remove_deletes_kapacitor_prefixed_folders_only() {
+    public async Task Remove_deletes_kcap_prefixed_folders_only() {
         using var dst = new InstallerTempDir();
 
         foreach (var src in SourceNames) {
-            Directory.CreateDirectory(Path.Combine(dst.Path, $"kapacitor-{src}"));
+            Directory.CreateDirectory(Path.Combine(dst.Path, $"kcap-{src}"));
         }
         Directory.CreateDirectory(Path.Combine(dst.Path, "user-skill"));
 
@@ -171,13 +171,13 @@ public class AgentsSkillsInstallerTests {
         await Assert.That(result.RemovedAny).IsTrue();
         await Assert.That(result.HadErrors).IsFalse();
         foreach (var src in SourceNames) {
-            await Assert.That(Directory.Exists(Path.Combine(dst.Path, $"kapacitor-{src}"))).IsFalse();
+            await Assert.That(Directory.Exists(Path.Combine(dst.Path, $"kcap-{src}"))).IsFalse();
         }
         await Assert.That(Directory.Exists(Path.Combine(dst.Path, "user-skill"))).IsTrue();
     }
 
     [Test]
-    public async Task Remove_returns_false_when_no_kapacitor_folders_present() {
+    public async Task Remove_returns_false_when_no_kcap_folders_present() {
         using var dst = new InstallerTempDir();
         Directory.CreateDirectory(Path.Combine(dst.Path, "someone-elses-skill"));
 
@@ -188,7 +188,7 @@ public class AgentsSkillsInstallerTests {
     }
 
     [Test]
-    public async Task CleanLegacyCodexSkills_removes_only_known_kapacitor_folders() {
+    public async Task CleanLegacyCodexSkills_removes_only_known_kcap_folders() {
         using var fakeHome = new InstallerTempDir();
         var legacy = Path.Combine(fakeHome.Path, ".codex", "skills");
         Directory.CreateDirectory(legacy);
@@ -227,7 +227,7 @@ public class AgentsSkillsInstallerTests {
         using var fakeHome = new InstallerTempDir();
         var legacy = Path.Combine(fakeHome.Path, ".codex", "skills");
         Directory.CreateDirectory(legacy);
-        Directory.CreateDirectory(Path.Combine(legacy, "kapacitor-recap"));
+        Directory.CreateDirectory(Path.Combine(legacy, "kcap-recap"));
         Directory.CreateDirectory(Path.Combine(legacy, "user-codex-skill"));
 
         AgentsSkillsInstaller.CleanLegacyCodexSkills(legacy);
@@ -316,7 +316,7 @@ public class AgentsSkillsInstallerTests {
         // existed must still be detected as "installed" so the first upgrade
         // onto a marker-aware build refreshes them instead of no-opping.
         using var dst = new InstallerTempDir();
-        Directory.CreateDirectory(Path.Combine(dst.Path, "kapacitor-recap"));
+        Directory.CreateDirectory(Path.Combine(dst.Path, "kcap-recap"));
 
         await Assert.That(AgentsSkillsInstaller.IsInstalled(dst.Path)).IsTrue();
     }
@@ -325,7 +325,7 @@ public class AgentsSkillsInstallerTests {
     public async Task IsInstalled_returns_false_when_only_unrelated_folders_present() {
         using var dst = new InstallerTempDir();
         Directory.CreateDirectory(Path.Combine(dst.Path, "user-skill"));
-        Directory.CreateDirectory(Path.Combine(dst.Path, "kapacitor-something-else"));
+        Directory.CreateDirectory(Path.Combine(dst.Path, "kcap-something-else"));
 
         await Assert.That(AgentsSkillsInstaller.IsInstalled(dst.Path)).IsFalse();
     }
@@ -359,18 +359,18 @@ public class AgentsSkillsInstallerTests {
         using var fakeHome = new InstallerTempDir();
         var legacy = Path.Combine(fakeHome.Path, ".codex", "skills");
         Directory.CreateDirectory(legacy);
-        Directory.CreateDirectory(Path.Combine(legacy, "kapacitor-recap"));
+        Directory.CreateDirectory(Path.Combine(legacy, "kcap-recap"));
 
         // sourceDir empty -> Install returns false without throwing.
         var ok = AgentsSkillsInstaller.Install(src.Path, Path.Combine(fakeHome.Path, ".agents", "skills"));
         await Assert.That(ok).IsFalse();
 
         // Caller would skip cleanup. Verify directly that legacy dir is still present.
-        await Assert.That(Directory.Exists(Path.Combine(legacy, "kapacitor-recap"))).IsTrue();
+        await Assert.That(Directory.Exists(Path.Combine(legacy, "kcap-recap"))).IsTrue();
     }
 
     [Test]
-    public async Task Remove_returns_RemovedAny_false_HadErrors_false_when_no_kapacitor_folders_in_populated_dir() {
+    public async Task Remove_returns_RemovedAny_false_HadErrors_false_when_no_kcap_folders_in_populated_dir() {
         using var dst = new InstallerTempDir();
         Directory.CreateDirectory(Path.Combine(dst.Path, "someone-elses-skill"));
 
@@ -396,7 +396,7 @@ public class AgentsSkillsInstallerTests {
         public string Path { get; }
         public InstallerTempDir() {
             Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
-                $"kapacitor-installer-{Guid.NewGuid():N}");
+                $"kcap-installer-{Guid.NewGuid():N}");
             Directory.CreateDirectory(Path);
         }
         public void Dispose() {

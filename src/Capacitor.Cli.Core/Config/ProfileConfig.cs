@@ -42,7 +42,7 @@ public record Profile {
     public string[] Remotes { get; init; } = [];
 }
 
-/// <summary>Repo-level .kapacitor.json committed to VCS.</summary>
+/// <summary>Repo-level .kcap.json committed to VCS.</summary>
 public record RepoConfig {
     [JsonPropertyName("profile")]
     public string? Profile { get; init; }

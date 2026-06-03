@@ -8,7 +8,7 @@ namespace Capacitor.Cli;
 
 static class WatcherManager {
     internal static string GetWatcherDir() {
-        var overrideDir = Environment.GetEnvironmentVariable("KAPACITOR_WATCHER_DIR");
+        var overrideDir = Environment.GetEnvironmentVariable("KCAP_WATCHER_DIR");
 
         return overrideDir ?? PathHelpers.ConfigPath("watchers");
     }
@@ -64,7 +64,7 @@ static class WatcherManager {
             var watcherDir = GetWatcherDir();
             Directory.CreateDirectory(watcherDir);
 
-            var kapacitorPath = Environment.ProcessPath ?? "kapacitor";
+            var kcapPath = Environment.ProcessPath ?? "kcap";
             // Use the coding-agent's PID (process group leader on Unix) rather than
             // getppid(): coding agents invoke hooks through a transient executor that
             // dies the moment the hook returns, so by the time the watcher checks
@@ -73,13 +73,13 @@ static class WatcherManager {
             var parentPid     = ProcessHelpers.GetCodingAgentPid();
             var arguments     = BuildSpawnArgs(key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, parentPid, vendor);
 
-            var psi = new ProcessStartInfo(kapacitorPath, arguments) {
+            var psi = new ProcessStartInfo(kcapPath, arguments) {
                 RedirectStandardOutput = true,
                 RedirectStandardInput  = true,
                 RedirectStandardError  = true,
                 UseShellExecute        = false,
                 CreateNoWindow         = true,
-                Environment            = { ["KAPACITOR_URL"] = baseUrl }
+                Environment            = { ["KCAP_URL"] = baseUrl }
             };
 
             var process = Process.Start(psi);
@@ -201,16 +201,16 @@ static class WatcherManager {
 
     public static void SpawnWhatsDoneGenerator(string baseUrl, string sessionId, string vendor = "claude") {
         try {
-            var kapacitorPath = Environment.ProcessPath ?? "kapacitor";
+            var kcapPath = Environment.ProcessPath ?? "kcap";
 
-            var psi = new ProcessStartInfo(kapacitorPath) {
+            var psi = new ProcessStartInfo(kcapPath) {
                 RedirectStandardOutput = true,
                 RedirectStandardInput  = true,
                 RedirectStandardError  = true,
                 UseShellExecute        = false,
                 CreateNoWindow         = true,
                 Environment = {
-                    ["KAPACITOR_URL"] = baseUrl
+                    ["KCAP_URL"] = baseUrl
                 }
             };
             psi.ArgumentList.Add("generate-whats-done");
@@ -312,7 +312,7 @@ static class WatcherManager {
                 Vendor      = vendor == "claude" ? null : vendor
             };
 
-            var       batchJson = JsonSerializer.Serialize(batch, KapacitorJsonContext.Default.TranscriptBatch);
+            var       batchJson = JsonSerializer.Serialize(batch, CapacitorJsonContext.Default.TranscriptBatch);
             using var content   = new StringContent(batchJson, Encoding.UTF8, "application/json");
 
             try {
@@ -335,5 +335,5 @@ static class WatcherManager {
     }
 
     static void PrintRecoveryHint(string sessionId) =>
-        Console.Error.WriteLine($"Transcript not uploaded. To import later, run: kapacitor import --session {sessionId}");
+        Console.Error.WriteLine($"Transcript not uploaded. To import later, run: kcap import --session {sessionId}");
 }

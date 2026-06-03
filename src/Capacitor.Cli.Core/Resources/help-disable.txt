@@ -1,6 +1,6 @@
-kapacitor disable — Stop recording and delete all session data
+kcap disable — Stop recording and delete all session data
 
-Usage: kapacitor disable [sessionId]
+Usage: kcap disable [sessionId]
 
 Stops the watcher, prevents future hook events from being sent,
 and deletes all session data from the server (streams + read models).

@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Commands;
 public static class UseCommand {
     public static async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
-            await Console.Error.WriteLineAsync("Usage: kapacitor use <profile-name> [--global] [--save]");
+            await Console.Error.WriteLineAsync("Usage: kcap use <profile-name> [--global] [--save]");
             return 1;
         }
 
@@ -28,7 +28,7 @@ public static class UseCommand {
         var config = await LoadConfig(configPath);
 
         if (!config.Profiles.TryGetValue(name, out var profile)) {
-            await Console.Error.WriteLineAsync($"Profile '{name}' not found. Run `kapacitor profile list` to see available profiles.");
+            await Console.Error.WriteLineAsync($"Profile '{name}' not found. Run `kcap profile list` to see available profiles.");
             return 1;
         }
 
@@ -50,7 +50,7 @@ public static class UseCommand {
                 Profile = name,
                 ServerUrl = profile.ServerUrl
             };
-            var repoConfigPath = Path.Combine(savePath, ".kapacitor.json");
+            var repoConfigPath = Path.Combine(savePath, ".kcap.json");
             await File.WriteAllBytesAsync(repoConfigPath,
                 JsonSerializer.SerializeToUtf8Bytes(repoConfig, RepoConfigJsonContextIndented.Default.RepoConfig));
             await Console.Out.WriteLineAsync($"Wrote {repoConfigPath} — commit this to share with your team.");

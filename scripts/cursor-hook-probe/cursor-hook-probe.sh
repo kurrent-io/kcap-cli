@@ -6,13 +6,13 @@
 #   - stdin (Cursor's JSON payload, verbatim)     → <ts>-<event>-<pid>.stdin.json
 #   - argv, cwd, filtered env                     → <ts>-<event>-<pid>.meta.txt
 #
-# Output dir: $HOME/kapacitor-cursor-hook-probe/
+# Output dir: $HOME/kcap-cursor-hook-probe/
 #
 # Exit 0 always — never block Cursor on probe issues.
 
 set -u
 
-DIR="${HOME}/kapacitor-cursor-hook-probe"
+DIR="${HOME}/kcap-cursor-hook-probe"
 mkdir -p "$DIR" 2>/dev/null || exit 0
 
 EVENT="${1:-unknown}"

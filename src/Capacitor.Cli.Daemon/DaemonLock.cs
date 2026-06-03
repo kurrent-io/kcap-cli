@@ -14,12 +14,12 @@ namespace Capacitor.Cli.Daemon;
 /// <c>DaemonConnect</c> — to distinguish a same-process reconnect from a
 /// different-process collision. The lock file's content is therefore
 /// diagnostic only (the wire <c>InstanceId</c> is the authoritative copy);
-/// <c>kapacitor daemon doctor</c> reads it to surface human-friendly
+/// <c>kcap daemon doctor</c> reads it to surface human-friendly
 /// "instance=<i>prefix</i>" output without needing a live SignalR session.</para>
 ///
 /// <para>The acquisition guards against the AI-630 scenario: two daemons
 /// under the same name on the same machine (regardless of
-/// <c>KAPACITOR_CONFIG_DIR</c> — <see cref="DaemonLockPaths"/> uses a fixed
+/// <c>KCAP_CONFIG_DIR</c> — <see cref="DaemonLockPaths"/> uses a fixed
 /// directory). Two daemons with <i>different</i> names are allowed to
 /// coexist; the lock file is per-name.</para>
 /// </summary>
@@ -112,7 +112,7 @@ internal sealed class DaemonLock : IDisposable {
         // would unlink the inode they're holding open, and a third daemon
         // could then create a brand-new `<name>.lock` at the same path
         // and acquire a SECOND independent flock — defeating the whole
-        // AI-630 guard. `kapacitor daemon doctor --clean` removes truly
+        // AI-630 guard. `kcap daemon doctor --clean` removes truly
         // stale files.
         //
         // Delete the PID file only if it still points to our own PID. A

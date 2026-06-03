@@ -8,10 +8,10 @@ public class ImportScopePromptTests {
     [Test]
     public async Task BuildRepoChoices_orders_current_first_then_alphabetical() {
         var choices = ImportScopePrompt.BuildRepoChoices(
-            currentRepo: ("EventStore", "kapacitor"),
+            currentRepo: ("EventStore", "kcap"),
             discoveredRepos: [
                 ("EventStore", "kurrentdb"),
-                ("EventStore", "kapacitor"), // dup with current
+                ("EventStore", "kcap"), // dup with current
                 ("alexeyzimarev", "scratchpad"),
             ]
         );
@@ -19,7 +19,7 @@ public class ImportScopePromptTests {
         await Assert.That(choices)
             .IsEquivalentTo(
                 [
-                    "EventStore/kapacitor (current)",
+                    "EventStore/kcap (current)",
                     "alexeyzimarev/scratchpad",
                     "EventStore/kurrentdb"
                 ]
@@ -53,7 +53,7 @@ public class ImportScopePromptTests {
         var s = ImportScopePrompt.FormatSummary(
             scope: new ImportScope.All(),
             matchedCount: 47,
-            repoSamples: ["EventStore/kapacitor", "EventStore/kurrentdb"],
+            repoSamples: ["EventStore/kcap", "EventStore/kurrentdb"],
             visibilityDescription: "org_public (from profile)"
         );
 
@@ -67,7 +67,7 @@ public class ImportScopePromptTests {
         var s = ImportScopePrompt.FormatSummary(
             scope: new ImportScope.Org("EventStore"),
             matchedCount: 5,
-            repoSamples: ["EventStore/kapacitor"],
+            repoSamples: ["EventStore/kcap"],
             visibilityDescription: "private (--private)"
         );
 
@@ -78,13 +78,13 @@ public class ImportScopePromptTests {
     [Test]
     public async Task FormatSummary_Repo_includes_owner_name() {
         var s = ImportScopePrompt.FormatSummary(
-            scope: new ImportScope.Repo("EventStore", "kapacitor"),
+            scope: new ImportScope.Repo("EventStore", "kcap"),
             matchedCount: 3,
-            repoSamples: ["EventStore/kapacitor"],
+            repoSamples: ["EventStore/kcap"],
             visibilityDescription: "org_public (from profile)"
         );
 
-        await Assert.That(s).Contains("repository EventStore/kapacitor");
+        await Assert.That(s).Contains("repository EventStore/kcap");
     }
 
     [Test]

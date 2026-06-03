@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Tests.Unit.Codex;
 public class CodexPathsHomeIsolationTests {
     [Test]
     public async Task Home_reflects_current_HOME_env_var() {
-        var tmp = Directory.CreateTempSubdirectory("kapacitor-codexpaths-test-");
+        var tmp = Directory.CreateTempSubdirectory("kcap-codexpaths-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
 
         try {
@@ -23,7 +23,7 @@ public class CodexPathsHomeIsolationTests {
 
     [Test]
     public async Task Sessions_reflects_current_HOME_env_var() {
-        var tmp = Directory.CreateTempSubdirectory("kapacitor-codexpaths-test-");
+        var tmp = Directory.CreateTempSubdirectory("kcap-codexpaths-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
 
         try {
@@ -38,7 +38,7 @@ public class CodexPathsHomeIsolationTests {
 
     [Test]
     public async Task UserHooksJson_reflects_current_HOME_env_var() {
-        var tmp = Directory.CreateTempSubdirectory("kapacitor-codexpaths-test-");
+        var tmp = Directory.CreateTempSubdirectory("kcap-codexpaths-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
 
         try {

@@ -9,15 +9,15 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 /// checks one PID file while the daemon writes to a different one, and
 /// the AI-78 PID-file guard would be bypassable again.
 /// </summary>
-[NotInParallel("KAPACITOR_DAEMON_NAME")]
+[NotInParallel("KCAP_DAEMON_NAME")]
 public class DaemonNameResolverTests {
-    static readonly string? OriginalEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_NAME");
+    static readonly string? OriginalEnv = Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME");
 
-    static void Reset() => Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_NAME", OriginalEnv);
+    static void Reset() => Environment.SetEnvironmentVariable("KCAP_DAEMON_NAME", OriginalEnv);
 
     [Test]
     public async Task Resolve_PrefersNameArg() {
-        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_NAME", null);
+        Environment.SetEnvironmentVariable("KCAP_DAEMON_NAME", null);
 
         try {
             var name = DaemonNameResolver.Resolve(["--name", "from-arg"], profileName: "from-profile");
@@ -29,7 +29,7 @@ public class DaemonNameResolverTests {
 
     [Test]
     public async Task Resolve_FallsBackToProfile_WhenNoArgOrEnv() {
-        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_NAME", null);
+        Environment.SetEnvironmentVariable("KCAP_DAEMON_NAME", null);
 
         try {
             var name = DaemonNameResolver.Resolve([], profileName: "from-profile");
@@ -41,7 +41,7 @@ public class DaemonNameResolverTests {
 
     [Test]
     public async Task Resolve_EnvVarOverridesProfile() {
-        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_NAME", "from-env");
+        Environment.SetEnvironmentVariable("KCAP_DAEMON_NAME", "from-env");
 
         try {
             var name = DaemonNameResolver.Resolve([], profileName: "from-profile");
@@ -57,7 +57,7 @@ public class DaemonNameResolverTests {
         // which inverted the usual CLI convention (explicit flag is the
         // strongest signal). The new precedence puts --name first so the
         // user's explicit choice always wins.
-        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_NAME", "from-env");
+        Environment.SetEnvironmentVariable("KCAP_DAEMON_NAME", "from-env");
 
         try {
             var name = DaemonNameResolver.Resolve(["--name", "from-arg"], profileName: "from-profile");
@@ -69,7 +69,7 @@ public class DaemonNameResolverTests {
 
     [Test]
     public async Task Resolve_FallsBackToUsername_WhenNothingProvided() {
-        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_NAME", null);
+        Environment.SetEnvironmentVariable("KCAP_DAEMON_NAME", null);
 
         try {
             var name = DaemonNameResolver.Resolve([]);
@@ -84,7 +84,7 @@ public class DaemonNameResolverTests {
 
     [Test]
     public async Task Resolve_Throws_WhenNameFlagHasNoValue() {
-        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_NAME", null);
+        Environment.SetEnvironmentVariable("KCAP_DAEMON_NAME", null);
 
         try {
             var ex = Assert.Throws<ArgumentException>(() => DaemonNameResolver.Resolve(["--name"]));
@@ -99,7 +99,7 @@ public class DaemonNameResolverTests {
         // Defends against `agent stop --name --yes` (which would otherwise
         // try to stop a daemon literally named "--yes") and the more
         // dangerous `agent stop --yes --name` chain — see PR 67 review.
-        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_NAME", null);
+        Environment.SetEnvironmentVariable("KCAP_DAEMON_NAME", null);
 
         try {
             var ex = Assert.Throws<ArgumentException>(() => DaemonNameResolver.Resolve(["--name", "--yes"]));

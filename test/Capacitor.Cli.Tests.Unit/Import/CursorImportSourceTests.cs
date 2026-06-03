@@ -29,7 +29,7 @@ public class CursorImportSourceTests {
 
     [Test]
     public async Task is_unavailable_when_projects_dir_missing() {
-        var missing = Path.Combine(Path.GetTempPath(), $"kapacitor-cursor-missing-{Guid.NewGuid():N}");
+        var missing = Path.Combine(Path.GetTempPath(), $"kcap-cursor-missing-{Guid.NewGuid():N}");
         var src     = new CursorImportSource(missing, missing);
         await Assert.That(src.IsAvailable).IsFalse();
     }
@@ -48,7 +48,7 @@ public class CursorImportSourceTests {
 
     [Test]
     public async Task discover_returns_empty_when_projects_dir_missing() {
-        var missing = Path.Combine(Path.GetTempPath(), $"kapacitor-cursor-missing-{Guid.NewGuid():N}");
+        var missing = Path.Combine(Path.GetTempPath(), $"kcap-cursor-missing-{Guid.NewGuid():N}");
         var src     = new CursorImportSource(missing, missing);
         var result  = await src.DiscoverAsync(Filters(), CancellationToken.None);
         await Assert.That(result.Count).IsEqualTo(0);
@@ -785,7 +785,7 @@ public class CursorImportSourceTests {
         public string WorkspaceStorageDir => Path.Combine(Root, "workspaceStorage");
 
         public ProjectsDirFixture() {
-            Root = Path.Combine(Path.GetTempPath(), $"kapacitor-cursor-walker-{Guid.NewGuid():N}");
+            Root = Path.Combine(Path.GetTempPath(), $"kcap-cursor-walker-{Guid.NewGuid():N}");
             Directory.CreateDirectory(ProjectsDir);
             Directory.CreateDirectory(WorkspaceStorageDir);
         }

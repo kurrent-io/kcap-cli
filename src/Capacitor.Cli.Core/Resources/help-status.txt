@@ -1,6 +1,6 @@
-kapacitor status — Show server, auth, hook, and daemon status
+kcap status — Show server, auth, hook, and daemon status
 
-Usage: kapacitor status
+Usage: kcap status
 
 Reports:
   Server     Configured base URL and reachability check

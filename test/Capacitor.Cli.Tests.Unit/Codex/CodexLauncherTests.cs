@@ -91,9 +91,9 @@ public class CodexLauncherTests {
 
     [Test]
     public async Task Prepare_overlays_codex_settings_dir_from_source_repo() {
-        var sourceRepo = Directory.CreateTempSubdirectory("kapacitor-codexlauncher-src-").FullName;
-        var worktree = Directory.CreateTempSubdirectory("kapacitor-codexlauncher-wt-").FullName;
-        var home = Directory.CreateTempSubdirectory("kapacitor-codexlauncher-home-").FullName;
+        var sourceRepo = Directory.CreateTempSubdirectory("kcap-codexlauncher-src-").FullName;
+        var worktree = Directory.CreateTempSubdirectory("kcap-codexlauncher-wt-").FullName;
+        var home = Directory.CreateTempSubdirectory("kcap-codexlauncher-home-").FullName;
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         Environment.SetEnvironmentVariable("HOME", home);
 
@@ -101,9 +101,9 @@ public class CodexLauncherTests {
             var srcCodex = Directory.CreateDirectory(Path.Combine(sourceRepo, ".codex")).FullName;
             File.WriteAllText(Path.Combine(srcCodex, "hooks.json"), """
                 {"hooks":{
-                    "SessionStart":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}],
-                    "Stop":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}],
-                    "PermissionRequest":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}]
+                    "SessionStart":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}],
+                    "Stop":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}],
+                    "PermissionRequest":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}]
                 }}
                 """);
 
@@ -121,9 +121,9 @@ public class CodexLauncherTests {
 
     [Test]
     public async Task Prepare_throws_when_no_hooks_json_anywhere() {
-        var sourceRepo = Directory.CreateTempSubdirectory("kapacitor-codexlauncher-src-").FullName;
-        var worktree = Directory.CreateTempSubdirectory("kapacitor-codexlauncher-wt-").FullName;
-        var home = Directory.CreateTempSubdirectory("kapacitor-codexlauncher-home-").FullName;
+        var sourceRepo = Directory.CreateTempSubdirectory("kcap-codexlauncher-src-").FullName;
+        var worktree = Directory.CreateTempSubdirectory("kcap-codexlauncher-wt-").FullName;
+        var home = Directory.CreateTempSubdirectory("kcap-codexlauncher-home-").FullName;
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         Environment.SetEnvironmentVariable("HOME", home);
 
@@ -133,7 +133,7 @@ public class CodexLauncherTests {
                 NewLauncher().Prepare(ctx);
                 await Task.CompletedTask;
             });
-            await Assert.That(ex!.Message).Contains("kapacitor plugin install --codex");
+            await Assert.That(ex!.Message).Contains("kcap plugin install --codex");
         } finally {
             Environment.SetEnvironmentVariable("HOME", originalHome);
             Directory.Delete(sourceRepo, recursive: true);
@@ -144,9 +144,9 @@ public class CodexLauncherTests {
 
     [Test]
     public async Task Prepare_succeeds_when_user_scope_hooks_json_has_all_three_critical_events() {
-        var sourceRepo = Directory.CreateTempSubdirectory("kapacitor-codexlauncher-src-").FullName;
-        var worktree = Directory.CreateTempSubdirectory("kapacitor-codexlauncher-wt-").FullName;
-        var home = Directory.CreateTempSubdirectory("kapacitor-codexlauncher-home-").FullName;
+        var sourceRepo = Directory.CreateTempSubdirectory("kcap-codexlauncher-src-").FullName;
+        var worktree = Directory.CreateTempSubdirectory("kcap-codexlauncher-wt-").FullName;
+        var home = Directory.CreateTempSubdirectory("kcap-codexlauncher-home-").FullName;
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         Environment.SetEnvironmentVariable("HOME", home);
 
@@ -154,9 +154,9 @@ public class CodexLauncherTests {
             Directory.CreateDirectory(Path.Combine(home, ".codex"));
             File.WriteAllText(Path.Combine(home, ".codex", "hooks.json"), """
                 {"hooks":{
-                    "SessionStart":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}],
-                    "Stop":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}],
-                    "PermissionRequest":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}]
+                    "SessionStart":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}],
+                    "Stop":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}],
+                    "PermissionRequest":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}]
                 }}
                 """);
 
@@ -174,9 +174,9 @@ public class CodexLauncherTests {
 
     [Test]
     public async Task Prepare_succeeds_when_project_scope_hooks_json_present_after_overlay() {
-        var sourceRepo = Directory.CreateTempSubdirectory("kapacitor-codexlauncher-src-").FullName;
-        var worktree = Directory.CreateTempSubdirectory("kapacitor-codexlauncher-wt-").FullName;
-        var home = Directory.CreateTempSubdirectory("kapacitor-codexlauncher-home-").FullName;
+        var sourceRepo = Directory.CreateTempSubdirectory("kcap-codexlauncher-src-").FullName;
+        var worktree = Directory.CreateTempSubdirectory("kcap-codexlauncher-wt-").FullName;
+        var home = Directory.CreateTempSubdirectory("kcap-codexlauncher-home-").FullName;
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         Environment.SetEnvironmentVariable("HOME", home);
 
@@ -184,9 +184,9 @@ public class CodexLauncherTests {
             Directory.CreateDirectory(Path.Combine(sourceRepo, ".codex"));
             File.WriteAllText(Path.Combine(sourceRepo, ".codex", "hooks.json"), """
                 {"hooks":{
-                    "SessionStart":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}],
-                    "Stop":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}],
-                    "PermissionRequest":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}]
+                    "SessionStart":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}],
+                    "Stop":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}],
+                    "PermissionRequest":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}]
                 }}
                 """);
 
@@ -203,9 +203,9 @@ public class CodexLauncherTests {
 
     [Test]
     public async Task Prepare_invokes_codex_config_writer_with_worktree_path() {
-        var sourceRepo = Directory.CreateTempSubdirectory("kapacitor-codexlauncher-src-").FullName;
-        var worktree = Directory.CreateTempSubdirectory("kapacitor-codexlauncher-wt-").FullName;
-        var home = Directory.CreateTempSubdirectory("kapacitor-codexlauncher-home-").FullName;
+        var sourceRepo = Directory.CreateTempSubdirectory("kcap-codexlauncher-src-").FullName;
+        var worktree = Directory.CreateTempSubdirectory("kcap-codexlauncher-wt-").FullName;
+        var home = Directory.CreateTempSubdirectory("kcap-codexlauncher-home-").FullName;
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         Environment.SetEnvironmentVariable("HOME", home);
 
@@ -213,9 +213,9 @@ public class CodexLauncherTests {
             Directory.CreateDirectory(Path.Combine(home, ".codex"));
             File.WriteAllText(Path.Combine(home, ".codex", "hooks.json"), """
                 {"hooks":{
-                    "SessionStart":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}],
-                    "Stop":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}],
-                    "PermissionRequest":[{"hooks":[{"type":"command","command":"kapacitor codex-hook"}]}]
+                    "SessionStart":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}],
+                    "Stop":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}],
+                    "PermissionRequest":[{"hooks":[{"type":"command","command":"kcap codex-hook"}]}]
                 }}
                 """);
 

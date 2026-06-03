@@ -12,7 +12,7 @@ public static class CodexPaths {
     /// (<c>rollout-&lt;ISO-ts&gt;-&lt;uuid&gt;.jsonl</c>) and an always-empty
     /// EncodedCwd — the day folder name (e.g. <c>"07"</c>) is NOT a Claude-style
     /// hyphen-encoded absolute path, so feeding it to
-    /// <see cref="kapacitor.Commands.SessionImporter.DecodeCwdFromDirName"/> would
+    /// <see cref="Capacitor.Cli.Commands.SessionImporter.DecodeCwdFromDirName"/> would
     /// produce a misleading relative cwd if <c>session_meta</c> parsing fails.
     /// Empty makes the decoder return null and callers degrade to "no cwd" cleanly.
     /// </summary>

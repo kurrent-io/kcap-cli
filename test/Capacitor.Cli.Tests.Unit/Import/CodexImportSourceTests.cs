@@ -18,7 +18,7 @@ public class CodexImportSourceTests {
 
     [Test]
     public async Task is_available_when_sessions_dir_exists() {
-        var dir = Directory.CreateTempSubdirectory("kapacitor-codex-source-");
+        var dir = Directory.CreateTempSubdirectory("kcap-codex-source-");
         try {
             var src = new CodexImportSource(dir.FullName);
             await Assert.That(src.IsAvailable).IsTrue();
@@ -29,7 +29,7 @@ public class CodexImportSourceTests {
 
     [Test]
     public async Task is_unavailable_when_sessions_dir_missing() {
-        var missing = Path.Combine(Path.GetTempPath(), "kapacitor-codex-source-missing-" + Guid.NewGuid().ToString("N"));
+        var missing = Path.Combine(Path.GetTempPath(), "kcap-codex-source-missing-" + Guid.NewGuid().ToString("N"));
         var src     = new CodexImportSource(missing);
         await Assert.That(src.IsAvailable).IsFalse();
     }

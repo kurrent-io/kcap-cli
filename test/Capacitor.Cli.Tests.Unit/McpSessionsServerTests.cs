@@ -88,11 +88,11 @@ public class McpSessionsServerTests {
     public async Task BuildSearchUrl_explicit_repo_overrides_cwd_hash() {
         var url = McpSessionsServer.BuildSearchUrl(
             "http://srv",
-            new JsonObject { ["repo"] = "kurrent-io/kapacitor" },
+            new JsonObject { ["repo"] = "kurrent-io/kcap" },
             cwdRepoHash: "abc1234567890def"
         );
 
-        await Assert.That(url).IsEqualTo("http://srv/api/sessions/search?repo=kurrent-io%2Fkapacitor");
+        await Assert.That(url).IsEqualTo("http://srv/api/sessions/search?repo=kurrent-io%2Fkcap");
     }
 
     [Test]

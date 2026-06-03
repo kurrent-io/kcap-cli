@@ -22,7 +22,7 @@ public static class ReposCommand {
         var entries = await RepoPathStore.LoadAsync();
 
         if (entries.Length == 0) {
-            await Console.Out.WriteLineAsync("No known repos. Use `kapacitor repos add .` to add the current directory.");
+            await Console.Out.WriteLineAsync("No known repos. Use `kcap repos add .` to add the current directory.");
 
             return 0;
         }
@@ -79,19 +79,19 @@ public static class ReposCommand {
     }
 
     static int PrintUsage() {
-        Console.Error.WriteLine("Usage: kapacitor repos [add|remove] [path]");
+        Console.Error.WriteLine("Usage: kcap repos [add|remove] [path]");
 
         return 1;
     }
 
     static int PrintAddUsage() {
-        Console.Error.WriteLine("Usage: kapacitor repos add <path>");
+        Console.Error.WriteLine("Usage: kcap repos add <path>");
 
         return 1;
     }
 
     static int PrintRemoveUsage() {
-        Console.Error.WriteLine("Usage: kapacitor repos remove <path>");
+        Console.Error.WriteLine("Usage: kcap repos remove <path>");
 
         return 1;
     }

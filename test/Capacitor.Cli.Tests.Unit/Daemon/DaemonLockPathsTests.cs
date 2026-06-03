@@ -42,8 +42,8 @@ public class DaemonLockPathsTests {
     [Test]
     public async Task Directory_LivesUnderDaemonsFolder() {
         // Verify the production layout (no test override) uses the renamed
-        // ~/.config/kapacitor/daemons/ path, not the pre-AI-644 agents/ path.
+        // ~/.config/kcap/daemons/ path, not the pre-AI-644 agents/ path.
         await Assert.That(DaemonLockPaths.Directory.Replace('\\', '/'))
-            .EndsWith("/.config/kapacitor/daemons");
+            .EndsWith("/.config/kcap/daemons");
     }
 }

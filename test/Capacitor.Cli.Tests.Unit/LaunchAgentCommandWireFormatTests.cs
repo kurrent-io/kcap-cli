@@ -9,7 +9,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// the server (Kurrent.Capacitor) configures its SignalR JSON protocol with
 /// <c>JsonStringEnumConverter(JsonNamingPolicy.CamelCase)</c> and snake_case
 /// property names, so <see cref="LaunchKind"/> rides the wire as a camelCase
-/// string. The daemon's <see cref="Capacitor.Cli.Core.KapacitorJsonContext"/> must be able to
+/// string. The daemon's <see cref="CapacitorJsonContext"/> must be able to
 /// parse that — historically it couldn't, and the SignalR client silently
 /// dropped every <c>LaunchAgent</c> invocation (DEV-1665).
 /// </summary>
@@ -38,7 +38,7 @@ public class LaunchAgentCommandWireFormatTests {
         );
 
         var wire   = JsonSerializer.Serialize(cmd, ServerWireOptions);
-        var parsed = JsonSerializer.Deserialize(wire, KapacitorJsonContext.Default.LaunchAgentCommand);
+        var parsed = JsonSerializer.Deserialize(wire, CapacitorJsonContext.Default.LaunchAgentCommand);
 
         await Assert.That(parsed.Kind).IsEqualTo(LaunchKind.Default);
         await Assert.That(parsed.AgentId).IsEqualTo("abc12345");
@@ -56,16 +56,16 @@ public class LaunchAgentCommandWireFormatTests {
             AttachmentIds: null,
             Vendor:        "claude",
             Kind:          LaunchKind.Review,
-            Review:        new ReviewLaunchInfo("kurrent-io", "kapacitor", 42)
+            Review:        new ReviewLaunchInfo("kurrent-io", "kcap", 42)
         );
 
         var wire   = JsonSerializer.Serialize(cmd, ServerWireOptions);
-        var parsed = JsonSerializer.Deserialize(wire, KapacitorJsonContext.Default.LaunchAgentCommand);
+        var parsed = JsonSerializer.Deserialize(wire, CapacitorJsonContext.Default.LaunchAgentCommand);
 
         await Assert.That(parsed.Kind).IsEqualTo(LaunchKind.Review);
         await Assert.That(parsed.Review).IsNotNull();
         await Assert.That(parsed.Review!.Value.Owner).IsEqualTo("kurrent-io");
-        await Assert.That(parsed.Review!.Value.Repo).IsEqualTo("kapacitor");
+        await Assert.That(parsed.Review!.Value.Repo).IsEqualTo("kcap");
         await Assert.That(parsed.Review!.Value.PrNumber).IsEqualTo(42);
     }
 
@@ -101,8 +101,8 @@ public class LaunchAgentCommandWireFormatTests {
             Vendor:        "codex"
         );
 
-        var json = JsonSerializer.Serialize(cmd, KapacitorJsonContext.Default.LaunchAgentCommand);
-        var back = JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.LaunchAgentCommand);
+        var json = JsonSerializer.Serialize(cmd, CapacitorJsonContext.Default.LaunchAgentCommand);
+        var back = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.LaunchAgentCommand);
 
         await Assert.That(back.Vendor).IsEqualTo("codex");
     }
@@ -118,7 +118,7 @@ public class LaunchAgentCommandWireFormatTests {
             Vendor: "codex"
         );
 
-        var json = JsonSerializer.Serialize(evt, KapacitorJsonContext.Default.AgentRunStarted);
+        var json = JsonSerializer.Serialize(evt, CapacitorJsonContext.Default.AgentRunStarted);
         await Assert.That(json).Contains("codex");
         await Assert.That(json.ToLowerInvariant()).Contains("\"vendor\"");
     }

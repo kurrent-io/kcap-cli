@@ -11,7 +11,7 @@ public static class IgnoreCommand {
             case "--list":
                 return await List();
             case "--remove" when args.Length < 3:
-                await Console.Error.WriteLineAsync("Usage: kapacitor ignore --remove <path>");
+                await Console.Error.WriteLineAsync("Usage: kcap ignore --remove <path>");
 
                 return 1;
             case "--remove":
@@ -161,7 +161,7 @@ public static class IgnoreCommand {
     /// <summary>
     /// Picks the profile to write ignore entries into. Prefers the profile that
     /// <see cref="AppConfig.ResolveServerUrl"/> resolved for the current cwd
-    /// (which is the profile the hook will read from) so a `kapacitor ignore .`
+    /// (which is the profile the hook will read from) so a `kcap ignore .`
     /// in a repo bound to a non-default profile updates the same profile the
     /// hook will check. Falls back to <see cref="ProfileConfig.ActiveProfile"/>
     /// when called outside a resolution context.
@@ -176,9 +176,9 @@ public static class IgnoreCommand {
     }
 
     static int Usage() {
-        Console.Error.WriteLine("Usage: kapacitor ignore <path>");
-        Console.Error.WriteLine("       kapacitor ignore --list");
-        Console.Error.WriteLine("       kapacitor ignore --remove <path>");
+        Console.Error.WriteLine("Usage: kcap ignore <path>");
+        Console.Error.WriteLine("       kcap ignore --list");
+        Console.Error.WriteLine("       kcap ignore --remove <path>");
 
         return 1;
     }

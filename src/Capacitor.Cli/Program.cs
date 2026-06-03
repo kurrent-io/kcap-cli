@@ -32,28 +32,28 @@ var command = args[0];
 
 // Hooks only: short-circuit when spawned inside a headless claude invocation
 // (e.g., title generation, the eval judge) so we don't forward the nested
-// session's hook events back into kapacitor and blow up into a loop. Scoped
-// to hook commands because non-hook commands — notably `kapacitor mcp judge`
+// session's hook events back into kcap and blow up into a loop. Scoped
+// to hook commands because non-hook commands — notably `kcap mcp judge`
 // running as an MCP server child of the eval judge claude process — must
-// actually execute despite inheriting KAPACITOR_SKIP=1 from the parent.
+// actually execute despite inheriting KCAP_SKIP=1 from the parent.
 //
 // Runs before ResolveServerUrl/update-check so a skipped hook does no work:
 // ResolveServerUrl can shell out to `git remote -v` and emit warnings, and
 // the update-check task hits the npm registry — both pure noise inside a
 // nested headless invocation.
-if (Environment.GetEnvironmentVariable("KAPACITOR_SKIP") is "1"
+if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
  && (hookCommands.Contains(command) || command == "hook")) {
     // `hook` is intentionally not in hookCommands (that list drives the
     // templated help for Claude's per-event commands), but it MUST honour
     // the same skip semantics so nested headless invocations don't loop
-    // Cursor hook payloads back into kapacitor.
+    // Cursor hook payloads back into kcap.
     return 0;
 }
 
 var baseUrl = await AppConfig.ResolveServerUrl(args);
 
 // Fire-and-forget update check (prints hint to stderr after command finishes).
-// Skipped for `uninstall` — the check writes ~/.config/kapacitor/update-check.json,
+// Skipped for `uninstall` — the check writes ~/.config/kcap/update-check.json,
 // which would race with uninstall's `rm -rf` of the config dir and recreate it
 // after the command has reported success.
 var   noUpdateCheck   = args.Contains("--no-update-check") || command == "uninstall";
@@ -69,7 +69,7 @@ if (command is "--help" or "-h" or "help") {
     return 0;
 }
 
-// Per-command help: kapacitor <command> --help / -h
+// Per-command help: kcap <command> --help / -h
 if (args.Skip(1).Any(a => a is "--help" or "-h")) {
     return await PrintCommandHelp(command);
 }
@@ -78,7 +78,7 @@ if (args.Skip(1).Any(a => a is "--help" or "-h")) {
 string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "update", "plugin", "profile", "use", "repos", "login", "ignore", "uninstall"];
 
 if (baseUrl is null && !offlineCommands.Contains(command)) {
-    Console.Error.WriteLine("No server configured. Run `kapacitor setup` or set KAPACITOR_URL.");
+    Console.Error.WriteLine("No server configured. Run `kcap setup` or set KCAP_URL.");
 
     return 1;
 }
@@ -89,7 +89,7 @@ switch (command) {
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
             ?
             .InformationalVersion ?? "unknown";
-        await Console.Out.WriteLineAsync($"kapacitor {version}");
+        await Console.Out.WriteLineAsync($"kcap {version}");
 
         return 0;
     }
@@ -98,7 +98,7 @@ switch (command) {
         var errSessionId = ResolveSessionId(args, skipCount: 1);
 
         if (errSessionId is null) {
-            Console.Error.WriteLine("Usage: kapacitor errors [--chain] [sessionId]");
+            Console.Error.WriteLine("Usage: kcap errors [--chain] [sessionId]");
             Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
 
             return 1;
@@ -118,7 +118,7 @@ switch (command) {
         var recapSessionId = ResolveSessionId(args);
 
         if (recapSessionId is null) {
-            Console.Error.WriteLine("Usage: kapacitor recap [--chain] [--full] [--repo] [sessionId]");
+            Console.Error.WriteLine("Usage: kcap recap [--chain] [--full] [--repo] [sessionId]");
             Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
             Console.Error.WriteLine("  Use --repo to see recent session summaries for the current repository.");
 
@@ -131,7 +131,7 @@ switch (command) {
         var vpSessionId = ResolveSessionId(args);
 
         if (vpSessionId is null) {
-            Console.Error.WriteLine("Usage: kapacitor validate-plan [sessionId]");
+            Console.Error.WriteLine("Usage: kcap validate-plan [sessionId]");
             Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
 
             return 1;
@@ -148,9 +148,9 @@ switch (command) {
         var evalSessionId = ResolveSessionId(args, valueFlags: ["--model", "--threshold", "--questions", "--skip"]);
 
         if (evalSessionId is null) {
-            Console.Error.WriteLine("Usage: kapacitor eval [--model sonnet] [--chain] [--threshold N]");
+            Console.Error.WriteLine("Usage: kcap eval [--model sonnet] [--chain] [--threshold N]");
             Console.Error.WriteLine("                     [--questions <csv> | --skip <csv>] [sessionId]");
-            Console.Error.WriteLine("       kapacitor eval --list-questions");
+            Console.Error.WriteLine("       kcap eval --list-questions");
             Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
 
             return 1;
@@ -180,7 +180,7 @@ switch (command) {
         );
     }
     case "generate-whats-done" when args.Length < 2:
-        Console.Error.WriteLine("Usage: kapacitor generate-whats-done <sessionId> [--codex]");
+        Console.Error.WriteLine("Usage: kcap generate-whats-done <sessionId> [--codex]");
 
         return 1;
     case "generate-whats-done": {
@@ -197,7 +197,7 @@ switch (command) {
         }
 
         if (baseUrl is null) {
-            Console.Error.WriteLine("No server configured. Run `kapacitor setup`, set KAPACITOR_URL, or use `kapacitor login --discover`.");
+            Console.Error.WriteLine("No server configured. Run `kcap setup`, set KCAP_URL, or use `kcap login --discover`.");
 
             return 1;
         }
@@ -223,7 +223,7 @@ switch (command) {
         var tokens = await TokenStore.LoadAsync();
 
         if (tokens is null) {
-            Console.Error.WriteLine("Not authenticated. Run `kapacitor login`.");
+            Console.Error.WriteLine("Not authenticated. Run `kcap login`.");
 
             return 1;
         }
@@ -258,9 +258,9 @@ switch (command) {
         return await UpdateCommand.HandleAsync();
     case "review": {
         if (args.Length < 2) {
-            Console.Error.WriteLine("Usage: kapacitor review <pr-url-or-shorthand>");
-            Console.Error.WriteLine("  Example: kapacitor review https://github.com/owner/repo/pull/123");
-            Console.Error.WriteLine("  Example: kapacitor review owner/repo#123");
+            Console.Error.WriteLine("Usage: kcap review <pr-url-or-shorthand>");
+            Console.Error.WriteLine("  Example: kcap review https://github.com/owner/repo/pull/123");
+            Console.Error.WriteLine("  Example: kcap review owner/repo#123");
 
             return 1;
         }
@@ -269,10 +269,10 @@ switch (command) {
     }
     case "mcp": {
         if (args.Length < 2) {
-            Console.Error.WriteLine("Usage: kapacitor mcp review|judge|sessions …");
-            Console.Error.WriteLine("  kapacitor mcp review [--owner <owner> --repo <repo> --pr <number>]");
-            Console.Error.WriteLine("  kapacitor mcp judge --session <sessionId>");
-            Console.Error.WriteLine("  kapacitor mcp sessions");
+            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions …");
+            Console.Error.WriteLine("  kcap mcp review [--owner <owner> --repo <repo> --pr <number>]");
+            Console.Error.WriteLine("  kcap mcp judge --session <sessionId>");
+            Console.Error.WriteLine("  kcap mcp sessions");
 
             return 1;
         }
@@ -295,7 +295,7 @@ switch (command) {
                 var session = GetArg(args, "--session");
 
                 if (string.IsNullOrWhiteSpace(session)) {
-                    Console.Error.WriteLine("Usage: kapacitor mcp judge --session <sessionId>");
+                    Console.Error.WriteLine("Usage: kcap mcp judge --session <sessionId>");
 
                     return 1;
                 }
@@ -321,7 +321,7 @@ switch (command) {
         var resolved = ResolveSessionId(args);
 
         if (resolved is null) {
-            Console.Error.WriteLine("Usage: kapacitor disable [sessionId]");
+            Console.Error.WriteLine("Usage: kcap disable [sessionId]");
             Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
 
             return 1;
@@ -329,7 +329,7 @@ switch (command) {
 
         if (!ArgParsing.TryNormalizeSessionGuid(resolved, out var sessionId)) {
             Console.Error.WriteLine($"Invalid session ID: '{resolved}'");
-            Console.Error.WriteLine("  Session ID must be a UUID. Use `kapacitor recap --repo` to find recent session IDs.");
+            Console.Error.WriteLine("  Session ID must be a UUID. Use `kcap recap --repo` to find recent session IDs.");
 
             return 1;
         }
@@ -381,7 +381,7 @@ switch (command) {
         var resolved = ResolveSessionId(args);
 
         if (resolved is null) {
-            Console.Error.WriteLine("Usage: kapacitor hide [sessionId]");
+            Console.Error.WriteLine("Usage: kcap hide [sessionId]");
             Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
 
             return 1;
@@ -389,7 +389,7 @@ switch (command) {
 
         if (!ArgParsing.TryNormalizeSessionGuid(resolved, out var sessionId)) {
             Console.Error.WriteLine($"Invalid session ID: '{resolved}'");
-            Console.Error.WriteLine("  Session ID must be a UUID. Use `kapacitor recap --repo` to find recent session IDs.");
+            Console.Error.WriteLine("  Session ID must be a UUID. Use `kcap recap --repo` to find recent session IDs.");
 
             return 1;
         }
@@ -506,7 +506,7 @@ switch (command) {
             currentRepo:             currentRepo);
     }
     case "watch" when args.Length < 3:
-        Console.Error.WriteLine("Usage: kapacitor watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex]");
+        Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex]");
 
         return 1;
     case "watch": {
@@ -545,14 +545,14 @@ switch (command) {
     case "permission-request":
         return await PermissionRequestCommand.Handle(baseUrl!);
     case "set-title" when args.Length < 2:
-        Console.Error.WriteLine("Usage: kapacitor set-title <title>");
+        Console.Error.WriteLine("Usage: kcap set-title <title>");
 
         return 1;
     case "set-title": {
         var stSessionId = ArgParsing.ResolveSessionIdFromEnv();
 
         if (stSessionId is null) {
-            Console.Error.WriteLine("No session ID found in KAPACITOR_SESSION_ID or CODEX_THREAD_ID.");
+            Console.Error.WriteLine("No session ID found in KCAP_SESSION_ID or CODEX_THREAD_ID.");
             Console.Error.WriteLine("Run set-title inside an active Claude Code / Codex CLI 0.81+ session.");
 
             return 1;
@@ -598,12 +598,12 @@ switch (command) {
         if (args.Contains("--cursor")) {
             return await CursorHookCommand.Handle(baseUrl!, Console.In);
         }
-        Console.Error.WriteLine("kapacitor hook requires a vendor flag (e.g. --cursor)");
+        Console.Error.WriteLine("kcap hook requires a vendor flag (e.g. --cursor)");
         return 1;
     }
     case "cursor":
         await Console.Error.WriteLineAsync(
-            "kapacitor cursor import has been removed. Use 'kapacitor import --cursor' instead.");
+            "kcap cursor import has been removed. Use 'kcap import --cursor' instead.");
         return 2;
 }
 
@@ -627,7 +627,7 @@ try {
         node["home_dir"] = PathHelpers.HomeDirectory;
 
         // If running inside a daemon-spawned agent, inject the agent ID
-        var agentHostId = Environment.GetEnvironmentVariable("KAPACITOR_AGENT_ID");
+        var agentHostId = Environment.GetEnvironmentVariable("KCAP_AGENT_ID");
 
         if (agentHostId is not null) {
             node["agent_host_id"] = agentHostId;
@@ -682,16 +682,16 @@ if (command is "session-end" or "subagent-stop") {
 // Load config once for exclusion check and default_visibility injection.
 // Runs after repo enrichment so the body already has repository.owner/repo_name,
 // avoiding a redundant git detection in RepoExclusion.
-var kapacitorConfig = await AppConfig.Load();
+var kcapConfig = await AppConfig.Load();
 
 // Check repo exclusion — silently exit for excluded repos
-if (kapacitorConfig?.ExcludedRepos is { Length: > 0 } repos && await RepoExclusion.IsExcludedAsync(body, repos)) {
+if (kcapConfig?.ExcludedRepos is { Length: > 0 } repos && await RepoExclusion.IsExcludedAsync(body, repos)) {
     return 0;
 }
 
 // Check path exclusion against the V2 profile that applies to this process.
-// GetActiveProfileAsync falls back to ActiveProfile when --server-url / KAPACITOR_URL
-// caused the resolver to skip profile selection — without that fallback `kapacitor
+// GetActiveProfileAsync falls back to ActiveProfile when --server-url / KCAP_URL
+// caused the resolver to skip profile selection — without that fallback `kcap
 // ignore` writes (which also fall back to ActiveProfile) would be silently ignored
 // by hooks.
 if ((await AppConfig.GetActiveProfileAsync())?.ExcludedPaths is { Length: > 0 } paths) {
@@ -707,7 +707,7 @@ if ((await AppConfig.GetActiveProfileAsync())?.ExcludedPaths is { Length: > 0 } 
 }
 
 // Inject default_visibility from config for session-start hooks
-if (command == "session-start" && kapacitorConfig?.DefaultVisibility is { } vis) {
+if (command == "session-start" && kcapConfig?.DefaultVisibility is { } vis) {
     try {
         var node = JsonNode.Parse(body);
 
@@ -764,7 +764,7 @@ switch (command) {
                 }
             }
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[kapacitor] session-end pre-hook failed: {ex.Message}");
+            Console.Error.WriteLine($"[kcap] session-end pre-hook failed: {ex.Message}");
         }
 
         body = await deferredRepoTask!;
@@ -788,7 +788,7 @@ switch (command) {
                 }
             }
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[kapacitor] subagent-stop pre-hook failed: {ex.Message}");
+            Console.Error.WriteLine($"[kcap] subagent-stop pre-hook failed: {ex.Message}");
         }
 
         body = await deferredRepoTask!;
@@ -942,7 +942,7 @@ string? ReadPlanFile(string slug) {
     try {
         return File.Exists(planPath) ? File.ReadAllText(planPath) : null;
     } catch (Exception ex) {
-        Console.Error.WriteLine($"[kapacitor] Failed to read plan file at {planPath}: {ex.Message}");
+        Console.Error.WriteLine($"[kcap] Failed to read plan file at {planPath}: {ex.Message}");
 
         return null;
     }
@@ -1012,7 +1012,7 @@ async Task<int> HandleDiscoverLoginAsync(bool forceDevice) {
             http, origin, ghToken, AuthProvider.GitHubApp, tenant.OrgLogin);
         if (exit != 0) {
             await Console.Error.WriteLineAsync(
-                $"Warning: token exchange failed for {tenant.OrgLogin}. Run 'kapacitor login' after switching to that profile.");
+                $"Warning: token exchange failed for {tenant.OrgLogin}. Run 'kcap login' after switching to that profile.");
         }
     });
     await Task.WhenAll(exchanges);
@@ -1038,7 +1038,7 @@ async Task<int> PrintCommandHelp(string cmd) {
         await Console.Out.WriteAsync(hookText);
     } else {
         Console.Error.WriteLine($"Unknown command: {cmd}");
-        Console.Error.WriteLine("Run `kapacitor --help` for a list of commands.");
+        Console.Error.WriteLine("Run `kcap --help` for a list of commands.");
 
         return 1;
     }

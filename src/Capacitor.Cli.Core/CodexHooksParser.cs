@@ -21,15 +21,15 @@ public static class CodexHooksParser {
 
     /// <summary>
     /// Returns true if <paramref name="entry"/> is a hooks.json group whose
-    /// <c>hooks[].command</c> contains <c>kapacitor codex-hook</c>.
+    /// <c>hooks[].command</c> contains <c>kcap codex-hook</c>.
     /// </summary>
-    public static bool EntryReferencesKapacitorCodexHook(JsonNode? entry) {
+    public static bool EntryReferencesCapacitorCodexHook(JsonNode? entry) {
         if (entry?["hooks"] is not JsonArray hooks) return false;
 
         foreach (var hook in hooks) {
             if (hook?["command"] is JsonValue jv &&
                 jv.TryGetValue<string>(out var cmd) &&
-                cmd.Contains("kapacitor codex-hook")) {
+                cmd.Contains("kcap codex-hook")) {
                 return true;
             }
         }
@@ -39,15 +39,15 @@ public static class CodexHooksParser {
 
     /// <summary>
     /// Returns true if every event in <paramref name="events"/> has at least one
-    /// hooks.json entry that invokes <c>kapacitor codex-hook</c>.
+    /// hooks.json entry that invokes <c>kcap codex-hook</c>.
     /// </summary>
-    public static bool HasKapacitorHooksFor(JsonObject root, IEnumerable<string> events) {
+    public static bool HasCapacitorHooksFor(JsonObject root, IEnumerable<string> events) {
         if (root["hooks"] is not JsonObject hooks) return false;
 
         foreach (var evt in events) {
             if (hooks[evt] is not JsonArray entries) return false;
 
-            var any = entries.Any(EntryReferencesKapacitorCodexHook);
+            var any = entries.Any(EntryReferencesCapacitorCodexHook);
 
             if (!any) return false;
         }

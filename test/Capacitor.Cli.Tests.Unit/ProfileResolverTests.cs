@@ -8,7 +8,7 @@ public class ProfileResolverTests {
         Profiles = new Dictionary<string, Profile> {
             ["default"] = new() { ServerUrl = "https://default.com" },
             ["contoso"] = new() {
-                ServerUrl = "https://contoso.kapacitor.io",
+                ServerUrl = "https://contoso.kcap.io",
                 Remotes = ["github.com/contoso/*"]
             }
         },
@@ -67,7 +67,7 @@ public class ProfileResolverTests {
 
         var result = resolver.Resolve();
 
-        await Assert.That(result.ServerUrl).IsEqualTo("https://contoso.kapacitor.io");
+        await Assert.That(result.ServerUrl).IsEqualTo("https://contoso.kcap.io");
         await Assert.That(result.ProfileName).IsEqualTo("contoso");
     }
 
@@ -78,14 +78,14 @@ public class ProfileResolverTests {
             cliServerUrl: null,
             envUrl: null,
             envProfile: null,
-            repoConfig: new RepoConfig { Profile = "contoso", ServerUrl = "https://contoso.kapacitor.io" },
+            repoConfig: new RepoConfig { Profile = "contoso", ServerUrl = "https://contoso.kcap.io" },
             repoRemoteUrls: [],
             repoPath: null
         );
 
         var result = resolver.Resolve();
 
-        await Assert.That(result.ServerUrl).IsEqualTo("https://contoso.kapacitor.io");
+        await Assert.That(result.ServerUrl).IsEqualTo("https://contoso.kcap.io");
         await Assert.That(result.ProfileName).IsEqualTo("contoso");
     }
 
@@ -103,7 +103,7 @@ public class ProfileResolverTests {
 
         var result = resolver.Resolve();
 
-        await Assert.That(result.ServerUrl).IsEqualTo("https://contoso.kapacitor.io");
+        await Assert.That(result.ServerUrl).IsEqualTo("https://contoso.kcap.io");
         await Assert.That(result.ProfileName).IsEqualTo("contoso");
     }
 
@@ -121,7 +121,7 @@ public class ProfileResolverTests {
 
         var result = resolver.Resolve();
 
-        await Assert.That(result.ServerUrl).IsEqualTo("https://contoso.kapacitor.io");
+        await Assert.That(result.ServerUrl).IsEqualTo("https://contoso.kcap.io");
         await Assert.That(result.ProfileName).IsEqualTo("contoso");
     }
 
@@ -158,7 +158,7 @@ public class ProfileResolverTests {
 
         var result = resolver.Resolve();
 
-        await Assert.That(result.ServerUrl).IsEqualTo("https://contoso.kapacitor.io");
+        await Assert.That(result.ServerUrl).IsEqualTo("https://contoso.kcap.io");
         await Assert.That(result.Warning).IsNotNull();
         // Warning should mention "stale"
     }

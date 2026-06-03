@@ -62,10 +62,10 @@ public class CliResolverTests {
     // cross-group tests can still race; running fully alone is safe.
     [Test, NotInParallel]
     public async Task ReturnsTrue_WhenBareCommandResolvesOnPath() {
-        // Drop a fake "kapacitor-pathprobe-{guid}" binary into a temp dir,
+        // Drop a fake "kcap-pathprobe-{guid}" binary into a temp dir,
         // mark it executable on POSIX, and prepend that dir to PATH.
         var dir        = Directory.CreateTempSubdirectory("cli-resolver-path-").FullName;
-        var name       = $"kapacitor-pathprobe-{Guid.NewGuid():N}";
+        var name       = $"kcap-pathprobe-{Guid.NewGuid():N}";
         var binaryName = OperatingSystem.IsWindows() ? name + ".exe" : name;
         var binaryPath = Path.Combine(dir, binaryName);
         await File.WriteAllTextAsync(binaryPath, "");
@@ -91,7 +91,7 @@ public class CliResolverTests {
         if (OperatingSystem.IsWindows()) return;
 
         var dir        = Directory.CreateTempSubdirectory("cli-resolver-noexec-path-").FullName;
-        var name       = $"kapacitor-pathprobe-noexec-{Guid.NewGuid():N}";
+        var name       = $"kcap-pathprobe-noexec-{Guid.NewGuid():N}";
         var binaryPath = Path.Combine(dir, name);
         await File.WriteAllTextAsync(binaryPath, "");
         File.SetUnixFileMode(binaryPath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
@@ -109,7 +109,7 @@ public class CliResolverTests {
 
     [Test]
     public async Task ReturnsFalse_WhenBareCommandNotOnPath() {
-        var unlikely = $"kapacitor-not-installed-{Guid.NewGuid():N}";
+        var unlikely = $"kcap-not-installed-{Guid.NewGuid():N}";
 
         await Assert.That(CliResolver.Exists(unlikely)).IsFalse();
     }

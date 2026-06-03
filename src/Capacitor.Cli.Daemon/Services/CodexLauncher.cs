@@ -17,7 +17,7 @@ internal sealed partial class CodexLauncher(
 
     public void Prepare(LauncherContext ctx) {
         // Step 1: overlay source/.codex into worktree FIRST so project-scope
-        // hooks (kapacitor plugin install --codex --project) become visible to
+        // hooks (kcap plugin install --codex --project) become visible to
         // the preflight in step 2. Best-effort.
         try {
             var sourceCodexDir = Path.Combine(ctx.SourceRepoPath, ".codex");
@@ -35,8 +35,8 @@ internal sealed partial class CodexLauncher(
 
         if (!HooksInstalledIn(worktreeHooks) && !HooksInstalledIn(CodexPaths.UserHooksJson)) {
             throw new CodexHooksNotInstalledException(
-                "Codex hooks not installed. Run `kapacitor plugin install --codex` " +
-                "(user scope) or `kapacitor plugin install --codex --project` "      +
+                "Codex hooks not installed. Run `kcap plugin install --codex` " +
+                "(user scope) or `kcap plugin install --codex --project` "      +
                 "(project scope) and try again."
             );
         }
@@ -96,7 +96,7 @@ internal sealed partial class CodexLauncher(
         try {
             var root = JsonNode.Parse(File.ReadAllText(hooksPath)) as JsonObject;
 
-            return root is not null && CodexHooksParser.HasKapacitorHooksFor(root, CriticalHookEvents);
+            return root is not null && CodexHooksParser.HasCapacitorHooksFor(root, CriticalHookEvents);
         } catch {
             return false;
         }

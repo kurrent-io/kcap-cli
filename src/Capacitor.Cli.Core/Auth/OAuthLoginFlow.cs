@@ -38,7 +38,7 @@ public static class OAuthLoginFlow {
             return 1;
         }
 
-        var config = (await configResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.AuthDiscoveryResponse))!;
+        var config = (await configResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.AuthDiscoveryResponse))!;
 
         return config.Provider switch {
             AuthProvider.None      => HandleNoneLogin(),
@@ -58,7 +58,7 @@ public static class OAuthLoginFlow {
     }
 
     static int HandleUnknownProvider(string provider) {
-        Console.Error.WriteLine($"Error: Unknown auth provider '{provider}'. Update your kapacitor CLI.");
+        Console.Error.WriteLine($"Error: Unknown auth provider '{provider}'. Update your kcap CLI.");
 
         return 1;
     }
@@ -89,7 +89,7 @@ public static class OAuthLoginFlow {
             return null;
         }
 
-        var device   = (await deviceResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.GitHubDeviceCodeResponse))!;
+        var device   = (await deviceResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.GitHubDeviceCodeResponse))!;
         var interval = device.Interval;
 
         var copied = Clipboard.TryCopy(device.UserCode);
@@ -121,7 +121,7 @@ public static class OAuthLoginFlow {
                 )
             );
 
-            var tokenResult = (await tokenResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.GitHubTokenResponse))!;
+            var tokenResult = (await tokenResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.GitHubTokenResponse))!;
 
             if (tokenResult.AccessToken is not null) {
                 await Console.Out.WriteLineAsync(" done!");
@@ -191,7 +191,7 @@ public static class OAuthLoginFlow {
             } catch (OperationCanceledException) {
                 listener.Stop();
                 _ = getContext.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-                Console.Error.WriteLine("Timed out waiting for authorization. Re-run `kapacitor login` to try again.");
+                Console.Error.WriteLine("Timed out waiting for authorization. Re-run `kcap login` to try again.");
 
                 return null;
             }
@@ -228,7 +228,7 @@ public static class OAuthLoginFlow {
             tokenResponse = await http.PostAsJsonAsync(
                 codeExchangeUrl,
                 exchangeRequest,
-                KapacitorJsonContext.Default.GitHubCodeExchangeRequest,
+                CapacitorJsonContext.Default.GitHubCodeExchangeRequest,
                 cancellationToken: cts.Token
             );
         } catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or UriFormatException or InvalidOperationException) {
@@ -246,7 +246,7 @@ public static class OAuthLoginFlow {
         GitHubTokenResponse? tokenResult;
 
         try {
-            tokenResult = await tokenResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.GitHubTokenResponse, cancellationToken: cts.Token);
+            tokenResult = await tokenResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.GitHubTokenResponse, cancellationToken: cts.Token);
         } catch (JsonException ex) {
             var raw = await tokenResponse.Content.ReadAsStringAsync(cts.Token);
             Console.Error.WriteLine($"Code-exchange response was not valid JSON ({ex.Message}): {raw}");
@@ -293,7 +293,7 @@ public static class OAuthLoginFlow {
         var exchangeResponse = await http.PostAsJsonAsync(
             $"{serverUrl}/auth/token",
             new() { GithubAccessToken = githubAccessToken },
-            KapacitorJsonContext.Default.TokenExchangeRequest
+            CapacitorJsonContext.Default.TokenExchangeRequest
         );
 
         if (!exchangeResponse.IsSuccessStatusCode) {
@@ -302,7 +302,7 @@ public static class OAuthLoginFlow {
             return 1;
         }
 
-        var exchange = (await exchangeResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.TokenExchangeResponse))!;
+        var exchange = (await exchangeResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.TokenExchangeResponse))!;
 
         await TokenStore.SaveAsync(
             new() {
@@ -345,7 +345,7 @@ public static class OAuthLoginFlow {
         var exchangeResponse = await http.PostAsJsonAsync(
             $"{serverUrl}/auth/token",
             new TokenExchangeRequest { GithubAccessToken = githubAccessToken },
-            KapacitorJsonContext.Default.TokenExchangeRequest
+            CapacitorJsonContext.Default.TokenExchangeRequest
         );
 
         if (!exchangeResponse.IsSuccessStatusCode) {
@@ -354,7 +354,7 @@ public static class OAuthLoginFlow {
             return 1;
         }
 
-        var exchange = (await exchangeResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.TokenExchangeResponse))!;
+        var exchange = (await exchangeResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.TokenExchangeResponse))!;
 
         await TokenStore.SaveAsync(
             profile,
@@ -394,7 +394,7 @@ public static class OAuthLoginFlow {
         Console.Error.WriteLine("Common fixes:");
         Console.Error.WriteLine("  1. Authorize as the right GitHub account. The device-flow page authorizes");
         Console.Error.WriteLine("     whoever is signed in to your browser — sign in to https://github.com as");
-        Console.Error.WriteLine("     your org user, then re-run `kapacitor setup ...`.");
+        Console.Error.WriteLine("     your org user, then re-run `kcap setup ...`.");
         Console.Error.WriteLine("  2. If your org enforces SAML SSO, authorize SSO for the App at");
         Console.Error.WriteLine("     https://github.com/settings/apps/authorizations.");
         Console.Error.WriteLine("  3. Revoke a stale prior authorization at the same URL and retry.");
@@ -406,7 +406,7 @@ public static class OAuthLoginFlow {
         if (string.IsNullOrWhiteSpace(body)) return null;
 
         try {
-            var parsed = JsonSerializer.Deserialize(body, KapacitorJsonContext.Default.AuthErrorResponse);
+            var parsed = JsonSerializer.Deserialize(body, CapacitorJsonContext.Default.AuthErrorResponse);
             var msg    = parsed?.Error;
 
             return msg is not null && msg.Contains("not installed", StringComparison.OrdinalIgnoreCase)
@@ -534,14 +534,14 @@ public static class OAuthLoginFlow {
             return 1;
         }
 
-        var json = (await tokenResponse.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.Auth0TokenResponse))!;
+        var json = (await tokenResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.Auth0TokenResponse))!;
 
         var username = "unknown";
 
         if (json.IdToken is not null) {
             var payload = json.IdToken.Split('.')[1];
             payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
-            var claims = JsonSerializer.Deserialize(Convert.FromBase64String(payload), KapacitorJsonContext.Default.Auth0IdTokenClaims);
+            var claims = JsonSerializer.Deserialize(Convert.FromBase64String(payload), CapacitorJsonContext.Default.Auth0IdTokenClaims);
             username = claims?.Nickname ?? "unknown";
         }
 

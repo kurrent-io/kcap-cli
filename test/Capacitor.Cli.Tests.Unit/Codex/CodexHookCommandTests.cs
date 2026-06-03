@@ -7,7 +7,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Unit.Codex;
 
 public class CodexHookCommandTests : IDisposable {
-    // Every test that mutates Console.Out or the KAPACITOR_DAEMON_URL env
+    // Every test that mutates Console.Out or the KCAP_DAEMON_URL env
     // var is decorated [NotInParallel] (no group) so it runs strictly alone.
     // A group key was insufficient: parallel tests in *other* files (e.g.
     // ImportDisplayGridTests / CliResolverTests) still mutate the same
@@ -114,13 +114,13 @@ public class CodexHookCommandTests : IDisposable {
     [Test, NotInParallel]
     public async Task PermissionRequest_records_event_and_yields_decision_to_codex() {
         // The Codex permission-request hook must not silently auto-allow tool
-        // calls; in the stub branch (no KAPACITOR_DAEMON_URL set) it records
+        // calls; in the stub branch (no KCAP_DAEMON_URL set) it records
         // the request server-side via /hooks/permission-record (the same
         // fire-and-forget endpoint Claude's terminal path uses) and emits an
         // empty hookSpecificOutput so Codex's normal in-CLI approval prompt
         // asks the user. Regression for AI-636.
-        var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
-        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", null);
+        var previousEnv = Environment.GetEnvironmentVariable("KCAP_DAEMON_URL");
+        Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", null);
 
         _server.Given(Request.Create().WithPath("/hooks/permission-record").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
@@ -156,7 +156,7 @@ public class CodexHookCommandTests : IDisposable {
             await Assert.That(hasDecision).IsFalse();
         } finally {
             Console.SetOut(originalOut);
-            Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
+            Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", previousEnv);
         }
 
         // Recording must land on /hooks/permission-record, not on the
@@ -335,7 +335,7 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(endRequests.Count).IsEqualTo(0);
     }
 
-    // AI-676 P1: when the user runs `kapacitor disable`, the marker file
+    // AI-676 P1: when the user runs `kcap disable`, the marker file
     // under PathHelpers.ConfigPath("disabled") must short-circuit the Codex
     // hook the same way it does for Claude. Without this guard, the next
     // Codex Stop hook restarts the watcher (HandleStop calls
@@ -412,8 +412,8 @@ public class CodexHookCommandTests : IDisposable {
                     .WithBody("""{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}""")
             );
 
-        var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
-        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/{token}");
+        var previousEnv = Environment.GetEnvironmentVariable("KCAP_DAEMON_URL");
+        Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/{token}");
 
         var stdoutCapture = new StringWriter();
         var originalOut   = Console.Out;
@@ -429,7 +429,7 @@ public class CodexHookCommandTests : IDisposable {
             await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"allow\"");
         } finally {
             Console.SetOut(originalOut);
-            Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
+            Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", previousEnv);
         }
     }
 
@@ -441,8 +441,8 @@ public class CodexHookCommandTests : IDisposable {
         bridge.Given(Request.Create().WithPath($"/{token}/codex/permission-request").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(500));
 
-        var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
-        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/{token}");
+        var previousEnv = Environment.GetEnvironmentVariable("KCAP_DAEMON_URL");
+        Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/{token}");
 
         var stdoutCapture = new StringWriter();
         var originalOut   = Console.Out;
@@ -458,15 +458,15 @@ public class CodexHookCommandTests : IDisposable {
             await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"deny\"");
         } finally {
             Console.SetOut(originalOut);
-            Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
+            Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", previousEnv);
         }
     }
 
     [Test, NotInParallel]
     public async Task PermissionRequest_with_daemon_url_emits_deny_on_connection_refused() {
         // Use a deliberately-unreachable port (e.g. 1) so the connection fails immediately.
-        var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
-        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", "http://127.0.0.1:1/abc");
+        var previousEnv = Environment.GetEnvironmentVariable("KCAP_DAEMON_URL");
+        Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", "http://127.0.0.1:1/abc");
 
         var stdoutCapture = new StringWriter();
         var originalOut   = Console.Out;
@@ -482,16 +482,16 @@ public class CodexHookCommandTests : IDisposable {
             await Assert.That(stdoutCapture.ToString()).Contains("\"behavior\":\"deny\"");
         } finally {
             Console.SetOut(originalOut);
-            Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
+            Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", previousEnv);
         }
     }
 
     [Test, NotInParallel]
     public async Task PermissionRequest_with_non_loopback_daemon_url_emits_deny_without_posting() {
         using var bridge      = WireMockServer.Start();
-        var       previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
+        var       previousEnv = Environment.GetEnvironmentVariable("KCAP_DAEMON_URL");
         // Non-loopback host should be rejected by DaemonBridgeUrl.TryParseLoopback
-        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", $"http://example.com:{bridge.Ports[0]}/abc");
+        Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", $"http://example.com:{bridge.Ports[0]}/abc");
 
         var stdoutCapture = new StringWriter();
         var originalOut   = Console.Out;
@@ -508,15 +508,15 @@ public class CodexHookCommandTests : IDisposable {
             await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);
         } finally {
             Console.SetOut(originalOut);
-            Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
+            Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", previousEnv);
         }
     }
 
     [Test, NotInParallel]
     public async Task PermissionRequest_with_https_daemon_url_emits_deny_without_posting() {
         using var bridge      = WireMockServer.Start();
-        var       previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
-        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", $"https://127.0.0.1:{bridge.Ports[0]}/abc");
+        var       previousEnv = Environment.GetEnvironmentVariable("KCAP_DAEMON_URL");
+        Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", $"https://127.0.0.1:{bridge.Ports[0]}/abc");
 
         var stdoutCapture = new StringWriter();
         var originalOut   = Console.Out;
@@ -533,7 +533,7 @@ public class CodexHookCommandTests : IDisposable {
             await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);
         } finally {
             Console.SetOut(originalOut);
-            Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
+            Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", previousEnv);
         }
     }
 
@@ -553,8 +553,8 @@ public class CodexHookCommandTests : IDisposable {
         server.Given(Request.Create().WithPath("/hooks/permission-request/codex").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
 
-        var previousEnv = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
-        Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/{token}");
+        var previousEnv = Environment.GetEnvironmentVariable("KCAP_DAEMON_URL");
+        Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", $"http://127.0.0.1:{bridge.Ports[0]}/{token}");
 
         var stdoutCapture = new StringWriter();
         var originalOut   = Console.Out;
@@ -570,7 +570,7 @@ public class CodexHookCommandTests : IDisposable {
             await Assert.That(bridge.LogEntries.Count).IsEqualTo(1);
         } finally {
             Console.SetOut(originalOut);
-            Environment.SetEnvironmentVariable("KAPACITOR_DAEMON_URL", previousEnv);
+            Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", previousEnv);
         }
     }
 }

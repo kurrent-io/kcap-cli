@@ -199,7 +199,7 @@ static class RepositoryDetection {
             }
 
             var json  = File.ReadAllText(path);
-            var entry = JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.GitCacheEntry);
+            var entry = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.GitCacheEntry);
 
             if (entry is null) {
                 return null;
@@ -217,7 +217,7 @@ static class RepositoryDetection {
             var path = GetCachePath(cwd);
             var dir  = Path.GetDirectoryName(path)!;
             Directory.CreateDirectory(dir);
-            File.WriteAllText(path, JsonSerializer.Serialize(entry, KapacitorJsonContext.Default.GitCacheEntry));
+            File.WriteAllText(path, JsonSerializer.Serialize(entry, CapacitorJsonContext.Default.GitCacheEntry));
         } catch {
             // Cache write failure is non-critical
         }
@@ -239,7 +239,7 @@ static class RepositoryDetection {
 
             var json = File.ReadAllText(path);
 
-            return JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.RepositoryPayload);
+            return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.RepositoryPayload);
         } catch {
             return null;
         }
@@ -266,7 +266,7 @@ static class RepositoryDetection {
             var path = GetLastEmittedPath(cwd);
             var dir  = Path.GetDirectoryName(path)!;
             Directory.CreateDirectory(dir);
-            File.WriteAllText(path, JsonSerializer.Serialize(payload, KapacitorJsonContext.Default.RepositoryPayload));
+            File.WriteAllText(path, JsonSerializer.Serialize(payload, CapacitorJsonContext.Default.RepositoryPayload));
         } catch {
             // Cache write failure is non-critical
         }

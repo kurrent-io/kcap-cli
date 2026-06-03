@@ -1,10 +1,10 @@
 namespace Capacitor.Cli.Core;
 
 /// <summary>
-/// Copies kapacitor skills from a source tree to the user's
+/// Copies kcap skills from a source tree to the user's
 /// <c>~/.agents/skills/</c> directory, prefixing each folder name with
-/// <c>kapacitor-</c> and rewriting the <c>name:</c> field in SKILL.md to
-/// match. Also handles cleanup of legacy <c>~/.codex/skills/kapacitor-*</c>
+/// <c>kcap-</c> and rewriting the <c>name:</c> field in SKILL.md to
+/// match. Also handles cleanup of legacy <c>~/.codex/skills/kcap-*</c>
 /// folders left by prior installer versions.
 /// </summary>
 public static class AgentsSkillsInstaller {
@@ -13,12 +13,12 @@ public static class AgentsSkillsInstaller {
     /// Holds the CLI version that produced the skills, used by the npm
     /// postinstall hook to detect when an upgrade-time refresh is needed.
     /// </summary>
-    public const string MarkerFileName = ".kapacitor-version";
+    public const string MarkerFileName = ".kcap-version";
 
     /// <summary>
-    /// Source folder names under <c>kapacitor/skills/</c>. On install each
-    /// becomes <c>kapacitor-&lt;name&gt;</c> under the target directory.
-    /// Add a new skill here when adding it to <c>kapacitor/skills/</c>.
+    /// Source folder names under <c>capacitor/skills/</c>. On install each
+    /// becomes <c>kcap-&lt;name&gt;</c> under the target directory.
+    /// Add a new skill here when adding it to <c>capacitor/skills/</c>.
     /// </summary>
     public static readonly string[] SourceNames = [
         "recap",
@@ -34,11 +34,11 @@ public static class AgentsSkillsInstaller {
     /// during legacy cleanup; user-authored skills are never touched.
     /// </summary>
     public static readonly string[] LegacyCodexSkillNames = [
-        "kapacitor-recap",
-        "kapacitor-errors",
-        "kapacitor-hide",
-        "kapacitor-disable",
-        "kapacitor-validate-plan"
+        "kcap-recap",
+        "kcap-errors",
+        "kcap-hide",
+        "kcap-disable",
+        "kcap-validate-plan"
     ];
 
     public static bool Install(string sourceDir, string targetDir) {
@@ -62,7 +62,7 @@ public static class AgentsSkillsInstaller {
 
             foreach (var name in SourceNames) {
                 var src    = Path.Combine(sourceDir, name);
-                var prefix = "kapacitor-" + name;
+                var prefix = "kcap-" + name;
                 var dst    = Path.Combine(targetDir, prefix);
 
                 if (Directory.Exists(dst)) Directory.Delete(dst, recursive: true);
@@ -80,13 +80,13 @@ public static class AgentsSkillsInstaller {
     }
 
     /// <summary>
-    /// True when the user has previously installed kapacitor skills via setup
-    /// or <c>kapacitor plugin install --skills</c>. The npm postinstall hook
+    /// True when the user has previously installed kcap skills via setup
+    /// or <c>kcap plugin install --skills</c>. The npm postinstall hook
     /// uses this to decide whether to refresh on upgrade (it does) vs. install
     /// for the first time (it doesn't — that's setup's job).
     /// </summary>
     /// <remarks>
-    /// Detection is the marker file OR any owned <c>kapacitor-&lt;name&gt;</c>
+    /// Detection is the marker file OR any owned <c>kcap-&lt;name&gt;</c>
     /// folder under <paramref name="targetDir"/>. The folder fallback covers
     /// users whose install predates the marker — without it, the very first
     /// upgrade onto a marker-aware build would no-op and leave stale skills
@@ -97,7 +97,7 @@ public static class AgentsSkillsInstaller {
     public static bool IsInstalled(string targetDir) {
         if (File.Exists(Path.Combine(targetDir, MarkerFileName))) return true;
 
-        return Directory.Exists(targetDir) && SourceNames.Any(name => Directory.Exists(Path.Combine(targetDir, "kapacitor-" + name)));
+        return Directory.Exists(targetDir) && SourceNames.Any(name => Directory.Exists(Path.Combine(targetDir, "kcap-" + name)));
     }
 
     /// <summary>
@@ -129,10 +129,10 @@ public static class AgentsSkillsInstaller {
     /// Exposed so callers can short-circuit a refresh when the marker already
     /// matches.
     /// </summary>
-    public static string CurrentVersion() => KapacitorVersion.Current();
+    public static string CurrentVersion() => CapacitorVersion.Current();
 
     /// <summary>
-    /// Deletes every <c>kapacitor-&lt;name&gt;</c> folder this installer owns
+    /// Deletes every <c>kcap-&lt;name&gt;</c> folder this installer owns
     /// from <paramref name="targetDir"/>. User-authored folders are left alone.
     /// Returns a <see cref="RemovalResult"/> indicating whether any folder was
     /// removed and whether any deletion failed.
@@ -144,7 +144,7 @@ public static class AgentsSkillsInstaller {
         var errors  = false;
 
         foreach (var name in SourceNames) {
-            var dst = Path.Combine(targetDir, "kapacitor-" + name);
+            var dst = Path.Combine(targetDir, "kcap-" + name);
 
             if (!Directory.Exists(dst)) continue;
 
@@ -152,7 +152,7 @@ public static class AgentsSkillsInstaller {
                 Directory.Delete(dst, recursive: true);
                 removed = true;
             } catch (Exception ex) {
-                Console.Error.WriteLine($"Could not remove agent skill 'kapacitor-{name}': {ex.Message}");
+                Console.Error.WriteLine($"Could not remove agent skill 'kcap-{name}': {ex.Message}");
                 errors = true;
             }
         }
@@ -171,7 +171,7 @@ public static class AgentsSkillsInstaller {
     }
 
     /// <summary>
-    /// Removes legacy <c>kapacitor-*</c> folders that prior installer versions
+    /// Removes legacy <c>kcap-*</c> folders that prior installer versions
     /// wrote to <c>~/.codex/skills/</c>. List of folder names is fixed
     /// (<see cref="LegacyCodexSkillNames"/>); user-authored skills are never
     /// touched. If the parent directory becomes empty, it is removed too.

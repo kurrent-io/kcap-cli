@@ -1,6 +1,6 @@
-kapacitor config — Manage configuration
+kcap config — Manage configuration
 
-Usage: kapacitor config <subcommand>
+Usage: kcap config <subcommand>
 
 Subcommands:
   show                    Print current configuration

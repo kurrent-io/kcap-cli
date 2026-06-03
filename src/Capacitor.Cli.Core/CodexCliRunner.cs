@@ -28,7 +28,7 @@ static class CodexCliRunner {
         // passed below so codex won't refuse to run, but a stable per-session
         // dir keeps any incidental writes (cache, temp probes) isolated and
         // sweepable.
-        var workingDir        = Path.Combine(Path.GetTempPath(), $"kapacitor-codex-{Guid.NewGuid():N}");
+        var workingDir        = Path.Combine(Path.GetTempPath(), $"kcap-codex-{Guid.NewGuid():N}");
         var lastMessageFile   = Path.Combine(workingDir, "last-message.txt");
         var createdWorkingDir = false;
 
@@ -38,7 +38,7 @@ static class CodexCliRunner {
         } catch (Exception ex) {
             log($"Failed to create isolated working directory: {ex.Message}");
             workingDir      = Path.GetTempPath();
-            lastMessageFile = Path.Combine(workingDir, $"kapacitor-codex-last-{Guid.NewGuid():N}.txt");
+            lastMessageFile = Path.Combine(workingDir, $"kcap-codex-last-{Guid.NewGuid():N}.txt");
         }
 
         try {
@@ -75,9 +75,9 @@ static class CodexCliRunner {
             UseShellExecute        = false,
             CreateNoWindow         = true,
             Environment = {
-                // Symmetric with the Claude path — block any nested kapacitor hook
+                // Symmetric with the Claude path — block any nested kcap hook
                 // forwarding so a headless codex invocation can't re-trigger import.
-                ["KAPACITOR_SKIP"] = "1"
+                ["KCAP_SKIP"] = "1"
             }
         };
 

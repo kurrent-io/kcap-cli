@@ -19,15 +19,15 @@ public static class CodexHooksInstaller {
     /// File name written next to <c>hooks.json</c> after a successful install.
     /// Holds the CLI version that produced the entries.
     /// </summary>
-    public const string MarkerFileName = ".kapacitor-hooks-version";
+    public const string MarkerFileName = ".kcap-hooks-version";
 
     /// <summary>
     /// True when the user has previously installed Codex hooks via setup or
-    /// <c>kapacitor plugin install --codex</c>. The npm postinstall hook uses
+    /// <c>kcap plugin install --codex</c>. The npm postinstall hook uses
     /// this to decide whether to refresh on upgrade vs. leave the system alone.
     /// </summary>
     /// <remarks>
-    /// Detection is marker OR existing <c>kapacitor codex-hook</c> entry in
+    /// Detection is marker OR existing <c>kcap codex-hook</c> entry in
     /// <paramref name="hooksPath"/>. The hooks-json fallback covers users
     /// whose install predates the marker — without it, the first upgrade onto
     /// a marker-aware build would no-op and leave stale command strings in
@@ -47,7 +47,7 @@ public static class CodexHooksInstaller {
             foreach (var (_, entries) in hooks) {
                 if (entries is not JsonArray arr) continue;
 
-                if (arr.Any(CodexHooksParser.EntryReferencesKapacitorCodexHook)) {
+                if (arr.Any(CodexHooksParser.EntryReferencesCapacitorCodexHook)) {
                     return true;
                 }
             }
@@ -78,7 +78,7 @@ public static class CodexHooksInstaller {
         if (string.IsNullOrEmpty(dir)) return;
         try {
             Directory.CreateDirectory(dir);
-            File.WriteAllText(Path.Combine(dir, MarkerFileName), KapacitorVersion.Current());
+            File.WriteAllText(Path.Combine(dir, MarkerFileName), CapacitorVersion.Current());
         } catch {
             // Best effort. Worst case the next upgrade re-runs the install
             // unconditionally, which is idempotent.

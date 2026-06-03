@@ -5,9 +5,9 @@ namespace Capacitor.Cli.Core.Commands;
 
 /// <summary>
 /// Shared helper that builds the <c>claude</c> invocation for a PR review:
-/// a temp MCP config pointing at <c>kapacitor mcp review</c> plus the embedded
+/// a temp MCP config pointing at <c>kcap mcp review</c> plus the embedded
 /// review system prompt with PR placeholders substituted. Used by both the
-/// interactive <c>kapacitor review</c> command and the daemon's hosted-review
+/// interactive <c>kcap review</c> command and the daemon's hosted-review
 /// launch path so the review experience stays identical between them.
 /// </summary>
 public static class ReviewLaunchBuilder {
@@ -29,12 +29,12 @@ public static class ReviewLaunchBuilder {
             .Replace("{owner}", owner)
             .Replace("{repo}", repo);
 
-        var kapacitorPath = Environment.ProcessPath ?? "kapacitor";
+        var kcapPath = Environment.ProcessPath ?? "kcap";
 
         var mcpConfig = new JsonObject {
             ["mcpServers"] = new JsonObject {
-                ["kapacitor-review"] = new JsonObject {
-                    ["command"] = kapacitorPath,
+                ["kcap-review"] = new JsonObject {
+                    ["command"] = kcapPath,
                     ["args"] = new JsonArray(
                         "mcp",
                         "review",
@@ -45,12 +45,12 @@ public static class ReviewLaunchBuilder {
                         "--pr",
                         prNumber.ToString()
                     ),
-                    ["env"] = new JsonObject { ["KAPACITOR_URL"] = baseUrl }
+                    ["env"] = new JsonObject { ["KCAP_URL"] = baseUrl }
                 }
             }
         };
 
-        var configPath = Path.Combine(Path.GetTempPath(), $"kapacitor-review-{Guid.NewGuid():N}.json");
+        var configPath = Path.Combine(Path.GetTempPath(), $"kcap-review-{Guid.NewGuid():N}.json");
         var json       = mcpConfig.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
         await File.WriteAllTextAsync(configPath, json);
 

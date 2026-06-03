@@ -20,7 +20,7 @@ namespace Capacitor.Cli.Commands;
 ///                       WatchCommand.PostSessionEndOnParentExitAsync).
 ///                       HandleStop only refreshes watcher liveness and emits
 ///                       {"continue":true} so Codex's hook parser is satisfied.
-///   PermissionRequest → in a daemon-launched hosted agent (KAPACITOR_DAEMON_URL set), bounce
+///   PermissionRequest → in a daemon-launched hosted agent (KCAP_DAEMON_URL set), bounce
 ///                       through the daemon's LocalPermissionBridge and wait for the dashboard's
 ///                       decision (fail-closed on bridge errors: deny + exit nonzero). Otherwise:
 ///                       POST /hooks/permission-record (fire-and-forget; CLI emits no decision so
@@ -63,12 +63,12 @@ static class CodexHookCommand {
 
         node["home_dir"] = PathHelpers.HomeDirectory;
 
-        var agentHostId = Environment.GetEnvironmentVariable("KAPACITOR_AGENT_ID");
+        var agentHostId = Environment.GetEnvironmentVariable("KCAP_AGENT_ID");
         if (agentHostId is not null) {
             node["agent_host_id"] = agentHostId;
         }
 
-        // Mirror the Claude path: if the user ran `kapacitor disable`, skip every
+        // Mirror the Claude path: if the user ran `kcap disable`, skip every
         // server POST and the watcher restart. Without this check the next Codex
         // Stop hook would re-enliven the watcher and re-send transcript data for
         // a session whose data was just deleted server-side.
@@ -152,7 +152,7 @@ static class CodexHookCommand {
     }
 
     static async Task<int> HandlePermissionRequest(string baseUrl, JsonNode node) {
-        var daemonUrl = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
+        var daemonUrl = Environment.GetEnvironmentVariable("KCAP_DAEMON_URL");
 
         return daemonUrl is null
             ? await HandlePermissionRequestStub(baseUrl, node)
@@ -177,7 +177,7 @@ static class CodexHookCommand {
         // default (100 s) before we even start the POST, blowing past Codex's
         // 30 s hook timeout. Passing baseUrl also keeps discovery targeted at
         // the server we're about to POST to, not the
-        // AppConfig.ResolvedServerUrl / KAPACITOR_URL / localhost:5108 fallback.
+        // AppConfig.ResolvedServerUrl / KCAP_URL / localhost:5108 fallback.
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         try {
             using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, cts.Token);
@@ -197,7 +197,7 @@ static class CodexHookCommand {
     static async Task<int> HandlePermissionRequestViaBridge(string daemonUrl, JsonNode node) {
         if (!DaemonBridgeUrl.TryParseLoopback(daemonUrl, out var bridgeBase)) {
             Console.Error.WriteLine(
-                $"[kapacitor] codex-hook permission-request: KAPACITOR_DAEMON_URL must be http loopback, got: {daemonUrl}");
+                $"[kcap] codex-hook permission-request: KCAP_DAEMON_URL must be http loopback, got: {daemonUrl}");
             return EmitDenyAndExitNonzero();
         }
 
@@ -210,7 +210,7 @@ static class CodexHookCommand {
 
             if (!resp.IsSuccessStatusCode) {
                 Console.Error.WriteLine(
-                    $"[kapacitor] codex-hook permission-request bridge: HTTP {(int)resp.StatusCode}");
+                    $"[kcap] codex-hook permission-request bridge: HTTP {(int)resp.StatusCode}");
                 return EmitDenyAndExitNonzero();
             }
 
@@ -218,7 +218,7 @@ static class CodexHookCommand {
             Console.Write(body);
             return 0;
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[kapacitor] codex-hook permission-request bridge error: {ex.Message}");
+            Console.Error.WriteLine($"[kcap] codex-hook permission-request bridge error: {ex.Message}");
             return EmitDenyAndExitNonzero();
         }
     }
@@ -242,7 +242,7 @@ static class CodexHookCommand {
         try {
             var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{endpoint}", content);
             if (!resp.IsSuccessStatusCode) {
-                Console.Error.WriteLine($"[kapacitor] codex-hook {endpoint}: HTTP {(int)resp.StatusCode}");
+                Console.Error.WriteLine($"[kcap] codex-hook {endpoint}: HTTP {(int)resp.StatusCode}");
                 return 1;
             }
 

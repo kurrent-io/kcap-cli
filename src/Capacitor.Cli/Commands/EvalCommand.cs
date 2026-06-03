@@ -111,7 +111,7 @@ static class EvalCommand {
     /// <summary>
     /// Renders every eval progress callback to stderr with a consistent
     /// <c>[HH:mm:ss] [eval] …</c> prefix, matching the pre-refactor shape
-    /// of <c>kapacitor eval</c>'s output.
+    /// of <c>kcap eval</c>'s output.
     /// </summary>
     sealed class ConsoleEvalObserver(string sessionId) : IEvalObserver {
         public void OnInfo(string message) => Log(message);

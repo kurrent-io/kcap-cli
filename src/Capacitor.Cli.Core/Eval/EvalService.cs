@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Core.Eval;
 
 /// <summary>
 /// Core orchestration for an LLM-as-judge eval run. Consumed by the CLI
-/// (<c>kapacitor eval</c>) and — per DEV-1440 milestone 2 — by the daemon
+/// (<c>kcap eval</c>) and — per DEV-1440 milestone 2 — by the daemon
 /// when the dashboard dispatches an evaluation. All progress is reported
 /// through <see cref="IEvalObserver"/> so the two host environments can
 /// render it differently (stderr logs vs SignalR events) without the
@@ -76,12 +76,12 @@ public static class EvalService {
     // call_id → tool_name accounting surface aligned across both judge runs
     // and prevents drift when new MCP tools are added.
     static readonly string[] JudgeMcpAllowedTools = [
-        "mcp__kapacitor-review__get_session_recap",
-        "mcp__kapacitor-review__get_session_errors",
-        "mcp__kapacitor-review__get_transcript",
-        "mcp__kapacitor-review__get_session_summary",
-        "mcp__kapacitor-review__search_session",
-        "mcp__kapacitor-review__get_tool_result"
+        "mcp__kcap-review__get_session_recap",
+        "mcp__kcap-review__get_session_errors",
+        "mcp__kcap-review__get_transcript",
+        "mcp__kcap-review__get_session_summary",
+        "mcp__kcap-review__search_session",
+        "mcp__kcap-review__get_tool_result"
     ];
 
     /// <summary>
@@ -232,7 +232,7 @@ public static class EvalService {
                 // writes to stderr, which would duplicate output for CLI
                 // callers and add noise for daemon callers that route via
                 // SignalR. The observer is the single reporting channel.
-                observer.OnFailed("authentication failed — run 'kapacitor login' to re-authenticate");
+                observer.OnFailed("authentication failed — run 'kcap login' to re-authenticate");
 
                 return null;
             }
@@ -244,7 +244,7 @@ public static class EvalService {
             }
 
             traceJson = await resp.Content.ReadAsStringAsync(ct);
-            context   = JsonSerializer.Deserialize(traceJson, KapacitorJsonContext.Default.EvalContextResult);
+            context   = JsonSerializer.Deserialize(traceJson, CapacitorJsonContext.Default.EvalContextResult);
         } catch (HttpRequestException ex) {
             observer.OnFailed($"server unreachable: {ex.Message}");
 
@@ -336,14 +336,14 @@ public static class EvalService {
             var prompt = BuildToolsQuestionPrompt(
                 ctx.ToolsPromptTemplate, ctx.SessionId, ctx.EvalRunId, question, patterns);
 
-            var commandPath = Environment.ProcessPath ?? "kapacitor";
+            var commandPath = Environment.ProcessPath ?? "kcap";
 
             var mcpConfig = new JsonObject {
                 ["mcpServers"] = new JsonObject {
-                    ["kapacitor-review"] = new JsonObject {
+                    ["kcap-review"] = new JsonObject {
                         ["command"] = commandPath,
                         ["args"]    = new JsonArray("mcp", "judge", "--session", ctx.SessionId),
-                        ["env"]     = new JsonObject { ["KAPACITOR_URL"] = baseUrl }
+                        ["env"]     = new JsonObject { ["KCAP_URL"] = baseUrl }
                     }
                 }
             }.ToJsonString();
@@ -473,7 +473,7 @@ public static class EvalService {
 
         // 6. Persist the aggregate to the server.
         var       postUrl     = $"{baseUrl}/api/sessions/{ctx.EncodedSessionId}/evals";
-        var       payloadJson = JsonSerializer.Serialize(aggregate, KapacitorJsonContext.Default.SessionEvalCompletedPayload);
+        var       payloadJson = JsonSerializer.Serialize(aggregate, CapacitorJsonContext.Default.SessionEvalCompletedPayload);
         using var httpContent = new StringContent(payloadJson, Encoding.UTF8, "application/json");
 
         try {
@@ -621,7 +621,7 @@ public static class EvalService {
 
         EvalQuestionVerdict? parsed;
         try {
-            parsed = JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.EvalQuestionVerdict);
+            parsed = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.EvalQuestionVerdict);
         } catch (JsonException) {
             return null;
         }
@@ -667,7 +667,7 @@ public static class EvalService {
         if (string.IsNullOrWhiteSpace(json)) return null;
 
         try {
-            return JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.EvalRetrospective);
+            return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.EvalRetrospective);
         } catch (JsonException) {
             return null;
         }
@@ -855,7 +855,7 @@ public static class EvalService {
         observer.OnRetrospectiveStarted();
 
         var sessionMeta  = $"session-id: {sessionId}\nrun-id: {evalRunId}\nmodel: {model}\noverall-score: {aggregate.OverallScore}/5";
-        var verdictsJson = JsonSerializer.Serialize(verdicts, KapacitorJsonContext.Default.IReadOnlyListEvalQuestionVerdict);
+        var verdictsJson = JsonSerializer.Serialize(verdicts, CapacitorJsonContext.Default.IReadOnlyListEvalQuestionVerdict);
 
         // Soft-drop of {KNOWN_PATTERNS}: template no longer has the
         // placeholder, so the retrospective prompt builder receives an
@@ -867,19 +867,19 @@ public static class EvalService {
         // per-session MCP judge server and let the judge pull recap /
         // errors / transcript slices on demand. MCP config built with
         // JsonObject/JsonArray — same pattern as ReviewCommand.cs.
-        var commandPath = Environment.ProcessPath ?? "kapacitor";
+        var commandPath = Environment.ProcessPath ?? "kcap";
 
-        // Inject KAPACITOR_URL so the child process uses the exact server the
+        // Inject KCAP_URL so the child process uses the exact server the
         // parent daemon resolved (which may have come from --server-url and
         // therefore isn't reachable via the child's own config lookup).
-        // Matches the pattern in ReviewCommand.cs for the `kapacitor review`
+        // Matches the pattern in ReviewCommand.cs for the `kcap review`
         // MCP launch.
         var mcpConfig = new JsonObject {
             ["mcpServers"] = new JsonObject {
-                ["kapacitor-review"] = new JsonObject {
+                ["kcap-review"] = new JsonObject {
                     ["command"] = commandPath,
                     ["args"]    = new JsonArray("mcp", "judge", "--session", sessionId),
-                    ["env"]     = new JsonObject { ["KAPACITOR_URL"] = baseUrl }
+                    ["env"]     = new JsonObject { ["KCAP_URL"] = baseUrl }
                 }
             }
         }.ToJsonString();
@@ -944,7 +944,7 @@ public static class EvalService {
             SourceEvalRunId = evalRunId
         };
 
-        var       payloadJson = JsonSerializer.Serialize(payload, KapacitorJsonContext.Default.JudgeFactPayload);
+        var       payloadJson = JsonSerializer.Serialize(payload, CapacitorJsonContext.Default.JudgeFactPayload);
         using var content     = new StringContent(payloadJson, Encoding.UTF8, "application/json");
 
         try {

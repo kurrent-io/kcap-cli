@@ -243,7 +243,7 @@ static class ImportCommand {
         /// <summary>The last-line probe failed (HTTP error, network error).</summary>
         ProbeError,
 
-        /// <summary>Kapacitor-spawned sub-session (title generation, what's-done summary) — never imported.</summary>
+        /// <summary>Capacitor-spawned sub-session (title generation, what's-done summary) — never imported.</summary>
         InternalSubSession,
     }
 
@@ -276,7 +276,7 @@ static class ImportCommand {
 
         /// <summary>
         /// Populated when the session's cwd lies within a path configured via
-        /// <c>kapacitor ignore</c>. Holds the matching excluded-path entry
+        /// <c>kcap ignore</c>. Holds the matching excluded-path entry
         /// (normalized) so prompts can group sessions by the entry that excluded
         /// them.
         /// </summary>
@@ -563,7 +563,7 @@ static class ImportCommand {
         }
 
         // --- Scope picker ---
-        var kapacitorConfig = await AppConfig.Load();
+        var kcapConfig = await AppConfig.Load();
 
         if (scope is null) {
             var distinct = resolved.Values
@@ -631,7 +631,7 @@ static class ImportCommand {
 
         var visibilityDesc = forcePrivate
             ? "private (--private)"
-            : $"{kapacitorConfig?.DefaultVisibility ?? "org_public"} (from profile)";
+            : $"{kcapConfig?.DefaultVisibility ?? "org_public"} (from profile)";
 
         if (!ImportScopePrompt.PromptConfirm(
                 scope,
@@ -646,7 +646,7 @@ static class ImportCommand {
         }
 
         // --- Classification (parallel fan-out per source) ---
-        var excludedRepos = kapacitorConfig?.ExcludedRepos;
+        var excludedRepos = kcapConfig?.ExcludedRepos;
         var excludedPaths = (await AppConfig.GetActiveProfileAsync())?.ExcludedPaths;
 
         var classifyCtx = new ClassifyContext(
@@ -1603,7 +1603,7 @@ static class ImportCommand {
     /// <summary>
     /// Build a SessionId → repo lookup for every discovered transcript. Repo
     /// detection (git + `gh pr view`) is the slow part of the discovery phase
-    /// and ran sequentially per-session pre-AI-692, making `kapacitor import`
+    /// and ran sequentially per-session pre-AI-692, making `kcap import`
     /// look frozen on large histories. This version deduplicates by cwd
     /// (transcripts in the same project share a repo) and runs detection in
     /// parallel, surfacing progress via a Spectre status spinner on a TTY and
@@ -1769,7 +1769,7 @@ static class ImportCommand {
                 CacheWriteTokens = result.CacheWriteTokens
             };
 
-            var       payloadJson = JsonSerializer.Serialize(payload, KapacitorJsonContext.Default.SessionTitlePayload);
+            var       payloadJson = JsonSerializer.Serialize(payload, CapacitorJsonContext.Default.SessionTitlePayload);
             using var content     = new StringContent(payloadJson, Encoding.UTF8, "application/json");
             using var titleResp   = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/session-title", content);
 
@@ -2085,7 +2085,7 @@ static class ImportCommand {
     /// <summary>
     /// PUT visibility=none for every imported session id. Failures are logged
     /// inline (one line per session) but never throw — the import already
-    /// succeeded; users can re-run `kapacitor hide` for any that failed.
+    /// succeeded; users can re-run `kcap hide` for any that failed.
     /// </summary>
     internal static async Task SetVisibilityNoneForAll(
             HttpClient            httpClient,

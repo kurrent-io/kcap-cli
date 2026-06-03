@@ -1,6 +1,6 @@
-kapacitor — CLI companion for Kurrent Capacitor
+kcap — CLI companion for Kurrent Capacitor
 
-Usage: kapacitor <command> [options]
+Usage: kcap <command> [options]
 
 Getting Started:
   setup                            Configure server, login, and install plugin
@@ -57,7 +57,7 @@ Plugin:
 Maintenance:
   update                           Check for and install updates
   cleanup                          Kill all orphaned watcher processes
-  uninstall [--project] [--yes]    Remove kapacitor config + all agent integrations
+  uninstall [--project] [--yes]    Remove kcap config + all agent integrations
   --version                        Show version
   --help                           Show this help
 

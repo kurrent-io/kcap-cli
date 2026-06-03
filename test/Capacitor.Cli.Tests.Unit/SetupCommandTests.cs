@@ -9,7 +9,7 @@ public class SetupCommandTests {
     public async Task InstallPlugin_CreatesNewSettingsFile() {
         using var tmp          = new TempDir();
         var       settingsPath = Path.Combine(tmp.Path, "settings.json");
-        var       marketplace  = "/opt/kapacitor";
+        var       marketplace  = "/opt/kcap";
 
         var result = SetupCommand.InstallPlugin(settingsPath, marketplace);
 
@@ -17,10 +17,10 @@ public class SetupCommandTests {
 
         var root = JsonNode.Parse(await File.ReadAllTextAsync(settingsPath))!.AsObject();
 
-        await Assert.That(root["extraKnownMarketplaces"]?["kapacitor"]?["source"]?["path"]?.GetValue<string>())
+        await Assert.That(root["extraKnownMarketplaces"]?["kcap"]?["source"]?["path"]?.GetValue<string>())
             .IsEqualTo(marketplace);
 
-        await Assert.That(root["enabledPlugins"]?["kapacitor@kapacitor"]?.GetValue<bool>() ?? false)
+        await Assert.That(root["enabledPlugins"]?["kcap@kcap"]?.GetValue<bool>() ?? false)
             .IsTrue();
     }
 
@@ -28,7 +28,7 @@ public class SetupCommandTests {
     public async Task InstallPlugin_PreservesExistingSettings() {
         using var    tmp          = new TempDir();
         var          settingsPath = Path.Combine(tmp.Path, "settings.json");
-        const string marketplace  = "/opt/kapacitor";
+        const string marketplace  = "/opt/kcap";
 
         // Pre-populate with existing settings
         await File.WriteAllTextAsync(
@@ -55,10 +55,10 @@ public class SetupCommandTests {
             .IsTrue();
 
         // Plugin added
-        await Assert.That(root["enabledPlugins"]?["kapacitor@kapacitor"]?.GetValue<bool>() ?? false)
+        await Assert.That(root["enabledPlugins"]?["kcap@kcap"]?.GetValue<bool>() ?? false)
             .IsTrue();
 
-        await Assert.That(root["extraKnownMarketplaces"]?["kapacitor"]?["source"]?["path"]?.GetValue<string>())
+        await Assert.That(root["extraKnownMarketplaces"]?["kcap"]?["source"]?["path"]?.GetValue<string>())
             .IsEqualTo(marketplace);
     }
 
@@ -76,7 +76,7 @@ public class SetupCommandTests {
               "extraKnownMarketplaces": {
                 "kurrent": { "source": { "source": "directory", "path": "/old/path" } }
               },
-              "enabledPlugins": { "kapacitor@kapacitor": true }
+              "enabledPlugins": { "kcap@kcap": true }
             }
             """
         );
@@ -87,7 +87,7 @@ public class SetupCommandTests {
 
         var root = JsonNode.Parse(await File.ReadAllTextAsync(settingsPath))!.AsObject();
 
-        await Assert.That(root["extraKnownMarketplaces"]?["kapacitor"]?["source"]?["path"]?.GetValue<string>())
+        await Assert.That(root["extraKnownMarketplaces"]?["kcap"]?["source"]?["path"]?.GetValue<string>())
             .IsEqualTo(newPath);
     }
 
@@ -95,7 +95,7 @@ public class SetupCommandTests {
     public async Task InstallPlugin_CreatesIntermediateDirectories() {
         using var    tmp          = new TempDir();
         var          settingsPath = Path.Combine(tmp.Path, ".claude", "nested", "settings.json");
-        const string marketplace  = "/opt/kapacitor";
+        const string marketplace  = "/opt/kcap";
 
         var result = SetupCommand.InstallPlugin(settingsPath, marketplace);
 
@@ -107,7 +107,7 @@ public class SetupCommandTests {
     public async Task InstallPlugin_MalformedJson_StartsFromScratch() {
         using var    tmp          = new TempDir();
         var          settingsPath = Path.Combine(tmp.Path, "settings.json");
-        const string marketplace  = "/opt/kapacitor";
+        const string marketplace  = "/opt/kcap";
 
         await File.WriteAllTextAsync(settingsPath, "not json {{{");
 
@@ -117,7 +117,7 @@ public class SetupCommandTests {
 
         var root = JsonNode.Parse(await File.ReadAllTextAsync(settingsPath))!.AsObject();
 
-        await Assert.That(root["enabledPlugins"]?["kapacitor@kapacitor"]?.GetValue<bool>() ?? false)
+        await Assert.That(root["enabledPlugins"]?["kcap@kcap"]?.GetValue<bool>() ?? false)
             .IsTrue();
     }
 
@@ -142,7 +142,7 @@ public class SetupCommandTests {
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
-            $"kapacitor-test-{Guid.NewGuid().ToString("N")[..8]}"
+            $"kcap-test-{Guid.NewGuid().ToString("N")[..8]}"
         );
 
         public TempDir() => Directory.CreateDirectory(Path);

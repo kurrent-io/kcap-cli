@@ -18,7 +18,7 @@ public class ClaudeImportSourceTests {
 
     [Test]
     public async Task is_available_when_projects_dir_exists() {
-        var dir = Directory.CreateTempSubdirectory("kapacitor-claude-source-");
+        var dir = Directory.CreateTempSubdirectory("kcap-claude-source-");
         try {
             var src = new ClaudeImportSource(dir.FullName);
             await Assert.That(src.IsAvailable).IsTrue();
@@ -29,7 +29,7 @@ public class ClaudeImportSourceTests {
 
     [Test]
     public async Task is_unavailable_when_projects_dir_missing() {
-        var missing = Path.Combine(Path.GetTempPath(), "kapacitor-claude-source-missing-" + Guid.NewGuid().ToString("N"));
+        var missing = Path.Combine(Path.GetTempPath(), "kcap-claude-source-missing-" + Guid.NewGuid().ToString("N"));
         var src     = new ClaudeImportSource(missing);
         await Assert.That(src.IsAvailable).IsFalse();
     }

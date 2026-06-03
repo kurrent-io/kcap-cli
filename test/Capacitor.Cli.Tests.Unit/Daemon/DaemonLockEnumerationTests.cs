@@ -7,13 +7,13 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 /// union <c>*.lock</c> and <c>*.pid</c> filenames, not just <c>*.lock</c>.
 /// An orphan PID file (no matching lock, e.g. a daemon that stopped via
 /// the AI-78 path before the per-name layout existed) needs to be visible
-/// to <c>kapacitor daemon doctor --clean</c>; previously it was invisible.
+/// to <c>kcap daemon doctor --clean</c>; previously it was invisible.
 /// </summary>
 [NotInParallel(nameof(DaemonLockPaths) + ".OverrideDirectoryForTesting")]
 public class DaemonLockEnumerationTests {
     [Test]
     public async Task EnumerateNames_UnionsLockAndPidFiles() {
-        var dir = Path.Combine(Path.GetTempPath(), "kapacitor-enum-tests", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(Path.GetTempPath(), "kcap-enum-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         DaemonLockPaths.OverrideDirectoryForTesting(dir);
 
@@ -40,7 +40,7 @@ public class DaemonLockEnumerationTests {
 
     [Test]
     public async Task EnumerateNames_DeduplicatesNamesAppearingInBoth() {
-        var dir = Path.Combine(Path.GetTempPath(), "kapacitor-enum-tests", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(Path.GetTempPath(), "kcap-enum-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         DaemonLockPaths.OverrideDirectoryForTesting(dir);
 

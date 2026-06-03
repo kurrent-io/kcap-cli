@@ -59,14 +59,14 @@ public static class TokenStore {
         var path = ProfileTokenPath(profile);
         if (!File.Exists(path)) return null;
         var json = await File.ReadAllTextAsync(path);
-        return JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.StoredTokens);
+        return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.StoredTokens);
     }
 
     public static async Task SaveAsync(string profile, StoredTokens tokens) {
         Directory.CreateDirectory(TokenDir);
         var path     = ProfileTokenPath(profile);
         var tempPath = $"{path}.tmp";
-        await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(tokens, KapacitorJsonContext.Default.StoredTokens));
+        await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(tokens, CapacitorJsonContext.Default.StoredTokens));
         File.Move(tempPath, path, overwrite: true);
 
         if (!OperatingSystem.IsWindows()) {
@@ -94,7 +94,7 @@ public static class TokenStore {
         // Fall back to legacy single-file layout for pre-upgrade installs
         if (!File.Exists(LegacyTokenPath)) return null;
         var json = await File.ReadAllTextAsync(LegacyTokenPath);
-        return JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.StoredTokens);
+        return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.StoredTokens);
     }
 
     public static async Task SaveAsync(StoredTokens tokens) {
@@ -148,12 +148,12 @@ public static class TokenStore {
     }
 
     static async Task<StoredTokens?> RefreshGitHubAsync(StoredTokens tokens) {
-        var       baseUrl = AppConfig.ResolvedServerUrl ?? Environment.GetEnvironmentVariable("KAPACITOR_URL") ?? "http://localhost:5108";
+        var       baseUrl = AppConfig.ResolvedServerUrl ?? Environment.GetEnvironmentVariable("KCAP_URL") ?? "http://localhost:5108";
         using var http    = new HttpClient();
 
         var requestBody = JsonSerializer.Serialize(
             new() { AccessToken = tokens.AccessToken },
-            KapacitorJsonContext.Default.RefreshTokenRequest
+            CapacitorJsonContext.Default.RefreshTokenRequest
         );
         var payload = new StringContent(requestBody, System.Text.Encoding.UTF8, "application/json");
 
@@ -164,7 +164,7 @@ public static class TokenStore {
                 return null;
             }
 
-            var json = await response.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.TokenExchangeResponse);
+            var json = await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.TokenExchangeResponse);
 
             if (json is null) {
                 return null;
@@ -201,7 +201,7 @@ public static class TokenStore {
             return null;
         }
 
-        var json = (await response.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.Auth0TokenResponse))!;
+        var json = (await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.Auth0TokenResponse))!;
 
         var refreshed = tokens with {
             AccessToken = json.AccessToken,

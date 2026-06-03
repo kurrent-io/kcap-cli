@@ -8,21 +8,21 @@ public class PrResolutionTests {
 
     [Test]
     public async Task Tool_arg_shorthand_wins_over_session_default() {
-        var args = new JsonObject { ["pr"] = "kurrent-io/kapacitor#42" };
+        var args = new JsonObject { ["pr"] = "kurrent-io/kcap#42" };
 
         var result = PrResolution.Resolve(args, SessionDefault);
 
-        await Assert.That(result.Identity).IsEqualTo(new PrIdentity("kurrent-io", "kapacitor", 42));
+        await Assert.That(result.Identity).IsEqualTo(new PrIdentity("kurrent-io", "kcap", 42));
         await Assert.That(result.Error).IsNull();
     }
 
     [Test]
     public async Task Tool_arg_url_form_is_parsed() {
-        var args = new JsonObject { ["pr"] = "https://github.com/kurrent-io/kapacitor-server/pull/717" };
+        var args = new JsonObject { ["pr"] = "https://github.com/kurrent-io/kcap-server/pull/717" };
 
         var result = PrResolution.Resolve(args, sessionDefault: null);
 
-        await Assert.That(result.Identity).IsEqualTo(new PrIdentity("kurrent-io", "kapacitor-server", 717));
+        await Assert.That(result.Identity).IsEqualTo(new PrIdentity("kurrent-io", "kcap-server", 717));
     }
 
     [Test]
@@ -59,7 +59,7 @@ public class PrResolutionTests {
 
         await Assert.That(result.Identity).IsNull();
         await Assert.That(result.Error!).Contains("Pass `pr` as a tool argument");
-        await Assert.That(result.Error!).DoesNotContain("kapacitor review");
+        await Assert.That(result.Error!).DoesNotContain("kcap review");
     }
 
     [Test]

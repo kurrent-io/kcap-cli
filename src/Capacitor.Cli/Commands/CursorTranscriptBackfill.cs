@@ -89,7 +89,7 @@ public static class CursorTranscriptBackfill {
             Vendor      = "cursor",
         };
 
-        var json = JsonSerializer.Serialize(batch, KapacitorJsonContext.Default.TranscriptBatch);
+        var json = JsonSerializer.Serialize(batch, CapacitorJsonContext.Default.TranscriptBatch);
 
         HttpResponseMessage? resp2 = null;
 

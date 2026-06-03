@@ -440,7 +440,7 @@ public class LocalPermissionBridgeTests {
             await bridge.StartAsync(CancellationToken.None);
 
             // Simulate the URL that PermissionRequestCommand builds:
-            // {KAPACITOR_DAEMON_URL}/claude/permission-request
+            // {KCAP_DAEMON_URL}/claude/permission-request
             var       targetUrl = $"{bridge.BaseUrl}/claude/permission-request";
             using var client    = CreateClient();
             using var response  = await client.PostAsync(targetUrl, JsonContent.Create(new { session_id = "abc", tool_name = "Bash" }));

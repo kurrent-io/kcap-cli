@@ -1,9 +1,9 @@
-kapacitor codex-hook — Codex hooks dispatcher (internal — used by ~/.codex/hooks.json)
+kcap codex-hook — Codex hooks dispatcher (internal — used by ~/.codex/hooks.json)
 
-Usage: kapacitor codex-hook < <hook-payload-json>
+Usage: kcap codex-hook < <hook-payload-json>
 
 Reads a Codex hook payload from stdin, branches on `hook_event_name`, and
-forwards to the Capacitor server. Wired via `kapacitor plugin install --codex`.
+forwards to the Capacitor server. Wired via `kcap plugin install --codex`.
 
 Hook events handled (Codex event → server route):
   SessionStart        → POST /hooks/session-start/codex (also spawns watcher)
@@ -15,7 +15,7 @@ Hook events handled (Codex event → server route):
   PreToolUse          → swallowed (informational; no server route in v1)
   PostToolUse         → swallowed (informational; no server route in v1)
 
-This command is not intended to be invoked directly. Use `kapacitor plugin
+This command is not intended to be invoked directly. Use `kcap plugin
 install --codex` to register it via Codex's hooks framework.
 
 Daemon-bridge mode

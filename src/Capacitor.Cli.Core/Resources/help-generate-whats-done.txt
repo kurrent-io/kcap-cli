@@ -1,6 +1,6 @@
-kapacitor generate-whats-done — Generate what's-done summary
+kcap generate-whats-done — Generate what's-done summary
 
-Usage: kapacitor generate-whats-done <sessionId> [--codex]
+Usage: kcap generate-whats-done <sessionId> [--codex]
 
 Arguments:
   sessionId               Session ID (required)

@@ -5,37 +5,37 @@ namespace Capacitor.Cli.Tests.Unit;
 public class PrRefParserTests {
     [Test]
     public async Task Shorthand_form_parses() {
-        var ok = PrRefParser.TryParse("kurrent-io/kapacitor-cli#101", out var owner, out var repo, out var pr);
+        var ok = PrRefParser.TryParse("kurrent-io/kcap-cli#101", out var owner, out var repo, out var pr);
 
         await Assert.That(ok).IsTrue();
         await Assert.That(owner).IsEqualTo("kurrent-io");
-        await Assert.That(repo).IsEqualTo("kapacitor-cli");
+        await Assert.That(repo).IsEqualTo("kcap-cli");
         await Assert.That(pr).IsEqualTo(101);
     }
 
     [Test]
     public async Task Plain_url_parses() {
-        var ok = PrRefParser.TryParse("https://github.com/kurrent-io/kapacitor-cli/pull/101", out var owner, out var repo, out var pr);
+        var ok = PrRefParser.TryParse("https://github.com/kurrent-io/kcap-cli/pull/101", out var owner, out var repo, out var pr);
 
         await Assert.That(ok).IsTrue();
         await Assert.That(owner).IsEqualTo("kurrent-io");
-        await Assert.That(repo).IsEqualTo("kapacitor-cli");
+        await Assert.That(repo).IsEqualTo("kcap-cli");
         await Assert.That(pr).IsEqualTo(101);
     }
 
     [Test]
     public async Task Url_with_query_parses() {
-        var ok = PrRefParser.TryParse("https://github.com/kurrent-io/kapacitor-cli/pull/101?diff=split", out var owner, out var repo, out var pr);
+        var ok = PrRefParser.TryParse("https://github.com/kurrent-io/kcap-cli/pull/101?diff=split", out var owner, out var repo, out var pr);
 
         await Assert.That(ok).IsTrue();
         await Assert.That(owner).IsEqualTo("kurrent-io");
-        await Assert.That(repo).IsEqualTo("kapacitor-cli");
+        await Assert.That(repo).IsEqualTo("kcap-cli");
         await Assert.That(pr).IsEqualTo(101);
     }
 
     [Test]
     public async Task Url_with_fragment_parses() {
-        var ok = PrRefParser.TryParse("https://github.com/kurrent-io/kapacitor-cli/pull/101#issuecomment-12345", out var owner, out var repo, out var pr);
+        var ok = PrRefParser.TryParse("https://github.com/kurrent-io/kcap-cli/pull/101#issuecomment-12345", out var owner, out var repo, out var pr);
 
         await Assert.That(ok).IsTrue();
         await Assert.That(pr).IsEqualTo(101);
@@ -43,7 +43,7 @@ public class PrRefParserTests {
 
     [Test]
     public async Task Url_with_trailing_path_parses() {
-        var ok = PrRefParser.TryParse("https://github.com/kurrent-io/kapacitor-cli/pull/101/files", out var owner, out var repo, out var pr);
+        var ok = PrRefParser.TryParse("https://github.com/kurrent-io/kcap-cli/pull/101/files", out var owner, out var repo, out var pr);
 
         await Assert.That(ok).IsTrue();
         await Assert.That(pr).IsEqualTo(101);
@@ -51,11 +51,11 @@ public class PrRefParserTests {
 
     [Test]
     public async Task Input_with_surrounding_whitespace_is_trimmed() {
-        var ok = PrRefParser.TryParse("  kurrent-io/kapacitor-cli#101  ", out var owner, out var repo, out var pr);
+        var ok = PrRefParser.TryParse("  kurrent-io/kcap-cli#101  ", out var owner, out var repo, out var pr);
 
         await Assert.That(ok).IsTrue();
         await Assert.That(owner).IsEqualTo("kurrent-io");
-        await Assert.That(repo).IsEqualTo("kapacitor-cli");
+        await Assert.That(repo).IsEqualTo("kcap-cli");
     }
 
     [Test]

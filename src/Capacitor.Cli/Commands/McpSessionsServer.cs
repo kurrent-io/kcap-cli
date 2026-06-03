@@ -10,7 +10,7 @@ using Capacitor.Cli.Core.Auth;
 namespace Capacitor.Cli.Commands;
 
 static class McpSessionsServer {
-    internal const string NotLoggedInMessage = "Not logged in. Run 'kapacitor login' on the host shell.";
+    internal const string NotLoggedInMessage = "Not logged in. Run 'kcap login' on the host shell.";
 
     public static async Task<int> RunAsync(string baseUrl) {
         var cwdRepoHash = await ResolveCwdRepoHashAsync();
@@ -18,7 +18,7 @@ static class McpSessionsServer {
 
         // Defer the authenticated-client creation until the first tools/call.
         // Under the plugin's auto-register manifest, Claude Code spawns
-        // `kapacitor mcp sessions` for every session, so an eager
+        // `kcap mcp sessions` for every session, so an eager
         // CreateAuthenticatedClientAsync (which does GET /auth/config + token
         // load) would charge every session the network round-trip even when
         // the agent never invokes a sessions tool. initialize / tools/list
@@ -87,7 +87,7 @@ static class McpSessionsServer {
     static string BuildInitializeResponse(JsonNode id) =>
         ToResponse<McpInitResult>(
             id,
-            new("2024-11-05", new(new()), new("kapacitor-sessions", "1.0.0")),
+            new("2024-11-05", new(new()), new("kcap-sessions", "1.0.0")),
             McpJsonContext.Default.McpInitResult
         );
 

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "kcap-review": {
+      "command": "kcap",
+      "args": ["mcp", "review"],
+      "description": "PR review context tools — query implementation session transcripts to understand why code was changed. Pass the target PR as a `pr` argument to each tool (e.g. 'owner/repo#123' or a github.com URL) or run from a branch with an open PR for auto-detection."
+    },
+    "kcap-sessions": {
+      "command": "kcap",
+      "args": ["mcp", "sessions"],
+      "cwd": "${CLAUDE_PROJECT_DIR}"
+    }
+  }
+}

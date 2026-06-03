@@ -26,7 +26,7 @@ public static class UpdateCommand {
         await Console.Out.WriteLineAsync($"Update available: {current} → {latest}");
         await Console.Out.WriteLineAsync();
         await Console.Out.WriteLineAsync("Run:");
-        await Console.Out.WriteLineAsync("  npm update -g @kurrent/kapacitor");
+        await Console.Out.WriteLineAsync("  npm update -g @kurrent/kcap");
 
         return 0;
     }
@@ -46,7 +46,7 @@ public static class UpdateCommand {
             if (latest is not null && current is not null && IsNewer(latest, current)) {
                 await Console.Error.WriteLineAsync();
                 await Console.Error.WriteLineAsync($"Update available: {current} → {latest}");
-                await Console.Error.WriteLineAsync("Run `npm update -g @kurrent/kapacitor` to update");
+                await Console.Error.WriteLineAsync("Run `npm update -g @kurrent/kcap` to update");
             }
         } catch {
             // Best effort — never break the CLI for update checks
@@ -79,10 +79,10 @@ public static class UpdateCommand {
         // Query npm registry
         using var http = new HttpClient();
         http.Timeout = TimeSpan.FromSeconds(5);
-        http.DefaultRequestHeaders.Add("User-Agent", "kapacitor-cli");
+        http.DefaultRequestHeaders.Add("User-Agent", "kcap-cli");
 
         try {
-            var resp = await http.GetAsync("https://registry.npmjs.org/@kurrent/kapacitor/latest");
+            var resp = await http.GetAsync("https://registry.npmjs.org/@kurrent/kcap/latest");
 
             if (!resp.IsSuccessStatusCode) return (null, current);
 

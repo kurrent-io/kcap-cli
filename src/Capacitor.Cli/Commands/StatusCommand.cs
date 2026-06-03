@@ -41,8 +41,8 @@ public static class StatusCommand {
 
             await Console.Out.WriteLineAsync(
                 rawTokens is not null
-                    ? $"{rawTokens.GitHubUsername} ({rawTokens.Provider}) ✗ token expired (run: kapacitor login)"
-                    : "not authenticated (run: kapacitor login)"
+                    ? $"{rawTokens.GitHubUsername} ({rawTokens.Provider}) ✗ token expired (run: kcap login)"
+                    : "not authenticated (run: kcap login)"
             );
         }
 
@@ -60,9 +60,9 @@ public static class StatusCommand {
         await Console.Out.WriteLineAsync(string.Join("  ", parts));
 
         // Daemon — AI-630: read per-name PID files under
-        // ~/.config/kapacitor/daemons/ instead of the pre-AI-630 singleton
-        // at ~/.config/kapacitor/agent.pid. The top-level `kapacitor status`
-        // must agree with `kapacitor daemon status`; previously this
+        // ~/.config/kcap/daemons/ instead of the pre-AI-630 singleton
+        // at ~/.config/kcap/agent.pid. The top-level `kcap status`
+        // must agree with `kcap daemon status`; previously this
         // command kept saying "not running" while `daemon status` reported
         // a healthy daemon because new daemons no longer write the legacy
         // singleton.
@@ -121,7 +121,7 @@ public static class StatusCommand {
                 await Console.Out.WriteLineAsync(
                     entries.Count == 0
                         ? "not running"
-                        : "not running (stale PID files; `kapacitor daemon doctor --clean` to remove)"
+                        : "not running (stale PID files; `kcap daemon doctor --clean` to remove)"
                 );
 
                 return;
@@ -140,7 +140,7 @@ public static class StatusCommand {
 
     /// <summary>
     /// True iff <paramref name="settingsPath"/> exists and has
-    /// <c>enabledPlugins["kapacitor@kapacitor"] == true</c>.
+    /// <c>enabledPlugins["kcap@kcap"] == true</c>.
     /// </summary>
     public static bool IsClaudePluginInstalled(string settingsPath) {
         try {
@@ -148,7 +148,7 @@ public static class StatusCommand {
             if (JsonNode.Parse(File.ReadAllText(settingsPath)) is not JsonObject root) return false;
             if (root["enabledPlugins"] is not JsonObject enabled) return false;
 
-            return enabled["kapacitor@kapacitor"]?.GetValue<bool>() == true;
+            return enabled["kcap@kcap"]?.GetValue<bool>() == true;
         } catch {
             return false;
         }
@@ -156,7 +156,7 @@ public static class StatusCommand {
 
     /// <summary>
     /// True iff <paramref name="hooksPath"/> exists and any hook entry under any
-    /// event references the <c>kapacitor codex-hook</c> command.
+    /// event references the <c>kcap codex-hook</c> command.
     /// </summary>
     public static bool IsCodexHooksInstalled(string hooksPath) {
         try {
@@ -167,7 +167,7 @@ public static class StatusCommand {
             foreach (var (_, value) in hooks) {
                 if (value is not JsonArray entries) continue;
 
-                if (entries.Any(CodexHooksParser.EntryReferencesKapacitorCodexHook)) {
+                if (entries.Any(CodexHooksParser.EntryReferencesCapacitorCodexHook)) {
                     return true;
                 }
             }

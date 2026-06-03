@@ -86,7 +86,7 @@ public class PathExclusionTests {
 
     [Test]
     public async Task IsExcluded_resolves_symlinked_entry_against_real_cwd() {
-        // User runs `kapacitor ignore /symlink-to-real` but session cwd reports
+        // User runs `kcap ignore /symlink-to-real` but session cwd reports
         // the resolved path. Both sides must normalize to the same target.
         using var real = TempDir.Create();
         using var link = TempSymlink.To(real.Path);

@@ -93,7 +93,7 @@ public class EvalQuestionCatalogClientTests : IDisposable {
 
         await Assert.That(result).IsNull();
         await Assert.That(observer.FailureMessages).Count().IsEqualTo(1);
-        await Assert.That(observer.FailureMessages[0]).IsEqualTo("authentication failed — run 'kapacitor login' to re-authenticate");
+        await Assert.That(observer.FailureMessages[0]).IsEqualTo("authentication failed — run 'kcap login' to re-authenticate");
     }
 
     [Test]

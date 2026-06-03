@@ -73,9 +73,9 @@ internal static class TranscriptFileClassification {
         var meta    = isCodex ? ImportCommand.ExtractCodexSessionMetadata(filePath) : ImportCommand.ExtractSessionMetadata(filePath);
 
         switch (isCodex) {
-            // Short-circuit: kapacitor's own sub-sessions (title / what's-done) never get imported.
+            // Short-circuit: kcap's own sub-sessions (title / what's-done) never get imported.
             // Codex rollouts have no analog, so the check is Claude-only.
-            case false when TitleGenerator.IsKapacitorSubSession(filePath):
+            case false when TitleGenerator.IsCapacitorSubSession(filePath):
                 return new() {
                     SessionId  = sessionId,
                     FilePath   = filePath,

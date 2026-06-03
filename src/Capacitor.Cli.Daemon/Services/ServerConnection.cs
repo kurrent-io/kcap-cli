@@ -78,7 +78,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             // healthy while it drops every invocation.
             .ConfigureLogging(b => b.Services.AddSingleton(loggerFactory))
             .AddJsonProtocol(options => {
-                    options.PayloadSerializerOptions.TypeInfoResolverChain.Insert(0, KapacitorJsonContext.Default);
+                    options.PayloadSerializerOptions.TypeInfoResolverChain.Insert(0, CapacitorJsonContext.Default);
                     options.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
                 }
             )
@@ -335,7 +335,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// The result carries the resolved <c>SessionId</c> (the daemon only knows
     /// agentId; the server resolves the link) plus a <c>GenerateWhatsDone</c> flag.
     /// When the flag is true and SessionId is non-null, the daemon should spawn
-    /// <c>kapacitor generate-whats-done {sessionId}</c> locally — matching the
+    /// <c>kcap generate-whats-done {sessionId}</c> locally — matching the
     /// behaviour of the CLI session-end handler for the local-claude case.
     /// </summary>
     public virtual Task<EndAgentSessionResult> EndAgentSessionAsync(string agentId, string reason)
@@ -428,7 +428,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
                 try {
                     var eventType = evt.Event.GetType().Name;
-                    var data      = JsonSerializer.SerializeToNode(evt.Event, evt.Event.GetType(), KapacitorJsonContext.Default)!.AsObject();
+                    var data      = JsonSerializer.SerializeToNode(evt.Event, evt.Event.GetType(), CapacitorJsonContext.Default)!.AsObject();
 
                     var payloadObj = new JsonObject {
                         ["event_type"] = eventType,

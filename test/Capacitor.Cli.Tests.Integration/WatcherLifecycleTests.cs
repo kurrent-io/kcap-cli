@@ -2,17 +2,17 @@ namespace Capacitor.Cli.Tests.Integration;
 
 [NotInParallel]
 public class WatcherLifecycleTests {
-    static readonly string TempDir = Path.Combine(Path.GetTempPath(), "kapacitor-watcher-tests");
+    static readonly string TempDir = Path.Combine(Path.GetTempPath(), "kcap-watcher-tests");
 
     [Before(Class)]
     public static void SetUp() {
         Directory.CreateDirectory(TempDir);
-        Environment.SetEnvironmentVariable("KAPACITOR_WATCHER_DIR", TempDir);
+        Environment.SetEnvironmentVariable("KCAP_WATCHER_DIR", TempDir);
     }
 
     [After(Class)]
     public static void TearDown() {
-        Environment.SetEnvironmentVariable("KAPACITOR_WATCHER_DIR", null);
+        Environment.SetEnvironmentVariable("KCAP_WATCHER_DIR", null);
 
         try { Directory.Delete(TempDir, recursive: true); } catch {
             /* best effort */

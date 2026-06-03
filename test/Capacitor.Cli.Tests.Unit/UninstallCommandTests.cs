@@ -6,16 +6,16 @@ namespace Capacitor.Cli.Tests.Unit;
 
 // HomeEnvVarMutation: uninstall reads HOME via PathHelpers.HomeDirectory to
 // resolve every user-level path (~/.claude, ~/.codex, ~/.cursor, ~/.agents).
-// ConfigDirEnvVar: uninstall reads KAPACITOR_CONFIG_DIR fresh on every call,
+// ConfigDirEnvVar: uninstall reads KCAP_CONFIG_DIR fresh on every call,
 // so we mutate it per-test to point at the test's temp dir without disturbing
 // the assembly-wide value pinned by RepoPathStoreGlobalSetup.
 [NotInParallel(["HomeEnvVarMutation", "ConfigDirEnvVar", "CwdMutation"])]
 public class UninstallCommandTests {
     [Test]
-    public async Task User_level_uninstall_removes_kapacitor_entries_and_preserves_user_data() {
+    public async Task User_level_uninstall_removes_kcap_entries_and_preserves_user_data() {
         await using var fixture = await Fixture.CreateAsync();
 
-        // Seed Claude user settings with kapacitor + user-authored content.
+        // Seed Claude user settings with kcap + user-authored content.
         var claudeDir = Path.Combine(fixture.Home, ".claude");
         Directory.CreateDirectory(claudeDir);
         var claudeSettings = Path.Combine(claudeDir, "settings.json");
@@ -23,17 +23,17 @@ public class UninstallCommandTests {
             {
               "userKey": "must-survive",
               "extraKnownMarketplaces": {
-                "kapacitor":  { "source": { "source": "directory", "path": "/p" } },
+                "kcap":  { "source": { "source": "directory", "path": "/p" } },
                 "userMarket": { "source": { "source": "directory", "path": "/u" } }
               },
-              "enabledPlugins": { "kapacitor@kapacitor": true, "user@market": true }
+              "enabledPlugins": { "kcap@kcap": true, "user@market": true }
             }
             """);
         await File.WriteAllTextAsync(
             Path.Combine(claudeDir, ClaudePluginInstaller.MarkerFileName),
-            KapacitorVersion.Current());
+            CapacitorVersion.Current());
 
-        // Codex user hooks with a non-kapacitor entry alongside kapacitor.
+        // Codex user hooks with a non-kcap entry alongside kcap.
         var codexDir = Path.Combine(fixture.Home, ".codex");
         Directory.CreateDirectory(codexDir);
         var codexHooks = Path.Combine(codexDir, "hooks.json");
@@ -42,7 +42,7 @@ public class UninstallCommandTests {
               "hooks": {
                 "SessionStart": [
                   { "hooks": [{ "type": "command", "command": "user-script", "timeout": 5 }] },
-                  { "hooks": [{ "type": "command", "command": "kapacitor codex-hook", "timeout": 30 }] }
+                  { "hooks": [{ "type": "command", "command": "kcap codex-hook", "timeout": 30 }] }
                 ]
               }
             }
@@ -58,7 +58,7 @@ public class UninstallCommandTests {
               "hooks": {
                 "sessionStart": [
                   { "command": "user-script" },
-                  { "command": "kapacitor hook --cursor" }
+                  { "command": "kcap hook --cursor" }
                 ]
               }
             }
@@ -68,7 +68,7 @@ public class UninstallCommandTests {
         var skillsDir = Path.Combine(fixture.Home, ".agents", "skills");
         Directory.CreateDirectory(skillsDir);
         foreach (var name in AgentsSkillsInstaller.SourceNames) {
-            Directory.CreateDirectory(Path.Combine(skillsDir, $"kapacitor-{name}"));
+            Directory.CreateDirectory(Path.Combine(skillsDir, $"kcap-{name}"));
         }
         var userSkill = Path.Combine(skillsDir, "user-authored");
         Directory.CreateDirectory(userSkill);
@@ -80,30 +80,30 @@ public class UninstallCommandTests {
         var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes"]);
         await Assert.That(exit).IsEqualTo(0);
 
-        // Claude: kapacitor entries gone, user entries preserved, marker removed.
+        // Claude: kcap entries gone, user entries preserved, marker removed.
         var claudeRoot = JsonNode.Parse(await File.ReadAllTextAsync(claudeSettings))!.AsObject();
         await Assert.That(claudeRoot["userKey"]!.GetValue<string>()).IsEqualTo("must-survive");
-        await Assert.That(claudeRoot["enabledPlugins"]!["kapacitor@kapacitor"]).IsNull();
+        await Assert.That(claudeRoot["enabledPlugins"]!["kcap@kcap"]).IsNull();
         await Assert.That(claudeRoot["enabledPlugins"]!["user@market"]!.GetValue<bool>()).IsTrue();
-        await Assert.That(claudeRoot["extraKnownMarketplaces"]!["kapacitor"]).IsNull();
+        await Assert.That(claudeRoot["extraKnownMarketplaces"]!["kcap"]).IsNull();
         await Assert.That(claudeRoot["extraKnownMarketplaces"]!["userMarket"]).IsNotNull();
         await Assert.That(File.Exists(Path.Combine(claudeDir, ClaudePluginInstaller.MarkerFileName))).IsFalse();
 
-        // Codex: kapacitor entry gone, user entry preserved.
+        // Codex: kcap entry gone, user entry preserved.
         var codexRoot = JsonNode.Parse(await File.ReadAllTextAsync(codexHooks))!.AsObject();
         var sessionStart = codexRoot["hooks"]!["SessionStart"]!.AsArray();
         await Assert.That(sessionStart.Count).IsEqualTo(1);
         await Assert.That(sessionStart[0]!["hooks"]![0]!["command"]!.GetValue<string>()).IsEqualTo("user-script");
 
-        // Cursor: kapacitor entry gone, user entry preserved.
+        // Cursor: kcap entry gone, user entry preserved.
         var cursorRoot   = JsonNode.Parse(await File.ReadAllTextAsync(cursorHooks))!.AsObject();
         var sessionStart2 = cursorRoot["hooks"]!["sessionStart"]!.AsArray();
         await Assert.That(sessionStart2.Count).IsEqualTo(1);
         await Assert.That(sessionStart2[0]!["command"]!.GetValue<string>()).IsEqualTo("user-script");
 
-        // Skills: kapacitor-* folders removed, user-authored folder intact.
+        // Skills: kcap-* folders removed, user-authored folder intact.
         foreach (var name in AgentsSkillsInstaller.SourceNames) {
-            await Assert.That(Directory.Exists(Path.Combine(skillsDir, $"kapacitor-{name}"))).IsFalse();
+            await Assert.That(Directory.Exists(Path.Combine(skillsDir, $"kcap-{name}"))).IsFalse();
         }
         await Assert.That(Directory.Exists(userSkill)).IsTrue();
 
@@ -119,7 +119,7 @@ public class UninstallCommandTests {
         Directory.CreateDirectory(claudeDir);
         var claudeSettings = Path.Combine(claudeDir, "settings.json");
         await File.WriteAllTextAsync(claudeSettings, """
-            {"enabledPlugins": {"kapacitor@kapacitor": true}}
+            {"enabledPlugins": {"kcap@kcap": true}}
             """);
 
         var sentinel = Path.Combine(fixture.ConfigDir, "profiles.json");
@@ -129,7 +129,7 @@ public class UninstallCommandTests {
         await Assert.That(exit).IsEqualTo(0);
 
         var root = JsonNode.Parse(await File.ReadAllTextAsync(claudeSettings))!.AsObject();
-        await Assert.That(root["enabledPlugins"]!["kapacitor@kapacitor"]).IsNull();
+        await Assert.That(root["enabledPlugins"]!["kcap@kcap"]).IsNull();
 
         await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
         await Assert.That(await File.ReadAllTextAsync(sentinel)).Contains("keep");
@@ -141,7 +141,7 @@ public class UninstallCommandTests {
 
         // Fake project: a temp dir with a .git directory makes GitRepository.FindRoot
         // return it as the working tree root.
-        var projectDir = Directory.CreateTempSubdirectory("kapacitor-uninstall-project-");
+        var projectDir = Directory.CreateTempSubdirectory("kcap-uninstall-project-");
         Directory.CreateDirectory(Path.Combine(projectDir.FullName, ".git"));
 
         var projectClaude = Path.Combine(projectDir.FullName, ".claude", "settings.local.json");
@@ -149,7 +149,7 @@ public class UninstallCommandTests {
         await File.WriteAllTextAsync(projectClaude, """
             {
               "userLocal": "keep",
-              "enabledPlugins": { "kapacitor@kapacitor": true }
+              "enabledPlugins": { "kcap@kcap": true }
             }
             """);
 
@@ -160,7 +160,7 @@ public class UninstallCommandTests {
               "hooks": {
                 "SessionStart": [
                   { "hooks": [{ "type": "command", "command": "user-script", "timeout": 5 }] },
-                  { "hooks": [{ "type": "command", "command": "kapacitor codex-hook", "timeout": 30 }] }
+                  { "hooks": [{ "type": "command", "command": "kcap codex-hook", "timeout": 30 }] }
                 ]
               }
             }
@@ -175,7 +175,7 @@ public class UninstallCommandTests {
 
             var claudeRoot = JsonNode.Parse(await File.ReadAllTextAsync(projectClaude))!.AsObject();
             await Assert.That(claudeRoot["userLocal"]!.GetValue<string>()).IsEqualTo("keep");
-            await Assert.That(claudeRoot["enabledPlugins"]!["kapacitor@kapacitor"]).IsNull();
+            await Assert.That(claudeRoot["enabledPlugins"]!["kcap@kcap"]).IsNull();
 
             var codexRoot    = JsonNode.Parse(await File.ReadAllTextAsync(projectCodex))!.AsObject();
             var sessionStart = codexRoot["hooks"]!["SessionStart"]!.AsArray();
@@ -193,7 +193,7 @@ public class UninstallCommandTests {
         await using var fixture = await Fixture.CreateAsync();
 
         // A scratch dir with NO .git anywhere up the tree.
-        var noRepoDir = Directory.CreateTempSubdirectory("kapacitor-uninstall-norepo-");
+        var noRepoDir = Directory.CreateTempSubdirectory("kcap-uninstall-norepo-");
         var originalCwd = Environment.CurrentDirectory;
         var originalErr = Console.Error;
         var capturedErr = new StringWriter();
@@ -213,35 +213,35 @@ public class UninstallCommandTests {
     }
 
     [Test]
-    public async Task Marker_only_install_is_purged_even_when_json_has_no_kapacitor_entries() {
+    public async Task Marker_only_install_is_purged_even_when_json_has_no_kcap_entries() {
         // Regression for the "marker survives manual JSON edit" leak: the
         // upstream plugin removers delete the marker only when JSON entries
-        // changed. If a user removed kapacitor entries by hand earlier, the
+        // changed. If a user removed kcap entries by hand earlier, the
         // marker survives and IsInstalled keeps returning true. uninstall
         // must always nuke the markers.
         await using var fixture = await Fixture.CreateAsync();
 
         var claudeDir = Path.Combine(fixture.Home, ".claude");
         Directory.CreateDirectory(claudeDir);
-        // settings.json present but no kapacitor entries.
+        // settings.json present but no kcap entries.
         await File.WriteAllTextAsync(Path.Combine(claudeDir, "settings.json"), """{"userKey":"x"}""");
         await File.WriteAllTextAsync(
             Path.Combine(claudeDir, ClaudePluginInstaller.MarkerFileName),
-            KapacitorVersion.Current());
+            CapacitorVersion.Current());
 
         var codexDir = Path.Combine(fixture.Home, ".codex");
         Directory.CreateDirectory(codexDir);
         await File.WriteAllTextAsync(Path.Combine(codexDir, "hooks.json"), """{"hooks":{}}""");
         await File.WriteAllTextAsync(
             Path.Combine(codexDir, CodexHooksInstaller.MarkerFileName),
-            KapacitorVersion.Current());
+            CapacitorVersion.Current());
 
         var cursorDir = Path.Combine(fixture.Home, ".cursor");
         Directory.CreateDirectory(cursorDir);
         await File.WriteAllTextAsync(Path.Combine(cursorDir, "hooks.json"), """{"version":1,"hooks":{}}""");
         await File.WriteAllTextAsync(
             Path.Combine(cursorDir, CursorHooksInstaller.MarkerFileName),
-            KapacitorVersion.Current());
+            CapacitorVersion.Current());
 
         var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes", "--keep-config"]);
         await Assert.That(exit).IsEqualTo(0);
@@ -252,10 +252,10 @@ public class UninstallCommandTests {
     }
 
     [Test]
-    public async Task Sweep_removes_kapacitor_prefixed_skill_folders_not_in_current_source_list() {
+    public async Task Sweep_removes_kcap_prefixed_skill_folders_not_in_current_source_list() {
         // Regression for the "retired/renamed skill folder survives" leak:
         // AgentsSkillsInstaller.Remove uses the current SourceNames list, so
-        // a kapacitor-* folder from an older release isn't matched. uninstall
+        // a kcap-* folder from an older release isn't matched. uninstall
         // must sweep the directory for our prefix to catch those.
         await using var fixture = await Fixture.CreateAsync();
 
@@ -265,8 +265,8 @@ public class UninstallCommandTests {
         // A skill from the current list (handled by Remove) and a retired one
         // (only handled by the sweep). Plus a user-authored folder that must
         // survive both.
-        var currentSkill = Path.Combine(skillsDir, $"kapacitor-{AgentsSkillsInstaller.SourceNames[0]}");
-        var retiredSkill = Path.Combine(skillsDir, "kapacitor-retired-from-v0.42");
+        var currentSkill = Path.Combine(skillsDir, $"kcap-{AgentsSkillsInstaller.SourceNames[0]}");
+        var retiredSkill = Path.Combine(skillsDir, "kcap-retired-from-v0.42");
         var userSkill    = Path.Combine(skillsDir, "user-authored");
         Directory.CreateDirectory(currentSkill);
         Directory.CreateDirectory(retiredSkill);
@@ -275,7 +275,7 @@ public class UninstallCommandTests {
         // Legacy Codex skills dir: same story.
         var legacyDir = Path.Combine(fixture.Home, ".codex", "skills");
         Directory.CreateDirectory(legacyDir);
-        var legacyRetired = Path.Combine(legacyDir, "kapacitor-also-retired");
+        var legacyRetired = Path.Combine(legacyDir, "kcap-also-retired");
         Directory.CreateDirectory(legacyRetired);
 
         var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes", "--keep-config"]);
@@ -290,7 +290,7 @@ public class UninstallCommandTests {
     [Test]
     public async Task Config_dir_is_preserved_when_user_level_steps_fail() {
         // Regression for the "discarded return codes" issue: when a step
-        // returns non-zero, uninstall must NOT delete ~/.config/kapacitor —
+        // returns non-zero, uninstall must NOT delete ~/.config/kcap —
         // doing so destroys the only state that lets the user re-run and
         // finish, and it would silently report success.
         //
@@ -302,14 +302,14 @@ public class UninstallCommandTests {
         await using var fixture = await Fixture.CreateAsync();
 
         // Force PluginCommand's Claude remove to return 1 by leaving a valid
-        // kapacitor entry behind a read-only file: File.Exists passes, JSON
+        // kcap entry behind a read-only file: File.Exists passes, JSON
         // parses cleanly, then File.WriteAllText hits UnauthorizedAccessException
         // — which the remover's catch translates into exit code 1.
         var claudeDir = Path.Combine(fixture.Home, ".claude");
         Directory.CreateDirectory(claudeDir);
         var settingsPath = Path.Combine(claudeDir, "settings.json");
         await File.WriteAllTextAsync(settingsPath, """
-            {"enabledPlugins": {"kapacitor@kapacitor": true}}
+            {"enabledPlugins": {"kcap@kcap": true}}
             """);
         File.SetUnixFileMode(settingsPath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
 
@@ -342,7 +342,7 @@ public class UninstallCommandTests {
         Directory.CreateDirectory(cursorDir);
         var hooksPath = Path.Combine(cursorDir, "hooks.json");
         await File.WriteAllTextAsync(hooksPath, """
-            {"version":1,"hooks":{"sessionStart":[{"command":"kapacitor hook --cursor"}]}}
+            {"version":1,"hooks":{"sessionStart":[{"command":"kcap hook --cursor"}]}}
             """);
         File.SetUnixFileMode(hooksPath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
 
@@ -359,8 +359,8 @@ public class UninstallCommandTests {
 
     [Test]
     public async Task Sweep_failure_propagates_to_exit_code() {
-        // SweepKapacitorPrefixedDirs previously logged Directory.Delete errors
-        // but never flipped hadFailures, so a stuck kapacitor-* folder under
+        // SweepCapacitorPrefixedDirs previously logged Directory.Delete errors
+        // but never flipped hadFailures, so a stuck kcap-* folder under
         // ~/.agents/skills/ would leave uninstall claiming success.
         if (OperatingSystem.IsWindows()) return;
 
@@ -368,7 +368,7 @@ public class UninstallCommandTests {
 
         var skillsDir = Path.Combine(fixture.Home, ".agents", "skills");
         Directory.CreateDirectory(skillsDir);
-        Directory.CreateDirectory(Path.Combine(skillsDir, "kapacitor-stuck"));
+        Directory.CreateDirectory(Path.Combine(skillsDir, "kcap-stuck"));
 
         // Strip write permission on the parent. Directory.Delete on a child
         // needs write+exec on the parent on every Unix; without write the
@@ -398,29 +398,29 @@ public class UninstallCommandTests {
         public string? OriginalConfigDir { get; init; }
 
         public static Task<Fixture> CreateAsync() {
-            var home      = Directory.CreateTempSubdirectory("kapacitor-uninstall-home-").FullName;
-            var configDir = Path.Combine(home, ".config", "kapacitor");
+            var home      = Directory.CreateTempSubdirectory("kcap-uninstall-home-").FullName;
+            var configDir = Path.Combine(home, ".config", "kcap");
             Directory.CreateDirectory(configDir);
 
             var f = new Fixture {
                 Home              = home,
                 ConfigDir         = configDir,
                 OriginalHome      = Environment.GetEnvironmentVariable("HOME"),
-                OriginalConfigDir = Environment.GetEnvironmentVariable("KAPACITOR_CONFIG_DIR"),
+                OriginalConfigDir = Environment.GetEnvironmentVariable("KCAP_CONFIG_DIR"),
             };
 
             Environment.SetEnvironmentVariable("HOME", home);
             // Pin the config dir under the test home so uninstall's
             // Directory.Delete only touches the test's temp tree, never the
             // assembly-wide config dir pinned by RepoPathStoreGlobalSetup.
-            Environment.SetEnvironmentVariable("KAPACITOR_CONFIG_DIR", configDir);
+            Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", configDir);
 
             return Task.FromResult(f);
         }
 
         public ValueTask DisposeAsync() {
             Environment.SetEnvironmentVariable("HOME", OriginalHome);
-            Environment.SetEnvironmentVariable("KAPACITOR_CONFIG_DIR", OriginalConfigDir);
+            Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", OriginalConfigDir);
             try { Directory.Delete(Home, recursive: true); } catch { /* best effort */ }
             return ValueTask.CompletedTask;
         }

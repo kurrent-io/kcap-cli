@@ -140,7 +140,7 @@ static class McpJudgeServer {
     static string BuildInitializeResponse(JsonNode id) =>
         ToResponse<McpInitResult>(
             id,
-            new("2024-11-05", new(new()), new("kapacitor-judge", "1.0.0")),
+            new("2024-11-05", new(new()), new("kcap-judge", "1.0.0")),
             McpJsonContext.Default.McpInitResult
         );
 

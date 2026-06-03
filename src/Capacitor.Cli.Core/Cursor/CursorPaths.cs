@@ -55,10 +55,10 @@ public sealed record CursorPaths(string UserDir, string WorkspaceStorageDir) {
         return Path.Combine(home, ".cursor", "hooks.json");
     }
 
-    /// <summary>Hook-event spool directory at <c>~/.cursor/kapacitor-pending/</c>.</summary>
+    /// <summary>Hook-event spool directory at <c>~/.cursor/kcap-pending/</c>.</summary>
     public static string SpoolDir(string? home = null) {
         home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Combine(home, ".cursor", "kapacitor-pending");
+        return Path.Combine(home, ".cursor", "kcap-pending");
     }
 
     /// <summary>

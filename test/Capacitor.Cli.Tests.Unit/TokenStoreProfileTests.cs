@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// Tests for per-profile TokenStore methods.
 ///
 /// PathHelpers.ConfigDir is static readonly — captured once at class-load time from
-/// KAPACITOR_CONFIG_DIR. RepoPathStoreGlobalSetup.[Before(Assembly)] sets that env var
+/// KCAP_CONFIG_DIR. RepoPathStoreGlobalSetup.[Before(Assembly)] sets that env var
 /// to a shared temp dir before PathHelpers is first touched, so all path-based tests
 /// in this process share that same base dir.
 ///
@@ -57,7 +57,7 @@ public class TokenStoreProfileTests {
 
         await File.WriteAllTextAsync(
             LegacyPath,
-            System.Text.Json.JsonSerializer.Serialize(MakeTokens("legacy"), KapacitorJsonContext.Default.StoredTokens)
+            System.Text.Json.JsonSerializer.Serialize(MakeTokens("legacy"), CapacitorJsonContext.Default.StoredTokens)
         );
 
         await TokenStore.SaveAsync("acme", MakeTokens("alice"));

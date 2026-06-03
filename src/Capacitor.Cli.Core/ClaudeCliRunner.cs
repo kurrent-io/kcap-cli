@@ -64,7 +64,7 @@ static class ClaudeCliRunner {
     /// <paramref name="mcpConfigJson"/> and <paramref name="allowedTools"/>
     /// are opt-in for callers that need the model to reach for MCP tools
     /// during the run (today: the DEV-1484 retrospective judge, which
-    /// pulls session details via <c>kapacitor mcp judge</c> instead of
+    /// pulls session details via <c>kcap mcp judge</c> instead of
     /// having the full trace embedded in its prompt). When
     /// <paramref name="mcpConfigJson"/> is supplied, the runner flips out
     /// of the text-only lockdown (<c>--strict-mcp-config</c> / empty
@@ -118,13 +118,13 @@ static class ClaudeCliRunner {
         // leak one directory per eval question under the OS tmp root.
         //
         // A previous implementation reused a single stable dir under
-        // ~/.config/kapacitor/claude-cwd. That kept all transcripts under
+        // ~/.config/kcap/claude-cwd. That kept all transcripts under
         // one ~/.claude/projects/ slug but still allowed ambient context
         // (hooks, plugin sync, auto-memory) to accumulate — and when an
         // ancestor directory happened to contain a CLAUDE.md, it would
         // load into the judge's prompt and push it over the 200K token
         // auto-compact threshold (DEV-1463 eval failures).
-        var workingDir = Path.Combine(Path.GetTempPath(), $"kapacitor-claude-{Guid.NewGuid():N}");
+        var workingDir = Path.Combine(Path.GetTempPath(), $"kcap-claude-{Guid.NewGuid():N}");
         var createdWorkingDir = false;
 
         try {
@@ -172,8 +172,8 @@ static class ClaudeCliRunner {
             UseShellExecute        = false,
             CreateNoWindow         = true,
             Environment = {
-                // Prevent the headless claude session from triggering kapacitor hooks (avoids infinite loop)
-                ["KAPACITOR_SKIP"] = "1"
+                // Prevent the headless claude session from triggering kcap hooks (avoids infinite loop)
+                ["KCAP_SKIP"] = "1"
             }
         };
         psi.Environment.Remove("CLAUDECODE");

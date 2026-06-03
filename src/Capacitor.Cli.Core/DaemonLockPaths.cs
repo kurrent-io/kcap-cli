@@ -7,15 +7,15 @@ namespace Capacitor.Cli.Core;
 ///
 /// <para>The previous layout used singletons at <c>PathHelpers.ConfigPath("agent.pid")</c>
 /// and <c>PathHelpers.ConfigPath("agent.start.lock")</c>. Two daemons with
-/// different <c>KAPACITOR_CONFIG_DIR</c>s (e.g. an Aspire-spawned dev daemon
-/// using <c>.dev/kapacitor</c> alongside a user-launched daemon using
-/// <c>~/.config/kapacitor</c>) wrote to different singletons and never saw
+/// different <c>KCAP_CONFIG_DIR</c>s (e.g. an Aspire-spawned dev daemon
+/// using <c>.dev/kcap</c> alongside a user-launched daemon using
+/// <c>~/.config/kcap</c>) wrote to different singletons and never saw
 /// each other, allowing two daemons under the same name to authenticate as
 /// the same GitHub ID and oscillate the server-side <c>DaemonRegistry</c>
 /// slot. The staging incident that motivated AI-630 was exactly that.</para>
 ///
 /// <para>This helper uses a <b>fixed location</b> under the home directory
-/// (<c>~/.config/kapacitor/daemons/</c>) regardless of <c>KAPACITOR_CONFIG_DIR</c>,
+/// (<c>~/.config/kcap/daemons/</c>) regardless of <c>KCAP_CONFIG_DIR</c>,
 /// so cross-config-dir daemons under the same name now collide on the same
 /// <c>flock</c>. Sanitization is intentionally strict to keep filenames
 /// portable: only <c>[a-z0-9._-]</c> survives, anything else maps to <c>-</c>.</para>
@@ -23,7 +23,7 @@ namespace Capacitor.Cli.Core;
 public static partial class DaemonLockPaths {
     static readonly string DefaultDirectory = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        ".config", "kapacitor", "daemons"
+        ".config", "kcap", "daemons"
     );
 
     static string? _overrideDir;
@@ -68,7 +68,7 @@ public static partial class DaemonLockPaths {
 
     /// <summary>
     /// Path to the CLI-side start lock — the brief critical-section lock the
-    /// <c>kapacitor daemon start</c> supervisor takes around its
+    /// <c>kcap daemon start</c> supervisor takes around its
     /// check-spawn-write-PID sequence. Distinct from <see cref="LockPath"/>,
     /// which the daemon itself holds for its entire lifetime.
     /// </summary>

@@ -67,15 +67,15 @@ public class TitleGeneratorTests {
     }
 
     [Test]
-    public async Task IsKnownKapacitorPrompt_detects_title_prompt() {
+    public async Task IsKnownCapacitorPrompt_detects_title_prompt() {
         var sample = TitleGenerator.TitlePromptPrefix + "trailing content";
 
-        await Assert.That(TitleGenerator.IsKnownKapacitorPrompt(sample)).IsTrue();
+        await Assert.That(TitleGenerator.IsKnownCapacitorPrompt(sample)).IsTrue();
     }
 
     [Test]
-    public async Task IsKnownKapacitorPrompt_rejects_unrelated_text() {
-        await Assert.That(TitleGenerator.IsKnownKapacitorPrompt("hello world")).IsFalse();
+    public async Task IsKnownCapacitorPrompt_rejects_unrelated_text() {
+        await Assert.That(TitleGenerator.IsKnownCapacitorPrompt("hello world")).IsFalse();
     }
 
     [Test]

@@ -44,7 +44,7 @@ internal static class EvalQuestionSelection {
             } else if (questionsById.ContainsKey(token)) {
                 resolved.Add(token);
             } else {
-                return (null, $"unknown question or category '{token}'. Run `kapacitor eval --list-questions` to see available tokens.");
+                return (null, $"unknown question or category '{token}'. Run `kcap eval --list-questions` to see available tokens.");
             }
         }
 

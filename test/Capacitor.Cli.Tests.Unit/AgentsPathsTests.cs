@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Tests.Unit;
 public class AgentsPathsTests {
     [Test]
     public async Task Home_resolves_under_HOME_dot_agents() {
-        var tmp = Directory.CreateTempSubdirectory("kapacitor-agentspaths-test-");
+        var tmp = Directory.CreateTempSubdirectory("kcap-agentspaths-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
 
         try {
@@ -21,7 +21,7 @@ public class AgentsPathsTests {
 
     [Test]
     public async Task UserSkillsDir_resolves_under_HOME_dot_agents_skills() {
-        var tmp = Directory.CreateTempSubdirectory("kapacitor-agentspaths-test-");
+        var tmp = Directory.CreateTempSubdirectory("kcap-agentspaths-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
 
         try {

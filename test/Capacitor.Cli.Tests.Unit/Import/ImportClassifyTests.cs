@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Tests.Unit.Import;
 
 public class ImportClassifyTests : IDisposable {
     readonly WireMockServer _server  = WireMockServer.Start();
-    readonly string         _tempDir = Directory.CreateTempSubdirectory("kapacitor-classify-test").FullName;
+    readonly string         _tempDir = Directory.CreateTempSubdirectory("kcap-classify-test").FullName;
 
     public void Dispose() {
         _server.Stop();
@@ -174,12 +174,12 @@ public class ImportClassifyTests : IDisposable {
     }
 
     [Test]
-    public async Task ClassifyAsync_identifies_kapacitor_subsession() {
-        // IsKapacitorSubSession detects headless claude -p sessions by reading the file:
+    public async Task ClassifyAsync_identifies_kcap_subsession() {
+        // IsCapacitorSubSession detects headless claude -p sessions by reading the file:
         // the first lines must contain a queue-operation entry whose content starts with
-        // a known kapacitor prompt prefix (title generation or what's-done summary).
+        // a known kcap prompt prefix (title generation or what's-done summary).
         // Nested under _tempDir so Dispose cleans it up.
-        var subagentDir = Path.Combine(_tempDir, "kapacitor-sub");
+        var subagentDir = Path.Combine(_tempDir, "kcap-sub");
         Directory.CreateDirectory(subagentDir);
         var path = Path.Combine(subagentDir, "agent-title-abc123.jsonl");
         // The title prompt starts with "<role>\nYou label coding-session transcripts. "
@@ -213,7 +213,7 @@ public class ImportClassifyTests : IDisposable {
         // Make a transcript whose cwd is a real git repo with an "excluded" remote.
         // git init + git remote add produces a real repo that DetectRepositoryAsync can query.
         // Nested under _tempDir so Dispose cleans it up.
-        var repoDir = Path.Combine(_tempDir, "kapacitor-excl");
+        var repoDir = Path.Combine(_tempDir, "kcap-excl");
         Directory.CreateDirectory(repoDir);
         await RunGitAsync("init", repoDir);
         await RunGitAsync("remote add origin https://github.com/acme/secret.git", repoDir);
@@ -357,7 +357,7 @@ public class ImportClassifyTests : IDisposable {
             );
 
         // Create a real git repo under _tempDir so DetectRepositoryAsync can resolve it.
-        var repoDir = Path.Combine(_tempDir, "kapacitor-reclass-excl");
+        var repoDir = Path.Combine(_tempDir, "kcap-reclass-excl");
         Directory.CreateDirectory(repoDir);
         await RunGitAsync("init", repoDir);
         await RunGitAsync("remote add origin https://github.com/any/repo.git", repoDir);

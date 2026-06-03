@@ -14,7 +14,7 @@ public class ImportScopeFilterTests {
     [Test]
     public async Task Apply_All_returns_every_transcript_including_unresolved() {
         var transcripts = new[] { T("a"), T("b"), T("c") };
-        var resolver = Resolver(new() { ["a"] = ("EventStore", "kapacitor"), ["b"] = null });
+        var resolver = Resolver(new() { ["a"] = ("EventStore", "kcap"), ["b"] = null });
 
         var kept = await ImportScopeFilter.Apply(transcripts, new ImportScope.All(), resolver);
 
@@ -25,7 +25,7 @@ public class ImportScopeFilterTests {
     public async Task Apply_Org_keeps_only_matching_owner() {
         var transcripts = new[] { T("a"), T("b"), T("c") };
         var resolver = Resolver(new() {
-            ["a"] = ("EventStore", "kapacitor"),
+            ["a"] = ("EventStore", "kcap"),
             ["b"] = ("kurrent-io", "secret"),
             ["c"] = ("EventStore", "kurrentdb"),
         });
@@ -38,7 +38,7 @@ public class ImportScopeFilterTests {
     [Test]
     public async Task Apply_Org_matches_case_insensitively() {
         var transcripts = new[] { T("a") };
-        var resolver = Resolver(new() { ["a"] = ("eventstore", "kapacitor") });
+        var resolver = Resolver(new() { ["a"] = ("eventstore", "kcap") });
 
         var kept = await ImportScopeFilter.Apply(transcripts, new ImportScope.Org("EventStore"), resolver);
 
@@ -59,13 +59,13 @@ public class ImportScopeFilterTests {
     public async Task Apply_Repo_keeps_only_exact_match() {
         var transcripts = new[] { T("a"), T("b"), T("c") };
         var resolver = Resolver(new() {
-            ["a"] = ("EventStore", "kapacitor"),
+            ["a"] = ("EventStore", "kcap"),
             ["b"] = ("EventStore", "kurrentdb"),
-            ["c"] = ("EventStore", "kapacitor"),
+            ["c"] = ("EventStore", "kcap"),
         });
 
         var kept = await ImportScopeFilter.Apply(
-            transcripts, new ImportScope.Repo("EventStore", "kapacitor"), resolver);
+            transcripts, new ImportScope.Repo("EventStore", "kcap"), resolver);
 
         await Assert.That(kept.Select(x => x.SessionId).ToArray()).IsEquivalentTo(["a", "c"]);
     }

@@ -17,13 +17,13 @@ public class PluginCommandClaudeTests {
         var marker = Path.Combine(tmp.Path, ClaudePluginInstaller.MarkerFileName);
         await Assert.That(File.Exists(marker)).IsTrue();
         await Assert.That((await File.ReadAllTextAsync(marker)).Trim())
-            .IsEqualTo(KapacitorVersion.Current());
+            .IsEqualTo(CapacitorVersion.Current());
     }
 
     [Test]
     [NotInParallel("HomeEnvVarMutation")]
     public async Task Install_claude_with_if_installed_is_noop_when_no_marker_and_no_entries() {
-        var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-claude-test-");
+        var fakeHome     = Directory.CreateTempSubdirectory("kcap-plugin-claude-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         try {
             Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
@@ -42,10 +42,10 @@ public class PluginCommandClaudeTests {
     [Test]
     [NotInParallel("HomeEnvVarMutation")]
     public async Task Install_claude_with_if_installed_refreshes_pre_marker_install() {
-        var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-claude-test-");
+        var fakeHome     = Directory.CreateTempSubdirectory("kcap-plugin-claude-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
-        var originalPlug = Environment.GetEnvironmentVariable("KAPACITOR_PLUGIN_DIR");
-        var pluginDir    = Directory.CreateTempSubdirectory("kapacitor-plugin-src-");
+        var originalPlug = Environment.GetEnvironmentVariable("KCAP_PLUGIN_DIR");
+        var pluginDir    = Directory.CreateTempSubdirectory("kcap-plugin-src-");
         try {
             // Seed pre-marker install: enabledPlugins entry, no marker.
             var claudeDir = Path.Combine(fakeHome.FullName, ".claude");
@@ -53,27 +53,27 @@ public class PluginCommandClaudeTests {
             var settingsPath = Path.Combine(claudeDir, "settings.json");
             await File.WriteAllTextAsync(settingsPath, """
                 {
-                  "extraKnownMarketplaces": { "kapacitor": { "source": { "source": "directory", "path": "/old/path" } } },
-                  "enabledPlugins": { "kapacitor@kapacitor": true }
+                  "extraKnownMarketplaces": { "kcap": { "source": { "source": "directory", "path": "/old/path" } } },
+                  "enabledPlugins": { "kcap@kcap": true }
                 }
                 """);
 
             Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", pluginDir.FullName);
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR", pluginDir.FullName);
 
             var exit = await PluginCommand.HandleAsync(["plugin", "install", "--if-installed"]);
             await Assert.That(exit).IsEqualTo(0);
 
             // Marketplace path must now point at the new plugin dir.
             var root = JsonNode.Parse(await File.ReadAllTextAsync(settingsPath))!.AsObject();
-            var path = root["extraKnownMarketplaces"]!["kapacitor"]!["source"]!["path"]!.GetValue<string>();
+            var path = root["extraKnownMarketplaces"]!["kcap"]!["source"]!["path"]!.GetValue<string>();
             await Assert.That(path).IsEqualTo(pluginDir.FullName);
 
             // Marker stamped.
             await Assert.That(File.Exists(Path.Combine(claudeDir, ClaudePluginInstaller.MarkerFileName))).IsTrue();
         } finally {
             Environment.SetEnvironmentVariable("HOME", originalHome);
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", originalPlug);
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR", originalPlug);
             fakeHome.Delete(recursive: true);
             pluginDir.Delete(recursive: true);
         }
@@ -82,7 +82,7 @@ public class PluginCommandClaudeTests {
     [Test]
     [NotInParallel("HomeEnvVarMutation")]
     public async Task Install_claude_with_if_installed_is_noop_when_marker_matches_current_version() {
-        var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-claude-test-");
+        var fakeHome     = Directory.CreateTempSubdirectory("kcap-plugin-claude-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         try {
             var claudeDir = Path.Combine(fakeHome.FullName, ".claude");
@@ -93,7 +93,7 @@ public class PluginCommandClaudeTests {
             await File.WriteAllTextAsync(settingsPath, """{"sentinel": "must-survive"}""");
             await File.WriteAllTextAsync(
                 Path.Combine(claudeDir, ClaudePluginInstaller.MarkerFileName),
-                KapacitorVersion.Current());
+                CapacitorVersion.Current());
             Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
 
             var exit = await PluginCommand.HandleAsync(["plugin", "install", "--if-installed"]);
@@ -111,9 +111,9 @@ public class PluginCommandClaudeTests {
     [Test]
     [NotInParallel(["ConsoleStreams", "HomeEnvVarMutation"])]
     public async Task Install_claude_with_if_installed_swallows_plugin_resolution_failure() {
-        var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-claude-test-");
+        var fakeHome     = Directory.CreateTempSubdirectory("kcap-plugin-claude-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
-        var originalPlug = Environment.GetEnvironmentVariable("KAPACITOR_PLUGIN_DIR");
+        var originalPlug = Environment.GetEnvironmentVariable("KCAP_PLUGIN_DIR");
         var originalErr  = Console.Error;
         var capturedErr  = new StringWriter();
         try {
@@ -126,8 +126,8 @@ public class PluginCommandClaudeTests {
 
             Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
             // …but plugin dir resolution fails.
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR",
-                Path.Combine(Path.GetTempPath(), $"kapacitor-missing-{Guid.NewGuid():N}"));
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR",
+                Path.Combine(Path.GetTempPath(), $"kcap-missing-{Guid.NewGuid():N}"));
             Console.SetError(capturedErr);
 
             var exit = await PluginCommand.HandleAsync(["plugin", "install", "--if-installed"]);
@@ -136,7 +136,7 @@ public class PluginCommandClaudeTests {
         } finally {
             Console.SetError(originalErr);
             Environment.SetEnvironmentVariable("HOME", originalHome);
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", originalPlug);
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR", originalPlug);
             fakeHome.Delete(recursive: true);
         }
     }
@@ -144,7 +144,7 @@ public class PluginCommandClaudeTests {
     [Test]
     [NotInParallel("HomeEnvVarMutation")]
     public async Task Remove_claude_deletes_marker() {
-        var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-claude-test-");
+        var fakeHome     = Directory.CreateTempSubdirectory("kcap-plugin-claude-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         try {
             var claudeDir = Path.Combine(fakeHome.FullName, ".claude");
@@ -152,13 +152,13 @@ public class PluginCommandClaudeTests {
             var settingsPath = Path.Combine(claudeDir, "settings.json");
             await File.WriteAllTextAsync(settingsPath, """
                 {
-                  "extraKnownMarketplaces": { "kapacitor": { "source": { "source": "directory", "path": "/p" } } },
-                  "enabledPlugins": { "kapacitor@kapacitor": true }
+                  "extraKnownMarketplaces": { "kcap": { "source": { "source": "directory", "path": "/p" } } },
+                  "enabledPlugins": { "kcap@kcap": true }
                 }
                 """);
             await File.WriteAllTextAsync(
                 Path.Combine(claudeDir, ClaudePluginInstaller.MarkerFileName),
-                KapacitorVersion.Current());
+                CapacitorVersion.Current());
 
             Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
 
@@ -175,7 +175,7 @@ public class PluginCommandClaudeTests {
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
-            $"kapacitor-claude-plugin-cmd-test-{Guid.NewGuid().ToString("N")[..8]}"
+            $"kcap-claude-plugin-cmd-test-{Guid.NewGuid().ToString("N")[..8]}"
         );
         public TempDir() => Directory.CreateDirectory(Path);
         public void Dispose() {

@@ -1,7 +1,7 @@
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Loopback validation for <c>KAPACITOR_DAEMON_URL</c>. Both the Claude and
+/// Loopback validation for <c>KCAP_DAEMON_URL</c>. Both the Claude and
 /// Codex permission-request hook CLI commands must refuse to POST permission
 /// payloads to anything other than an HTTP loopback URL — non-loopback or
 /// HTTPS values usually indicate a misconfigured environment variable, and

@@ -43,7 +43,7 @@ static class RecapCommand {
         }
 
         var json    = await resp.Content.ReadAsStringAsync();
-        var entries = JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.ListRepoRecapEntry);
+        var entries = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.ListRepoRecapEntry);
 
         if (entries is null || entries.Count == 0) {
             await Console.Out.WriteLineAsync($"No session summaries found for {repo.Owner}/{repo.RepoName}.");
@@ -62,7 +62,7 @@ static class RecapCommand {
             await Console.Out.WriteLineAsync();
             await Console.Out.WriteLineAsync(entry.Summary);
             await Console.Out.WriteLineAsync();
-            await Console.Out.WriteLineAsync($"Full transcript: `kapacitor recap --full {entry.SessionId}`");
+            await Console.Out.WriteLineAsync($"Full transcript: `kcap recap --full {entry.SessionId}`");
             await Console.Out.WriteLineAsync();
             await Console.Out.WriteLineAsync("---");
             await Console.Out.WriteLineAsync();
@@ -109,7 +109,7 @@ static class RecapCommand {
         }
 
         var json    = await resp.Content.ReadAsStringAsync();
-        var entries = JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.ListRecapEntry);
+        var entries = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.ListRecapEntry);
 
         if (entries is null || entries.Count == 0) {
             await Console.Out.WriteLineAsync("No recap entries found.");
@@ -124,7 +124,7 @@ static class RecapCommand {
         var summaries = entries.Where(e => e.Type is "whats_done" or "plan").ToList();
 
         if (summaries.Count == 0) {
-            Console.Out.WriteLine("No summary available yet. Use `kapacitor recap --full` to see the raw transcript.");
+            Console.Out.WriteLine("No summary available yet. Use `kcap recap --full` to see the raw transcript.");
 
             return 0;
         }
@@ -155,7 +155,7 @@ static class RecapCommand {
             }
         }
 
-        Console.Error.WriteLine("Use `kapacitor recap --full` for the complete transcript.");
+        Console.Error.WriteLine("Use `kcap recap --full` for the complete transcript.");
 
         return 0;
     }

@@ -96,7 +96,7 @@ public static class CursorHookCommand {
 
             NormalizeGuidField(node, "session_id");
             node["home_dir"] = PathHelpers.HomeDirectory;
-            var agentHostId = Environment.GetEnvironmentVariable("KAPACITOR_AGENT_ID");
+            var agentHostId = Environment.GetEnvironmentVariable("KCAP_AGENT_ID");
             if (agentHostId is not null) node["agent_host_id"] = agentHostId;
 
             if (eventName == "afterAgentThought") {

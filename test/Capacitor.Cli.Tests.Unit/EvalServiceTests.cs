@@ -650,7 +650,7 @@ public class EvalServiceTests {
               "source_session_id":"s","source_eval_run_id":"r","retained_at":"2026-05-13T00:00:00Z"}]
             """;
 
-        var facts = JsonSerializer.Deserialize(newServerJson, KapacitorJsonContext.Default.ListJudgeFact)!;
+        var facts = JsonSerializer.Deserialize(newServerJson, CapacitorJsonContext.Default.ListJudgeFact)!;
 
         await Assert.That(facts.Count).IsEqualTo(1);
         await Assert.That(facts[0].FactHash).IsEqualTo("h1");
@@ -664,7 +664,7 @@ public class EvalServiceTests {
               "retained_at":"2026-05-13T00:00:00Z"}]
             """;
 
-        var facts = JsonSerializer.Deserialize(oldServerJson, KapacitorJsonContext.Default.ListJudgeFact)!;
+        var facts = JsonSerializer.Deserialize(oldServerJson, CapacitorJsonContext.Default.ListJudgeFact)!;
 
         await Assert.That(facts.Count).IsEqualTo(1);
         await Assert.That(facts[0].FactHash).IsNull();

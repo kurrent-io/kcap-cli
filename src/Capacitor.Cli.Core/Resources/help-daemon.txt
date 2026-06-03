@@ -1,6 +1,6 @@
-kapacitor daemon — Manage the daemon process
+kcap daemon — Manage the daemon process
 
-Usage: kapacitor daemon <subcommand>
+Usage: kcap daemon <subcommand>
 
 Subcommands:
   start [-d]              Start the daemon (foreground, or -d for background)
@@ -29,7 +29,7 @@ Options for doctor:
                           --clean, doctor reports state without modifying.
 
 Notes:
-  Each daemon holds an exclusive flock on ~/.config/kapacitor/daemons/<name>.lock
+  Each daemon holds an exclusive flock on ~/.config/kcap/daemons/<name>.lock
   for its entire lifetime. The kernel releases the lock automatically on
   process exit (including SIGKILL or power-off), so stale lock files on disk
   are never a blocker — only a live process holding the kernel-level lock

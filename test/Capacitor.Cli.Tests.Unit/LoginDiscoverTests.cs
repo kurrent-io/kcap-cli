@@ -5,10 +5,10 @@ namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
 /// Tests for OAuthLoginFlow.ExchangeAndSaveAsync(string, string, string, string) —
-/// the named-profile overload used by `kapacitor login --discover`.
+/// the named-profile overload used by `kcap login --discover`.
 ///
-/// Uses the shared KAPACITOR_CONFIG_DIR temp directory set by RepoPathStoreGlobalSetup
-/// so token files land in an isolated directory, not ~/.config/kapacitor.
+/// Uses the shared KCAP_CONFIG_DIR temp directory set by RepoPathStoreGlobalSetup
+/// so token files land in an isolated directory, not ~/.config/kcap.
 ///
 /// Shares the TokenStoreProfileTests NotInParallel key so both classes serialize
 /// access to the shared tokens directory and don't race each other.

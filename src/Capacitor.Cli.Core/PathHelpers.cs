@@ -10,7 +10,7 @@ public static class PathHelpers {
         }
     }
 
-    static readonly string ConfigDir = Environment.GetEnvironmentVariable("KAPACITOR_CONFIG_DIR") ?? Path.Combine(HomeDirectory, ".config", "kapacitor");
+    static readonly string ConfigDir = Environment.GetEnvironmentVariable("KCAP_CONFIG_DIR") ?? Path.Combine(HomeDirectory, ".config", "kcap");
 
     public static string ConfigPath(string name) => Path.Combine(ConfigDir, name);
 }

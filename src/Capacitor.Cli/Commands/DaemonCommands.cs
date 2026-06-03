@@ -41,7 +41,7 @@ public static class DaemonCommands {
     /// <c>FileShare.None</c> for the CLI-side critical section that wraps
     /// the PID-file stale-check + daemon spawn. The daemon itself takes a
     /// separate <c>&lt;name&gt;.lock</c> via <see cref="DaemonLock"/>; this
-    /// lock just keeps two concurrent <c>kapacitor daemon start --name X</c>
+    /// lock just keeps two concurrent <c>kcap daemon start --name X</c>
     /// invocations from both observing a stale PID file and both spawning.
     /// </summary>
     static FileStream? TryAcquireStartLock(string daemonName) {
@@ -66,8 +66,8 @@ public static class DaemonCommands {
 
         if (startLock is null) {
             await Console.Error.WriteLineAsync(
-                $"Another `kapacitor daemon start --name {name}` is already in progress or holds the daemon lock. "
-              + $"Run `kapacitor daemon stop --name {name}` first or wait for the other start to complete."
+                $"Another `kcap daemon start --name {name}` is already in progress or holds the daemon lock. "
+              + $"Run `kcap daemon stop --name {name}` first or wait for the other start to complete."
             );
 
             return 1;
@@ -77,7 +77,7 @@ public static class DaemonCommands {
             if (ReadPidFile(name) is { } existing && IsOurDaemon(existing.Pid, existing.StartTicks)) {
                 await Console.Error.WriteLineAsync(
                     $"Daemon '{name}' already running (PID {existing.Pid}). "
-                  + $"Use `kapacitor daemon stop --name {name}` first."
+                  + $"Use `kcap daemon stop --name {name}` first."
                 );
 
                 return 1;
@@ -140,8 +140,8 @@ public static class DaemonCommands {
 
         if (startLock is null) {
             Console.Error.WriteLine(
-                $"Another `kapacitor daemon start --name {name}` is already in progress or holds the daemon lock. "
-              + $"Run `kapacitor daemon stop --name {name}` first or wait for the other start to complete."
+                $"Another `kcap daemon start --name {name}` is already in progress or holds the daemon lock. "
+              + $"Run `kcap daemon stop --name {name}` first or wait for the other start to complete."
             );
 
             return 1;
@@ -152,7 +152,7 @@ public static class DaemonCommands {
         if (ReadPidFile(name) is { } existing && IsOurDaemon(existing.Pid, existing.StartTicks)) {
             Console.Error.WriteLine(
                 $"Daemon '{name}' already running (PID {existing.Pid}). "
-              + $"Use `kapacitor daemon stop --name {name}` first."
+              + $"Use `kcap daemon stop --name {name}` first."
             );
 
             return 1;
@@ -200,7 +200,7 @@ public static class DaemonCommands {
         if (process.WaitForExit(1500)) {
             Console.Error.WriteLine(
                 $"Daemon '{name}' failed to start (exit code {process.ExitCode}). "
-              + $"Check `kapacitor daemon doctor` to see whether the name is held by another process."
+              + $"Check `kcap daemon doctor` to see whether the name is held by another process."
             );
 
             // Translate the daemon's flock-conflict exit code straight
@@ -213,8 +213,8 @@ public static class DaemonCommands {
 
         Console.Out.WriteLine($"Daemon '{name}' started (PID {process.Id})");
         Console.Out.WriteLine($"  Log:       {LogPath}");
-        Console.Out.WriteLine($"  Stop with: kapacitor daemon stop --name {name}");
-        Console.Out.WriteLine($"  Status:    kapacitor daemon status --name {name}");
+        Console.Out.WriteLine($"  Stop with: kcap daemon stop --name {name}");
+        Console.Out.WriteLine($"  Status:    kcap daemon status --name {name}");
 
         return 0;
     }
@@ -533,7 +533,7 @@ public static class DaemonCommands {
 
             var ourName = daemonPath is not null
                 ? Path.GetFileNameWithoutExtension(daemonPath)
-                : "kapacitor-daemon";
+                : "kcap-daemon";
 
             return string.Equals(process.ProcessName, ourName, StringComparison.OrdinalIgnoreCase);
         } catch (ArgumentException) {
@@ -543,7 +543,7 @@ public static class DaemonCommands {
 
     /// <summary>
     /// Returns the daemon names that currently have a PID file on disk
-    /// (per-name layout under <c>~/.config/kapacitor/daemons/</c>). Used by
+    /// (per-name layout under <c>~/.config/kcap/daemons/</c>). Used by
     /// <c>daemon stop</c> / <c>daemon status</c> without <c>--name</c>.
     /// </summary>
     static List<string> EnumerateRunningNames() {
@@ -614,21 +614,21 @@ public static class DaemonCommands {
     }
 
     /// <summary>
-    /// Resolve the kapacitor-daemon executable shipped alongside this binary.
+    /// Resolve the kcap-daemon executable shipped alongside this binary.
     /// </summary>
     static string? ResolveDaemonBinary() {
         var dir     = AppContext.BaseDirectory;
         var ext     = OperatingSystem.IsWindows() ? ".exe" : "";
-        var sibling = Path.Combine(dir, $"kapacitor-daemon{ext}");
+        var sibling = Path.Combine(dir, $"kcap-daemon{ext}");
 
         return File.Exists(sibling) ? sibling : null;
     }
 
     static string DaemonNotFoundMessage() =>
-        $"kapacitor-daemon binary not found next to {AppContext.BaseDirectory}. Reinstall the kapacitor package.";
+        $"kcap-daemon binary not found next to {AppContext.BaseDirectory}. Reinstall the kcap package.";
 
     static int PrintUsage() {
-        Console.Error.WriteLine("Usage: kapacitor daemon <start|stop|status|logs|doctor>");
+        Console.Error.WriteLine("Usage: kcap daemon <start|stop|status|logs|doctor>");
         Console.Error.WriteLine();
         Console.Error.WriteLine("  start [-d] [--name <n>]    Start the daemon (foreground, or -d for background)");
         Console.Error.WriteLine("  stop [--name <n>] [--yes]  Stop a running daemon (prompts on multi unless --yes)");

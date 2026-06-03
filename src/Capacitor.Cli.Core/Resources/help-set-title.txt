@@ -1,6 +1,6 @@
-kapacitor set-title — Set session title
+kcap set-title — Set session title
 
-Usage: kapacitor set-title <title>
+Usage: kcap set-title <title>
 
 Arguments:
   title                   Session title (max 120 characters)

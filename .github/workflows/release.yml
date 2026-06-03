@@ -12,8 +12,8 @@ permissions:
 
 env:
   DOTNET_VERSION: '10.0.x'
-  CLI_PROJECT: src/Kapacitor.Cli/Kapacitor.Cli.csproj
-  DAEMON_PROJECT: src/Kapacitor.Cli.Daemon/Kapacitor.Cli.Daemon.csproj
+  CLI_PROJECT: src/Capacitor.Cli/Capacitor.Cli.csproj
+  DAEMON_PROJECT: src/Capacitor.Cli.Daemon/Capacitor.Cli.Daemon.csproj
 
 jobs:
   ci:
@@ -37,35 +37,35 @@ jobs:
         include:
           - rid: osx-arm64
             os: macos-latest
-            npm-package: kapacitor-darwin-arm64
-            cli-binary: kapacitor
-            daemon-binary: kapacitor-daemon
+            npm-package: kcap-darwin-arm64
+            cli-binary: kcap
+            daemon-binary: kcap-daemon
           - rid: linux-x64
             os: ubuntu-latest
-            npm-package: kapacitor-linux-x64
-            cli-binary: kapacitor
-            daemon-binary: kapacitor-daemon
+            npm-package: kcap-linux-x64
+            cli-binary: kcap
+            daemon-binary: kcap-daemon
           - rid: linux-arm64
             os: ubuntu-24.04-arm
-            npm-package: kapacitor-linux-arm64
-            cli-binary: kapacitor
-            daemon-binary: kapacitor-daemon
+            npm-package: kcap-linux-arm64
+            cli-binary: kcap
+            daemon-binary: kcap-daemon
           - rid: linux-musl-x64
             os: ubuntu-latest
             container: alpine:3.20
-            npm-package: kapacitor-linux-musl-x64
-            cli-binary: kapacitor
-            daemon-binary: kapacitor-daemon
+            npm-package: kcap-linux-musl-x64
+            cli-binary: kcap
+            daemon-binary: kcap-daemon
           - rid: linux-musl-arm64
             os: ubuntu-24.04-arm
-            npm-package: kapacitor-linux-musl-arm64
-            cli-binary: kapacitor
-            daemon-binary: kapacitor-daemon
+            npm-package: kcap-linux-musl-arm64
+            cli-binary: kcap
+            daemon-binary: kcap-daemon
           - rid: win-x64
             os: windows-latest
-            npm-package: kapacitor-win-x64
-            cli-binary: kapacitor.exe
-            daemon-binary: kapacitor-daemon.exe
+            npm-package: kcap-win-x64
+            cli-binary: kcap.exe
+            daemon-binary: kcap-daemon.exe
 
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container || '' }}
@@ -146,9 +146,9 @@ jobs:
           fi
           cd archive
           if [ "${{ matrix.rid }}" = "win-x64" ]; then
-            7z a ../kapacitor-${{ matrix.rid }}.zip *
+            7z a ../kcap-${{ matrix.rid }}.zip *
           else
-            tar czf ../kapacitor-${{ matrix.rid }}.tar.gz *
+            tar czf ../kcap-${{ matrix.rid }}.tar.gz *
           fi
 
       - name: Upload binary artifact
@@ -161,7 +161,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.rid }}
-          path: kapacitor-${{ matrix.rid }}.*
+          path: kcap-${{ matrix.rid }}.*
 
   publish-npm:
     needs: build
@@ -195,7 +195,7 @@ jobs:
         run: |
           VERSION=${{ steps.version.outputs.VERSION }}
 
-          for dir in npm-artifacts/npm-kapacitor-*/; do
+          for dir in npm-artifacts/npm-kcap-*/; do
             pkg_name=$(basename "$dir" | sed 's/^npm-//')
             cp "npm/$pkg_name/package.json" "$dir/package.json"
 
@@ -205,19 +205,19 @@ jobs:
             # manually), so npm won't restore +x at install time either. Set it
             # explicitly here so the published tarball ships executable files.
             #
-            # Each platform package contains a CLI binary (kapacitor / kapacitor.exe)
-            # AND a daemon binary (kapacitor-daemon / kapacitor-daemon.exe).
+            # Each platform package contains a CLI binary (kcap / kcap.exe)
+            # AND a daemon binary (kcap-daemon / kcap-daemon.exe).
             # Pick by file existence instead of pkg_name pattern so adding new
             # RIDs doesn't silently regress this step.
             found_cli=false
-            for bin in kapacitor kapacitor.exe kapacitor-daemon kapacitor-daemon.exe; do
+            for bin in kcap kcap.exe kcap-daemon kcap-daemon.exe; do
               if [ -f "$dir/bin/$bin" ]; then
                 chmod +x "$dir/bin/$bin"
-                case "$bin" in kapacitor|kapacitor.exe) found_cli=true ;; esac
+                case "$bin" in kcap|kcap.exe) found_cli=true ;; esac
               fi
             done
             if [ "$found_cli" != "true" ]; then
-              echo "::error::No kapacitor binary found in $dir/bin (contents: $(ls "$dir/bin" 2>&1))"
+              echo "::error::No kcap binary found in $dir/bin (contents: $(ls "$dir/bin" 2>&1))"
               exit 1
             fi
 
@@ -231,18 +231,18 @@ jobs:
         run: |
           VERSION=${{ steps.version.outputs.VERSION }}
           node -e "
-            const pkg = require('./kapacitor/.claude-plugin/plugin.json');
+            const pkg = require('./kcap/.claude-plugin/plugin.json');
             pkg.version = '$VERSION';
-            require('fs').writeFileSync('./kapacitor/.claude-plugin/plugin.json', JSON.stringify(pkg, null, 2) + '\n');
+            require('fs').writeFileSync('./kcap/.claude-plugin/plugin.json', JSON.stringify(pkg, null, 2) + '\n');
           "
 
       - name: Copy plugin into wrapper package
-        run: cp -r kapacitor/ npm/kapacitor/kapacitor/
+        run: cp -r kcap/ npm/kcap/kcap/
 
       - name: Publish wrapper package
         run: |
           VERSION=${{ steps.version.outputs.VERSION }}
-          cd npm/kapacitor
+          cd npm/kcap
           npm version "$VERSION" --no-git-tag-version --allow-same-version
           node -e "
             const pkg = require('./package.json');

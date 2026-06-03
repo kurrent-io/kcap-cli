@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Tests.Unit.Codex;
 [NotInParallel("HomeEnvVarMutation")]
 public class CodexConfigWriterTests {
     static (DirectoryInfo Dir, string? OriginalHome) ScopedHome() {
-        var tmp          = Directory.CreateTempSubdirectory("kapacitor-codexconfig-test-");
+        var tmp          = Directory.CreateTempSubdirectory("kcap-codexconfig-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
         Environment.SetEnvironmentVariable("HOME", tmp.FullName);
 

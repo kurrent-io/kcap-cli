@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Tests.Unit.Import;
 public class ImportChainsTests : IDisposable {
     readonly WireMockServer _server  = WireMockServer.Start();
     // TUnit creates a new class instance per test, so _tempDir is always unique.
-    readonly string _tempDir = Directory.CreateTempSubdirectory("kapacitor-import-chains-test").FullName;
+    readonly string _tempDir = Directory.CreateTempSubdirectory("kcap-import-chains-test").FullName;
 
     public void Dispose() {
         _server.Stop();

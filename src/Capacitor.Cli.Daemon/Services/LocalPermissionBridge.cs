@@ -18,7 +18,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// connection, where no HTTP-request timeout applies.
 ///
 /// Bound to <c>127.0.0.1</c> on a random ephemeral port. The orchestrator publishes
-/// <see cref="BaseUrl"/> via the <c>KAPACITOR_DAEMON_URL</c> env var on every spawned
+/// <see cref="BaseUrl"/> via the <c>KCAP_DAEMON_URL</c> env var on every spawned
 /// agent so the CLI <c>permission-request</c> command can detect and use it.
 /// </summary>
 internal sealed partial class LocalPermissionBridge(

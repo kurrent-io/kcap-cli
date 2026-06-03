@@ -101,7 +101,7 @@ public static partial class ImportScopePrompt {
             case "all":
                 return new ImportScope.All();
             case "org" when string.IsNullOrEmpty(activeProfile) || activeProfile == "default":
-                AnsiConsole.MarkupLine("[red]Active profile has no org. Run `kapacitor setup`.[/]");
+                AnsiConsole.MarkupLine("[red]Active profile has no org. Run `kcap setup`.[/]");
 
                 return null;
             case "org":

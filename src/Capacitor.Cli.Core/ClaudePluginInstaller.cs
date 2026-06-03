@@ -20,19 +20,19 @@ namespace Capacitor.Cli.Core;
 /// upgrade is meaningful — not just for command-string drift.
 /// </remarks>
 public static class ClaudePluginInstaller {
-    public const string MarkerFileName = ".kapacitor-plugin-version";
+    public const string MarkerFileName = ".kcap-plugin-version";
 
     /// <summary>
-    /// True when the user has previously installed the kapacitor Claude
-    /// plugin via setup or <c>kapacitor plugin install</c>. Detection is
-    /// marker OR an existing kapacitor entry in <paramref name="settingsPath"/>
-    /// (either <c>enabledPlugins["kapacitor@kapacitor"]</c> /
-    /// <c>enabledPlugins["kapacitor@kurrent"]</c>, or
-    /// <c>extraKnownMarketplaces["kapacitor"]</c> /
+    /// True when the user has previously installed the kcap Claude
+    /// plugin via setup or <c>kcap plugin install</c>. Detection is
+    /// marker OR an existing kcap entry in <paramref name="settingsPath"/>
+    /// (either <c>enabledPlugins["kcap@kcap"]</c> /
+    /// <c>enabledPlugins["kcap@kurrent"]</c>, or
+    /// <c>extraKnownMarketplaces["kcap"]</c> /
     /// <c>extraKnownMarketplaces["kurrent"]</c>) so pre-marker installs
     /// — including the pre-rename <c>kurrent</c> key shape that
     /// <c>SetupCommand.InstallPlugin</c> and <c>PluginCommand.RemoveClaude</c>
-    /// already treat as kapacitor-owned — are picked up on the first
+    /// already treat as kcap-owned — are picked up on the first
     /// marker-aware upgrade.
     /// </summary>
     public static bool IsInstalled(string settingsPath) {
@@ -46,13 +46,13 @@ public static class ClaudePluginInstaller {
             if (JsonNode.Parse(File.ReadAllText(settingsPath)) is not JsonObject root) return false;
 
             if (root["enabledPlugins"] is JsonObject enabled &&
-                (HasEnabledFlag(enabled, "kapacitor@kapacitor") ||
-                 HasEnabledFlag(enabled, "kapacitor@kurrent"))) {
+                (HasEnabledFlag(enabled, "kcap@kcap") ||
+                 HasEnabledFlag(enabled, "kcap@kurrent"))) {
                 return true;
             }
 
             if (root["extraKnownMarketplaces"] is JsonObject marketplaces &&
-                (marketplaces["kapacitor"] is not null ||
+                (marketplaces["kcap"] is not null ||
                  marketplaces["kurrent"]   is not null)) {
                 return true;
             }
@@ -81,7 +81,7 @@ public static class ClaudePluginInstaller {
         if (string.IsNullOrEmpty(dir)) return;
         try {
             Directory.CreateDirectory(dir);
-            File.WriteAllText(Path.Combine(dir, MarkerFileName), KapacitorVersion.Current());
+            File.WriteAllText(Path.Combine(dir, MarkerFileName), CapacitorVersion.Current());
         } catch {
             // Best effort. Worst case the next upgrade re-runs the install
             // unconditionally, which is idempotent.

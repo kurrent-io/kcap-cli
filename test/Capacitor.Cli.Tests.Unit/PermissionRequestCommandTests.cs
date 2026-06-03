@@ -3,7 +3,7 @@ using Capacitor.Cli.Commands;
 namespace Capacitor.Cli.Tests.Unit;
 
 public class PermissionRequestCommandTests {
-    const string EnvVar = "KAPACITOR_DAEMON_URL";
+    const string EnvVar = "KCAP_DAEMON_URL";
 
     [Test, NotInParallel(nameof(PermissionRequestCommandTests))]
     public async Task ReturnsFalseWhenEnvVarIsUnset() {

@@ -4,7 +4,7 @@ namespace Capacitor.Cli.Tests.Unit.Http;
 
 public class HttpClientExtensionsAbsoluteUrlTests {
     [Test]
-    [Arguments("https://staging.kapacitor.ai/hooks/stop")]
+    [Arguments("https://staging.kcap.ai/hooks/stop")]
     [Arguments("http://localhost:5108/hooks/stop")]
     [Arguments("http://127.0.0.1:5108")]
     public async Task Accepts_AbsoluteHttpAndHttps(string url) {
@@ -12,7 +12,7 @@ public class HttpClientExtensionsAbsoluteUrlTests {
     }
 
     [Test]
-    [Arguments("staging.kapacitor.ai/hooks/stop")]
+    [Arguments("staging.kcap.ai/hooks/stop")]
     [Arguments("/hooks/stop")]
     [Arguments("")]
     [Arguments("not a url at all")]

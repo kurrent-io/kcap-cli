@@ -11,7 +11,7 @@ namespace Capacitor.Cli.Commands;
 
 static class McpReviewServer {
     /// <summary>
-    /// Run with an explicit session-default PR (used by <c>kapacitor review &lt;pr&gt;</c>).
+    /// Run with an explicit session-default PR (used by <c>kcap review &lt;pr&gt;</c>).
     /// Tool calls may still override the default by passing a <c>pr</c> argument.
     /// </summary>
     public static Task<int> RunAsync(string baseUrl, string owner, string repo, int prNumber)
@@ -90,7 +90,7 @@ static class McpReviewServer {
     static string BuildInitializeResponse(JsonNode id) =>
         ToResponse<McpInitResult>(
             id,
-            new("2024-11-05", new(new()), new("kapacitor-review", "1.0.0")),
+            new("2024-11-05", new(new()), new("kcap-review", "1.0.0")),
             McpJsonContext.Default.McpInitResult
         );
 
@@ -219,7 +219,7 @@ static class McpReviewServer {
     static McpTool[] BuildToolsList() {
         const string PrArgDescription =
             "Optional PR reference (e.g. 'owner/repo#123' or a github.com PR URL). " +
-            "Defaults to the session's PR if launched via `kapacitor review`, otherwise auto-detected from current branch.";
+            "Defaults to the session's PR if launched via `kcap review`, otherwise auto-detected from current branch.";
 
         return [
             new(

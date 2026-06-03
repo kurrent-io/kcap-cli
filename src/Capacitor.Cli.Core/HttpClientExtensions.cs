@@ -17,7 +17,7 @@ public static class HttpClientExtensions {
     public static async Task<HttpClient> CreateAuthenticatedClientAsync(string? baseUrl = null, CancellationToken ct = default) {
         var client = new HttpClient();
 
-        baseUrl ??= AppConfig.ResolvedServerUrl ?? Environment.GetEnvironmentVariable("KAPACITOR_URL") ?? "http://localhost:5108";
+        baseUrl ??= AppConfig.ResolvedServerUrl ?? Environment.GetEnvironmentVariable("KCAP_URL") ?? "http://localhost:5108";
         var provider = await DiscoverProviderAsync(baseUrl, ct);
 
         if (provider == "None") {
@@ -32,9 +32,9 @@ public static class HttpClientExtensions {
             var stored = await TokenStore.LoadAsync();
 
             if (stored is not null) {
-                await Console.Error.WriteLineAsync("Authentication token has expired. Run 'kapacitor login' to re-authenticate.");
+                await Console.Error.WriteLineAsync("Authentication token has expired. Run 'kcap login' to re-authenticate.");
             } else {
-                await Console.Error.WriteLineAsync("Not authenticated. Run 'kapacitor login' to authenticate.");
+                await Console.Error.WriteLineAsync("Not authenticated. Run 'kcap login' to authenticate.");
             }
         }
 
@@ -59,7 +59,7 @@ public static class HttpClientExtensions {
             var response = await http.GetAsync($"{baseUrl}/auth/config", ct);
 
             if (response.IsSuccessStatusCode) {
-                var config   = await response.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.AuthDiscoveryResponse, ct);
+                var config   = await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.AuthDiscoveryResponse, ct);
                 var provider = config?.Provider ?? "None";
                 cachedProvider = provider; // Only cache successful discovery
 
@@ -86,7 +86,7 @@ public static class HttpClientExtensions {
         "\rError connecting to: ";
 
     internal const string SchemeMissingHint =
-        "server_url is missing a scheme. Run: kapacitor config set server_url https://<host>";
+        "server_url is missing a scheme. Run: kcap config set server_url https://<host>";
 
     /// <summary>
     /// Pure test seam for <see cref="EnsureAbsolute"/>. Returns <c>true</c> only
@@ -193,9 +193,9 @@ public static class HttpClientExtensions {
         try {
             using var doc     = JsonDocument.Parse(body);
             var       message = doc.RootElement.Str("message");
-            await Console.Error.WriteLineAsync(message ?? "Authentication failed. Run 'kapacitor login' to re-authenticate.");
+            await Console.Error.WriteLineAsync(message ?? "Authentication failed. Run 'kcap login' to re-authenticate.");
         } catch {
-            await Console.Error.WriteLineAsync("Authentication failed. Run 'kapacitor login' to re-authenticate.");
+            await Console.Error.WriteLineAsync("Authentication failed. Run 'kcap login' to re-authenticate.");
         }
 
         return true;

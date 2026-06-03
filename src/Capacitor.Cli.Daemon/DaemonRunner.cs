@@ -30,7 +30,7 @@ public static partial class DaemonRunner {
         // Resolve server URL + active profile. The CLI does this in its own
         // Program.cs, but the daemon is a separate process so its statics start
         // empty. Skips repo discovery (the daemon isn't bound to a working dir);
-        // honors --server-url, KAPACITOR_URL, KAPACITOR_PROFILE.
+        // honors --server-url, KCAP_URL, KCAP_PROFILE.
         await AppConfig.ResolveActiveProfile(args);
         config.ServerUrl = AppConfig.ResolvedServerUrl ?? "";
 
@@ -81,17 +81,17 @@ public static partial class DaemonRunner {
         if (!string.IsNullOrEmpty(profileDaemon?.CodexPath))
             config.CodexPath = profileDaemon.CodexPath;
 
-        if (Environment.GetEnvironmentVariable("KAPACITOR_MAX_AGENTS") is { } maxAgents) {
+        if (Environment.GetEnvironmentVariable("KCAP_MAX_AGENTS") is { } maxAgents) {
             if (int.TryParse(maxAgents, out var n) && n >= 1)
                 config.MaxConcurrentAgents = n;
             else
-                await Console.Error.WriteLineAsync($"Warning: ignoring invalid KAPACITOR_MAX_AGENTS={maxAgents}");
+                await Console.Error.WriteLineAsync($"Warning: ignoring invalid KCAP_MAX_AGENTS={maxAgents}");
         }
 
-        if (Environment.GetEnvironmentVariable("KAPACITOR_CLAUDE_PATH") is { Length: > 0 } envClaudePath)
+        if (Environment.GetEnvironmentVariable("KCAP_CLAUDE_PATH") is { Length: > 0 } envClaudePath)
             config.ClaudePath = envClaudePath;
 
-        if (Environment.GetEnvironmentVariable("KAPACITOR_CODEX_PATH") is { Length: > 0 } envCodexPath)
+        if (Environment.GetEnvironmentVariable("KCAP_CODEX_PATH") is { Length: > 0 } envCodexPath)
             config.CodexPath = envCodexPath;
 
         // Shared name resolution with the CLI supervisor — the CLI's
@@ -128,8 +128,8 @@ public static partial class DaemonRunner {
 
         if (daemonLock is null) {
             await Console.Error.WriteLineAsync(
-                $"Another kapacitor-daemon is already running under the name '{config.Name}' on this machine. "
-                + $"Either stop it (`kapacitor daemon stop --name {config.Name}`) or start this one with a different `--name`."
+                $"Another kcap-daemon is already running under the name '{config.Name}' on this machine. "
+                + $"Either stop it (`kcap daemon stop --name {config.Name}`) or start this one with a different `--name`."
             );
 
             return 2;
@@ -172,7 +172,7 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<EvalRunner>();
 
         var host   = builder.Build();
-        var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("kapacitor.Daemon");
+        var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("kcap.Daemon");
 
         // AI-652: probe each registered launcher's CLI binary so the
         // DaemonConnect payload only advertises vendors this daemon can
@@ -251,6 +251,6 @@ public static partial class DaemonRunner {
         return nameInUse ? 3 : 0;
     }
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "kapacitor daemon '{Name}' starting, connecting to {ServerUrl}")]
+    [LoggerMessage(Level = LogLevel.Information, Message = "kcap daemon '{Name}' starting, connecting to {ServerUrl}")]
     static partial void LogDaemonStarting(ILogger logger, string name, string serverUrl);
 }

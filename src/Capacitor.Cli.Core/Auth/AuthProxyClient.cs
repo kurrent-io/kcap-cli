@@ -13,7 +13,7 @@ public class AuthProxyClient(HttpClient http) : IAuthProxyClient {
         try {
             using var response = await http.GetAsync($"{proxyUrl}/config");
             if (!response.IsSuccessStatusCode) return null;
-            return await response.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.ProxyConfigResponse);
+            return await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.ProxyConfigResponse);
         } catch (Exception e) when (e is HttpRequestException or OperationCanceledException) {
             return null;
         }
@@ -36,5 +36,5 @@ public class AuthProxyClient(HttpClient http) : IAuthProxyClient {
     }
 
     static async Task<DiscoveredTenant[]> ReadTenants(HttpResponseMessage response) =>
-        await response.Content.ReadFromJsonAsync(KapacitorJsonContext.Default.DiscoveredTenantArray) ?? [];
+        await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.DiscoveredTenantArray) ?? [];
 }

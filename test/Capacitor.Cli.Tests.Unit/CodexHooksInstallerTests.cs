@@ -21,7 +21,7 @@ public class CodexHooksInstallerTests {
     }
 
     [Test]
-    public async Task IsInstalled_true_when_hooks_json_has_kapacitor_entry_but_no_marker() {
+    public async Task IsInstalled_true_when_hooks_json_has_kcap_entry_but_no_marker() {
         // Pre-marker install: hooks.json was written by an older CLI build
         // that didn't stamp a marker. The very first upgrade must still
         // refresh, otherwise stale command strings linger forever.
@@ -31,7 +31,7 @@ public class CodexHooksInstallerTests {
             {
               "hooks": {
                 "SessionStart": [
-                  { "hooks": [{ "type": "command", "command": "kapacitor codex-hook", "timeout": 5 }] }
+                  { "hooks": [{ "type": "command", "command": "kcap codex-hook", "timeout": 5 }] }
                 ]
               }
             }
@@ -69,7 +69,7 @@ public class CodexHooksInstallerTests {
         var hooksPath = Path.Combine(tmp.Path, "hooks.json");
         CodexHooksInstaller.WriteMarker(hooksPath);
         await Assert.That(CodexHooksInstaller.ReadMarker(hooksPath))
-            .IsEqualTo(KapacitorVersion.Current());
+            .IsEqualTo(CapacitorVersion.Current());
     }
 
     [Test]
@@ -94,7 +94,7 @@ public class CodexHooksInstallerTests {
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
-            $"kapacitor-codex-hooks-installer-test-{Guid.NewGuid().ToString("N")[..8]}"
+            $"kcap-codex-hooks-installer-test-{Guid.NewGuid().ToString("N")[..8]}"
         );
         public TempDir() => Directory.CreateDirectory(Path);
         public void Dispose() {

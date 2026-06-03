@@ -9,14 +9,14 @@ namespace Capacitor.Cli.Tests.Unit.Daemon;
 /// acquiring the same name on the same machine fails fast.
 ///
 /// All tests redirect <see cref="DaemonLockPaths"/> to a temp directory so
-/// nothing touches the user's real <c>~/.config/kapacitor/daemons</c>. The
+/// nothing touches the user's real <c>~/.config/kcap/daemons</c>. The
 /// per-class isolation pattern (unique subdir per test, restored at the
 /// end) keeps the tests independent of one another's failed/leaked locks.
 /// </summary>
 [NotInParallel(nameof(DaemonLockPaths) + ".OverrideDirectoryForTesting")]
 public class DaemonLockTests {
     static string CreateScratchDir() {
-        var dir = Path.Combine(Path.GetTempPath(), "kapacitor-lock-tests", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(Path.GetTempPath(), "kcap-lock-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         DaemonLockPaths.OverrideDirectoryForTesting(dir);
 

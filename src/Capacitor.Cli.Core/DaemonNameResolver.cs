@@ -1,7 +1,7 @@
 namespace Capacitor.Cli.Core;
 
 /// <summary>
-/// Shared resolution of the daemon's name. Lives in Kapacitor.Core
+/// Shared resolution of the daemon's name. Lives in Capacitor.Core
 /// so the CLI supervisor and the daemon binary agree on which name the
 /// per-name lock / PID files belong to. Precedence — first non-empty
 /// source wins:
@@ -9,7 +9,7 @@ namespace Capacitor.Cli.Core;
 /// <list type="number">
 /// <item><c>--name &lt;value&gt;</c> on the command line — the most
 ///     explicit signal, takes priority over everything else.</item>
-/// <item><c>KAPACITOR_DAEMON_NAME</c> environment variable — useful for
+/// <item><c>KCAP_DAEMON_NAME</c> environment variable — useful for
 ///     shell scripts that fan out multiple daemons without rewriting
 ///     argv (e.g. <c>direnv</c> per shell).</item>
 /// <item><c>profile.daemon.name</c> from the active profile (resolved
@@ -29,7 +29,7 @@ public static class DaemonNameResolver {
     /// Parse the daemon name from <paramref name="args"/>. Pass the
     /// profile-supplied default (typically
     /// <c>AppConfig.ResolvedProfile?.Profile?.Daemon?.Name</c>) so callers
-    /// don't need to thread AppConfig into Kapacitor.Core. Returns the
+    /// don't need to thread AppConfig into Capacitor.Core. Returns the
     /// resolved name; never null or empty.
     /// </summary>
     public static string Resolve(string[] args, string? profileName = null) {
@@ -55,7 +55,7 @@ public static class DaemonNameResolver {
             return args[i + 1];
         }
 
-        if (Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_NAME") is { Length: > 0 } envName)
+        if (Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 } envName)
             return envName;
 
         if (!string.IsNullOrEmpty(profileName))

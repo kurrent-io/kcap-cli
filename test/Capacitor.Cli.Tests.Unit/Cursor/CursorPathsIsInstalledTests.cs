@@ -46,15 +46,15 @@ public class CursorPathsIsInstalledTests {
     }
 
     [Test]
-    public async Task SpoolDir_is_dot_cursor_kapacitor_pending_under_home() {
+    public async Task SpoolDir_is_dot_cursor_kcap_pending_under_home() {
         var resolved = CursorPaths.SpoolDir(home: "/tmp/h");
-        await Assert.That(resolved).IsEqualTo("/tmp/h/.cursor/kapacitor-pending");
+        await Assert.That(resolved).IsEqualTo("/tmp/h/.cursor/kcap-pending");
     }
 
     sealed class TempHome : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
-            $"kapacitor-cursor-paths-test-{Guid.NewGuid().ToString("N")[..8]}");
+            $"kcap-cursor-paths-test-{Guid.NewGuid().ToString("N")[..8]}");
         public TempHome() => Directory.CreateDirectory(Path);
         public void Dispose() { try { Directory.Delete(Path, true); } catch { } }
     }

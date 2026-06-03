@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Tests.Unit;
 public class GitRepositoryTests {
     [Test]
     public async Task FindRoot_returns_null_for_directory_with_no_git_entry_anywhere() {
-        var tmp = Directory.CreateTempSubdirectory("kapacitor-git-test-");
+        var tmp = Directory.CreateTempSubdirectory("kcap-git-test-");
         try {
             var nested = Path.Combine(tmp.FullName, "a", "b", "c");
             Directory.CreateDirectory(nested);
@@ -18,7 +18,7 @@ public class GitRepositoryTests {
 
     [Test]
     public async Task FindRoot_returns_directory_when_dot_git_directory_is_present() {
-        var tmp = Directory.CreateTempSubdirectory("kapacitor-git-test-");
+        var tmp = Directory.CreateTempSubdirectory("kcap-git-test-");
         try {
             Directory.CreateDirectory(Path.Combine(tmp.FullName, ".git"));
 
@@ -30,7 +30,7 @@ public class GitRepositoryTests {
 
     [Test]
     public async Task FindRoot_returns_directory_when_dot_git_is_a_file_as_in_worktrees_or_submodules() {
-        var tmp = Directory.CreateTempSubdirectory("kapacitor-git-test-");
+        var tmp = Directory.CreateTempSubdirectory("kcap-git-test-");
         try {
             await File.WriteAllTextAsync(Path.Combine(tmp.FullName, ".git"), "gitdir: ../parent/.git/worktrees/x\n");
 
@@ -42,7 +42,7 @@ public class GitRepositoryTests {
 
     [Test]
     public async Task FindRoot_walks_up_and_returns_the_ancestor_holding_the_dot_git_entry() {
-        var tmp = Directory.CreateTempSubdirectory("kapacitor-git-test-");
+        var tmp = Directory.CreateTempSubdirectory("kcap-git-test-");
         try {
             Directory.CreateDirectory(Path.Combine(tmp.FullName, ".git"));
             var nested = Path.Combine(tmp.FullName, "a", "b", "c");
@@ -61,7 +61,7 @@ public class GitRepositoryTests {
 
     [Test]
     public async Task IsInsideRepo_matches_FindRoot_result() {
-        var tmp = Directory.CreateTempSubdirectory("kapacitor-git-test-");
+        var tmp = Directory.CreateTempSubdirectory("kcap-git-test-");
         try {
             await Assert.That(GitRepository.IsInsideRepo(tmp.FullName)).IsFalse();
 

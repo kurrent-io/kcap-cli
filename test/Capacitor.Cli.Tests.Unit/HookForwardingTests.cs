@@ -76,7 +76,7 @@ public class InlineDrainTests : IDisposable {
         _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
 
-        var dir            = Path.Combine(Path.GetTempPath(), $"kapacitor_test_{Guid.NewGuid():N}");
+        var dir            = Path.Combine(Path.GetTempPath(), $"kcap_test_{Guid.NewGuid():N}");
         var transcriptPath = Path.Combine(dir, "transcript.jsonl");
         Directory.CreateDirectory(dir);
 
@@ -118,7 +118,7 @@ public class InlineDrainTests : IDisposable {
         _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
 
-        var dir            = Path.Combine(Path.GetTempPath(), $"kapacitor_test_{Guid.NewGuid():N}");
+        var dir            = Path.Combine(Path.GetTempPath(), $"kcap_test_{Guid.NewGuid():N}");
         var transcriptPath = Path.Combine(dir, "rollout.jsonl");
         Directory.CreateDirectory(dir);
 

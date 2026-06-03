@@ -8,8 +8,8 @@ namespace Capacitor.Cli.Commands;
 public static class PluginCommand {
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
-    const string CodexHookCommand  = "kapacitor codex-hook";
-    const string CursorHookCommand = "kapacitor hook --cursor";
+    const string CodexHookCommand  = "kcap codex-hook";
+    const string CursorHookCommand = "kcap hook --cursor";
 
     // PermissionRequest must wait for the dashboard's decision; the daemon-side
     // bridge call is intentionally infinite. 86400s = 24h keeps Codex from
@@ -82,7 +82,7 @@ public static class PluginCommand {
         switch (refreshOnly) {
             case true when !ClaudePluginInstaller.IsInstalled(settingsPath):
             case true when
-                ClaudePluginInstaller.ReadMarker(settingsPath) == KapacitorVersion.Current():
+                ClaudePluginInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current():
                 return 0;
         }
 
@@ -91,8 +91,8 @@ public static class PluginCommand {
         if (pluginPath is null) {
             if (refreshOnly) return 0;
 
-            await Console.Error.WriteLineAsync("Plugin directory not found. Re-install kapacitor via npm:");
-            await Console.Error.WriteLineAsync("  npm install -g @kurrent/kapacitor");
+            await Console.Error.WriteLineAsync("Plugin directory not found. Re-install kcap via npm:");
+            await Console.Error.WriteLineAsync("  npm install -g @kurrent/kcap");
 
             return 1;
         }
@@ -156,12 +156,12 @@ public static class PluginCommand {
     }
 
     /// <summary>
-    /// Removes kapacitor's marketplace + enabledPlugins entries (including the
+    /// Removes kcap's marketplace + enabledPlugins entries (including the
     /// legacy <c>kurrent</c> keys) from the Claude Code settings file at
-    /// <paramref name="settingsPath"/>, and deletes the version marker. Non-kapacitor
+    /// <paramref name="settingsPath"/>, and deletes the version marker. Non-kcap
     /// settings are preserved. Throws on I/O failure so callers can decide how to
     /// report it; returns <see cref="ClaudeRemovalOutcome.NotInstalled"/> when the
-    /// file exists but contains no kapacitor entries.
+    /// file exists but contains no kcap entries.
     /// </summary>
     public static ClaudeRemovalOutcome RemoveClaudePlugin(string settingsPath) {
         if (!File.Exists(settingsPath)) return ClaudeRemovalOutcome.NotInstalled;
@@ -173,12 +173,12 @@ public static class PluginCommand {
         var changed = false;
 
         if (root["enabledPlugins"] is JsonObject enabled) {
-            changed |= enabled.Remove("kapacitor@kapacitor");
-            changed |= enabled.Remove("kapacitor@kurrent");
+            changed |= enabled.Remove("kcap@kcap");
+            changed |= enabled.Remove("kcap@kurrent");
         }
 
         if (root["extraKnownMarketplaces"] is JsonObject marketplaces) {
-            changed |= marketplaces.Remove("kapacitor");
+            changed |= marketplaces.Remove("kcap");
             changed |= marketplaces.Remove("kurrent");
         }
 
@@ -200,7 +200,7 @@ public static class PluginCommand {
         // --if-installed: only refresh when a marker file shows the user has
         // previously installed skills. Used by the npm postinstall hook to
         // keep existing installs up to date without forcing skills onto users
-        // who haven't run `kapacitor setup` yet.
+        // who haven't run `kcap setup` yet.
         var refreshOnly = args.Contains("--if-installed");
 
         switch (refreshOnly) {
@@ -220,8 +220,8 @@ public static class PluginCommand {
             if (refreshOnly) return 0;
 
             await Console.Error.WriteLineAsync(
-                "Cannot install agent skills: kapacitor plugin folder not found. " +
-                "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
+                "Cannot install agent skills: kcap plugin folder not found. " +
+                "Re-install kcap via npm: npm install -g @kurrent/kcap"
             );
 
             return 1;
@@ -234,7 +234,7 @@ public static class PluginCommand {
 
             await Console.Error.WriteLineAsync(
                 $"Cannot install agent skills: 'skills' folder missing from {pluginPath}. " +
-                "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
+                "Re-install kcap via npm: npm install -g @kurrent/kcap"
             );
 
             return 1;
@@ -296,8 +296,8 @@ public static class PluginCommand {
 
         switch (refreshOnly) {
             case true when !CodexHooksInstaller.IsInstalled(hooksPath):
-            case true when CodexHooksInstaller.ReadMarker(hooksPath) == KapacitorVersion.Current():
-            // Hooks-only refresh: rewrite the kapacitor entries in hooks.json,
+            case true when CodexHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current():
+            // Hooks-only refresh: rewrite the kcap entries in hooks.json,
             // stamp the marker, exit. No skills, no plugin folder needed.
             // Never fail the npm install path.
             case true when !InstallCodexHooks(hooksPath):
@@ -316,8 +316,8 @@ public static class PluginCommand {
 
         if (pluginPath is null) {
             await Console.Error.WriteLineAsync(
-                "Cannot install Codex plugin: kapacitor plugin folder not found. " +
-                "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
+                "Cannot install Codex plugin: kcap plugin folder not found. " +
+                "Re-install kcap via npm: npm install -g @kurrent/kcap"
             );
 
             return 1;
@@ -328,7 +328,7 @@ public static class PluginCommand {
         if (!Directory.Exists(skillsSource)) {
             await Console.Error.WriteLineAsync(
                 $"Cannot install Codex plugin: 'skills' folder missing from {pluginPath}. " +
-                "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
+                "Re-install kcap via npm: npm install -g @kurrent/kcap"
             );
 
             return 1;
@@ -346,7 +346,7 @@ public static class PluginCommand {
             await Console.Error.WriteLineAsync(
                 $"Cannot install Codex plugin: missing skill folder(s) under {skillsSource}: "
               + string.Join(", ", missingSkills)
-              + ". Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
+              + ". Re-install kcap via npm: npm install -g @kurrent/kcap"
             );
 
             return 1;
@@ -361,7 +361,7 @@ public static class PluginCommand {
         await Console.Out.WriteLineAsync($"Codex hooks installed ({scope}: {hooksPath})");
 
         await Console.Out.WriteLineAsync(
-            "Next: run /hooks inside Codex and trust each kapacitor entry — " +
+            "Next: run /hooks inside Codex and trust each kcap entry — " +
             "Codex won't execute hooks until each is explicitly trusted."
         );
 
@@ -433,8 +433,8 @@ public static class PluginCommand {
 
     /// <summary>
     /// Writes (or merges into) <paramref name="hooksPath"/> a hooks.json that
-    /// invokes <c>kapacitor codex-hook</c> for every Codex event. Existing
-    /// non-kapacitor entries are preserved; existing kapacitor entries are
+    /// invokes <c>kcap codex-hook</c> for every Codex event. Existing
+    /// non-kcap entries are preserved; existing kcap entries are
     /// replaced (so the timeout/command stay current after a CLI upgrade).
     /// </summary>
     public static bool InstallCodexHooks(string hooksPath) {
@@ -457,7 +457,7 @@ public static class PluginCommand {
             foreach (var evt in CodexHooksParser.CodexHookEvents) {
                 var timeout = evt == "PermissionRequest" ? PermissionRequestTimeout : DefaultHookTimeout;
 
-                var kapacitorEntry = new JsonObject {
+                var kcapEntry = new JsonObject {
                     ["hooks"] = new JsonArray(
                         new JsonObject {
                             ["type"]    = "command",
@@ -468,7 +468,7 @@ public static class PluginCommand {
                 };
 
                 if (hooks[evt] is not JsonArray entries) {
-                    hooks[evt] = new JsonArray(kapacitorEntry);
+                    hooks[evt] = new JsonArray(kcapEntry);
 
                     continue;
                 }
@@ -478,12 +478,12 @@ public static class PluginCommand {
                 foreach (var entry in entries) {
                     if (entry is null) continue;
 
-                    if (!CodexHooksParser.EntryReferencesKapacitorCodexHook(entry)) {
+                    if (!CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)) {
                         preserved.Add(entry.DeepClone());
                     }
                 }
 
-                preserved.Add((JsonNode)kapacitorEntry);
+                preserved.Add((JsonNode)kcapEntry);
                 hooks[evt] = preserved;
             }
 
@@ -500,7 +500,7 @@ public static class PluginCommand {
 
     /// <summary>
     /// Removes every entry in <paramref name="hooksPath"/> whose command
-    /// invokes <c>kapacitor codex-hook</c>. Other entries are preserved.
+    /// invokes <c>kcap codex-hook</c>. Other entries are preserved.
     /// Returns true if any entries were removed. Throws on I/O failure
     /// (caller decides how to surface partial writes); returns false only
     /// when there was genuinely nothing to remove.
@@ -521,7 +521,7 @@ public static class PluginCommand {
             foreach (var entry in entries) {
                 if (entry is null) continue;
 
-                if (CodexHooksParser.EntryReferencesKapacitorCodexHook(entry)) {
+                if (CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)) {
                     changed = true;
                 } else {
                     preserved.Add(entry.DeepClone());
@@ -546,17 +546,17 @@ public static class PluginCommand {
 
         switch (refreshOnly) {
             case true when !CursorHooksInstaller.IsInstalled(hooksPath):
-            case true when CursorHooksInstaller.ReadMarker(hooksPath) == KapacitorVersion.Current():
+            case true when CursorHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current():
                 return 0;
             // PATH precheck on the non-postinstall path. hooks.json writes the bare
-            // `kapacitor hook --cursor` command; we must verify Cursor will actually
+            // `kcap hook --cursor` command; we must verify Cursor will actually
             // find it. Skip the precheck on the postinstall (--if-installed) path so
             // an in-flight npm install doesn't fail just because the new symlink
             // isn't on the child process's PATH yet.
-            case false when !AgentDetector.IsInstalled("kapacitor"):
+            case false when !AgentDetector.IsInstalled("kcap"):
                 await Console.Error.WriteLineAsync(
-                    "Cannot install Cursor hooks: 'kapacitor' is not on PATH. "
-                  + "Re-install kapacitor via npm: npm install -g @kurrent/kapacitor"
+                    "Cannot install Cursor hooks: 'kcap' is not on PATH. "
+                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
                 );
 
                 return 1;
@@ -607,8 +607,8 @@ public static class PluginCommand {
 
     /// <summary>
     /// Writes (or merges into) <paramref name="hooksPath"/> a Cursor hooks.json
-    /// invoking <c>kapacitor hook --cursor</c> for every event. Preserves
-    /// user-authored entries; replaces existing kapacitor entries.
+    /// invoking <c>kcap hook --cursor</c> for every event. Preserves
+    /// user-authored entries; replaces existing kcap entries.
     /// </summary>
     public static bool InstallCursorHooks(string hooksPath) {
         try {
@@ -630,12 +630,12 @@ public static class PluginCommand {
             }
 
             foreach (var evt in CursorHooksParser.CursorHookEvents) {
-                var kapacitorEntry = new JsonObject {
+                var kcapEntry = new JsonObject {
                     ["command"] = CursorHookCommand
                 };
 
                 if (hooks[evt] is not JsonArray entries) {
-                    hooks[evt] = new JsonArray(kapacitorEntry);
+                    hooks[evt] = new JsonArray(kcapEntry);
 
                     continue;
                 }
@@ -645,12 +645,12 @@ public static class PluginCommand {
                 foreach (var entry in entries) {
                     if (entry is null) continue;
 
-                    if (!CursorHooksParser.EntryReferencesKapacitorCursorHook(entry)) {
+                    if (!CursorHooksParser.EntryReferencesCapacitorCursorHook(entry)) {
                         preserved.Add(entry.DeepClone());
                     }
                 }
 
-                preserved.Add((JsonNode)kapacitorEntry);
+                preserved.Add((JsonNode)kcapEntry);
                 hooks[evt] = preserved;
             }
 
@@ -664,7 +664,7 @@ public static class PluginCommand {
 
     /// <summary>
     /// Removes every entry in <paramref name="hooksPath"/> whose command
-    /// invokes <c>kapacitor hook --cursor</c>. Other entries are preserved.
+    /// invokes <c>kcap hook --cursor</c>. Other entries are preserved.
     /// Returns true if any entries were removed. Throws on I/O failure
     /// (caller decides how to surface partial writes); returns false only
     /// when there was genuinely nothing to remove.
@@ -684,7 +684,7 @@ public static class PluginCommand {
             foreach (var entry in entries) {
                 if (entry is null) continue;
 
-                if (CursorHooksParser.EntryReferencesKapacitorCursorHook(entry)) {
+                if (CursorHooksParser.EntryReferencesCapacitorCursorHook(entry)) {
                     changed = true;
                 } else {
                     preserved.Add(entry.DeepClone());
@@ -710,7 +710,7 @@ public static class PluginCommand {
 
     static int PrintUsage() {
         Console.Error.WriteLine(
-            "Usage: kapacitor plugin <install|remove> [--project] [--codex|--cursor|--skills] [--if-installed]"
+            "Usage: kcap plugin <install|remove> [--project] [--codex|--cursor|--skills] [--if-installed]"
         );
 
         return 1;

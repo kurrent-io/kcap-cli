@@ -10,7 +10,7 @@ public class ProfileCommandTests {
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
-            "kapacitor-test-" + Guid.NewGuid().ToString("N")[..8]
+            "kcap-test-" + Guid.NewGuid().ToString("N")[..8]
         );
 
         public TempDir() => Directory.CreateDirectory(Path);
@@ -34,7 +34,7 @@ public class ProfileCommandTests {
             JsonSerializer.Serialize(initial, ProfileConfigJsonContextIndented.Default.ProfileConfig));
 
         var result = await ProfileCommand.AddProfile(
-            configPath, "contoso", "https://contoso.kapacitor.io",
+            configPath, "contoso", "https://contoso.kcap.io",
             ["github.com/contoso/*"]
         );
 
@@ -44,7 +44,7 @@ public class ProfileCommandTests {
         var config = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.ProfileConfig)!;
 
         await Assert.That(config.Profiles).ContainsKey("contoso");
-        await Assert.That(config.Profiles["contoso"].ServerUrl).IsEqualTo("https://contoso.kapacitor.io");
+        await Assert.That(config.Profiles["contoso"].ServerUrl).IsEqualTo("https://contoso.kcap.io");
         await Assert.That(config.Profiles["contoso"].Remotes).Contains("github.com/contoso/*");
     }
 
@@ -87,7 +87,7 @@ public class ProfileCommandTests {
 
         // skipProbe defaults to true → no network, falls back to loopback heuristic.
         var result = await ProfileCommand.AddProfile(
-            configPath, "contoso", "contoso.kapacitor.io", remotes: []);
+            configPath, "contoso", "contoso.kcap.io", remotes: []);
 
         await Assert.That(result).IsEqualTo(0);
 
@@ -95,7 +95,7 @@ public class ProfileCommandTests {
             await File.ReadAllTextAsync(configPath),
             ProfileConfigJsonContextIndented.Default.ProfileConfig)!;
 
-        await Assert.That(saved.Profiles["contoso"].ServerUrl).IsEqualTo("https://contoso.kapacitor.io");
+        await Assert.That(saved.Profiles["contoso"].ServerUrl).IsEqualTo("https://contoso.kcap.io");
     }
 
     [Test]

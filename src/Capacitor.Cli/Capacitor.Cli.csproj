@@ -17,16 +17,16 @@
         <InternalsVisibleTo Include="Capacitor.Cli.Tests.Unit" />
         <InternalsVisibleTo Include="Capacitor.Cli.Tests.Integration" />
         <!-- Used when referenced as a submodule from the server repo -->
-        <InternalsVisibleTo Include="Kapacitor.Server.TestHelpers" />
-        <InternalsVisibleTo Include="Kapacitor.Server.Tests" />
-        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Agents" />
-        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Auth" />
-        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Chat" />
-        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Evals" />
-        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Ingest" />
-        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Notify" />
-        <InternalsVisibleTo Include="Kapacitor.Server.Tests.Read" />
-        <InternalsVisibleTo Include="Kapacitor.Server.Tests.UI" />
+        <InternalsVisibleTo Include="Capacitor.Server.TestHelpers" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.Agents" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.Auth" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.Chat" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.Evals" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.Ingest" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.Notify" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.Read" />
+        <InternalsVisibleTo Include="Capacitor.Server.Tests.UI" />
     </ItemGroup>
     <ItemGroup>
         <ProjectReference Include="..\Capacitor.Cli.Core\Capacitor.Cli.Core.csproj" />

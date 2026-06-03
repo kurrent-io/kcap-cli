@@ -1,6 +1,6 @@
-kapacitor recap — Session summary
+kcap recap — Session summary
 
-Usage: kapacitor recap [options] [sessionId]
+Usage: kcap recap [options] [sessionId]
 
 Options:
   --chain                 Include all sessions in the continuation chain

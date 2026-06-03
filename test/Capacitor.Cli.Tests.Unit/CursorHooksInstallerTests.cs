@@ -20,11 +20,11 @@ public class CursorHooksInstallerTests {
     }
 
     [Test]
-    public async Task IsInstalled_true_when_hooks_json_has_kapacitor_entry_but_no_marker() {
+    public async Task IsInstalled_true_when_hooks_json_has_kcap_entry_but_no_marker() {
         using var tmp = new TempDir();
         var hooksPath = Path.Combine(tmp.Path, "hooks.json");
         await File.WriteAllTextAsync(hooksPath, """
-            {"version":1,"hooks":{"sessionStart":[{"command":"kapacitor hook --cursor"}]}}
+            {"version":1,"hooks":{"sessionStart":[{"command":"kcap hook --cursor"}]}}
             """);
         await Assert.That(CursorHooksInstaller.IsInstalled(hooksPath)).IsTrue();
     }
@@ -53,7 +53,7 @@ public class CursorHooksInstallerTests {
         var hooksPath = Path.Combine(tmp.Path, "hooks.json");
         CursorHooksInstaller.WriteMarker(hooksPath);
         await Assert.That(CursorHooksInstaller.ReadMarker(hooksPath))
-            .IsEqualTo(KapacitorVersion.Current());
+            .IsEqualTo(CapacitorVersion.Current());
     }
 
     [Test]
@@ -76,7 +76,7 @@ public class CursorHooksInstallerTests {
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
-            $"kapacitor-cursor-hooks-installer-test-{Guid.NewGuid().ToString("N")[..8]}");
+            $"kcap-cursor-hooks-installer-test-{Guid.NewGuid().ToString("N")[..8]}");
         public TempDir() => Directory.CreateDirectory(Path);
         public void Dispose() { try { Directory.Delete(Path, true); } catch { } }
     }

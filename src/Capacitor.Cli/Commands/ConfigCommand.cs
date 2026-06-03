@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Commands;
 public static class ConfigCommand {
     public static async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
-            await Console.Error.WriteLineAsync("Usage: kapacitor config <show|set> [key] [value]");
+            await Console.Error.WriteLineAsync("Usage: kcap config <show|set> [key] [value]");
 
             return 1;
         }
@@ -83,7 +83,7 @@ public static class ConfigCommand {
         };
 
     static int SetUsage() {
-        Console.Error.WriteLine("Usage: kapacitor config set <key> <value> [--no-probe]");
+        Console.Error.WriteLine("Usage: kcap config set <key> <value> [--no-probe]");
         Console.Error.WriteLine();
         Console.Error.WriteLine("Keys:");
         Console.Error.WriteLine("  server_url                  Server URL");

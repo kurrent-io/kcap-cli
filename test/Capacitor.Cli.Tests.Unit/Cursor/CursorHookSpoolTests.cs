@@ -163,7 +163,7 @@ public class CursorHookSpoolTests {
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
-            $"kapacitor-cursor-spool-test-{Guid.NewGuid().ToString("N")[..8]}"
+            $"kcap-cursor-spool-test-{Guid.NewGuid().ToString("N")[..8]}"
         );
         public TempDir() => Directory.CreateDirectory(Path);
 

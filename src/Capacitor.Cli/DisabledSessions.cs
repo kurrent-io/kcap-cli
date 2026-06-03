@@ -5,7 +5,7 @@ namespace Capacitor.Cli;
 
 /// <summary>
 /// Disk-backed marker store recording sessions that the user disabled via
-/// <c>kapacitor disable</c>. Hook handlers check <see cref="IsDisabled"/>
+/// <c>kcap disable</c>. Hook handlers check <see cref="IsDisabled"/>
 /// before doing any server-bound work so a disabled session never re-sends
 /// transcript data after its server-side record was deleted.
 /// </summary>

@@ -1,16 +1,16 @@
-kapacitor hook — dispatch a vendor hook event
+kcap hook — dispatch a vendor hook event
 
-Usage: kapacitor hook --<vendor>
+Usage: kcap hook --<vendor>
 
 Description:
   Invoked by a coding agent's hook system, NOT by users directly. Reads
-  the hook payload as JSON from stdin and forwards it to the kapacitor
+  the hook payload as JSON from stdin and forwards it to the kcap
   server. The dispatcher is bounded to 2 seconds wall-clock; on server
-  unavailability payloads are spooled to ~/.cursor/kapacitor-pending/
+  unavailability payloads are spooled to ~/.cursor/kcap-pending/
   and retried on the next hook invocation.
 
-  The command is registered via 'kapacitor setup' or
-  'kapacitor plugin install --cursor', which writes the appropriate
+  The command is registered via 'kcap setup' or
+  'kcap plugin install --cursor', which writes the appropriate
   hooks.json entries for the detected vendor.
 
 Options:

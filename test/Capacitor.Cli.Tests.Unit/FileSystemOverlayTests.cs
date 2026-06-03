@@ -72,7 +72,7 @@ public class FileSystemOverlayTests {
         public string External { get; }
 
         public TempDir() {
-            _root = Directory.CreateTempSubdirectory("kapacitor-overlay-test-");
+            _root = Directory.CreateTempSubdirectory("kcap-overlay-test-");
             Source = Path.Combine(_root.FullName, "source");
             Dest = Path.Combine(_root.FullName, "dest");
             External = Path.Combine(_root.FullName, "external");

@@ -1,6 +1,6 @@
-kapacitor setup — Configure server, login, and install hooks
+kcap setup — Configure server, login, and install hooks
 
-Usage: kapacitor setup [options]
+Usage: kcap setup [options]
 
 Options:
   --server-url <url>          Server URL (skip prompt)
@@ -22,7 +22,7 @@ the cursor shell command are covered. One yes/no prompt is shown per detected
 agent. Hooks are installed user-wide. For project-scope or post-setup
 re-installs, use:
 
-  kapacitor plugin install [--codex] [--cursor] [--project]
+  kcap plugin install [--codex] [--cursor] [--project]
 
 Legacy:
   --plugin-scope <user|project|skip>
@@ -31,4 +31,4 @@ Legacy:
           project → install the Claude plugin into <repo>/.claude/settings.local.json
           skip    → alias for --skip-claude-hooks
         New scripts should use --skip-claude-hooks / --skip-codex-hooks. For
-        project-scope installs, prefer `kapacitor plugin install --project`.
+        project-scope installs, prefer `kcap plugin install --project`.

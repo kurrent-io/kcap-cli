@@ -38,10 +38,10 @@ public class PluginCommandSkillsTests {
 
     [Test]
     public async Task Install_skills_writes_to_agents_dir_and_cleans_legacy() {
-        var fakeHome      = Directory.CreateTempSubdirectory("kapacitor-plugin-skills-test-");
+        var fakeHome      = Directory.CreateTempSubdirectory("kcap-plugin-skills-test-");
         var originalHome  = Environment.GetEnvironmentVariable("HOME");
-        var pluginPath    = Directory.CreateTempSubdirectory("kapacitor-plugin-src-");
-        var originalPlug  = Environment.GetEnvironmentVariable("KAPACITOR_PLUGIN_DIR");
+        var pluginPath    = Directory.CreateTempSubdirectory("kcap-plugin-src-");
+        var originalPlug  = Environment.GetEnvironmentVariable("KCAP_PLUGIN_DIR");
 
         try {
             var skillsSrc = Path.Combine(pluginPath.FullName, "skills");
@@ -55,22 +55,22 @@ public class PluginCommandSkillsTests {
 
             var legacyDir = Path.Combine(fakeHome.FullName, ".codex", "skills");
             Directory.CreateDirectory(legacyDir);
-            Directory.CreateDirectory(Path.Combine(legacyDir, "kapacitor-recap"));
+            Directory.CreateDirectory(Path.Combine(legacyDir, "kcap-recap"));
 
             Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", pluginPath.FullName);
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR", pluginPath.FullName);
 
             var exit = await PluginCommand.HandleAsync(["plugin", "install", "--skills"]);
             await Assert.That(exit).IsEqualTo(0);
 
             var target = Path.Combine(fakeHome.FullName, ".agents", "skills");
             foreach (var name in AgentsSkillsInstaller.SourceNames) {
-                await Assert.That(Directory.Exists(Path.Combine(target, $"kapacitor-{name}"))).IsTrue();
+                await Assert.That(Directory.Exists(Path.Combine(target, $"kcap-{name}"))).IsTrue();
             }
-            await Assert.That(Directory.Exists(Path.Combine(legacyDir, "kapacitor-recap"))).IsFalse();
+            await Assert.That(Directory.Exists(Path.Combine(legacyDir, "kcap-recap"))).IsFalse();
         } finally {
             Environment.SetEnvironmentVariable("HOME", originalHome);
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", originalPlug);
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR", originalPlug);
             fakeHome.Delete(recursive: true);
             pluginPath.Delete(recursive: true);
         }
@@ -78,10 +78,10 @@ public class PluginCommandSkillsTests {
 
     [Test]
     public async Task Install_skills_with_if_installed_is_noop_when_marker_absent() {
-        var fakeHome      = Directory.CreateTempSubdirectory("kapacitor-plugin-skills-test-");
+        var fakeHome      = Directory.CreateTempSubdirectory("kcap-plugin-skills-test-");
         var originalHome  = Environment.GetEnvironmentVariable("HOME");
-        var pluginPath    = Directory.CreateTempSubdirectory("kapacitor-plugin-src-");
-        var originalPlug  = Environment.GetEnvironmentVariable("KAPACITOR_PLUGIN_DIR");
+        var pluginPath    = Directory.CreateTempSubdirectory("kcap-plugin-src-");
+        var originalPlug  = Environment.GetEnvironmentVariable("KCAP_PLUGIN_DIR");
 
         try {
             // Seed a valid plugin source — proves the gate short-circuits
@@ -96,7 +96,7 @@ public class PluginCommandSkillsTests {
             }
 
             Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", pluginPath.FullName);
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR", pluginPath.FullName);
 
             var exit = await PluginCommand.HandleAsync(["plugin", "install", "--skills", "--if-installed"]);
             await Assert.That(exit).IsEqualTo(0);
@@ -106,7 +106,7 @@ public class PluginCommandSkillsTests {
             await Assert.That(Directory.Exists(target)).IsFalse();
         } finally {
             Environment.SetEnvironmentVariable("HOME", originalHome);
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", originalPlug);
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR", originalPlug);
             fakeHome.Delete(recursive: true);
             pluginPath.Delete(recursive: true);
         }
@@ -114,10 +114,10 @@ public class PluginCommandSkillsTests {
 
     [Test]
     public async Task Install_skills_with_if_installed_refreshes_when_marker_present() {
-        var fakeHome      = Directory.CreateTempSubdirectory("kapacitor-plugin-skills-test-");
+        var fakeHome      = Directory.CreateTempSubdirectory("kcap-plugin-skills-test-");
         var originalHome  = Environment.GetEnvironmentVariable("HOME");
-        var pluginPath    = Directory.CreateTempSubdirectory("kapacitor-plugin-src-");
-        var originalPlug  = Environment.GetEnvironmentVariable("KAPACITOR_PLUGIN_DIR");
+        var pluginPath    = Directory.CreateTempSubdirectory("kcap-plugin-src-");
+        var originalPlug  = Environment.GetEnvironmentVariable("KCAP_PLUGIN_DIR");
 
         try {
             var skillsSrc = Path.Combine(pluginPath.FullName, "skills");
@@ -137,14 +137,14 @@ public class PluginCommandSkillsTests {
                 "old-version");
 
             Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", pluginPath.FullName);
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR", pluginPath.FullName);
 
             var exit = await PluginCommand.HandleAsync(["plugin", "install", "--skills", "--if-installed"]);
             await Assert.That(exit).IsEqualTo(0);
 
             // Skills must be present after refresh.
             foreach (var name in AgentsSkillsInstaller.SourceNames) {
-                await Assert.That(Directory.Exists(Path.Combine(target, $"kapacitor-{name}"))).IsTrue();
+                await Assert.That(Directory.Exists(Path.Combine(target, $"kcap-{name}"))).IsTrue();
             }
 
             // Marker must have been overwritten with the current assembly version.
@@ -152,7 +152,7 @@ public class PluginCommandSkillsTests {
             await Assert.That(currentMarker.Trim()).IsNotEqualTo("old-version");
         } finally {
             Environment.SetEnvironmentVariable("HOME", originalHome);
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", originalPlug);
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR", originalPlug);
             fakeHome.Delete(recursive: true);
             pluginPath.Delete(recursive: true);
         }
@@ -161,13 +161,13 @@ public class PluginCommandSkillsTests {
     [Test]
     public async Task Install_skills_with_if_installed_refreshes_pre_marker_install() {
         // Regression: an existing install from a pre-marker build has owned
-        // kapacitor-* folders but no marker file. The first upgrade-time
+        // kcap-* folders but no marker file. The first upgrade-time
         // postinstall must still refresh it (and stamp the marker so future
         // upgrades take the marker-fast-path).
-        var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-skills-test-");
+        var fakeHome     = Directory.CreateTempSubdirectory("kcap-plugin-skills-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
-        var pluginPath   = Directory.CreateTempSubdirectory("kapacitor-plugin-src-");
-        var originalPlug = Environment.GetEnvironmentVariable("KAPACITOR_PLUGIN_DIR");
+        var pluginPath   = Directory.CreateTempSubdirectory("kcap-plugin-src-");
+        var originalPlug = Environment.GetEnvironmentVariable("KCAP_PLUGIN_DIR");
 
         try {
             var skillsSrc = Path.Combine(pluginPath.FullName, "skills");
@@ -179,26 +179,26 @@ public class PluginCommandSkillsTests {
                     $"---\nname: {name}\ndescription: fresh\n---\nfresh body");
             }
 
-            // Pre-marker install: kapacitor-* folder exists, no marker file.
+            // Pre-marker install: kcap-* folder exists, no marker file.
             var target = Path.Combine(fakeHome.FullName, ".agents", "skills");
-            var staleSkill = Path.Combine(target, "kapacitor-recap");
+            var staleSkill = Path.Combine(target, "kcap-recap");
             Directory.CreateDirectory(staleSkill);
             await File.WriteAllTextAsync(
                 Path.Combine(staleSkill, "SKILL.md"),
-                "---\nname: kapacitor-recap\n---\nstale body");
+                "---\nname: kcap-recap\n---\nstale body");
             await Assert.That(File.Exists(Path.Combine(target, AgentsSkillsInstaller.MarkerFileName))).IsFalse();
 
             Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", pluginPath.FullName);
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR", pluginPath.FullName);
 
             var exit = await PluginCommand.HandleAsync(["plugin", "install", "--skills", "--if-installed"]);
             await Assert.That(exit).IsEqualTo(0);
 
             // All skills present + freshly written.
             foreach (var name in AgentsSkillsInstaller.SourceNames) {
-                await Assert.That(Directory.Exists(Path.Combine(target, $"kapacitor-{name}"))).IsTrue();
+                await Assert.That(Directory.Exists(Path.Combine(target, $"kcap-{name}"))).IsTrue();
             }
-            var refreshed = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-recap", "SKILL.md"));
+            var refreshed = await File.ReadAllTextAsync(Path.Combine(target, "kcap-recap", "SKILL.md"));
             await Assert.That(refreshed).Contains("fresh body");
             await Assert.That(refreshed).DoesNotContain("stale body");
 
@@ -206,7 +206,7 @@ public class PluginCommandSkillsTests {
             await Assert.That(File.Exists(Path.Combine(target, AgentsSkillsInstaller.MarkerFileName))).IsTrue();
         } finally {
             Environment.SetEnvironmentVariable("HOME", originalHome);
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", originalPlug);
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR", originalPlug);
             fakeHome.Delete(recursive: true);
             pluginPath.Delete(recursive: true);
         }
@@ -214,12 +214,12 @@ public class PluginCommandSkillsTests {
 
     [Test]
     public async Task Install_skills_with_if_installed_is_noop_when_marker_matches_current_version() {
-        // Fast path: same-version reinstalls (e.g. `npm install -g @kurrent/kapacitor`
+        // Fast path: same-version reinstalls (e.g. `npm install -g @kurrent/kcap`
         // when the same version is already installed) must not re-copy every skill.
-        var fakeHome      = Directory.CreateTempSubdirectory("kapacitor-plugin-skills-test-");
+        var fakeHome      = Directory.CreateTempSubdirectory("kcap-plugin-skills-test-");
         var originalHome  = Environment.GetEnvironmentVariable("HOME");
-        var pluginPath    = Directory.CreateTempSubdirectory("kapacitor-plugin-src-");
-        var originalPlug  = Environment.GetEnvironmentVariable("KAPACITOR_PLUGIN_DIR");
+        var pluginPath    = Directory.CreateTempSubdirectory("kcap-plugin-src-");
+        var originalPlug  = Environment.GetEnvironmentVariable("KCAP_PLUGIN_DIR");
 
         try {
             var skillsSrc = Path.Combine(pluginPath.FullName, "skills");
@@ -241,23 +241,23 @@ public class PluginCommandSkillsTests {
             // Pre-seed one skill folder with a sentinel that the installer
             // would otherwise overwrite. If the short-circuit fires, this
             // file should survive untouched.
-            Directory.CreateDirectory(Path.Combine(target, "kapacitor-recap"));
+            Directory.CreateDirectory(Path.Combine(target, "kcap-recap"));
             await File.WriteAllTextAsync(
-                Path.Combine(target, "kapacitor-recap", "SKILL.md"),
+                Path.Combine(target, "kcap-recap", "SKILL.md"),
                 "stale body — must NOT be overwritten");
 
             Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", pluginPath.FullName);
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR", pluginPath.FullName);
 
             var exit = await PluginCommand.HandleAsync(["plugin", "install", "--skills", "--if-installed"]);
             await Assert.That(exit).IsEqualTo(0);
 
             // Sentinel still intact → installer did not run.
-            var preserved = await File.ReadAllTextAsync(Path.Combine(target, "kapacitor-recap", "SKILL.md"));
+            var preserved = await File.ReadAllTextAsync(Path.Combine(target, "kcap-recap", "SKILL.md"));
             await Assert.That(preserved).IsEqualTo("stale body — must NOT be overwritten");
         } finally {
             Environment.SetEnvironmentVariable("HOME", originalHome);
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", originalPlug);
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR", originalPlug);
             fakeHome.Delete(recursive: true);
             pluginPath.Delete(recursive: true);
         }
@@ -265,9 +265,9 @@ public class PluginCommandSkillsTests {
 
     [Test]
     public async Task Install_skills_with_if_installed_swallows_plugin_resolution_failure() {
-        var fakeHome      = Directory.CreateTempSubdirectory("kapacitor-plugin-skills-test-");
+        var fakeHome      = Directory.CreateTempSubdirectory("kcap-plugin-skills-test-");
         var originalHome  = Environment.GetEnvironmentVariable("HOME");
-        var originalPlug  = Environment.GetEnvironmentVariable("KAPACITOR_PLUGIN_DIR");
+        var originalPlug  = Environment.GetEnvironmentVariable("KCAP_PLUGIN_DIR");
         var originalErr   = Console.Error;
         var capturedErr   = new StringWriter();
 
@@ -281,8 +281,8 @@ public class PluginCommandSkillsTests {
 
             Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
             // …but make plugin resolution fail by pointing at a non-existent dir.
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR",
-                Path.Combine(Path.GetTempPath(), $"kapacitor-missing-{Guid.NewGuid():N}"));
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR",
+                Path.Combine(Path.GetTempPath(), $"kcap-missing-{Guid.NewGuid():N}"));
             Console.SetError(capturedErr);
 
             var exit = await PluginCommand.HandleAsync(["plugin", "install", "--skills", "--if-installed"]);
@@ -293,14 +293,14 @@ public class PluginCommandSkillsTests {
         } finally {
             Console.SetError(originalErr);
             Environment.SetEnvironmentVariable("HOME", originalHome);
-            Environment.SetEnvironmentVariable("KAPACITOR_PLUGIN_DIR", originalPlug);
+            Environment.SetEnvironmentVariable("KCAP_PLUGIN_DIR", originalPlug);
             fakeHome.Delete(recursive: true);
         }
     }
 
     [Test]
     public async Task Remove_skills_clears_agents_and_legacy() {
-        var fakeHome     = Directory.CreateTempSubdirectory("kapacitor-plugin-skills-test-");
+        var fakeHome     = Directory.CreateTempSubdirectory("kcap-plugin-skills-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
 
         try {
@@ -309,7 +309,7 @@ public class PluginCommandSkillsTests {
             Directory.CreateDirectory(agentsDir);
             Directory.CreateDirectory(legacyDir);
             foreach (var name in AgentsSkillsInstaller.SourceNames) {
-                Directory.CreateDirectory(Path.Combine(agentsDir, $"kapacitor-{name}"));
+                Directory.CreateDirectory(Path.Combine(agentsDir, $"kcap-{name}"));
             }
             foreach (var name in AgentsSkillsInstaller.LegacyCodexSkillNames) {
                 Directory.CreateDirectory(Path.Combine(legacyDir, name));
@@ -321,7 +321,7 @@ public class PluginCommandSkillsTests {
             await Assert.That(exit).IsEqualTo(0);
 
             foreach (var name in AgentsSkillsInstaller.SourceNames) {
-                await Assert.That(Directory.Exists(Path.Combine(agentsDir, $"kapacitor-{name}"))).IsFalse();
+                await Assert.That(Directory.Exists(Path.Combine(agentsDir, $"kcap-{name}"))).IsFalse();
             }
             await Assert.That(Directory.Exists(legacyDir)).IsFalse();
         } finally {

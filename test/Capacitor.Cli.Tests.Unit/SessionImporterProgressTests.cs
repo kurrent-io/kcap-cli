@@ -65,7 +65,7 @@ public class SessionImporterProgressTests : IDisposable {
         _server.Given(Request.Create().WithPath("/hooks/subagent-stop").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
 
-        var tmp = Directory.CreateTempSubdirectory("kapacitor-import-test");
+        var tmp = Directory.CreateTempSubdirectory("kcap-import-test");
         try {
             var sessionName = Guid.NewGuid().ToString("N");
             var sessionPath = Path.Combine(tmp.FullName, $"{sessionName}.jsonl");

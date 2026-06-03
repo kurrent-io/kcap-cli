@@ -10,12 +10,12 @@ namespace Capacitor.Cli.Core;
 /// <see cref="WriteMarker"/> stamps the version after a successful write.
 /// </summary>
 public static class CursorHooksInstaller {
-    public const string MarkerFileName = ".kapacitor-hooks-version";
+    public const string MarkerFileName = ".kcap-hooks-version";
 
     /// <summary>
     /// True when the user has previously installed Cursor hooks via setup or
-    /// <c>kapacitor plugin install --cursor</c>. Marker file presence OR an
-    /// existing <c>kapacitor hook --cursor</c> entry in hooks.json — the
+    /// <c>kcap plugin install --cursor</c>. Marker file presence OR an
+    /// existing <c>kcap hook --cursor</c> entry in hooks.json — the
     /// hooks-json fallback covers pre-marker installs.
     /// </summary>
     public static bool IsInstalled(string hooksPath) {
@@ -32,7 +32,7 @@ public static class CursorHooksInstaller {
             foreach (var (_, entries) in hooks) {
                 if (entries is not JsonArray arr) continue;
 
-                if (arr.Any(CursorHooksParser.EntryReferencesKapacitorCursorHook)) {
+                if (arr.Any(CursorHooksParser.EntryReferencesCapacitorCursorHook)) {
                     return true;
                 }
             }
@@ -53,7 +53,7 @@ public static class CursorHooksInstaller {
         if (string.IsNullOrEmpty(dir)) return;
         try {
             Directory.CreateDirectory(dir);
-            File.WriteAllText(Path.Combine(dir, MarkerFileName), KapacitorVersion.Current());
+            File.WriteAllText(Path.Combine(dir, MarkerFileName), CapacitorVersion.Current());
         } catch { /* best effort */ }
     }
 

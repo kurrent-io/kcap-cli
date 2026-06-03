@@ -3,7 +3,7 @@ using Spectre.Console;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Pure logic for the "coding agents" step of <c>kapacitor setup</c>. All I/O
+/// Pure logic for the "coding agents" step of <c>kcap setup</c>. All I/O
 /// (filesystem, console, prompts) flows through injected delegates so tests
 /// can drive every branch without touching ~/.claude, ~/.codex, or AnsiConsole.
 /// </summary>
@@ -26,7 +26,7 @@ internal static class CodingAgentsStep {
             Func<string /*settingsPath*/, string /*pluginDir*/, bool> InstallClaudePlugin,
             Func<string /*hooksPath*/, bool>                          InstallCodexHooks,
             Func<string /*hooksPath*/, bool>                          InstallCursorHooks,
-            Func<bool>                                                KapacitorOnPath,
+            Func<bool>                                                CapacitorOnPath,
             Func<string /*srcDir*/, string /*dstDir*/, bool>          InstallAgentSkills,
             Func<string /*legacyDir*/, bool>                          CleanLegacyCodexSkills
         );
@@ -91,7 +91,7 @@ internal static class CodingAgentsStep {
         }
 
         writeLine($"  [green]✓[/] Agent skills installed (user: {Markup.Escape(paths.AgentsSkillsDir)})");
-        writeLine("    [dim]kapacitor-recap, kapacitor-errors, kapacitor-hide, kapacitor-disable, kapacitor-validate-plan[/]");
+        writeLine("    [dim]kcap-recap, kcap-errors, kcap-hide, kcap-disable, kcap-validate-plan[/]");
         installers.CleanLegacyCodexSkills(paths.LegacyCodexSkillsDir);
 
         return true;
@@ -119,10 +119,10 @@ internal static class CodingAgentsStep {
             return false;
         }
 
-        var shouldInstall = options.NoPrompt || prompt("Install Codex CLI hooks and kapacitor agent skills?");
+        var shouldInstall = options.NoPrompt || prompt("Install Codex CLI hooks and kcap agent skills?");
 
         if (!shouldInstall) {
-            writeLine("  [dim]· Codex CLI hooks not installed (you can run kapacitor plugin install --codex later)[/]");
+            writeLine("  [dim]· Codex CLI hooks not installed (you can run kcap plugin install --codex later)[/]");
 
             return false;
         }
@@ -136,7 +136,7 @@ internal static class CodingAgentsStep {
         }
 
         writeLine($"  [green]✓[/] Codex hooks installed (user: {Markup.Escape(paths.CodexHooksPath)})");
-        writeLine("  [dim]  Next: run /hooks inside Codex and trust each kapacitor entry —[/]");
+        writeLine("  [dim]  Next: run /hooks inside Codex and trust each kcap entry —[/]");
         writeLine("  [dim]  Codex won't execute hooks until each is explicitly trusted.[/]");
 
         return true;
@@ -167,18 +167,18 @@ internal static class CodingAgentsStep {
         var shouldInstall = options.NoPrompt || prompt("Install Cursor IDE hooks?");
 
         if (!shouldInstall) {
-            writeLine("  [dim]· Cursor hooks not installed (you can run kapacitor plugin install --cursor later)[/]");
+            writeLine("  [dim]· Cursor hooks not installed (you can run kcap plugin install --cursor later)[/]");
 
             return false;
         }
 
-        // hooks.json writes the bare "kapacitor hook --cursor" command and
-        // relies on Cursor finding it on PATH. If kapacitor isn't on PATH
+        // hooks.json writes the bare "kcap hook --cursor" command and
+        // relies on Cursor finding it on PATH. If kcap isn't on PATH
         // we'd write a config Cursor can't execute — surface a setup error
         // instead. Mirror of PluginCommand.InstallCursor's precheck.
-        if (!installers.KapacitorOnPath()) {
-            writeLine("  [yellow]⚠[/] Cursor hooks not installed — 'kapacitor' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kapacitor[/]");
+        if (!installers.CapacitorOnPath()) {
+            writeLine("  [yellow]⚠[/] Cursor hooks not installed — 'kcap' is not on PATH.");
+            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
 
             return false;
         }
@@ -221,14 +221,14 @@ internal static class CodingAgentsStep {
         var shouldInstall = options.NoPrompt || prompt("Install Claude Code plugin (hooks, skills, memory)?");
 
         if (!shouldInstall) {
-            writeLine("  [dim]· Claude Code plugin not installed (you can run kapacitor plugin install later)[/]");
+            writeLine("  [dim]· Claude Code plugin not installed (you can run kcap plugin install later)[/]");
 
             return false;
         }
 
         if (paths.PluginDir is null) {
-            writeLine("  [yellow]⚠[/] Plugin directory not found. Re-install kapacitor via npm:");
-            writeLine("    [cyan]npm install -g @kurrent/kapacitor[/]");
+            writeLine("  [yellow]⚠[/] Plugin directory not found. Re-install kcap via npm:");
+            writeLine("    [cyan]npm install -g @kurrent/kcap[/]");
 
             return false;
         }

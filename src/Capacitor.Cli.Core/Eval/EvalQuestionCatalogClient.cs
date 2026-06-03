@@ -19,7 +19,7 @@ internal static class EvalQuestionCatalogClient {
         try {
             using var resp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/eval/questions", ct: ct);
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized) {
-                observer.OnFailed("authentication failed — run 'kapacitor login' to re-authenticate");
+                observer.OnFailed("authentication failed — run 'kcap login' to re-authenticate");
                 return null;
             }
             if (!resp.IsSuccessStatusCode) {
@@ -28,7 +28,7 @@ internal static class EvalQuestionCatalogClient {
             }
 
             var json = await resp.Content.ReadAsStringAsync(ct);
-            var parsed = JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.EvalQuestionDtoArray);
+            var parsed = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.EvalQuestionDtoArray);
             if (parsed is null || parsed.Length == 0) {
                 observer.OnFailed("eval question catalog is empty");
                 return null;

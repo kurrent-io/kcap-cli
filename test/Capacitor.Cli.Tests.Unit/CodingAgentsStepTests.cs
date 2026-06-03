@@ -469,9 +469,9 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
-    public async Task Cursor_kapacitor_not_on_path_aborts_install_without_writing_hooks() {
+    public async Task Cursor_kcap_not_on_path_aborts_install_without_writing_hooks() {
         var sink     = new Sink();
-        var calls    = new InstallerCalls { KapacitorOnPathReturns = false };
+        var calls    = new InstallerCalls { CapacitorOnPathReturns = false };
         var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, NoPrompt: false);
         var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true);
 
@@ -480,9 +480,9 @@ public class CodingAgentsStepTests {
             prompt: _ => true, writeLine: sink.Write);
 
         await Assert.That(result.CursorHooksInstalled).IsFalse();
-        await Assert.That(calls.KapacitorOnPathCalled).IsTrue();
+        await Assert.That(calls.CapacitorOnPathCalled).IsTrue();
         await Assert.That(calls.CursorHooksCalled).IsFalse();
-        await Assert.That(sink.Lines).Contains(l => l.Contains("'kapacitor' is not on PATH"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("'kcap' is not on PATH"));
     }
 
     static Paths TestPaths() => new(
@@ -513,8 +513,8 @@ public class CodingAgentsStepTests {
         public string? CursorHooksArg     { get; private set; }
         public bool    CursorHooksReturns { get; set; } = true;
 
-        public bool KapacitorOnPathCalled  { get; private set; }
-        public bool KapacitorOnPathReturns { get; set; } = true;
+        public bool CapacitorOnPathCalled  { get; private set; }
+        public bool CapacitorOnPathReturns { get; set; } = true;
 
         public bool                      AgentSkillsCalled  { get; private set; }
         public (string Src, string Dst)? AgentSkillsArgs    { get; private set; }
@@ -543,9 +543,9 @@ public class CodingAgentsStepTests {
 
                 return CursorHooksReturns;
             },
-            KapacitorOnPath: () => {
-                KapacitorOnPathCalled = true;
-                return KapacitorOnPathReturns;
+            CapacitorOnPath: () => {
+                CapacitorOnPathCalled = true;
+                return CapacitorOnPathReturns;
             },
             InstallAgentSkills: (s, d) => {
                 AgentSkillsCalled = true;

@@ -4,12 +4,12 @@ using Capacitor.Cli.Core.Cursor;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Completely removes kapacitor from the local machine: stops daemons, kills
-/// watcher processes, strips kapacitor entries from user-level Claude / Codex /
+/// Completely removes kcap from the local machine: stops daemons, kills
+/// watcher processes, strips kcap entries from user-level Claude / Codex /
 /// Cursor hook files, removes agent skills (and legacy Codex skills), and
-/// deletes the kapacitor config directory.
+/// deletes the kcap config directory.
 ///
-/// With <c>--project</c>, also strips kapacitor entries from the cwd's git-root
+/// With <c>--project</c>, also strips kcap entries from the cwd's git-root
 /// <c>.claude/settings.local.json</c> and <c>.codex/hooks.json</c>. Project-scope
 /// Cursor hooks are not a thing — Cursor only reads its user-scope hooks.json.
 /// Per-agent selective cleanup is intentionally out of scope here; this command
@@ -38,22 +38,22 @@ public static class UninstallCommand {
 
         var configDir = ResolveConfigDir();
 
-        await Console.Out.WriteLineAsync("This will remove kapacitor from your machine:");
+        await Console.Out.WriteLineAsync("This will remove kcap from your machine:");
         await Console.Out.WriteLineAsync("  • Stop any running daemons and watcher processes");
-        await Console.Out.WriteLineAsync($"  • Remove kapacitor entries from {ClaudePaths.UserSettings}");
-        await Console.Out.WriteLineAsync($"  • Remove kapacitor entries from {CodexPaths.UserHooksJson}");
-        await Console.Out.WriteLineAsync($"  • Remove kapacitor entries from {CursorPaths.UserHooksJson()}");
+        await Console.Out.WriteLineAsync($"  • Remove kcap entries from {ClaudePaths.UserSettings}");
+        await Console.Out.WriteLineAsync($"  • Remove kcap entries from {CodexPaths.UserHooksJson}");
+        await Console.Out.WriteLineAsync($"  • Remove kcap entries from {CursorPaths.UserHooksJson()}");
         await Console.Out.WriteLineAsync($"  • Remove agent skills under {AgentsPaths.UserSkillsDir}");
 
         if (projectRoot is not null) {
             await Console.Out.WriteLineAsync(
-                $"  • Remove kapacitor entries from {Path.Combine(projectRoot, ".claude", "settings.local.json")}");
+                $"  • Remove kcap entries from {Path.Combine(projectRoot, ".claude", "settings.local.json")}");
             await Console.Out.WriteLineAsync(
-                $"  • Remove kapacitor entries from {Path.Combine(projectRoot, ".codex", "hooks.json")}");
+                $"  • Remove kcap entries from {Path.Combine(projectRoot, ".codex", "hooks.json")}");
         }
 
         if (!keepConfig) {
-            await Console.Out.WriteLineAsync($"  • Delete the kapacitor config directory ({configDir})");
+            await Console.Out.WriteLineAsync($"  • Delete the kcap config directory ({configDir})");
         }
 
         if (!skipPrompt) {
@@ -68,7 +68,7 @@ public static class UninstallCommand {
         }
 
         // Track every step's success so we can surface failures in the exit
-        // code AND keep ~/.config/kapacitor in place when something went wrong
+        // code AND keep ~/.config/kcap in place when something went wrong
         // (so the user can re-run rather than losing local state on a partial
         // removal). Individual remove commands keep printing their own output
         // — this flag captures the boolean for the final decision only.
@@ -100,7 +100,7 @@ public static class UninstallCommand {
         // only when JSON entries changed; if the user manually pruned the
         // entries earlier (or installed via a pre-marker build that later
         // wrote a marker on first refresh), the marker survives and IsInstalled
-        // still reports kapacitor as installed. uninstall promises a full
+        // still reports kcap as installed. uninstall promises a full
         // wipe, so always nuke the markers regardless of what the JSON state
         // looked like going in.
         ClaudePluginInstaller.DeleteMarker(ClaudePaths.UserSettings);
@@ -108,11 +108,11 @@ public static class UninstallCommand {
         CursorHooksInstaller.DeleteMarker(CursorPaths.UserHooksJson());
 
         // Skill installer Remove uses the current SourceNames list, so any
-        // kapacitor-* folder from an older release (renamed/retired skill)
+        // kcap-* folder from an older release (renamed/retired skill)
         // would survive. Sweep the directory for our prefix to catch those.
         // Same for legacy ~/.codex/skills/.
-        if (!SweepKapacitorPrefixedDirs(AgentsPaths.UserSkillsDir))            hadFailures = true;
-        if (!SweepKapacitorPrefixedDirs(Path.Combine(CodexPaths.Home, "skills"))) hadFailures = true;
+        if (!SweepCapacitorPrefixedDirs(AgentsPaths.UserSkillsDir))            hadFailures = true;
+        if (!SweepCapacitorPrefixedDirs(Path.Combine(CodexPaths.Home, "skills"))) hadFailures = true;
 
         if (projectRoot is not null) {
             var claudeProject = Path.Combine(projectRoot, ".claude", "settings.local.json");
@@ -150,7 +150,7 @@ public static class UninstallCommand {
                 await Console.Error.WriteLineAsync(
                     $"Skipping config-directory delete because earlier steps failed: {configDir}");
                 await Console.Error.WriteLineAsync(
-                    "Investigate the errors above, then re-run `kapacitor uninstall` to finish.");
+                    "Investigate the errors above, then re-run `kcap uninstall` to finish.");
             } else if (Directory.Exists(configDir)) {
                 try {
                     Directory.Delete(configDir, recursive: true);
@@ -163,49 +163,49 @@ public static class UninstallCommand {
         }
 
         if (hadFailures) {
-            await Console.Error.WriteLineAsync("kapacitor uninstall finished with errors — see above.");
+            await Console.Error.WriteLineAsync("kcap uninstall finished with errors — see above.");
 
             return 1;
         }
 
-        await Console.Out.WriteLineAsync("kapacitor uninstalled.");
+        await Console.Out.WriteLineAsync("kcap uninstalled.");
 
         return 0;
     }
 
     /// <summary>
-    /// Resolves the kapacitor config directory the same way
+    /// Resolves the kcap config directory the same way
     /// <see cref="PathHelpers"/> would on a fresh process — read
-    /// <c>KAPACITOR_CONFIG_DIR</c> first, fall back to
-    /// <c>$HOME/.config/kapacitor</c>. Re-evaluates every call so tests that
+    /// <c>KCAP_CONFIG_DIR</c> first, fall back to
+    /// <c>$HOME/.config/kcap</c>. Re-evaluates every call so tests that
     /// override <c>HOME</c> see the override even after <c>PathHelpers</c>
     /// has captured a different value into its static cache.
     /// </summary>
     static string ResolveConfigDir() {
-        var env = Environment.GetEnvironmentVariable("KAPACITOR_CONFIG_DIR");
+        var env = Environment.GetEnvironmentVariable("KCAP_CONFIG_DIR");
 
         return !string.IsNullOrWhiteSpace(env)
             ? env
-            : Path.Combine(PathHelpers.HomeDirectory, ".config", "kapacitor");
+            : Path.Combine(PathHelpers.HomeDirectory, ".config", "kcap");
     }
 
     /// <summary>
-    /// Deletes every <c>kapacitor-*</c> directory directly under
+    /// Deletes every <c>kcap-*</c> directory directly under
     /// <paramref name="root"/>. Catches the cases where the installer's
     /// fixed name list doesn't match what's on disk: a skill renamed,
-    /// retired, or added between releases. <c>kapacitor-</c> is our
+    /// retired, or added between releases. <c>kcap-</c> is our
     /// namespace prefix so this is safe; user-authored folders without it
     /// are untouched. Returns true on full success, false when any deletion
     /// (or the enumeration itself) failed — callers feed the result into
     /// their failure aggregator so a stuck folder doesn't get masked by
-    /// a "kapacitor uninstalled." exit.
+    /// a "kcap uninstalled." exit.
     /// </summary>
-    static bool SweepKapacitorPrefixedDirs(string root) {
+    static bool SweepCapacitorPrefixedDirs(string root) {
         if (!Directory.Exists(root)) return true;
 
         IEnumerable<string> dirs;
         try {
-            dirs = Directory.EnumerateDirectories(root, "kapacitor-*").ToArray();
+            dirs = Directory.EnumerateDirectories(root, "kcap-*").ToArray();
         } catch (Exception ex) {
             Console.Error.WriteLine($"Could not enumerate {root}: {ex.Message}");
             return false;

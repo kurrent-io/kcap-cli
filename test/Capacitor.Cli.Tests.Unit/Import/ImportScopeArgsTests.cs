@@ -15,8 +15,8 @@ public class ImportScopeArgsTests {
 
     [Test]
     public async Task ParseFlags_reads_repo_value() {
-        var f = ImportScopeArgs.ParseFlags(["import", "--repo", "EventStore/kapacitor"]);
-        await Assert.That(f.RepoArg).IsEqualTo("EventStore/kapacitor");
+        var f = ImportScopeArgs.ParseFlags(["import", "--repo", "EventStore/kcap"]);
+        await Assert.That(f.RepoArg).IsEqualTo("EventStore/kcap");
     }
 
     [Test]
@@ -91,7 +91,7 @@ public class ImportScopeArgsTests {
     [Test]
     public async Task Resolve_returns_Repo_for_owner_slash_name() {
         var input = new ImportScopeArgs.ResolveInput(
-            Flags: new(All: false, Org: false, RepoArg: "EventStore/kapacitor", Yes: false, Private: false),
+            Flags: new(All: false, Org: false, RepoArg: "EventStore/kcap", Yes: false, Private: false),
             ActiveProfile: "EventStore",
             IsInteractive: true,
             CurrentRepo: null);
@@ -100,7 +100,7 @@ public class ImportScopeArgsTests {
 
         var repo = (ImportScope.Repo)r.Scope!;
         await Assert.That(repo.Owner).IsEqualTo("EventStore");
-        await Assert.That(repo.Name).IsEqualTo("kapacitor");
+        await Assert.That(repo.Name).IsEqualTo("kcap");
     }
 
     [Test]
@@ -109,13 +109,13 @@ public class ImportScopeArgsTests {
             Flags: new(All: false, Org: false, RepoArg: ".", Yes: false, Private: false),
             ActiveProfile: "EventStore",
             IsInteractive: true,
-            CurrentRepo: ("EventStore", "kapacitor"));
+            CurrentRepo: ("EventStore", "kcap"));
 
         var r = ImportScopeArgs.Resolve(input);
 
         var repo = (ImportScope.Repo)r.Scope!;
         await Assert.That(repo.Owner).IsEqualTo("EventStore");
-        await Assert.That(repo.Name).IsEqualTo("kapacitor");
+        await Assert.That(repo.Name).IsEqualTo("kcap");
     }
 
     [Test]
@@ -124,13 +124,13 @@ public class ImportScopeArgsTests {
             Flags: new(All: false, Org: false, RepoArg: "current", Yes: false, Private: false),
             ActiveProfile: "EventStore",
             IsInteractive: true,
-            CurrentRepo: ("EventStore", "kapacitor"));
+            CurrentRepo: ("EventStore", "kcap"));
 
         var r = ImportScopeArgs.Resolve(input);
 
         var repo = (ImportScope.Repo)r.Scope!;
         await Assert.That(repo.Owner).IsEqualTo("EventStore");
-        await Assert.That(repo.Name).IsEqualTo("kapacitor");
+        await Assert.That(repo.Name).IsEqualTo("kcap");
     }
 
     [Test]

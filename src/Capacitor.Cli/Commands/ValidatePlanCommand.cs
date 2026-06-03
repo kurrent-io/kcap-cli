@@ -35,7 +35,7 @@ static class ValidatePlanCommand {
         }
 
         var json    = await resp.Content.ReadAsStringAsync();
-        var entries = JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.ListRecapEntry);
+        var entries = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.ListRecapEntry);
 
         if (entries is null || entries.Count == 0) {
             await Console.Out.WriteLineAsync("No plan found for this session.");

@@ -121,7 +121,7 @@ public class AgentDetectorTests {
 file sealed class TempDir : IDisposable {
     public string Path { get; } = System.IO.Path.Combine(
         System.IO.Path.GetTempPath(),
-        $"kapacitor-test-{Guid.NewGuid().ToString("N")[..8]}"
+        $"kcap-test-{Guid.NewGuid().ToString("N")[..8]}"
     );
     public TempDir() => Directory.CreateDirectory(Path);
     public void Dispose() {

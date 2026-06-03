@@ -1,6 +1,6 @@
-kapacitor errors — List tool call errors for a session
+kcap errors — List tool call errors for a session
 
-Usage: kapacitor errors [options] [sessionId]
+Usage: kcap errors [options] [sessionId]
 
 Options:
   --chain                 Include all sessions in the continuation chain

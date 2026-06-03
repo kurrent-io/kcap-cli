@@ -72,7 +72,7 @@ public class WatcherParentExitPostTests : IDisposable {
             vendor:         "claude",
             repository: new() {
                 Owner    = "kurrent-io",
-                RepoName = "kapacitor",
+                RepoName = "kcap",
                 Branch   = "main",
             }
         );
@@ -83,7 +83,7 @@ public class WatcherParentExitPostTests : IDisposable {
         var body = JsonDocument.Parse(requests[0].RequestMessage.Body!).RootElement;
         var repo = body.GetProperty("repository");
         await Assert.That(repo.GetProperty("owner").GetString()).IsEqualTo("kurrent-io");
-        await Assert.That(repo.GetProperty("repo_name").GetString()).IsEqualTo("kapacitor");
+        await Assert.That(repo.GetProperty("repo_name").GetString()).IsEqualTo("kcap");
         await Assert.That(repo.GetProperty("branch").GetString()).IsEqualTo("main");
     }
 

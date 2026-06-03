@@ -84,7 +84,7 @@ public class ConfigMigrationTests {
                     ExcludedRepos = []
                 },
                 ["contoso"] = new() {
-                    ServerUrl = "https://contoso.kapacitor.io",
+                    ServerUrl = "https://contoso.kcap.io",
                     Daemon = new DaemonSettings { Name = "consulting", MaxAgents = 2 },
                     DefaultVisibility = "private",
                     UpdateCheck = true,
@@ -104,7 +104,7 @@ public class ConfigMigrationTests {
         await Assert.That(deserialized!.Version).IsEqualTo(2);
         await Assert.That(deserialized.ActiveProfile).IsEqualTo("default");
         await Assert.That(deserialized.Profiles).Count().IsEqualTo(2);
-        await Assert.That(deserialized.Profiles["contoso"].ServerUrl).IsEqualTo("https://contoso.kapacitor.io");
+        await Assert.That(deserialized.Profiles["contoso"].ServerUrl).IsEqualTo("https://contoso.kcap.io");
         await Assert.That(deserialized.Profiles["contoso"].Remotes).Contains("github.com/contoso/*");
         await Assert.That(deserialized.ProfileBindings["/home/user/contoso-project"]).IsEqualTo("contoso");
     }
@@ -134,7 +134,7 @@ public class ConfigMigrationTests {
     [Test]
     public async Task PickActiveProfile_falls_back_to_active_when_resolved_is_null() {
         // URL override case: ResolveServerUrl returns ResolvedProfile.Profile == null,
-        // but `kapacitor ignore` still writes to ActiveProfile, so the hook must look there.
+        // but `kcap ignore` still writes to ActiveProfile, so the hook must look there.
         var activeProfile = new Profile { ExcludedPaths = ["/from/active"] };
         var config        = new ProfileConfig {
             ActiveProfile = "default",

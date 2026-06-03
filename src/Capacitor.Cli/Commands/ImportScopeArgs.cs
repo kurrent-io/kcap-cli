@@ -1,7 +1,7 @@
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Pure flag parser and resolver for `kapacitor import` scope selection.
+/// Pure flag parser and resolver for `kcap import` scope selection.
 /// Performs no I/O — current-repo lookup is the caller's job; the resolved
 /// result is passed in via <see cref="ResolveInput.CurrentRepo"/>.
 /// </summary>
@@ -85,7 +85,7 @@ public static class ImportScopeArgs {
                     null,
                     f.Yes,
                     f.Private,
-                    "--org requires a tenant-bound profile. Run `kapacitor setup` first, or use --all / --repo <owner/name>."
+                    "--org requires a tenant-bound profile. Run `kcap setup` first, or use --all / --repo <owner/name>."
                 );
             }
 

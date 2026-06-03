@@ -77,7 +77,7 @@ public static partial class RemoteMatcher {
             1 => matches[0],
             _ => throw new InvalidOperationException(
                 $"Multiple profiles match this repo's remotes: {string.Join(", ", matches)}. " +
-                "Add a .kapacitor.json to the repo to disambiguate."
+                "Add a .kcap.json to the repo to disambiguate."
             )
         };
     }

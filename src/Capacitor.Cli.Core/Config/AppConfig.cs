@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 
 namespace Capacitor.Cli.Core.Config;
 
-public record KapacitorConfig {
+public record CapacitorConfig {
     [JsonPropertyName("server_url")]
     public string? ServerUrl { get; init; }
 
@@ -35,10 +35,10 @@ public record DaemonSettings {
     public string? CodexPath { get; init; }
 }
 
-[JsonSerializable(typeof(KapacitorConfig))]
+[JsonSerializable(typeof(CapacitorConfig))]
 internal partial class ConfigJsonContext : JsonSerializerContext;
 
-[JsonSerializable(typeof(KapacitorConfig))]
+[JsonSerializable(typeof(CapacitorConfig))]
 [JsonSourceGenerationOptions(WriteIndented = true)]
 internal partial class ConfigJsonContextIndented : JsonSerializerContext;
 
@@ -52,16 +52,16 @@ public static class AppConfig {
     public static string RepoRoot => GetGitRepoRoot() ?? Environment.CurrentDirectory;
 
     /// <summary>
-    /// Resolve server URL using only the active profile (or KAPACITOR_PROFILE /
-    /// KAPACITOR_URL / --server-url overrides). Skips repo discovery and git
+    /// Resolve server URL using only the active profile (or KCAP_PROFILE /
+    /// KCAP_URL / --server-url overrides). Skips repo discovery and git
     /// remote matching — used by the daemon, which is not bound to a working
     /// directory.
     /// </summary>
     public static async Task<string?> ResolveActiveProfile(string[] args) {
         var idx          = Array.IndexOf(args, "--server-url");
         var cliServerUrl = (idx >= 0 && idx + 1 < args.Length) ? args[idx + 1] : null;
-        var envUrl       = Environment.GetEnvironmentVariable("KAPACITOR_URL");
-        var envProfile   = Environment.GetEnvironmentVariable("KAPACITOR_PROFILE");
+        var envUrl       = Environment.GetEnvironmentVariable("KCAP_URL");
+        var envProfile   = Environment.GetEnvironmentVariable("KCAP_PROFILE");
 
         var config   = await LoadProfileConfig();
         var resolver = new ProfileResolver(
@@ -89,8 +89,8 @@ public static class AppConfig {
         var idx          = Array.IndexOf(args, "--server-url");
         var cliServerUrl = (idx >= 0 && idx + 1 < args.Length) ? args[idx + 1] : null;
 
-        var envUrl     = Environment.GetEnvironmentVariable("KAPACITOR_URL");
-        var envProfile = Environment.GetEnvironmentVariable("KAPACITOR_PROFILE");
+        var envUrl     = Environment.GetEnvironmentVariable("KCAP_URL");
+        var envProfile = Environment.GetEnvironmentVariable("KCAP_PROFILE");
 
         // Short-circuit: if explicit URL is provided, skip all profile/repo resolution
         if (cliServerUrl is not null || envUrl is not null) {
@@ -118,7 +118,7 @@ public static class AppConfig {
             var repoRoot = RepoRoot;
 
             RepoConfig? repoConfig     = null;
-            var         repoConfigPath = Path.Combine(repoRoot, ".kapacitor.json");
+            var         repoConfigPath = Path.Combine(repoRoot, ".kcap.json");
 
             if (File.Exists(repoConfigPath)) {
                 try {
@@ -221,13 +221,13 @@ public static class AppConfig {
 
     static readonly string[] ValidVisibilities = ["private", "org_public", "public"];
 
-    public static async Task<KapacitorConfig?> Load() {
+    public static async Task<CapacitorConfig?> Load() {
         if (!File.Exists(ConfigPath))
             return null;
 
         try {
             var json   = await File.ReadAllTextAsync(ConfigPath);
-            var config = JsonSerializer.Deserialize(json, ConfigJsonContext.Default.KapacitorConfig);
+            var config = JsonSerializer.Deserialize(json, ConfigJsonContext.Default.CapacitorConfig);
 
             if (config is null) return null;
 
@@ -302,7 +302,7 @@ public static class AppConfig {
     /// process. Prefers <paramref name="resolvedProfile"/> (set by
     /// <see cref="ResolveServerUrl"/>) and falls back to the on-disk
     /// <see cref="ProfileConfig.ActiveProfile"/> when URL overrides
-    /// (<c>--server-url</c> / <c>KAPACITOR_URL</c>) caused the resolver to
+    /// (<c>--server-url</c> / <c>KCAP_URL</c>) caused the resolver to
     /// skip profile selection. Exposed for testing; production callers should
     /// use <see cref="GetActiveProfileAsync"/>.
     /// </summary>

@@ -8,17 +8,17 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// End-to-end stdio JSON-RPC tests for <c>kapacitor mcp sessions</c>.
+/// End-to-end stdio JSON-RPC tests for <c>kcap mcp sessions</c>.
 /// Spawns the freshly-built CLI binary, points it at a WireMock-stubbed
-/// Kapacitor server (via <c>KAPACITOR_URL</c>), seeds an isolated config
-/// directory (via <c>KAPACITOR_CONFIG_DIR</c>) so token/profile state never
+/// Capacitor server (via <c>KCAP_URL</c>), seeds an isolated config
+/// directory (via <c>KCAP_CONFIG_DIR</c>) so token/profile state never
 /// leaks between tests, and asserts on the wire-level JSON-RPC envelopes
 /// the server emits plus the HTTP calls WireMock observed.
 /// </summary>
 public class McpSessionsServerTests : IDisposable {
     readonly WireMockServer _server            = WireMockServer.Start();
-    readonly string         _cfgDir            = Path.Combine(Path.GetTempPath(), $"kapacitor-mcp-cfg-{Guid.NewGuid():N}");
-    readonly string         _cwdDir            = Path.Combine(Path.GetTempPath(), $"kapacitor-mcp-cwd-{Guid.NewGuid():N}");
+    readonly string         _cfgDir            = Path.Combine(Path.GetTempPath(), $"kcap-mcp-cfg-{Guid.NewGuid():N}");
+    readonly string         _cwdDir            = Path.Combine(Path.GetTempPath(), $"kcap-mcp-cwd-{Guid.NewGuid():N}");
     readonly List<Process>  _spawnedProcesses  = [];
 
     public McpSessionsServerTests() {
@@ -44,10 +44,10 @@ public class McpSessionsServerTests : IDisposable {
     }
 
     /// <summary>
-    /// Resolves the path of the built `kapacitor` CLI binary in the source tree.
+    /// Resolves the path of the built `kcap` CLI binary in the source tree.
     /// The integration tests are built into
     /// <c>test/Capacitor.Cli.Tests.Integration/bin/&lt;config&gt;/net10.0/</c>, so we
-    /// walk up to the repo root and descend into <c>src/Capacitor.Cli/bin/&lt;config&gt;/net10.0/kapacitor</c>.
+    /// walk up to the repo root and descend into <c>src/Capacitor.Cli/bin/&lt;config&gt;/net10.0/kcap</c>.
     /// </summary>
     static string GetCliBinaryPath() {
         var asmDir = Path.GetDirectoryName(typeof(McpSessionsServerTests).Assembly.Location)!;
@@ -58,13 +58,13 @@ public class McpSessionsServerTests : IDisposable {
         var testProjDir  = Path.GetDirectoryName(testBin)!;          // .../Capacitor.Cli.Tests.Integration
         var testRoot     = Path.GetDirectoryName(testProjDir)!;      // .../test
         var repoRoot     = Path.GetDirectoryName(testRoot)!;         // repo root
-        var binaryName   = OperatingSystem.IsWindows() ? "kapacitor.exe" : "kapacitor";
+        var binaryName   = OperatingSystem.IsWindows() ? "kcap.exe" : "kcap";
 
         return Path.Combine(repoRoot, "src", "Capacitor.Cli", "bin", config, "net10.0", binaryName);
     }
 
     /// <summary>
-    /// Spawns <c>kapacitor mcp sessions</c> as a child process. <paramref name="provider"/>
+    /// Spawns <c>kcap mcp sessions</c> as a child process. <paramref name="provider"/>
     /// controls the response to <c>/auth/config</c> — "None" lets the server skip token
     /// resolution entirely; "GitHub" forces token-store consultation so the unauthenticated
     /// path can be exercised.
@@ -78,7 +78,7 @@ public class McpSessionsServerTests : IDisposable {
 
         if (!File.Exists(binary)) {
             throw new FileNotFoundException(
-                $"kapacitor binary not found at {binary}. Build it first: " +
+                $"kcap binary not found at {binary}. Build it first: " +
                 "dotnet build src/Capacitor.Cli/Capacitor.Cli.csproj",
                 binary
             );
@@ -92,12 +92,12 @@ public class McpSessionsServerTests : IDisposable {
             CreateNoWindow         = true,
             WorkingDirectory       = _cwdDir,
             Environment = {
-                ["KAPACITOR_URL"]        = _server.Url!,
-                ["KAPACITOR_CONFIG_DIR"] = _cfgDir
+                ["KCAP_URL"]        = _server.Url!,
+                ["KCAP_CONFIG_DIR"] = _cfgDir
             }
         };
 
-        var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start kapacitor process");
+        var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start kcap process");
         _spawnedProcesses.Add(process);
 
         return process;
@@ -163,7 +163,7 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(response["id"]?.GetValue<int>()).IsEqualTo(1);
             var result = response["result"]?.AsObject();
             await Assert.That(result).IsNotNull();
-            await Assert.That(result!["serverInfo"]?["name"]?.GetValue<string>()).IsEqualTo("kapacitor-sessions");
+            await Assert.That(result!["serverInfo"]?["name"]?.GetValue<string>()).IsEqualTo("kcap-sessions");
             await Assert.That(result["protocolVersion"]?.GetValue<string>()).IsEqualTo("2024-11-05");
         } finally {
             await ShutdownAsync(proc);
@@ -375,7 +375,7 @@ public class McpSessionsServerTests : IDisposable {
 
     /// <summary>
     /// Spec compliance: when the server returns 401, <see cref="Capacitor.Cli.Commands.McpSessionsServer"/>
-    /// must surface the exact friendly message "Not logged in. Run 'kapacitor login' on the host shell."
+    /// must surface the exact friendly message "Not logged in. Run 'kcap login' on the host shell."
     /// inside the MCP tool result (with <c>isError: true</c>) — not the raw HTTP body.
     ///
     /// MCP clients (Claude Code, Codex) don't forward CLI stderr to the model, so the

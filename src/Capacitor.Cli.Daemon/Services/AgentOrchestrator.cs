@@ -292,24 +292,24 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             mcpConfigPath = launchArgs.McpConfigPath;
 
             var env = new Dictionary<string, string> {
-                ["KAPACITOR_RENDERED_AGENT"] = "1",
-                ["KAPACITOR_AGENT_ID"]       = agentId
+                ["KCAP_RENDERED_AGENT"] = "1",
+                ["KCAP_AGENT_ID"]       = agentId
             };
 
             if (!string.IsNullOrEmpty(_config.ServerUrl)) {
-                env["KAPACITOR_URL"] = _config.ServerUrl;
+                env["KCAP_URL"] = _config.ServerUrl;
             }
 
             // Tell the spawned Claude's permission-request hook where to find this
             // daemon's local SignalR bridge. Bypasses Cloudflare's HTTP timeout on
             // the server's /hooks/permission-request long-poll. CLI falls back to
-            // KAPACITOR_URL if this var is absent (e.g. older CLI builds).
+            // KCAP_URL if this var is absent (e.g. older CLI builds).
             if (_permissionBridge.BaseUrl is { } bridgeUrl) {
-                env["KAPACITOR_DAEMON_URL"] = bridgeUrl;
+                env["KCAP_DAEMON_URL"] = bridgeUrl;
             }
 
             if (isReview && cmd.Review is { } reviewEnv) {
-                env["KAPACITOR_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
+                env["KCAP_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
             }
 
             var process = _ptyFactory.Spawn(launcher.CliPath, args, worktree.Path, env);
@@ -618,23 +618,23 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     /// <summary>
-    /// Spawns <c>kapacitor generate-whats-done {sessionId}</c> as a detached process.
+    /// Spawns <c>kcap generate-whats-done {sessionId}</c> as a detached process.
     /// Used when the daemon-driven session-end path supplants claude's own session-end
     /// hook — claude normally spawns this generator from its CLI session-end handler,
     /// but when claude crashed or was killed before firing session-end the daemon has
     /// to do it instead. Best-effort: failure is logged but doesn't block other
-    /// cleanup, and a missing kapacitor binary just means no what's-done summary.
+    /// cleanup, and a missing kcap binary just means no what's-done summary.
     /// </summary>
     void SpawnWhatsDoneGenerator(string sessionId) {
         try {
-            var psi = new ProcessStartInfo(_config.KapacitorPath) {
+            var psi = new ProcessStartInfo(_config.CapacitorPath) {
                 RedirectStandardOutput = true,
                 RedirectStandardInput  = true,
                 RedirectStandardError  = true,
                 UseShellExecute        = false,
                 CreateNoWindow         = true,
                 Environment = {
-                    ["KAPACITOR_URL"] = _config.ServerUrl
+                    ["KCAP_URL"] = _config.ServerUrl
                 }
             };
             psi.ArgumentList.Add("generate-whats-done");

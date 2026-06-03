@@ -32,7 +32,7 @@ public class RemoteMatcherTests {
         var profiles = new Dictionary<string, Profile> {
             ["default"] = new() { ServerUrl = "https://default.com" },
             ["contoso"] = new() {
-                ServerUrl = "https://contoso.kapacitor.io",
+                ServerUrl = "https://contoso.kcap.io",
                 Remotes = ["github.com/contoso/*", "github.com/contoso-labs/*"]
             }
         };
@@ -47,7 +47,7 @@ public class RemoteMatcherTests {
     public async Task FindMatchingProfile_NoMatch_ReturnsNull() {
         var profiles = new Dictionary<string, Profile> {
             ["contoso"] = new() {
-                ServerUrl = "https://contoso.kapacitor.io",
+                ServerUrl = "https://contoso.kcap.io",
                 Remotes = ["github.com/contoso/*"]
             }
         };
@@ -85,7 +85,7 @@ public class RemoteMatcherTests {
     public async Task FindMatchingProfile_SshUrl_MatchesHttpsPattern() {
         var profiles = new Dictionary<string, Profile> {
             ["contoso"] = new() {
-                ServerUrl = "https://contoso.kapacitor.io",
+                ServerUrl = "https://contoso.kcap.io",
                 Remotes = ["github.com/contoso/*"]
             }
         };

@@ -1,5 +1,5 @@
-Usage: kapacitor eval <sessionId> [options]
-       kapacitor eval --list-questions
+Usage: kcap eval <sessionId> [options]
+       kcap eval --list-questions
 
 Runs an LLM-as-judge evaluation over a stored session. 13 questions across 4
 categories (safety, plan adherence, quality, efficiency) are asked of Claude
@@ -32,6 +32,6 @@ Notes:
     (Codex 0.81+).
 
 Examples:
-  kapacitor eval --questions safety                # 4 safety judges only
-  kapacitor eval --questions safety,tests_written  # 4 safety + tests_written = 5
-  kapacitor eval --skip efficiency                 # 10 judges (skip the 3 efficiency ones)
+  kcap eval --questions safety                # 4 safety judges only
+  kcap eval --questions safety,tests_written  # 4 safety + tests_written = 5
+  kcap eval --skip efficiency                 # 10 judges (skip the 3 efficiency ones)

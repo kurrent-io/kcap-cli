@@ -22,7 +22,7 @@ public static class RepoPathStore {
 
         try {
             var json = await File.ReadAllTextAsync(StorePath);
-            return JsonSerializer.Deserialize(json, KapacitorJsonContext.Default.RepoEntryArray) ?? [];
+            return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.RepoEntryArray) ?? [];
         } catch {
             return [];
         }
@@ -72,7 +72,7 @@ public static class RepoPathStore {
         Directory.CreateDirectory(dir);
         var tempPath = Path.Combine(dir, $"repos.{Environment.ProcessId}.tmp");
         var sorted   = entries.OrderByDescending(e => e.LastUsed).ToArray();
-        await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(sorted, KapacitorJsonContext.Default.RepoEntryArray));
+        await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(sorted, CapacitorJsonContext.Default.RepoEntryArray));
         File.Move(tempPath, StorePath, overwrite: true);
     }
 

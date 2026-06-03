@@ -1,6 +1,6 @@
-kapacitor mcp — MCP server commands
+kcap mcp — MCP server commands
 
-Usage: kapacitor mcp <subcommand>
+Usage: kcap mcp <subcommand>
 
 Subcommands:
   review                  Start the MCP review server (stdio) — implementation
@@ -31,23 +31,23 @@ mcp sessions:
   Exposes three tools — search_sessions, get_session_summary,
   get_session_transcript — for agents to search and inspect past Kurrent
   Capacitor sessions. The active repo is resolved from cwd at startup;
-  cd into your project before spawning. Requires `kapacitor login`.
+  cd into your project before spawning. Requires `kcap login`.
 
 INSTALL
 
-  The Kapacitor plugin auto-registers `kapacitor-sessions` and
-  `kapacitor-review` for both Claude Code (via the plugin's `.mcp.json`)
+  The Kurrent Capacitor plugin auto-registers `kcap-sessions` and
+  `kcap-review` for both Claude Code (via the plugin's `.mcp.json`)
   and Codex CLI (via `.codex-plugin/plugin.json` -> `.codex-mcp.json`),
   so no manual `claude mcp add` or TOML edit is needed after
-  `kapacitor setup`.
+  `kcap setup`.
 
-  `kapacitor-judge` is not auto-registered. Add it explicitly if you
+  `kcap-judge` is not auto-registered. Add it explicitly if you
   want it:
 
     Claude Code:
-      claude mcp add kapacitor-judge -- kapacitor mcp judge
+      claude mcp add kcap-judge -- kcap mcp judge
 
     Codex (~/.config/codex/mcp_servers.toml):
-      [kapacitor-judge]
-      command = "kapacitor"
+      [kcap-judge]
+      command = "kcap"
       args    = ["mcp", "judge"]

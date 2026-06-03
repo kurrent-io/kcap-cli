@@ -1,6 +1,6 @@
-kapacitor hide — Hide session from other users
+kcap hide — Hide session from other users
 
-Usage: kapacitor hide [sessionId]
+Usage: kcap hide [sessionId]
 
 Sets the current session's visibility to owner-only. Other users
 will no longer see this session in the dashboard.

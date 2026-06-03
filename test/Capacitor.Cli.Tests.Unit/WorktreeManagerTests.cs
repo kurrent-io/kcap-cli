@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// </summary>
 public class WorktreeManagerTests {
     static (string upstream, string clone) MakeUpstreamWithSideRef(string sideRefName, out string sideCommitSha) {
-        var upstream = Path.Combine(Path.GetTempPath(), "kapacitor-upstream-" + Guid.NewGuid().ToString("N")[..8]);
+        var upstream = Path.Combine(Path.GetTempPath(), "kcap-upstream-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(upstream);
 
         Git(upstream, "init", "-q");
@@ -40,7 +40,7 @@ public class WorktreeManagerTests {
         // Allow `git clone` of a non-bare repo over the file:// protocol.
         Git(upstream, "config", "uploadpack.allowAnySHA1InWant", "true");
 
-        var clone = Path.Combine(Path.GetTempPath(), "kapacitor-clone-" + Guid.NewGuid().ToString("N")[..8]);
+        var clone = Path.Combine(Path.GetTempPath(), "kcap-clone-" + Guid.NewGuid().ToString("N")[..8]);
         Git(Path.GetTempPath(), "clone", "-q", upstream, clone);
 
         return (upstream, clone);
@@ -129,13 +129,13 @@ public class WorktreeManagerTests {
     /// raced on the shared <c>FETCH_HEAD</c> ref — fetch N would land on
     /// <c>FETCH_HEAD</c> after fetch M, then worktree-add for M would create
     /// the wrong commit. The fix routes each fetch into a per-worktree
-    /// <c>refs/kapacitor/review/{name}</c> and worktree-adds from that ref.
+    /// <c>refs/kcap/review/{name}</c> and worktree-adds from that ref.
     /// This test asserts each worktree HEAD lines up with the SHA we asked
     /// for, even when 5 launches are issued in parallel.
     /// </summary>
     [Test]
     public async Task CreateAsync_ConcurrentBaseRefs_EachWorktreePinnedToCorrectSha() {
-        var upstream = Path.Combine(Path.GetTempPath(), "kapacitor-upstream-" + Guid.NewGuid().ToString("N")[..8]);
+        var upstream = Path.Combine(Path.GetTempPath(), "kcap-upstream-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(upstream);
 
         Git(upstream, "init", "-q");
@@ -165,7 +165,7 @@ public class WorktreeManagerTests {
             refs[i] = (refName, sha);
         }
 
-        var clone = Path.Combine(Path.GetTempPath(), "kapacitor-clone-" + Guid.NewGuid().ToString("N")[..8]);
+        var clone = Path.Combine(Path.GetTempPath(), "kcap-clone-" + Guid.NewGuid().ToString("N")[..8]);
         Git(Path.GetTempPath(), "clone", "-q", upstream, clone);
 
         try {
@@ -184,7 +184,7 @@ public class WorktreeManagerTests {
                 for (var i = 0; i < concurrency; i++) {
                     var head = GitCapture(worktrees[i].Path, "rev-parse", "HEAD").Trim();
                     await Assert.That(head).IsEqualTo(refs[i].Sha);
-                    await Assert.That(worktrees[i].FetchedRef).IsEqualTo($"refs/kapacitor/review/review-{i}");
+                    await Assert.That(worktrees[i].FetchedRef).IsEqualTo($"refs/kcap/review/review-{i}");
                 }
             } finally {
                 foreach (var w in worktrees) {
@@ -215,15 +215,15 @@ public class WorktreeManagerTests {
             var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance);
             var worktree = await manager.CreateAsync(clone, name: "review-77", baseRef: "refs/pull/77/head");
 
-            await Assert.That(worktree.FetchedRef).IsEqualTo("refs/kapacitor/review/review-77");
+            await Assert.That(worktree.FetchedRef).IsEqualTo("refs/kcap/review/review-77");
 
             // Sanity: ref exists before cleanup.
-            var beforeRefs = GitCapture(clone, "for-each-ref", "refs/kapacitor/review/").Trim();
-            await Assert.That(beforeRefs).Contains("refs/kapacitor/review/review-77");
+            var beforeRefs = GitCapture(clone, "for-each-ref", "refs/kcap/review/").Trim();
+            await Assert.That(beforeRefs).Contains("refs/kcap/review/review-77");
 
             await WorktreeManager.RemoveAsync(worktree);
 
-            var afterRefs = GitCapture(clone, "for-each-ref", "refs/kapacitor/review/").Trim();
+            var afterRefs = GitCapture(clone, "for-each-ref", "refs/kcap/review/").Trim();
             await Assert.That(afterRefs).IsEmpty();
         } finally {
             try { Directory.Delete(upstream, true); } catch {

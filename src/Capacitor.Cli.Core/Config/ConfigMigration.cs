@@ -29,8 +29,8 @@ public static class ConfigMigration {
         }
 
         // V1 → V2: read old flat fields, build default profile
-        var v1 = JsonSerializer.Deserialize(json, ConfigJsonContext.Default.KapacitorConfig)
-         ?? new KapacitorConfig();
+        var v1 = JsonSerializer.Deserialize(json, ConfigJsonContext.Default.CapacitorConfig)
+         ?? new CapacitorConfig();
 
         var defaultProfile = new Profile {
             ServerUrl         = v1.ServerUrl,

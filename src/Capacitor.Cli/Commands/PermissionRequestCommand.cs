@@ -15,7 +15,7 @@ static class PermissionRequestCommand {
         try {
             node = JsonNode.Parse(body);
         } catch {
-            Console.Error.WriteLine("[kapacitor] Failed to parse permission-request input");
+            Console.Error.WriteLine("[kcap] Failed to parse permission-request input");
 
             return 0;
         }
@@ -26,12 +26,12 @@ static class PermissionRequestCommand {
         var sessionId = node["session_id"]?.GetValue<string>()?.Replace("-", "");
 
         if (sessionId is null) {
-            Console.Error.WriteLine("[kapacitor] No session_id in permission-request");
+            Console.Error.WriteLine("[kcap] No session_id in permission-request");
 
             return 0;
         }
 
-        var isRenderedAgent = Environment.GetEnvironmentVariable("KAPACITOR_RENDERED_AGENT") is "1";
+        var isRenderedAgent = Environment.GetEnvironmentVariable("KCAP_RENDERED_AGENT") is "1";
 
         if (isRenderedAgent) {
             return await HandleRenderedAgent(baseUrl, node, sessionId);
@@ -71,14 +71,14 @@ static class PermissionRequestCommand {
 
     internal static bool TryGetLoopbackDaemonUrl(out string daemonUrl) {
         daemonUrl = "";
-        var raw = Environment.GetEnvironmentVariable("KAPACITOR_DAEMON_URL");
+        var raw = Environment.GetEnvironmentVariable("KCAP_DAEMON_URL");
         if (string.IsNullOrEmpty(raw)) return false;
 
         if (DaemonBridgeUrl.TryParseLoopback(raw, out daemonUrl)) {
             return true;
         }
 
-        Console.Error.WriteLine($"[kapacitor] Ignoring non-loopback KAPACITOR_DAEMON_URL: {raw}");
+        Console.Error.WriteLine($"[kcap] Ignoring non-loopback KCAP_DAEMON_URL: {raw}");
         return false;
     }
 
@@ -98,7 +98,7 @@ static class PermissionRequestCommand {
             using var response = await client.PostAsync(url, content);
 
             if (!response.IsSuccessStatusCode) {
-                Console.Error.WriteLine($"[kapacitor] permission-request failed: HTTP {(int)response.StatusCode}");
+                Console.Error.WriteLine($"[kcap] permission-request failed: HTTP {(int)response.StatusCode}");
 
                 return 2;
             }
@@ -108,11 +108,11 @@ static class PermissionRequestCommand {
 
             return 0;
         } catch (TaskCanceledException) {
-            Console.Error.WriteLine("[kapacitor] permission-request timed out");
+            Console.Error.WriteLine("[kcap] permission-request timed out");
 
             return 2;
         } catch (HttpRequestException ex) {
-            Console.Error.WriteLine($"[kapacitor] permission-request error: {ex.Message}");
+            Console.Error.WriteLine($"[kcap] permission-request error: {ex.Message}");
 
             return 2;
         }

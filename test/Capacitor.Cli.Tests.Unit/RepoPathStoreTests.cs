@@ -6,25 +6,25 @@ namespace Capacitor.Cli.Tests.Unit;
 /// Assembly-level setup/teardown for RepoPathStore tests.
 ///
 /// PathHelpers.ConfigDir is static readonly — captured once at class-load time from
-/// KAPACITOR_CONFIG_DIR. We must set that env var here, before any test code triggers
+/// KCAP_CONFIG_DIR. We must set that env var here, before any test code triggers
 /// the PathHelpers static initializer, so RepoPathStore.StorePath resolves to a
-/// temp directory instead of ~/.config/kapacitor/repos.json.
+/// temp directory instead of ~/.config/kcap/repos.json.
 /// </summary>
 public class RepoPathStoreGlobalSetup {
     internal static readonly string SharedConfigDir = Path.Combine(
         Path.GetTempPath(),
-        "kapacitor-repopathstore-tests-" + Guid.NewGuid().ToString("N")[..8]
+        "kcap-repopathstore-tests-" + Guid.NewGuid().ToString("N")[..8]
     );
 
     [Before(Assembly)]
     public static void SetConfigDir() {
         Directory.CreateDirectory(SharedConfigDir);
-        Environment.SetEnvironmentVariable("KAPACITOR_CONFIG_DIR", SharedConfigDir);
+        Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", SharedConfigDir);
     }
 
     [After(Assembly)]
     public static void CleanupConfigDir() {
-        Environment.SetEnvironmentVariable("KAPACITOR_CONFIG_DIR", null);
+        Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", null);
         try { Directory.Delete(SharedConfigDir, recursive: true); } catch { /* best effort */ }
     }
 }

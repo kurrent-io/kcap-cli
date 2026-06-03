@@ -4,8 +4,8 @@ namespace Capacitor.Cli.Core.Commands;
 
 /// <summary>
 /// Parses a PR reference in either shorthand (<c>owner/repo#123</c>) or
-/// github.com URL form. Shared by the <c>kapacitor review</c> CLI command
-/// and the <c>kapacitor mcp review</c> server's per-tool PR argument.
+/// github.com URL form. Shared by the <c>kcap review</c> CLI command
+/// and the <c>kcap mcp review</c> server's per-tool PR argument.
 /// </summary>
 public static partial class PrRefParser {
     public static bool TryParse(string input, out string owner, out string repo, out int prNumber) {

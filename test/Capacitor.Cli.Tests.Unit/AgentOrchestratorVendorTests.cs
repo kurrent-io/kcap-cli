@@ -21,7 +21,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// </summary>
 public class AgentOrchestratorVendorTests {
     static (string repoPath, Action cleanup) CreateGitRepo() {
-        var repoPath = Path.Combine(Path.GetTempPath(), "kapacitor-orch-" + Guid.NewGuid().ToString("N")[..8]);
+        var repoPath = Path.Combine(Path.GetTempPath(), "kcap-orch-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(repoPath);
 
         Git(repoPath, "init", "-q");
@@ -63,7 +63,7 @@ public class AgentOrchestratorVendorTests {
             ServerUrl           = "http://127.0.0.1:1",
             ClaudePath          = "claude",
             MaxConcurrentAgents = 5,
-            WorktreeRoot        = Path.Combine(Path.GetTempPath(), "kapacitor-orch-wt-" + Guid.NewGuid().ToString("N")[..8])
+            WorktreeRoot        = Path.Combine(Path.GetTempPath(), "kcap-orch-wt-" + Guid.NewGuid().ToString("N")[..8])
         };
 
         if (allowedRepoPath is not null) {

@@ -9,7 +9,7 @@ public class StatusCommandHooksTests {
         var       path = Path.Combine(tmp.Path, "settings.json");
 
         await File.WriteAllTextAsync(path, """
-            { "enabledPlugins": { "kapacitor@kapacitor": true } }
+            { "enabledPlugins": { "kcap@kcap": true } }
             """);
 
         await Assert.That(StatusCommand.IsClaudePluginInstalled(path)).IsTrue();
@@ -21,7 +21,7 @@ public class StatusCommandHooksTests {
         var       path = Path.Combine(tmp.Path, "settings.json");
 
         await File.WriteAllTextAsync(path, """
-            { "enabledPlugins": { "kapacitor@kapacitor": false } }
+            { "enabledPlugins": { "kcap@kcap": false } }
             """);
 
         await Assert.That(StatusCommand.IsClaudePluginInstalled(path)).IsFalse();
@@ -36,7 +36,7 @@ public class StatusCommandHooksTests {
     }
 
     [Test]
-    public async Task DetectsCodexHooks_when_kapacitor_command_present() {
+    public async Task DetectsCodexHooks_when_kcap_command_present() {
         using var tmp  = new TempDir();
         var       path = Path.Combine(tmp.Path, "hooks.json");
 
@@ -44,7 +44,7 @@ public class StatusCommandHooksTests {
             {
               "hooks": {
                 "SessionStart": [
-                  { "hooks": [{ "type": "command", "command": "kapacitor codex-hook", "timeout": 30 }] }
+                  { "hooks": [{ "type": "command", "command": "kcap codex-hook", "timeout": 30 }] }
                 ]
               }
             }
@@ -54,7 +54,7 @@ public class StatusCommandHooksTests {
     }
 
     [Test]
-    public async Task DetectsCodexHooks_missing_when_no_kapacitor_command() {
+    public async Task DetectsCodexHooks_missing_when_no_kcap_command() {
         using var tmp  = new TempDir();
         var       path = Path.Combine(tmp.Path, "hooks.json");
 
@@ -95,14 +95,14 @@ public class StatusCommandHooksTests {
             }
             """);
 
-        // Must not throw; numeric command is not a kapacitor entry.
+        // Must not throw; numeric command is not a kcap entry.
         await Assert.That(StatusCommand.IsCodexHooksInstalled(path)).IsFalse();
     }
 
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
-            $"kapacitor-test-{Guid.NewGuid().ToString("N")[..8]}"
+            $"kcap-test-{Guid.NewGuid().ToString("N")[..8]}"
         );
         public TempDir() => Directory.CreateDirectory(Path);
         public void Dispose() {

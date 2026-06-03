@@ -16,15 +16,15 @@ public class ProfileResolver(
         if (!string.IsNullOrEmpty(cliServerUrl))
             return new(AppConfig.NormalizeUrl(cliServerUrl), null, null, null);
 
-        // 2. KAPACITOR_URL env var
+        // 2. KCAP_URL env var
         if (!string.IsNullOrEmpty(envUrl))
             return new(AppConfig.NormalizeUrl(envUrl), null, null, null);
 
-        // 3. KAPACITOR_PROFILE env var
+        // 3. KCAP_PROFILE env var
         if (!string.IsNullOrEmpty(envProfile))
             return ResolveByName(envProfile);
 
-        // 4. .kapacitor.json in repo
+        // 4. .kcap.json in repo
         if (repoConfig?.Profile is { } repoProfileName) {
             if (config.Profiles.TryGetValue(repoProfileName, out var repoProfile)) {
                 if (repoConfig.ServerUrl is { } repoUrl
@@ -34,7 +34,7 @@ public class ProfileResolver(
                         AppConfig.NormalizeUrl(repoProfile.ServerUrl!),
                         repoProfileName,
                         repoProfile,
-                        $"Profile '{repoProfileName}' server URL does not match .kapacitor.json (stale config?)"
+                        $"Profile '{repoProfileName}' server URL does not match .kcap.json (stale config?)"
                     );
                 }
 
@@ -50,7 +50,7 @@ public class ProfileResolver(
                 null,
                 null,
                 null,
-                $"Profile '{repoProfileName}' from .kapacitor.json not found locally. Run: kapacitor profile add {repoProfileName} --server-url {repoConfig.ServerUrl}"
+                $"Profile '{repoProfileName}' from .kcap.json not found locally. Run: kcap profile add {repoProfileName} --server-url {repoConfig.ServerUrl}"
             );
         }
 
@@ -66,7 +66,7 @@ public class ProfileResolver(
         if (remoteMatch is not null)
             return ResolveByName(remoteMatch);
 
-        // 6. Profile binding (from `kapacitor use`)
+        // 6. Profile binding (from `kcap use`)
         if (repoPath is not null && config.ProfileBindings.TryGetValue(repoPath, out var boundName))
             return ResolveByName(boundName);
 

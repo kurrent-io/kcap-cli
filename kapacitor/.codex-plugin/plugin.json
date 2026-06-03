@@ -1,6 +1,0 @@
-{
-  "name": "kapacitor",
-  "version": "1.6.0",
-  "description": "Records and visualizes Codex CLI sessions via kapacitor CLI hooks",
-  "mcpServers": "./.codex-mcp.json"
-}

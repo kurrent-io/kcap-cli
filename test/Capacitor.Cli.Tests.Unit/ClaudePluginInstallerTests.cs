@@ -21,35 +21,35 @@ public class ClaudePluginInstallerTests {
     }
 
     [Test]
-    public async Task IsInstalled_true_when_enabledPlugins_has_kapacitor() {
+    public async Task IsInstalled_true_when_enabledPlugins_has_kcap() {
         using var tmp = new TempDir();
         var settingsPath = Path.Combine(tmp.Path, "settings.json");
         await File.WriteAllTextAsync(settingsPath, """
-            { "enabledPlugins": { "kapacitor@kapacitor": true } }
+            { "enabledPlugins": { "kcap@kcap": true } }
             """);
         await Assert.That(ClaudePluginInstaller.IsInstalled(settingsPath)).IsTrue();
     }
 
     [Test]
-    public async Task IsInstalled_true_when_marketplace_has_kapacitor() {
+    public async Task IsInstalled_true_when_marketplace_has_kcap() {
         using var tmp = new TempDir();
         var settingsPath = Path.Combine(tmp.Path, "settings.json");
         await File.WriteAllTextAsync(settingsPath, """
-            { "extraKnownMarketplaces": { "kapacitor": { "source": { "source": "directory", "path": "/some/path" } } } }
+            { "extraKnownMarketplaces": { "kcap": { "source": { "source": "directory", "path": "/some/path" } } } }
             """);
         await Assert.That(ClaudePluginInstaller.IsInstalled(settingsPath)).IsTrue();
     }
 
     [Test]
     public async Task IsInstalled_true_when_legacy_enabledPlugins_kurrent_key_present() {
-        // Pre-rename installs used the "kapacitor@kurrent" key. The installer
-        // and remover both treat it as a kapacitor-owned stale entry, so the
+        // Pre-rename installs used the "kcap@kurrent" key. The installer
+        // and remover both treat it as a kcap-owned stale entry, so the
         // refresh gate must detect it too — otherwise users on a pre-marker
         // pre-rename config would never get migrated.
         using var tmp = new TempDir();
         var settingsPath = Path.Combine(tmp.Path, "settings.json");
         await File.WriteAllTextAsync(settingsPath, """
-            { "enabledPlugins": { "kapacitor@kurrent": true } }
+            { "enabledPlugins": { "kcap@kurrent": true } }
             """);
         await Assert.That(ClaudePluginInstaller.IsInstalled(settingsPath)).IsTrue();
     }
@@ -86,7 +86,7 @@ public class ClaudePluginInstallerTests {
         var settingsPath = Path.Combine(tmp.Path, "settings.json");
         ClaudePluginInstaller.WriteMarker(settingsPath);
         await Assert.That(ClaudePluginInstaller.ReadMarker(settingsPath))
-            .IsEqualTo(KapacitorVersion.Current());
+            .IsEqualTo(CapacitorVersion.Current());
     }
 
     [Test]
@@ -102,7 +102,7 @@ public class ClaudePluginInstallerTests {
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
-            $"kapacitor-claude-plugin-installer-test-{Guid.NewGuid().ToString("N")[..8]}"
+            $"kcap-claude-plugin-installer-test-{Guid.NewGuid().ToString("N")[..8]}"
         );
         public TempDir() => Directory.CreateDirectory(Path);
         public void Dispose() {

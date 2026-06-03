@@ -33,11 +33,11 @@ public static class SetupCommand {
             await Console.Error.WriteLineAsync(
                 $"--plugin-scope project requires a git working tree, but '{Environment.CurrentDirectory}' is not inside one.");
             await Console.Error.WriteLineAsync(
-                "Either re-run `kapacitor setup` from inside your repo, or drop --plugin-scope project to install user-scope hooks.");
+                "Either re-run `kcap setup` from inside your repo, or drop --plugin-scope project to install user-scope hooks.");
             return 1;
         }
 
-        AnsiConsole.Write(new Rule("[bold green]Welcome to Kapacitor[/]").Centered());
+        AnsiConsole.Write(new Rule("[bold green]Welcome to Capacitor[/]").Centered());
 
         // Check if already configured
         var existingProfile = await AppConfig.LoadProfileConfig();
@@ -160,7 +160,7 @@ public static class SetupCommand {
 
         // Step 4: Coding agents
         AnsiConsole.Write(new Rule("[yellow]Step 4/5 — Coding agents[/]").LeftJustified());
-        await Console.Out.WriteLineAsync("  Kapacitor records sessions by installing hooks into your coding agent CLIs.");
+        await Console.Out.WriteLineAsync("  Capacitor records sessions by installing hooks into your coding agent CLIs.");
         await Console.Out.WriteLineAsync();
 
         var pluginPath = ResolvePluginPath();
@@ -194,7 +194,7 @@ public static class SetupCommand {
             InstallClaudePlugin:    InstallPlugin,
             InstallCodexHooks:      PluginCommand.InstallCodexHooks,
             InstallCursorHooks:     PluginCommand.InstallCursorHooks,
-            KapacitorOnPath:        () => AgentDetector.IsInstalled("kapacitor"),
+            CapacitorOnPath:        () => AgentDetector.IsInstalled("kcap"),
             InstallAgentSkills:     AgentsSkillsInstaller.Install,
             CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny);
 
@@ -271,8 +271,8 @@ public static class SetupCommand {
                 "  [dim]cd[/] into your project before recording to capture full session context.");
         }
 
-        AnsiConsole.MarkupLine("\n[dim]Optional:[/] start the daemon with [cyan]kapacitor daemon start -d[/]");
-        AnsiConsole.MarkupLine("[dim]Optional:[/] import past sessions with [cyan]kapacitor import --org[/]");
+        AnsiConsole.MarkupLine("\n[dim]Optional:[/] start the daemon with [cyan]kcap daemon start -d[/]");
+        AnsiConsole.MarkupLine("[dim]Optional:[/] import past sessions with [cyan]kcap import --org[/]");
 
         return 0;
     }
@@ -312,7 +312,7 @@ public static class SetupCommand {
     }
 
     internal static string? ResolvePluginPath() {
-        var overrideDir = Environment.GetEnvironmentVariable("KAPACITOR_PLUGIN_DIR");
+        var overrideDir = Environment.GetEnvironmentVariable("KCAP_PLUGIN_DIR");
         if (!string.IsNullOrWhiteSpace(overrideDir) && Directory.Exists(overrideDir)) {
             return overrideDir;
         }
@@ -326,27 +326,27 @@ public static class SetupCommand {
         if (exeDir is null) return null;
 
         // Try: <exe_dir>/../../../../plugin  (npm optional-deps layout)
-        // Binary is at <wrapper>/node_modules/@kurrent/<platform-pkg>/bin/kapacitor
+        // Binary is at <wrapper>/node_modules/@kurrent/<platform-pkg>/bin/kcap
         // Plugin is at <wrapper>/plugin
-        var optDepsPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", "..", "kapacitor"));
+        var optDepsPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", "..", "kcap"));
 
         if (Directory.Exists(optDepsPluginPath))
             return optDepsPluginPath;
 
-        // Try: <exe_dir>/../../kapacitor/plugin  (npm flat layout)
-        var npmPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kapacitor", "kapacitor"));
+        // Try: <exe_dir>/../../kcap/plugin  (npm flat layout)
+        var npmPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kcap", "kcap"));
 
         if (Directory.Exists(npmPluginPath))
             return npmPluginPath;
 
         // Try: <exe_dir>/../plugin  (wrapper package direct layout)
-        var wrapperPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "kapacitor"));
+        var wrapperPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "kcap"));
 
         if (Directory.Exists(wrapperPluginPath))
             return wrapperPluginPath;
 
         // Try: repo root layout (dev mode)
-        var repoPlugin = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kapacitor"));
+        var repoPlugin = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kcap"));
 
         return Directory.Exists(repoPlugin) ? repoPlugin : null;
     }
@@ -360,7 +360,7 @@ public static class SetupCommand {
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
     /// <summary>
-    /// Registers the kapacitor plugin in a Claude Code settings.json file by merging
+    /// Registers the kcap plugin in a Claude Code settings.json file by merging
     /// the marketplace source and enabling the plugin. Preserves all existing settings.
     /// </summary>
     internal static bool InstallPlugin(string settingsPath, string marketplacePath) {
@@ -376,13 +376,13 @@ public static class SetupCommand {
                 }
             }
 
-            // Ensure extraKnownMarketplaces.kapacitor exists with the correct path
+            // Ensure extraKnownMarketplaces.kcap exists with the correct path
             if (root["extraKnownMarketplaces"] is not JsonObject marketplaces) {
                 marketplaces                   = [];
                 root["extraKnownMarketplaces"] = marketplaces;
             }
 
-            marketplaces["kapacitor"] = new JsonObject {
+            marketplaces["kcap"] = new JsonObject {
                 ["source"] = new JsonObject {
                     ["source"] = "directory",
                     ["path"]   = marketplacePath
@@ -392,16 +392,16 @@ public static class SetupCommand {
             // Remove stale kurrent marketplace entry if present
             marketplaces.Remove("kurrent");
 
-            // Ensure enabledPlugins.kapacitor@kapacitor is true
+            // Ensure enabledPlugins.kcap@kcap is true
             if (root["enabledPlugins"] is not JsonObject enabled) {
                 enabled                = [];
                 root["enabledPlugins"] = enabled;
             }
 
-            enabled["kapacitor@kapacitor"] = true;
+            enabled["kcap@kcap"] = true;
 
             // Remove stale plugin entry if present
-            enabled.Remove("kapacitor@kurrent");
+            enabled.Remove("kcap@kurrent");
 
             Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
             File.WriteAllText(settingsPath, root.ToJsonString(WriteOpts));

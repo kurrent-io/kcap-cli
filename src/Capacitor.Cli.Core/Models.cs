@@ -233,7 +233,7 @@ public record EvalContextResult {
 /// <summary>
 /// Wire-format DTO for a single eval question served by
 /// <c>GET /api/eval/questions</c>. Mirrors the shape of
-/// <c>Kurrent.Kapacitor.EvalQuestionMetadata.Question</c> on the server —
+/// <c>Kurrent.Capacitor.EvalQuestionMetadata.Question</c> on the server —
 /// the CLI cannot reference the Shared library (standalone submodule),
 /// so the shape is duplicated here.
 /// </summary>
@@ -534,7 +534,7 @@ public record RepoEntry {
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
     UseStringEnumConverter = true
 )]
-partial class KapacitorJsonContext : JsonSerializerContext;
+partial class CapacitorJsonContext : JsonSerializerContext;
 
 /// <summary>
 /// Decision returned by the server's <c>RequestPermission</c> SignalR hub method.
@@ -798,7 +798,7 @@ public record AgentRunHeartbeat(string? SessionId);
 /// <summary>
 /// Returned by the server's <c>EndAgentSession</c> SignalR hub method. Mirrors the
 /// server-side record of the same name. SessionId is surfaced because the daemon
-/// only knows agentId — it can't spawn <c>kapacitor generate-whats-done</c> without
+/// only knows agentId — it can't spawn <c>kcap generate-whats-done</c> without
 /// the sessionId, which the server resolves via FindAgentSessionIdAsync.
 /// </summary>
 public record EndAgentSessionResult {

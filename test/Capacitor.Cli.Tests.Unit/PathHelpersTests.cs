@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Tests.Unit;
 public class PathHelpersTests {
     [Test]
     public async Task HomeDirectory_uses_HOME_when_set_to_rooted_absolute_path() {
-        var tmp = Directory.CreateTempSubdirectory("kapacitor-pathhelpers-test-");
+        var tmp = Directory.CreateTempSubdirectory("kcap-pathhelpers-test-");
         var originalHome = Environment.GetEnvironmentVariable("HOME");
 
         try {
