@@ -3,7 +3,7 @@ namespace Kapacitor.Cli.Tests.Unit.Import;
 using Kapacitor.Cli.Commands;
 
 public class ImportDisplayGridTests {
-    [Test, NotInParallel("ConsoleStreams")]
+    [Test, NotInParallel]
     public async Task plan_grid_renders_no_by_source_when_single_source() {
         var output = CaptureNonTtyOutput(d => d.WritePlanGrid(
             new ImportCommand.ClassificationCounts(New: 5, Partial: 0, AlreadyLoaded: 0, TooShort: 0, Excluded: 0, ProbeError: 0),
@@ -14,7 +14,7 @@ public class ImportDisplayGridTests {
         await Assert.That(output).DoesNotContain("By source");
     }
 
-    [Test, NotInParallel("ConsoleStreams")]
+    [Test, NotInParallel]
     public async Task plan_grid_renders_by_source_section_when_multiple_sources() {
         var output = CaptureNonTtyOutput(d => d.WritePlanGrid(
             new ImportCommand.ClassificationCounts(New: 7, Partial: 0, AlreadyLoaded: 0, TooShort: 0, Excluded: 0, ProbeError: 0),
@@ -28,7 +28,7 @@ public class ImportDisplayGridTests {
         await Assert.That(output).Contains("codex");
     }
 
-    [Test, NotInParallel("ConsoleStreams")]
+    [Test, NotInParallel]
     public async Task plan_grid_renders_no_by_source_when_breakdown_null() {
         var output = CaptureNonTtyOutput(d => d.WritePlanGrid(
             new ImportCommand.ClassificationCounts(New: 5, Partial: 0, AlreadyLoaded: 0, TooShort: 0, Excluded: 0, ProbeError: 0),
@@ -37,7 +37,7 @@ public class ImportDisplayGridTests {
         await Assert.That(output).DoesNotContain("By source");
     }
 
-    [Test, NotInParallel("ConsoleStreams")]
+    [Test, NotInParallel]
     public async Task done_grid_renders_no_by_source_when_single_source() {
         var output = CaptureNonTtyOutput(d => d.WriteDoneGrid(
             MakeFinal(loaded: 5),
@@ -48,7 +48,7 @@ public class ImportDisplayGridTests {
         await Assert.That(output).DoesNotContain("By source");
     }
 
-    [Test, NotInParallel("ConsoleStreams")]
+    [Test, NotInParallel]
     public async Task done_grid_renders_by_source_section_when_multiple_sources() {
         var output = CaptureNonTtyOutput(d => d.WriteDoneGrid(
             MakeFinal(loaded: 7),
@@ -62,7 +62,7 @@ public class ImportDisplayGridTests {
         await Assert.That(output).Contains("codex");
     }
 
-    [Test, NotInParallel("ConsoleStreams")]
+    [Test, NotInParallel]
     public async Task done_grid_renders_no_by_source_when_breakdown_null() {
         var output = CaptureNonTtyOutput(d => d.WriteDoneGrid(
             MakeFinal(loaded: 5),

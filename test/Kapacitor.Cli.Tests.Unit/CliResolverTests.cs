@@ -56,7 +56,11 @@ public class CliResolverTests {
         await Assert.That(CliResolver.Exists(missing)).IsFalse();
     }
 
-    [Test]
+    // NotInParallel: this test mutates the process-global PATH env var,
+    // which races with any other test reading PATH (e.g. plugin installers,
+    // resolver tests below). A unique group key isn't enough because
+    // cross-group tests can still race; running fully alone is safe.
+    [Test, NotInParallel]
     public async Task ReturnsTrue_WhenBareCommandResolvesOnPath() {
         // Drop a fake "kapacitor-pathprobe-{guid}" binary into a temp dir,
         // mark it executable on POSIX, and prepend that dir to PATH.
@@ -82,7 +86,7 @@ public class CliResolverTests {
     /// The Unix exec-bit check (mirrors <c>AgentDetector.IsExecutable</c>)
     /// applies to PATH-resolved candidates too, not just absolute paths.
     /// </summary>
-    [Test]
+    [Test, NotInParallel]
     public async Task ReturnsFalse_WhenBareCommandOnPathIsNotExecutable() {
         if (OperatingSystem.IsWindows()) return;
 
