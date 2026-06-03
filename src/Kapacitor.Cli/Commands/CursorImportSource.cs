@@ -1,5 +1,7 @@
 using System.Net;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Kapacitor.Cli.Core;
 using Kapacitor.Cli.Core.Cursor;
 
@@ -294,6 +296,23 @@ internal sealed class CursorImportSource : IImportSource {
             ? classification.ResumeFromLine
             : 0;
 
+        var workspaceFolder = classification.SourceMeta!.TryGetValue("WorkspaceFolder", out var wfObj)
+            ? wfObj as string
+            : null;
+
+        // Synthesize the sessionStart hook so the server appends a Cursor-shaped
+        // SessionStarted with the CursorSessionExtension (vendor + workspace
+        // metadata). Without this the read-model would have only transcript
+        // turn events and the session would surface as a generic, vendor-less
+        // active session per SessionProjector.cs:193. The server keys the
+        // canonical event id on (composerId, "SessionStarted"), so re-emitting
+        // is idempotent — safe to fire on every import (including Partial
+        // resumes after a previous import or live hooks already fired).
+        await PostSyntheticHookAsync(
+            ctx.HttpClient, ctx.BaseUrl, "session-start/cursor",
+            BuildSessionStartPayload(classification.SessionId, workspaceFolder, transcriptPath),
+            ct);
+
         int sent;
         try {
             sent = await SessionImporter.SendTranscriptBatches(
@@ -308,9 +327,71 @@ internal sealed class CursorImportSource : IImportSource {
             return ImportOutcome.Failed;
         }
 
+        // sessionEnd seals the session so the read-model marks it ended.
+        // Server's canonical-event id is (composerId, "SessionEnded") — also
+        // idempotent on replay. Reason "historical-import" lets operators
+        // distinguish synthetic ends from live-hook ends in event metadata.
+        var durationMs = ComputeHistoricalDurationMs(transcriptPath);
+        await PostSyntheticHookAsync(
+            ctx.HttpClient, ctx.BaseUrl, "session-end/cursor",
+            BuildSessionEndPayload(classification.SessionId, transcriptPath, durationMs),
+            ct);
+
         if (sent == 0) return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
 
         return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
+    }
+
+    static JsonObject BuildSessionStartPayload(string sessionId, string? workspaceFolder, string transcriptPath) {
+        var payload = new JsonObject {
+            ["hook_event_name"]     = "sessionStart",
+            ["session_id"]          = sessionId,
+            ["transcript_path"]     = transcriptPath,
+            ["is_background_agent"] = false,
+        };
+        if (workspaceFolder is not null) {
+            payload["workspace_roots"] = new JsonArray(workspaceFolder);
+        }
+        return payload;
+    }
+
+    static JsonObject BuildSessionEndPayload(string sessionId, string transcriptPath, long? durationMs) {
+        var payload = new JsonObject {
+            ["hook_event_name"] = "sessionEnd",
+            ["session_id"]      = sessionId,
+            ["reason"]          = "historical-import",
+            ["transcript_path"] = transcriptPath,
+        };
+        if (durationMs is { } d) {
+            payload["duration_ms"] = d;
+        }
+        return payload;
+    }
+
+    static long? ComputeHistoricalDurationMs(string transcriptPath) {
+        try {
+            var created  = File.GetCreationTimeUtc(transcriptPath);
+            var modified = File.GetLastWriteTimeUtc(transcriptPath);
+            var delta    = (long)(modified - created).TotalMilliseconds;
+            return delta >= 0 ? delta : null;
+        } catch {
+            return null;
+        }
+    }
+
+    static async Task PostSyntheticHookAsync(
+        HttpClient client, string baseUrl, string routeSegment, JsonObject payload, CancellationToken ct
+    ) {
+        try {
+            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            using var _       = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, ct: ct);
+            // Outcome is intentionally ignored: server idempotency makes
+            // re-tries safe, and transcript-line ingest is the primary
+            // payload — a missing lifecycle event is a degraded but
+            // recoverable state (next re-import re-emits).
+        } catch {
+            // Best effort; do not fail the whole import for a lifecycle POST.
+        }
     }
 
     static ImportCommand.SessionClassification MakeClassification(

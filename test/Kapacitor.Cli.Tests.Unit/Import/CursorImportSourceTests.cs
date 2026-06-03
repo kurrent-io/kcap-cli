@@ -251,7 +251,7 @@ public class CursorImportSourceTests {
     }
 
     [Test]
-    public async Task import_session_posts_all_lines_via_hooks_transcript_with_cursor_vendor() {
+    public async Task import_session_posts_lifecycle_then_transcript_then_session_end() {
         using var fx = new ProjectsDirFixture();
         var jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111",
                                   "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
@@ -265,24 +265,73 @@ public class CursorImportSourceTests {
 
         var classification = new ImportCommand.SessionClassification {
             SessionId  = "11111111111111111111111111111111",
-            FilePath   = jsonl,
+            FilePath   = "",
             EncodedCwd = "",
             Meta       = new SessionMetadata(),
             Status     = ImportCommand.ClassificationStatus.New,
             Vendor     = "cursor",
-            SourceMeta = new Dictionary<string, object?> { ["TranscriptPath"] = jsonl },
+            SourceMeta = new Dictionary<string, object?> {
+                ["TranscriptPath"]  = jsonl,
+                ["WorkspaceFolder"] = "/Users/me/dev/proj",
+            },
         };
 
         var outcome = await src.ImportSessionAsync(classification, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
 
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
-        await Assert.That(posted.Count).IsEqualTo(1);
-        await Assert.That(posted[0].Path).IsEqualTo("/hooks/transcript");
+        await Assert.That(posted.Count).IsEqualTo(3);
 
-        var node = JsonNode.Parse(posted[0].Body)!;
-        await Assert.That(node["session_id"]!.GetValue<string>()).IsEqualTo("11111111111111111111111111111111");
-        await Assert.That(node["vendor"]!.GetValue<string>()).IsEqualTo("cursor");
-        await Assert.That(node["lines"]!.AsArray().Count).IsEqualTo(3);
+        // Order matters: session-start before transcript, session-end after.
+        await Assert.That(posted[0].Path).IsEqualTo("/hooks/session-start/cursor");
+        await Assert.That(posted[1].Path).IsEqualTo("/hooks/transcript");
+        await Assert.That(posted[2].Path).IsEqualTo("/hooks/session-end/cursor");
+
+        var startNode = JsonNode.Parse(posted[0].Body)!;
+        await Assert.That(startNode["session_id"]!.GetValue<string>()).IsEqualTo("11111111111111111111111111111111");
+        await Assert.That(startNode["hook_event_name"]!.GetValue<string>()).IsEqualTo("sessionStart");
+        await Assert.That(startNode["workspace_roots"]!.AsArray()[0]!.GetValue<string>()).IsEqualTo("/Users/me/dev/proj");
+        await Assert.That(startNode["transcript_path"]!.GetValue<string>()).IsEqualTo(jsonl);
+
+        var transcriptNode = JsonNode.Parse(posted[1].Body)!;
+        await Assert.That(transcriptNode["session_id"]!.GetValue<string>()).IsEqualTo("11111111111111111111111111111111");
+        await Assert.That(transcriptNode["vendor"]!.GetValue<string>()).IsEqualTo("cursor");
+        await Assert.That(transcriptNode["lines"]!.AsArray().Count).IsEqualTo(3);
+
+        var endNode = JsonNode.Parse(posted[2].Body)!;
+        await Assert.That(endNode["session_id"]!.GetValue<string>()).IsEqualTo("11111111111111111111111111111111");
+        await Assert.That(endNode["hook_event_name"]!.GetValue<string>()).IsEqualTo("sessionEnd");
+        await Assert.That(endNode["reason"]!.GetValue<string>()).IsEqualTo("historical-import");
+    }
+
+    [Test]
+    public async Task import_session_omits_workspace_roots_when_cwd_unresolved() {
+        using var fx = new ProjectsDirFixture();
+        var jsonl = fx.AddSession("unknown-workspace", "11111111-1111-1111-1111-111111111111", "{}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        var posted = new List<(string Path, string Body)>();
+        using var handler = new StubHandler(
+            postCapture: (req, body) => { posted.Add((req.RequestUri!.AbsolutePath, body)); return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var client = new HttpClient(handler);
+
+        var classification = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.New,
+            Vendor     = "cursor",
+            SourceMeta = new Dictionary<string, object?> {
+                ["TranscriptPath"]  = jsonl,
+                ["WorkspaceFolder"] = null,
+            },
+        };
+
+        await src.ImportSessionAsync(classification, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        var startNode = JsonNode.Parse(posted[0].Body)!;
+        await Assert.That(startNode["workspace_roots"]).IsNull();
     }
 
     [Test]
@@ -293,14 +342,14 @@ public class CursorImportSourceTests {
 
         var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
 
-        string? capturedBody = null;
+        var posted = new List<(string Path, string Body)>();
         using var handler = new StubHandler(
-            postCapture: (_, body) => { capturedBody = body; return new HttpResponseMessage(HttpStatusCode.OK); });
+            postCapture: (req, body) => { posted.Add((req.RequestUri!.AbsolutePath, body)); return new HttpResponseMessage(HttpStatusCode.OK); });
         using var client = new HttpClient(handler);
 
         var classification = new ImportCommand.SessionClassification {
             SessionId      = "11111111111111111111111111111111",
-            FilePath       = jsonl,
+            FilePath       = "",
             EncodedCwd     = "",
             Meta           = new SessionMetadata(),
             Status         = ImportCommand.ClassificationStatus.Partial,
@@ -312,9 +361,11 @@ public class CursorImportSourceTests {
         var outcome = await src.ImportSessionAsync(classification, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
 
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Resumed);
-        var node = JsonNode.Parse(capturedBody!)!;
-        var lines = node["lines"]!.AsArray();
-        var lineNumbers = node["line_numbers"]!.AsArray();
+
+        var transcriptPost = posted.First(p => p.Path == "/hooks/transcript");
+        var node           = JsonNode.Parse(transcriptPost.Body)!;
+        var lines          = node["lines"]!.AsArray();
+        var lineNumbers    = node["line_numbers"]!.AsArray();
         await Assert.That(lines.Count).IsEqualTo(2);
         await Assert.That(lines[0]!.GetValue<string>()).IsEqualTo("{\"b\":2}");
         await Assert.That((int)lineNumbers[0]!).IsEqualTo(1);
