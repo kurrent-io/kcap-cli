@@ -21,7 +21,7 @@ public class ImportMissingCwdsReportTests {
             await Assert.That(output).Contains("/does/not/exist/repo-a");
             await Assert.That(output).Contains("/does/not/exist/repo-b");
             await Assert.That(output).DoesNotContain(existing); // existing dir not reported
-            await Assert.That(output).Contains("Add cwd_remap");
+            await Assert.That(output).Contains("kcap remap");
         } finally {
             Directory.Delete(existing, recursive: true);
         }
@@ -36,7 +36,7 @@ public class ImportMissingCwdsReportTests {
         var rules  = new[] { new CwdRemap { From = "/old", To = "/new" } };
         var output = Capture(d => ImportCommand.ReportMissingCwds(sessionCwds, rules, d));
 
-        await Assert.That(output).Contains("Update the cwd_remap entries");
+        await Assert.That(output).Contains("update or add mappings");
     }
 
     [Test, NotInParallel]

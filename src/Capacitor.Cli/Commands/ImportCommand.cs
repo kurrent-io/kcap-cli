@@ -1671,8 +1671,8 @@ static class ImportCommand {
         }
 
         var hint = cwdRemap is { Count: > 0 }
-            ? "Update the cwd_remap entries in your kcap config to map these to their new on-disk paths."
-            : "Add cwd_remap entries to your kcap config to map these to their new on-disk paths.";
+            ? "Run `kcap remap <from> <to>` to update or add mappings to their new on-disk paths."
+            : "Run `kcap remap <from> <to>` to map these to their new on-disk paths.";
 
         display.Line(hint);
     }
