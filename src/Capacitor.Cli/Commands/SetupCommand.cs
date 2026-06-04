@@ -244,6 +244,12 @@ public static class SetupCommand {
         await AppConfig.SaveProfileConfig(profileConfig);
 
         var finalTokens = await TokenStore.LoadAsync();
+
+        // AI-752: tell the server this user has finished CLI setup, so the dashboard
+        // can flip the new-tenant welcome modal from "Waiting for CLI to register"
+        // to "Registered". Best-effort — never block setup completion on this.
+        await PingCliSetupAsync(serverUrl);
+
         AnsiConsole.Write(new Rule("[green]Setup complete[/]").LeftJustified());
 
         var grid = new Grid().AddColumn().AddColumn();
@@ -349,6 +355,31 @@ public static class SetupCommand {
         var repoPlugin = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kcap"));
 
         return Directory.Exists(repoPlugin) ? repoPlugin : null;
+    }
+
+    // AI-752 — best-effort signal to the server that this user has completed CLI setup.
+    // Silently swallows network/auth/server errors: the welcome-modal nudge is a UX
+    // affordance, not part of the contract of `kcap setup`.
+    static async Task PingCliSetupAsync(string serverUrl) {
+        try {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(serverUrl, cts.Token);
+
+            // No bearer header => server uses Auth:None or our local tokens are gone.
+            // Either way the welcome modal doesn't gate startup, so just skip silently.
+            if (client.DefaultRequestHeaders.Authorization is null) return;
+
+            var version = typeof(SetupCommand).Assembly.GetName().Version?.ToString();
+            var payload = new StringContent(
+                $$"""{"cliVersion":{{(version is null ? "null" : "\"" + version + "\"")}}}""",
+                System.Text.Encoding.UTF8,
+                "application/json");
+
+            using var response = await client.PostAsync($"{serverUrl.TrimEnd('/')}/api/users/me/cli-setup", payload, cts.Token);
+            // 204 NoContent on success; anything else just means "older server / down" — that's fine.
+        } catch {
+            // Swallow — see method-doc.
+        }
     }
 
     static string? GetArg(string[] args, string name) {
