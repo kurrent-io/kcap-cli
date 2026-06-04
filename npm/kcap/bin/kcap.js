@@ -49,7 +49,7 @@ try {
 }
 
 const ext = process.platform === "win32" ? ".exe" : "";
-const binaryPath = path.join(binaryDir, "bin", `kapacitor${ext}`);
+const binaryPath = path.join(binaryDir, "bin", `kcap${ext}`);
 
 if (!fs.existsSync(binaryPath)) {
   console.error(`Binary not found at ${binaryPath}`);

@@ -66,7 +66,7 @@ Hook Commands (internal — used by Claude Code plugin):
   codex-hook                       Codex hooks dispatcher (single binary, branches on hook_event_name)
 
 Environment:
-  KAPACITOR_URL              Server URL (overrides config file)
-  KAPACITOR_SESSION_ID       Session ID set by the Claude Code SessionStart hook
+  KCAP_URL              Server URL (overrides config file)
+  KCAP_SESSION_ID       Session ID set by the Claude Code SessionStart hook
   CODEX_THREAD_ID            Session ID exported by Codex CLI 0.81+
-  KAPACITOR_DAEMON_NAME      Daemon name (overrides profile; superseded by --name)
+  KCAP_DAEMON_NAME      Daemon name (overrides profile; superseded by --name)

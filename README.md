@@ -301,6 +301,8 @@ kcap daemon doctor                  # diagnose lock-file state for every daemon 
 kcap daemon doctor --clean          # also remove stale lock/pid files (held entries are never touched)
 ```
 
+`KCAP_DAEMON_NAME` overrides the active profile's daemon name (superseded by an explicit `--name` flag).
+
 Each daemon process holds an exclusive `flock` on `~/.config/kcap/daemons/<name>.lock` for its entire lifetime. The kernel releases the lock automatically when the daemon exits (including `SIGKILL` or power-off), so leftover lock files on disk are never a blocker — only a live process holding the kernel-level lock can prevent another daemon from acquiring the same name.
 
 Two daemons with **different** `--name` values can run side-by-side. Two daemons under the **same name** on the same machine collide on the flock and the second one exits with code 2. Even if that guard is bypassed somehow, the server rejects the second daemon's `DaemonConnect` with a typed error and the second daemon exits with code 3 — no more silent slot-displacement oscillation.
