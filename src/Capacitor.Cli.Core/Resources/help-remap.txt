@@ -1,0 +1,33 @@
+kcap remap — Rewrite recorded transcript cwds during import
+
+Usage: kcap remap <from> <to>
+       kcap remap --list
+       kcap remap --remove <from>
+
+Historic transcripts record an absolute working directory. If you've since
+renamed or moved that directory on disk (e.g. ~/dev/foo-cli → ~/dev/bar-cli),
+`kcap import --org` / `--repo` can't resolve those sessions to a GitHub repo
+because git can no longer be run inside a path that doesn't exist. The
+import command prints a one-shot report of missing cwds at the top of every
+run; add a remap for each one you want to recover.
+
+Matching semantics (applied by `kcap import`):
+  - Path-prefix rewrite: `cwd == from` or `cwd starts with from + sep`,
+    where sep is `/` (or `\` on Windows). So `~/dev/foo` will NOT match
+    `~/dev/foo-cli`.
+  - `~` (and `~\` on Windows) expand to the current user's home directory
+    at apply time, so entries stay portable across users / hosts.
+  - Comparison follows the host filesystem's case policy:
+    case-insensitive on Windows, case-sensitive elsewhere.
+  - Longest `from` wins when multiple rules apply.
+  - Rules are applied once (no chaining).
+
+Scope:
+  Stored at the **top level** of `~/.config/kcap/config.json` — remaps are
+  GLOBAL across all profiles, since the same on-disk rename affects every
+  profile's import.
+
+Examples:
+  kcap remap ~/dev/eventstore/foo-cli ~/dev/eventstore/bar-cli
+  kcap remap --list
+  kcap remap --remove ~/dev/eventstore/foo-cli

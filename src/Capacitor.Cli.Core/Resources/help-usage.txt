@@ -22,6 +22,9 @@ Configuration:
   ignore <path>                    Exclude a path (and descendants) from session recording
   ignore --list                    List excluded paths in the active profile
   ignore --remove <path>           Remove a path from the exclusion list
+  remap <from> <to>                Rewrite a recorded transcript cwd prefix during import (renamed/moved repos)
+  remap --list                     List configured cwd remaps
+  remap --remove <from>            Remove a cwd remap entry
 
 Daemon:
   daemon start [-d] [--name N]     Start the daemon (foreground, or -d for background; refuses on duplicate name)
