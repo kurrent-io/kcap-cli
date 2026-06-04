@@ -25,6 +25,18 @@ npm automatically selects the right native binary for your platform:
 
 The CLI is compiled with NativeAOT — fast startup, no runtime dependency.
 
+> **npm 11+ blocks install scripts by default.** You'll see a warning like
+> `1 package has install scripts not yet covered by allowScripts`. The `kcap`
+> binary works without the script; it only refreshes already-installed agent
+> plugins (Claude / Codex / Cursor) on upgrade. Approve it once if you want
+> upgrades to auto-refresh agent skills and hooks:
+>
+> ```bash
+> npm approve-scripts @kurrent/kcap
+> ```
+>
+> Without approval, re-run `kcap plugin install [--codex|--cursor|--skills] --if-installed` manually after each upgrade.
+
 ### 2. Run setup
 
 ```bash
@@ -50,7 +62,7 @@ kcap setup --server-url https://my-tenant.kcap.ai --default-visibility org_publi
 In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, and/or `--skip-cursor-hooks`.
 
 > **Need hooks for an agent installed after setup, or scoped to a single repo?**
-> Run `kcap plugin install [--codex|--cursor]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, run `/hooks` inside Codex and trust each kcap entry — Codex doesn't execute hooks until each is explicitly trusted. After a `--project` install, also run `codex` once in the repo and accept the trust prompt. Re-running after a kcap upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kcap`.
+> Run `kcap plugin install [--codex|--cursor]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, run `/hooks` inside Codex and trust each kcap entry — Codex doesn't execute hooks until each is explicitly trusted. After a `--project` install, also run `codex` once in the repo and accept the trust prompt. Re-running after a kcap upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kcap` (run `npm approve-scripts @kurrent/kcap` once to enable it on npm 11+, which blocks install scripts by default).
 
 > **Need at least one agent to capture sessions:** the setup wizard runs to completion without an agent CLI on `PATH` (it'll still configure your profile, auth, and daemon), but kcap only records work once Claude Code or Codex CLI is installed and the hooks are in place.
 
@@ -314,6 +326,8 @@ All five auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionI
 The daemon starts Codex with `--sandbox workspace-write` and `--ask-for-approval on-request`. This lets Codex edit files in the agent's worktree but escalates sensitive operations (e.g. network calls, shell commands outside the worktree) through the daemon's permission bridge to the dashboard.
 
 > **Upgrading from an earlier version of kcap?** The npm postinstall hook refreshes all user-scope kcap installations on every `npm install -g @kurrent/kcap`, so you always pick up the current CLI version's skills (`~/.agents/skills/kcap-*`), Codex hook commands (`~/.codex/hooks.json`), and Claude plugin registration (`~/.claude/settings.json`). Each refresh is gated on a marker file written by your previous setup — fresh systems that never opted in are left untouched. Project-scope installs (`--project`) are not auto-refreshed; re-run `kcap plugin install [--codex] --project` after upgrading if you want the latest config for a specific repo.
+>
+> npm 11+ blocks install scripts by default. Run `npm approve-scripts @kurrent/kcap` once to opt in to the auto-refresh; otherwise re-run the relevant `kcap plugin install ... --if-installed` commands manually after each upgrade.
 
 PR review for hosted Codex agents is not yet supported (tracked in AI-632). The sandbox and approval-mode selectors in the launch dialog are also planned as a follow-up (AI-633).
 
