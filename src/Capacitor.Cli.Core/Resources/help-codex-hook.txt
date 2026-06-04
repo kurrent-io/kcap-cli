@@ -20,7 +20,7 @@ install --codex` to register it via Codex's hooks framework.
 
 Daemon-bridge mode
 
-When KAPACITOR_DAEMON_URL is set (i.e. the hook is invoked inside a daemon-
+When KCAP_DAEMON_URL is set (i.e. the hook is invoked inside a daemon-
 launched hosted Codex agent), the PermissionRequest event bounces through the
 local daemon's permission bridge and forwards the dashboard's decision back to
 Codex. The legacy informational POST to the Capacitor server is skipped in
@@ -28,6 +28,6 @@ this mode.
 
 Bridge errors are fail-closed: the hook emits {"behavior": "deny"} and exits
 non-zero rather than falling back to allow. Outside daemon context (no
-KAPACITOR_DAEMON_URL), the hook posts to /hooks/permission-record (fire-and-
+KCAP_DAEMON_URL), the hook posts to /hooks/permission-record (fire-and-
 forget record) and yields without emitting a decision so Codex's own in-CLI
 approval prompt asks the user.

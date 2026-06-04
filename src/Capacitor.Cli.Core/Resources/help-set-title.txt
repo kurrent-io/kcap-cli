@@ -6,5 +6,5 @@ Arguments:
   title                   Session title (max 120 characters)
 
 Environment:
-  Session ID is auto-resolved from KAPACITOR_SESSION_ID (Claude)
+  Session ID is auto-resolved from KCAP_SESSION_ID (Claude)
   or CODEX_THREAD_ID (Codex 0.81+).

@@ -33,7 +33,7 @@ jobs:
       - name: Run unit tests
         # --maximum-parallel-tests 1 serializes the entire unit suite.
         # The codebase has many tests that mutate process-global state
-        # (Environment.SetEnvironmentVariable on HOME/PATH/KAPACITOR_*,
+        # (Environment.SetEnvironmentVariable on HOME/PATH/KCAP_*,
         # Console.SetOut/SetError) and rely on [NotInParallel(group)] to
         # serialize among themselves. Cross-group parallel execution still
         # races the shared process state intermittently on the slower

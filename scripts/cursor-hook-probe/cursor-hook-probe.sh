@@ -41,7 +41,7 @@ cat > "${BASE}.stdin.json" 2>/dev/null || true
     echo
     echo "# env (filtered)"
     env 2>/dev/null \
-        | grep -E '^(CURSOR_|KAPACITOR_|HOME=|PATH=|PWD=|SHELL=|USER=|LOGNAME=|TERM=)' \
+        | grep -E '^(CURSOR_|KCAP_|HOME=|PATH=|PWD=|SHELL=|USER=|LOGNAME=|TERM=)' \
         | sort \
         | sed 's/^/  /'
 } > "${BASE}.meta.txt" 2>/dev/null || true
