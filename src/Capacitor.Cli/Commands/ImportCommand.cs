@@ -1709,13 +1709,18 @@ static class ImportCommand {
 
     /// <summary>
     /// Replace the user's home directory prefix with <c>~</c> for display only.
-    /// Uses path-boundary matching so siblings like <c>/Users/alexeyfoo</c>
-    /// aren't accidentally shortened.
+    /// Uses path-boundary matching (either <c>/</c> or <c>\</c>) so siblings
+    /// like <c>/Users/alexeyfoo</c> aren't accidentally shortened, and follows
+    /// the host filesystem's case-sensitivity policy.
     /// </summary>
     internal static string ShortenHome(string path, string home) {
-        if (string.IsNullOrEmpty(home) || !path.StartsWith(home, StringComparison.Ordinal)) return path;
+        var comparison = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows)
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (string.IsNullOrEmpty(home) || !path.StartsWith(home, comparison)) return path;
         if (path.Length == home.Length) return "~";
-        return path[home.Length] == '/' ? "~" + path[home.Length..] : path;
+        return CwdRemapper.IsSeparator(path[home.Length]) ? "~" + path[home.Length..] : path;
     }
 
     static async Task<Dictionary<string, (string Owner, string Name)?>> ResolveTranscriptReposAsync(
@@ -1738,7 +1743,13 @@ static class ImportCommand {
 
             perTranscript[i] = (transcripts[i].SessionId, remapped);
 
-            if (remapped is not null) sessionCwds?.Add(transcripts[i].SessionId, remapped);
+            // Indexer assignment (not Add) so duplicate SessionIds across
+            // project dirs / backups can't abort the import. Last-write-wins
+            // is fine for the missing-cwd report — the cwd is functionally
+            // the same path anyway.
+            if (remapped is not null && sessionCwds is not null) {
+                sessionCwds[transcripts[i].SessionId] = remapped;
+            }
         }
 
         var uniqueCwds = perTranscript

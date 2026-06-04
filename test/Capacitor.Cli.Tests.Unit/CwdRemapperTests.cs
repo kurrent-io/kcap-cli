@@ -74,6 +74,43 @@ public class CwdRemapperTests {
     }
 
     [Test]
+    public async Task Apply_matches_at_backslash_boundary_on_windows_style_paths() {
+        // Cwd uses Windows separators; rule does too. Boundary check must
+        // accept '\' as a separator regardless of host OS.
+        var rules = new[] { R(@"C:\dev\foo", @"C:\dev\bar") };
+        var result = CwdRemapper.Apply(@"C:\dev\foo\src\X", rules, "/home/u", StringComparison.OrdinalIgnoreCase);
+        await Assert.That(result).IsEqualTo(@"C:\dev\bar\src\X");
+    }
+
+    [Test]
+    public async Task Apply_does_not_cross_backslash_boundary() {
+        var rules = new[] { R(@"C:\dev\foo", @"C:\dev\bar") };
+        var result = CwdRemapper.Apply(@"C:\dev\foobar\x", rules, "/home/u", StringComparison.OrdinalIgnoreCase);
+        await Assert.That(result).IsEqualTo(@"C:\dev\foobar\x");
+    }
+
+    [Test]
+    public async Task Apply_is_case_insensitive_when_comparison_is_OrdinalIgnoreCase() {
+        var rules = new[] { R(@"C:\Users\Alice\Dev", @"C:\Users\Alice\New") };
+        var result = CwdRemapper.Apply(@"c:\users\alice\dev\src", rules, "/home/u", StringComparison.OrdinalIgnoreCase);
+        await Assert.That(result).IsEqualTo(@"C:\Users\Alice\New\src");
+    }
+
+    [Test]
+    public async Task Apply_is_case_sensitive_when_comparison_is_Ordinal() {
+        var rules = new[] { R("/dev/Foo", "/dev/Bar") };
+        var result = CwdRemapper.Apply("/dev/foo/x", rules, "/home/u", StringComparison.Ordinal);
+        await Assert.That(result).IsEqualTo("/dev/foo/x");
+    }
+
+    [Test]
+    public async Task Apply_expands_tilde_with_backslash_separator() {
+        var rules = new[] { R(@"~\dev\foo", @"~\dev\bar") };
+        var result = CwdRemapper.Apply(@"C:\Users\u\dev\foo\src", rules, @"C:\Users\u", StringComparison.OrdinalIgnoreCase);
+        await Assert.That(result).IsEqualTo(@"C:\Users\u\dev\bar\src");
+    }
+
+    [Test]
     public async Task Apply_exact_match_with_trailing_to_uses_to_verbatim() {
         // cwd == from: result is `to` verbatim, no trailing slash added.
         var rules = new[] { R("/dev/a", "/dev/b") };

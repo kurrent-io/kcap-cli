@@ -86,6 +86,14 @@ public class ImportMissingCwdsReportTests {
     }
 
     [Test]
+    public async Task ShortenHome_accepts_backslash_as_path_boundary() {
+        // Even on a non-Windows host the helper must accept '\' as a separator
+        // so transcripts that recorded Windows paths shrink correctly.
+        await Assert.That(ImportCommand.ShortenHome(@"C:\Users\alexey\dev\foo", @"C:\Users\alexey"))
+            .IsEqualTo(@"~\dev\foo");
+    }
+
+    [Test]
     public async Task CollapseDescendants_drops_worktree_when_parent_is_also_missing() {
         var input = new HashSet<string>(StringComparer.Ordinal) {
             "/dev/kapacitor",
