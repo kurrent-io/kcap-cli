@@ -514,8 +514,13 @@ static class ImportCommand {
 
         // Run file-based repo resolution. The helper takes a single codex bool;
         // since Claude and Codex differ only in cwd-extraction, run it per
-        // vendor and merge.
-        var resolved = new Dictionary<string, (string Owner, string Name)?>(StringComparer.Ordinal);
+        // vendor and merge. User-configured cwd remaps let historic transcripts
+        // referencing since-renamed local repo paths still resolve to a real
+        // git directory.
+        var profileConfig = await AppConfig.LoadProfileConfig();
+        var cwdRemap      = profileConfig.CwdRemap;
+        var resolved      = new Dictionary<string, (string Owner, string Name)?>(StringComparer.Ordinal);
+        var sessionCwds   = new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var vendor in new[] { "claude", "codex" }) {
             var slice = allFileTuples
@@ -525,14 +530,26 @@ static class ImportCommand {
 
             if (slice.Count == 0) continue;
 
-            var partial                                  = await ResolveTranscriptReposAsync(slice, codex: vendor == "codex", display);
+            var partial                                  = await ResolveTranscriptReposAsync(slice, codex: vendor == "codex", display, cwdRemap, sessionCwds);
             foreach (var kv in partial) resolved[kv.Key] = kv.Value;
         }
 
         // Resolve Cursor sessions in parallel by workspace path (dedup like
         // ResolveTranscriptReposAsync).
         if (cursorCwds.Count > 0) {
-            var uniqueWorkspaces = cursorCwds.Values
+            // Remap once per session so repo detection AND the missing-cwd
+            // report below see the same path.
+            var cursorRemapped = cursorCwds.ToDictionary(
+                kv => kv.Key,
+                kv => kv.Value is null ? null : CwdRemapper.Apply(kv.Value, cwdRemap),
+                StringComparer.Ordinal
+            );
+
+            foreach (var (sid, cwd) in cursorRemapped) {
+                if (cwd is not null) sessionCwds[sid] = cwd;
+            }
+
+            var uniqueWorkspaces = cursorRemapped.Values
                 .Where(c => c is not null)
                 .Cast<string>()
                 .Distinct(StringComparer.Ordinal)
@@ -557,10 +574,16 @@ static class ImportCommand {
                 );
             }
 
-            foreach (var (sid, cwd) in cursorCwds) {
+            foreach (var (sid, cwd) in cursorRemapped) {
                 resolved[sid] = cwd is not null && repoByCwd.TryGetValue(cwd, out var r) ? r : null;
             }
         }
+
+        // --- Missing cwd report ---
+        // Surface transcripts whose (possibly remapped) cwd no longer exists on
+        // disk so the user understands why some sessions won't match an org or
+        // repo scope, and can fix it by adding cwd_remap entries.
+        ReportMissingCwds(sessionCwds, cwdRemap, display);
 
         // --- Scope picker ---
         var kcapConfig = await AppConfig.Load();
@@ -1609,16 +1632,124 @@ static class ImportCommand {
     /// parallel, surfacing progress via a Spectre status spinner on a TTY and
     /// a plain status line otherwise.
     /// </summary>
+    /// <summary>
+    /// Print a one-shot summary of transcript cwds that don't exist on disk.
+    /// Most users with a long history accumulate references to deleted
+    /// worktrees and renamed repo directories, and those sessions silently
+    /// fail to match an --org/--repo scope. This output lets them spot the
+    /// gap before the import proceeds.
+    /// </summary>
+    internal static void ReportMissingCwds(
+            IReadOnlyDictionary<string, string> sessionCwds,
+            IReadOnlyList<CwdRemap>?            cwdRemap,
+            ImportDisplay                       display
+        ) {
+        if (sessionCwds.Count == 0) return;
+
+        var uniqueCwds = sessionCwds.Values.Distinct(StringComparer.Ordinal).ToList();
+        var missing    = uniqueCwds.Where(c => !Directory.Exists(c)).ToHashSet(StringComparer.Ordinal);
+
+        if (missing.Count == 0) return;
+
+        // Collapse descendants under missing ancestors — if /repo is missing,
+        // there's no value in also listing /repo/.claude/worktrees/agent-X.
+        var roots = CollapseDescendants(missing);
+
+        var sessionsAffected = sessionCwds.Values.Count(missing.Contains);
+        var sortedRoots      = roots.OrderBy(c => c, StringComparer.Ordinal).ToList();
+        var home             = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        var sessionWord = sessionsAffected == 1 ? "session references" : "sessions reference";
+        var pathWord    = sortedRoots.Count == 1 ? "path that no longer exists" : "distinct paths that no longer exist";
+        display.Line($"{sessionsAffected} {sessionWord} {sortedRoots.Count} {pathWord} on disk:");
+
+        const int sampleSize = 5;
+        foreach (var cwd in sortedRoots.Take(sampleSize)) display.Line($"  {ShortenHome(cwd, home)}");
+
+        if (sortedRoots.Count > sampleSize) {
+            display.Line($"  ... and {sortedRoots.Count - sampleSize} more");
+        }
+
+        var hint = cwdRemap is { Count: > 0 }
+            ? "Update the cwd_remap entries in your kcap config to map these to their new on-disk paths."
+            : "Add cwd_remap entries to your kcap config to map these to their new on-disk paths.";
+
+        display.Line(hint);
+    }
+
+    /// <summary>
+    /// Drop any path from <paramref name="paths"/> whose parent (at any depth)
+    /// is also in the set. Used to collapse worktree-style descendants like
+    /// <c>/repo/.claude/worktrees/agent-X</c> under their already-missing
+    /// parent <c>/repo</c> for a less noisy report.
+    /// </summary>
+    internal static HashSet<string> CollapseDescendants(IReadOnlySet<string> paths) {
+        var roots = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var p in paths) {
+            if (!HasAncestorIn(p, paths)) roots.Add(p);
+        }
+
+        return roots;
+
+        static bool HasAncestorIn(string path, IReadOnlySet<string> set) {
+            // Walk parent directories: /a/b/c → /a/b → /a → / (stop at root or
+            // when GetDirectoryName returns null/empty).
+            var parent = Path.GetDirectoryName(path);
+
+            while (!string.IsNullOrEmpty(parent) && parent != path) {
+                if (set.Contains(parent)) return true;
+                path   = parent;
+                parent = Path.GetDirectoryName(parent);
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Replace the user's home directory prefix with <c>~</c> for display only.
+    /// Uses path-boundary matching (either <c>/</c> or <c>\</c>) so siblings
+    /// like <c>/Users/alexeyfoo</c> aren't accidentally shortened, and follows
+    /// the host filesystem's case-sensitivity policy.
+    /// </summary>
+    internal static string ShortenHome(string path, string home) {
+        var comparison = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows)
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        if (string.IsNullOrEmpty(home) || !path.StartsWith(home, comparison)) return path;
+        if (path.Length == home.Length) return "~";
+        return CwdRemapper.IsSeparator(path[home.Length]) ? "~" + path[home.Length..] : path;
+    }
+
     static async Task<Dictionary<string, (string Owner, string Name)?>> ResolveTranscriptReposAsync(
             IReadOnlyList<(string SessionId, string FilePath, string EncodedCwd)> transcripts,
             bool                                                                  codex,
-            ImportDisplay                                                         display
+            ImportDisplay                                                         display,
+            IReadOnlyList<CwdRemap>?                                              cwdRemap    = null,
+            IDictionary<string, string>?                                          sessionCwds = null
         ) {
         // Extract cwd per transcript first (cheap: ≤20-line file read).
+        // Apply user-configured prefix remaps so historic transcripts pointing
+        // at since-renamed local directories still resolve. The per-session
+        // (remapped) cwd is also fed back to the caller via sessionCwds so the
+        // import flow can report which paths are missing on disk.
         var perTranscript = new (string SessionId, string? Cwd)[transcripts.Count];
 
         for (var i = 0; i < transcripts.Count; i++) {
-            perTranscript[i] = (transcripts[i].SessionId, ExtractCwdFromTranscript(transcripts[i].FilePath, codex));
+            var raw      = ExtractCwdFromTranscript(transcripts[i].FilePath, codex);
+            var remapped = raw is null ? null : CwdRemapper.Apply(raw, cwdRemap);
+
+            perTranscript[i] = (transcripts[i].SessionId, remapped);
+
+            // Indexer assignment (not Add) so duplicate SessionIds across
+            // project dirs / backups can't abort the import. Last-write-wins
+            // is fine for the missing-cwd report — the cwd is functionally
+            // the same path anyway.
+            if (remapped is not null && sessionCwds is not null) {
+                sessionCwds[transcripts[i].SessionId] = remapped;
+            }
         }
 
         var uniqueCwds = perTranscript

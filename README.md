@@ -88,6 +88,8 @@ This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex
 
 You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org` uses the active profile name as the GitHub org login — it works out of the box when the profile was created by `kcap setup` (which names it after the picked tenant), and errors otherwise. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
+If your repo directories have been renamed or deleted on disk, the import prints a list of unresolved cwds up front. See [Renamed repo directories (`cwd_remap`)](#renamed-repo-directories-cwd_remap) to recover those sessions.
+
 ### 4. Open the dashboard
 
 Open the server URL in your browser. The dashboard shows repositories, sessions, and agents. It updates in real time as Claude Code sessions are active.
@@ -285,6 +287,8 @@ kcap import --org --session abc123           # single session
 
 Non-interactive runs (no TTY, e.g. CI) must pass both a scope flag and `--yes`. The command is idempotent and resumable — re-running with the same scope only uploads what's missing or incomplete. A server-side tracker deduplicates events on `(stream, eventId)` so previously-imported turns don't get re-appended.
 
+After discovery, the import surfaces a one-shot report of any transcript working directories that no longer exist on disk (typically deleted worktrees, or local repo dirs that have been renamed). Those sessions won't match an `--org` / `--repo` scope until you tell kcap how their old paths map to the new ones. See [Renamed repo directories (`cwd_remap`)](#renamed-repo-directories-cwd_remap) below for the fix.
+
 ### Daemon
 
 The daemon connects to the Capacitor server and runs Claude Code or Codex agents in isolated git worktrees, controlled from the dashboard. The daemon supports hosted Claude and Codex agents on macOS and Linux — choose the vendor from the dashboard's launch dialog. At startup the daemon probes `daemon.claude_path` and `daemon.codex_path` and advertises only the vendors it can actually spawn, so the launch dialog hides whichever agent isn't installed on the selected daemon.
@@ -460,6 +464,33 @@ kcap ignore --remove ~/code/secret-project
 ```
 
 Entries are stored on the **active profile**, so switching profiles with `kcap use` switches the ignore list too. Symlinks are resolved on both the stored entry and the session's reported cwd, so a worktree symlink and its target match.
+
+#### Renamed repo directories (`cwd_remap`)
+
+Historic transcripts record the absolute working directory they ran in. If you've since renamed or moved that directory on disk (e.g. `~/dev/foo-cli → ~/dev/bar-cli`), `kcap import --org` / `--repo` can't resolve those sessions to a GitHub repo any more and silently drops them from the matched count.
+
+To recover them, add `cwd_remap` to `~/.config/kcap/config.json` (no `kcap config set` shortcut — edit the file directly):
+
+```json
+{
+  "version": 2,
+  "active_profile": "default",
+  "profiles": { "default": { /* ... */ } },
+  "cwd_remap": [
+    { "from": "~/dev/eventstore/foo-cli", "to": "~/dev/eventstore/bar-cli" },
+    { "from": "~/dev/eventstore/foo",     "to": "~/dev/eventstore/bar"     }
+  ]
+}
+```
+
+Semantics:
+
+- `from` / `to` are **path-prefix** rewrites with `~` expanding to the current user's home directory. The match requires a path boundary (`from` exactly equal, or `from` followed by `/`), so `from: "~/dev/foo"` will **not** spuriously rewrite `~/dev/foo-cli`.
+- When multiple rules could apply to the same transcript cwd, the **longest** `from` wins.
+- Rules are applied once (no chaining), so the result of one rule isn't fed into another.
+- Remaps are global, not per-profile — same rename affects all profiles' imports.
+
+After editing, re-run `kcap import --org` (or whatever scope you use). The missing-cwd report at the top of the import will show what's still unresolved.
 
 ### Uninstalling
 

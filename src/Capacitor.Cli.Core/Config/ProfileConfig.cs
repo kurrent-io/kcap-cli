@@ -14,6 +14,25 @@ public record ProfileConfig {
 
     [JsonPropertyName("profile_bindings")]
     public Dictionary<string, string> ProfileBindings { get; init; } = new();
+
+    /// <summary>
+    /// Path-prefix remaps applied to historic transcript cwds before repository
+    /// detection. Useful when a local repo directory has been renamed (e.g.
+    /// <c>~/dev/kapacitor-cli → ~/dev/kcap-cli</c>) so old sessions can still
+    /// be resolved to their org/repo during <c>kcap import</c>.
+    /// Match is a path-boundary prefix (cwd == from || cwd starts with from + "/");
+    /// longest-from wins when multiple rules could apply.
+    /// </summary>
+    [JsonPropertyName("cwd_remap")]
+    public CwdRemap[] CwdRemap { get; init; } = [];
+}
+
+public record CwdRemap {
+    [JsonPropertyName("from")]
+    public string From { get; init; } = "";
+
+    [JsonPropertyName("to")]
+    public string To { get; init; } = "";
 }
 
 public record Profile {
