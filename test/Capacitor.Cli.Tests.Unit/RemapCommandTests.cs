@@ -100,4 +100,45 @@ public class RemapCommandTests {
     public async Task Normalize_trims_whitespace_around_path() {
         await Assert.That(RemapCommand.Normalize("  /a/b  ")).IsEqualTo("/a/b");
     }
+
+    [Test]
+    public async Task ApplyAdd_with_OrdinalIgnoreCase_replaces_case_variant_entry() {
+        // On Windows, "C:\Users\Alice" and "c:\users\alice" refer to the same
+        // dir at import time, so kcap remap should replace — not duplicate —
+        // when the user re-adds with different casing.
+        var current = new[] { R(@"C:\Users\Alice\Dev", @"C:\Users\Alice\Old") };
+        var (next, replaced) = RemapCommand.ApplyAdd(
+            current, @"c:\users\alice\dev", @"C:\Users\Alice\New", StringComparison.OrdinalIgnoreCase);
+
+        await Assert.That(replaced).IsTrue();
+        await Assert.That(next).HasCount(1);
+        await Assert.That(next[0].From).IsEqualTo(@"c:\users\alice\dev"); // new casing wins
+        await Assert.That(next[0].To).IsEqualTo(@"C:\Users\Alice\New");
+    }
+
+    [Test]
+    public async Task ApplyAdd_with_Ordinal_keeps_case_variant_as_separate_entry() {
+        // On non-Windows hosts, case differences must stay distinct — two
+        // separate paths.
+        var current = new[] { R("/dev/Foo", "/dev/v1") };
+        var (next, replaced) = RemapCommand.ApplyAdd(
+            current, "/dev/foo", "/dev/v2", StringComparison.Ordinal);
+
+        await Assert.That(replaced).IsFalse();
+        await Assert.That(next).HasCount(2);
+    }
+
+    [Test]
+    public async Task ApplyRemove_with_OrdinalIgnoreCase_removes_case_variant_entry() {
+        var current = new[] { R(@"C:\Users\Alice\Dev", @"C:\Users\Alice\New") };
+        var next    = RemapCommand.ApplyRemove(current, @"c:\users\alice\dev", StringComparison.OrdinalIgnoreCase);
+        await Assert.That(next).IsEmpty();
+    }
+
+    [Test]
+    public async Task ApplyRemove_with_Ordinal_keeps_case_variant_entry() {
+        var current = new[] { R("/dev/Foo", "/dev/x") };
+        var next    = RemapCommand.ApplyRemove(current, "/dev/foo", StringComparison.Ordinal);
+        await Assert.That(next).HasCount(1);
+    }
 }

@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.Cli.Commands;
@@ -14,6 +15,18 @@ namespace Capacitor.Cli.Commands;
 /// by <see cref="CwdRemapper"/>.
 /// </summary>
 public static class RemapCommand {
+    /// <summary>
+    /// Mirror <see cref="CwdRemapper"/>'s policy so a stored entry and the
+    /// argument typed at the CLI compare with the same case sensitivity that
+    /// the import-time matcher uses. Otherwise a user on Windows could type
+    /// <c>~/Dev/Foo</c> once and <c>~/dev/foo</c> later and end up with two
+    /// stored rules that both fire at import time.
+    /// </summary>
+    static readonly StringComparison FromComparison =
+        RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
     public static async Task<int> HandleAsync(string[] args) {
         // args[0] == "remap"; --help / -h is handled by the dispatcher in Program.cs.
         if (args.Length < 2) return Usage();
@@ -104,13 +117,18 @@ public static class RemapCommand {
     /// Returns the new array and a flag indicating whether an existing entry
     /// was overwritten. Exposed for testing.
     /// </summary>
-    public static (CwdRemap[] Next, bool Replaced) ApplyAdd(CwdRemap[]? current, string from, string to) {
-        var arr  = current ?? [];
-        var next = new CwdRemap[arr.Length];
+    public static (CwdRemap[] Next, bool Replaced) ApplyAdd(CwdRemap[]? current, string from, string to) =>
+        ApplyAdd(current, from, to, FromComparison);
+
+    // Internal seam for tests that need to pin the comparison policy
+    // regardless of host OS.
+    internal static (CwdRemap[] Next, bool Replaced) ApplyAdd(CwdRemap[]? current, string from, string to, StringComparison comparison) {
+        var arr      = current ?? [];
+        var next     = new CwdRemap[arr.Length];
         var replaced = false;
 
         for (var i = 0; i < arr.Length; i++) {
-            if (SameFrom(arr[i].From, from)) {
+            if (SameFrom(arr[i].From, from, comparison)) {
                 next[i]  = new() { From = from, To = to };
                 replaced = true;
             } else {
@@ -128,14 +146,19 @@ public static class RemapCommand {
     /// <paramref name="from"/>. Returns the unchanged array if no match.
     /// Exposed for testing.
     /// </summary>
-    public static CwdRemap[] ApplyRemove(CwdRemap[]? current, string from) {
+    public static CwdRemap[] ApplyRemove(CwdRemap[]? current, string from) =>
+        ApplyRemove(current, from, FromComparison);
+
+    // Internal seam for tests that need to pin the comparison policy
+    // regardless of host OS.
+    internal static CwdRemap[] ApplyRemove(CwdRemap[]? current, string from, StringComparison comparison) {
         var arr = current ?? [];
 
-        return arr.Where(r => !SameFrom(r.From, from)).ToArray();
+        return arr.Where(r => !SameFrom(r.From, from, comparison)).ToArray();
     }
 
-    static bool SameFrom(string stored, string input) =>
-        string.Equals(Normalize(stored), Normalize(input), StringComparison.Ordinal);
+    static bool SameFrom(string stored, string input, StringComparison comparison) =>
+        string.Equals(Normalize(stored), Normalize(input), comparison);
 
     static bool TryNormalize(string path, out string normalized, out string error) {
         var n = Normalize(path);
