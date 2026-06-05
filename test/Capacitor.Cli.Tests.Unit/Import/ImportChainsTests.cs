@@ -20,9 +20,12 @@ public class ImportChainsTests : IDisposable {
     void StubAllHookEndpoints() {
         _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
-        _server.Given(Request.Create().WithPath("/hooks/session-start").UsingPost())
+        // Match both the legacy un-vendored path and the new vendor-routed
+        // path the importer uses now (/hooks/session-start/{vendor}) so codex
+        // imports can't silently land as claude-tagged SessionStarted events.
+        _server.Given(Request.Create().WithPath("/hooks/session-start*").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
-        _server.Given(Request.Create().WithPath("/hooks/session-end").UsingPost())
+        _server.Given(Request.Create().WithPath("/hooks/session-end*").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
         _server.Given(Request.Create().WithPath("/hooks/subagent-start").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
@@ -124,6 +127,42 @@ public class ImportChainsTests : IDisposable {
     }
 
     [Test]
+    public async Task ImportChainsAsync_routes_codex_session_to_vendor_specific_url() {
+        // Regression: kcap import --codex used to POST to /hooks/session-start
+        // (no vendor in path), which routes to the {vendor=claude} default and
+        // wrote claude-tagged SessionStarted events for every codex rollout.
+        // Asserting on the URL path here keeps that bug from re-appearing.
+        StubAllHookEndpoints();
+
+        var session = MakeNew("codex-routing", 10) with { Vendor = "codex" };
+        var chains  = new List<List<ImportCommand.SessionClassification>> { new() { session } };
+
+        var events = new ImportCommand.ChainWorkerEvents {
+            OnSessionStarted      = (_, _) => { },
+            OnSubagentStarted     = (_, _, _) => { },
+            OnSubagentFinished    = (_, _, _, _) => { },
+            OnSessionErrored      = (_, _, _) => { },
+            OnSessionEnded        = (_, _, _, _) => { },
+            OnTitleTaskReady      = _ => { },
+            OnBackgroundWorkReady = _ => { },
+        };
+
+        using var client = new HttpClient();
+        await ImportCommand.ImportChainsAsync(client, _server.Url!, chains, events, CancellationToken.None);
+
+        var startHits = _server.LogEntries
+            .Count(e => e.RequestMessage.Path == "/hooks/session-start/codex");
+        var endHits = _server.LogEntries
+            .Count(e => e.RequestMessage.Path == "/hooks/session-end/codex");
+        var legacyHits = _server.LogEntries
+            .Count(e => e.RequestMessage.Path is "/hooks/session-start" or "/hooks/session-end");
+
+        await Assert.That(startHits).IsEqualTo(1);
+        await Assert.That(endHits).IsEqualTo(1);
+        await Assert.That(legacyHits).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task ImportChainsAsync_dispatches_independent_chains_in_parallel() {
         // WireMock adds a 200ms server-side delay to every transcript POST.
         // If chains run serially: 4 × 200ms = 800ms minimum.
@@ -132,9 +171,9 @@ public class ImportChainsTests : IDisposable {
         // well under 200ms (they all start roughly simultaneously).
         _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithDelay(TimeSpan.FromMilliseconds(200)));
-        _server.Given(Request.Create().WithPath("/hooks/session-start").UsingPost())
+        _server.Given(Request.Create().WithPath("/hooks/session-start*").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
-        _server.Given(Request.Create().WithPath("/hooks/session-end").UsingPost())
+        _server.Given(Request.Create().WithPath("/hooks/session-end*").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
         _server.Given(Request.Create().WithPath("/hooks/subagent-start").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
