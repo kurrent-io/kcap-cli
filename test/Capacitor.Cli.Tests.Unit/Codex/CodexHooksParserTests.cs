@@ -11,6 +11,14 @@ public class CodexHooksParserTests {
     }
 
     [Test]
+    public async Task EntryReferencesCapacitorCodexHook_returns_true_for_legacy_kapacitor_marker() {
+        // Pre-rename installs wrote `kapacitor codex-hook`; uninstall and the
+        // upgrade-time refresh must still recognise them so they can be cleaned.
+        var entry = JsonNode.Parse("""{"hooks":[{"type":"command","command":"kapacitor codex-hook","timeout":30}]}""");
+        await Assert.That(CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)).IsTrue();
+    }
+
+    [Test]
     public async Task EntryReferencesCapacitorCodexHook_returns_false_when_command_does_not_match() {
         var entry = JsonNode.Parse("""{"hooks":[{"type":"command","command":"echo hi","timeout":30}]}""");
         await Assert.That(CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)).IsFalse();

@@ -112,6 +112,37 @@ public class UninstallCommandTests {
     }
 
     [Test]
+    public async Task User_level_uninstall_removes_legacy_kapacitor_codex_hooks() {
+        // Regression: a user who installed via the pre-rename `kapacitor` CLI
+        // has hooks.json entries pointing at `kapacitor codex-hook`. Running
+        // `kcap uninstall` must clean those up — the rename PR did not migrate
+        // the detection marker, so legacy entries previously survived.
+        await using var fixture = await Fixture.CreateAsync();
+
+        var codexDir = Path.Combine(fixture.Home, ".codex");
+        Directory.CreateDirectory(codexDir);
+        var codexHooks = Path.Combine(codexDir, "hooks.json");
+        await File.WriteAllTextAsync(codexHooks, """
+            {
+              "hooks": {
+                "SessionStart": [
+                  { "hooks": [{ "type": "command", "command": "user-script", "timeout": 5 }] },
+                  { "hooks": [{ "type": "command", "command": "kapacitor codex-hook", "timeout": 30 }] }
+                ]
+              }
+            }
+            """);
+
+        var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes", "--keep-config"]);
+        await Assert.That(exit).IsEqualTo(0);
+
+        var codexRoot    = JsonNode.Parse(await File.ReadAllTextAsync(codexHooks))!.AsObject();
+        var sessionStart = codexRoot["hooks"]!["SessionStart"]!.AsArray();
+        await Assert.That(sessionStart.Count).IsEqualTo(1);
+        await Assert.That(sessionStart[0]!["hooks"]![0]!["command"]!.GetValue<string>()).IsEqualTo("user-script");
+    }
+
+    [Test]
     public async Task Keep_config_preserves_config_dir_but_removes_integrations() {
         await using var fixture = await Fixture.CreateAsync();
 
