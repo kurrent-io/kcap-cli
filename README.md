@@ -60,6 +60,8 @@ The setup wizard walks you through:
 4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH`, and Cursor by user-dir presence (`~/.cursor/`), then offers to install hooks/skills for each (user-wide)
 5. **Daemon** — configure the daemon name for remote agent execution
 
+When setup finishes, `kcap` sends a best-effort POST to the server's `/api/users/me/cli-setup` endpoint so the dashboard can mark your CLI as registered and surface the import-past-sessions hint. The call is capped at 5 seconds and failures are silent — they do not affect setup completion.
+
 Verify with `kcap whoami` and `kcap status`.
 
 For non-interactive environments:

@@ -360,14 +360,25 @@ public static class SetupCommand {
     // AI-752 — best-effort signal to the server that this user has completed CLI setup.
     // Silently swallows network/auth/server errors: the welcome-modal nudge is a UX
     // affordance, not part of the contract of `kcap setup`.
+    //
+    // Two reliability rules (kcap-cli#113 review):
+    //   • Don't use HttpClientExtensions.CreateAuthenticatedClientAsync — its
+    //     TokenStore.GetValidTokensAsync refresh path makes HTTP calls that
+    //     don't honor a CancellationToken and can block far longer than any
+    //     CTS-based timeout. The user just logged in moments ago in this same
+    //     command, so a non-expired token is the expected case; if it's
+    //     missing or expired we silently skip rather than triggering a refresh.
+    //   • Cap the operation with Task.WhenAny(ping, Task.Delay(5s)) so the
+    //     wall-clock bound is enforced independently of what HttpClient does
+    //     internally. If the delay wins, HttpClient disposal on method-exit
+    //     cancels the in-flight POST.
     static async Task PingCliSetupAsync(string serverUrl) {
         try {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            using var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(serverUrl, cts.Token);
+            var tokens = await TokenStore.LoadAsync();
+            if (tokens is null || tokens.IsExpired) return;
 
-            // No bearer header => server uses Auth:None or our local tokens are gone.
-            // Either way the welcome modal doesn't gate startup, so just skip silently.
-            if (client.DefaultRequestHeaders.Authorization is null) return;
+            using var http = new HttpClient();
+            http.DefaultRequestHeaders.Authorization = new("Bearer", tokens.AccessToken);
 
             var version = typeof(SetupCommand).Assembly.GetName().Version?.ToString();
             var payload = new StringContent(
@@ -375,8 +386,24 @@ public static class SetupCommand {
                 System.Text.Encoding.UTF8,
                 "application/json");
 
-            using var response = await client.PostAsync($"{serverUrl.TrimEnd('/')}/api/users/me/cli-setup", payload, cts.Token);
-            // 204 NoContent on success; anything else just means "older server / down" — that's fine.
+            var pingTask = http.PostAsync($"{serverUrl.TrimEnd('/')}/api/users/me/cli-setup", payload);
+            var winner   = await Task.WhenAny(pingTask, Task.Delay(TimeSpan.FromSeconds(5)));
+
+            if (winner == pingTask) {
+                // Observe the result so any exception is consumed by the outer
+                // catch (instead of surfacing as UnobservedTaskException later).
+                (await pingTask).Dispose();
+            } else {
+                // Wall-clock cap hit. HttpClient.Dispose() at method-exit
+                // cancels the in-flight POST; observe the orphan so its
+                // cancellation exception doesn't go unhandled.
+                _ = pingTask.ContinueWith(
+                    t => {
+                        if (t.IsCompletedSuccessfully) t.Result.Dispose();
+                        _ = t.Exception; // mark observed
+                    },
+                    TaskScheduler.Default);
+            }
         } catch {
             // Swallow — see method-doc.
         }
