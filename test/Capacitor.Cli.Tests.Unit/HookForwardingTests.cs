@@ -143,5 +143,58 @@ public class InlineDrainTests : IDisposable {
 }
 
 public class SessionStartAdditionalContextTests {
-    // Repopulated in Task 5 with aggregator tests.
+    [Test]
+    public async Task BuildEnvelope_returns_null_when_no_fragments() {
+        var result = SessionStartAdditionalContext.BuildEnvelope();
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task BuildEnvelope_returns_null_when_all_fragments_null() {
+        var result = SessionStartAdditionalContext.BuildEnvelope(null, null, null);
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task BuildEnvelope_returns_null_when_all_fragments_empty_or_whitespace() {
+        var result = SessionStartAdditionalContext.BuildEnvelope("", "   ", "\n\t");
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task BuildEnvelope_wraps_single_fragment_in_envelope() {
+        var result = SessionStartAdditionalContext.BuildEnvelope("hello world");
+
+        await Assert.That(result).IsNotNull();
+        var json = JsonNode.Parse(result!);
+        await Assert.That(json!["hookSpecificOutput"]!["hookEventName"]!.GetValue<string>()).IsEqualTo("SessionStart");
+        await Assert.That(json["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>()).IsEqualTo("hello world");
+    }
+
+    [Test]
+    public async Task BuildEnvelope_joins_multiple_fragments_with_blank_line_in_order() {
+        var result = SessionStartAdditionalContext.BuildEnvelope("first", "second");
+
+        await Assert.That(result).IsNotNull();
+        var ctx = JsonNode.Parse(result!)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx).IsEqualTo("first\n\nsecond");
+    }
+
+    [Test]
+    public async Task BuildEnvelope_skips_null_and_blank_when_mixed_with_real_fragments() {
+        var result = SessionStartAdditionalContext.BuildEnvelope(null, "first", "   ", "second", null);
+
+        await Assert.That(result).IsNotNull();
+        var ctx = JsonNode.Parse(result!)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx).IsEqualTo("first\n\nsecond");
+    }
+
+    [Test]
+    public async Task BuildEnvelope_produces_single_top_level_json_object() {
+        var result = SessionStartAdditionalContext.BuildEnvelope("first", "second")!;
+        // No second `{` after the first object closes — exactly one top-level JSON value.
+        var firstClose = result.LastIndexOf('}');
+        var afterClose = result[(firstClose + 1)..].Trim();
+        await Assert.That(afterClose).IsEqualTo("");
+    }
 }
