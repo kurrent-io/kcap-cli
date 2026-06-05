@@ -24,8 +24,18 @@ public static class VersionNudgeEmitter {
 
         if (!SemverCompare.IsNewer(serverVersion, currentCliVersion)) return null;
 
+        // Strip "+buildmetadata" before showing the strings to the user.
+        // SemverCompare ignores the suffix for the comparison itself; this
+        // makes the rendered fragment match what users typed to install the
+        // CLI (e.g. "0.6.3") rather than the MinVer commit-SHA form.
         return
-            $"A newer kcap version is available: {currentCliVersion} → {serverVersion}.\n" +
+            $"A newer kcap version is available: {StripBuildMetadata(currentCliVersion)} → {StripBuildMetadata(serverVersion)}.\n" +
             "Offer the user to upgrade by running: npm install -g @kurrent/kcap";
+    }
+
+    static string StripBuildMetadata(string? v) {
+        if (v is null) return "";
+        var plus = v.IndexOf('+');
+        return plus >= 0 ? v[..plus] : v;
     }
 }

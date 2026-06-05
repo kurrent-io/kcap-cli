@@ -106,4 +106,18 @@ public class VersionNudgeEmitterTests {
         await Assert.That(result.TrimStart().StartsWith("{")).IsFalse();
         await Assert.That(result).DoesNotContain("hookSpecificOutput");
     }
+
+    [Test]
+    public async Task Fragment_strips_build_metadata_from_current_version() {
+        var result = VersionNudgeEmitter.BuildFragment(ResponseWithVersion("0.6.5"), "0.6.3+abc1234")!;
+        await Assert.That(result).Contains("0.6.3");
+        await Assert.That(result).DoesNotContain("+abc1234");
+    }
+
+    [Test]
+    public async Task Fragment_strips_build_metadata_from_server_version() {
+        var result = VersionNudgeEmitter.BuildFragment(ResponseWithVersion("0.6.5+server.sha"), "0.6.3")!;
+        await Assert.That(result).Contains("0.6.5");
+        await Assert.That(result).DoesNotContain("+server.sha");
+    }
 }

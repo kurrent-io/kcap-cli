@@ -272,7 +272,7 @@ public static class ClaudeHookCommand {
                     try {
                         var disabled        = AppConfig.ResolvedProfile?.Profile?.DisableSessionGuidelines is true;
                         var lessonsFragment = SessionGuidelinesEmitter.BuildFragment(responseNode, disabled);
-                        var nudgeFragment   = VersionNudgeEmitter.BuildFragment(responseNode, CapacitorVersion.Current());
+                        var nudgeFragment   = VersionNudgeEmitter.BuildFragment(responseNode, CapacitorVersion.CurrentDisplay());
 
                         var envelope = SessionStartAdditionalContext.BuildEnvelope(lessonsFragment, nudgeFragment);
 

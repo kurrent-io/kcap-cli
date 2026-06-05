@@ -113,13 +113,7 @@ public static class UpdateCommand {
     static bool IsNewer(string? latest, string? current) => SemverCompare.IsNewer(latest, current);
 
     static string? GetCurrentVersion() {
-        var v = typeof(UpdateCommand).Assembly
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-            ?.InformationalVersion;
-
-        if (v is null) return null;
-
-        var plus = v.IndexOf('+');
-        return plus >= 0 ? v[..plus] : v;
+        var v = CapacitorVersion.CurrentDisplay();
+        return v == "unknown" ? null : v;
     }
 }
