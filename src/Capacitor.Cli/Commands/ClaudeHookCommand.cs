@@ -270,14 +270,17 @@ public static class ClaudeHookCommand {
 
                 if (responseNode is not null) {
                     try {
-                        var disabled = AppConfig.ResolvedProfile?.Profile?.DisableSessionGuidelines is true;
-                        var emission = SessionGuidelinesEmitter.BuildAdditionalContext(responseNode, disabled);
+                        var disabled        = AppConfig.ResolvedProfile?.Profile?.DisableSessionGuidelines is true;
+                        var lessonsFragment = SessionGuidelinesEmitter.BuildFragment(responseNode, disabled);
+                        var nudgeFragment   = VersionNudgeEmitter.BuildFragment(responseNode, CapacitorVersion.Current());
 
-                        if (emission is not null) {
-                            Console.WriteLine(emission);
+                        var envelope = SessionStartAdditionalContext.BuildEnvelope(lessonsFragment, nudgeFragment);
+
+                        if (envelope is not null) {
+                            Console.WriteLine(envelope);
                         }
                     } catch {
-                        // Best effort
+                        // Best effort — never break session capture for hook output emission.
                     }
                 }
 
