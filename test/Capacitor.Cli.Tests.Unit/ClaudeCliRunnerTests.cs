@@ -202,6 +202,29 @@ public class ClaudeCliRunnerTests {
         await Assert.That(result!.Result).IsEqualTo("ok");
     }
 
+    // AI-755 follow-up: if the envelope says is_error:true, the parser
+    // returns null but RunCoreAsync still tries TryReadTranscriptFallback.
+    // The transcript's last assistant block on a failed turn can be a
+    // partial reply or stale auto-memory content, so converting that into
+    // a successful result reintroduces the same regression. The fallback
+    // must short-circuit on is_error before touching the filesystem.
+    [Test]
+    public async Task TryReadTranscriptFallback_IsError_ShortCircuits() {
+        const string json = """
+                            {
+                                "session_id": "should-not-be-looked-up",
+                                "is_error": true,
+                                "result": "Claude API error: Overloaded"
+                            }
+                            """;
+        var logs = new List<string>();
+
+        var result = ClaudeCliRunner.TryReadTranscriptFallback(json, logs.Add);
+
+        await Assert.That(result).IsNull();
+        await Assert.That(logs).Contains(l => l.Contains("is_error", StringComparison.Ordinal));
+    }
+
     [Test]
     public async Task ParseResponse_extracts_num_turns_from_json() {
         const string json = """

@@ -429,11 +429,25 @@ static class ClaudeCliRunner {
     /// <summary>
     /// When the CLI JSON response has an empty <c>result</c> field, extract the session ID,
     /// find the transcript file, and read the last assistant text block as the result.
+    ///
+    /// <para>
+    /// Skipped when the envelope has <c>is_error: true</c>: the transcript's
+    /// last assistant text on a failed turn can be a partial reply or stale
+    /// auto-memory content, and surfacing that as a successful result is the
+    /// AI-755 regression vector the <see cref="ParseJsonResponseOnly"/>
+    /// guard exists to close.
+    /// </para>
     /// </summary>
-    static ClaudeCliResult? TryReadTranscriptFallback(string stdout, Action<string> log) {
+    internal static ClaudeCliResult? TryReadTranscriptFallback(string stdout, Action<string> log) {
         try {
             using var doc  = JsonDocument.Parse(stdout);
             var       root = doc.RootElement;
+
+            if (root.TryGetProperty("is_error", out var isErr) && isErr.ValueKind == JsonValueKind.True) {
+                log("Transcript fallback: skipping because envelope has is_error:true");
+
+                return null;
+            }
 
             var sessionId = root.Str("session_id");
 
