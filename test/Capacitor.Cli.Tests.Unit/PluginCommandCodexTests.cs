@@ -325,7 +325,7 @@ public class PluginCommandCodexTests {
         var       target = Path.Combine(tmp.Path, "agents-skills");
         WriteSkill(target, "kcap-recap",  "recap");
         WriteSkill(target, "kcap-errors", "errors");
-        WriteSkill(target, "user-skill",       "user content");
+        WriteSkill(target, "user-skill",  "user content");
 
         var result = AgentsSkillsInstaller.Remove(target);
         await Assert.That(result.RemovedAny).IsTrue();
@@ -346,95 +346,79 @@ public class PluginCommandCodexTests {
     }
 
     [Test]
-    [NotInParallel("HomeEnvVarMutation")]
     public async Task Install_codex_with_if_installed_is_noop_when_no_marker_and_no_existing_entries() {
-        var fakeHome     = Directory.CreateTempSubdirectory("kcap-plugin-codex-test-");
-        var originalHome = Environment.GetEnvironmentVariable("HOME");
-        try {
-            Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
+        using var fakeHome = new TempDir();
 
-            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex", "--if-installed"]);
-            await Assert.That(exit).IsEqualTo(0);
+        var exit = await PluginCommand.HandleAsync(
+            ["plugin", "install", "--codex", "--if-installed"],
+            TestEnv(fakeHome.Path));
+        await Assert.That(exit).IsEqualTo(0);
 
-            // hooks.json must NOT exist — user never opted in.
-            var hooksPath = Path.Combine(fakeHome.FullName, ".codex", "hooks.json");
-            await Assert.That(File.Exists(hooksPath)).IsFalse();
-        } finally {
-            Environment.SetEnvironmentVariable("HOME", originalHome);
-            fakeHome.Delete(recursive: true);
-        }
+        // hooks.json must NOT exist — user never opted in.
+        var hooksPath = Path.Combine(fakeHome.Path, ".codex", "hooks.json");
+        await Assert.That(File.Exists(hooksPath)).IsFalse();
     }
 
     [Test]
-    [NotInParallel("HomeEnvVarMutation")]
     public async Task Install_codex_with_if_installed_refreshes_pre_marker_install() {
-        var fakeHome     = Directory.CreateTempSubdirectory("kcap-plugin-codex-test-");
-        var originalHome = Environment.GetEnvironmentVariable("HOME");
-        try {
-            // Seed hooks.json with a stale 5-second PermissionRequest timeout
-            // and NO marker. This is the pre-marker scenario.
-            var codexDir = Path.Combine(fakeHome.FullName, ".codex");
-            Directory.CreateDirectory(codexDir);
-            var hooksPath = Path.Combine(codexDir, "hooks.json");
-            await File.WriteAllTextAsync(hooksPath, """
-                {
-                  "hooks": {
-                    "PermissionRequest": [
-                      { "hooks": [{ "type": "command", "command": "kcap codex-hook", "timeout": 5 }] }
-                    ]
-                  }
-                }
-                """);
-            Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
+        using var fakeHome = new TempDir();
 
-            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex", "--if-installed"]);
-            await Assert.That(exit).IsEqualTo(0);
+        // Seed hooks.json with a stale 5-second PermissionRequest timeout
+        // and NO marker. This is the pre-marker scenario.
+        var codexDir = Path.Combine(fakeHome.Path, ".codex");
+        Directory.CreateDirectory(codexDir);
+        var hooksPath = Path.Combine(codexDir, "hooks.json");
+        await File.WriteAllTextAsync(hooksPath, """
+            {
+              "hooks": {
+                "PermissionRequest": [
+                  { "hooks": [{ "type": "command", "command": "kcap codex-hook", "timeout": 5 }] }
+                ]
+              }
+            }
+            """);
 
-            // PermissionRequest timeout must have been refreshed to 86400.
-            var root = JsonNode.Parse(await File.ReadAllTextAsync(hooksPath))!.AsObject();
-            var entries = root["hooks"]!["PermissionRequest"]!.AsArray();
-            var kcap = entries.First(e =>
-                (e!["hooks"] as JsonArray)!.Any(h =>
-                    h?["command"] is JsonValue v && v.TryGetValue<string>(out var s) && s.Contains("kcap codex-hook")));
-            await Assert.That(kcap!["hooks"]!.AsArray()[0]!["timeout"]!.GetValue<int>())
-                .IsEqualTo(86400);
+        var exit = await PluginCommand.HandleAsync(
+            ["plugin", "install", "--codex", "--if-installed"],
+            TestEnv(fakeHome.Path));
+        await Assert.That(exit).IsEqualTo(0);
 
-            // Marker now stamped → next upgrade takes the fast path.
-            await Assert.That(File.Exists(Path.Combine(codexDir, CodexHooksInstaller.MarkerFileName))).IsTrue();
-        } finally {
-            Environment.SetEnvironmentVariable("HOME", originalHome);
-            fakeHome.Delete(recursive: true);
-        }
+        // PermissionRequest timeout must have been refreshed to 86400.
+        var root = JsonNode.Parse(await File.ReadAllTextAsync(hooksPath))!.AsObject();
+        var entries = root["hooks"]!["PermissionRequest"]!.AsArray();
+        var kcap = entries.First(e =>
+            (e!["hooks"] as JsonArray)!.Any(h =>
+                h?["command"] is JsonValue v && v.TryGetValue<string>(out var s) && s.Contains("kcap codex-hook")));
+        await Assert.That(kcap!["hooks"]!.AsArray()[0]!["timeout"]!.GetValue<int>())
+            .IsEqualTo(86400);
+
+        // Marker now stamped → next upgrade takes the fast path.
+        await Assert.That(File.Exists(Path.Combine(codexDir, CodexHooksInstaller.MarkerFileName))).IsTrue();
     }
 
     [Test]
-    [NotInParallel("HomeEnvVarMutation")]
     public async Task Install_codex_with_if_installed_is_noop_when_marker_matches_current_version() {
-        var fakeHome     = Directory.CreateTempSubdirectory("kcap-plugin-codex-test-");
-        var originalHome = Environment.GetEnvironmentVariable("HOME");
-        try {
-            var codexDir = Path.Combine(fakeHome.FullName, ".codex");
-            Directory.CreateDirectory(codexDir);
+        using var fakeHome = new TempDir();
 
-            // Pre-seed hooks.json with sentinel content + matching marker.
-            var hooksPath = Path.Combine(codexDir, "hooks.json");
-            await File.WriteAllTextAsync(hooksPath, """{"sentinel": "must-survive"}""");
-            await File.WriteAllTextAsync(
-                Path.Combine(codexDir, CodexHooksInstaller.MarkerFileName),
-                CapacitorVersion.Current());
-            Environment.SetEnvironmentVariable("HOME", fakeHome.FullName);
+        var codexDir = Path.Combine(fakeHome.Path, ".codex");
+        Directory.CreateDirectory(codexDir);
 
-            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex", "--if-installed"]);
-            await Assert.That(exit).IsEqualTo(0);
+        // Pre-seed hooks.json with sentinel content + matching marker.
+        var hooksPath = Path.Combine(codexDir, "hooks.json");
+        await File.WriteAllTextAsync(hooksPath, """{"sentinel": "must-survive"}""");
+        await File.WriteAllTextAsync(
+            Path.Combine(codexDir, CodexHooksInstaller.MarkerFileName),
+            CapacitorVersion.Current());
 
-            // Sentinel intact → installer short-circuited.
-            var root = JsonNode.Parse(await File.ReadAllTextAsync(hooksPath))!.AsObject();
-            await Assert.That(root["sentinel"]!.GetValue<string>()).IsEqualTo("must-survive");
-            await Assert.That(root["hooks"]).IsNull();
-        } finally {
-            Environment.SetEnvironmentVariable("HOME", originalHome);
-            fakeHome.Delete(recursive: true);
-        }
+        var exit = await PluginCommand.HandleAsync(
+            ["plugin", "install", "--codex", "--if-installed"],
+            TestEnv(fakeHome.Path));
+        await Assert.That(exit).IsEqualTo(0);
+
+        // Sentinel intact → installer short-circuited.
+        var root = JsonNode.Parse(await File.ReadAllTextAsync(hooksPath))!.AsObject();
+        await Assert.That(root["sentinel"]!.GetValue<string>()).IsEqualTo("must-survive");
+        await Assert.That(root["hooks"]).IsNull();
     }
 
     [Test]
@@ -464,6 +448,18 @@ public class PluginCommandCodexTests {
         await Assert.That(File.Exists(Path.Combine(tmp.Path, CodexHooksInstaller.MarkerFileName))).IsFalse();
     }
 
+    static PluginEnvironment TestEnv(
+        string      fakeHome,
+        string?     pluginPath = null,
+        TextWriter? stdout     = null,
+        TextWriter? stderr     = null
+    ) => new(
+        HomeDirectory: fakeHome,
+        PluginPath:    pluginPath,
+        Stdout:        stdout ?? TextWriter.Null,
+        Stderr:        stderr ?? TextWriter.Null
+    );
+
     static void WriteSkill(string root, string name, string body) {
         var dir = Path.Combine(root, name);
         Directory.CreateDirectory(dir);
@@ -482,81 +478,22 @@ public class PluginCommandCodexTests {
     }
 }
 
-// Separated into its own class so it joins two serialization groups:
-//   class-level: "HomeEnvVarMutation" — prevents concurrent HOME-mutating tests
-//     from leaking the real user profile into our PluginCommand call.
-//   method-level: CodexHookCommandTests.ConsoleSerialGroup ("CodexHookCommandTests.Console")
-//     — TUnit's NotInParallel takes a single key per attribute, so we must share
-//     the SAME literal token that every Console.Out-redirecting test in
-//     CodexHookCommandTests uses. A distinct "Console.Out_redirect" token would
-//     leave us racing against CodexHookCommandTests on the process-wide
-//     Console.Out writer.
-[NotInParallel("HomeEnvVarMutation")]
 public class PluginCommandCodexInstallIntegrationTests {
-    // SetupCommand.ResolvePluginPath probes paths relative to Environment.ProcessPath.
-    // In the test runner the process exe lives at
-    //   <repo>/test/Capacitor.Cli.Tests.Unit/bin/Debug/net10.0/Capacitor.Cli.Tests.Unit
-    // None of the resolver's fallbacks exist by default, so this helper plants
-    // a fake plugin tree at the "<exeDir>/../../kcap" path the resolver
-    // probes (= "<bin>/kcap"). The folder is cleaned up after the test
-    // so it doesn't pollute subsequent runs that expect resolution to fail.
-    static string ProbedPluginRoot() {
-        var exeDir = Path.GetDirectoryName(Environment.ProcessPath)!;
-        return Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kcap"));
-    }
-
-    static void PlantFakePlugin(string pluginRoot) {
-        var skillsSrc = Path.Combine(pluginRoot, "skills");
-        Directory.CreateDirectory(skillsSrc);
-
-        // AgentsSkillsInstaller.Install has a per-skill preflight that requires
-        // every name in AgentsSkillsInstaller.SourceNames to be present. Plant a
-        // stub SKILL.md so the copy succeeds.
-        foreach (var name in AgentsSkillsInstaller.SourceNames) {
-            var dir = Path.Combine(skillsSrc, name);
-            Directory.CreateDirectory(dir);
-            File.WriteAllText(Path.Combine(dir, "SKILL.md"), $"---\nname: {name}\n---\n# {name}");
-        }
-    }
-
-    static void RemoveFakePlugin(string pluginRoot) {
-        try { Directory.Delete(pluginRoot, recursive: true); } catch { /* best effort */ }
-    }
-
-    [Test, NotInParallel("CodexHookCommandTests.Console")]
+    [Test]
     public async Task InstallCodex_prints_hooks_trust_hint_after_success() {
-        using var tmp = new TempDir();
-
-        // PathHelpers.HomeDirectory reads HOME first and falls back to UserProfile
-        // (USERPROFILE on Windows). On Windows shells that export HOME (Git Bash,
-        // MSYS, Cygwin, WSL) the production path resolver picks HOME, so setting
-        // only USERPROFILE would leave the test writing to the real ~/.codex.
-        // Set BOTH and restore BOTH regardless of OS.
-        var originalHome        = Environment.GetEnvironmentVariable("HOME");
-        var originalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
-        Environment.SetEnvironmentVariable("HOME",        tmp.Path);
-        Environment.SetEnvironmentVariable("USERPROFILE", tmp.Path);
-
-        var pluginRoot = ProbedPluginRoot();
-        PlantFakePlugin(pluginRoot);
+        using var fakeHome   = new TempDir();
+        using var pluginRoot = new TempDir();
+        PlantFakePlugin(pluginRoot.Path);
 
         var capturedOut = new StringWriter();
-        var originalOut = Console.Out;
-        Console.SetOut(capturedOut);
+        var env         = TestEnv(fakeHome.Path, pluginRoot.Path, stdout: capturedOut);
 
-        try {
-            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex"]);
-            await Assert.That(exit).IsEqualTo(0);
+        var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex"], env);
+        await Assert.That(exit).IsEqualTo(0);
 
-            var stdout = capturedOut.ToString();
-            await Assert.That(stdout).Contains("/hooks");
-            await Assert.That(stdout).Contains("trust");
-        } finally {
-            Console.SetOut(originalOut);
-            Environment.SetEnvironmentVariable("HOME",        originalHome);
-            Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
-            RemoveFakePlugin(pluginRoot);
-        }
+        var stdout = capturedOut.ToString();
+        await Assert.That(stdout).Contains("/hooks");
+        await Assert.That(stdout).Contains("trust");
     }
 
     // AI-698 regression: when the top-level skills/ folder is present but one
@@ -564,21 +501,13 @@ public class PluginCommandCodexInstallIntegrationTests {
     // `plugin install --codex` must fail BEFORE writing hooks. The per-skill
     // preflight must run before InstallCodexHooks to maintain the atomicity
     // guarantee from AI-676 — either everything installs or nothing does.
-    [Test, NotInParallel("CodexHookCommandTests.Console")]
+    [Test]
     public async Task InstallCodex_fails_before_writing_hooks_when_individual_skill_folder_missing() {
-        using var tmp = new TempDir();
-
-        var originalHome        = Environment.GetEnvironmentVariable("HOME");
-        var originalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
-        Environment.SetEnvironmentVariable("HOME",        tmp.Path);
-        Environment.SetEnvironmentVariable("USERPROFILE", tmp.Path);
-
-        var pluginRoot = ProbedPluginRoot();
+        using var fakeHome   = new TempDir();
+        using var pluginRoot = new TempDir();
 
         // Plant a fake plugin tree with skills/ present but validate-plan/ missing.
-        // This simulates a packaging defect where the top-level folder exists but
-        // at least one individual skill folder is absent.
-        var skillsSrc = Path.Combine(pluginRoot, "skills");
+        var skillsSrc = Path.Combine(pluginRoot.Path, "skills");
         Directory.CreateDirectory(skillsSrc);
         foreach (var name in AgentsSkillsInstaller.SourceNames.Where(n => n != "validate-plan")) {
             var dir = Path.Combine(skillsSrc, name);
@@ -587,25 +516,17 @@ public class PluginCommandCodexInstallIntegrationTests {
         }
 
         var capturedErr = new StringWriter();
-        var originalErr = Console.Error;
-        Console.SetError(capturedErr);
+        var env         = TestEnv(fakeHome.Path, pluginRoot.Path, stderr: capturedErr);
 
-        try {
-            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex"]);
-            await Assert.That(exit).IsEqualTo(1);
+        var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex"], env);
+        await Assert.That(exit).IsEqualTo(1);
 
-            // Atomicity contract: hooks.json must NOT exist after a failed install.
-            var hooksPath = Path.Combine(tmp.Path, ".codex", "hooks.json");
-            await Assert.That(File.Exists(hooksPath)).IsFalse();
+        // Atomicity contract: hooks.json must NOT exist after a failed install.
+        var hooksPath = Path.Combine(fakeHome.Path, ".codex", "hooks.json");
+        await Assert.That(File.Exists(hooksPath)).IsFalse();
 
-            var stderr = capturedErr.ToString();
-            await Assert.That(stderr).Contains("Cannot install Codex plugin");
-        } finally {
-            Console.SetError(originalErr);
-            Environment.SetEnvironmentVariable("HOME",        originalHome);
-            Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
-            RemoveFakePlugin(pluginRoot);
-        }
+        var stderr = capturedErr.ToString();
+        await Assert.That(stderr).Contains("Cannot install Codex plugin");
     }
 
     // AI-676 P2: when the kcap plugin folder cannot be resolved (e.g.,
@@ -613,42 +534,48 @@ public class PluginCommandCodexInstallIntegrationTests {
     // `plugin install --codex` must fail BEFORE writing hooks. Otherwise the
     // user ends up with hook entries pointing at a kcap binary whose
     // skills never installed, breaking the documented `--codex` contract.
-    [Test, NotInParallel("CodexHookCommandTests.Console")]
+    [Test]
     public async Task InstallCodex_fails_before_writing_hooks_when_plugin_folder_missing() {
-        using var tmp = new TempDir();
-
-        var originalHome        = Environment.GetEnvironmentVariable("HOME");
-        var originalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
-        Environment.SetEnvironmentVariable("HOME",        tmp.Path);
-        Environment.SetEnvironmentVariable("USERPROFILE", tmp.Path);
-
-        // Defensive: make sure no leftover plant from a previous test forces
-        // ResolvePluginPath to succeed. With no folder at the probed path,
-        // resolver returns null and InstallCodex must short-circuit.
-        var pluginRoot = ProbedPluginRoot();
-        RemoveFakePlugin(pluginRoot);
+        using var fakeHome = new TempDir();
 
         var capturedErr = new StringWriter();
-        var originalErr = Console.Error;
-        Console.SetError(capturedErr);
+        // PluginPath = null signals ResolvePluginPath returned no plugin.
+        var env = TestEnv(fakeHome.Path, pluginPath: null, stderr: capturedErr);
 
-        try {
-            var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex"]);
-            await Assert.That(exit).IsEqualTo(1);
+        var exit = await PluginCommand.HandleAsync(["plugin", "install", "--codex"], env);
+        await Assert.That(exit).IsEqualTo(1);
 
-            // The atomic-install contract: NO hooks.json may exist in the
-            // temp HOME after a failed install.
-            var hooksPath = Path.Combine(tmp.Path, ".codex", "hooks.json");
-            await Assert.That(File.Exists(hooksPath)).IsFalse();
+        // The atomic-install contract: NO hooks.json may exist in the
+        // temp HOME after a failed install.
+        var hooksPath = Path.Combine(fakeHome.Path, ".codex", "hooks.json");
+        await Assert.That(File.Exists(hooksPath)).IsFalse();
 
-            var stderr = capturedErr.ToString();
-            await Assert.That(stderr).Contains("Cannot install Codex plugin");
-        } finally {
-            Console.SetError(originalErr);
-            Environment.SetEnvironmentVariable("HOME",        originalHome);
-            Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
+        var stderr = capturedErr.ToString();
+        await Assert.That(stderr).Contains("Cannot install Codex plugin");
+    }
+
+    static void PlantFakePlugin(string pluginRoot) {
+        var skillsSrc = Path.Combine(pluginRoot, "skills");
+        Directory.CreateDirectory(skillsSrc);
+
+        foreach (var name in AgentsSkillsInstaller.SourceNames) {
+            var dir = Path.Combine(skillsSrc, name);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "SKILL.md"), $"---\nname: {name}\n---\n# {name}");
         }
     }
+
+    static PluginEnvironment TestEnv(
+        string      fakeHome,
+        string?     pluginPath = null,
+        TextWriter? stdout     = null,
+        TextWriter? stderr     = null
+    ) => new(
+        HomeDirectory: fakeHome,
+        PluginPath:    pluginPath,
+        Stdout:        stdout ?? TextWriter.Null,
+        Stderr:        stderr ?? TextWriter.Null
+    );
 
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
