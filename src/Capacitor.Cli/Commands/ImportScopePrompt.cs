@@ -143,12 +143,36 @@ public static partial class ImportScopePrompt {
             bool                  skip
         ) {
         var summary = FormatSummary(scope, matchedCount, repoSamples, visibilityDescription);
-        Console.Error.WriteLine(summary);
+        WriteSummaryToStderr(summary, matchedCount);
 
         if (skip) return true;
 
         return AnsiConsole.Prompt(
             new ConfirmationPrompt("Continue?") { DefaultValue = false }
         );
+    }
+
+    // Render the summary to stderr (visible even when stdout is redirected),
+    // highlighting the matched-session count so it's the line the operator's
+    // eye lands on. Spectre auto-strips markup on non-TTY stderr (e.g. CI),
+    // so the printed text stays equivalent to FormatSummary's plain form.
+    static void WriteSummaryToStderr(string summary, int matchedCount) {
+        var console = AnsiConsole.Create(
+            new AnsiConsoleSettings { Out = new AnsiConsoleOutput(Console.Error) }
+        );
+
+        const string matchedPrefix = "  matched: ";
+        var          countStr      = matchedCount.ToString();
+
+        foreach (var rawLine in summary.Split('\n')) {
+            var line = rawLine.TrimEnd('\r');
+
+            if (line.StartsWith(matchedPrefix, StringComparison.Ordinal)) {
+                var tail = line[(matchedPrefix.Length + countStr.Length)..];
+                console.MarkupLine($"{matchedPrefix}[bold cyan]{countStr}[/]{Markup.Escape(tail)}");
+            } else {
+                console.WriteLine(line);
+            }
+        }
     }
 }
