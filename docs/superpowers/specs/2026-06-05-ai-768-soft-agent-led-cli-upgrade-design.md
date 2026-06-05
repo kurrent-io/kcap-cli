@@ -10,16 +10,23 @@ We want a *soft, agent-led* nudge: when the CLI processes a `SessionStart` hook,
 
 Not a hard version floor. Not a blocker. Not a stderr line. The agent decides whether to surface it; the user decides whether to act.
 
-## Scope: Claude Code only (v1)
+## Scope and vendor-neutrality
 
-The nudge ships for Claude Code only. The two other supported vendors have stdout contracts that are incompatible with the SessionStart `additionalContext` envelope:
+The design is split into a **vendor-neutral core** and **per-vendor delivery shims**. v1 ships the Claude Code delivery shim because that vendor's hook protocol has the channel we need today; the Codex and Cursor shims are real follow-up work that reuse the core unchanged.
 
-- **Cursor** must emit nothing on stdout (`CursorHookCommand` drops response bodies; `docs/superpowers/specs/2026-06-01-ai-669-cursor-hooks-ingest-design.md:121`).
-- **Codex** writes its own `session-start.command.output` JSON schema to stdout (`CodexHookCommand.cs:33-34,67`), not an `additionalContext` envelope.
+**Vendor-neutral core (lands in v1):**
 
-A Cursor- or Codex-shaped nudge would need a separate delivery mechanism per vendor (e.g. a stderr line for Cursor, a Codex-schema field for Codex, or a daemon-side prompt injection). Each is enough scope to deserve its own spec; punting both keeps this ticket focused.
+- The server `version` field on the shared `/hooks/session-start` response (all three vendors POST to this — Codex via `/hooks/session-start/codex`, but the response shape is shared).
+- The semver comparison helper.
+- `VersionNudgeEmitter.BuildFragment` — returns the human-readable nudge text or `null`. No JSON envelope, no vendor-specific framing. Pure function over `(JsonNode? responseBody, string currentCliVersion)`.
 
-The server-side `version` field is still vendor-agnostic — it sits on the shared `/hooks/session-start` response that all three vendors hit. When Cursor/Codex equivalents land later, they reuse the same field.
+**Per-vendor delivery shims:**
+
+- **Claude Code (v1):** the existing `ClaudeHookCommand` session-start case calls the core, packs the fragment into the SessionStart `hookSpecificOutput.additionalContext` envelope, writes it to stdout. Implemented in this spec.
+- **Codex (follow-up):** `CodexHookCommand.HandleSessionStart` will call the core, then surface the fragment via Codex's `session-start.command.output` schema. Whether that schema has an `additionalContext` analog needs verification against Codex's hook docs; that verification is the gating work for the Codex follow-up ticket. Out of scope for this spec.
+- **Cursor (follow-up):** Cursor's SessionStart hook stdout must stay silent (`CursorHookCommand` drops response bodies; `docs/superpowers/specs/2026-06-01-ai-669-cursor-hooks-ingest-design.md:121`). Delivery via a different channel — e.g. piggybacking the `UserPromptSubmit` hook (Cursor exposes it), a daemon-side injection, or the shared MCP server's `instructions` field — needs a separate design pass. Out of scope for this spec.
+
+**The shape rule this enforces:** `VersionNudgeEmitter.BuildFragment` and the semver helper must not depend on Claude-specific concepts (no `hookSpecificOutput`, no SessionStart envelope shape, no `Console.WriteLine`). They take JSON in, return text out. The Claude-shaped envelope is built one level up, in the Claude delivery shim, by `SessionStartAdditionalContext.BuildEnvelope`. When Codex and Cursor shims land they wrap the same fragment in *their* native shape.
 
 ## Server contract
 
@@ -41,7 +48,9 @@ Server-side implementation is out of scope for this spec — this document defin
 
 ## CLI behaviour
 
-On every `SessionStart` (including `resume` and `compact` sources):
+This section describes the **Claude Code delivery shim**. The core (fragment builder + semver helper) is vendor-neutral; see the previous section.
+
+On every Claude `SessionStart` (including `resume` and `compact` sources):
 
 1. Each contributor (recurring-lessons, version-nudge) produces a `string?` *text fragment* — the human-readable lines that belong in `additionalContext`.
 2. The call site collects the non-null fragments and, if any are present, serializes **one** `SessionStart` `hookSpecificOutput` JSON object whose `additionalContext` is the fragments joined by a blank-line separator. That single object is written to stdout.
@@ -62,25 +71,23 @@ The existing `UpdateCommand.PrintUpdateHintIfAvailable` (npm-registry-based stde
 
 ## Components
 
-### Refactor: fragment-returning emitters + single aggregator
+### Vendor-neutral core (shared across all three vendors)
 
-To guarantee a single JSON object on stdout regardless of how many contributors fire, both the existing and new emitters return text fragments (not envelopes), and the call site does the JSON serialization once.
+**`src/Capacitor.Cli.Core/VersionNudgeEmitter.cs` (new, in Core):**
 
-**`src/Capacitor.Cli/SessionGuidelinesEmitter.cs` (refactor):**
-
-Split the existing `BuildAdditionalContext(string|JsonNode, bool)` into two responsibilities:
-
-- `string? BuildFragment(JsonNode? responseNode, bool disabled)` — returns just the `"Recurring lessons …"` text block built from `top_clusters`, or `null`. No JSON envelope.
-- The current `BuildAdditionalContext` methods are removed or kept as thin wrappers that build the envelope via the new aggregator; tests already pinned to the envelope shape continue to pass.
-
-**`src/Capacitor.Cli/VersionNudgeEmitter.cs` (new):**
+Lives in `Capacitor.Cli.Core` (not `Capacitor.Cli`) so the future Codex and Cursor shims can call it without taking a dependency on the Claude command project.
 
 ```csharp
-static class VersionNudgeEmitter {
+namespace Capacitor.Cli.Core;
+
+public static class VersionNudgeEmitter {
     /// <summary>
-    /// Returns the text fragment nudging the user to upgrade kcap, or null
-    /// when no nudge is needed (server didn't supply a version, CLI is current
-    /// or ahead, either version unparseable, or current CLI is "unknown").
+    /// Vendor-neutral. Returns the human-readable text fragment nudging the
+    /// user to upgrade kcap, or null when no nudge is needed (server didn't
+    /// supply a version, CLI is current or ahead, either version unparseable,
+    /// or current CLI is "unknown"). The caller is responsible for delivering
+    /// this fragment via its vendor's native channel — no JSON envelope is
+    /// produced here.
     /// </summary>
     public static string? BuildFragment(JsonNode? responseNode, string currentCliVersion);
 }
@@ -93,24 +100,40 @@ A newer kcap version is available: <current> → <server>.
 Offer the user to upgrade by running: npm install -g @kurrent/kcap
 ```
 
-Phrased to invite the agent to *propose* the install command, not to silently run it — the agent's normal tool-permission flow still applies.
+Phrased to invite the agent to *propose* the install command, not to silently run it — each vendor's normal tool-permission flow still applies. The fragment is intentionally plain text with no markdown fencing, no Claude-specific phrasing, and no `hookSpecificOutput`-shaped wrapping.
 
-**`src/Capacitor.Cli/SessionStartAdditionalContext.cs` (new aggregator):**
+**Shared semver helper:** also in Core (likely `Capacitor.Cli.Core.SemverCompare`). Both `UpdateCommand`, `VersionNudgeEmitter`, and any future vendor shim call it. See the **Shared semver helper** subsection below.
+
+### Claude Code delivery shim (this is what v1 implements)
+
+**`src/Capacitor.Cli/SessionGuidelinesEmitter.cs` (refactor):**
+
+Split the existing `BuildAdditionalContext(string|JsonNode, bool)` into two responsibilities:
+
+- `string? BuildFragment(JsonNode? responseNode, bool disabled)` — returns just the `"Recurring lessons …"` text block built from `top_clusters`, or `null`. No JSON envelope. Stays in `Capacitor.Cli` (Claude-only feature today).
+- The current `BuildAdditionalContext` methods are removed or kept as thin wrappers that build the envelope via the new aggregator; tests already pinned to the envelope shape continue to pass.
+
+**`src/Capacitor.Cli/SessionStartAdditionalContext.cs` (new aggregator, Claude-shaped):**
 
 ```csharp
+namespace Capacitor.Cli;
+
 static class SessionStartAdditionalContext {
     /// <summary>
-    /// Joins non-null fragments with a blank line and wraps them in a single
-    /// SessionStart hookSpecificOutput JSON envelope. Returns null when every
-    /// fragment is null/empty so the caller emits nothing at all.
+    /// Claude-Code-specific: joins non-null fragments with a blank line and
+    /// wraps them in a single SessionStart hookSpecificOutput JSON envelope.
+    /// Returns null when every fragment is null/empty so the caller emits
+    /// nothing at all.
     /// </summary>
     public static string? BuildEnvelope(params string?[] fragments);
 }
 ```
 
+The Claude-shaped envelope-builder stays in `Capacitor.Cli`. Codex and Cursor shims will have their own envelope-builders (or equivalent) in their respective code paths.
+
 ### Shared semver helper
 
-`UpdateCommand.IsNewer` plus its prerelease-strip and the build-metadata strip currently in `UpdateCommand.GetCurrentVersion` are consolidated into a new public helper that both `UpdateCommand` and `VersionNudgeEmitter` call. Likely location: `Capacitor.Cli.Core.SemverCompare` (in Core, since both call sites reach Core), or static methods on `CapacitorVersion`.
+`UpdateCommand.IsNewer` plus its prerelease-strip and the build-metadata strip currently in `UpdateCommand.GetCurrentVersion` are consolidated into a new public helper in `Capacitor.Cli.Core` so every vendor shim — Claude today, Codex and Cursor tomorrow — can call it. Likely location: `Capacitor.Cli.Core.SemverCompare`, or static methods on the existing `CapacitorVersion`.
 
 The new helper differs from today's `IsNewer` in two intentional ways:
 
@@ -226,7 +249,7 @@ Three symmetric cases:
 ## Out of scope
 
 - Server-side implementation of the `version` field (separate ticket, separate repo).
-- Cursor and Codex upgrade nudges. v1 is Claude Code only; see the **Scope** section.
+- Cursor and Codex **delivery shims**. Only the Claude shim ships in v1. The vendor-neutral core (`Capacitor.Cli.Core.VersionNudgeEmitter`, semver helper) is sized to be reused by Codex/Cursor shims in follow-up tickets without redesign. See the **Scope and vendor-neutrality** section.
 - Functional changes to `UpdateCommand.PrintUpdateHintIfAvailable` — it coexists unchanged from the user's point of view. Internally, its semver comparison is rerouted through the new shared helper; the only observable difference is that pathological unparseable inputs now produce no hint instead of a "garbage → garbage" line.
 - User-facing toggle to suppress the in-agent nudge (can be added later if needed).
 - Branching by install method (brew, manual). `npm install -g` is the only documented channel.
