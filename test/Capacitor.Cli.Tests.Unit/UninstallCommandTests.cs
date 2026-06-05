@@ -143,6 +143,81 @@ public class UninstallCommandTests {
     }
 
     [Test]
+    public async Task User_level_uninstall_removes_legacy_kapacitor_cursor_hooks() {
+        // Mirror of the Codex legacy regression: a user who installed via the
+        // pre-rename `kapacitor` CLI has cursor hooks.json entries pointing at
+        // `kapacitor hook --cursor`. Uninstall must remove them while keeping
+        // user-authored sibling entries intact.
+        await using var fixture = await Fixture.CreateAsync();
+
+        var cursorDir = Path.Combine(fixture.Home, ".cursor");
+        Directory.CreateDirectory(cursorDir);
+        var cursorHooks = Path.Combine(cursorDir, "hooks.json");
+        await File.WriteAllTextAsync(cursorHooks, """
+            {
+              "version": 1,
+              "hooks": {
+                "sessionStart": [
+                  { "command": "user-script" },
+                  { "command": "kapacitor hook --cursor" }
+                ]
+              }
+            }
+            """);
+
+        var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes", "--keep-config"]);
+        await Assert.That(exit).IsEqualTo(0);
+
+        var cursorRoot   = JsonNode.Parse(await File.ReadAllTextAsync(cursorHooks))!.AsObject();
+        var sessionStart = cursorRoot["hooks"]!["sessionStart"]!.AsArray();
+        await Assert.That(sessionStart.Count).IsEqualTo(1);
+        await Assert.That(sessionStart[0]!["command"]!.GetValue<string>()).IsEqualTo("user-script");
+    }
+
+    [Test]
+    public async Task User_level_uninstall_removes_legacy_kapacitor_claude_settings() {
+        // Regression: a user who installed via the pre-rename `kapacitor` CLI
+        // has `kapacitor@kapacitor` / `kapacitor@kurrent` in enabledPlugins and
+        // a `kapacitor` marketplace entry. Uninstall must strip those while
+        // preserving sibling settings.
+        await using var fixture = await Fixture.CreateAsync();
+
+        var claudeDir = Path.Combine(fixture.Home, ".claude");
+        Directory.CreateDirectory(claudeDir);
+        var claudeSettings = Path.Combine(claudeDir, "settings.json");
+        await File.WriteAllTextAsync(claudeSettings, """
+            {
+              "userKey": "keep",
+              "enabledPlugins": {
+                "kapacitor@kapacitor": true,
+                "kapacitor@kurrent":   true,
+                "other-plugin@vendor": true
+              },
+              "extraKnownMarketplaces": {
+                "kapacitor": { "source": { "source": "directory", "path": "/legacy" } },
+                "other":     { "source": { "source": "directory", "path": "/other" } }
+              }
+            }
+            """);
+
+        var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes", "--keep-config"]);
+        await Assert.That(exit).IsEqualTo(0);
+
+        var root         = JsonNode.Parse(await File.ReadAllTextAsync(claudeSettings))!.AsObject();
+        var enabled      = root["enabledPlugins"]!.AsObject();
+        var marketplaces = root["extraKnownMarketplaces"]!.AsObject();
+
+        await Assert.That(enabled["kapacitor@kapacitor"]).IsNull();
+        await Assert.That(enabled["kapacitor@kurrent"]).IsNull();
+        await Assert.That(enabled["other-plugin@vendor"]!.GetValue<bool>()).IsTrue();
+
+        await Assert.That(marketplaces["kapacitor"]).IsNull();
+        await Assert.That(marketplaces["other"]).IsNotNull();
+
+        await Assert.That(root["userKey"]!.GetValue<string>()).IsEqualTo("keep");
+    }
+
+    [Test]
     public async Task Keep_config_preserves_config_dir_but_removes_integrations() {
         await using var fixture = await Fixture.CreateAsync();
 

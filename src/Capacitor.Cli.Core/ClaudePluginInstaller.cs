@@ -25,15 +25,12 @@ public static class ClaudePluginInstaller {
     /// <summary>
     /// True when the user has previously installed the kcap Claude
     /// plugin via setup or <c>kcap plugin install</c>. Detection is
-    /// marker OR an existing kcap entry in <paramref name="settingsPath"/>
-    /// (either <c>enabledPlugins["kcap@kcap"]</c> /
-    /// <c>enabledPlugins["kcap@kurrent"]</c>, or
-    /// <c>extraKnownMarketplaces["kcap"]</c> /
-    /// <c>extraKnownMarketplaces["kurrent"]</c>) so pre-marker installs
-    /// — including the pre-rename <c>kurrent</c> key shape that
-    /// <c>SetupCommand.InstallPlugin</c> and <c>PluginCommand.RemoveClaude</c>
-    /// already treat as kcap-owned — are picked up on the first
-    /// marker-aware upgrade.
+    /// marker OR any historical kcap entry in <paramref name="settingsPath"/>:
+    /// <c>enabledPlugins["kcap@kcap" | "kcap@kurrent" | "kapacitor@kapacitor" | "kapacitor@kurrent"]</c>,
+    /// or <c>extraKnownMarketplaces["kcap" | "kurrent" | "kapacitor"]</c>.
+    /// Recognising the legacy keys lets the postinstall refresh pick up
+    /// installs left by the pre-rename <c>kapacitor</c> CLI as well as
+    /// the interim <c>kurrent</c> marketplace shape.
     /// </summary>
     public static bool IsInstalled(string settingsPath) {
         var dir = Path.GetDirectoryName(settingsPath);
@@ -46,14 +43,17 @@ public static class ClaudePluginInstaller {
             if (JsonNode.Parse(File.ReadAllText(settingsPath)) is not JsonObject root) return false;
 
             if (root["enabledPlugins"] is JsonObject enabled &&
-                (HasEnabledFlag(enabled, "kcap@kcap") ||
-                 HasEnabledFlag(enabled, "kcap@kurrent"))) {
+                (HasEnabledFlag(enabled, "kcap@kcap")           ||
+                 HasEnabledFlag(enabled, "kcap@kurrent")        ||
+                 HasEnabledFlag(enabled, "kapacitor@kapacitor") ||
+                 HasEnabledFlag(enabled, "kapacitor@kurrent"))) {
                 return true;
             }
 
             if (root["extraKnownMarketplaces"] is JsonObject marketplaces &&
-                (marketplaces["kcap"] is not null ||
-                 marketplaces["kurrent"]   is not null)) {
+                (marketplaces["kcap"]      is not null ||
+                 marketplaces["kurrent"]   is not null ||
+                 marketplaces["kapacitor"] is not null)) {
                 return true;
             }
         } catch {

@@ -5,7 +5,15 @@ namespace Capacitor.Cli.Tests.Unit.Codex;
 
 public class CodexHooksParserTests {
     [Test]
-    public async Task EntryReferencesCapacitorCodexHook_returns_true_when_command_contains_marker() {
+    public async Task EntryReferencesCapacitorCodexHook_returns_true_for_current_marker() {
+        var entry = JsonNode.Parse("""{"hooks":[{"type":"command","command":"kcap hook --codex","timeout":30}]}""");
+        await Assert.That(CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)).IsTrue();
+    }
+
+    [Test]
+    public async Task EntryReferencesCapacitorCodexHook_returns_true_for_pre_consolidation_marker() {
+        // Installs from the `kcap codex-hook` era must still be recognised so
+        // upgrade-time refresh and uninstall can rewrite / clean them.
         var entry = JsonNode.Parse("""{"hooks":[{"type":"command","command":"kcap codex-hook","timeout":30}]}""");
         await Assert.That(CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)).IsTrue();
     }

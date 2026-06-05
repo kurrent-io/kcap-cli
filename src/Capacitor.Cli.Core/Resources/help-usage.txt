@@ -64,9 +64,10 @@ Maintenance:
   --version                        Show version
   --help                           Show this help
 
-Hook Commands (internal — used by Claude Code plugin):
-{hookCommands}
-  codex-hook                       Codex hooks dispatcher (single binary, branches on hook_event_name)
+Hooks (internal — invoked by Claude Code / Codex / Cursor):
+  hook --claude                    Dispatch a Claude Code hook event (reads payload from stdin)
+  hook --codex                     Dispatch a Codex CLI hook event
+  hook --cursor                    Dispatch a Cursor IDE hook event
 
 Environment:
   KCAP_URL              Server URL (overrides config file)

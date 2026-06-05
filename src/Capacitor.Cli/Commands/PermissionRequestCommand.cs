@@ -7,8 +7,11 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Commands;
 
 static class PermissionRequestCommand {
-    public static async Task<int> Handle(string baseUrl) {
-        var body = await Console.In.ReadToEndAsync();
+    public static Task<int> Handle(string baseUrl) =>
+        Handle(baseUrl, body: null);
+
+    public static async Task<int> Handle(string baseUrl, string? body) {
+        body ??= await Console.In.ReadToEndAsync();
 
         JsonNode? node;
 

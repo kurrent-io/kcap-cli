@@ -4,22 +4,20 @@ Usage: kcap hook --<vendor>
 
 Description:
   Invoked by a coding agent's hook system, NOT by users directly. Reads
-  the hook payload as JSON from stdin and forwards it to the kcap
-  server. The dispatcher is bounded to 2 seconds wall-clock; on server
-  unavailability payloads are spooled to ~/.cursor/kcap-pending/
-  and retried on the next hook invocation.
+  the hook payload as JSON from stdin (including `hook_event_name`) and
+  forwards it to the kcap server. The vendor flag selects the per-agent
+  dispatcher; the event is taken from the payload.
 
   The command is registered via 'kcap setup' or
-  'kcap plugin install --cursor', which writes the appropriate
-  hooks.json entries for the detected vendor.
+  'kcap plugin install [--claude|--codex|--cursor]', which writes the
+  appropriate hook configuration for the detected vendor.
 
 Options:
+  --claude    Dispatch the event as a Claude Code hook.
+  --codex     Dispatch the event as a Codex CLI hook.
   --cursor    Dispatch the event as a Cursor IDE hook.
-
-              Additional vendor flags (--codex, --claude) will be added
-              under AI-732 and AI-733.
 
 Exit codes:
   0   Normal exit (including budget expiry, malformed payload, and
       disabled-session suppression).
-  1   No vendor flag provided.
+  1   No vendor flag provided, missing hook_event_name, or server error.

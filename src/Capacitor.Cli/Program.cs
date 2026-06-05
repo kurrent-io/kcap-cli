@@ -9,19 +9,6 @@ using Capacitor.Cli.Core.Config;
 using ReviewCommand = Capacitor.Cli.Commands.ReviewCommand;
 using WatchCommand = Capacitor.Cli.Commands.WatchCommand;
 
-// Declared before any PrintUsage()/PrintCommandHelp() call because both
-// local functions capture this list to render the hooks section of the
-// help text.
-string[] hookCommands = [
-    "session-start",
-    "session-end",
-    "subagent-start",
-    "subagent-stop",
-    "notification",
-    "stop",
-    "pre-compact"
-];
-
 if (args.Length < 1) {
     await PrintUsage();
 
@@ -30,23 +17,18 @@ if (args.Length < 1) {
 
 var command = args[0];
 
-// Hooks only: short-circuit when spawned inside a headless claude invocation
-// (e.g., title generation, the eval judge) so we don't forward the nested
-// session's hook events back into kcap and blow up into a loop. Scoped
-// to hook commands because non-hook commands — notably `kcap mcp judge`
-// running as an MCP server child of the eval judge claude process — must
-// actually execute despite inheriting KCAP_SKIP=1 from the parent.
+// Hook short-circuit: when spawned inside a headless claude invocation
+// (e.g., title generation, the eval judge) we don't forward the nested
+// session's hook events back into kcap. Scoped to `hook` because non-hook
+// commands — notably `kcap mcp judge` running as an MCP server child of
+// the eval judge claude process — must actually execute despite inheriting
+// KCAP_SKIP=1 from the parent.
 //
 // Runs before ResolveServerUrl/update-check so a skipped hook does no work:
 // ResolveServerUrl can shell out to `git remote -v` and emit warnings, and
 // the update-check task hits the npm registry — both pure noise inside a
 // nested headless invocation.
-if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
- && (hookCommands.Contains(command) || command == "hook")) {
-    // `hook` is intentionally not in hookCommands (that list drives the
-    // templated help for Claude's per-event commands), but it MUST honour
-    // the same skip semantics so nested headless invocations don't loop
-    // Cursor hook payloads back into kcap.
+if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1" && command == "hook") {
     return 0;
 }
 
@@ -544,8 +526,6 @@ switch (command) {
             watchSkipTitle, parentPid, watchVendor
         );
     }
-    case "permission-request":
-        return await PermissionRequestCommand.Handle(baseUrl!);
     case "set-title" when args.Length < 2:
         Console.Error.WriteLine("Usage: kcap set-title <title>");
 
@@ -594,13 +574,18 @@ switch (command) {
 
         return 0;
     }
-    case "codex-hook":
-        return await CodexHookCommand.Handle(baseUrl!, Console.In);
     case "hook": {
+        if (args.Contains("--claude")) {
+            return await ClaudeHookCommand.Handle(baseUrl!, Console.In, updateCheckTask);
+        }
+        if (args.Contains("--codex")) {
+            return await CodexHookCommand.Handle(baseUrl!, Console.In);
+        }
         if (args.Contains("--cursor")) {
             return await CursorHookCommand.Handle(baseUrl!, Console.In);
         }
-        Console.Error.WriteLine("kcap hook requires a vendor flag (e.g. --cursor)");
+        Console.Error.WriteLine("kcap hook requires a vendor flag (for example --claude)");
+        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor");
         return 1;
     }
     case "cursor":
@@ -609,352 +594,9 @@ switch (command) {
         return 2;
 }
 
-if (!hookCommands.Contains(command)) {
-    Console.Error.WriteLine($"Unknown command: {command}");
+Console.Error.WriteLine($"Unknown command: {command}");
 
-    return 1;
-}
-
-var body = await Console.In.ReadToEndAsync();
-
-// Inject home_dir and agent_host_id into all hook payloads, and normalize IDs
-try {
-    var node = JsonNode.Parse(body);
-
-    if (node is not null) {
-        // Normalize session_id and agent_id to dashless GUIDs
-        NormalizeGuidField(node, "session_id");
-        NormalizeGuidField(node, "agent_id");
-
-        node["home_dir"] = PathHelpers.HomeDirectory;
-
-        // If running inside a daemon-spawned agent, inject the agent ID
-        var agentHostId = Environment.GetEnvironmentVariable("KCAP_AGENT_ID");
-
-        if (agentHostId is not null) {
-            node["agent_host_id"] = agentHostId;
-        }
-
-        body = node.ToJsonString();
-    }
-} catch {
-    // Best effort — don't fail the hook if JSON parsing fails
-}
-
-// Check if session is disabled — skip all server communication
-try {
-    var disabledSessionId = JsonNode.Parse(body)?["session_id"]?.GetValue<string>();
-
-    if (disabledSessionId is not null && DisabledSessions.IsDisabled(disabledSessionId)) {
-        // For session-end: remove the marker so it doesn't accumulate
-        if (command == "session-end") {
-            DisabledSessions.RemoveMarker(disabledSessionId);
-        }
-
-        return 0;
-    }
-} catch {
-    // Best effort — don't fail if JSON parsing fails
-}
-
-// On session-start, clear the last-emitted repo cache so this session always gets a
-// RepositoryDetected event (the dedup cache is per-cwd, but each session needs its own link).
-if (command == "session-start") {
-    try {
-        var cwdNode = JsonNode.Parse(body)?["cwd"]?.GetValue<string>();
-
-        if (cwdNode is not null) {
-            RepositoryDetection.ClearLastEmitted(cwdNode);
-        }
-    } catch {
-        // Best effort
-    }
-}
-
-// Enrich hook payloads with repository info.
-// For session-end and subagent-stop, defer enrichment to run in parallel with watcher kill.
-Task<string>? deferredRepoTask = null;
-
-if (command is "session-end" or "subagent-stop") {
-    deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body);
-} else {
-    body = await RepositoryDetection.EnrichWithRepositoryInfo(body);
-}
-
-// Load config once for exclusion check and default_visibility injection.
-// Runs after repo enrichment so the body already has repository.owner/repo_name,
-// avoiding a redundant git detection in RepoExclusion.
-var kcapConfig = await AppConfig.Load();
-
-// Check repo exclusion — silently exit for excluded repos
-if (kcapConfig?.ExcludedRepos is { Length: > 0 } repos && await RepoExclusion.IsExcludedAsync(body, repos)) {
-    return 0;
-}
-
-// Check path exclusion against the V2 profile that applies to this process.
-// GetActiveProfileAsync falls back to ActiveProfile when --server-url / KCAP_URL
-// caused the resolver to skip profile selection — without that fallback `kcap
-// ignore` writes (which also fall back to ActiveProfile) would be silently ignored
-// by hooks.
-if ((await AppConfig.GetActiveProfileAsync())?.ExcludedPaths is { Length: > 0 } paths) {
-    try {
-        var cwd = JsonNode.Parse(body)?["cwd"]?.GetValue<string>();
-
-        if (PathExclusion.IsExcluded(cwd, paths)) return 0;
-    } catch {
-        // Best effort — a malformed payload or pathological exclusion entry must not
-        // break hook forwarding. PathExclusion.IsExcluded already swallows per-entry
-        // errors; this outer guard covers the cwd parse and any unforeseen surface.
-    }
-}
-
-// Inject default_visibility from config for session-start hooks
-if (command == "session-start" && kcapConfig?.DefaultVisibility is { } vis) {
-    try {
-        var node = JsonNode.Parse(body);
-
-        if (node is not null) {
-            node["default_visibility"] = vis;
-            body                       = node.ToJsonString();
-        }
-    } catch {
-        // Best effort — don't block session start if config read fails
-    }
-}
-
-// For session-start: read plan file if slug is known and inject plan_content into payload
-var planContentInjected = false;
-
-if (command == "session-start") {
-    try {
-        var node = JsonNode.Parse(body);
-        var slug = node?["slug"]?.GetValue<string>();
-
-        if (slug is not null) {
-            var planContent = ReadPlanFile(slug);
-
-            if (planContent is not null) {
-                node!["plan_content"] = planContent;
-                body                  = node.ToJsonString();
-                planContentInjected   = true;
-            }
-        }
-    } catch {
-        // Best effort — don't fail the hook if plan reading fails
-    }
-}
-
-// For session-end and subagent-stop: kill watcher BEFORE posting hook
-// so transcript is fully drained before server computes stats.
-// If watcher was already dead, do an inline drain to catch up.
-// Repo enrichment runs concurrently (started above).
-switch (command) {
-    case "session-end": {
-        try {
-            var node           = JsonNode.Parse(body);
-            var sessionId      = node?["session_id"]?.GetValue<string>();
-            var transcriptPath = node?["transcript_path"]?.GetValue<string>();
-
-            if (sessionId is not null) {
-                await WatcherManager.KillWatcher(sessionId);
-
-                // Always inline drain — the watcher may have been alive but never connected
-                // (stuck in SignalR connect retry during server downtime). InlineDrainAsync
-                // checks server position first, so it's a no-op if already fully drained.
-                if (transcriptPath is not null) {
-                    await WatcherManager.InlineDrainAsync(baseUrl!, sessionId, transcriptPath, agentId: null);
-                }
-            }
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"[kcap] session-end pre-hook failed: {ex.Message}");
-        }
-
-        body = await deferredRepoTask!;
-
-        break;
-    }
-    case "subagent-stop": {
-        try {
-            var node           = JsonNode.Parse(body);
-            var sessionId      = node?["session_id"]?.GetValue<string>();
-            var agentId        = node?["agent_id"]?.GetValue<string>();
-            var transcriptPath = node?["transcript_path"]?.GetValue<string>();
-
-            if (sessionId is not null && agentId is not null) {
-                await WatcherManager.KillWatcher($"{sessionId}-{agentId}");
-
-                if (transcriptPath is not null) {
-                    var sessionDir          = Path.ChangeExtension(transcriptPath, null);
-                    var agentTranscriptPath = Path.Combine(sessionDir, "subagents", $"agent-{agentId}.jsonl");
-                    await WatcherManager.InlineDrainAsync(baseUrl!, sessionId, agentTranscriptPath, agentId);
-                }
-            }
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"[kcap] subagent-stop pre-hook failed: {ex.Message}");
-        }
-
-        body = await deferredRepoTask!;
-
-        break;
-    }
-}
-
-using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync();
-using var content = new StringContent(body, Encoding.UTF8, "application/json");
-
-HttpResponseMessage response;
-
-try {
-    response = await client.PostWithRetryAsync($"{baseUrl!}/hooks/{command}", content);
-} catch (HttpRequestException ex) {
-    HttpClientExtensions.WriteUnreachableError(baseUrl!, ex);
-
-    return 1;
-}
-
-if (!response.IsSuccessStatusCode) {
-    Console.Error.WriteLine($"HTTP {(int)response.StatusCode}");
-
-    return 1;
-}
-
-// Check session-end response for generate_whats_done flag
-if (command == "session-end") {
-    try {
-        var responseBody = await response.Content.ReadAsStringAsync();
-        var responseNode = JsonNode.Parse(responseBody);
-
-        if (responseNode?["generate_whats_done"]?.GetValue<bool>() == true) {
-            var node      = JsonNode.Parse(body);
-            var sessionId = node?["session_id"]?.GetValue<string>();
-
-            if (sessionId is not null) {
-                WatcherManager.SpawnWhatsDoneGenerator(baseUrl!, sessionId);
-            }
-        }
-    } catch {
-        // Best effort — don't fail the hook if response parsing fails
-    }
-}
-
-switch (command) {
-    // For session-start and subagent-start: ensure watcher is running AFTER posting hook
-    case "session-start": {
-        var node           = JsonNode.Parse(body);
-        var sessionId      = node?["session_id"]?.GetValue<string>();
-        var transcriptPath = node?["transcript_path"]?.GetValue<string>();
-        var sessionCwd     = node?["cwd"]?.GetValue<string>();
-
-        // Parse the server response body once. Two independent consumers:
-        //   1. slug fallback for plan_content (resume/compact path)
-        //   2. top_clusters → SessionStart additionalContext (DEV-1676)
-        // Each consumer has its own try/catch so a failure in one path
-        // (e.g., PostPlanContentAsync hitting a transient network error)
-        // doesn't suppress the other.
-        JsonNode? responseNode = null;
-        try {
-            var responseBody = await response.Content.ReadAsStringAsync();
-            responseNode     = JsonNode.Parse(responseBody);
-        } catch {
-            // Best effort — never fail session start over response parsing
-        }
-
-        // (1) slug-resolved continuation — inject plan content if server resolved a slug
-        if (responseNode is not null && !planContentInjected && sessionId is not null) {
-            try {
-                var resolvedSlug = responseNode["slug"]?.GetValue<string>();
-
-                if (resolvedSlug is not null) {
-                    var planContent = ReadPlanFile(resolvedSlug);
-
-                    if (planContent is not null) {
-                        await PostPlanContentAsync(client, baseUrl!, sessionId, planContent);
-                    }
-                }
-            } catch {
-                // Best effort — slug-fallback failure must not block additionalContext
-            }
-        }
-
-        // (2) DEV-1676 — emit additionalContext from top_clusters unless the user opted out
-        if (responseNode is not null) {
-            try {
-                var disabled = AppConfig.ResolvedProfile?.Profile?.DisableSessionGuidelines is true;
-                var emission = SessionGuidelinesEmitter.BuildAdditionalContext(responseNode, disabled);
-
-                if (emission is not null) {
-                    Console.WriteLine(emission);
-                }
-            } catch {
-                // Best effort — never fail session start over emission
-            }
-        }
-
-        var source = node?["source"]?.GetValue<string>();
-
-        var isResumeOrCompact = source is not null
-         && (source.Equals("resume", StringComparison.OrdinalIgnoreCase)
-             || source.Equals("compact", StringComparison.OrdinalIgnoreCase));
-
-        if (sessionId is not null && transcriptPath is not null) {
-            await WatcherManager.EnsureWatcherRunning(baseUrl!, sessionId, transcriptPath, agentId: null, cwd: sessionCwd, skipTitle: isResumeOrCompact);
-        }
-
-        break;
-    }
-    case "subagent-start": {
-        var node           = JsonNode.Parse(body);
-        var sessionId      = node?["session_id"]?.GetValue<string>();
-        var agentId        = node?["agent_id"]?.GetValue<string>();
-        var transcriptPath = node?["transcript_path"]?.GetValue<string>();
-
-        if (sessionId is not null && agentId is not null && transcriptPath is not null) {
-            var sessionDir          = Path.ChangeExtension(transcriptPath, null);
-            var agentTranscriptPath = Path.Combine(sessionDir, "subagents", $"agent-{agentId}.jsonl");
-            await WatcherManager.EnsureWatcherRunning(baseUrl!, $"{sessionId}-{agentId}", agentTranscriptPath, agentId, sessionId);
-        }
-
-        break;
-    }
-    case "notification" or "stop": {
-        // Check watcher liveness on every notification/stop hook
-        var node           = JsonNode.Parse(body);
-        var sessionId      = node?["session_id"]?.GetValue<string>();
-        var transcriptPath = node?["transcript_path"]?.GetValue<string>();
-        var sessionCwd     = node?["cwd"]?.GetValue<string>();
-
-        if (sessionId is not null && transcriptPath is not null) {
-            await WatcherManager.EnsureWatcherRunning(baseUrl!, sessionId, transcriptPath, agentId: null, cwd: sessionCwd);
-        }
-
-        break;
-    }
-}
-
-// Wait for update check to print (if applicable)
-if (updateCheckTask is not null) {
-    await updateCheckTask;
-}
-
-return 0;
-
-string? ReadPlanFile(string slug) {
-    var planPath = Path.Combine(ClaudePaths.Plans, $"{slug}.md");
-
-    try {
-        return File.Exists(planPath) ? File.ReadAllText(planPath) : null;
-    } catch (Exception ex) {
-        Console.Error.WriteLine($"[kcap] Failed to read plan file at {planPath}: {ex.Message}");
-
-        return null;
-    }
-}
-
-async Task PostPlanContentAsync(HttpClient httpClient, string url, string sessionId, string planContent) {
-    var       obj         = new JsonObject { ["plan_content"] = planContent };
-    using var planPayload = new StringContent(obj.ToJsonString(), Encoding.UTF8, "application/json");
-    await httpClient.PostWithRetryAsync($"{url}/api/sessions/{sessionId}/plan", planPayload);
-}
+return 1;
 
 static string? GetArg(string[] arguments, string flag) {
     var idx = Array.IndexOf(arguments, flag);
@@ -964,14 +606,6 @@ static string? GetArg(string[] arguments, string flag) {
 
 string? ResolveSessionId(string[] args, int skipCount = 1, string[]? valueFlags = null) =>
     ArgParsing.ResolveSessionId(args, skipCount, valueFlags);
-
-void NormalizeGuidField(JsonNode node, string fieldName) {
-    var value = node[fieldName]?.GetValue<string>();
-
-    if (value is not null && value.Contains('-')) {
-        node[fieldName] = value.Replace("-", "");
-    }
-}
 
 async Task<int> HandleDiscoverLoginAsync(bool forceDevice) {
     using var http  = new HttpClient();
@@ -1025,8 +659,7 @@ async Task<int> HandleDiscoverLoginAsync(bool forceDevice) {
 }
 
 async Task PrintUsage() {
-    var hookList = string.Join('\n', hookCommands.Select(h => $"  {h}"));
-    var text     = EmbeddedResources.Load("help-usage.txt").Replace("{hookCommands}", hookList);
+    var text = EmbeddedResources.Load("help-usage.txt");
     await Console.Out.WriteAsync(text);
 }
 
@@ -1035,15 +668,11 @@ async Task<int> PrintCommandHelp(string cmd) {
 
     if (text is not null) {
         await Console.Out.WriteAsync(text);
-    } else if (hookCommands.Contains(cmd)) {
-        var hookText = EmbeddedResources.Load("help-hook-event.txt").Replace("{cmd}", cmd);
-        await Console.Out.WriteAsync(hookText);
-    } else {
-        Console.Error.WriteLine($"Unknown command: {cmd}");
-        Console.Error.WriteLine("Run `kcap --help` for a list of commands.");
-
-        return 1;
+        return 0;
     }
 
-    return 0;
+    Console.Error.WriteLine($"Unknown command: {cmd}");
+    Console.Error.WriteLine("Run `kcap --help` for a list of commands.");
+
+    return 1;
 }
