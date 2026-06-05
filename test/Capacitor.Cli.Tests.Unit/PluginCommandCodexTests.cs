@@ -454,10 +454,10 @@ public class PluginCommandCodexTests {
         TextWriter? stdout     = null,
         TextWriter? stderr     = null
     ) => new(
-        HomeDirectory: fakeHome,
-        PluginPath:    pluginPath,
-        Stdout:        stdout ?? TextWriter.Null,
-        Stderr:        stderr ?? TextWriter.Null
+        HomeDirectory:     fakeHome,
+        ResolvePluginPath: () => pluginPath,
+        Stdout:            stdout ?? TextWriter.Null,
+        Stderr:            stderr ?? TextWriter.Null
     );
 
     static void WriteSkill(string root, string name, string body) {
@@ -571,10 +571,10 @@ public class PluginCommandCodexInstallIntegrationTests {
         TextWriter? stdout     = null,
         TextWriter? stderr     = null
     ) => new(
-        HomeDirectory: fakeHome,
-        PluginPath:    pluginPath,
-        Stdout:        stdout ?? TextWriter.Null,
-        Stderr:        stderr ?? TextWriter.Null
+        HomeDirectory:     fakeHome,
+        ResolvePluginPath: () => pluginPath,
+        Stdout:            stdout ?? TextWriter.Null,
+        Stderr:            stderr ?? TextWriter.Null
     );
 
     sealed class TempDir : IDisposable {

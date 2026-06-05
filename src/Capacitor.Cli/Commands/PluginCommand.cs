@@ -18,13 +18,13 @@ public static class PluginCommand {
     const int DefaultHookTimeout       = 30;
 
     public static async Task<int> HandleAsync(string[] args, PluginEnvironment? env = null) {
-        env ??= PluginEnvironment.FromProcess();
-
         if (args.Length < 2) {
             PrintUsage();
 
             return 1;
         }
+
+        env ??= PluginEnvironment.FromProcess();
 
         return args[1] switch {
             "install" => await Install(args, env),
@@ -46,7 +46,7 @@ public static class PluginCommand {
 
         if (args.Contains("--skills")) return await InstallSkills(args, env);
         if (args.Contains("--codex")) return await InstallCodex(args, env);
-        if (args.Contains("--cursor")) return await InstallCursor(args);
+        if (args.Contains("--cursor")) return await InstallCursor(args, env);
 
         return await InstallClaude(args, env);
     }
@@ -64,7 +64,7 @@ public static class PluginCommand {
 
         if (args.Contains("--skills")) return await RemoveSkills(args, env);
         if (args.Contains("--codex")) return await RemoveCodex(args, env);
-        if (args.Contains("--cursor")) return await RemoveCursor(args);
+        if (args.Contains("--cursor")) return await RemoveCursor(args, env);
 
         return await RemoveClaude(args, env);
     }
@@ -88,7 +88,7 @@ public static class PluginCommand {
                 return 0;
         }
 
-        var pluginPath = env.PluginPath;
+        var pluginPath = env.ResolvePluginPath();
 
         if (pluginPath is null) {
             if (refreshOnly) return 0;
@@ -216,7 +216,7 @@ public static class PluginCommand {
                 return 0;
         }
 
-        var pluginPath = env.PluginPath;
+        var pluginPath = env.ResolvePluginPath();
 
         if (pluginPath is null) {
             if (refreshOnly) return 0;
@@ -314,7 +314,7 @@ public static class PluginCommand {
         // skills source BEFORE writing hooks so a missing plugin folder
         // doesn't leave the user with hooks pointing at a binary whose
         // skills never installed.
-        var pluginPath = env.PluginPath;
+        var pluginPath = env.ResolvePluginPath();
 
         if (pluginPath is null) {
             await env.Stderr.WriteLineAsync(
@@ -541,8 +541,8 @@ public static class PluginCommand {
         return changed;
     }
 
-    static async Task<int> InstallCursor(string[] args) {
-        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? CursorPaths.UserHooksJson();
+    static async Task<int> InstallCursor(string[] args, PluginEnvironment env) {
+        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? env.CursorUserHooksJson;
 
         var refreshOnly = args.Contains("--if-installed");
 
@@ -556,7 +556,7 @@ public static class PluginCommand {
             // an in-flight npm install doesn't fail just because the new symlink
             // isn't on the child process's PATH yet.
             case false when !AgentDetector.IsInstalled("kcap"):
-                await Console.Error.WriteLineAsync(
+                await env.Stderr.WriteLineAsync(
                     "Cannot install Cursor hooks: 'kcap' is not on PATH. "
                   + "Re-install kcap via npm: npm install -g @kurrent/kcap"
                 );
@@ -567,12 +567,12 @@ public static class PluginCommand {
         if (!InstallCursorHooks(hooksPath)) {
             if (refreshOnly) return 0;
 
-            await Console.Error.WriteLineAsync("Could not write Cursor hooks file.");
+            await env.Stderr.WriteLineAsync("Could not write Cursor hooks file.");
 
             return 1;
         }
 
-        await Console.Out.WriteLineAsync(
+        await env.Stdout.WriteLineAsync(
             refreshOnly
                 ? $"Cursor hooks refreshed ({hooksPath})"
                 : $"Cursor hooks installed ({hooksPath})"
@@ -581,11 +581,11 @@ public static class PluginCommand {
         return 0;
     }
 
-    static async Task<int> RemoveCursor(string[] args) {
-        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? CursorPaths.UserHooksJson();
+    static async Task<int> RemoveCursor(string[] args, PluginEnvironment env) {
+        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? env.CursorUserHooksJson;
 
         if (!File.Exists(hooksPath)) {
-            await Console.Out.WriteLineAsync("Nothing to remove — Cursor hooks file not found.");
+            await env.Stdout.WriteLineAsync("Nothing to remove — Cursor hooks file not found.");
 
             return 0;
         }
@@ -593,7 +593,7 @@ public static class PluginCommand {
         try {
             var removed = RemoveCursorHooks(hooksPath);
 
-            await Console.Out.WriteLineAsync(
+            await env.Stdout.WriteLineAsync(
                 removed
                     ? $"Cursor hooks removed ({hooksPath})"
                     : "Cursor hooks were not installed."
@@ -601,7 +601,7 @@ public static class PluginCommand {
 
             return 0;
         } catch (Exception ex) {
-            await Console.Error.WriteLineAsync($"Could not update Cursor hooks at {hooksPath}: {ex.Message}");
+            await env.Stderr.WriteLineAsync($"Could not update Cursor hooks at {hooksPath}: {ex.Message}");
 
             return 1;
         }

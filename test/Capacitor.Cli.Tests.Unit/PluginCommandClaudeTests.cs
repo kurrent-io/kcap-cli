@@ -132,10 +132,10 @@ public class PluginCommandClaudeTests {
         TextWriter? stdout     = null,
         TextWriter? stderr     = null
     ) => new(
-        HomeDirectory: fakeHome,
-        PluginPath:    pluginPath,
-        Stdout:        stdout ?? TextWriter.Null,
-        Stderr:        stderr ?? TextWriter.Null
+        HomeDirectory:     fakeHome,
+        ResolvePluginPath: () => pluginPath,
+        Stdout:            stdout ?? TextWriter.Null,
+        Stderr:            stderr ?? TextWriter.Null
     );
 
     sealed class TempDir : IDisposable {
