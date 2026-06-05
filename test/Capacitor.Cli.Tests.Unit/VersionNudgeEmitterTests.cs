@@ -40,6 +40,18 @@ public class VersionNudgeEmitterTests {
     }
 
     [Test]
+    public async Task Returns_null_when_response_node_is_array() {
+        var result = VersionNudgeEmitter.BuildFragment(JsonNode.Parse("[]"), "0.6.3");
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task Returns_null_when_version_field_is_numeric() {
+        var result = VersionNudgeEmitter.BuildFragment(JsonNode.Parse("""{"version": 42}"""), "0.6.3");
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
     public async Task Returns_null_when_current_equals_server() {
         var result = VersionNudgeEmitter.BuildFragment(ResponseWithVersion("0.6.5"), "0.6.5");
         await Assert.That(result).IsNull();
