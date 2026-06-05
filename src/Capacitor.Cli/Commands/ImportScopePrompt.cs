@@ -47,29 +47,40 @@ public static partial class ImportScopePrompt {
             IReadOnlyList<string> repoSamples,
             string                visibilityDescription
         ) {
-        var scopeLabel = scope switch {
-            ImportScope.All    => "everything",
-            ImportScope.Org o  => $"org repos only ({o.OrgLogin})",
-            ImportScope.Repo r => $"repository {r.Owner}/{r.Name}",
-            _                  => "?"
-        };
+        var sb = new StringBuilder();
+        sb.AppendLine("About to import:");
+        sb.AppendLine($"  scope:   {ScopeLabel(scope)}");
+        sb.AppendLine($"{MatchedPrefix}{matchedCount}{MatchedSuffix(matchedCount, repoSamples.Count)}");
+        sb.AppendLine($"  repos:   {RepoLine(repoSamples)}");
+        sb.Append($"  visibility: {visibilityDescription}");
 
+        return sb.ToString();
+    }
+
+    // Shared between the plain-text FormatSummary and the colored stderr
+    // renderer in PromptConfirm so both code paths stay byte-for-byte
+    // identical to each other without either one parsing the other's
+    // output.
+    const string MatchedPrefix = "  matched: ";
+
+    static string ScopeLabel(ImportScope scope) => scope switch {
+        ImportScope.All    => "everything",
+        ImportScope.Org o  => $"org repos only ({o.OrgLogin})",
+        ImportScope.Repo r => $"repository {r.Owner}/{r.Name}",
+        _                  => "?"
+    };
+
+    static string MatchedSuffix(int matchedCount, int repoCount) =>
+        $" session{(matchedCount == 1 ? "" : "s")} across {repoCount} repo{(repoCount == 1 ? "" : "s")}";
+
+    static string RepoLine(IReadOnlyList<string> repoSamples) {
         const int sampleLimit = 5;
         var       samples     = repoSamples.Take(sampleLimit).ToArray();
         var       more        = repoSamples.Count - samples.Length;
 
-        var repoLine = samples.Length == 0
+        return samples.Length == 0
             ? "(none)"
             : string.Join(", ", samples) + (more > 0 ? $", +{more} more" : "");
-
-        var sb = new StringBuilder();
-        sb.AppendLine("About to import:");
-        sb.AppendLine($"  scope:   {scopeLabel}");
-        sb.AppendLine($"  matched: {matchedCount} session{(matchedCount == 1 ? "" : "s")} across {repoSamples.Count} repo{(repoSamples.Count == 1 ? "" : "s")}");
-        sb.AppendLine($"  repos:   {repoLine}");
-        sb.Append($"  visibility: {visibilityDescription}");
-
-        return sb.ToString();
     }
 }
 
@@ -142,13 +153,38 @@ public static partial class ImportScopePrompt {
             string                visibilityDescription,
             bool                  skip
         ) {
-        var summary = FormatSummary(scope, matchedCount, repoSamples, visibilityDescription);
-        Console.Error.WriteLine(summary);
+        WriteSummaryToStderr(scope, matchedCount, repoSamples, visibilityDescription);
 
         if (skip) return true;
 
         return AnsiConsole.Prompt(
             new ConfirmationPrompt("Continue?") { DefaultValue = false }
         );
+    }
+
+    // Render the summary to stderr (visible even when stdout is redirected),
+    // highlighting the matched-session count so it's the line the operator's
+    // eye lands on. Lines are composed from the same per-component helpers
+    // FormatSummary uses, so the rendered text stays in lock-step with the
+    // canonical form without parsing it. Spectre auto-strips markup on
+    // non-TTY stderr (e.g. CI), so the printed text matches FormatSummary
+    // byte-for-byte in CI logs.
+    static void WriteSummaryToStderr(
+            ImportScope           scope,
+            int                   matchedCount,
+            IReadOnlyList<string> repoSamples,
+            string                visibilityDescription
+        ) {
+        var console = AnsiConsole.Create(
+            new AnsiConsoleSettings { Out = new AnsiConsoleOutput(Console.Error) }
+        );
+
+        console.WriteLine("About to import:");
+        console.WriteLine($"  scope:   {ScopeLabel(scope)}");
+        console.MarkupLine(
+            $"{MatchedPrefix}[bold cyan]{matchedCount}[/]{Markup.Escape(MatchedSuffix(matchedCount, repoSamples.Count))}"
+        );
+        console.WriteLine($"  repos:   {RepoLine(repoSamples)}");
+        console.WriteLine($"  visibility: {visibilityDescription}");
     }
 }
