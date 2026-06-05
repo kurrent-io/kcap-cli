@@ -58,7 +58,7 @@ public class ClaudeHookStdoutTests : IDisposable {
             );
 
         var stdout = await CaptureStdoutAsync(() =>
-            ClaudeHookCommand.Handle(_server.Url, new StringReader(SessionStartPayloadWithoutTranscriptPath()))
+            ClaudeHookCommand.Handle(_server.Url!, new StringReader(SessionStartPayloadWithoutTranscriptPath()))
         );
 
         var trimmed = stdout.Trim();
@@ -92,7 +92,7 @@ public class ClaudeHookStdoutTests : IDisposable {
             );
 
         var stdout = await CaptureStdoutAsync(() =>
-            ClaudeHookCommand.Handle(_server.Url, new StringReader(SessionStartPayloadWithoutTranscriptPath()))
+            ClaudeHookCommand.Handle(_server.Url!, new StringReader(SessionStartPayloadWithoutTranscriptPath()))
         );
 
         var trimmed = stdout.Trim();
@@ -117,7 +117,7 @@ public class ClaudeHookStdoutTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
         var stdout = await CaptureStdoutAsync(() =>
-            ClaudeHookCommand.Handle(_server.Url, new StringReader(SessionStartPayloadWithoutTranscriptPath()))
+            ClaudeHookCommand.Handle(_server.Url!, new StringReader(SessionStartPayloadWithoutTranscriptPath()))
         );
 
         await Assert.That(stdout.Trim()).IsEqualTo("");
