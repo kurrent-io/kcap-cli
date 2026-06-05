@@ -2120,7 +2120,6 @@ static class ImportCommand {
         if (meta.FirstTimestamp is not null) startHook["started_at"]                = meta.FirstTimestamp.Value.ToString("O");
         if (session.PreviousSessionId is not null) startHook["previous_session_id"] = session.PreviousSessionId;
         if (meta.Slug is not null) startHook["slug"]                                = meta.Slug;
-        if (session.Vendor != "claude") startHook["vendor"]                         = session.Vendor;
 
         // Codex sessions carry a `git` block on session_meta — prefer it over a fresh
         // RepositoryDetection probe (which reads the live git config and might disagree
@@ -2155,9 +2154,15 @@ static class ImportCommand {
             }
         }
 
+        // The /hooks/session-start route binds vendor from the URL path
+        // (/session-start/{vendor=claude}); a body-level `vendor` field is
+        // ignored. Codex history imports that posted to /hooks/session-start
+        // (no path vendor) silently landed as claude-tagged SessionStarted
+        // events on KurrentDB, and the projector then wrote sessions.vendor =
+        // claude even though the transcript was a codex rollout.
         try {
             using var startContent = new StringContent(startHook.ToJsonString(), Encoding.UTF8, "application/json");
-            using var startResp    = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/session-start", startContent, ct: ct);
+            using var startResp    = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/session-start/{session.Vendor}", startContent, ct: ct);
 
             if (!startResp.IsSuccessStatusCode) {
                 events.OnSessionErrored(slot, session.SessionId, $"session-start failed: HTTP {(int)startResp.StatusCode}");
@@ -2204,9 +2209,11 @@ static class ImportCommand {
 
         var generateWhatsDone = false;
 
+        // Same vendor-in-URL contract applies to /hooks/session-end (see the
+        // session-start comment above) — symmetric route, same default of claude.
         try {
             using var endContent = new StringContent(endHook.ToJsonString(), Encoding.UTF8, "application/json");
-            using var endResp    = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/session-end", endContent, ct: ct);
+            using var endResp    = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/session-end/{session.Vendor}", endContent, ct: ct);
 
             if (endResp.IsSuccessStatusCode) {
                 try {
