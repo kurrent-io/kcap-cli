@@ -151,6 +151,80 @@ public class ClaudeCliRunnerTests {
         await Assert.That(ex?.ParamName).IsEqualTo("allowedTools");
     }
 
+    // AI-755: the CLI returns is_error:true with the API failure text in
+    // `result` when the upstream call fails (overload, rate limit, auth).
+    // Surfacing that text as a title produced session titles like
+    // "Claude API error: Overloaded". Treat it as a failure instead.
+    [Test]
+    public async Task ParseResponse_IsError_ReturnsNull() {
+        const string json = """
+                            {
+                                "result": "Claude API error: Overloaded",
+                                "is_error": true,
+                                "subtype": "error_during_execution",
+                                "total_cost_usd": 0.0
+                            }
+                            """;
+
+        var result = ClaudeCliRunner.ParseResponse(json);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task ParseResponse_IsErrorWithStructuredOutput_ReturnsNull() {
+        const string json = """
+                            {
+                                "result": "",
+                                "structured_output": {"verdict": "pass"},
+                                "is_error": true,
+                                "subtype": "error_max_turns"
+                            }
+                            """;
+
+        var result = ClaudeCliRunner.ParseResponse(json);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task ParseResponse_IsErrorFalse_StillParses() {
+        const string json = """
+                            {
+                                "result": "ok",
+                                "is_error": false
+                            }
+                            """;
+
+        var result = ClaudeCliRunner.ParseResponse(json);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Result).IsEqualTo("ok");
+    }
+
+    // AI-755 follow-up: if the envelope says is_error:true, the parser
+    // returns null but RunCoreAsync still tries TryReadTranscriptFallback.
+    // The transcript's last assistant block on a failed turn can be a
+    // partial reply or stale auto-memory content, so converting that into
+    // a successful result reintroduces the same regression. The fallback
+    // must short-circuit on is_error before touching the filesystem.
+    [Test]
+    public async Task TryReadTranscriptFallback_IsError_ShortCircuits() {
+        const string json = """
+                            {
+                                "session_id": "should-not-be-looked-up",
+                                "is_error": true,
+                                "result": "Claude API error: Overloaded"
+                            }
+                            """;
+        var logs = new List<string>();
+
+        var result = ClaudeCliRunner.TryReadTranscriptFallback(json, logs.Add);
+
+        await Assert.That(result).IsNull();
+        await Assert.That(logs).Contains(l => l.Contains("is_error", StringComparison.Ordinal));
+    }
+
     [Test]
     public async Task ParseResponse_extracts_num_turns_from_json() {
         const string json = """
