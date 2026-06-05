@@ -22,12 +22,16 @@ public static class CursorHooksParser {
 
     /// <summary>
     /// True if <paramref name="entry"/> is an object whose <c>command</c>
-    /// string contains <c>"kcap hook --cursor"</c>.
+    /// string references the kcap Cursor hook dispatcher. Matches the
+    /// current <c>kcap hook --cursor</c> marker as well as the pre-rename
+    /// <c>kapacitor hook --cursor</c> so <c>kcap uninstall</c> and the
+    /// upgrade-time refresh both clean up entries left by older CLI versions.
     /// </summary>
     public static bool EntryReferencesCapacitorCursorHook(JsonNode? entry) {
         return entry?["command"] is JsonValue jv &&
             jv.TryGetValue<string>(out var cmd)  &&
-            cmd.Contains("kcap hook --cursor");
+            (cmd.Contains("kcap hook --cursor",      StringComparison.Ordinal)
+          || cmd.Contains("kapacitor hook --cursor", StringComparison.Ordinal));
     }
 
     /// <summary>

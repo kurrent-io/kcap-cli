@@ -18,6 +18,15 @@ public class CursorHooksParserTests {
     }
 
     [Test]
+    public async Task EntryReferencesCapacitorCursorHook_true_for_legacy_kapacitor_marker() {
+        // Pre-rename installs wrote `kapacitor hook --cursor`; uninstall and
+        // the upgrade-time refresh must still recognise them so they can be
+        // rewritten / cleaned. Mirrors the Codex parser's legacy detection.
+        var entry = JsonNode.Parse("""{"command":"kapacitor hook --cursor"}""");
+        await Assert.That(CursorHooksParser.EntryReferencesCapacitorCursorHook(entry)).IsTrue();
+    }
+
+    [Test]
     public async Task EntryReferencesCapacitorCursorHook_false_for_third_party_command() {
         var entry = JsonNode.Parse("""{"command":"/usr/local/bin/other"}""");
         await Assert.That(CursorHooksParser.EntryReferencesCapacitorCursorHook(entry)).IsFalse();
