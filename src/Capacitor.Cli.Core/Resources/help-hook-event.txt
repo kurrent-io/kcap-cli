@@ -1,5 +1,0 @@
-kcap {cmd} — Hook command (internal)
-
-Usage: echo '<json>' | kcap {cmd}
-
-Used internally by the Claude Code plugin. Reads JSON from stdin.

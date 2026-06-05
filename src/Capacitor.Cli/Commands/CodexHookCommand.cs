@@ -55,6 +55,26 @@ static class CodexHookCommand {
 
         if (string.IsNullOrWhiteSpace(eventName)) return 0;
 
+        // KCAP_SKIP=1 marks a kcap-launched headless Codex invocation
+        // (CodexCliRunner sets it). Suppress all server / watcher / git
+        // enrichment work so we don't forward the nested session's hooks
+        // back into kcap, but still honour Codex's stdout contract — the
+        // Stop / SessionStart parsers reject empty output, and a missing
+        // PermissionRequest response leaves Codex hung.
+        if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1") {
+            switch (eventName) {
+                case "SessionStart" or "Stop":
+                    Console.Write(SessionScopedOutputJson);
+                    break;
+                case "PermissionRequest":
+                    // Empty hookSpecificOutput → Codex falls back to its
+                    // own approval prompt. See HandlePermissionRequestStub.
+                    Console.Write("{}");
+                    break;
+            }
+            return 0;
+        }
+
         // Normalize session_id to dashless GUID, inject home_dir, and tag the
         // agent host id when running inside a daemon-spawned agent. Mirrors
         // the Claude hook path in Program.cs (including the disabled-session

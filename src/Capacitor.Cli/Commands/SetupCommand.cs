@@ -447,8 +447,9 @@ public static class SetupCommand {
                 }
             };
 
-            // Remove stale kurrent marketplace entry if present
+            // Remove stale marketplace entries from earlier shapes
             marketplaces.Remove("kurrent");
+            marketplaces.Remove("kapacitor");
 
             // Ensure enabledPlugins.kcap@kcap is true
             if (root["enabledPlugins"] is not JsonObject enabled) {
@@ -458,8 +459,10 @@ public static class SetupCommand {
 
             enabled["kcap@kcap"] = true;
 
-            // Remove stale plugin entry if present
+            // Remove stale plugin entries from earlier shapes
             enabled.Remove("kcap@kurrent");
+            enabled.Remove("kapacitor@kapacitor");
+            enabled.Remove("kapacitor@kurrent");
 
             Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
             File.WriteAllText(settingsPath, root.ToJsonString(WriteOpts));

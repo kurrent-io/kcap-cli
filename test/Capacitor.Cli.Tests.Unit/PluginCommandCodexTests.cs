@@ -24,7 +24,7 @@ public class PluginCommandCodexTests {
             var inner           = entries[0]!["hooks"]!.AsArray();
             var expectedTimeout = evt == "PermissionRequest" ? 86400 : 30;
             await Assert.That(inner[0]!["type"]!.GetValue<string>()).IsEqualTo("command");
-            await Assert.That(inner[0]!["command"]!.GetValue<string>()).IsEqualTo("kcap codex-hook");
+            await Assert.That(inner[0]!["command"]!.GetValue<string>()).IsEqualTo("kcap hook --codex");
             await Assert.That(inner[0]!["timeout"]!.GetValue<int>()).IsEqualTo(expectedTimeout);
         }
     }
@@ -40,7 +40,7 @@ public class PluginCommandCodexTests {
         var permissionEntries = root["hooks"]!["PermissionRequest"]!.AsArray();
         var kcapEntry = permissionEntries.First(e =>
             (e!["hooks"] as JsonArray)!.Any(h =>
-                h?["command"] is JsonValue v && v.TryGetValue<string>(out var s) && s.Contains("kcap codex-hook"))
+                h?["command"] is JsonValue v && v.TryGetValue<string>(out var s) && s.Contains("kcap hook --codex"))
         );
         var timeout = kcapEntry!["hooks"]!.AsArray()[0]!["timeout"]!.GetValue<int>();
 
@@ -68,6 +68,9 @@ public class PluginCommandCodexTests {
         using var tmp  = new TempDir();
         var       path = Path.Combine(tmp.Path, "hooks.json");
 
+        // Seed with the pre-consolidation marker `kcap codex-hook` plus an
+        // unrelated user-authored sibling. Install must rewrite the kcap entry
+        // to the new `kcap hook --codex` shape while preserving the sibling.
         await File.WriteAllTextAsync(path, """
             {
               "hooks": {
@@ -89,9 +92,42 @@ public class PluginCommandCodexTests {
             .Select(h => h!["command"]!.GetValue<string>())
             .ToList();
 
-        await Assert.That(commands).Contains("kcap codex-hook");
+        await Assert.That(commands).Contains("kcap hook --codex");
         await Assert.That(commands).Contains("/usr/local/bin/other");
-        await Assert.That(commands.Count(c => c == "kcap codex-hook")).IsEqualTo(1);
+        await Assert.That(commands.Count(c => c == "kcap hook --codex")).IsEqualTo(1);
+        await Assert.That(commands).DoesNotContain("kcap codex-hook");
+    }
+
+    [Test]
+    public async Task InstallCodexHooks_rewrites_pre_rename_kapacitor_marker() {
+        using var tmp  = new TempDir();
+        var       path = Path.Combine(tmp.Path, "hooks.json");
+
+        // Pre-rename installs left `kapacitor codex-hook` entries behind.
+        // Install must rewrite them to the consolidated `kcap hook --codex`
+        // form so postinstall refresh on upgrade fully migrates the user.
+        await File.WriteAllTextAsync(path, """
+            {
+              "hooks": {
+                "SessionStart": [
+                  { "hooks": [{ "type": "command", "command": "kapacitor codex-hook", "timeout": 5 }] }
+                ]
+              }
+            }
+            """);
+
+        PluginCommand.InstallCodexHooks(path);
+
+        var root         = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+        var sessionStart = root["hooks"]!["SessionStart"]!.AsArray();
+
+        var commands = sessionStart
+            .SelectMany(e => e!["hooks"]!.AsArray())
+            .Select(h => h!["command"]!.GetValue<string>())
+            .ToList();
+
+        await Assert.That(commands).Contains("kcap hook --codex");
+        await Assert.That(commands).DoesNotContain("kapacitor codex-hook");
     }
 
     [Test]
@@ -113,6 +149,7 @@ public class PluginCommandCodexTests {
                     .Select(h => h!["command"]!.GetValue<string>());
 
                 foreach (var cmd in commands) {
+                    await Assert.That(cmd).DoesNotContain("kcap hook --codex");
                     await Assert.That(cmd).DoesNotContain("kcap codex-hook");
                 }
             }
@@ -388,7 +425,7 @@ public class PluginCommandCodexTests {
         var entries = root["hooks"]!["PermissionRequest"]!.AsArray();
         var kcap = entries.First(e =>
             (e!["hooks"] as JsonArray)!.Any(h =>
-                h?["command"] is JsonValue v && v.TryGetValue<string>(out var s) && s.Contains("kcap codex-hook")));
+                h?["command"] is JsonValue v && v.TryGetValue<string>(out var s) && s.Contains("kcap hook --codex")));
         await Assert.That(kcap!["hooks"]!.AsArray()[0]!["timeout"]!.GetValue<int>())
             .IsEqualTo(86400);
 

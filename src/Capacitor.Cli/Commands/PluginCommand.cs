@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Commands;
 public static class PluginCommand {
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
-    const string CodexHookCommand  = "kcap codex-hook";
+    const string CodexHookCommand  = "kcap hook --codex";
     const string CursorHookCommand = "kcap hook --cursor";
 
     // PermissionRequest must wait for the dashboard's decision; the daemon-side
@@ -159,11 +159,12 @@ public static class PluginCommand {
 
     /// <summary>
     /// Removes kcap's marketplace + enabledPlugins entries (including the
-    /// legacy <c>kurrent</c> keys) from the Claude Code settings file at
-    /// <paramref name="settingsPath"/>, and deletes the version marker. Non-kcap
-    /// settings are preserved. Throws on I/O failure so callers can decide how to
-    /// report it; returns <see cref="ClaudeRemovalOutcome.NotInstalled"/> when the
-    /// file exists but contains no kcap entries.
+    /// legacy <c>kurrent</c> and pre-rename <c>kapacitor</c> keys) from the
+    /// Claude Code settings file at <paramref name="settingsPath"/>, and
+    /// deletes the version marker. Non-kcap settings are preserved. Throws
+    /// on I/O failure so callers can decide how to report it; returns
+    /// <see cref="ClaudeRemovalOutcome.NotInstalled"/> when the file exists
+    /// but contains no kcap entries.
     /// </summary>
     public static ClaudeRemovalOutcome RemoveClaudePlugin(string settingsPath) {
         if (!File.Exists(settingsPath)) return ClaudeRemovalOutcome.NotInstalled;
@@ -177,11 +178,14 @@ public static class PluginCommand {
         if (root["enabledPlugins"] is JsonObject enabled) {
             changed |= enabled.Remove("kcap@kcap");
             changed |= enabled.Remove("kcap@kurrent");
+            changed |= enabled.Remove("kapacitor@kapacitor");
+            changed |= enabled.Remove("kapacitor@kurrent");
         }
 
         if (root["extraKnownMarketplaces"] is JsonObject marketplaces) {
             changed |= marketplaces.Remove("kcap");
             changed |= marketplaces.Remove("kurrent");
+            changed |= marketplaces.Remove("kapacitor");
         }
 
         if (!changed) return ClaudeRemovalOutcome.NotInstalled;

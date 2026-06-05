@@ -65,6 +65,39 @@ public class ClaudePluginInstallerTests {
     }
 
     [Test]
+    public async Task IsInstalled_true_when_pre_rename_kapacitor_enabledPlugins_present() {
+        // Pre-rename installs used the "kapacitor@kapacitor" key. Refresh on
+        // upgrade must pick this up so the user gets migrated to the kcap
+        // marketplace entry.
+        using var tmp = new TempDir();
+        var settingsPath = Path.Combine(tmp.Path, "settings.json");
+        await File.WriteAllTextAsync(settingsPath, """
+            { "enabledPlugins": { "kapacitor@kapacitor": true } }
+            """);
+        await Assert.That(ClaudePluginInstaller.IsInstalled(settingsPath)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsInstalled_true_when_pre_rename_kapacitor_kurrent_enabledPlugins_present() {
+        using var tmp = new TempDir();
+        var settingsPath = Path.Combine(tmp.Path, "settings.json");
+        await File.WriteAllTextAsync(settingsPath, """
+            { "enabledPlugins": { "kapacitor@kurrent": true } }
+            """);
+        await Assert.That(ClaudePluginInstaller.IsInstalled(settingsPath)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsInstalled_true_when_pre_rename_kapacitor_marketplace_present() {
+        using var tmp = new TempDir();
+        var settingsPath = Path.Combine(tmp.Path, "settings.json");
+        await File.WriteAllTextAsync(settingsPath, """
+            { "extraKnownMarketplaces": { "kapacitor": { "source": { "source": "directory", "path": "/some/path" } } } }
+            """);
+        await Assert.That(ClaudePluginInstaller.IsInstalled(settingsPath)).IsTrue();
+    }
+
+    [Test]
     public async Task IsInstalled_false_when_settings_has_unrelated_keys_only() {
         using var tmp = new TempDir();
         var settingsPath = Path.Combine(tmp.Path, "settings.json");
