@@ -76,5 +76,6 @@ public class SessionGuidelinesEmitterTests {
         await Assert.That(fragment!).Contains("- real lesson");
         var bullets = fragment.Split('\n').Count(l => l.StartsWith("- "));
         await Assert.That(bullets).IsEqualTo(1);
+        await Assert.That(fragment).DoesNotContain("- \n"); // no bullet with empty body
     }
 }
