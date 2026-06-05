@@ -32,7 +32,8 @@ public static class CodexHooksParser {
         foreach (var hook in hooks) {
             if (hook?["command"] is JsonValue jv &&
                 jv.TryGetValue<string>(out var cmd) &&
-                (cmd.Contains("kcap codex-hook") || cmd.Contains("kapacitor codex-hook"))) {
+                (cmd.Contains("kcap codex-hook", StringComparison.Ordinal)
+              || cmd.Contains("kapacitor codex-hook", StringComparison.Ordinal))) {
                 return true;
             }
         }
