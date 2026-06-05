@@ -573,4 +573,120 @@ public class CodexHookCommandTests : IDisposable {
             Environment.SetEnvironmentVariable("KCAP_DAEMON_URL", previousEnv);
         }
     }
+
+    // KCAP_SKIP=1 marks a kcap-launched headless Codex flow
+    // (CodexCliRunner sets it). The dispatcher must still satisfy Codex's
+    // hook output contract — empty stdout on SessionStart / Stop is a
+    // protocol error — while suppressing every side effect: no server
+    // POST, no watcher spawn, no git enrichment.
+
+    [Test, NotInParallel]
+    public async Task KcapSkip_SessionStart_emits_continue_json_and_skips_server() {
+        var previousSkip = Environment.GetEnvironmentVariable("KCAP_SKIP");
+        Environment.SetEnvironmentVariable("KCAP_SKIP", "1");
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+
+        try {
+            Console.SetOut(stdoutWriter);
+
+            var exit = await CodexHookCommand.Handle(
+                _server.Url!,
+                new StringReader("""{"hook_event_name":"SessionStart","session_id":"abc","cwd":"/tmp","transcript_path":"/tmp/r.jsonl"}"""));
+
+            await Assert.That(exit).IsEqualTo(0);
+
+            var doc = JsonDocument.Parse(stdoutWriter.ToString());
+            await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
+
+            await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
+        } finally {
+            Console.SetOut(originalOut);
+            Environment.SetEnvironmentVariable("KCAP_SKIP", previousSkip);
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task KcapSkip_Stop_emits_continue_json_and_skips_server() {
+        var previousSkip = Environment.GetEnvironmentVariable("KCAP_SKIP");
+        Environment.SetEnvironmentVariable("KCAP_SKIP", "1");
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+
+        try {
+            Console.SetOut(stdoutWriter);
+
+            var exit = await CodexHookCommand.Handle(
+                _server.Url!,
+                new StringReader("""{"hook_event_name":"Stop","session_id":"abc","cwd":"/tmp","transcript_path":"/tmp/r.jsonl"}"""));
+
+            await Assert.That(exit).IsEqualTo(0);
+
+            var doc = JsonDocument.Parse(stdoutWriter.ToString());
+            await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
+
+            await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
+        } finally {
+            Console.SetOut(originalOut);
+            Environment.SetEnvironmentVariable("KCAP_SKIP", previousSkip);
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task KcapSkip_PermissionRequest_emits_empty_object_and_skips_server() {
+        // Empty hookSpecificOutput → Codex falls back to its own approval
+        // prompt. Same shape as the non-skip stub path, just without the
+        // /hooks/permission-record POST.
+        var previousSkip = Environment.GetEnvironmentVariable("KCAP_SKIP");
+        Environment.SetEnvironmentVariable("KCAP_SKIP", "1");
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+
+        try {
+            Console.SetOut(stdoutWriter);
+
+            var exit = await CodexHookCommand.Handle(
+                _server.Url!,
+                new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"abc","tool_name":"shell"}"""));
+
+            await Assert.That(exit).IsEqualTo(0);
+
+            var doc = JsonDocument.Parse(stdoutWriter.ToString());
+            await Assert.That(doc.RootElement.ValueKind).IsEqualTo(JsonValueKind.Object);
+
+            await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
+        } finally {
+            Console.SetOut(originalOut);
+            Environment.SetEnvironmentVariable("KCAP_SKIP", previousSkip);
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task KcapSkip_PreToolUse_is_silent_and_skips_server() {
+        // Non-Stop / SessionStart / PermissionRequest events have no Codex
+        // stdout contract; the skip must produce nothing.
+        var previousSkip = Environment.GetEnvironmentVariable("KCAP_SKIP");
+        Environment.SetEnvironmentVariable("KCAP_SKIP", "1");
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+
+        try {
+            Console.SetOut(stdoutWriter);
+
+            var exit = await CodexHookCommand.Handle(
+                _server.Url!,
+                new StringReader("""{"hook_event_name":"PreToolUse","session_id":"abc","tool_name":"shell"}"""));
+
+            await Assert.That(exit).IsEqualTo(0);
+            await Assert.That(stdoutWriter.ToString()).IsEqualTo(string.Empty);
+            await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
+        } finally {
+            Console.SetOut(originalOut);
+            Environment.SetEnvironmentVariable("KCAP_SKIP", previousSkip);
+        }
+    }
 }

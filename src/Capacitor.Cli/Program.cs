@@ -17,18 +17,28 @@ if (args.Length < 1) {
 
 var command = args[0];
 
-// Hook short-circuit: when spawned inside a headless claude invocation
-// (e.g., title generation, the eval judge) we don't forward the nested
-// session's hook events back into kcap. Scoped to `hook` because non-hook
-// commands — notably `kcap mcp judge` running as an MCP server child of
-// the eval judge claude process — must actually execute despite inheriting
-// KCAP_SKIP=1 from the parent.
+// Hook short-circuit: when spawned inside a kcap-launched headless agent
+// invocation (e.g., title generation, the eval judge) we don't forward the
+// nested session's hook events back into kcap. Scoped to `hook` because
+// non-hook commands — notably `kcap mcp judge` running as an MCP server
+// child of the eval judge claude process — must actually execute despite
+// inheriting KCAP_SKIP=1 from the parent.
+//
+// Vendor-aware: only Claude and Cursor get the early exit. Codex's hook
+// parser rejects empty stdout on SessionStart / Stop ("invalid hook JSON
+// output") and requires {"continue":true}, which CodexHookCommand emits.
+// Returning 0 with no body would break kcap-launched headless Codex flows
+// (CodexCliRunner.cs sets KCAP_SKIP=1) whenever ~/.codex/hooks.json is
+// populated, so `kcap hook --codex` runs its handler regardless of
+// KCAP_SKIP and the handler owns the output contract.
 //
 // Runs before ResolveServerUrl/update-check so a skipped hook does no work:
 // ResolveServerUrl can shell out to `git remote -v` and emit warnings, and
 // the update-check task hits the npm registry — both pure noise inside a
 // nested headless invocation.
-if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1" && command == "hook") {
+if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
+ && command == "hook"
+ && (args.Contains("--claude") || args.Contains("--cursor"))) {
     return 0;
 }
 
