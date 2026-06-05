@@ -397,11 +397,22 @@ static class ClaudeCliRunner {
     /// re-serialised to a string so downstream verdict/retrospective parsers
     /// see the same shape they would from a free-form JSON reply.
     /// </para>
+    ///
+    /// <para>
+    /// Rejects responses with <c>is_error: true</c> — the CLI signals API
+    /// failures (overload, rate limit, auth) by setting this flag and writing
+    /// the error text into <c>result</c>. Treating that text as a valid title
+    /// caused AI-755, where API error messages surfaced as session titles.
+    /// </para>
     /// </summary>
     static ClaudeCliResult? ParseJsonResponseOnly(string stdout) {
         try {
             using var doc  = JsonDocument.Parse(stdout);
             var       root = doc.RootElement;
+
+            if (root.TryGetProperty("is_error", out var isErr) && isErr.ValueKind == JsonValueKind.True) {
+                return null;
+            }
 
             if (root.TryGetProperty("structured_output", out var so) && so.ValueKind is JsonValueKind.Object or JsonValueKind.Array) {
                 return BuildResult(root, so.GetRawText());

@@ -151,6 +151,57 @@ public class ClaudeCliRunnerTests {
         await Assert.That(ex?.ParamName).IsEqualTo("allowedTools");
     }
 
+    // AI-755: the CLI returns is_error:true with the API failure text in
+    // `result` when the upstream call fails (overload, rate limit, auth).
+    // Surfacing that text as a title produced session titles like
+    // "Claude API error: Overloaded". Treat it as a failure instead.
+    [Test]
+    public async Task ParseResponse_IsError_ReturnsNull() {
+        const string json = """
+                            {
+                                "result": "Claude API error: Overloaded",
+                                "is_error": true,
+                                "subtype": "error_during_execution",
+                                "total_cost_usd": 0.0
+                            }
+                            """;
+
+        var result = ClaudeCliRunner.ParseResponse(json);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task ParseResponse_IsErrorWithStructuredOutput_ReturnsNull() {
+        const string json = """
+                            {
+                                "result": "",
+                                "structured_output": {"verdict": "pass"},
+                                "is_error": true,
+                                "subtype": "error_max_turns"
+                            }
+                            """;
+
+        var result = ClaudeCliRunner.ParseResponse(json);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task ParseResponse_IsErrorFalse_StillParses() {
+        const string json = """
+                            {
+                                "result": "ok",
+                                "is_error": false
+                            }
+                            """;
+
+        var result = ClaudeCliRunner.ParseResponse(json);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Result).IsEqualTo("ok");
+    }
+
     [Test]
     public async Task ParseResponse_extracts_num_turns_from_json() {
         const string json = """
