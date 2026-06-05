@@ -136,6 +136,24 @@ public class ImportMissingCwdsReportTests {
     }
 
     [Test, NotInParallel]
+    public async Task ReportWorktreeAttributions_stays_silent_when_zero() {
+        var output = Capture(d => ImportCommand.ReportWorktreeAttributions(0, d));
+        await Assert.That(output).IsEmpty();
+    }
+
+    [Test, NotInParallel]
+    public async Task ReportWorktreeAttributions_reports_singular_phrasing_for_one() {
+        var output = Capture(d => ImportCommand.ReportWorktreeAttributions(1, d));
+        await Assert.That(output).Contains("Attributed 1 session to a parent project via worktree path.");
+    }
+
+    [Test, NotInParallel]
+    public async Task ReportWorktreeAttributions_reports_plural_phrasing_for_many() {
+        var output = Capture(d => ImportCommand.ReportWorktreeAttributions(477, d));
+        await Assert.That(output).Contains("Attributed 477 sessions to a parent project via worktree path.");
+    }
+
+    [Test, NotInParallel]
     public async Task Truncates_sample_to_five_distinct_paths() {
         var sessionCwds = new Dictionary<string, string>(StringComparer.Ordinal) {
             ["s1"] = "/missing/a",

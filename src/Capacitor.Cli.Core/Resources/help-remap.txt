@@ -11,6 +11,11 @@ because git can no longer be run inside a path that doesn't exist. The
 import command prints a one-shot report of missing cwds at the top of every
 run; add a remap for each one you want to recover.
 
+Ephemeral worktree cwds — paths shaped `<project>/.<anything>/worktrees/<slug>`,
+e.g. `~/dev/my-repo/.claude/worktrees/<slug>` — are auto-attributed to
+`<project>` when the project still exists on disk, so they don't need an
+entry here.
+
 Matching semantics (applied by `kcap import`):
   - Path-prefix rewrite: `cwd == from` or `cwd starts with from + sep`,
     where sep is `/` (or `\` on Windows). So `~/dev/foo` will NOT match
