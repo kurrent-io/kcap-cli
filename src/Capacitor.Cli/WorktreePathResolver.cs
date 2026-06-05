@@ -23,11 +23,18 @@ static class WorktreePathResolver {
 
     // Internal seam so tests can pin filesystem existence without touching disk.
     internal static (string Path, bool Stripped) Resolve(string cwd, Func<string, bool> exists) {
-        if (string.IsNullOrEmpty(cwd) || exists(cwd)) return (cwd, false);
+        if (string.IsNullOrEmpty(cwd)) return (cwd, false);
 
+        // Run the cheap pure-string pattern scan FIRST. Import calls this
+        // for every session cwd, and the vast majority don't match the
+        // worktree pattern — short-circuiting before any filesystem probe
+        // keeps the per-session cost to a substring scan.
         var stripped = StripWorktreeSuffix(cwd);
 
-        return stripped is not null && exists(stripped) ? (stripped, true) : (cwd, false);
+        if (stripped is null) return (cwd, false);
+        if (exists(cwd)) return (cwd, false);                 // pattern matches but worktree wasn't cleaned up — leave it alone
+
+        return exists(stripped) ? (stripped, true) : (cwd, false);
     }
 
     /// <summary>
@@ -60,9 +67,14 @@ static class WorktreePathResolver {
 
             if (slugStart >= path.Length || CwdRemapper.IsSeparator(path[slugStart])) continue;
 
-            // Found the pattern. Refuse if it sits at the very root (no
-            // project prefix to attribute to).
-            return i == 0 ? null : path[..i];
+            // Found the pattern. Refuse if it sits at the very root —
+            // there's no meaningful project prefix to attribute to. "Root"
+            // covers both Unix (`/.X/worktrees/...` → i == 0) and Windows
+            // drive roots (`C:\.X\worktrees\...` → i == 2, prefix `C:`,
+            // also `C:/.X/...`).
+            if (i == 0) return null;
+            if (i == 2 && path[1] == ':' && char.IsLetter(path[0])) return null;
+            return path[..i];
         }
 
         return null;

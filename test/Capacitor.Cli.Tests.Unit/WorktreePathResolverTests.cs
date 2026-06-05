@@ -88,6 +88,29 @@ public class WorktreePathResolverTests {
         await Assert.That(result).IsNull();
     }
 
+    [Test]
+    public async Task Strip_returns_null_for_windows_drive_root_backslash() {
+        // C:\.claude\worktrees\X — would otherwise strip to "C:", which is
+        // not a meaningful project directory.
+        var result = WorktreePathResolver.StripWorktreeSuffix(@"C:\.claude\worktrees\X");
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task Strip_returns_null_for_windows_drive_root_forward_slash() {
+        // C:/.claude/worktrees/X — same issue, forward-slash variant.
+        var result = WorktreePathResolver.StripWorktreeSuffix("C:/.claude/worktrees/X");
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task Strip_still_works_for_windows_drive_subdirectory() {
+        // C:\dev\repo\.claude\worktrees\X — the pattern is well below drive
+        // root, so it still strips to C:\dev\repo.
+        var result = WorktreePathResolver.StripWorktreeSuffix(@"C:\dev\repo\.claude\worktrees\X");
+        await Assert.That(result).IsEqualTo(@"C:\dev\repo");
+    }
+
     // --- Resolve (filesystem-aware wrapper) ---
 
     [Test]
@@ -139,5 +162,35 @@ public class WorktreePathResolverTests {
         var (path, stripped) = WorktreePathResolver.Resolve("", _ => false);
         await Assert.That(path).IsEqualTo("");
         await Assert.That(stripped).IsFalse();
+    }
+
+    [Test]
+    public async Task Resolve_skips_filesystem_probe_when_pattern_does_not_match() {
+        // Import calls Resolve for every session cwd; the vast majority
+        // don't match the worktree pattern. The cheap pure-string scan
+        // must run before any filesystem probe so non-matching paths
+        // never touch the disk.
+        var probes = 0;
+        var (path, stripped) = WorktreePathResolver.Resolve(
+            "/dev/kcap-cli/src/Foo",
+            _ => { probes++; return true; }
+        );
+
+        await Assert.That(path).IsEqualTo("/dev/kcap-cli/src/Foo");
+        await Assert.That(stripped).IsFalse();
+        await Assert.That(probes).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Resolve_probes_filesystem_when_pattern_matches() {
+        // Sanity check the other half of the perf ordering: when the
+        // pattern matches we DO need to call exists.
+        var probes = 0;
+        WorktreePathResolver.Resolve(
+            "/dev/kcap-cli/.claude/worktrees/slug",
+            _ => { probes++; return false; }
+        );
+
+        await Assert.That(probes).IsGreaterThan(0);
     }
 }
