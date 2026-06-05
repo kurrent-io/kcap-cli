@@ -192,9 +192,10 @@ public class SessionStartAdditionalContextTests {
     [Test]
     public async Task BuildEnvelope_produces_single_top_level_json_object() {
         var result = SessionStartAdditionalContext.BuildEnvelope("first", "second")!;
-        // No second `{` after the first object closes — exactly one top-level JSON value.
-        var firstClose = result.LastIndexOf('}');
-        var afterClose = result[(firstClose + 1)..].Trim();
+        // Guard against a future bug that appends a second envelope: nothing
+        // (not even whitespace) should follow the last closing brace.
+        var lastClose  = result.LastIndexOf('}');
+        var afterClose = result[(lastClose + 1)..].Trim();
         await Assert.That(afterClose).IsEqualTo("");
     }
 }

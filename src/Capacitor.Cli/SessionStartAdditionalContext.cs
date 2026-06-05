@@ -16,6 +16,12 @@ namespace Capacitor.Cli;
 /// envelopes would not be parsed.
 /// </summary>
 static class SessionStartAdditionalContext {
+    /// <summary>
+    /// Joins the non-null, non-whitespace <paramref name="fragments"/> with a
+    /// blank-line separator and returns the JSON-serialized SessionStart
+    /// <c>hookSpecificOutput</c> envelope. Returns <c>null</c> when no fragment
+    /// survives the filter, so the caller can skip writing to stdout entirely.
+    /// </summary>
     public static string? BuildEnvelope(params string?[] fragments) {
         if (fragments.Length == 0) return null;
 
