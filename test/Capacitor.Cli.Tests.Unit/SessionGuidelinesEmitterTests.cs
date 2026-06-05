@@ -1,40 +1,18 @@
-using System.Text;
 using System.Text.Json.Nodes;
-using Capacitor.Cli.Core;
-using WireMock.RequestBuilders;
-using WireMock.ResponseBuilders;
-using WireMock.Server;
 
 namespace Capacitor.Cli.Tests.Unit;
 
-public class SessionGuidelinesEmitterTests : IDisposable {
-    readonly WireMockServer _server = WireMockServer.Start();
-
-    public void Dispose() => _server.Stop();
-
+public class SessionGuidelinesEmitterTests {
     [Test]
     public async Task BuildFragment_returns_lessons_text_when_server_returns_top_clusters() {
-        _server.Given(Request.Create().WithPath("/hooks/session-start").UsingPost())
-            .RespondWith(
-                Response.Create()
-                    .WithStatusCode(200)
-                    .WithHeader("Content-Type", "application/json")
-                    .WithBody(
-                        """
-                        {
-                          "top_clusters": [
-                            { "category": "safety",          "text": "always close the writer" },
-                            { "category": "maintainability", "text": "prefer JsonNode.Parse for AOT-safe string assignment" }
-                          ]
-                        }
-                        """
-                    )
-            );
-
-        using var client   = new HttpClient();
-        using var content  = new StringContent("{}", Encoding.UTF8, "application/json");
-        var       response = await client.PostAsync($"{_server.Url}/hooks/session-start", content);
-        var       body     = await response.Content.ReadAsStringAsync();
+        var body = """
+                   {
+                     "top_clusters": [
+                       { "category": "safety",          "text": "always close the writer" },
+                       { "category": "maintainability", "text": "prefer JsonNode.Parse for AOT-safe string assignment" }
+                     ]
+                   }
+                   """;
 
         var fragment = SessionGuidelinesEmitter.BuildFragment(JsonNode.Parse(body), disabled: false);
 
