@@ -10,6 +10,17 @@ We want a *soft, agent-led* nudge: when the CLI processes a `SessionStart` hook,
 
 Not a hard version floor. Not a blocker. Not a stderr line. The agent decides whether to surface it; the user decides whether to act.
 
+## Scope: Claude Code only (v1)
+
+The nudge ships for Claude Code only. The two other supported vendors have stdout contracts that are incompatible with the SessionStart `additionalContext` envelope:
+
+- **Cursor** must emit nothing on stdout (`CursorHookCommand` drops response bodies; `docs/superpowers/specs/2026-06-01-ai-669-cursor-hooks-ingest-design.md:121`).
+- **Codex** writes its own `session-start.command.output` JSON schema to stdout (`CodexHookCommand.cs:33-34,67`), not an `additionalContext` envelope.
+
+A Cursor- or Codex-shaped nudge would need a separate delivery mechanism per vendor (e.g. a stderr line for Cursor, a Codex-schema field for Codex, or a daemon-side prompt injection). Each is enough scope to deserve its own spec; punting both keeps this ticket focused.
+
+The server-side `version` field is still vendor-agnostic — it sits on the shared `/hooks/session-start` response that all three vendors hit. When Cursor/Codex equivalents land later, they reuse the same field.
+
 ## Server contract
 
 The existing `POST /hooks/session-start` response body gains one optional field:
@@ -146,10 +157,12 @@ Pure-function tests on `VersionNudgeEmitter.BuildFragment`:
 
 ### Aggregator unit tests — repurposed `SessionStartAdditionalContextTests`
 
-`test/Capacitor.Cli.Tests.Unit/HookForwardingTests.cs:145` already declares a `public class SessionStartAdditionalContextTests`. Its three existing methods (`SessionStart_EmitsAdditionalContextJson_WhenServerReturnsTopClusters`, `…_EmitsNothing_WhenTopClustersAbsent`, `…_EmitsNothing_WhenDisableSessionGuidelinesConfigSet`) actually exercise `SessionGuidelinesEmitter.BuildAdditionalContext` — they belong with the emitter's own tests. Action:
+`test/Capacitor.Cli.Tests.Unit/HookForwardingTests.cs:145` already declares a `public class SessionStartAdditionalContextTests`. Despite its name, every `[Test]` method in that class (seven at the time of writing — `SessionStart_EmitsAdditionalContextJson_WhenServerReturnsTopClusters`, `…_EmitsNothing_WhenTopClustersAbsent`, `…_EmitsNothing_WhenDisableSessionGuidelinesConfigSet`, `…_EmitsNothing_WhenTopClustersEmpty`, `…_EmitsNothing_WhenTopClustersIsObject`, `…_EmitsNothing_WhenResponseNodeIsArray`, `…_SkipsEntries_WithBlankText`) calls `SessionGuidelinesEmitter.BuildAdditionalContext` directly. They belong with the emitter's own tests. Action:
 
-1. Move those three methods into `SessionGuidelinesEmitterTests` (creating that file if absent) and adjust them to assert on `BuildFragment` output (plain text, not envelope JSON).
+1. Move **every** existing `[Test]` method in this class into `SessionGuidelinesEmitterTests` (creating that file if absent). Adjust each to assert on `BuildFragment` output — plain text, no envelope JSON, no `hookEventName` field. Verify by grepping the moved file for `hookSpecificOutput` / `hookEventName` afterwards: zero hits expected.
 2. Reuse the now-empty `SessionStartAdditionalContextTests` class for the new aggregator tests below.
+
+(Method count is checked at implementation time — the spec count may drift if the existing class grows before the refactor lands.)
 
 Pure-function tests on `SessionStartAdditionalContext.BuildEnvelope`:
 
@@ -193,7 +206,7 @@ Three symmetric cases:
 
 ## Docs
 
-- `README.md` — brief mention under the auto-capture description that the agent may surface an upgrade prompt when a newer kcap is available. No new commands or flags, so no quick-start or `## CLI commands` changes.
+- `README.md` — brief Claude-Code-specific mention under the auto-capture description that Claude Code sessions may surface an upgrade prompt when a newer kcap is available. Phrase it explicitly as "in Claude Code sessions" so it doesn't imply equivalent behaviour for Cursor or Codex (which it doesn't). No new commands or flags, so no quick-start or `## CLI commands` changes.
 - No `Resources/help-*.txt` changes.
 
 ## Edge cases and behaviour matrix
@@ -213,6 +226,7 @@ Three symmetric cases:
 ## Out of scope
 
 - Server-side implementation of the `version` field (separate ticket, separate repo).
+- Cursor and Codex upgrade nudges. v1 is Claude Code only; see the **Scope** section.
 - Functional changes to `UpdateCommand.PrintUpdateHintIfAvailable` — it coexists unchanged from the user's point of view. Internally, its semver comparison is rerouted through the new shared helper; the only observable difference is that pathological unparseable inputs now produce no hint instead of a "garbage → garbage" line.
 - User-facing toggle to suppress the in-agent nudge (can be added later if needed).
 - Branching by install method (brew, manual). `npm install -g` is the only documented channel.
