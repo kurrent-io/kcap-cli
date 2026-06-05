@@ -18,6 +18,13 @@ namespace Capacitor.Cli.Tests.Integration;
 /// <c>WatcherManager.EnsureWatcherRunning</c>; spawning the watcher's
 /// child process corrupts TUnit's <c>Console</c> capture (see
 /// <c>test/Capacitor.Cli.Tests.Unit/Codex/CodexHookCommandTests.cs:47-53</c>).
+///
+/// Config isolation is provided by <see cref="IntegrationGlobalSetup"/>,
+/// which points <c>KCAP_CONFIG_DIR</c> at a fresh temp directory before
+/// any test code touches <c>PathHelpers</c>. Without it, a developer-side
+/// <c>excluded_paths</c> entry covering the test <c>cwd</c> would silently
+/// short-circuit <c>ClaudeHookCommand</c> and make these tests pass for
+/// the wrong reason.
 /// </summary>
 public class ClaudeHookStdoutTests : IDisposable {
     readonly WireMockServer _server = WireMockServer.Start();

@@ -17,6 +17,12 @@ public static class UpdateCommand {
             return 1;
         }
 
+        if (string.IsNullOrEmpty(current)) {
+            await Console.Error.WriteLineAsync($"Could not determine the current kcap version. Latest published: {latest}.");
+
+            return 1;
+        }
+
         if (!IsNewer(latest, current)) {
             await Console.Out.WriteLineAsync($"Already up to date: {current}");
 
