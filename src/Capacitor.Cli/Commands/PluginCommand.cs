@@ -17,62 +17,64 @@ public static class PluginCommand {
     const int PermissionRequestTimeout = 86400;
     const int DefaultHookTimeout       = 30;
 
-    public static async Task<int> HandleAsync(string[] args) {
+    public static async Task<int> HandleAsync(string[] args, PluginEnvironment? env = null) {
         if (args.Length < 2) {
             PrintUsage();
 
             return 1;
         }
 
+        env ??= PluginEnvironment.FromProcess();
+
         return args[1] switch {
-            "install" => await Install(args),
-            "remove"  => await Remove(args),
+            "install" => await Install(args, env),
+            "remove"  => await Remove(args, env),
             _         => PrintUsage()
         };
     }
 
-    static async Task<int> Install(string[] args) {
+    static async Task<int> Install(string[] args, PluginEnvironment env) {
         if ((args.Contains("--codex")  && args.Contains("--skills"))
          || (args.Contains("--cursor") && args.Contains("--skills"))
          || (args.Contains("--cursor") && args.Contains("--codex"))) {
-            await Console.Error.WriteLineAsync(
+            await env.Stderr.WriteLineAsync(
                 "--cursor, --codex, and --skills are mutually exclusive."
             );
 
             return 1;
         }
 
-        if (args.Contains("--skills")) return await InstallSkills(args);
-        if (args.Contains("--codex")) return await InstallCodex(args);
-        if (args.Contains("--cursor")) return await InstallCursor(args);
+        if (args.Contains("--skills")) return await InstallSkills(args, env);
+        if (args.Contains("--codex")) return await InstallCodex(args, env);
+        if (args.Contains("--cursor")) return await InstallCursor(args, env);
 
-        return await InstallClaude(args);
+        return await InstallClaude(args, env);
     }
 
-    static async Task<int> Remove(string[] args) {
+    static async Task<int> Remove(string[] args, PluginEnvironment env) {
         if ((args.Contains("--codex")  && args.Contains("--skills"))
          || (args.Contains("--cursor") && args.Contains("--skills"))
          || (args.Contains("--cursor") && args.Contains("--codex"))) {
-            await Console.Error.WriteLineAsync(
+            await env.Stderr.WriteLineAsync(
                 "--cursor, --codex, and --skills are mutually exclusive."
             );
 
             return 1;
         }
 
-        if (args.Contains("--skills")) return await RemoveSkills(args);
-        if (args.Contains("--codex")) return await RemoveCodex(args);
-        if (args.Contains("--cursor")) return await RemoveCursor(args);
+        if (args.Contains("--skills")) return await RemoveSkills(args, env);
+        if (args.Contains("--codex")) return await RemoveCodex(args, env);
+        if (args.Contains("--cursor")) return await RemoveCursor(args, env);
 
-        return await RemoveClaude(args);
+        return await RemoveClaude(args, env);
     }
 
-    static async Task<int> InstallClaude(string[] args) {
+    static async Task<int> InstallClaude(string[] args, PluginEnvironment env) {
         var scope = args.Contains("--project") ? "project" : "user";
 
         var settingsPath = scope == "project"
             ? Path.Combine(Environment.CurrentDirectory, ".claude", "settings.local.json")
-            : ClaudePaths.UserSettings;
+            : env.ClaudeUserSettings;
 
         // --if-installed: refresh-only mode used by the npm postinstall hook.
         // Skip when the user never opted in; short-circuit when the marker
@@ -86,13 +88,13 @@ public static class PluginCommand {
                 return 0;
         }
 
-        var pluginPath = SetupCommand.ResolvePluginPath();
+        var pluginPath = env.ResolvePluginPath();
 
         if (pluginPath is null) {
             if (refreshOnly) return 0;
 
-            await Console.Error.WriteLineAsync("Plugin directory not found. Re-install kcap via npm:");
-            await Console.Error.WriteLineAsync("  npm install -g @kurrent/kcap");
+            await env.Stderr.WriteLineAsync("Plugin directory not found. Re-install kcap via npm:");
+            await env.Stderr.WriteLineAsync("  npm install -g @kurrent/kcap");
 
             return 1;
         }
@@ -100,7 +102,7 @@ public static class PluginCommand {
         var installed = SetupCommand.InstallPlugin(settingsPath, pluginPath);
 
         if (installed) {
-            await Console.Out.WriteLineAsync(
+            await env.Stdout.WriteLineAsync(
                 refreshOnly
                     ? $"Plugin refreshed ({scope}: {settingsPath})"
                     : $"Plugin installed ({scope}: {settingsPath})"
@@ -108,7 +110,7 @@ public static class PluginCommand {
         } else {
             if (refreshOnly) return 0;
 
-            await Console.Error.WriteLineAsync("Could not update settings file.");
+            await env.Stderr.WriteLineAsync("Could not update settings file.");
 
             return 1;
         }
@@ -116,15 +118,15 @@ public static class PluginCommand {
         return 0;
     }
 
-    static async Task<int> RemoveClaude(string[] args) {
+    static async Task<int> RemoveClaude(string[] args, PluginEnvironment env) {
         var scope = args.Contains("--project") ? "project" : "user";
 
         var settingsPath = scope == "project"
             ? Path.Combine(Environment.CurrentDirectory, ".claude", "settings.local.json")
-            : ClaudePaths.UserSettings;
+            : env.ClaudeUserSettings;
 
         if (!File.Exists(settingsPath)) {
-            await Console.Out.WriteLineAsync("Nothing to remove — settings file not found.");
+            await env.Stdout.WriteLineAsync("Nothing to remove — settings file not found.");
 
             return 0;
         }
@@ -134,22 +136,22 @@ public static class PluginCommand {
 
             switch (outcome) {
                 case ClaudeRemovalOutcome.Removed:
-                    await Console.Out.WriteLineAsync($"Plugin removed ({scope}: {settingsPath})");
+                    await env.Stdout.WriteLineAsync($"Plugin removed ({scope}: {settingsPath})");
 
                     break;
                 case ClaudeRemovalOutcome.NotInstalled:
-                    await Console.Out.WriteLineAsync("Plugin was not installed.");
+                    await env.Stdout.WriteLineAsync("Plugin was not installed.");
 
                     break;
                 case ClaudeRemovalOutcome.Malformed:
-                    await Console.Out.WriteLineAsync("Nothing to remove.");
+                    await env.Stdout.WriteLineAsync("Nothing to remove.");
 
                     break;
             }
 
             return 0;
         } catch (Exception ex) {
-            await Console.Error.WriteLineAsync($"Could not update settings: {ex.Message}");
+            await env.Stderr.WriteLineAsync($"Could not update settings: {ex.Message}");
 
             return 1;
         }
@@ -200,7 +202,7 @@ public static class PluginCommand {
         Malformed
     }
 
-    static async Task<int> InstallSkills(string[] args) {
+    static async Task<int> InstallSkills(string[] args, PluginEnvironment env) {
         // --if-installed: only refresh when a marker file shows the user has
         // previously installed skills. Used by the npm postinstall hook to
         // keep existing installs up to date without forcing skills onto users
@@ -208,22 +210,22 @@ public static class PluginCommand {
         var refreshOnly = args.Contains("--if-installed");
 
         switch (refreshOnly) {
-            case true when !AgentsSkillsInstaller.IsInstalled(AgentsPaths.UserSkillsDir):
+            case true when !AgentsSkillsInstaller.IsInstalled(env.AgentsSkillsDir):
             // Fast path: marker already matches the current build, no point
             // re-copying every skill on a same-version reinstall (e.g. `npm
             // install -g` of the version already on disk).
             case true when
-                AgentsSkillsInstaller.ReadMarker(AgentsPaths.UserSkillsDir) ==
+                AgentsSkillsInstaller.ReadMarker(env.AgentsSkillsDir) ==
                 AgentsSkillsInstaller.CurrentVersion():
                 return 0;
         }
 
-        var pluginPath = SetupCommand.ResolvePluginPath();
+        var pluginPath = env.ResolvePluginPath();
 
         if (pluginPath is null) {
             if (refreshOnly) return 0;
 
-            await Console.Error.WriteLineAsync(
+            await env.Stderr.WriteLineAsync(
                 "Cannot install agent skills: kcap plugin folder not found. " +
                 "Re-install kcap via npm: npm install -g @kurrent/kcap"
             );
@@ -236,7 +238,7 @@ public static class PluginCommand {
         if (!Directory.Exists(skillsSource)) {
             if (refreshOnly) return 0;
 
-            await Console.Error.WriteLineAsync(
+            await env.Stderr.WriteLineAsync(
                 $"Cannot install agent skills: 'skills' folder missing from {pluginPath}. " +
                 "Re-install kcap via npm: npm install -g @kurrent/kcap"
             );
@@ -244,53 +246,53 @@ public static class PluginCommand {
             return 1;
         }
 
-        if (!AgentsSkillsInstaller.Install(skillsSource, AgentsPaths.UserSkillsDir)) {
+        if (!AgentsSkillsInstaller.Install(skillsSource, env.AgentsSkillsDir)) {
             if (refreshOnly) return 0;
 
-            await Console.Error.WriteLineAsync("Could not install agent skills.");
+            await env.Stderr.WriteLineAsync("Could not install agent skills.");
 
             return 1;
         }
 
-        await Console.Out.WriteLineAsync(
+        await env.Stdout.WriteLineAsync(
             refreshOnly
-                ? $"Agent skills refreshed (user: {AgentsPaths.UserSkillsDir})"
-                : $"Agent skills installed (user: {AgentsPaths.UserSkillsDir})"
+                ? $"Agent skills refreshed (user: {env.AgentsSkillsDir})"
+                : $"Agent skills installed (user: {env.AgentsSkillsDir})"
         );
 
-        AgentsSkillsInstaller.CleanLegacyCodexSkills(Path.Combine(CodexPaths.Home, "skills"));
+        AgentsSkillsInstaller.CleanLegacyCodexSkills(env.LegacyCodexSkills);
 
         return 0;
     }
 
-    static async Task<int> RemoveSkills(string[] _) {
-        var agents = AgentsSkillsInstaller.Remove(AgentsPaths.UserSkillsDir);
+    static async Task<int> RemoveSkills(string[] _, PluginEnvironment env) {
+        var agents = AgentsSkillsInstaller.Remove(env.AgentsSkillsDir);
 
         if (agents.RemovedAny) {
-            await Console.Out.WriteLineAsync($"Agent skills removed (user: {AgentsPaths.UserSkillsDir})");
+            await env.Stdout.WriteLineAsync($"Agent skills removed (user: {env.AgentsSkillsDir})");
         }
 
-        var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(Path.Combine(CodexPaths.Home, "skills"));
+        var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(env.LegacyCodexSkills);
 
         if (agents.HadErrors || legacy.HadErrors) {
-            await Console.Out.WriteLineAsync("Removal incomplete — see errors above.");
+            await env.Stdout.WriteLineAsync("Removal incomplete — see errors above.");
 
             return 0;
         }
 
         if (!agents.RemovedAny && !legacy.RemovedAny) {
-            await Console.Out.WriteLineAsync("Nothing to remove — agent skills were not installed.");
+            await env.Stdout.WriteLineAsync("Nothing to remove — agent skills were not installed.");
         }
 
         return 0;
     }
 
-    static async Task<int> InstallCodex(string[] args) {
+    static async Task<int> InstallCodex(string[] args, PluginEnvironment env) {
         var scope = args.Contains("--project") ? "project" : "user";
 
         var hooksPath = scope == "project"
             ? Path.Combine(Environment.CurrentDirectory, ".codex", "hooks.json")
-            : CodexPaths.UserHooksJson;
+            : env.CodexUserHooksJson;
 
         // --if-installed: refresh-only mode used by the npm postinstall hook.
         // Skip when the user never opted in; short-circuit when the marker
@@ -307,7 +309,7 @@ public static class PluginCommand {
             case true when !InstallCodexHooks(hooksPath):
                 return 0;
             case true:
-                await Console.Out.WriteLineAsync($"Codex hooks refreshed ({scope}: {hooksPath})");
+                await env.Stdout.WriteLineAsync($"Codex hooks refreshed ({scope}: {hooksPath})");
 
                 return 0;
         }
@@ -316,10 +318,10 @@ public static class PluginCommand {
         // skills source BEFORE writing hooks so a missing plugin folder
         // doesn't leave the user with hooks pointing at a binary whose
         // skills never installed.
-        var pluginPath = SetupCommand.ResolvePluginPath();
+        var pluginPath = env.ResolvePluginPath();
 
         if (pluginPath is null) {
-            await Console.Error.WriteLineAsync(
+            await env.Stderr.WriteLineAsync(
                 "Cannot install Codex plugin: kcap plugin folder not found. " +
                 "Re-install kcap via npm: npm install -g @kurrent/kcap"
             );
@@ -330,7 +332,7 @@ public static class PluginCommand {
         var skillsSource = Path.Combine(pluginPath, "skills");
 
         if (!Directory.Exists(skillsSource)) {
-            await Console.Error.WriteLineAsync(
+            await env.Stderr.WriteLineAsync(
                 $"Cannot install Codex plugin: 'skills' folder missing from {pluginPath}. " +
                 "Re-install kcap via npm: npm install -g @kurrent/kcap"
             );
@@ -347,7 +349,7 @@ public static class PluginCommand {
             .ToList();
 
         if (missingSkills.Count > 0) {
-            await Console.Error.WriteLineAsync(
+            await env.Stderr.WriteLineAsync(
                 $"Cannot install Codex plugin: missing skill folder(s) under {skillsSource}: "
               + string.Join(", ", missingSkills)
               + ". Re-install kcap via npm: npm install -g @kurrent/kcap"
@@ -357,32 +359,32 @@ public static class PluginCommand {
         }
 
         if (!InstallCodexHooks(hooksPath)) {
-            await Console.Error.WriteLineAsync("Could not write Codex hooks file.");
+            await env.Stderr.WriteLineAsync("Could not write Codex hooks file.");
 
             return 1;
         }
 
-        await Console.Out.WriteLineAsync($"Codex hooks installed ({scope}: {hooksPath})");
+        await env.Stdout.WriteLineAsync($"Codex hooks installed ({scope}: {hooksPath})");
 
-        await Console.Out.WriteLineAsync(
+        await env.Stdout.WriteLineAsync(
             "Next: run /hooks inside Codex and trust each kcap entry — " +
             "Codex won't execute hooks until each is explicitly trusted."
         );
 
         // Skills are user-scoped only. Written to ~/.agents/skills/ so they
         // work across Codex and other compatible agents.
-        if (!AgentsSkillsInstaller.Install(skillsSource, AgentsPaths.UserSkillsDir)) {
-            await Console.Error.WriteLineAsync("Could not install agent skills.");
+        if (!AgentsSkillsInstaller.Install(skillsSource, env.AgentsSkillsDir)) {
+            await env.Stderr.WriteLineAsync("Could not install agent skills.");
 
             return 1;
         }
 
-        await Console.Out.WriteLineAsync($"Agent skills installed (user: {AgentsPaths.UserSkillsDir})");
+        await env.Stdout.WriteLineAsync($"Agent skills installed (user: {env.AgentsSkillsDir})");
 
-        AgentsSkillsInstaller.CleanLegacyCodexSkills(Path.Combine(CodexPaths.Home, "skills"));
+        AgentsSkillsInstaller.CleanLegacyCodexSkills(env.LegacyCodexSkills);
 
         if (scope == "project") {
-            await Console.Out.WriteLineAsync(
+            await env.Stdout.WriteLineAsync(
                 "Note: Codex requires the project's .codex directory to be trusted. " +
                 "Run `codex` once in this directory and accept the trust prompt."
             );
@@ -391,12 +393,12 @@ public static class PluginCommand {
         return 0;
     }
 
-    static async Task<int> RemoveCodex(string[] args) {
+    static async Task<int> RemoveCodex(string[] args, PluginEnvironment env) {
         var scope = args.Contains("--project") ? "project" : "user";
 
         var hooksPath = scope == "project"
             ? Path.Combine(Environment.CurrentDirectory, ".codex", "hooks.json")
-            : CodexPaths.UserHooksJson;
+            : env.CodexUserHooksJson;
 
         var hooksRemoved = false;
         var hooksFailed  = false;
@@ -405,31 +407,31 @@ public static class PluginCommand {
             try {
                 hooksRemoved = RemoveCodexHooks(hooksPath);
             } catch (Exception ex) {
-                await Console.Error.WriteLineAsync($"Could not update Codex hooks at {hooksPath}: {ex.Message}");
+                await env.Stderr.WriteLineAsync($"Could not update Codex hooks at {hooksPath}: {ex.Message}");
                 hooksFailed = true;
             }
         }
 
         if (hooksRemoved) {
-            await Console.Out.WriteLineAsync($"Codex hooks removed ({scope}: {hooksPath})");
+            await env.Stdout.WriteLineAsync($"Codex hooks removed ({scope}: {hooksPath})");
         }
 
-        var agents = AgentsSkillsInstaller.Remove(AgentsPaths.UserSkillsDir);
+        var agents = AgentsSkillsInstaller.Remove(env.AgentsSkillsDir);
 
         if (agents.RemovedAny) {
-            await Console.Out.WriteLineAsync($"Agent skills removed (user: {AgentsPaths.UserSkillsDir})");
+            await env.Stdout.WriteLineAsync($"Agent skills removed (user: {env.AgentsSkillsDir})");
         }
 
-        var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(Path.Combine(CodexPaths.Home, "skills"));
+        var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(env.LegacyCodexSkills);
 
         if (hooksFailed || agents.HadErrors || legacy.HadErrors) {
-            await Console.Out.WriteLineAsync("Removal incomplete — see errors above.");
+            await env.Stdout.WriteLineAsync("Removal incomplete — see errors above.");
 
             return 1;
         }
 
         if (!hooksRemoved && !agents.RemovedAny && !legacy.RemovedAny) {
-            await Console.Out.WriteLineAsync("Nothing to remove — hooks and skills were not installed.");
+            await env.Stdout.WriteLineAsync("Nothing to remove — hooks and skills were not installed.");
         }
 
         return 0;
@@ -543,8 +545,8 @@ public static class PluginCommand {
         return changed;
     }
 
-    static async Task<int> InstallCursor(string[] args) {
-        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? CursorPaths.UserHooksJson();
+    static async Task<int> InstallCursor(string[] args, PluginEnvironment env) {
+        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? env.CursorUserHooksJson;
 
         var refreshOnly = args.Contains("--if-installed");
 
@@ -558,7 +560,7 @@ public static class PluginCommand {
             // an in-flight npm install doesn't fail just because the new symlink
             // isn't on the child process's PATH yet.
             case false when !AgentDetector.IsInstalled("kcap"):
-                await Console.Error.WriteLineAsync(
+                await env.Stderr.WriteLineAsync(
                     "Cannot install Cursor hooks: 'kcap' is not on PATH. "
                   + "Re-install kcap via npm: npm install -g @kurrent/kcap"
                 );
@@ -569,12 +571,12 @@ public static class PluginCommand {
         if (!InstallCursorHooks(hooksPath)) {
             if (refreshOnly) return 0;
 
-            await Console.Error.WriteLineAsync("Could not write Cursor hooks file.");
+            await env.Stderr.WriteLineAsync("Could not write Cursor hooks file.");
 
             return 1;
         }
 
-        await Console.Out.WriteLineAsync(
+        await env.Stdout.WriteLineAsync(
             refreshOnly
                 ? $"Cursor hooks refreshed ({hooksPath})"
                 : $"Cursor hooks installed ({hooksPath})"
@@ -583,11 +585,11 @@ public static class PluginCommand {
         return 0;
     }
 
-    static async Task<int> RemoveCursor(string[] args) {
-        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? CursorPaths.UserHooksJson();
+    static async Task<int> RemoveCursor(string[] args, PluginEnvironment env) {
+        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? env.CursorUserHooksJson;
 
         if (!File.Exists(hooksPath)) {
-            await Console.Out.WriteLineAsync("Nothing to remove — Cursor hooks file not found.");
+            await env.Stdout.WriteLineAsync("Nothing to remove — Cursor hooks file not found.");
 
             return 0;
         }
@@ -595,7 +597,7 @@ public static class PluginCommand {
         try {
             var removed = RemoveCursorHooks(hooksPath);
 
-            await Console.Out.WriteLineAsync(
+            await env.Stdout.WriteLineAsync(
                 removed
                     ? $"Cursor hooks removed ({hooksPath})"
                     : "Cursor hooks were not installed."
@@ -603,7 +605,7 @@ public static class PluginCommand {
 
             return 0;
         } catch (Exception ex) {
-            await Console.Error.WriteLineAsync($"Could not update Cursor hooks at {hooksPath}: {ex.Message}");
+            await env.Stderr.WriteLineAsync($"Could not update Cursor hooks at {hooksPath}: {ex.Message}");
 
             return 1;
         }

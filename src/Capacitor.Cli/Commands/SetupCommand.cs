@@ -317,8 +317,8 @@ public static class SetupCommand {
         return (AppConfig.NormalizeUrl(outcome.Picked.Origin), ghToken, AuthProvider.GitHubApp);
     }
 
-    internal static string? ResolvePluginPath() {
-        var overrideDir = Environment.GetEnvironmentVariable("KCAP_PLUGIN_DIR");
+    internal static string? ResolvePluginPath(string? overrideDir = null) {
+        overrideDir ??= Environment.GetEnvironmentVariable("KCAP_PLUGIN_DIR");
         if (!string.IsNullOrWhiteSpace(overrideDir) && Directory.Exists(overrideDir)) {
             return overrideDir;
         }
