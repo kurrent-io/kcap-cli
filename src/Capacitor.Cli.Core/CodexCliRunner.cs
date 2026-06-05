@@ -95,7 +95,9 @@ static class CodexCliRunner {
         // Only pin a model when the caller explicitly asks. Letting codex pick its
         // own default keeps title generation working for ChatGPT-account auth
         // (which rejects model names like "gpt-5.3-codex" with a 400 — AI-757).
-        if (model is not null) {
+        // Empty/whitespace is treated the same as null to match CodexLauncher's
+        // argv-building behaviour — passing `-m ""` to codex is never useful.
+        if (!string.IsNullOrWhiteSpace(model)) {
             psi.ArgumentList.Add("-m");
             psi.ArgumentList.Add(model);
         }
@@ -150,7 +152,7 @@ static class CodexCliRunner {
                 // useful part (AI-757). Keep the last 800 chars so 4xx/5xx bodies
                 // and skill-loader warnings further down still make it into the log.
                 var stderrTail = stderr.Length > 800 ? "…" + stderr[^800..] : stderr;
-                log($"Codex exited with code {process.ExitCode}, stderr: {stderrTail}");
+                log($"Codex exited with code {process.ExitCode}, stderr: {SanitizeForLog(stderrTail)}");
 
                 return null;
             }
@@ -197,5 +199,27 @@ static class CodexCliRunner {
 
             return null;
         }
+    }
+
+    /// <summary>
+    /// Collapses newlines and drops other control characters so codex's multi-line
+    /// stderr lands as a single log line — keeps the timestamp/prefix added by the
+    /// caller's <c>log</c> aligned with the rest of the entry.
+    /// </summary>
+    static string SanitizeForLog(string value) {
+        var sb = new StringBuilder(value.Length);
+
+        foreach (var ch in value) {
+            if (ch is '\r' or '\n') {
+                sb.Append("\\n");
+                continue;
+            }
+
+            if (char.IsControl(ch)) continue;
+
+            sb.Append(ch);
+        }
+
+        return sb.ToString();
     }
 }
