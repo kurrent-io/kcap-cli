@@ -20,7 +20,7 @@ static class CodexCliRunner {
             string            prompt,
             TimeSpan          timeout,
             Action<string>    log,
-            string            model         = "gpt-5.3-codex",
+            string?           model         = null,
             string            reasoning     = "low",
             CancellationToken ct            = default
         ) {
@@ -62,7 +62,7 @@ static class CodexCliRunner {
             Action<string>    log,
             string            workingDir,
             string            lastMessageFile,
-            string            model,
+            string?           model,
             string            reasoning,
             CancellationToken ct
         ) {
@@ -92,8 +92,15 @@ static class CodexCliRunner {
         psi.ArgumentList.Add("never");
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add($"model_reasoning_effort=\"{reasoning}\"");
-        psi.ArgumentList.Add("-m");
-        psi.ArgumentList.Add(model);
+        // Only pin a model when the caller explicitly asks. Letting codex pick its
+        // own default keeps title generation working for ChatGPT-account auth
+        // (which rejects model names like "gpt-5.3-codex" with a 400 — AI-757).
+        // Empty/whitespace is treated the same as null to match CodexLauncher's
+        // argv-building behaviour — passing `-m ""` to codex is never useful.
+        if (!string.IsNullOrWhiteSpace(model)) {
+            psi.ArgumentList.Add("-m");
+            psi.ArgumentList.Add(model);
+        }
         psi.ArgumentList.Add("--output-last-message");
         psi.ArgumentList.Add(lastMessageFile);
         // Read prompt from stdin via the literal "-" placeholder so titles longer
@@ -140,8 +147,12 @@ static class CodexCliRunner {
             var stderr = await stderrTask;
 
             if (process.ExitCode != 0) {
-                var stderrPreview = stderr.Length > 200 ? stderr[..200] : stderr;
-                log($"Codex exited with code {process.ExitCode}, stderr: {stderrPreview}");
+                // Tail-truncate: codex prints a multi-line session header before any
+                // error message lands on stderr, so head-truncation discarded the
+                // useful part (AI-757). Keep the last 800 chars so 4xx/5xx bodies
+                // and skill-loader warnings further down still make it into the log.
+                var stderrTail = stderr.Length > 800 ? "…" + stderr[^800..] : stderr;
+                log($"Codex exited with code {process.ExitCode}, stderr: {SanitizeForLog(stderrTail)}");
 
                 return null;
             }
@@ -188,5 +199,27 @@ static class CodexCliRunner {
 
             return null;
         }
+    }
+
+    /// <summary>
+    /// Collapses newlines and drops other control characters so codex's multi-line
+    /// stderr lands as a single log line — keeps the timestamp/prefix added by the
+    /// caller's <c>log</c> aligned with the rest of the entry.
+    /// </summary>
+    static string SanitizeForLog(string value) {
+        var sb = new StringBuilder(value.Length);
+
+        foreach (var ch in value) {
+            if (ch is '\r' or '\n') {
+                sb.Append("\\n");
+                continue;
+            }
+
+            if (char.IsControl(ch)) continue;
+
+            sb.Append(ch);
+        }
+
+        return sb.ToString();
     }
 }
