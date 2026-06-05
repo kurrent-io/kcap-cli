@@ -47,7 +47,7 @@ For the version-nudge contributor specifically:
 
 The nudge fires on every session-start where the server is strictly newer. No caching, no throttle. If procrastinated upgrades become a context-window problem in practice, we can add a cache or opt-out later — not in v1.
 
-The existing `UpdateCommand.PrintUpdateHintIfAvailable` (npm-registry-based stderr hint) is untouched. It serves a different surface (humans running `kcap` directly) and the two can disagree harmlessly across short windows.
+The existing `UpdateCommand.PrintUpdateHintIfAvailable` (npm-registry-based stderr hint) is user-facing-unchanged. It serves a different surface (humans running `kcap` directly), and the two surfaces can disagree harmlessly across short windows. Internally its semver comparison is rerouted through the shared helper, which is a behaviour-tightening described in the helper section below.
 
 ## Components
 
@@ -144,9 +144,14 @@ Pure-function tests on `VersionNudgeEmitter.BuildFragment`:
 - Returned fragment contains both versions and the literal `npm install -g @kurrent/kcap`.
 - Returned fragment is plain text (no JSON braces, no leading `{`).
 
-### New unit tests — `test/Capacitor.Cli.Tests.Unit/SessionStartAdditionalContextTests.cs`
+### Aggregator unit tests — repurposed `SessionStartAdditionalContextTests`
 
-Pure-function tests on the aggregator:
+`test/Capacitor.Cli.Tests.Unit/HookForwardingTests.cs:145` already declares a `public class SessionStartAdditionalContextTests`. Its three existing methods (`SessionStart_EmitsAdditionalContextJson_WhenServerReturnsTopClusters`, `…_EmitsNothing_WhenTopClustersAbsent`, `…_EmitsNothing_WhenDisableSessionGuidelinesConfigSet`) actually exercise `SessionGuidelinesEmitter.BuildAdditionalContext` — they belong with the emitter's own tests. Action:
+
+1. Move those three methods into `SessionGuidelinesEmitterTests` (creating that file if absent) and adjust them to assert on `BuildFragment` output (plain text, not envelope JSON).
+2. Reuse the now-empty `SessionStartAdditionalContextTests` class for the new aggregator tests below.
+
+Pure-function tests on `SessionStartAdditionalContext.BuildEnvelope`:
 
 - Returns `null` when every fragment is `null`/empty/whitespace.
 - Single non-null fragment → valid envelope containing exactly that fragment.
@@ -173,10 +178,12 @@ The current tests assert the full envelope shape. After the refactor, the file i
 
 `HookRoundTripTests` today posts directly via `HttpClient` and never invokes `ClaudeHookCommand.Handle`, so it can't observe stdout. We add a new fixture (e.g. `ClaudeHookStdoutTests.cs`) that:
 
-- Boots a `WireMockServer` and points the CLI at it via `KCAP_URL` (or by passing `baseUrl` directly to `ClaudeHookCommand.Handle`).
+- Boots a `WireMockServer` and points the CLI at it via the `baseUrl` parameter to `ClaudeHookCommand.Handle`.
 - Redirects `Console.Out` to a `StringWriter` for the duration of each test (and restores it in a `finally`).
 - Calls `ClaudeHookCommand.Handle(baseUrl, new StringReader(payload))` with a session-start payload.
 - Marks the class `[NotInParallel]` because `Console.Out` is process-global.
+
+**Critical:** the test payloads must **omit `transcript_path`** (and/or `session_id`). `ClaudeHookCommand.session-start:290-292` calls `WatcherManager.EnsureWatcherRunning` only when both fields are present, and the watcher spawn (`Process.Start` at `WatcherManager.cs:85`) under TUnit's `Console` capture corrupts subsequent stdout reads — exactly the failure mode documented at `test/Capacitor.Cli.Tests.Unit/Codex/CodexHookCommandTests.cs:47-53`. Omitting `transcript_path` short-circuits the spawn while still exercising the full request-build → POST → response-parse → stdout-emit path that this feature lives in.
 
 Three symmetric cases:
 
