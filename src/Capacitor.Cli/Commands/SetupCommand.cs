@@ -244,6 +244,12 @@ public static class SetupCommand {
         await AppConfig.SaveProfileConfig(profileConfig);
 
         var finalTokens = await TokenStore.LoadAsync();
+
+        // AI-752: tell the server this user has finished CLI setup, so the dashboard
+        // can flip the new-tenant welcome modal from "Waiting for CLI to register"
+        // to "Registered". Best-effort — never block setup completion on this.
+        await PingCliSetupAsync(serverUrl);
+
         AnsiConsole.Write(new Rule("[green]Setup complete[/]").LeftJustified());
 
         var grid = new Grid().AddColumn().AddColumn();
@@ -349,6 +355,58 @@ public static class SetupCommand {
         var repoPlugin = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kcap"));
 
         return Directory.Exists(repoPlugin) ? repoPlugin : null;
+    }
+
+    // AI-752 — best-effort signal to the server that this user has completed CLI setup.
+    // Silently swallows network/auth/server errors: the welcome-modal nudge is a UX
+    // affordance, not part of the contract of `kcap setup`.
+    //
+    // Two reliability rules (kcap-cli#113 review):
+    //   • Don't use HttpClientExtensions.CreateAuthenticatedClientAsync — its
+    //     TokenStore.GetValidTokensAsync refresh path makes HTTP calls that
+    //     don't honor a CancellationToken and can block far longer than any
+    //     CTS-based timeout. The user just logged in moments ago in this same
+    //     command, so a non-expired token is the expected case; if it's
+    //     missing or expired we silently skip rather than triggering a refresh.
+    //   • Cap the operation with Task.WhenAny(ping, Task.Delay(5s)) so the
+    //     wall-clock bound is enforced independently of what HttpClient does
+    //     internally. If the delay wins, HttpClient disposal on method-exit
+    //     cancels the in-flight POST.
+    static async Task PingCliSetupAsync(string serverUrl) {
+        try {
+            var tokens = await TokenStore.LoadAsync();
+            if (tokens is null || tokens.IsExpired) return;
+
+            using var http = new HttpClient();
+            http.DefaultRequestHeaders.Authorization = new("Bearer", tokens.AccessToken);
+
+            var version = typeof(SetupCommand).Assembly.GetName().Version?.ToString();
+            var payload = new StringContent(
+                $$"""{"cliVersion":{{(version is null ? "null" : "\"" + version + "\"")}}}""",
+                System.Text.Encoding.UTF8,
+                "application/json");
+
+            var pingTask = http.PostAsync($"{serverUrl.TrimEnd('/')}/api/users/me/cli-setup", payload);
+            var winner   = await Task.WhenAny(pingTask, Task.Delay(TimeSpan.FromSeconds(5)));
+
+            if (winner == pingTask) {
+                // Observe the result so any exception is consumed by the outer
+                // catch (instead of surfacing as UnobservedTaskException later).
+                (await pingTask).Dispose();
+            } else {
+                // Wall-clock cap hit. HttpClient.Dispose() at method-exit
+                // cancels the in-flight POST; observe the orphan so its
+                // cancellation exception doesn't go unhandled.
+                _ = pingTask.ContinueWith(
+                    t => {
+                        if (t.IsCompletedSuccessfully) t.Result.Dispose();
+                        _ = t.Exception; // mark observed
+                    },
+                    TaskScheduler.Default);
+            }
+        } catch {
+            // Swallow — see method-doc.
+        }
     }
 
     static string? GetArg(string[] args, string name) {
