@@ -517,10 +517,11 @@ static class ImportCommand {
         // vendor and merge. User-configured cwd remaps let historic transcripts
         // referencing since-renamed local repo paths still resolve to a real
         // git directory.
-        var profileConfig = await AppConfig.LoadProfileConfig();
-        var cwdRemap      = profileConfig.CwdRemap;
-        var resolved      = new Dictionary<string, (string Owner, string Name)?>(StringComparer.Ordinal);
-        var sessionCwds   = new Dictionary<string, string>(StringComparer.Ordinal);
+        var profileConfig      = await AppConfig.LoadProfileConfig();
+        var cwdRemap           = profileConfig.CwdRemap;
+        var resolved           = new Dictionary<string, (string Owner, string Name)?>(StringComparer.Ordinal);
+        var sessionCwds        = new Dictionary<string, string>(StringComparer.Ordinal);
+        var worktreeAttributed = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var vendor in new[] { "claude", "codex" }) {
             var slice = allFileTuples
@@ -530,18 +531,19 @@ static class ImportCommand {
 
             if (slice.Count == 0) continue;
 
-            var partial                                  = await ResolveTranscriptReposAsync(slice, codex: vendor == "codex", display, cwdRemap, sessionCwds);
+            var partial                                  = await ResolveTranscriptReposAsync(slice, codex: vendor == "codex", display, cwdRemap, sessionCwds, worktreeAttributed);
             foreach (var kv in partial) resolved[kv.Key] = kv.Value;
         }
 
         // Resolve Cursor sessions in parallel by workspace path (dedup like
         // ResolveTranscriptReposAsync).
         if (cursorCwds.Count > 0) {
-            // Remap once per session so repo detection AND the missing-cwd
-            // report below see the same path.
+            // Resolve once per session so repo detection AND the missing-cwd
+            // report below see the same path (user remap + worktree-strip
+            // fallback for ephemeral worktree paths).
             var cursorRemapped = cursorCwds.ToDictionary(
                 kv => kv.Key,
-                kv => kv.Value is null ? null : CwdRemapper.Apply(kv.Value, cwdRemap),
+                kv => kv.Value is null ? null : ResolveCwd(kv.Value, cwdRemap, worktreeAttributed, kv.Key),
                 StringComparer.Ordinal
             );
 
@@ -583,6 +585,7 @@ static class ImportCommand {
         // Surface transcripts whose (possibly remapped) cwd no longer exists on
         // disk so the user understands why some sessions won't match an org or
         // repo scope, and can fix it by adding cwd_remap entries.
+        ReportWorktreeAttributions(worktreeAttributed.Count, display);
         ReportMissingCwds(sessionCwds, cwdRemap, display);
 
         // --- Scope picker ---
@@ -1639,6 +1642,19 @@ static class ImportCommand {
     /// fail to match an --org/--repo scope. This output lets them spot the
     /// gap before the import proceeds.
     /// </summary>
+    /// <summary>
+    /// Surface how many sessions were transparently attributed to their parent
+    /// project via the worktree-path fallback (cwd lived under
+    /// <c>&lt;dir&gt;/.&lt;X&gt;/worktrees/&lt;slug&gt;</c> but the worktree
+    /// itself no longer exists on disk). Stays silent when zero.
+    /// </summary>
+    internal static void ReportWorktreeAttributions(int count, ImportDisplay display) {
+        if (count <= 0) return;
+
+        var sessionWord = count == 1 ? "session" : "sessions";
+        display.Line($"Attributed {count} {sessionWord} to a parent project via worktree path.");
+    }
+
     internal static void ReportMissingCwds(
             IReadOnlyDictionary<string, string> sessionCwds,
             IReadOnlyList<CwdRemap>?            cwdRemap,
@@ -1723,32 +1739,56 @@ static class ImportCommand {
         return CwdRemapper.IsSeparator(path[home.Length]) ? "~" + path[home.Length..] : path;
     }
 
+    /// <summary>
+    /// Two-step cwd resolution shared between Claude/Codex transcripts and
+    /// Cursor workspaces: apply user-configured prefix remaps first, then
+    /// fall back to attributing ephemeral worktree paths (e.g.
+    /// <c>.../&lt;project&gt;/.claude/worktrees/&lt;slug&gt;</c>) to
+    /// <c>&lt;project&gt;</c> when the worktree itself no longer exists.
+    /// </summary>
+    static string ResolveCwd(
+            string                   raw,
+            IReadOnlyList<CwdRemap>? cwdRemap,
+            ISet<string>?            worktreeAttributed,
+            string                   sessionId
+        ) {
+        var remapped              = CwdRemapper.Apply(raw, cwdRemap);
+        var (final, wasStripped) = WorktreePathResolver.Resolve(remapped);
+
+        if (wasStripped) worktreeAttributed?.Add(sessionId);
+
+        return final;
+    }
+
     static async Task<Dictionary<string, (string Owner, string Name)?>> ResolveTranscriptReposAsync(
             IReadOnlyList<(string SessionId, string FilePath, string EncodedCwd)> transcripts,
             bool                                                                  codex,
             ImportDisplay                                                         display,
-            IReadOnlyList<CwdRemap>?                                              cwdRemap    = null,
-            IDictionary<string, string>?                                          sessionCwds = null
+            IReadOnlyList<CwdRemap>?                                              cwdRemap            = null,
+            IDictionary<string, string>?                                          sessionCwds        = null,
+            ISet<string>?                                                         worktreeAttributed = null
         ) {
         // Extract cwd per transcript first (cheap: ≤20-line file read).
         // Apply user-configured prefix remaps so historic transcripts pointing
-        // at since-renamed local directories still resolve. The per-session
-        // (remapped) cwd is also fed back to the caller via sessionCwds so the
-        // import flow can report which paths are missing on disk.
+        // at since-renamed local directories still resolve, then transparently
+        // attribute ephemeral worktree cwds back to their parent project when
+        // the worktree itself no longer exists on disk. The per-session
+        // (resolved) cwd is fed back to the caller via sessionCwds so the
+        // import flow can report which paths are still missing.
         var perTranscript = new (string SessionId, string? Cwd)[transcripts.Count];
 
         for (var i = 0; i < transcripts.Count; i++) {
-            var raw      = ExtractCwdFromTranscript(transcripts[i].FilePath, codex);
-            var remapped = raw is null ? null : CwdRemapper.Apply(raw, cwdRemap);
+            var raw       = ExtractCwdFromTranscript(transcripts[i].FilePath, codex);
+            var effective = raw is null ? null : ResolveCwd(raw, cwdRemap, worktreeAttributed, transcripts[i].SessionId);
 
-            perTranscript[i] = (transcripts[i].SessionId, remapped);
+            perTranscript[i] = (transcripts[i].SessionId, effective);
 
             // Indexer assignment (not Add) so duplicate SessionIds across
             // project dirs / backups can't abort the import. Last-write-wins
             // is fine for the missing-cwd report — the cwd is functionally
             // the same path anyway.
-            if (remapped is not null && sessionCwds is not null) {
-                sessionCwds[transcripts[i].SessionId] = remapped;
+            if (effective is not null && sessionCwds is not null) {
+                sessionCwds[transcripts[i].SessionId] = effective;
             }
         }
 
