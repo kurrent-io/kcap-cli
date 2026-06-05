@@ -21,7 +21,10 @@ public static class CodexHooksParser {
 
     /// <summary>
     /// Returns true if <paramref name="entry"/> is a hooks.json group whose
-    /// <c>hooks[].command</c> contains <c>kcap codex-hook</c>.
+    /// <c>hooks[].command</c> contains <c>kcap codex-hook</c>, or the
+    /// pre-rename <c>kapacitor codex-hook</c>. Recognising the legacy
+    /// marker lets <c>kcap uninstall</c> (and the upgrade-time refresh)
+    /// clean up entries left over from the kapacitor CLI.
     /// </summary>
     public static bool EntryReferencesCapacitorCodexHook(JsonNode? entry) {
         if (entry?["hooks"] is not JsonArray hooks) return false;
@@ -29,7 +32,8 @@ public static class CodexHooksParser {
         foreach (var hook in hooks) {
             if (hook?["command"] is JsonValue jv &&
                 jv.TryGetValue<string>(out var cmd) &&
-                cmd.Contains("kcap codex-hook")) {
+                (cmd.Contains("kcap codex-hook", StringComparison.Ordinal)
+              || cmd.Contains("kapacitor codex-hook", StringComparison.Ordinal))) {
                 return true;
             }
         }
