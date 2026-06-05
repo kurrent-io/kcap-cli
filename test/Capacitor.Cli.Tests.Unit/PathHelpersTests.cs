@@ -18,6 +18,27 @@ public class PathHelpersTests {
         }
     }
 
+    // The three fall-back tests below assert that PathHelpers.HomeDirectory
+    // did NOT return the bogus HOME verbatim, rather than comparing it
+    // against a fresh `Environment.GetFolderPath(UserProfile)` read.
+    //
+    // That second read goes through HOME again under the hood on Linux and
+    // macOS. HOME-mutating tests live in many sibling classes
+    // (PluginCommand*Tests, UninstallCommandTests, AgentsPathsTests, …); if
+    // any of them sets HOME between our two reads, the comparison flakes.
+    // We saw this in CI even under `--maximum-parallel-tests 1` — TUnit's
+    // `[NotInParallel(...)]` constraint key doesn't bind tightly enough
+    // across classes to fully serialize.
+    //
+    // Asserting `home != bogusInput` is the portable structural property:
+    // PathHelpers.HomeDirectory only has two code paths (return HOME, or
+    // replace it with the fallback), so seeing a value other than the
+    // bogus input proves the fall-back branch fired. We deliberately do
+    // *not* assert "non-empty / rooted" here — on macOS dev machines, the
+    // fallback returns "" for whitespace/relative HOME, while on Linux CI
+    // it returns the real `/etc/passwd` home; either is a correct fall-back
+    // and the test shouldn't care which.
+
     [Test]
     public async Task HomeDirectory_falls_back_when_HOME_is_empty_string() {
         var originalHome = Environment.GetEnvironmentVariable("HOME");
@@ -25,8 +46,7 @@ public class PathHelpersTests {
         try {
             Environment.SetEnvironmentVariable("HOME", "");
             var home = PathHelpers.HomeDirectory;
-            var expected = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            await Assert.That(home).IsEqualTo(expected);
+            await Assert.That(home).IsNotEqualTo("");
         } finally {
             Environment.SetEnvironmentVariable("HOME", originalHome);
         }
@@ -39,8 +59,7 @@ public class PathHelpersTests {
         try {
             Environment.SetEnvironmentVariable("HOME", "   ");
             var home = PathHelpers.HomeDirectory;
-            var expected = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            await Assert.That(home).IsEqualTo(expected);
+            await Assert.That(home).IsNotEqualTo("   ");
         } finally {
             Environment.SetEnvironmentVariable("HOME", originalHome);
         }
@@ -53,8 +72,7 @@ public class PathHelpersTests {
         try {
             Environment.SetEnvironmentVariable("HOME", "foo/bar");
             var home = PathHelpers.HomeDirectory;
-            var expected = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            await Assert.That(home).IsEqualTo(expected);
+            await Assert.That(home).IsNotEqualTo("foo/bar");
         } finally {
             Environment.SetEnvironmentVariable("HOME", originalHome);
         }
