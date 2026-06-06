@@ -367,8 +367,8 @@ public static class PluginCommand {
         await env.Stdout.WriteLineAsync($"Codex hooks installed ({scope}: {hooksPath})");
 
         await env.Stdout.WriteLineAsync(
-            "Next: run /hooks inside Codex and trust each kcap entry — " +
-            "Codex won't execute hooks until each is explicitly trusted."
+            "Next: Codex will prompt to trust the kcap hooks on its next launch — " +
+            "accept once to trust them all (or run /hooks inside Codex to trust them individually)."
         );
 
         // Skills are user-scoped only. Written to ~/.agents/skills/ so they

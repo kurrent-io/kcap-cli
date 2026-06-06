@@ -73,7 +73,7 @@ kcap setup --server-url https://my-tenant.kcap.ai --default-visibility org_publi
 In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, and/or `--skip-cursor-hooks`.
 
 > **Need hooks for an agent installed after setup, or scoped to a single repo?**
-> Run `kcap plugin install [--codex|--cursor]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, run `/hooks` inside Codex and trust each kcap entry — Codex doesn't execute hooks until each is explicitly trusted. After a `--project` install, also run `codex` once in the repo and accept the trust prompt. Re-running after a kcap upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kcap` (npm 11+ blocks install scripts by default; add `allow-scripts[]=@kurrent/kcap` to `~/.npmrc` to opt in once).
+> Run `kcap plugin install [--codex|--cursor]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, the next `codex` launch prompts to trust the new hooks — accept once to trust them all (run `/hooks` inside Codex if you'd rather trust each entry individually). After a `--project` install, also run `codex` once in the repo and accept the workspace trust prompt. Re-running after a kcap upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kcap` (npm 11+ blocks install scripts by default; add `allow-scripts[]=@kurrent/kcap` to `~/.npmrc` to opt in once).
 
 > **Need at least one agent to capture sessions:** the setup wizard runs to completion without an agent CLI on `PATH` (it'll still configure your profile, auth, and daemon), but kcap only records work once Claude Code or Codex CLI is installed and the hooks are in place.
 
@@ -131,7 +131,7 @@ kcap setup --server-url <url> --no-prompt --skip-claude-hooks --skip-cursor-hook
 kcap setup --server-url <url> --no-prompt --skip-claude-hooks --skip-codex-hooks   # only Cursor
 ```
 
-After installing Codex hooks, run `/hooks` inside Codex and trust each kcap entry — Codex does not execute hooks until each is explicitly trusted. For project-scope installs (a single repo), use `kcap plugin install [--codex] --project` after setup.
+After installing Codex hooks, the next `codex` launch prompts to trust the new hooks — accept once to trust them all (run `/hooks` inside Codex if you'd rather trust each entry individually). For project-scope installs (a single repo), use `kcap plugin install [--codex] --project` after setup.
 
 Legacy `--plugin-scope <user|project|skip>` is retained for backwards compatibility:
 
