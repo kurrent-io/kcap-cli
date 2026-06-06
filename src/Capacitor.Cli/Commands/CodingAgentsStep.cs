@@ -136,8 +136,8 @@ internal static class CodingAgentsStep {
         }
 
         writeLine($"  [green]✓[/] Codex hooks installed (user: {Markup.Escape(paths.CodexHooksPath)})");
-        writeLine("  [dim]  Next: run /hooks inside Codex and trust each kcap entry —[/]");
-        writeLine("  [dim]  Codex won't execute hooks until each is explicitly trusted.[/]");
+        writeLine("  [dim]  Next: Codex will prompt to trust the kcap hooks on its next launch —[/]");
+        writeLine("  [dim]  accept once to trust them all (or run /hooks to trust them individually).[/]");
 
         return true;
     }
