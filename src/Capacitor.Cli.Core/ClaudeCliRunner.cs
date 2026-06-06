@@ -178,6 +178,9 @@ static class ClaudeCliRunner {
         };
         psi.Environment.Remove("CLAUDECODE");
         psi.Environment.Remove("CLAUDE_CODE_ENTRYPOINT");
+        // A globally-set ANTHROPIC_API_KEY overrides subscription auth in `claude -p`,
+        // which surfaced as AI-755 (API error text leaking into session titles).
+        psi.Environment.Remove("ANTHROPIC_API_KEY");
         psi.ArgumentList.Add("-p");
 
         if (!promptViaStdin) {
