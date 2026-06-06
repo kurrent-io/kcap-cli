@@ -17,6 +17,12 @@ public static class UpdateCommand {
             return 1;
         }
 
+        if (string.IsNullOrEmpty(current)) {
+            await Console.Error.WriteLineAsync($"Could not determine the current kcap version. Latest published: {latest}.");
+
+            return 1;
+        }
+
         if (!IsNewer(latest, current)) {
             await Console.Out.WriteLineAsync($"Already up to date: {current}");
 
@@ -110,42 +116,10 @@ public static class UpdateCommand {
         }
     }
 
-    /// <summary>
-    /// Returns true if <paramref name="latest"/> is a newer semver than <paramref name="current"/>.
-    /// Prerelease suffixes (e.g. "-alpha.0.1") are stripped so that a local prerelease build
-    /// is not considered older than the stable version it's based on.
-    /// </summary>
-    static bool IsNewer(string? latest, string? current) {
-        if (latest is null || current is null) return false;
-
-        // Strip prerelease suffix (everything after first '-') for comparison
-        static Version? ParseCore(string v) {
-            var dash         = v.IndexOf('-');
-            if (dash >= 0) v = v[..dash];
-
-            return Version.TryParse(v, out var parsed) ? parsed : null;
-        }
-
-        var latestVersion  = ParseCore(latest);
-        var currentVersion = ParseCore(current);
-
-        if (latestVersion is null || currentVersion is null) return latest != current;
-
-        return latestVersion > currentVersion;
-    }
+    static bool IsNewer(string? latest, string? current) => SemverCompare.IsNewer(latest, current);
 
     static string? GetCurrentVersion() {
-        var version = typeof(UpdateCommand).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-
-        // Strip build metadata (everything after '+') so that
-        // "0.1.2+d727aeea..." compares equal to npm's "0.1.2"
-        if (version is not null) {
-            var plusIndex = version.IndexOf('+');
-
-            if (plusIndex >= 0)
-                version = version[..plusIndex];
-        }
-
-        return version;
+        var v = CapacitorVersion.CurrentDisplay();
+        return v == "unknown" ? null : v;
     }
 }

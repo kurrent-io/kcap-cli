@@ -142,138 +142,60 @@ public class InlineDrainTests : IDisposable {
     }
 }
 
-public class SessionStartAdditionalContextTests : IDisposable {
-    readonly WireMockServer _server = WireMockServer.Start();
-
-    public void Dispose() => _server.Stop();
+public class SessionStartAdditionalContextTests {
+    [Test]
+    public async Task BuildEnvelope_returns_null_when_no_fragments() {
+        var result = SessionStartAdditionalContext.BuildEnvelope();
+        await Assert.That(result).IsNull();
+    }
 
     [Test]
-    public async Task SessionStart_EmitsAdditionalContextJson_WhenServerReturnsTopClusters() {
-        _server.Given(Request.Create().WithPath("/hooks/session-start").UsingPost())
-            .RespondWith(
-                Response.Create()
-                    .WithStatusCode(200)
-                    .WithHeader("Content-Type", "application/json")
-                    .WithBody(
-                        """
-                        {
-                          "top_clusters": [
-                            { "category": "safety",          "text": "always close the writer" },
-                            { "category": "maintainability", "text": "prefer JsonNode.Parse for AOT-safe string assignment" }
-                          ]
-                        }
-                        """
-                    )
-            );
+    public async Task BuildEnvelope_returns_null_when_all_fragments_null() {
+        var result = SessionStartAdditionalContext.BuildEnvelope(null, null, null);
+        await Assert.That(result).IsNull();
+    }
 
-        using var client   = new HttpClient();
-        using var content  = new StringContent("{}", Encoding.UTF8, "application/json");
-        var       response = await client.PostAsync($"{_server.Url}/hooks/session-start", content);
-        var       body     = await response.Content.ReadAsStringAsync();
+    [Test]
+    public async Task BuildEnvelope_returns_null_when_all_fragments_empty_or_whitespace() {
+        var result = SessionStartAdditionalContext.BuildEnvelope("", "   ", "\n\t");
+        await Assert.That(result).IsNull();
+    }
 
-        var emission = SessionGuidelinesEmitter.BuildAdditionalContext(body, disabled: false);
+    [Test]
+    public async Task BuildEnvelope_wraps_single_fragment_in_envelope() {
+        var result = SessionStartAdditionalContext.BuildEnvelope("hello world");
 
-        await Assert.That(emission).IsNotNull();
-        var json = JsonNode.Parse(emission!);
+        await Assert.That(result).IsNotNull();
+        var json = JsonNode.Parse(result!);
         await Assert.That(json!["hookSpecificOutput"]!["hookEventName"]!.GetValue<string>()).IsEqualTo("SessionStart");
-        var ctx = json["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
-        await Assert.That(ctx).Contains("Recurring lessons");
-        await Assert.That(ctx).Contains("- always close the writer");
-        await Assert.That(ctx).Contains("- prefer JsonNode.Parse for AOT-safe string assignment");
+        await Assert.That(json["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>()).IsEqualTo("hello world");
     }
 
     [Test]
-    public async Task SessionStart_EmitsNothing_WhenTopClustersAbsent() {
-        _server.Given(Request.Create().WithPath("/hooks/session-start").UsingPost())
-            .RespondWith(
-                Response.Create()
-                    .WithStatusCode(200)
-                    .WithHeader("Content-Type", "application/json")
-                    .WithBody("""{ "slug": "some-resumed-session" }""")
-            );
+    public async Task BuildEnvelope_joins_multiple_fragments_with_blank_line_in_order() {
+        var result = SessionStartAdditionalContext.BuildEnvelope("first", "second");
 
-        using var client   = new HttpClient();
-        using var content  = new StringContent("{}", Encoding.UTF8, "application/json");
-        var       response = await client.PostAsync($"{_server.Url}/hooks/session-start", content);
-        var       body     = await response.Content.ReadAsStringAsync();
-
-        var emission = SessionGuidelinesEmitter.BuildAdditionalContext(body, disabled: false);
-
-        await Assert.That(emission).IsNull();
+        await Assert.That(result).IsNotNull();
+        var ctx = JsonNode.Parse(result!)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx).IsEqualTo("first\n\nsecond");
     }
 
     [Test]
-    public async Task SessionStart_EmitsNothing_WhenDisableSessionGuidelinesConfigSet() {
-        _server.Given(Request.Create().WithPath("/hooks/session-start").UsingPost())
-            .RespondWith(
-                Response.Create()
-                    .WithStatusCode(200)
-                    .WithHeader("Content-Type", "application/json")
-                    .WithBody(
-                        """
-                        {
-                          "top_clusters": [
-                            { "category": "safety", "text": "x" }
-                          ]
-                        }
-                        """
-                    )
-            );
+    public async Task BuildEnvelope_skips_null_and_blank_when_mixed_with_real_fragments() {
+        var result = SessionStartAdditionalContext.BuildEnvelope(null, "first", "   ", "second", null);
 
-        using var client   = new HttpClient();
-        using var content  = new StringContent("{}", Encoding.UTF8, "application/json");
-        var       response = await client.PostAsync($"{_server.Url}/hooks/session-start", content);
-        var       body     = await response.Content.ReadAsStringAsync();
-
-        // Mirrors how Program.cs reads `AppConfig.ResolvedProfile?.Profile?.DisableSessionGuidelines is true`.
-        var emission = SessionGuidelinesEmitter.BuildAdditionalContext(body, disabled: true);
-
-        await Assert.That(emission).IsNull();
+        await Assert.That(result).IsNotNull();
+        var ctx = JsonNode.Parse(result!)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx).IsEqualTo("first\n\nsecond");
     }
 
     [Test]
-    public async Task SessionStart_EmitsNothing_WhenTopClustersEmpty() {
-        var emission = SessionGuidelinesEmitter.BuildAdditionalContext(
-            """{ "top_clusters": [] }""",
-            disabled: false
-        );
-
-        await Assert.That(emission).IsNull();
-    }
-
-    [Test]
-    public async Task SessionStart_EmitsNothing_WhenTopClustersIsObject() {
-        var malformed = JsonNode.Parse("""{ "top_clusters": { "category": "x" } }""");
-        var result    = SessionGuidelinesEmitter.BuildAdditionalContext(malformed, disabled: false);
-
-        await Assert.That(result).IsNull();
-    }
-
-    [Test]
-    public async Task SessionStart_EmitsNothing_WhenResponseNodeIsArray() {
-        var arrayRoot = JsonNode.Parse("""[ { "top_clusters": [] } ]""");
-        var result    = SessionGuidelinesEmitter.BuildAdditionalContext(arrayRoot, disabled: false);
-
-        await Assert.That(result).IsNull();
-    }
-
-    [Test]
-    public async Task SessionStart_SkipsEntries_WithBlankText() {
-        var emission = SessionGuidelinesEmitter.BuildAdditionalContext(
-            """
-            {
-              "top_clusters": [
-                { "category": "safety", "text": "" },
-                { "category": "safety", "text": "real lesson" }
-              ]
-            }
-            """,
-            disabled: false
-        );
-
-        await Assert.That(emission).IsNotNull();
-        var ctx = JsonNode.Parse(emission!)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
-        await Assert.That(ctx).Contains("- real lesson");
-        await Assert.That(ctx).DoesNotContain("- \n");
+    public async Task BuildEnvelope_produces_single_top_level_json_object() {
+        var result = SessionStartAdditionalContext.BuildEnvelope("first", "second")!;
+        // Guard against a future bug that appends a second envelope: nothing
+        // (not even whitespace) should follow the last closing brace.
+        var lastClose  = result.LastIndexOf('}');
+        var afterClose = result[(lastClose + 1)..].Trim();
+        await Assert.That(afterClose).IsEqualTo("");
     }
 }

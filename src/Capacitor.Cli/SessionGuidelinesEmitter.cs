@@ -3,40 +3,21 @@ using System.Text.Json.Nodes;
 namespace Capacitor.Cli;
 
 /// <summary>
-/// Builds the SessionStart <c>additionalContext</c> JSON envelope from the server's
-/// session-start hook response (DEV-1676). The server may attach a
-/// <c>top_clusters</c> array to the response body summarising recurring lessons
-/// from prior sessions in the same repository; the CLI emits that to stdout in
-/// the Claude Code SessionStart hook output format so the model receives it as
-/// additional context.
+/// Builds the "recurring lessons from prior sessions" text fragment from a
+/// server <c>/hooks/session-start</c> response body. Returns plain text, not
+/// a JSON envelope — the caller (see <c>SessionStartAdditionalContext</c>)
+/// joins this fragment with other fragments (e.g. the version-upgrade nudge)
+/// and serializes a single Claude Code <c>hookSpecificOutput</c> envelope.
 /// </summary>
 static class SessionGuidelinesEmitter {
     /// <summary>
-    /// Returns the JSON envelope to write to stdout, or <c>null</c> if nothing
-    /// should be emitted (no top_clusters, all empty, or user opted out).
+    /// Returns the lessons block text, or <c>null</c> when there is nothing
+    /// to emit (no <c>top_clusters</c>, all empty, user opted out, malformed
+    /// response).
     /// </summary>
-    /// <param name="responseBody">The hook response body returned by the server.</param>
+    /// <param name="responseNode">The hook response body parsed as a <see cref="JsonNode"/>.</param>
     /// <param name="disabled">True when the user has set <c>disable_session_guidelines</c> on their active profile.</param>
-    public static string? BuildAdditionalContext(string responseBody, bool disabled) {
-        if (disabled) return null;
-
-        JsonNode? responseNode;
-
-        try {
-            responseNode = JsonNode.Parse(responseBody);
-        } catch {
-            return null;
-        }
-
-        return BuildAdditionalContext(responseNode, disabled);
-    }
-
-    /// <summary>
-    /// Overload taking an already-parsed response node so callers that need
-    /// the parsed tree for other purposes (e.g. slug-fallback plan injection)
-    /// don't have to parse twice.
-    /// </summary>
-    public static string? BuildAdditionalContext(JsonNode? responseNode, bool disabled) {
+    public static string? BuildFragment(JsonNode? responseNode, bool disabled) {
         if (disabled) return null;
         if (responseNode is not JsonObject obj) return null;
         if (obj["top_clusters"] is not JsonArray topClusters || topClusters.Count == 0) return null;
@@ -57,16 +38,7 @@ static class SessionGuidelinesEmitter {
 
         if (lines.Count == 0) return null;
 
-        var ctx = "Recurring lessons from prior sessions in this repo (no action required unless relevant):\n"
-                + string.Join("\n", lines);
-
-        var output = new JsonObject {
-            ["hookSpecificOutput"] = new JsonObject {
-                ["hookEventName"]     = "SessionStart",
-                ["additionalContext"] = ctx
-            }
-        };
-
-        return output.ToJsonString();
+        return "Recurring lessons from prior sessions in this repo (no action required unless relevant):\n"
+             + string.Join("\n", lines);
     }
 }

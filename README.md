@@ -110,6 +110,7 @@ Once set up, Capacitor runs silently in the background. Every Claude Code (and C
 - **Tool usage** — every tool call with timing and results
 - **Token consumption** — input/output/cache token counts per interaction
 - **Repository context** — git repo, branch, and PR linkage
+- **In-agent upgrade prompts** — in Claude Code sessions, when the server is running a newer kcap release than the local CLI, additional context is injected into the session so the agent can offer the user an upgrade via `npm install -g @kurrent/kcap`. The stderr `kcap` update hint continues to fire for direct command-line use.
 
 ## CLI commands
 
