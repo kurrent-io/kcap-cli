@@ -80,6 +80,8 @@ static class CodexCliRunner {
                 ["KCAP_SKIP"] = "1"
             }
         };
+        // A globally-set OPENAI_API_KEY overrides ChatGPT subscription auth in `codex exec`.
+        psi.Environment.Remove("OPENAI_API_KEY");
 
         psi.ArgumentList.Add("exec");
         psi.ArgumentList.Add("--ephemeral");
