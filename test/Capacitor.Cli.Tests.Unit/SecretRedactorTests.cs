@@ -81,7 +81,8 @@ public class SecretRedactorTests {
     }
 
     [Test]
-    public async Task PassesThrough_NonToolResult_Unchanged() {
+    public async Task LeavesAssistantText_Unchanged_WhenNoSecretMatch() {
+        // Plain assistant prose with no secret-matching tokens — scanned, but nothing to redact.
         var line = """{"type":"progress","data":{"message":{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}},"uuid":"abc","timestamp":"2026-01-01T00:00:00Z"}""";
 
         var result = SecretRedactor.RedactLine(line);
@@ -90,7 +91,7 @@ public class SecretRedactorTests {
     }
 
     [Test]
-    public async Task PassesThrough_MalformedJson_Unchanged() {
+    public async Task LeavesMalformedJson_Unchanged_WhenNoSecretMatch() {
         var line = "not json at all";
 
         var result = SecretRedactor.RedactLine(line);
@@ -112,6 +113,8 @@ public class SecretRedactorTests {
     [Arguments("pypi-ABCDEFghijklmnop1234567890ab", "PyPI")]
     [Arguments("npm_ABCDEFghijklmnop1234567890ab", "npm")]
     [Arguments("glpat-ABCDEFghijklmnop12345", "GitLab PAT")]
+    [Arguments("dckr_pat_ABCDEFghijklmnop1234567890", "Docker Hub PAT")]
+    [Arguments("dckr_oat_J6Ui9AbcDef123XYZabcdef0987", "Docker Hub OAuth access token")]
     public async Task RedactsLine_VendorToken_InToolResult(string token, string description) {
         var line = $$$"""
             {"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"The token is {{{token}}} here","is_error":false}]}}
@@ -243,17 +246,21 @@ public class SecretRedactorTests {
     }
 
     [Test]
-    public async Task PassesThrough_UserMessage_Unchanged() {
+    public async Task LeavesUserText_Unchanged_WhenSecretValueTooShort() {
+        // "hunter2" is below LabeledSecretRegex's 16-char floor; no pattern matches.
+        // (A real high-entropy secret in the same shape WOULD be redacted — see
+        // RedactsLine_VendorToken_InUserTextContent.)
         var line = """{"type":"user","message":{"role":"user","content":"my secret password is hunter2"}}""";
 
         var result = SecretRedactor.RedactLine(line);
 
-        // User messages with string content (not array with tool_result) are not scanned
         await Assert.That(result).IsEqualTo(line);
     }
 
     [Test]
-    public async Task PassesThrough_ToolUse_Unchanged() {
+    public async Task LeavesToolUse_Unchanged_WhenNoSecretMatch() {
+        // tool_use args reference a file path; "/etc/secret.pem" has no key:value or labeled-secret
+        // shape, so the line passes through scanning unmodified.
         var line = """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"/etc/secret.pem"}}]}}""";
 
         var result = SecretRedactor.RedactLine(line);
@@ -272,6 +279,51 @@ public class SecretRedactorTests {
         await Assert.That(result).DoesNotContain("ghp_abc123");
         await Assert.That(result).DoesNotContain("AKIAIOSFODNN7EXAMPLE");
         await Assert.That(result).DoesNotContain("supersecretvalue123");
+    }
+
+    // Scope-widening coverage — secrets must be redacted regardless of whether they appear in a
+    // tool_result, assistant narrative, or human-authored user turn. The original implementation
+    // only scanned user messages containing a tool_result block, which let the assistant trivially
+    // re-emit a token by quoting it back when explaining what a command did.
+
+    [Test]
+    public async Task RedactsLine_DockerToken_InAssistantText() {
+        // Real leak shape (AI-): agent paraphrased kubectl/docker output into its own narrative,
+        // re-emitting a dckr_oat_ token that had been redacted from the originating tool_result.
+        var line = """
+            {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Image pushed but the pull token (dckr_oat_J6Ui9AbcDef123XYZabcdef0987) used by the cluster's registry-pull Secret is scoped to kurrentplatform/kcap only."}]}}
+            """.Trim();
+
+        var result = SecretRedactor.RedactLine(line);
+
+        await Assert.That(result).DoesNotContain("dckr_oat_J6Ui9AbcDef123XYZabcdef0987");
+        await Assert.That(result).Contains("[REDACTED]");
+    }
+
+    [Test]
+    public async Task RedactsLine_VendorToken_InAssistantText_ProgressFormat() {
+        var line = """
+            {"type":"progress","data":{"message":{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I used ghp_ABCDEFghijklmnop1234567890abcdef12345678 to authenticate."}]}}},"uuid":"abc","timestamp":"2026-01-01T00:00:00Z"}
+            """.Trim();
+
+        var result = SecretRedactor.RedactLine(line);
+
+        await Assert.That(result).DoesNotContain("ghp_ABCDEFghijklmnop1234567890abcdef12345678");
+        await Assert.That(result).Contains("[REDACTED]");
+    }
+
+    [Test]
+    public async Task RedactsLine_VendorToken_InUserTextContent() {
+        // Free-form user turn (string content, not the tool_result array form) — a human paste of
+        // a token must also be redacted before the line is uploaded.
+        var line = """
+            {"type":"user","message":{"role":"user","content":"my token is ghp_ABCDEFghijklmnop1234567890abcdef12345678 please rotate"}}
+            """.Trim();
+
+        var result = SecretRedactor.RedactLine(line);
+
+        await Assert.That(result).DoesNotContain("ghp_ABCDEFghijklmnop1234567890abcdef12345678");
+        await Assert.That(result).Contains("[REDACTED]");
     }
 
     [Test]
