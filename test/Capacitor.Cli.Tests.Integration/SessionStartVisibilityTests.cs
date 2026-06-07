@@ -71,6 +71,56 @@ public class SessionStartVisibilityTests : IDisposable {
     }
 
     [Test, NotInParallel("AppConfig_FileState")]
+    public async Task Lowercases_mixedcase_visibility_from_v2_config() {
+        var config = new ProfileConfig {
+            ActiveProfile = "work",
+            Profiles = new() {
+                ["work"] = new Profile {
+                    ServerUrl         = _server.Url,
+                    DefaultVisibility = "Private"
+                }
+            }
+        };
+        await AppConfig.SaveProfileConfig(config);
+
+        _server.Given(Request.Create().WithPath("/hooks/session-start").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+
+        await ClaudeHookCommand.Handle(_server.Url!, new StringReader(SessionStartPayloadWithoutTranscriptPath()));
+
+        var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start").UsingPost());
+        await Assert.That(requests.Count).IsEqualTo(1);
+
+        var body = JsonNode.Parse(requests[0].RequestMessage.Body!)!;
+        await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("private");
+    }
+
+    [Test, NotInParallel("AppConfig_FileState")]
+    public async Task Falls_back_to_org_public_when_v2_config_visibility_is_invalid() {
+        var config = new ProfileConfig {
+            ActiveProfile = "work",
+            Profiles = new() {
+                ["work"] = new Profile {
+                    ServerUrl         = _server.Url,
+                    DefaultVisibility = "totally-bogus"
+                }
+            }
+        };
+        await AppConfig.SaveProfileConfig(config);
+
+        _server.Given(Request.Create().WithPath("/hooks/session-start").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+
+        await ClaudeHookCommand.Handle(_server.Url!, new StringReader(SessionStartPayloadWithoutTranscriptPath()));
+
+        var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start").UsingPost());
+        await Assert.That(requests.Count).IsEqualTo(1);
+
+        var body = JsonNode.Parse(requests[0].RequestMessage.Body!)!;
+        await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("org_public");
+    }
+
+    [Test, NotInParallel("AppConfig_FileState")]
     public async Task Skips_session_start_when_repo_is_excluded_by_active_profile_v2_config() {
         var config = new ProfileConfig {
             ActiveProfile = "work",
