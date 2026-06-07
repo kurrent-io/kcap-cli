@@ -280,7 +280,34 @@ public static class AppConfig {
             }
         }
 
-        return result.Config;
+        return NormalizeProfileVisibilities(result.Config);
+    }
+
+    /// <summary>
+    /// Coerce each profile's <c>default_visibility</c> to the same set the
+    /// legacy <see cref="Load"/> path enforced (lowercase, restricted to
+    /// <see cref="ValidVisibilities"/>; fall back to <c>org_public</c>
+    /// otherwise). Manual edits and v1→v2 migrations bypass the validation
+    /// that <c>kcap config set</c> / <c>kcap setup</c> apply at write time,
+    /// so a profile on disk can carry through values like <c>"Private"</c>
+    /// or <c>"foo"</c> that the server would reject.
+    /// </summary>
+    static ProfileConfig NormalizeProfileVisibilities(ProfileConfig config) {
+        Dictionary<string, Profile>? rebuilt = null;
+
+        foreach (var (name, profile) in config.Profiles) {
+            var raw        = profile.DefaultVisibility ?? "org_public";
+            var normalized = raw.ToLowerInvariant();
+
+            if (!ValidVisibilities.Contains(normalized)) normalized = "org_public";
+
+            if (normalized == profile.DefaultVisibility) continue;
+
+            rebuilt                                                 ??= new(config.Profiles);
+            rebuilt[name] = profile with { DefaultVisibility = normalized };
+        }
+
+        return rebuilt is null ? config : config with { Profiles = rebuilt };
     }
 
     public static async Task SaveProfileConfig(ProfileConfig config) {
