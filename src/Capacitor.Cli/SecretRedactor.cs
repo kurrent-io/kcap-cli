@@ -5,7 +5,26 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli;
 
 static partial class SecretRedactor {
+    // Above this length, lines are replaced with an opaque placeholder instead of being scanned
+    // by the regex pipeline. Real conversation turns and small tool results stay well under this;
+    // lines above it are almost always truncated dumps (mid-key secret blobs, base64 blobs) that
+    // would trip regex alternation paths into catastrophic backtracking (see AI-783 / line 953
+    // incident where an unterminated `-----BEGIN RSA PRIVATE KEY-----` blob wedged the watcher
+    // main loop at 100% CPU). UTF-16 code units, not bytes — the redaction cost is dominated by
+    // regex stepping over chars, and the limit is a coarse defense-in-depth bound, not a wire-size
+    // budget.
+    internal const int MaxRedactableLineChars = 64 * 1024;
+
+    // Sent in place of an oversize line so its content never reaches the server even partially
+    // redacted. The server treats unknown top-level `type` values as a no-op event, which keeps
+    // line numbering stable for resume/gap-recovery while guaranteeing no raw secret bytes leave
+    // the host.
+    internal const string OversizeLinePlaceholder =
+        """{"type":"redacted_oversize_line","reason":"line exceeded SecretRedactor size limit"}""";
+
     public static string RedactLine(string rawJsonlLine) {
+        if (rawJsonlLine.Length > MaxRedactableLineChars) return OversizeLinePlaceholder;
+
         try {
             using var doc  = JsonDocument.Parse(rawJsonlLine);
             var       root = doc.RootElement;
@@ -74,8 +93,12 @@ static partial class SecretRedactor {
         return text;
     }
 
-    // Matches PEM private key blocks (handles both real newlines and \\n escaped newlines in JSON strings)
-    [GeneratedRegex(@"-----BEGIN[A-Z\s]*PRIVATE KEY-----(?:\\n|[\s\S])*?-----END[A-Z\s]*PRIVATE KEY-----", RegexOptions.None)]
+    // Matches PEM private key blocks. `[\s\S]` already covers `\` and `n` individually, so the
+    // earlier `(?:\\n|[\s\S])` alternation was redundant — and catastrophically backtrackable when
+    // the BEGIN marker appears without a matching END (e.g. truncated tool dumps). The `{0,16384}`
+    // upper bound caps the search even if a future regex change reintroduces ambiguity; real PEM
+    // keys (RSA-4096 armored) are ~3.2KB so this leaves plenty of headroom.
+    [GeneratedRegex(@"-----BEGIN[A-Z\s]*PRIVATE KEY-----[\s\S]{0,16384}?-----END[A-Z\s]*PRIVATE KEY-----", RegexOptions.None)]
     private static partial Regex PemBlockRx();
 
     static readonly Regex PemBlockRegex = PemBlockRx();

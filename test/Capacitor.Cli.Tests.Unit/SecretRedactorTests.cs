@@ -1,6 +1,58 @@
+using System.Diagnostics;
+using System.Text;
+
 namespace Capacitor.Cli.Tests.Unit;
 
 public class SecretRedactorTests {
+    [Test]
+    public async Task RedactsLine_TruncatedPemPrivateKey_DoesNotHangOnBacktracking() {
+        // Regression: a tool result containing `-----BEGIN RSA PRIVATE KEY-----` followed by many
+        // `\n`-escaped key body lines, then truncated WITHOUT a matching `-----END` marker, used
+        // to wedge the watcher: the `(?:\\n|[\s\S])*?` alternation in PemBlockRegex had two paths
+        // for every `\n` pair, producing ~2^N backtracking on the failed-to-find-END search.
+        // Observed in prod (AI-783): watcher main loop at 100% CPU for 50s+ on a 5KB line.
+        var keyBody = new StringBuilder();
+
+        // Synthetic base64-like body — NOT a real key. The redactor's backtracking shape only
+        // depends on the count of `\n` pairs and absence of an END marker, not on byte contents.
+        for (var i = 0; i < 60; i++) {
+            keyBody.Append("AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJKKKKLLLLMMMMNNNNOOOOPPPP\\n");
+        }
+
+        var line = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"tool_use_id\":\"toolu_1\",\"type\":\"tool_result\",\"content\":\"-----BEGIN RSA PRIVATE KEY-----\\n"
+         + keyBody
+         + "\",\"is_error\":false}]}}";
+
+        var sw = Stopwatch.StartNew();
+        var result = SecretRedactor.RedactLine(line);
+        sw.Stop();
+
+        // The pre-fix regex would not return inside any reasonable test budget on this input.
+        // 2 seconds is generous; the fixed regex completes in <10ms.
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(2));
+        // No END marker means there's no PEM block to redact — line should pass through unchanged.
+        await Assert.That(result).IsEqualTo(line);
+    }
+
+    [Test]
+    public async Task RedactsLine_OverSizeLimit_ReplacesWithPlaceholder_DoesNotLeakContent() {
+        // Defense in depth: lines above the size cap skip the regex pipeline entirely so a
+        // future regex change reintroducing ambiguity cannot wedge the watcher. The line MUST
+        // NOT be returned verbatim — WatchCommand uploads RedactLine output to the server, so
+        // raw passthrough on an oversize tool-result line would be an exfiltration path.
+        var secretMarker = "GHOST_TOKEN_DO_NOT_LEAK_ME_xyz12345";
+        var padding      = new string('A', SecretRedactor.MaxRedactableLineChars);
+        var oversized    = padding + secretMarker;
+
+        var sw = Stopwatch.StartNew();
+        var result = SecretRedactor.RedactLine(oversized);
+        sw.Stop();
+
+        await Assert.That(result).DoesNotContain(secretMarker);
+        await Assert.That(result).IsEqualTo(SecretRedactor.OversizeLinePlaceholder);
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromMilliseconds(100));
+    }
+
     [Test]
     public async Task RedactsLine_PemPrivateKey_InToolResult() {
         var line = """
