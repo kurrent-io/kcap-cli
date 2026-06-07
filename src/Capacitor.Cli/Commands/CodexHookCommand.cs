@@ -104,21 +104,21 @@ static class CodexHookCommand {
             return 0;
         }
 
-        // Honor per-profile excluded_paths / excluded_repos for every Codex
-        // event — symmetric with the Claude path (ClaudeHookCommand.cs around
-        // line 100). Skipping just SessionStart would still leak transcripts
-        // via the Stop hook's watcher refresh and re-emit permission events,
-        // so the short-circuit lives here above the event switch.
+        // Path exclusion is a string-prefix compare against the payload's cwd
+        // — cheap, safe to run on every event (including Stop, which fires
+        // per turn). Repo exclusion is handled inside HandleSessionStart
+        // instead: running it here would call RepoExclusion.IsExcludedAsync,
+        // which falls back to DetectRepositoryAsync (multiple git commands +
+        // gh pr view) when the payload lacks a repository block — too
+        // expensive for the per-turn Stop hook. Doing the repo check once at
+        // SessionStart (after enrichment, when the repository block is
+        // populated) and marking the session via DisabledSessions lets
+        // subsequent events take the existing disabled-session fast path
+        // above without paying any git cost.
         var activeProfile = await AppConfig.GetActiveProfileAsync();
 
         if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
          && PathExclusion.IsExcluded(TryGetString(node, "cwd"), excludedPaths)) {
-            EmitExclusionAcknowledgment(eventName);
-            return 0;
-        }
-
-        if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
-         && await RepoExclusion.IsExcludedAsync(node.ToJsonString(), excludedRepos)) {
             EmitExclusionAcknowledgment(eventName);
             return 0;
         }
@@ -161,6 +161,23 @@ static class CodexHookCommand {
         }
 
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(node.ToJsonString());
+
+        // Repo exclusion runs here (not above the event switch) so that the
+        // repository block is already populated by enrichment — RepoExclusion
+        // takes the fast in-payload path and skips the expensive
+        // DetectRepositoryAsync fallback. Mark the session via
+        // DisabledSessions so subsequent Stop / PermissionRequest events
+        // take the existing disabled-session fast path at the top of Handle
+        // without paying any git cost.
+        if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
+         && await RepoExclusion.IsExcludedAsync(enriched, excludedRepos)) {
+            var excludedSessionId = TryGetString(node, "session_id");
+
+            if (excludedSessionId is not null) DisabledSessions.Mark(excludedSessionId);
+
+            Console.Write(SessionScopedOutputJson);
+            return 0;
+        }
 
         var exit = await PostHookAsync(baseUrl, "session-start/codex", enriched);
         if (exit != 0) return exit;

@@ -72,8 +72,14 @@ public class CodexSessionStartVisibilityTests : IDisposable {
         await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("private");
     }
 
-    [Test, NotInParallel("AppConfig_FileState")]
-    public async Task SessionStart_for_excluded_repo_is_skipped_and_continue_json_is_emitted() {
+    // Globally sequential ([NotInParallel] with no group key): this test
+    // captures Console.Out. Group keys don't prevent cross-group Console
+    // interleaving — see the comment block at the top of
+    // test/Capacitor.Cli.Tests.Unit/Codex/CodexHookCommandTests.cs.
+    [Test, NotInParallel]
+    public async Task SessionStart_for_excluded_repo_is_skipped_and_marks_session_disabled() {
+        const string excludedSessionId = "codexexclusiontestsess";
+
         var config = new ProfileConfig {
             ActiveProfile = "work",
             Profiles = new() {
@@ -88,15 +94,15 @@ public class CodexSessionStartVisibilityTests : IDisposable {
         _server.Given(Request.Create().WithPath("/hooks/session-start/codex").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
-        const string payload =
-            """
-            {
-              "hook_event_name": "SessionStart",
-              "session_id":      "abc",
-              "cwd":             "/tmp",
-              "repository":      { "owner": "acme", "repo_name": "secret-repo" }
-            }
-            """;
+        var payload =
+            $$"""
+              {
+                "hook_event_name": "SessionStart",
+                "session_id":      "{{excludedSessionId}}",
+                "cwd":             "/tmp",
+                "repository":      { "owner": "acme", "repo_name": "secret-repo" }
+              }
+              """;
 
         var originalOut  = Console.Out;
         var stdoutWriter = new StringWriter();
@@ -105,16 +111,22 @@ public class CodexSessionStartVisibilityTests : IDisposable {
         try {
             var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
             await Assert.That(exit).IsEqualTo(0);
+
+            // No /hooks/session-start/codex POST.
+            var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/codex").UsingPost());
+            await Assert.That(requests.Count).IsEqualTo(0);
+
+            // Codex's SessionStart parser rejects empty stdout.
+            var doc = System.Text.Json.JsonDocument.Parse(stdoutWriter.ToString());
+            await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
+
+            // Subsequent Stop on the same session must take the disabled-session
+            // fast path (no /hooks call, no watcher refresh) — that's how
+            // per-turn Stop hooks stay cheap for excluded sessions.
+            await Assert.That(DisabledSessions.IsDisabled(excludedSessionId)).IsTrue();
         } finally {
             Console.SetOut(originalOut);
+            DisabledSessions.RemoveMarker(excludedSessionId);
         }
-
-        var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/codex").UsingPost());
-        await Assert.That(requests.Count).IsEqualTo(0);
-
-        // Codex's SessionStart parser rejects empty stdout — exclusion still
-        // needs to emit the schema-default acknowledgment.
-        var doc = System.Text.Json.JsonDocument.Parse(stdoutWriter.ToString());
-        await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
     }
 }
