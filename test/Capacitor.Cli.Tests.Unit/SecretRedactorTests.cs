@@ -35,16 +35,21 @@ public class SecretRedactorTests {
     }
 
     [Test]
-    public async Task RedactsLine_OverSizeLimit_PassesThroughUnchanged() {
-        // Defense in depth: lines above the size cap skip redaction entirely so that even a
-        // future regex change reintroducing ambiguity cannot wedge the watcher.
-        var oversized = new string('A', SecretRedactor.MaxRedactableLineBytes + 1);
+    public async Task RedactsLine_OverSizeLimit_ReplacesWithPlaceholder_DoesNotLeakContent() {
+        // Defense in depth: lines above the size cap skip the regex pipeline entirely so a
+        // future regex change reintroducing ambiguity cannot wedge the watcher. The line MUST
+        // NOT be returned verbatim — WatchCommand uploads RedactLine output to the server, so
+        // raw passthrough on an oversize tool-result line would be an exfiltration path.
+        var secretMarker = "GHOST_TOKEN_DO_NOT_LEAK_ME_xyz12345";
+        var padding      = new string('A', SecretRedactor.MaxRedactableLineChars);
+        var oversized    = padding + secretMarker;
 
         var sw = Stopwatch.StartNew();
         var result = SecretRedactor.RedactLine(oversized);
         sw.Stop();
 
-        await Assert.That(result).IsEqualTo(oversized);
+        await Assert.That(result).DoesNotContain(secretMarker);
+        await Assert.That(result).IsEqualTo(SecretRedactor.OversizeLinePlaceholder);
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromMilliseconds(100));
     }
 
