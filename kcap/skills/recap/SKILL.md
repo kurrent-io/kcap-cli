@@ -1,15 +1,18 @@
 ---
 name: recap
 description: >-
-  This skill should be used when the user asks to "read a previous session",
-  "get session history", "recap session", "what happened in session X",
-  "load context from a previous session", "continue from session",
-  "what did we do last time", "catch me up on session X",
-  "summarize session", "show me what happened",
-  "what have we been working on", "recently we implemented",
-  "what was done in this repo", "recent changes", "recent sessions",
-  or provides a session ID they want to review.
-  Provides instructions for retrieving session history via the kcap CLI.
+  This skill should be used to read, search, or recall past Kurrent Capacitor
+  sessions. Triggers include: "read a previous session", "get session history",
+  "recap session", "what happened in session X", "load context from a previous
+  session", "continue from session", "what did we do last time", "catch me up
+  on session X", "summarize session", "show me what happened", "what have we
+  been working on", "recently we implemented", "what was done in this repo",
+  "recent changes", "recent sessions", or providing a session ID to review.
+  Also covers search/recall asks: "find the session where we…", "which session
+  discussed X", "did we ever debug Y", "look up the session about Z", "recall
+  the session that…", "search past sessions for…". Provides instructions for
+  retrieving and searching session history via the kcap CLI and the
+  kcap-sessions MCP tools.
 ---
 
 > **For agents:** When the `kcap-sessions` MCP server is available, prefer its tools (`search_sessions`, `get_session_summary`, `get_session_transcript`) for retrieving past sessions. This CLI-wrapped skill remains a fallback for shell use and when MCP isn't installed.
