@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 // ReSharper disable ShortLivedHttpClient
 
 namespace Capacitor.Cli.Commands;
@@ -103,8 +104,27 @@ static class CodexHookCommand {
             return 0;
         }
 
+        // Honor per-profile excluded_paths / excluded_repos for every Codex
+        // event — symmetric with the Claude path (ClaudeHookCommand.cs around
+        // line 100). Skipping just SessionStart would still leak transcripts
+        // via the Stop hook's watcher refresh and re-emit permission events,
+        // so the short-circuit lives here above the event switch.
+        var activeProfile = await AppConfig.GetActiveProfileAsync();
+
+        if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
+         && PathExclusion.IsExcluded(TryGetString(node, "cwd"), excludedPaths)) {
+            EmitExclusionAcknowledgment(eventName);
+            return 0;
+        }
+
+        if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
+         && await RepoExclusion.IsExcludedAsync(node.ToJsonString(), excludedRepos)) {
+            EmitExclusionAcknowledgment(eventName);
+            return 0;
+        }
+
         return eventName switch {
-            "SessionStart"      => await HandleSessionStart(baseUrl, node),
+            "SessionStart"      => await HandleSessionStart(baseUrl, node, activeProfile),
             "Stop"              => await HandleStop(baseUrl, node),
             "PermissionRequest" => await HandlePermissionRequest(baseUrl, node),
             "UserPromptSubmit"
@@ -114,7 +134,32 @@ static class CodexHookCommand {
         };
     }
 
-    static async Task<int> HandleSessionStart(string baseUrl, JsonNode node) {
+    static void EmitExclusionAcknowledgment(string eventName) {
+        switch (eventName) {
+            case "SessionStart" or "Stop":
+                // Codex's SessionStart/Stop parser rejects empty stdout.
+                Console.Write(SessionScopedOutputJson);
+                break;
+            case "PermissionRequest":
+                // Empty hookSpecificOutput → Codex's local approval prompt
+                // takes over (matches the KCAP_SKIP=1 branch above).
+                Console.Write("{}");
+                break;
+        }
+    }
+
+    static async Task<int> HandleSessionStart(string baseUrl, JsonNode node, Profile? activeProfile) {
+        // Stamp the user's configured default visibility onto the payload
+        // BEFORE git enrichment so it survives the JsonString round-trip.
+        // /hooks/session-start/codex shares SessionStartHook with the Claude
+        // route and the server-side SessionHookHandlers.HandleSessionStart
+        // reads hook.DefaultVisibility for both vendors; without this, codex
+        // sessions in org repos silently default to org-visible because
+        // VisibilityService treats null as "fall back to org visibility".
+        if (activeProfile?.DefaultVisibility is { } visibility) {
+            node["default_visibility"] = visibility;
+        }
+
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(node.ToJsonString());
 
         var exit = await PostHookAsync(baseUrl, "session-start/codex", enriched);

@@ -1,0 +1,120 @@
+using System.Text.Json.Nodes;
+using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+using WireMock.Server;
+
+namespace Capacitor.Cli.Tests.Integration;
+
+/// <summary>
+/// AI-782 — Codex sessions must honor the active V2 profile's
+/// <c>default_visibility</c> and <c>excluded_repos</c> settings, the
+/// same way the Claude hook does. Without this, Codex sessions
+/// silently default to org-visible (the server treats null as the
+/// org-visibility fallback) and ignore per-profile exclusions.
+/// </summary>
+public class CodexSessionStartVisibilityTests : IDisposable {
+    readonly WireMockServer _server         = WireMockServer.Start();
+    readonly string         _configPath     = PathHelpers.ConfigPath("config.json");
+    readonly string?        _previousConfig;
+
+    public CodexSessionStartVisibilityTests() {
+        _previousConfig = File.Exists(_configPath) ? File.ReadAllText(_configPath) : null;
+    }
+
+    public void Dispose() {
+        _server.Stop();
+
+        if (_previousConfig is null) {
+            if (File.Exists(_configPath)) File.Delete(_configPath);
+        } else {
+            File.WriteAllText(_configPath, _previousConfig);
+        }
+    }
+
+    [Test, NotInParallel("AppConfig_FileState")]
+    public async Task SessionStart_stamps_default_visibility_from_active_profile() {
+        var config = new ProfileConfig {
+            ActiveProfile = "work",
+            Profiles = new() {
+                ["work"] = new Profile {
+                    ServerUrl         = _server.Url,
+                    DefaultVisibility = "private"
+                }
+            }
+        };
+        await AppConfig.SaveProfileConfig(config);
+
+        _server.Given(Request.Create().WithPath("/hooks/session-start/codex").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+
+        // No transcript_path → HandleSessionStart short-circuits before the
+        // watcher spawn (mirrors ClaudeHookStdoutTests' approach).
+        const string payload =
+            """
+            {
+              "hook_event_name": "SessionStart",
+              "session_id":      "abc",
+              "cwd":             "/tmp",
+              "model":           "gpt-5"
+            }
+            """;
+
+        var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+        await Assert.That(exit).IsEqualTo(0);
+
+        var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/codex").UsingPost());
+        await Assert.That(requests.Count).IsEqualTo(1);
+
+        var body = JsonNode.Parse(requests[0].RequestMessage.Body!)!;
+        await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("private");
+    }
+
+    [Test, NotInParallel("AppConfig_FileState")]
+    public async Task SessionStart_for_excluded_repo_is_skipped_and_continue_json_is_emitted() {
+        var config = new ProfileConfig {
+            ActiveProfile = "work",
+            Profiles = new() {
+                ["work"] = new Profile {
+                    ServerUrl     = _server.Url,
+                    ExcludedRepos = ["acme/secret-repo"]
+                }
+            }
+        };
+        await AppConfig.SaveProfileConfig(config);
+
+        _server.Given(Request.Create().WithPath("/hooks/session-start/codex").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+
+        const string payload =
+            """
+            {
+              "hook_event_name": "SessionStart",
+              "session_id":      "abc",
+              "cwd":             "/tmp",
+              "repository":      { "owner": "acme", "repo_name": "secret-repo" }
+            }
+            """;
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+        Console.SetOut(stdoutWriter);
+
+        try {
+            var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+            await Assert.That(exit).IsEqualTo(0);
+        } finally {
+            Console.SetOut(originalOut);
+        }
+
+        var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/codex").UsingPost());
+        await Assert.That(requests.Count).IsEqualTo(0);
+
+        // Codex's SessionStart parser rejects empty stdout — exclusion still
+        // needs to emit the schema-default acknowledgment.
+        var doc = System.Text.Json.JsonDocument.Parse(stdoutWriter.ToString());
+        await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
+    }
+}
