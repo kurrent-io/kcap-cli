@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 // ReSharper disable ShortLivedHttpClient
 
 namespace Capacitor.Cli.Commands;
@@ -103,8 +104,27 @@ static class CodexHookCommand {
             return 0;
         }
 
+        // Path exclusion is a string-prefix compare against the payload's cwd
+        // — cheap, safe to run on every event (including Stop, which fires
+        // per turn). Repo exclusion is handled inside HandleSessionStart
+        // instead: running it here would call RepoExclusion.IsExcludedAsync,
+        // which falls back to DetectRepositoryAsync (multiple git commands +
+        // gh pr view) when the payload lacks a repository block — too
+        // expensive for the per-turn Stop hook. Doing the repo check once at
+        // SessionStart (after enrichment, when the repository block is
+        // populated) and marking the session via DisabledSessions lets
+        // subsequent events take the existing disabled-session fast path
+        // above without paying any git cost.
+        var activeProfile = await AppConfig.GetActiveProfileAsync();
+
+        if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
+         && PathExclusion.IsExcluded(TryGetString(node, "cwd"), excludedPaths)) {
+            EmitExclusionAcknowledgment(eventName);
+            return 0;
+        }
+
         return eventName switch {
-            "SessionStart"      => await HandleSessionStart(baseUrl, node),
+            "SessionStart"      => await HandleSessionStart(baseUrl, node, activeProfile),
             "Stop"              => await HandleStop(baseUrl, node),
             "PermissionRequest" => await HandlePermissionRequest(baseUrl, node),
             "UserPromptSubmit"
@@ -114,8 +134,50 @@ static class CodexHookCommand {
         };
     }
 
-    static async Task<int> HandleSessionStart(string baseUrl, JsonNode node) {
+    static void EmitExclusionAcknowledgment(string eventName) {
+        switch (eventName) {
+            case "SessionStart" or "Stop":
+                // Codex's SessionStart/Stop parser rejects empty stdout.
+                Console.Write(SessionScopedOutputJson);
+                break;
+            case "PermissionRequest":
+                // Empty hookSpecificOutput → Codex's local approval prompt
+                // takes over (matches the KCAP_SKIP=1 branch above).
+                Console.Write("{}");
+                break;
+        }
+    }
+
+    static async Task<int> HandleSessionStart(string baseUrl, JsonNode node, Profile? activeProfile) {
+        // Stamp the user's configured default visibility onto the payload
+        // BEFORE git enrichment so it survives the JsonString round-trip.
+        // /hooks/session-start/codex shares SessionStartHook with the Claude
+        // route and the server-side SessionHookHandlers.HandleSessionStart
+        // reads hook.DefaultVisibility for both vendors; without this, codex
+        // sessions in org repos silently default to org-visible because
+        // VisibilityService treats null as "fall back to org visibility".
+        if (activeProfile?.DefaultVisibility is { } visibility) {
+            node["default_visibility"] = visibility;
+        }
+
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(node.ToJsonString());
+
+        // Repo exclusion runs here (not above the event switch) so that the
+        // repository block is already populated by enrichment — RepoExclusion
+        // takes the fast in-payload path and skips the expensive
+        // DetectRepositoryAsync fallback. Mark the session via
+        // DisabledSessions so subsequent Stop / PermissionRequest events
+        // take the existing disabled-session fast path at the top of Handle
+        // without paying any git cost.
+        if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
+         && await RepoExclusion.IsExcludedAsync(enriched, excludedRepos)) {
+            var excludedSessionId = TryGetString(node, "session_id");
+
+            if (excludedSessionId is not null) DisabledSessions.Mark(excludedSessionId);
+
+            Console.Write(SessionScopedOutputJson);
+            return 0;
+        }
 
         var exit = await PostHookAsync(baseUrl, "session-start/codex", enriched);
         if (exit != 0) return exit;
