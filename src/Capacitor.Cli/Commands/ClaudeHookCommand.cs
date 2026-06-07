@@ -94,16 +94,20 @@ public static class ClaudeHookCommand {
             body = await RepositoryDetection.EnrichWithRepositoryInfo(body);
         }
 
-        // Load config once for exclusion check and default_visibility injection.
-        var kcapConfig = await AppConfig.Load();
+        // Resolve the V2 profile once for repo/path exclusion and
+        // default_visibility injection. Reading these off the legacy top-level
+        // CapacitorConfig silently misses v2 settings (the fields live under
+        // the active profile), so per-profile `excluded_repos` / `private`
+        // visibility were being ignored.
+        var activeProfile = await AppConfig.GetActiveProfileAsync();
 
         // Check repo exclusion — silently exit for excluded repos.
-        if (kcapConfig?.ExcludedRepos is { Length: > 0 } repos && await RepoExclusion.IsExcludedAsync(body, repos)) {
+        if (activeProfile?.ExcludedRepos is { Length: > 0 } repos && await RepoExclusion.IsExcludedAsync(body, repos)) {
             return 0;
         }
 
         // Check path exclusion against the V2 profile that applies to this process.
-        if ((await AppConfig.GetActiveProfileAsync())?.ExcludedPaths is { Length: > 0 } paths) {
+        if (activeProfile?.ExcludedPaths is { Length: > 0 } paths) {
             try {
                 var cwd = JsonNode.Parse(body)?["cwd"]?.GetValue<string>();
 
@@ -113,8 +117,12 @@ public static class ClaudeHookCommand {
             }
         }
 
-        // Inject default_visibility from config for session-start hooks.
-        if (command == "session-start" && kcapConfig?.DefaultVisibility is { } vis) {
+        // Inject default_visibility from the active V2 profile for session-start
+        // hooks. The legacy top-level CapacitorConfig.DefaultVisibility shape is
+        // not populated by v2 configs (the field lives under the profile), so
+        // reading it there silently fell back to "org_public" and ignored
+        // per-profile `private` settings.
+        if (command == "session-start" && activeProfile?.DefaultVisibility is { } vis) {
             try {
                 var node = JsonNode.Parse(body);
 
