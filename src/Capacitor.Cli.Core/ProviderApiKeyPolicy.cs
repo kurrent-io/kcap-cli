@@ -33,14 +33,19 @@ public static class ProviderApiKeyPolicy {
     /// Pure resolver — exposed for testing.
     /// </summary>
     public static bool ShouldKeepProviderKey(string? envValue, Profile? profile) {
-        if (TryParseEnv(envValue) is { } envOverride) {
+        if (TryParseBool(envValue) is { } envOverride) {
             return envOverride;
         }
 
         return profile?.UseProviderApiKey ?? false;
     }
 
-    static bool? TryParseEnv(string? value) {
+    /// <summary>
+    /// Parses a user-supplied truthy/falsy string. Returns <c>null</c> for
+    /// unrecognised or empty input so callers can error out (e.g. CLI flag
+    /// validation) instead of silently coercing to <c>false</c>.
+    /// </summary>
+    public static bool? TryParseBool(string? value) {
         if (string.IsNullOrWhiteSpace(value)) return null;
 
         return value.Trim().ToLowerInvariant() switch {

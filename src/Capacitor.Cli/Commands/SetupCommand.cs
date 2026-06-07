@@ -234,7 +234,13 @@ public static class SetupCommand {
             if (noPrompt) {
                 var flagValue = GetArg(args, "--use-provider-api-key");
                 if (flagValue is not null) {
-                    useProviderApiKey = flagValue is "1" or "true" or "yes";
+                    var parsed = ProviderApiKeyPolicy.TryParseBool(flagValue);
+                    if (parsed is null) {
+                        await Console.Error.WriteLineAsync(
+                            $"  Invalid value for --use-provider-api-key: '{flagValue}'. Must be true/1/yes/on or false/0/no/off.");
+                        return 1;
+                    }
+                    useProviderApiKey = parsed.Value;
                 }
                 await Console.Out.WriteLineAsync($"  Use provider API key: {useProviderApiKey}");
             } else {

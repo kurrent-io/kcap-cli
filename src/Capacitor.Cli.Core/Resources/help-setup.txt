@@ -17,9 +17,11 @@ Options:
                               user-dir is detected (~/.cursor/).
   --use-provider-api-key <v>  In --no-prompt mode, set whether kcap keeps
                               ANTHROPIC_API_KEY / OPENAI_API_KEY in headless
-                              agent spawns. true/1/yes opts in; anything else
-                              preserves the previous profile setting.
-                              Default scrub keeps subscription auth working.
+                              agent spawns. Accepts true/1/yes/on or
+                              false/0/no/off; any other value exits with an
+                              error. Omit the flag to preserve the existing
+                              profile setting. Default scrub keeps
+                              subscription auth working.
 
 The setup wizard detects every supported coding agent: Claude Code and Codex CLI
 via PATH; Cursor via user-dir presence (~/.cursor/) so IDE-only users without

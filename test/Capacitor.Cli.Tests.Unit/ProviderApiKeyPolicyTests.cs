@@ -50,4 +50,27 @@ public class ProviderApiKeyPolicyTests {
         var profile = new Profile { UseProviderApiKey = true };
         await Assert.That(ProviderApiKeyPolicy.ShouldKeepProviderKey(envValue, profile)).IsTrue();
     }
+
+    [Test]
+    [Arguments("1",     true)]
+    [Arguments("true",  true)]
+    [Arguments("YES",   true)]
+    [Arguments("on",    true)]
+    [Arguments("0",     false)]
+    [Arguments("false", false)]
+    [Arguments("no",    false)]
+    [Arguments("off",   false)]
+    public async Task TryParseBool_recognises_truthy_and_falsy(string value, bool expected) {
+        await Assert.That(ProviderApiKeyPolicy.TryParseBool(value)).IsEqualTo(expected);
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments("   ")]
+    [Arguments("maybe")]
+    [Arguments("2")]
+    public async Task TryParseBool_returns_null_on_unrecognised(string? value) {
+        await Assert.That(ProviderApiKeyPolicy.TryParseBool(value)).IsNull();
+    }
 }
