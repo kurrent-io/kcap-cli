@@ -5,7 +5,17 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli;
 
 static partial class SecretRedactor {
+    // Skip redaction on pathologically large lines. Real conversation turns and
+    // small tool results stay well under this; lines above it are almost always
+    // truncated dumps (mid-key secret blobs, base64 blobs) that trip regex
+    // alternation paths into catastrophic backtracking — see AI-783 / line 953
+    // incident where an unterminated `-----BEGIN RSA PRIVATE KEY-----` blob
+    // wedged the watcher main loop at 100% CPU.
+    internal const int MaxRedactableLineBytes = 64 * 1024;
+
     public static string RedactLine(string rawJsonlLine) {
+        if (rawJsonlLine.Length > MaxRedactableLineBytes) return rawJsonlLine;
+
         try {
             using var doc  = JsonDocument.Parse(rawJsonlLine);
             var       root = doc.RootElement;
@@ -74,8 +84,12 @@ static partial class SecretRedactor {
         return text;
     }
 
-    // Matches PEM private key blocks (handles both real newlines and \\n escaped newlines in JSON strings)
-    [GeneratedRegex(@"-----BEGIN[A-Z\s]*PRIVATE KEY-----(?:\\n|[\s\S])*?-----END[A-Z\s]*PRIVATE KEY-----", RegexOptions.None)]
+    // Matches PEM private key blocks. `[\s\S]` already covers `\` and `n` individually, so the
+    // earlier `(?:\\n|[\s\S])` alternation was redundant — and catastrophically backtrackable when
+    // the BEGIN marker appears without a matching END (e.g. truncated tool dumps). The `{0,16384}`
+    // upper bound caps the search even if a future regex change reintroduces ambiguity; real PEM
+    // keys (RSA-4096 armored) are ~3.2KB so this leaves plenty of headroom.
+    [GeneratedRegex(@"-----BEGIN[A-Z\s]*PRIVATE KEY-----[\s\S]{0,16384}?-----END[A-Z\s]*PRIVATE KEY-----", RegexOptions.None)]
     private static partial Regex PemBlockRx();
 
     static readonly Regex PemBlockRegex = PemBlockRx();
