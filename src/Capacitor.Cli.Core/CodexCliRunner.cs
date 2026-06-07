@@ -81,7 +81,11 @@ static class CodexCliRunner {
             }
         };
         // A globally-set OPENAI_API_KEY overrides ChatGPT subscription auth in `codex exec`.
-        psi.Environment.Remove("OPENAI_API_KEY");
+        // Users on PAYG/API-key auth opt back in via profile flag or
+        // KCAP_USE_PROVIDER_API_KEY=1 (AI-776).
+        if (!ProviderApiKeyPolicy.ShouldKeepProviderKey()) {
+            psi.Environment.Remove("OPENAI_API_KEY");
+        }
 
         psi.ArgumentList.Add("exec");
         psi.ArgumentList.Add("--ephemeral");

@@ -48,6 +48,16 @@ public record Profile {
     [JsonPropertyName("disable_session_guidelines")]
     public bool? DisableSessionGuidelines { get; init; }
 
+    /// <summary>
+    /// When true, kcap keeps <c>ANTHROPIC_API_KEY</c> / <c>OPENAI_API_KEY</c>
+    /// in the spawn environment for headless agent CLIs (title generation,
+    /// summaries, judges). Default <c>false</c> scrubs them so subscription
+    /// auth (claude.ai / ChatGPT account) is used instead — see AI-755.
+    /// Override at runtime with <c>KCAP_USE_PROVIDER_API_KEY=1</c>.
+    /// </summary>
+    [JsonPropertyName("use_provider_api_key")]
+    public bool UseProviderApiKey { get; init; }
+
     [JsonPropertyName("update_check")]
     public bool UpdateCheck { get; init; } = true;
 
