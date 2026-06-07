@@ -206,6 +206,43 @@ public static class SetupCommand {
         var _ = await CodingAgentsStep.RunAsync(
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
 
+        // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
+        // from headless agent CLI spawns by default (AI-755) so subscription auth
+        // wins. PAYG users with the keys set in their environment can opt back in
+        // here; the rest never see this prompt.
+        var anthropicSet     = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
+        var openaiSet        = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
+        var promptApiKey      = (anthropicSet && !skipClaude) || (openaiSet && !skipCodexFlag);
+        // Preserve any previous opt-in when no key is in the current env (we just
+        // don't have anything to prompt about; the on-disk value is still valid).
+        var useProviderApiKey = existing?.UseProviderApiKey ?? false;
+
+        if (promptApiKey) {
+            await Console.Out.WriteLineAsync();
+
+            var keys = (anthropicSet, openaiSet) switch {
+                (true, true)  => "ANTHROPIC_API_KEY and OPENAI_API_KEY are set",
+                (true, false) => "ANTHROPIC_API_KEY is set",
+                (false, true) => "OPENAI_API_KEY is set",
+                _             => ""
+            };
+
+            AnsiConsole.MarkupLine($"  [dim]{Markup.Escape(keys)} in your environment.[/]");
+            AnsiConsole.MarkupLine("  [dim]By default kcap scrubs these when spawning Claude/Codex for headless calls so your[/]");
+            AnsiConsole.MarkupLine("  [dim]subscription login is used. Keep them if you authenticate via API key (PAYG).[/]");
+
+            if (noPrompt) {
+                var flagValue = GetArg(args, "--use-provider-api-key");
+                if (flagValue is not null) {
+                    useProviderApiKey = flagValue is "1" or "true" or "yes";
+                }
+                await Console.Out.WriteLineAsync($"  Use provider API key: {useProviderApiKey}");
+            } else {
+                useProviderApiKey = AnsiConsole.Prompt(
+                    new ConfirmationPrompt("  Use these API keys for kcap's headless calls?") { DefaultValue = useProviderApiKey });
+            }
+        }
+
         await Console.Out.WriteLineAsync();
 
         // Step 5: Daemon name + save
@@ -232,9 +269,10 @@ public static class SetupCommand {
         var defaultProfile = profileConfig.Profiles.GetValueOrDefault(activeName) ?? new Profile();
 
         defaultProfile = defaultProfile with {
-            ServerUrl         = serverUrl,
-            DefaultVisibility = defaultVisibility,
-            Daemon            = (defaultProfile.Daemon ?? new DaemonSettings()) with { Name = daemonName }
+            ServerUrl          = serverUrl,
+            DefaultVisibility  = defaultVisibility,
+            UseProviderApiKey  = useProviderApiKey,
+            Daemon             = (defaultProfile.Daemon ?? new DaemonSettings()) with { Name = daemonName }
         };
 
         var profiles = new Dictionary<string, Profile>(profileConfig.Profiles) {
@@ -256,6 +294,10 @@ public static class SetupCommand {
         grid.AddRow("[bold]Server[/]",     Markup.Escape(serverUrl));
         grid.AddRow("[bold]Visibility[/]", Markup.Escape(defaultVisibility));
         grid.AddRow("[bold]Daemon[/]",     Markup.Escape(daemonName));
+
+        if (useProviderApiKey) {
+            grid.AddRow("[bold]Provider API key[/]", "kept in headless spawns");
+        }
 
         if (finalTokens is not null) {
             grid.AddRow("[bold]Auth[/]", Markup.Escape($"{finalTokens.GitHubUsername} ({finalTokens.Provider})"));
