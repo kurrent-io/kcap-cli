@@ -32,9 +32,21 @@ public static class EvalService {
     // strengths/issues and five suggestions. Enforcing this at the schema
     // level keeps retrospectives cheap and prevents the model from padding
     // lists with low-signal bullets just because the schema would let it.
+    //
+    // AI-795: suggestions.items is an object with {text, audience} — NOT a
+    // bare string. The previous string-items schema forced the model to
+    // ignore the prompt's {text, audience} instruction, which meant every
+    // suggestion landed as audience="human" and no agent_guidance was ever
+    // produced by CLI-driven evals.
     const string RetrospectiveJsonSchema = """
-        {"type":"object","properties":{"overall":{"type":"string"},"strengths":{"type":"array","maxItems":3,"items":{"type":"string"}},"issues":{"type":"array","maxItems":3,"items":{"type":"string"}},"suggestions":{"type":"array","maxItems":5,"items":{"type":"string"}}},"required":["overall","strengths","issues","suggestions"],"additionalProperties":false}
+        {"type":"object","properties":{"overall":{"type":"string"},"strengths":{"type":"array","maxItems":3,"items":{"type":"string"}},"issues":{"type":"array","maxItems":3,"items":{"type":"string"}},"suggestions":{"type":"array","maxItems":5,"items":{"type":"object","properties":{"text":{"type":"string"},"audience":{"type":"string","enum":["agent","human"]}},"required":["text","audience"],"additionalProperties":false}}},"required":["overall","strengths","issues","suggestions"],"additionalProperties":false}
         """;
+
+    /// <summary>
+    /// Exposes <see cref="RetrospectiveJsonSchema"/> for test-time schema
+    /// validation. Production callers reference the constant directly.
+    /// </summary>
+    internal static string GetRetrospectiveJsonSchema() => RetrospectiveJsonSchema;
 
     // Claude CLI spends one turn calling the synthetic StructuredOutput tool
     // and a second turn emitting the end-of-turn, so eval calls need at
