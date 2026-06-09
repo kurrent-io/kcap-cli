@@ -111,6 +111,7 @@ Once set up, Capacitor runs silently in the background. Every Claude Code (and C
 - **Token consumption** — input/output/cache token counts per interaction
 - **Repository context** — git repo, branch, and PR linkage
 - **In-agent upgrade prompts** — in Claude Code sessions, when the server is running a newer kcap release than the local CLI, additional context is injected into the session so the agent can offer the user an upgrade via `npm install -g @kurrent/kcap`. The stderr `kcap` update hint continues to fire for direct command-line use.
+- **SessionStart context injection** — at every session start the server injects top evaluation-derived fact clusters for the current repo into Claude's `additionalContext`. The injected block is split into two sections: `## Known patterns` (repo/project facts relevant to any reader) and `## Guidance from past sessions` (agent-targeted action items derived from prior eval suggestions with `audience: "agent"`). Opt out by setting `disable_session_guidelines: true` in `~/.config/kcap/config.json` or via `kcap config set disable_session_guidelines true`.
 
 ## CLI commands
 
