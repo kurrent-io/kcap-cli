@@ -129,9 +129,12 @@ public sealed record ProxyConfigResponse {
 
 // Auth proxy: POST /discover-tenants response item
 public sealed record DiscoveredTenant {
-    [JsonPropertyName("org_id")]    public long   OrgId    { get; init; }
-    [JsonPropertyName("org_login")] public string OrgLogin { get; init; } = "";
-    [JsonPropertyName("origin")]    public string Origin   { get; init; } = "";
+    [JsonPropertyName("org_id")]        public long   OrgId        { get; init; }
+    [JsonPropertyName("org_login")]     public string OrgLogin     { get; init; } = "";
+    [JsonPropertyName("origin")]        public string Origin       { get; init; } = "";
+    [JsonPropertyName("account_id")]    public long   AccountId    { get; init; }
+    [JsonPropertyName("account_login")] public string AccountLogin { get; init; } = "";
+    [JsonPropertyName("account_type")]  public string AccountType  { get; init; } = "Organization";
 }
 
 public enum DiscoveryError {
