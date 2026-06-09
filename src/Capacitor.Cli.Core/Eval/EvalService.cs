@@ -144,7 +144,7 @@ public static class EvalService {
     /// <see cref="IEvalObserver.OnFailed"/> either way.
     /// </para>
     /// </summary>
-    public static async Task<SessionEvalCompletedPayload?> RunAsync(
+    public static async Task<SessionEvalCompletedPayloadV2?> RunAsync(
             string                          baseUrl,
             HttpClient                      httpClient,
             string                          sessionId,
@@ -425,7 +425,7 @@ public static class EvalService {
 
     // ── Phase 3: Finalize ──────────────────────────────────────────────────
 
-    public static async Task<SessionEvalCompletedPayload?> FinalizeAsync(
+    public static async Task<SessionEvalCompletedPayloadV2?> FinalizeAsync(
             EvalContext                        ctx,
             HttpClient                         httpClient,
             string                             baseUrl,
@@ -440,7 +440,8 @@ public static class EvalService {
             return null;
         }
 
-        // 4. Aggregate per-category + overall scores.
+        // 4. Aggregate per-category + overall scores. AI-795 T18: V2 payload
+        //    with structured RetrospectiveSuggestion items.
         var aggregate = Aggregate(verdicts, ctx.EvalRunId, model, ctx.Questions);
 
         // FactsUsed stays empty: nothing was injected into the judge prompt,
@@ -471,9 +472,39 @@ public static class EvalService {
         );
         aggregate = aggregate with { Retrospective = retrospective };
 
-        // 6. Persist the aggregate to the server.
-        var       postUrl     = $"{baseUrl}/api/sessions/{ctx.EncodedSessionId}/evals";
-        var       payloadJson = JsonSerializer.Serialize(aggregate, CapacitorJsonContext.Default.SessionEvalCompletedPayload);
+        // 6. Persist the aggregate to the server via the V2 route.
+        var ok = await PersistAggregateV2Async(httpClient, baseUrl, ctx.EncodedSessionId, aggregate, observer, ct);
+        if (!ok) return null;
+
+        observer.OnFinished(aggregate);
+
+        return aggregate;
+    }
+
+    /// <summary>
+    /// Persists a V2 aggregate to <c>POST /api/sessions/{id}/evals/v2</c>.
+    /// Extracted from <see cref="FinalizeAsync"/> as a public seam so the
+    /// daemon's wire-format contract can be tested without driving a full
+    /// retrospective synthesis (the latter requires the <c>claude</c> CLI
+    /// which isn't available in CI).
+    ///
+    /// <para>
+    /// Reports failures through <paramref name="observer"/>.OnFailed and
+    /// returns <c>false</c>; on HTTP success returns <c>true</c> without
+    /// touching the observer (caller is responsible for firing
+    /// OnFinished — see <see cref="FinalizeAsync"/>).
+    /// </para>
+    /// </summary>
+    public static async Task<bool> PersistAggregateV2Async(
+            HttpClient                    httpClient,
+            string                        baseUrl,
+            string                        encodedSessionId,
+            SessionEvalCompletedPayloadV2 aggregate,
+            IEvalObserver                 observer,
+            CancellationToken             ct
+        ) {
+        var       postUrl     = $"{baseUrl}/api/sessions/{encodedSessionId}/evals/v2";
+        var       payloadJson = JsonSerializer.Serialize(aggregate, CapacitorJsonContext.Default.SessionEvalCompletedPayloadV2);
         using var httpContent = new StringContent(payloadJson, Encoding.UTF8, "application/json");
 
         try {
@@ -481,17 +512,15 @@ public static class EvalService {
             if (!postResp.IsSuccessStatusCode) {
                 observer.OnFailed($"failed to persist eval result: HTTP {(int)postResp.StatusCode}");
 
-                return null;
+                return false;
             }
         } catch (HttpRequestException ex) {
             observer.OnFailed($"server unreachable for POST: {ex.Message}");
 
-            return null;
+            return false;
         }
 
-        observer.OnFinished(aggregate);
-
-        return aggregate;
+        return true;
     }
 
     // ── Prompt construction ────────────────────────────────────────────────
@@ -855,7 +884,7 @@ public static class EvalService {
 
     // ── Aggregation ────────────────────────────────────────────────────────
 
-    public static SessionEvalCompletedPayload Aggregate(
+    public static SessionEvalCompletedPayloadV2 Aggregate(
             IReadOnlyList<EvalQuestionVerdict> verdicts,
             string                             evalRunId,
             string                             model,
@@ -883,7 +912,7 @@ public static class EvalService {
         var summary = $"Evaluated {verdicts.Count}/{questions.Count} questions "
             + $"across {byCategory.Count} categories. Overall: {overall}/5 ({VerdictForScore(overall)}).";
 
-        return new SessionEvalCompletedPayload {
+        return new SessionEvalCompletedPayloadV2 {
             EvalRunId    = evalRunId,
             JudgeModel   = model,
             Categories   = byCategory,
@@ -921,12 +950,12 @@ public static class EvalService {
     /// <see cref="OperationCanceledException"/> propagates so upstream
     /// cancellation still cancels the eval run.
     /// </summary>
-    static async Task<EvalRetrospective?> RunRetrospectiveAsync(
+    static async Task<EvalRetrospectiveV2?> RunRetrospectiveAsync(
             string                             evalRunId,
             string                             sessionId,
             string                             model,
             string                             baseUrl,
-            SessionEvalCompletedPayload        aggregate,
+            SessionEvalCompletedPayloadV2      aggregate,
             IReadOnlyList<EvalQuestionVerdict> verdicts,
             IEvalObserver                      observer,
             CancellationToken                  ct
@@ -990,7 +1019,10 @@ public static class EvalService {
                 return null;
             }
 
-            var retrospective = ParseRetrospective(result.Result);
+            // AI-795 T18: V2 parser — tolerant of bare-string suggestion items
+            // and missing audience field (coerces to "human"). Server-side V2
+            // route accepts both shapes.
+            var retrospective = ParseRetrospectiveV2(result.Result);
             if (retrospective is null) {
                 observer.OnRetrospectiveFailed($"retrospective response did not parse as expected JSON shape; raw response: {Truncate(result.Result, 500)}");
 
@@ -1080,13 +1112,13 @@ public static class EvalService {
         public void OnRetrospectiveStarted() =>
             Safe(inner.OnRetrospectiveStarted, nameof(OnRetrospectiveStarted));
 
-        public void OnRetrospectiveCompleted(EvalRetrospective retrospective) =>
+        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective) =>
             Safe(() => inner.OnRetrospectiveCompleted(retrospective), nameof(OnRetrospectiveCompleted));
 
         public void OnRetrospectiveFailed(string reason) =>
             Safe(() => inner.OnRetrospectiveFailed(reason), nameof(OnRetrospectiveFailed));
 
-        public void OnFinished(SessionEvalCompletedPayload aggregate) =>
+        public void OnFinished(SessionEvalCompletedPayloadV2 aggregate) =>
             Safe(() => inner.OnFinished(aggregate), nameof(OnFinished));
 
         public void OnFailed(string reason) =>

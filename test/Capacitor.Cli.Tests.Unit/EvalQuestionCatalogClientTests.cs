@@ -31,11 +31,11 @@ public class EvalQuestionCatalogClientTests : IDisposable {
 
         public void OnRetrospectiveStarted() { }
 
-        public void OnRetrospectiveCompleted(EvalRetrospective retrospective) { }
+        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective) { }
 
         public void OnRetrospectiveFailed(string reason) { }
 
-        public void OnFinished(SessionEvalCompletedPayload aggregate) { }
+        public void OnFinished(SessionEvalCompletedPayloadV2 aggregate) { }
 
         public void OnFailed(string reason) => FailureMessages.Add(reason);
     }
