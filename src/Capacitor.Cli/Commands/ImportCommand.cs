@@ -394,6 +394,26 @@ static class ImportCommand {
             bool RequestedSummaries
         );
 
+    /// <summary>
+    /// Builds the Spectre markup for the "✗ Skipping {sid} [reason]" line.
+    /// The outer literal brackets around <paramref name="reason"/> MUST be
+    /// doubled — Spectre treats a bare <c>[word ...]</c> as a markup tag and
+    /// throws InvalidOperationException ("Could not find color or style ...")
+    /// when the first word isn't a known color/style. <see cref="Markup.Escape"/>
+    /// only escapes characters inside the substring, not the literal brackets
+    /// we wrap around it.
+    /// </summary>
+    internal static string FormatSkippedReasonMarkup(string sessionId, string reason) =>
+        $"[red]✗[/] Skipping [cyan]{Markup.Escape(sessionId)}[/] [[{Markup.Escape(reason)}]]";
+
+    /// <summary>
+    /// Builds the Spectre markup for the "✓ Loading {sid}... N lines [verb]"
+    /// line. See <see cref="FormatSkippedReasonMarkup"/> for why the outer
+    /// brackets around <paramref name="verb"/> are doubled.
+    /// </summary>
+    internal static string FormatLoadedSummaryMarkup(string sessionId, int lines, string verb) =>
+        $"[green]✓[/] Loading [cyan]{Markup.Escape(sessionId)}[/]... {lines} lines [[{Markup.Escape(verb)}]]";
+
     public static async Task<int> HandleImport(
             string                        baseUrl,
             string?                       filterCwd,
@@ -885,7 +905,7 @@ static class ImportCommand {
             ),
             OnSessionErrored = (_, sid, reason) => display.Line(
                 $"Skipping {sid} [{reason}]",
-                $"[red]✗[/] Skipping [cyan]{Markup.Escape(sid)}[/] [{Markup.Escape(reason)}]"
+                FormatSkippedReasonMarkup(sid, reason)
             ),
             OnSessionEnded = (_, c, outcome, lines) => {
                 importedSessionIds.Add(c.SessionId);
@@ -896,7 +916,7 @@ static class ImportCommand {
 
                 display.Line(
                     $"Loading {c.SessionId}... {lines} lines [{verb}]",
-                    $"[green]✓[/] Loading [cyan]{Markup.Escape(c.SessionId)}[/]... {lines} lines [{verb}]"
+                    FormatLoadedSummaryMarkup(c.SessionId, lines, verb)
                 );
             },
             OnTitleTaskReady = t => {
@@ -1051,7 +1071,7 @@ static class ImportCommand {
                                     IdleSlot(slot);
                                     // Errors print to scrollback above the live region —
                                     // Spectre.Console.Progress flushes prior writes.
-                                    AnsiConsole.MarkupLine($"[red]✗[/] Skipping [cyan]{Markup.Escape(sid)}[/] [{Markup.Escape(reason)}]");
+                                    AnsiConsole.MarkupLine(FormatSkippedReasonMarkup(sid, reason));
                                 },
                             };
 
