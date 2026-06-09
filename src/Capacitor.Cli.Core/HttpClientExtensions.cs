@@ -223,11 +223,22 @@ public static class HttpClientExtensions {
             TimeSpan                                           perAttemptTimeout,
             CancellationToken                                  ct
         ) {
-        var sw      = Stopwatch.StartNew();
-        var delayMs = 250;
+        var        sw        = Stopwatch.StartNew();
+        var        delayMs   = 250;
+        Exception? lastError = null;
 
         while (true) {
-            using var attemptCts = new CancellationTokenSource(perAttemptTimeout);
+            // Hard wall-clock guard: never start a new attempt (or sleep) past totalTimeout,
+            // even when perAttemptTimeout would otherwise allow it. Without this, a default
+            // call (total=30s, per-attempt=60s) against a hung server still blocks for ~60s.
+            var remaining = totalTimeout - sw.Elapsed;
+
+            if (remaining <= TimeSpan.Zero)
+                throw BudgetExhausted(totalTimeout, perAttemptTimeout, lastError);
+
+            var attemptCap = remaining < perAttemptTimeout ? remaining : perAttemptTimeout;
+
+            using var attemptCts = new CancellationTokenSource(attemptCap);
             using var linkedCts  = CancellationTokenSource.CreateLinkedTokenSource(ct, attemptCts.Token);
 
             try {
@@ -235,28 +246,44 @@ public static class HttpClientExtensions {
             } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                 // Caller cancelled — surface as cancellation, never retry.
                 throw;
-            } catch (HttpRequestException) when (sw.Elapsed < totalTimeout) {
+            } catch (HttpRequestException ex) when (sw.Elapsed < totalTimeout) {
                 // Transient transport error within retry budget — back off and try again.
-            } catch (OperationCanceledException) when (sw.Elapsed < totalTimeout) {
+                lastError = ex;
+            } catch (OperationCanceledException ex) when (sw.Elapsed < totalTimeout) {
                 // Per-attempt timeout fired (linked CTS, not caller's ct) and retry budget
                 // remains — back off and try again. Without this branch the same condition
                 // would surface as an unhandled TaskCanceledException at every call site
                 // that only catches HttpRequestException (import probes, transcript POSTs,
                 // session-start hooks, ...).
-            } catch (OperationCanceledException ex) {
-                // Per-attempt timeout fired but retry budget is exhausted. Convert to
-                // HttpRequestException so existing `catch (HttpRequestException)` handlers
-                // — which all the import / hook call sites already have — degrade the
-                // session to ProbeError / "server unreachable" instead of crashing.
+                lastError = ex;
+            } catch (HttpRequestException ex) {
+                // Budget exhausted on transport error — surface as HttpRequestException so
+                // existing `catch (HttpRequestException)` handlers degrade gracefully.
                 throw new HttpRequestException(
-                    $"Request did not complete within the {perAttemptTimeout.TotalSeconds:F0}s " +
-                    $"per-attempt timeout (retry budget of {totalTimeout.TotalSeconds:F0}s exhausted).",
+                    $"Request failed after exhausting the {totalTimeout.TotalSeconds:F0}s retry budget.",
                     ex
                 );
+            } catch (OperationCanceledException ex) {
+                throw BudgetExhausted(totalTimeout, perAttemptTimeout, ex);
             }
 
-            await Task.Delay(delayMs, ct);
+            // Cap the backoff sleep to the remaining budget so a retry delay can never push
+            // us past totalTimeout. If nothing's left, jump back to the loop top so the
+            // hard-guard above throws with lastError preserved as the inner exception.
+            var remainingAfter = totalTimeout - sw.Elapsed;
+
+            if (remainingAfter <= TimeSpan.Zero) continue;
+
+            var actualDelayMs = (int)Math.Min(delayMs, remainingAfter.TotalMilliseconds);
+            await Task.Delay(actualDelayMs, ct);
             delayMs = Math.Min(delayMs * 2, (int)MaxDelay.TotalMilliseconds);
         }
+
+        static HttpRequestException BudgetExhausted(TimeSpan totalTimeout, TimeSpan perAttemptTimeout, Exception? inner) =>
+            new(
+                $"Request did not complete within the {totalTimeout.TotalSeconds:F0}s retry budget "      +
+                $"(per-attempt timeout {perAttemptTimeout.TotalSeconds:F0}s).",
+                inner
+            );
     }
 }

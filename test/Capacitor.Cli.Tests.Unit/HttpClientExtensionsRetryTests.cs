@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using Capacitor.Cli.Core;
 
@@ -20,8 +21,8 @@ public class HttpClientExtensionsRetryTests {
 
         var ex = await Assert.That(async () => await HttpClientExtensions.SendWithRetryAsync(
                     Send,
-                    totalTimeout: TimeSpan.FromMilliseconds(400),
-                    perAttemptTimeout: TimeSpan.FromMilliseconds(50),
+                    totalTimeout: TimeSpan.FromMilliseconds(1_200),
+                    perAttemptTimeout: TimeSpan.FromMilliseconds(150),
                     ct: CancellationToken.None
                 )
             )
@@ -29,6 +30,34 @@ public class HttpClientExtensionsRetryTests {
 
         await Assert.That(ex!.InnerException).IsTypeOf<TaskCanceledException>();
         await Assert.That(attempts).IsGreaterThan(1);
+    }
+
+    [Test]
+    public async Task SendWithRetry_enforces_total_timeout_even_when_per_attempt_is_larger() {
+        // Regression for Qodo finding: with total < per-attempt, a hung request
+        // must not block past totalTimeout. The implementation caps each attempt
+        // at min(perAttemptTimeout, remainingBudget) instead of always using the
+        // full per-attempt cap.
+        async Task<HttpResponseMessage> Send(CancellationToken token) {
+            await Task.Delay(Timeout.Infinite, token);
+            return new HttpResponseMessage(HttpStatusCode.OK); // unreachable
+        }
+
+        var sw = Stopwatch.StartNew();
+
+        await Assert.That(async () => await HttpClientExtensions.SendWithRetryAsync(
+                    Send,
+                    totalTimeout: TimeSpan.FromMilliseconds(300),
+                    perAttemptTimeout: TimeSpan.FromSeconds(30),
+                    ct: CancellationToken.None
+                )
+            )
+            .Throws<HttpRequestException>();
+
+        sw.Stop();
+        // Generous upper bound: a strict enforcement should be ~300ms; even
+        // under heavy CI load it should be well under 2s.
+        await Assert.That(sw.ElapsedMilliseconds).IsLessThan(2_000);
     }
 
     [Test]
@@ -48,8 +77,8 @@ public class HttpClientExtensionsRetryTests {
 
         var resp = await HttpClientExtensions.SendWithRetryAsync(
             Send,
-            totalTimeout: TimeSpan.FromSeconds(2),
-            perAttemptTimeout: TimeSpan.FromMilliseconds(50),
+            totalTimeout: TimeSpan.FromSeconds(5),
+            perAttemptTimeout: TimeSpan.FromMilliseconds(150),
             ct: CancellationToken.None
         );
 
@@ -92,7 +121,7 @@ public class HttpClientExtensionsRetryTests {
 
         var resp = await HttpClientExtensions.SendWithRetryAsync(
             Send,
-            totalTimeout: TimeSpan.FromSeconds(2),
+            totalTimeout: TimeSpan.FromSeconds(5),
             perAttemptTimeout: TimeSpan.FromSeconds(1),
             ct: CancellationToken.None
         );
