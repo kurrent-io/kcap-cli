@@ -674,6 +674,90 @@ public static class EvalService {
     }
 
     /// <summary>
+    /// Parses a V2 retrospective synthesis response into
+    /// <see cref="EvalRetrospectiveV2"/> with defensive coercions:
+    /// <list type="bullet">
+    ///   <item>Code fences stripped before parsing.</item>
+    ///   <item>Legacy bare-string suggestion items coerced to
+    ///     <c>{ Text = s, Audience = "human" }</c>.</item>
+    ///   <item>Missing <c>audience</c> field → <c>"human"</c>.</item>
+    ///   <item>Unknown <c>audience</c> values (not <c>"agent"</c> or
+    ///     <c>"human"</c>) → <c>"human"</c>.</item>
+    /// </list>
+    /// Returns <c>null</c> on null/empty/whitespace input, malformed JSON,
+    /// or a non-object root. Synthesis failure is non-fatal — the caller
+    /// leaves <see cref="SessionEvalCompletedPayloadV2.Retrospective"/> as
+    /// null.
+    /// </summary>
+    public static EvalRetrospectiveV2? ParseRetrospectiveV2(string rawResponse) {
+        if (string.IsNullOrWhiteSpace(rawResponse)) return null;
+
+        var json = StripCodeFences(rawResponse.Trim());
+
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(json); }
+        catch { return null; }
+
+        using (doc) {
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return null;
+
+            var overall   = root.TryGetProperty("overall",   out var ov) ? (ov.GetString() ?? "") : "";
+            var strengths = ReadStringArray(root, "strengths");
+            var issues    = ReadStringArray(root, "issues");
+            var suggestions = ReadSuggestionsV2(root);
+
+            return new EvalRetrospectiveV2 {
+                OverallSummary = overall,
+                Strengths      = strengths,
+                Issues         = issues,
+                Suggestions    = suggestions
+            };
+        }
+    }
+
+    static List<RetrospectiveSuggestion> ReadSuggestionsV2(JsonElement root) {
+        if (!root.TryGetProperty("suggestions", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return [];
+
+        var list = new List<RetrospectiveSuggestion>(arr.GetArrayLength());
+
+        foreach (var item in arr.EnumerateArray()) {
+            switch (item.ValueKind) {
+                case JsonValueKind.String:
+                    list.Add(new RetrospectiveSuggestion {
+                        Text     = item.GetString() ?? "",
+                        Audience = "human"
+                    });
+                    break;
+
+                case JsonValueKind.Object:
+                    var text     = item.TryGetProperty("text",     out var t) ? (t.GetString() ?? "") : "";
+                    var audience = item.TryGetProperty("audience", out var a) ? (a.GetString() ?? "human") : "human";
+                    if (audience != "agent" && audience != "human") audience = "human";
+                    list.Add(new RetrospectiveSuggestion { Text = text, Audience = audience });
+                    break;
+            }
+        }
+
+        return list;
+    }
+
+    static List<string> ReadStringArray(JsonElement root, string propertyName) {
+        if (!root.TryGetProperty(propertyName, out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return [];
+
+        var list = new List<string>(arr.GetArrayLength());
+        foreach (var item in arr.EnumerateArray()) {
+            if (item.ValueKind == JsonValueKind.String) {
+                list.Add(item.GetString() ?? "");
+            }
+        }
+
+        return list;
+    }
+
+    /// <summary>
     /// Extracts the optional <c>retain_fact</c> string from a raw judge
     /// response. Returns null when absent, explicitly null, empty, or when
     /// the response isn't parseable JSON. Independent of
