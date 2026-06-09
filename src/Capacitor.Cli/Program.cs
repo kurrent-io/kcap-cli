@@ -220,11 +220,7 @@ switch (command) {
             return 1;
         }
 
-        await Console.Out.WriteLineAsync($"Username: {tokens.GitHubUsername}");
-        await Console.Out.WriteLineAsync($"Provider: {tokens.Provider}");
-        await Console.Out.WriteLineAsync($"Expires:  {tokens.ExpiresAt:u}");
-        await Console.Out.WriteLineAsync($"Server:   {baseUrl!}");
-        await Console.Out.WriteLineAsync($"Expired:  {(tokens.IsExpired ? "yes" : "no")}");
+        await Console.Out.WriteLineAsync(WhoAmIRenderer.Render(tokens, baseUrl!));
 
         return 0;
     }
@@ -655,7 +651,7 @@ async Task<int> HandleDiscoverLoginAsync(bool forceDevice) {
     var exchanges = outcome.Tenants.Select(async tenant => {
         var origin = AppConfig.NormalizeUrl(tenant.Origin);
         var exit = await OAuthLoginFlow.ExchangeAndSaveAsync(
-            http, origin, ghToken, AuthProvider.GitHubApp, tenant.OrgLogin);
+            http, origin, ghToken, AuthProvider.GitHubApp, tenant.OrgLogin, tenant);
         if (exit != 0) {
             await Console.Error.WriteLineAsync(
                 $"Warning: token exchange failed for {tenant.OrgLogin}. Run 'kcap login' after switching to that profile.");

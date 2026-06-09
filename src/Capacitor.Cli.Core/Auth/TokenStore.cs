@@ -27,6 +27,20 @@ public record StoredTokens {
     [JsonPropertyName("client_id")]
     public string? ClientId { get; init; }
 
+    /// <summary>
+    /// "User" for personal-account tenants, "Organization" for org tenants, "" when unknown.
+    /// Populated during discovery-based login (GitHubApp provider); empty for Auth0/GitHub direct.
+    /// </summary>
+    [JsonPropertyName("account_type")]
+    public string AccountType { get; init; } = "";
+
+    /// <summary>
+    /// GitHub login for the account that owns this tenant.
+    /// Populated during discovery-based login; empty when AccountType is empty.
+    /// </summary>
+    [JsonPropertyName("account_login")]
+    public string AccountLogin { get; init; } = "";
+
     public bool IsExpired => DateTimeOffset.UtcNow >= ExpiresAt - TimeSpan.FromSeconds(30);
 }
 

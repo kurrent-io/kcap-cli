@@ -1,3 +1,17 @@
 kcap whoami — Show current authenticated user
 
 Usage: kcap whoami
+
+Output varies by account type:
+
+  Personal account tenant:
+    Personal account: @alice
+    Provider: GitHubApp
+    Token expires in 23h
+    Server: https://kapacitor.alice.example
+
+  Organization tenant:
+    Organization: acme
+    Provider: GitHubApp
+    Token expires in 23h
+    Server: https://kapacitor.acme.example

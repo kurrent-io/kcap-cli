@@ -529,6 +529,24 @@ kcap update         # check for CLI updates
 kcap logout         # delete stored tokens
 ```
 
+`kcap whoami` output varies by account type:
+
+Personal account tenant:
+```
+Personal account: @alice
+Provider: GitHubApp
+Token expires in 23h
+Server: https://kapacitor.alice.example
+```
+
+Organization tenant:
+```
+Organization: acme
+Provider: GitHubApp
+Token expires in 23h
+Server: https://kapacitor.acme.example
+```
+
 ## Upgrading from v1
 
 The v1 config format stored `server_url` as a bare host name without a

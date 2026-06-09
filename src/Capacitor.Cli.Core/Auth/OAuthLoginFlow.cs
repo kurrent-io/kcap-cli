@@ -323,18 +323,19 @@ public static class OAuthLoginFlow {
     /// Unlike the single-argument overload, this does NOT print "Logged in as …" — the caller
     /// is responsible for user-facing output. Returns 0 on success, 1 on failure.
     /// </summary>
-    public static async Task<int> ExchangeAndSaveAsync(string serverUrl, string githubAccessToken, string provider, string profile) {
+    public static async Task<int> ExchangeAndSaveAsync(string serverUrl, string githubAccessToken, string provider, string profile, DiscoveredTenant? tenant = null) {
         using var http = new HttpClient();
 
-        return await ExchangeAndSaveAsync(http, serverUrl, githubAccessToken, provider, profile);
+        return await ExchangeAndSaveAsync(http, serverUrl, githubAccessToken, provider, profile, tenant);
     }
 
     public static async Task<int> ExchangeAndSaveAsync(
-            HttpClient http,
-            string     serverUrl,
-            string     githubAccessToken,
-            string     provider,
-            string     profile
+            HttpClient        http,
+            string            serverUrl,
+            string            githubAccessToken,
+            string            provider,
+            string            profile,
+            DiscoveredTenant? tenant = null
         ) {
         if (provider is not AuthProvider.GitHubApp and not AuthProvider.Auth0) {
             Console.Error.WriteLine($"Error: unknown auth provider '{provider}'");
@@ -362,7 +363,9 @@ public static class OAuthLoginFlow {
                 AccessToken    = exchange.AccessToken,
                 ExpiresAt      = DateTimeOffset.UtcNow.AddSeconds(exchange.ExpiresIn),
                 GitHubUsername = exchange.Username,
-                Provider       = provider
+                Provider       = provider,
+                AccountType    = tenant?.AccountType  ?? "",
+                AccountLogin   = tenant?.AccountLogin ?? ""
             }
         );
 
