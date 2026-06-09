@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Pty.Unix;
 using Capacitor.Cli.Daemon.Pty.Windows;
@@ -190,6 +191,21 @@ public static partial class DaemonRunner {
         var lifetime   = host.Services.GetRequiredService<IHostApplicationLifetime>();
         var connection = host.Services.GetRequiredService<ServerConnection>();
 
+        // Death-rattle instrumentation: without these, a daemon dying mid-run
+        // (signal, OOM, unobserved-task FailFast, native crash) leaves no trace
+        // in the log and we can't tell a clean shutdown from a kill. Each hook
+        // best-effort logs *why* the process is going away before the runtime
+        // tears down the logging pipeline. Lifetime is captured so SIGHUP
+        // (terminal closed) can be turned into a cooperative StopApplication
+        // — without that, the host's finally-block cleanup never runs.
+        RegisterDeathRattle(logger, lifetime);
+
+        // Lifetime-driven log lines — pair with the AppDomain/signal hooks so
+        // we can distinguish a cooperative StopApplication (e.g. NameInUse,
+        // Ctrl+C consumed by ConsoleLifetime) from an outside-the-runtime kill.
+        lifetime.ApplicationStopping.Register(() => LogLifetimeStopping(logger));
+        lifetime.ApplicationStopped.Register(() => LogLifetimeStopped(logger));
+
         // AI-630: if the server rejects our DaemonConnect because another
         // live daemon owns the (owner, name) slot, signal host shutdown
         // and remember to return exit code 3 instead of 0. Subscribe
@@ -237,11 +253,14 @@ public static partial class DaemonRunner {
             // would surface as OperationCanceledException. The no-arg overload listens
             // internally for ApplicationStopping and returns cleanly.
             await host.WaitForShutdownAsync();
+            LogWaitForShutdownReturned(logger);
         } finally {
+            LogEnteringCleanup(logger);
             daemonLock.Dispose();
             await orchestrator.DisposeAsync();
             await connection.DisposeAsync();
             await host.StopAsync();
+            LogCleanupCompleted(logger);
         }
 
         // AI-630: if the daemon was shut down because the server told us
@@ -253,4 +272,100 @@ public static partial class DaemonRunner {
 
     [LoggerMessage(Level = LogLevel.Information, Message = "kcap daemon '{Name}' starting, connecting to {ServerUrl}")]
     static partial void LogDaemonStarting(ILogger logger, string name, string serverUrl);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Lifetime: ApplicationStopping fired")]
+    static partial void LogLifetimeStopping(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Lifetime: ApplicationStopped fired")]
+    static partial void LogLifetimeStopped(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "WaitForShutdownAsync returned — entering cleanup")]
+    static partial void LogWaitForShutdownReturned(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Cleanup: disposing daemon resources")]
+    static partial void LogEnteringCleanup(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Cleanup: completed, daemon exiting")]
+    static partial void LogCleanupCompleted(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Critical, Message = "AppDomain.UnhandledException (terminating={IsTerminating})")]
+    static partial void LogUnhandledException(ILogger logger, Exception ex, bool isTerminating);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "TaskScheduler.UnobservedTaskException — observed and swallowed")]
+    static partial void LogUnobservedTaskException(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "AppDomain.ProcessExit fired (this is the last log line)")]
+    static partial void LogProcessExit(ILogger logger);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Received POSIX signal {Signal} — requesting cooperative shutdown")]
+    static partial void LogPosixSignal(ILogger logger, PosixSignal signal);
+
+    /// <summary>
+    /// Wires AppDomain + TaskScheduler + POSIX-signal hooks so whenever the
+    /// daemon process is going away we get a last log line before the runtime
+    /// tears down. Without these, the only signal we'd see is "the log ends" —
+    /// indistinguishable between SIGTERM, SIGHUP (terminal closed), OOM kill,
+    /// an unobserved Task FailFast, or a clean StopApplication. SIGHUP is the
+    /// top suspect for "daemon dies silently after a foreground run", since
+    /// ConsoleLifetime doesn't register for it and the OS default is SIGTERM
+    /// the process. Routing it through <paramref name="lifetime"/> turns the
+    /// hard kill into a cooperative shutdown so the cleanup finally-block
+    /// gets to run.
+    /// </summary>
+    static void RegisterDeathRattle(ILogger logger, IHostApplicationLifetime lifetime) {
+        AppDomain.CurrentDomain.UnhandledException += (_, args) => {
+            if (args.ExceptionObject is Exception ex) {
+                LogUnhandledException(logger, ex, args.IsTerminating);
+            }
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, args) => {
+            LogUnobservedTaskException(logger, args.Exception);
+            // Mark observed so the default policy (a no-op in .NET 5+, but a
+            // process-killing rethrow on legacy/AOT configurations) can't
+            // escalate this past the logging step.
+            args.SetObserved();
+        };
+
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => LogProcessExit(logger);
+
+        // POSIX signal hooks. ConsoleLifetime already wires SIGINT and SIGTERM
+        // to lifetime.StopApplication(); our registration is additive (multiple
+        // PosixSignalRegistration handlers all run) so it just guarantees a
+        // log line lands before the cooperative shutdown begins. SIGHUP and
+        // SIGQUIT are NOT caught by ConsoleLifetime, so for those we both log
+        // AND call StopApplication ourselves — otherwise the OS would terminate
+        // us before the host's finally-block could run.
+        //
+        // The returned PosixSignalRegistration IS the registration's lifetime
+        // anchor — if it's GC'd and finalized the handler unregisters silently
+        // and the signal goes back to its default OS action (terminate the
+        // process for SIGHUP, etc). Root them in a static list so they live
+        // as long as the DaemonRunner type — i.e. the process.
+        foreach (var signal in new[] { PosixSignal.SIGINT, PosixSignal.SIGTERM, PosixSignal.SIGHUP, PosixSignal.SIGQUIT }) {
+            try {
+                _signalRegistrations.Add(PosixSignalRegistration.Create(signal, ctx => {
+                    LogPosixSignal(logger, ctx.Signal);
+                    ctx.Cancel = true;
+                    lifetime.StopApplication();
+                }));
+            } catch (PlatformNotSupportedException) {
+                // Signal not supported on this OS — skip silently. SIGHUP/SIGQUIT
+                // are unsupported on Windows; SIGINT/SIGTERM are supported
+                // everywhere.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Roots <see cref="PosixSignalRegistration"/> instances for the lifetime
+    /// of the process. <see cref="PosixSignalRegistration.Create"/> returns an
+    /// <see cref="IDisposable"/> whose finalizer unregisters the handler;
+    /// without a strong reference the registration is eligible for GC the
+    /// moment <see cref="RegisterDeathRattle"/> returns, which would silently
+    /// re-arm the OS default for SIGHUP/SIGQUIT (= terminate the daemon
+    /// before the finally-block runs). Static field on a static class = same
+    /// lifetime as the process.
+    /// </summary>
+    static readonly List<PosixSignalRegistration> _signalRegistrations = [];
 }
