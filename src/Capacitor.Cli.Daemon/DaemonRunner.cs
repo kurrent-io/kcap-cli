@@ -336,13 +336,19 @@ public static partial class DaemonRunner {
         // SIGQUIT are NOT caught by ConsoleLifetime, so for those we both log
         // AND call StopApplication ourselves — otherwise the OS would terminate
         // us before the host's finally-block could run.
+        //
+        // The returned PosixSignalRegistration IS the registration's lifetime
+        // anchor — if it's GC'd and finalized the handler unregisters silently
+        // and the signal goes back to its default OS action (terminate the
+        // process for SIGHUP, etc). Root them in a static list so they live
+        // as long as the DaemonRunner type — i.e. the process.
         foreach (var signal in new[] { PosixSignal.SIGINT, PosixSignal.SIGTERM, PosixSignal.SIGHUP, PosixSignal.SIGQUIT }) {
             try {
-                PosixSignalRegistration.Create(signal, ctx => {
+                _signalRegistrations.Add(PosixSignalRegistration.Create(signal, ctx => {
                     LogPosixSignal(logger, ctx.Signal);
                     ctx.Cancel = true;
                     lifetime.StopApplication();
-                });
+                }));
             } catch (PlatformNotSupportedException) {
                 // Signal not supported on this OS — skip silently. SIGHUP/SIGQUIT
                 // are unsupported on Windows; SIGINT/SIGTERM are supported
@@ -350,4 +356,16 @@ public static partial class DaemonRunner {
             }
         }
     }
+
+    /// <summary>
+    /// Roots <see cref="PosixSignalRegistration"/> instances for the lifetime
+    /// of the process. <see cref="PosixSignalRegistration.Create"/> returns an
+    /// <see cref="IDisposable"/> whose finalizer unregisters the handler;
+    /// without a strong reference the registration is eligible for GC the
+    /// moment <see cref="RegisterDeathRattle"/> returns, which would silently
+    /// re-arm the OS default for SIGHUP/SIGQUIT (= terminate the daemon
+    /// before the finally-block runs). Static field on a static class = same
+    /// lifetime as the process.
+    /// </summary>
+    static readonly List<PosixSignalRegistration> _signalRegistrations = [];
 }
