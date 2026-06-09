@@ -79,6 +79,16 @@ public static class HttpClientExtensions {
     static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
     static readonly TimeSpan MaxDelay       = TimeSpan.FromSeconds(4);
 
+    /// <summary>
+    /// Per-attempt cap on a single HTTP call inside <see cref="SendWithRetryAsync(Func{CancellationToken, Task{HttpResponseMessage}}, TimeSpan, CancellationToken)"/>.
+    /// Enforced via a linked <see cref="CancellationTokenSource"/> so the wall-clock cap
+    /// is observable on the token we pass to <see cref="HttpClient"/> — not on the
+    /// client's own <see cref="HttpClient.Timeout"/> (default 100s), which would
+    /// otherwise raise an unhandled <see cref="TaskCanceledException"/> at every call
+    /// site whose <c>catch</c> only covers <see cref="HttpRequestException"/>.
+    /// </summary>
+    internal static readonly TimeSpan PerAttemptTimeout = TimeSpan.FromSeconds(60);
+
     const string UnreachableHint =
         "Kurrent Capacitor API cannot be reached, is it running? "                    +
         "Make sure the URL is correctly configured and the service is running. "      +
@@ -117,12 +127,12 @@ public static class HttpClientExtensions {
                 CancellationToken ct      = default
             ) {
             EnsureAbsolute(url);
-            return SendWithRetryAsync(() => client.PostAsync(url, content, ct), timeout ?? DefaultTimeout, ct);
+            return SendWithRetryAsync(token => client.PostAsync(url, content, token), timeout ?? DefaultTimeout, ct);
         }
 
         public Task<HttpResponseMessage> GetWithRetryAsync(string url, TimeSpan? timeout = null, CancellationToken ct = default) {
             EnsureAbsolute(url);
-            return SendWithRetryAsync(() => client.GetAsync(url, ct), timeout ?? DefaultTimeout, ct);
+            return SendWithRetryAsync(token => client.GetAsync(url, token), timeout ?? DefaultTimeout, ct);
         }
 
         public Task<HttpResponseMessage> PutWithRetryAsync(
@@ -132,12 +142,12 @@ public static class HttpClientExtensions {
                 CancellationToken ct      = default
             ) {
             EnsureAbsolute(url);
-            return SendWithRetryAsync(() => client.PutAsync(url, content, ct), timeout ?? DefaultTimeout, ct);
+            return SendWithRetryAsync(token => client.PutAsync(url, content, token), timeout ?? DefaultTimeout, ct);
         }
 
         public Task<HttpResponseMessage> DeleteWithRetryAsync(string url, TimeSpan? timeout = null, CancellationToken ct = default) {
             EnsureAbsolute(url);
-            return SendWithRetryAsync(() => client.DeleteAsync(url, ct), timeout ?? DefaultTimeout, ct);
+            return SendWithRetryAsync(token => client.DeleteAsync(url, token), timeout ?? DefaultTimeout, ct);
         }
 
         /// <summary>
@@ -201,17 +211,52 @@ public static class HttpClientExtensions {
         return true;
     }
 
-    static async Task<HttpResponseMessage> SendWithRetryAsync(Func<Task<HttpResponseMessage>> send, TimeSpan timeout, CancellationToken ct) {
+    internal static Task<HttpResponseMessage> SendWithRetryAsync(
+            Func<CancellationToken, Task<HttpResponseMessage>> send,
+            TimeSpan                                           totalTimeout,
+            CancellationToken                                  ct
+        ) => SendWithRetryAsync(send, totalTimeout, PerAttemptTimeout, ct);
+
+    internal static async Task<HttpResponseMessage> SendWithRetryAsync(
+            Func<CancellationToken, Task<HttpResponseMessage>> send,
+            TimeSpan                                           totalTimeout,
+            TimeSpan                                           perAttemptTimeout,
+            CancellationToken                                  ct
+        ) {
         var sw      = Stopwatch.StartNew();
         var delayMs = 250;
 
         while (true) {
+            using var attemptCts = new CancellationTokenSource(perAttemptTimeout);
+            using var linkedCts  = CancellationTokenSource.CreateLinkedTokenSource(ct, attemptCts.Token);
+
             try {
-                return await send();
-            } catch (HttpRequestException) when (!ct.IsCancellationRequested && sw.Elapsed < timeout) {
-                await Task.Delay(delayMs, ct);
-                delayMs = Math.Min(delayMs * 2, (int)MaxDelay.TotalMilliseconds);
+                return await send(linkedCts.Token);
+            } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                // Caller cancelled — surface as cancellation, never retry.
+                throw;
+            } catch (HttpRequestException) when (sw.Elapsed < totalTimeout) {
+                // Transient transport error within retry budget — back off and try again.
+            } catch (OperationCanceledException) when (sw.Elapsed < totalTimeout) {
+                // Per-attempt timeout fired (linked CTS, not caller's ct) and retry budget
+                // remains — back off and try again. Without this branch the same condition
+                // would surface as an unhandled TaskCanceledException at every call site
+                // that only catches HttpRequestException (import probes, transcript POSTs,
+                // session-start hooks, ...).
+            } catch (OperationCanceledException ex) {
+                // Per-attempt timeout fired but retry budget is exhausted. Convert to
+                // HttpRequestException so existing `catch (HttpRequestException)` handlers
+                // — which all the import / hook call sites already have — degrade the
+                // session to ProbeError / "server unreachable" instead of crashing.
+                throw new HttpRequestException(
+                    $"Request did not complete within the {perAttemptTimeout.TotalSeconds:F0}s " +
+                    $"per-attempt timeout (retry budget of {totalTimeout.TotalSeconds:F0}s exhausted).",
+                    ex
+                );
             }
+
+            await Task.Delay(delayMs, ct);
+            delayMs = Math.Min(delayMs * 2, (int)MaxDelay.TotalMilliseconds);
         }
     }
 }
