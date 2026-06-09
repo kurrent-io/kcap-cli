@@ -411,6 +411,60 @@ public record SessionEvalCompletedPayload {
     public List<EvalFactSnapshotPayload> FactsUsed { get; init; } = [];
 }
 
+// V2 retrospective types — structured suggestions with audience tag.
+// Mirror of server-side RetrospectiveSuggestion / EvalRetrospectiveV2 /
+// SessionEvalCompletedPayloadV2 in Capacitor.Server.Core.
+// Wire shape must stay 1:1 with the server so the V2 POST route deserializes
+// correctly (snake_case field names enforced by [JsonPropertyName] below).
+
+public record RetrospectiveSuggestion {
+    [JsonPropertyName("text")]     public required string Text     { get; init; }
+    [JsonPropertyName("audience")] public required string Audience { get; init; } // "agent" | "human"
+}
+
+public record EvalRetrospectiveV2 {
+    // Backing fields coerce an explicit JSON `null` to an empty list so a
+    // judge response like `"strengths": null` deserializes to an empty list
+    // rather than a null field, keeping downstream code null-safe.
+
+    [JsonPropertyName("overall")]
+    public required string OverallSummary { get; init; }
+
+    [JsonPropertyName("strengths")]
+    public List<string> Strengths { get; init => field = value ?? []; } = [];
+
+    [JsonPropertyName("issues")]
+    public List<string> Issues { get; init => field = value ?? []; } = [];
+
+    [JsonPropertyName("suggestions")]
+    public List<RetrospectiveSuggestion> Suggestions { get; init => field = value ?? []; } = [];
+}
+
+// Posted to POST /api/sessions/{id}/evals/v2.
+// Differs from SessionEvalCompletedPayload only in Retrospective type.
+public record SessionEvalCompletedPayloadV2 {
+    [JsonPropertyName("eval_run_id")]
+    public required string EvalRunId { get; init; }
+
+    [JsonPropertyName("judge_model")]
+    public required string JudgeModel { get; init; }
+
+    [JsonPropertyName("categories")]
+    public List<EvalCategoryResult> Categories { get; init; } = [];
+
+    [JsonPropertyName("overall_score")]
+    public required int OverallScore { get; init; }
+
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("retrospective")]
+    public EvalRetrospectiveV2? Retrospective { get; init; }
+
+    [JsonPropertyName("facts_used")]
+    public List<EvalFactSnapshotPayload> FactsUsed { get; init; } = [];
+}
+
 enum HistorySessionStatus { New, Partial, AlreadyLoaded }
 
 class SessionMetadata {
@@ -465,6 +519,9 @@ public record RepoEntry {
 [JsonSerializable(typeof(IReadOnlyList<EvalQuestionVerdict>))]
 [JsonSerializable(typeof(EvalRetrospective))]
 [JsonSerializable(typeof(SessionEvalCompletedPayload))]
+[JsonSerializable(typeof(RetrospectiveSuggestion))]
+[JsonSerializable(typeof(EvalRetrospectiveV2))]
+[JsonSerializable(typeof(SessionEvalCompletedPayloadV2))]
 [JsonSerializable(typeof(JudgeFactPayload))]
 [JsonSerializable(typeof(List<JudgeFact>))]
 [JsonSerializable(typeof(EvalFactSnapshotPayload))]
