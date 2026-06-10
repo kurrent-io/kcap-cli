@@ -14,6 +14,14 @@ namespace Capacitor.Cli.Commands;
 /// <see cref="CursorHookCommand"/>.
 /// </summary>
 public static class ClaudeHookCommand {
+    // Hard ceiling on the best-effort pre-POST drain (watcher kill + inline transcript
+    // drain) for session-end / subagent-stop. Claude kills the SessionEnd hook at its
+    // configured timeout (15s); a slow or retrying remote call in the drain could consume
+    // all of it (the HTTP retry helper alone allows up to 30s) and the session-end POST
+    // would never be sent, leaving the session stuck "Active". 8s leaves ample headroom to
+    // send the POST; the server's StopAndDrain + the "kcap import" hint recover the rest.
+    static readonly TimeSpan PreHookDrainCap = TimeSpan.FromSeconds(8);
+
     public static async Task<int> Handle(string baseUrl, TextReader stdin, Task? updateCheckTask = null) {
         var body = await stdin.ReadToEndAsync();
 
@@ -167,10 +175,22 @@ public static class ClaudeHookCommand {
                     var transcriptPath = node?["transcript_path"]?.GetValue<string>();
 
                     if (sessionId is not null) {
-                        await WatcherManager.KillWatcher(sessionId);
+                        var drained = await TimeBudget.RunCappedAsync(
+                            async () => {
+                                await WatcherManager.KillWatcher(sessionId);
 
-                        if (transcriptPath is not null) {
-                            await WatcherManager.InlineDrainAsync(baseUrl, sessionId, transcriptPath, agentId: null);
+                                if (transcriptPath is not null) {
+                                    await WatcherManager.InlineDrainAsync(baseUrl, sessionId, transcriptPath, agentId: null);
+                                }
+                            },
+                            PreHookDrainCap
+                        );
+
+                        if (!drained) {
+                            await Console.Error.WriteLineAsync(
+                                $"[kcap] session-end pre-drain cap ({PreHookDrainCap.TotalSeconds:0}s) elapsed; proceeding to POST. "
+                              + $"Transcript tail may be incomplete — recoverable via: kcap import --session {sessionId}"
+                            );
                         }
                     }
                 } catch (Exception ex) {
@@ -189,12 +209,23 @@ public static class ClaudeHookCommand {
                     var transcriptPath = node?["transcript_path"]?.GetValue<string>();
 
                     if (sessionId is not null && agentId is not null) {
-                        await WatcherManager.KillWatcher($"{sessionId}-{agentId}");
+                        var drained = await TimeBudget.RunCappedAsync(
+                            async () => {
+                                await WatcherManager.KillWatcher($"{sessionId}-{agentId}");
 
-                        if (transcriptPath is not null) {
-                            var sessionDir          = Path.ChangeExtension(transcriptPath, null);
-                            var agentTranscriptPath = Path.Combine(sessionDir, "subagents", $"agent-{agentId}.jsonl");
-                            await WatcherManager.InlineDrainAsync(baseUrl, sessionId, agentTranscriptPath, agentId);
+                                if (transcriptPath is not null) {
+                                    var sessionDir          = Path.ChangeExtension(transcriptPath, null);
+                                    var agentTranscriptPath = Path.Combine(sessionDir, "subagents", $"agent-{agentId}.jsonl");
+                                    await WatcherManager.InlineDrainAsync(baseUrl, sessionId, agentTranscriptPath, agentId);
+                                }
+                            },
+                            PreHookDrainCap
+                        );
+
+                        if (!drained) {
+                            await Console.Error.WriteLineAsync(
+                                $"[kcap] subagent-stop pre-drain cap ({PreHookDrainCap.TotalSeconds:0}s) elapsed; proceeding to POST"
+                            );
                         }
                     }
                 } catch (Exception ex) {
