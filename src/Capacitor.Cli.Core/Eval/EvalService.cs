@@ -743,7 +743,7 @@ public static class EvalService {
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object) return null;
 
-            var overall   = root.TryGetProperty("overall",   out var ov) ? (ov.GetString() ?? "") : "";
+            var overall   = ReadString(root, "overall") ?? "";
             var strengths = ReadStringArray(root, "strengths");
             var issues    = ReadStringArray(root, "issues");
             var suggestions = ReadSuggestionsV2(root);
@@ -773,15 +773,21 @@ public static class EvalService {
                     break;
 
                 case JsonValueKind.Object:
-                    var text     = item.TryGetProperty("text",     out var t) ? (t.GetString() ?? "") : "";
-                    var audience = item.TryGetProperty("audience", out var a) ? (a.GetString() ?? "human") : "human";
-                    if (audience != "agent" && audience != "human") audience = "human";
+                    var text         = ReadString(item, "text") ?? "";
+                    var audienceRaw  = ReadString(item, "audience");
+                    var normalized   = audienceRaw?.Trim().ToLowerInvariant();
+                    var audience     = normalized == "agent" || normalized == "human" ? normalized : "human";
                     list.Add(new RetrospectiveSuggestion { Text = text, Audience = audience });
                     break;
             }
         }
 
         return list;
+    }
+
+    static string? ReadString(JsonElement parent, string propertyName) {
+        if (!parent.TryGetProperty(propertyName, out var prop)) return null;
+        return prop.ValueKind == JsonValueKind.String ? prop.GetString() : null;
     }
 
     static List<string> ReadStringArray(JsonElement root, string propertyName) {
