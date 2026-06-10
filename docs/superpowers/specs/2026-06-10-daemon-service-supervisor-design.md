@@ -87,8 +87,9 @@ Rules:
    the sanitized id when it differs from the input so the user isn't surprised.
 2. **Every interpolated value** (binary path, log path, env values, the id) is
    escaped for its target format when generating unit text: XML-escape for plist
-   and Task XML; systemd value-escaping for `.service` lines. Generators never
-   concatenate raw strings into markup.
+   and Task XML; systemd value-escaping for `.service` lines; **cmd batch
+   escaping** for the Windows `.cmd` wrapper (e.g. `%` → `%%`, quote handling in
+   `set "KEY=value"`). Generators never concatenate raw strings into markup.
 
 This keeps the pure generators total (any input produces well-formed output) and
 is the focus of the escaping unit tests.
@@ -118,9 +119,12 @@ public enum ServiceState { NotInstalled, Installed, Running }
 
 public record ServiceStatus(ServiceState State, string? BinaryPath);
 
+public record GeneratedFile(string Path, string Content); // absolute target path + content
+
 public interface IServiceManager {
-    string  Describe();                       // e.g. "launchd LaunchAgent"
-    string  GenerateUnit(ServiceSpec spec);   // PURE — the primary tested seam
+    string  Describe();                                    // e.g. "launchd LaunchAgent"
+    IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec); // PURE — the primary tested seam
+                                                                  // (1 file on macOS/Linux; 2 on Windows: Task XML + .cmd wrapper)
 
     IReadOnlyList<string> ListInstalled();    // service ids with a unit file on disk
     ServiceStatus Status(string serviceId);   // state + baked binary path (for doctor)
@@ -199,9 +203,14 @@ So instead of `--server-url`, `install`:
 - **Captures environment** from the installing shell into the unit:
   `PATH` (so bare `claude`/`codex` resolve exactly as they do in the terminal),
   plus any set `KCAP_CONFIG_DIR`, `KCAP_PROFILE`, `KCAP_CLAUDE_PATH`,
-  `KCAP_CODEX_PATH`. Mechanism per platform: launchd `EnvironmentVariables` dict,
-  systemd `Environment=` lines, Windows tasks inherit the user env block but get
-  the same keys set for parity/determinism.
+  `KCAP_CODEX_PATH`. Mechanism per platform: launchd `EnvironmentVariables`
+  dict; systemd `Environment=` lines; **Windows: a generated `.cmd` wrapper**
+  — the Task Scheduler `Exec` action exposes only `Command` / `Arguments` /
+  `WorkingDirectory` (no environment element in the schema), so the task runs
+  `cmd.exe /c <wrapper>` and the wrapper does `set "KEY=value"` for each captured
+  var, then execs `kcap-daemon.exe`. The wrapper lives at
+  `PathHelpers.ConfigPath("daemon-service-<id>.cmd")`; `install` rewrites it,
+  `uninstall` deletes it alongside the task.
 - **`daemon doctor`** additionally warns when neither an absolute agent path nor
   a `PATH` entry containing `claude`/`codex` is present in a unit's captured env.
 
@@ -242,8 +251,8 @@ refresh a moved binary path" well-defined.
 
 | verb | macOS | Linux | Windows |
 |---|---|---|---|
-| install | write plist; `launchctl bootout` (if present); `launchctl bootstrap gui/<uid> <plist>` (`RunAtLoad` starts it); `launchctl kill SIGTERM` if `--no-start` | write unit; `systemctl --user daemon-reload`; `enable <unit>`; `restart` (or leave stopped if `--no-start`) | `schtasks /Create /TN <task> /XML <f> /F`; `/Run` unless `--no-start` |
-| uninstall | `launchctl bootout gui/<uid>/<label>`; delete plist | `systemctl --user disable --now <unit>`; delete unit; `daemon-reload` | `schtasks /Delete /TN <task> /F` |
+| install | write plist; `launchctl bootout` (if present); `launchctl bootstrap gui/<uid> <plist>` (`RunAtLoad` starts it); `launchctl kill SIGTERM` if `--no-start` | write unit; `systemctl --user daemon-reload`; `enable <unit>`; `restart` (or leave stopped if `--no-start`) | write `.cmd` wrapper; `schtasks /Create /TN <task> /XML <f> /F`; `/Run` unless `--no-start` |
+| uninstall | `launchctl bootout gui/<uid>/<label>`; delete plist | `systemctl --user disable --now <unit>`; delete unit; `daemon-reload` | `schtasks /Delete /TN <task> /F`; delete `.cmd` wrapper |
 | start | `launchctl kickstart gui/<uid>/<label>` (bootstrap first if not loaded) | `systemctl --user start <unit>` | `schtasks /Run /TN <task>` |
 | stop | `launchctl kill SIGTERM gui/<uid>/<label>` | `systemctl --user stop <unit>` | `schtasks /End /TN <task>` |
 | status | `launchctl print gui/<uid>/<label>` (exit code → state) | `systemctl --user is-active / is-enabled <unit>` | `schtasks /Query /TN <task> /FO LIST` |
@@ -253,8 +262,10 @@ refresh a moved binary path" well-defined.
 > `0x41306` (terminated), which Task Scheduler does **not** treat as a failure
 > exit, so the restart-on-failure setting should not relaunch it. This is the
 > one platform behavior to **verify on a real Windows host** during
-> implementation; if `/End` does trigger a relaunch, fall back to disabling the
-> task (`schtasks /Change /DISABLE`) for `stop` and re-enabling for `start`.
+> implementation; if `/End` does trigger a relaunch, `stop` falls back to
+> **disable → `/End` → re-enable** (`schtasks /Change /DISABLE`, `/End`,
+> `/Change /ENABLE`) so the run is ended without an immediate relaunch while the
+> task stays **enabled** for the next logon (no manual `start` required).
 
 ### macOS plist (generated — values XML-escaped)
 
@@ -311,14 +322,29 @@ One concrete file per id (`kcap-daemon-<id>.service`), **not** a shared
 `@.service` template — so per-instance baked args/env are expressible and
 uninstalling one id deletes only its file without touching other instances.
 
-### Windows Task Scheduler XML (generated — values XML-escaped)
+### Windows Task Scheduler XML + `.cmd` wrapper (generated)
 
-Logon trigger for the current user; action runs `kcap-daemon.exe --name <id> --log-file …`;
-settings: `MultipleInstances=IgnoreNew`, `ExecutionTimeLimit=PT0S` (unlimited),
-`DisallowStartIfOnBatteries=false`, `StopIfGoingOnBatteries=false`,
-`StartWhenAvailable=true`, restart-on-failure (`RestartCount=999`,
-`RestartInterval=PT1M`). Registered via `schtasks /Create /XML` (avoids
-PowerShell quoting; XML is a pure generated string).
+Two generated artifacts, because the Task Scheduler `Exec` action has no
+environment element:
+
+1. **`daemon-service-<id>.cmd`** (under the kcap config dir, cmd-escaped):
+   ```bat
+   @echo off
+   set "PATH=<captured PATH>"
+   set "KCAP_PROFILE=<pinned profile>"
+   rem plus any captured KCAP_CONFIG_DIR / KCAP_CLAUDE_PATH / KCAP_CODEX_PATH
+   "C:\abs\path\kcap-daemon.exe" --name <id> --log-file "<...>\daemon-<id>.log"
+   ```
+2. **Task XML** (values XML-escaped): logon trigger for the current user; the
+   `Exec` action is `Command = cmd.exe`, `Arguments = /c "<wrapper path>"`;
+   settings `MultipleInstances=IgnoreNew`, `ExecutionTimeLimit=PT0S` (unlimited),
+   `DisallowStartIfOnBatteries=false`, `StopIfGoingOnBatteries=false`,
+   `StartWhenAvailable=true`, restart-on-failure (`RestartCount=999`,
+   `RestartInterval=PT1M`). Registered via `schtasks /Create /XML` (avoids
+   PowerShell quoting; XML is a pure generated string).
+
+`install` writes both (overwriting); `uninstall` deletes the task and the
+wrapper.
 
 ### Integration with existing commands
 
@@ -345,14 +371,17 @@ survive upgrades. A prefix change is fixed by re-running `service install`
 
 ## Testing
 
-- **Pure generators** (`GenerateUnit`) per platform via `ForPlatform`: TUnit
-  tests assert the output contains the absolute binary path, pinned `--name`/
+- **Pure generators** (`GenerateFiles`) per platform via `ForPlatform`: TUnit
+  tests assert the file set (1 file on macOS/Linux; Task XML + `.cmd` wrapper on
+  Windows) and that contents contain the absolute binary path, pinned `--name`/
   `--log-file`, the baked `PATH`/`KCAP_PROFILE` env, the correct label / unit
   name / task id, and the restart keys (`KeepAlive` / `Restart=on-failure` /
   `RestartCount`).
 - **Escaping tests:** ids and paths containing XML/shell metacharacters and
   spaces produce well-formed plist / `.service` / Task XML (parse the plist and
-  Task XML with `XDocument` in the test to assert validity).
+  Task XML with `XDocument` in the test to assert validity), and a Windows
+  `.cmd` wrapper whose `set "KEY=value"` lines and exec line are correctly
+  cmd-escaped (e.g. `%` doubled).
 - **Sanitization:** `Sanitize` mapping of messy names → ids, and idempotency.
 - **Command-vector builders** (the `launchctl`/`systemctl`/`schtasks` argument
   lists for each verb) are pure helpers → asserted directly, including the
