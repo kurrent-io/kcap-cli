@@ -1,0 +1,54 @@
+using System.Xml.Linq;
+using Capacitor.Cli.Services;
+
+namespace Capacitor.Cli.Tests.Unit.Services;
+
+public class LaunchdUnitTests {
+    static ServiceSpec Spec(string id = "laptop") => new(
+        ServiceId: id,
+        DaemonBinaryPath: "/opt/kcap/kcap-daemon",
+        LogPath: "/home/u/.config/kcap/daemon-laptop.log",
+        Environment: new Dictionary<string, string> { ["PATH"] = "/usr/bin:/bin", ["KCAP_PROFILE"] = "work" },
+        ExtraArgs: ["--max-agents", "8"]);
+
+    [Test]
+    public async Task Label_is_reverse_dns_with_id() {
+        await Assert.That(LaunchdUnit.Label("laptop")).IsEqualTo("io.kurrent.kcap.daemon.laptop");
+    }
+
+    [Test]
+    public async Task Plist_is_well_formed_xml_and_carries_args_and_env() {
+        var plist = LaunchdUnit.Plist(Spec());
+        var doc   = XDocument.Parse(plist); // throws if malformed
+        await Assert.That(doc).IsNotNull();
+        await Assert.That(plist).Contains("<string>/opt/kcap/kcap-daemon</string>");
+        await Assert.That(plist).Contains("<string>--name</string>");
+        await Assert.That(plist).Contains("<string>laptop</string>");
+        await Assert.That(plist).Contains("<string>--max-agents</string>");
+        await Assert.That(plist).Contains("<key>PATH</key>");
+        await Assert.That(plist).Contains("<key>KCAP_PROFILE</key>");
+        await Assert.That(plist).Contains("<key>SuccessfulExit</key>");
+    }
+
+    [Test]
+    public async Task Plist_escapes_metacharacters_in_values() {
+        var spec  = Spec() with { DaemonBinaryPath = "/opt/a&b/kcap-daemon" };
+        var plist = LaunchdUnit.Plist(spec);
+        XDocument.Parse(plist); // must still parse
+        await Assert.That(plist).Contains("/opt/a&amp;b/kcap-daemon");
+    }
+
+    [Test]
+    public async Task IdFromPlistFileName_extracts_the_id() {
+        await Assert.That(LaunchdUnit.IdFromPlistFileName("io.kurrent.kcap.daemon.laptop.plist"))
+            .IsEqualTo("laptop");
+        await Assert.That(LaunchdUnit.IdFromPlistFileName("unrelated.plist")).IsNull();
+    }
+
+    [Test]
+    public async Task StatusFromPrint_maps_exit_and_state() {
+        await Assert.That(LaunchdUnit.StatusFromPrint(exitCode: 1, stdout: "")).IsEqualTo(ServiceState.NotInstalled);
+        await Assert.That(LaunchdUnit.StatusFromPrint(0, "state = running")).IsEqualTo(ServiceState.Running);
+        await Assert.That(LaunchdUnit.StatusFromPrint(0, "state = not running")).IsEqualTo(ServiceState.Installed);
+    }
+}
