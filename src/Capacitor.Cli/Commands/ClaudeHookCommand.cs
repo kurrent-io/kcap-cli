@@ -175,7 +175,7 @@ public static class ClaudeHookCommand {
                     var transcriptPath = node?["transcript_path"]?.GetValue<string>();
 
                     if (sessionId is not null) {
-                        await TimeBudget.RunCappedAsync(
+                        var drained = await TimeBudget.RunCappedAsync(
                             async () => {
                                 await WatcherManager.KillWatcher(sessionId);
 
@@ -185,6 +185,13 @@ public static class ClaudeHookCommand {
                             },
                             PreHookDrainCap
                         );
+
+                        if (!drained) {
+                            await Console.Error.WriteLineAsync(
+                                $"[kcap] session-end pre-drain cap ({PreHookDrainCap.TotalSeconds:0}s) elapsed; proceeding to POST. "
+                              + $"Transcript tail may be incomplete — recoverable via: kcap import --session {sessionId}"
+                            );
+                        }
                     }
                 } catch (Exception ex) {
                     Console.Error.WriteLine($"[kcap] session-end pre-hook failed: {ex.Message}");
@@ -202,7 +209,7 @@ public static class ClaudeHookCommand {
                     var transcriptPath = node?["transcript_path"]?.GetValue<string>();
 
                     if (sessionId is not null && agentId is not null) {
-                        await TimeBudget.RunCappedAsync(
+                        var drained = await TimeBudget.RunCappedAsync(
                             async () => {
                                 await WatcherManager.KillWatcher($"{sessionId}-{agentId}");
 
@@ -214,6 +221,12 @@ public static class ClaudeHookCommand {
                             },
                             PreHookDrainCap
                         );
+
+                        if (!drained) {
+                            await Console.Error.WriteLineAsync(
+                                $"[kcap] subagent-stop pre-drain cap ({PreHookDrainCap.TotalSeconds:0}s) elapsed; proceeding to POST"
+                            );
+                        }
                     }
                 } catch (Exception ex) {
                     Console.Error.WriteLine($"[kcap] subagent-stop pre-hook failed: {ex.Message}");

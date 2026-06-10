@@ -11,27 +11,30 @@ namespace Capacitor.Cli.Tests.Unit;
 /// </summary>
 public class TimeBudgetTests {
     [Test]
-    public async Task RunCappedAsync_ReturnsAtCap_WhenWorkExceedsIt() {
+    public async Task RunCappedAsync_ReturnsFalseAtCap_WhenWorkExceedsIt() {
         var sw = Stopwatch.StartNew();
 
-        await TimeBudget.RunCappedAsync(() => Task.Delay(TimeSpan.FromSeconds(5)), TimeSpan.FromMilliseconds(200));
+        var completed = await TimeBudget.RunCappedAsync(() => Task.Delay(TimeSpan.FromSeconds(5)), TimeSpan.FromMilliseconds(200));
 
         sw.Stop();
 
         // Returns at ~the cap, NOT after the 5s work — proves a slow drain is abandoned
-        // so the session-end POST still gets to run inside the hook budget.
+        // so the session-end POST still gets to run inside the hook budget. The `false`
+        // result lets the caller log that the drain was cut short.
+        await Assert.That(completed).IsFalse();
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(2));
     }
 
     [Test]
-    public async Task RunCappedAsync_ReturnsWhenWorkCompletes_WithoutWaitingForCap() {
+    public async Task RunCappedAsync_ReturnsTrueWhenWorkCompletes_WithoutWaitingForCap() {
         var sw = Stopwatch.StartNew();
 
-        await TimeBudget.RunCappedAsync(() => Task.CompletedTask, TimeSpan.FromSeconds(30));
+        var completed = await TimeBudget.RunCappedAsync(() => Task.CompletedTask, TimeSpan.FromSeconds(30));
 
         sw.Stop();
 
-        // Fast work returns immediately — the cap is a ceiling, not a fixed delay.
+        // Fast work returns immediately (true) — the cap is a ceiling, not a fixed delay.
+        await Assert.That(completed).IsTrue();
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }
 
