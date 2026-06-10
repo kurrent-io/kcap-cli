@@ -6,11 +6,10 @@ namespace Capacitor.Cli.Daemon.Pty.Unix;
 internal static partial class UnixPtyInterop {
     static readonly bool IsMacOS = RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
 
-    // forkpty is in libutil on both macOS and Linux
-
-    // On macOS, forkpty takes a pointer to struct winsize. We pass IntPtr.Zero and set size after fork.
-    // Alternate overload that takes WinSize ref for Linux where we can pass it directly:
-    [LibraryImport("libutil", EntryPoint = "forkpty", SetLastError = true)]
+    // forkpty: glibc 2.34+ consolidated libutil into libc, and Ubuntu 24.04 ships only
+    // libutil.so.1 (no unversioned libutil.so), so DllImport("libutil") fails to resolve.
+    // libc works on Linux (glibc 2.34+) and on macOS (libSystem re-exports forkpty).
+    [LibraryImport("libc", EntryPoint = "forkpty", SetLastError = true)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial int forkpty(out int master, IntPtr name, IntPtr termp, ref WinSize winp);
 
