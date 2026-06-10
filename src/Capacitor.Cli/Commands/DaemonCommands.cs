@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Commands;
 
@@ -18,12 +19,13 @@ public static class DaemonCommands {
         var remaining  = args[2..];
 
         return subcommand switch {
-            "start"  => await StartAsync(remaining),
-            "stop"   => await StopAsync(remaining),
-            "status" => await Status(remaining),
-            "logs"   => await Logs(),
-            "doctor" => await DoctorAsync(remaining),
-            _        => PrintUsage()
+            "start"   => await StartAsync(remaining),
+            "stop"    => await StopAsync(remaining),
+            "status"  => await Status(remaining),
+            "logs"    => await Logs(),
+            "doctor"  => await DoctorAsync(remaining),
+            "service" => await ServiceAsync(remaining),
+            _         => PrintUsage()
         };
     }
 
@@ -611,6 +613,76 @@ public static class DaemonCommands {
         await Console.Error.WriteLineAsync($"\n--- {LogPath} ({lines.Length} lines total) ---");
 
         return 0;
+    }
+
+    // ── service (OS supervisor: launchd / systemd / scheduled task) ───────────
+
+    static async Task<int> ServiceAsync(string[] args) {
+        if (args.Length == 0) return ServiceUsage();
+
+        var action  = args[0];
+        var rest    = args[1..];
+        var noStart = rest.Contains("--no-start");
+
+        IServiceManager manager;
+        try {
+            manager = ServiceManagerFactory.ForCurrentOs();
+        } catch (PlatformNotSupportedException ex) {
+            await Console.Error.WriteLineAsync(ex.Message);
+            return 1;
+        }
+
+        var id = ServiceText.ServiceId(ResolveName(rest));
+
+        switch (action) {
+            case "install":   return await ServiceInstall(manager, rest, id, startNow: !noStart);
+            case "uninstall": manager.Uninstall(id); await Console.Out.WriteLineAsync($"Service '{id}' uninstalled ({manager.Describe()})."); return 0;
+            case "start":     manager.Start(id);     await Console.Out.WriteLineAsync($"Service '{id}' started.");   return 0;
+            case "stop":      manager.Stop(id);      await Console.Out.WriteLineAsync($"Service '{id}' stopped (still installed)."); return 0;
+            case "status":    return await ServiceStatus(manager, id);
+            default:          return ServiceUsage();
+        }
+    }
+
+    static async Task<int> ServiceInstall(IServiceManager manager, string[] args, string id, bool startNow) {
+        var daemonPath = ResolveDaemonBinary();
+        if (daemonPath is null) { await Console.Error.WriteLineAsync(DaemonNotFoundMessage()); return 1; }
+
+        var profileName = ExtractFlagValue(args, "--profile") ?? AppConfig.ResolvedProfile?.ProfileName;
+        var env         = ServiceEnvironment.Capture(profileName);
+
+        var extra = new List<string>();
+        if (ExtractFlagValue(args, "--max-agents") is { } mx) { extra.Add("--max-agents"); extra.Add(mx); }
+
+        var logPath = PathHelpers.ConfigPath($"daemon-{id}.log");
+        var spec    = new ServiceSpec(id, daemonPath, logPath, env, extra);
+
+        manager.Install(spec, startNow);
+
+        await Console.Out.WriteLineAsync($"Service '{id}' installed ({manager.Describe()}).");
+        await Console.Out.WriteLineAsync("  Auto-restarts on crash/SIGKILL; starts at login.");
+        await Console.Out.WriteLineAsync($"  Log:       {logPath}");
+        await Console.Out.WriteLineAsync($"  Stop:      kcap daemon service stop --name {id}");
+        await Console.Out.WriteLineAsync($"  Remove:    kcap daemon service uninstall --name {id}");
+        return 0;
+    }
+
+    static async Task<int> ServiceStatus(IServiceManager manager, string id) {
+        var status = manager.Status(id);
+        await Console.Out.WriteLineAsync($"Service '{id}': {status.State} ({manager.Describe()})");
+        if (status.BinaryPath is { } bin) await Console.Out.WriteLineAsync($"  binary: {bin}");
+        return 0;
+    }
+
+    static int ServiceUsage() {
+        Console.Error.WriteLine("Usage: kcap daemon service <install|uninstall|start|stop|status> [--name N]");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("  install [--name N] [--profile P] [--max-agents N] [--no-start]");
+        Console.Error.WriteLine("  uninstall [--name N]   Stop and remove the service unit");
+        Console.Error.WriteLine("  start [--name N]       Start the installed service now");
+        Console.Error.WriteLine("  stop [--name N]        Stop the running service (stays installed)");
+        Console.Error.WriteLine("  status [--name N]      Show installed/running state");
+        return 1;
     }
 
     /// <summary>
