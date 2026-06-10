@@ -198,6 +198,7 @@ jobs:
           for dir in npm-artifacts/npm-kcap-*/; do
             pkg_name=$(basename "$dir" | sed 's/^npm-//')
             cp "npm/$pkg_name/package.json" "$dir/package.json"
+            cp LICENSE.md "$dir/LICENSE.md"
 
             # actions/upload-artifact + download-artifact round-trips through ZIP,
             # which drops the executable bit. The platform packages have no `bin`
@@ -238,6 +239,9 @@ jobs:
 
       - name: Copy plugin into wrapper package
         run: cp -r kcap/ npm/kcap/kcap/
+
+      - name: Copy license into wrapper package
+        run: cp LICENSE.md npm/kcap/LICENSE.md
 
       - name: Publish wrapper package
         run: |

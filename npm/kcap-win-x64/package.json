@@ -2,7 +2,7 @@
   "name": "@kurrent/kcap-win-x64",
   "version": "0.0.0",
   "description": "kcap native binary for Windows x64",
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN LICENSE.md",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kurrent-io/kcap-cli.git"

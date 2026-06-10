@@ -565,4 +565,4 @@ Or remove the config file and re-run setup:
 
 ## License
 
-[Kurrent License v1](LICENSE)
+[Kurrent License v1](LICENSE.md)

@@ -2,7 +2,7 @@
   "name": "@kurrent/kcap",
   "version": "0.0.0",
   "description": "CLI companion for Kurrent Capacitor — records and visualizes Claude Code sessions",
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN LICENSE.md",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kurrent-io/kcap-cli.git"
