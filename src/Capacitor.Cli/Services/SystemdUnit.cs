@@ -59,6 +59,34 @@ static class SystemdUnit {
         return enabledExit == 0 ? ServiceState.Installed : ServiceState.NotInstalled;
     }
 
+    /// <summary>
+    /// The daemon binary from a rendered unit's <c>ExecStart=</c> — quote-aware,
+    /// since <see cref="Unit"/> may emit <c>ExecStart="/opt/k cap/kcap-daemon" …</c>
+    /// for a path with spaces. Used by <c>daemon doctor</c>.
+    /// </summary>
+    public static string? BinaryFromUnit(string unitText) {
+        var line = unitText.Split('\n').Select(l => l.Trim())
+            .FirstOrDefault(l => l.StartsWith("ExecStart=", StringComparison.Ordinal));
+        return line is null ? null : FirstToken(line["ExecStart=".Length..]);
+    }
+
+    /// <summary>First whitespace-delimited token, honoring a leading double-quoted segment (reverses <see cref="Esc"/>).</summary>
+    static string? FirstToken(string s) {
+        if (s.Length == 0) return null;
+        if (s[0] != '"') {
+            var sp = s.IndexOf(' ');
+            return sp < 0 ? s : s[..sp];
+        }
+
+        var sb = new StringBuilder();
+        for (var i = 1; i < s.Length; i++) {
+            if (s[i] == '\\' && i + 1 < s.Length) { sb.Append(s[++i]); continue; } // \\ -> \ , \" -> "
+            if (s[i] == '"') break;
+            sb.Append(s[i]);
+        }
+        return sb.ToString();
+    }
+
     // ── systemd value/argument quoting ──
     // systemd splits Environment= and ExecStart on unquoted whitespace, so any
     // value/path with a space must be double-quoted (with \ and " escaped).

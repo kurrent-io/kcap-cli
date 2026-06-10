@@ -19,13 +19,8 @@ sealed class SystemdServiceManager : IServiceManager {
         if (!File.Exists(path)) return new ServiceStatus(ServiceState.NotInstalled, null);
         var (_, active, _)      = ServiceProcess.Run("systemctl", SystemdUnit.IsActiveArgs(serviceId));
         var (enabledExit, _, _) = ServiceProcess.Run("systemctl", SystemdUnit.IsEnabledArgs(serviceId));
-        var bin = ExecStartBinary(path);
+        var bin = SystemdUnit.BinaryFromUnit(File.ReadAllText(path)); // quote-aware ExecStart parse
         return new ServiceStatus(SystemdUnit.StatusFrom(active, enabledExit), bin);
-    }
-
-    static string? ExecStartBinary(string unitPath) {
-        var line = File.ReadLines(unitPath).FirstOrDefault(l => l.StartsWith("ExecStart=", StringComparison.Ordinal));
-        return line?["ExecStart=".Length..].Split(' ', 2)[0];
     }
 
     public void Install(ServiceSpec spec, bool startNow) {

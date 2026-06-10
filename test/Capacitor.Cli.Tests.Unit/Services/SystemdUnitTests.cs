@@ -43,6 +43,14 @@ public class SystemdUnitTests {
     }
 
     [Test]
+    public async Task BinaryFromUnit_parses_unquoted_and_quoted_execstart() {
+        await Assert.That(SystemdUnit.BinaryFromUnit(SystemdUnit.Unit(Spec()))).IsEqualTo("/opt/kcap/kcap-daemon");
+
+        var spaced = Spec() with { DaemonBinaryPath = "/opt/k cap/kcap-daemon" };
+        await Assert.That(SystemdUnit.BinaryFromUnit(SystemdUnit.Unit(spaced))).IsEqualTo("/opt/k cap/kcap-daemon");
+    }
+
+    [Test]
     public async Task StatusFrom_maps_active_strings() {
         await Assert.That(SystemdUnit.StatusFrom(activeOut: "active", enabledExit: 0)).IsEqualTo(ServiceState.Running);
         await Assert.That(SystemdUnit.StatusFrom("inactive", 0)).IsEqualTo(ServiceState.Installed);
