@@ -76,7 +76,8 @@ public class ClaudeHookStdoutTests : IDisposable {
         var ctx = json["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
         await Assert.That(ctx).Contains("999.0.0");
         await Assert.That(ctx).Contains("npm install -g @kurrent/kcap");
-        await Assert.That(ctx).DoesNotContain("Recurring lessons");
+        await Assert.That(ctx).DoesNotContain("## Known patterns");
+        await Assert.That(ctx).DoesNotContain("## Guidance from past sessions");
     }
 
     [Test, NotInParallel("Console_Out")]
@@ -112,7 +113,8 @@ public class ClaudeHookStdoutTests : IDisposable {
 
         var json = JsonNode.Parse(trimmed);
         var ctx  = json!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
-        await Assert.That(ctx).Contains("Recurring lessons");
+        // "safety" is not agent_guidance, so the cluster lands in the patterns block.
+        await Assert.That(ctx).Contains("## Known patterns");
         await Assert.That(ctx).Contains("- always close the writer");
         await Assert.That(ctx).Contains("999.0.0");
         await Assert.That(ctx).Contains("npm install -g @kurrent/kcap");

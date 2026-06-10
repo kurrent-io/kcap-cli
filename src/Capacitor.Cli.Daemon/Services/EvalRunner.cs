@@ -133,6 +133,11 @@ internal sealed class EvalRunner {
         try {
             // FinalizeAsync signature was updated in Task 6.5 — the taxonomy is
             // carried on ctx.Questions, not passed separately.
+            // AI-795 T18: FinalizeAsync now returns SessionEvalCompletedPayloadV2;
+            // FinalizeResult.Aggregate is the V1 wire DTO held by the server
+            // orchestrator, which only inspects Success on this result so we
+            // pass null for Aggregate. The V2 payload is already persisted to
+            // /api/sessions/{id}/evals/v2 inside FinalizeAsync.
             var aggregate = await EvalService.FinalizeAsync(
                 ctx,
                 httpClient,
@@ -143,7 +148,7 @@ internal sealed class EvalRunner {
                 _shutdownToken
             );
 
-            return new(aggregate is not null, aggregate is null ? "finalize failed" : null, aggregate);
+            return new(aggregate is not null, aggregate is null ? "finalize failed" : null, null);
         } catch (Exception ex) {
             _logger.LogError(ex, "FinalizeEval failed for {RunId}", cmd.EvalRunId);
 
@@ -233,7 +238,7 @@ sealed class DaemonEvalObserver(
         Relay(() => connection.EvalRetrospectiveStartedAsync(sessionId, evalRunId), "EvalRetrospectiveStarted");
     }
 
-    public void OnRetrospectiveCompleted(EvalRetrospective retrospective) {
+    public void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective) {
         logger.LogInformation("[eval {Run}] retrospective completed", evalRunId);
         Relay(() => connection.EvalRetrospectiveCompletedAsync(sessionId, evalRunId), "EvalRetrospectiveCompleted");
     }
@@ -243,7 +248,7 @@ sealed class DaemonEvalObserver(
         Relay(() => connection.EvalRetrospectiveFailedAsync(sessionId, evalRunId, reason), "EvalRetrospectiveFailed");
     }
 
-    public void OnFinished(SessionEvalCompletedPayload aggregate) {
+    public void OnFinished(SessionEvalCompletedPayloadV2 aggregate) {
         logger.LogInformation("Eval {Run} finished on session {Sid}: {Score}/5", evalRunId, sessionId, aggregate.OverallScore);
         Relay(() => connection.EvalFinishedAsync(evalRunId, sessionId, aggregate.OverallScore, aggregate.Summary), "EvalFinished");
     }
