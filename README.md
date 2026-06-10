@@ -77,6 +77,8 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 
 > **Need at least one agent to capture sessions:** the setup wizard runs to completion without an agent CLI on `PATH` (it'll still configure your profile, auth, and daemon), but kcap only records work once Claude Code or Codex CLI is installed and the hooks are in place.
 
+> **Keep the daemon running:** `kcap daemon start -d` stops when the process dies (a crash, or an OS memory-pressure kill — macOS jetsam / Linux OOM). To auto-restart it and start it at login, install it as a per-user service: `kcap daemon service install`. See [Daemon](#daemon).
+
 ### 3. Import existing sessions (optional)
 
 ```bash
@@ -310,6 +312,23 @@ kcap daemon doctor --clean          # also remove stale lock/pid files (held ent
 ```
 
 `KCAP_DAEMON_NAME` overrides the active profile's daemon name (superseded by an explicit `--name` flag).
+
+#### Run it as a service (auto-restart)
+
+`kcap daemon start -d` runs only until the process dies — a crash, or an OS memory-pressure kill (macOS **jetsam** / Linux **OOM killer**) that sends an uncatchable `SIGKILL`. To have the daemon auto-restart and start at login, install it as a **per-user** OS service:
+
+```bash
+kcap daemon service install                # launchd (macOS) / systemd --user (Linux) / Scheduled Task (Windows)
+kcap daemon service install --name laptop  # a service per daemon name
+kcap daemon service status                 # installed / running state
+kcap daemon service stop                   # stop the running service (stays installed)
+kcap daemon service start                  # start it again
+kcap daemon service uninstall              # stop and remove the service
+```
+
+`install` pins the active profile via `KCAP_PROFILE` and captures your current `PATH` into the unit, so the supervised daemon resolves the same server URL, `claude`/`codex` binaries, and profile settings it would from your shell. Pass `--profile P` to pin a different profile, `--max-agents N` to bake an override, or `--no-start` to register without starting. The service restarts the daemon on crash/`SIGKILL` but **not** on a clean stop.
+
+Because the service auto-restarts, stop a service-managed daemon with `kcap daemon service stop` (or `uninstall`) rather than `kcap daemon stop` — a raw stop would be relaunched immediately. `kcap daemon status` and `kcap daemon doctor` both report installed services.
 
 Each daemon process holds an exclusive `flock` on `~/.config/kcap/daemons/<name>.lock` for its entire lifetime. The kernel releases the lock automatically when the daemon exits (including `SIGKILL` or power-off), so leftover lock files on disk are never a blocker — only a live process holding the kernel-level lock can prevent another daemon from acquiring the same name.
 

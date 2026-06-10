@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Commands;
 
@@ -18,12 +19,13 @@ public static class DaemonCommands {
         var remaining  = args[2..];
 
         return subcommand switch {
-            "start"  => await StartAsync(remaining),
-            "stop"   => await StopAsync(remaining),
-            "status" => await Status(remaining),
-            "logs"   => await Logs(),
-            "doctor" => await DoctorAsync(remaining),
-            _        => PrintUsage()
+            "start"   => await StartAsync(remaining),
+            "stop"    => await StopAsync(remaining),
+            "status"  => await Status(remaining),
+            "logs"    => await Logs(),
+            "doctor"  => await DoctorAsync(remaining),
+            "service" => await ServiceAsync(remaining),
+            _         => PrintUsage()
         };
     }
 
@@ -275,6 +277,15 @@ public static class DaemonCommands {
     }
 
     static int StopByName(string name) {
+        var manager = TryServiceManager();
+        if (manager is not null && manager.Status(ServiceText.ServiceId(name)).State != ServiceState.NotInstalled) {
+            Console.Out.WriteLine(
+                $"Daemon '{name}' is managed by {manager.Describe()}; a raw stop would be auto-restarted.");
+            Console.Out.WriteLine($"Use: kcap daemon service stop --name {name}  (or uninstall to remove it)");
+
+            return 0;
+        }
+
         if (ReadPidFile(name) is not { } entry) {
             Console.Error.WriteLine($"No daemon '{name}' running (no PID file found).");
 
@@ -316,7 +327,12 @@ public static class DaemonCommands {
             return 1;
         }
 
-        var names = explicitName is not null ? [explicitName] : EnumerateRunningNames();
+        var manager    = TryServiceManager();
+        var serviceIds = manager?.ListInstalled() ?? [];
+
+        var names = explicitName is not null
+            ? new List<string> { explicitName }
+            : EnumerateRunningNames().Concat(serviceIds).Distinct().Order().ToList();
 
         if (names.Count == 0) {
             await Console.Out.WriteLineAsync("Daemon: not running");
@@ -327,11 +343,7 @@ public static class DaemonCommands {
         foreach (var name in names) {
             if (ReadPidFile(name) is not { } entry) {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': not running");
-
-                continue;
-            }
-
-            if (IsOurDaemon(entry.Pid, entry.StartTicks)) {
+            } else if (IsOurDaemon(entry.Pid, entry.StartTicks)) {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': running (PID {entry.Pid})");
             } else {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': not running (stale PID file)");
@@ -339,6 +351,12 @@ public static class DaemonCommands {
                 try { File.Delete(DaemonLockPaths.PidPath(name)); } catch {
                     /* best-effort */
                 }
+            }
+
+            if (manager is not null) {
+                var st = manager.Status(ServiceText.ServiceId(name)).State;
+                if (st != ServiceState.NotInstalled)
+                    await Console.Out.WriteLineAsync($"  service: {st} ({manager.Describe()})");
             }
         }
 
@@ -364,6 +382,7 @@ public static class DaemonCommands {
 
         if (names.Count == 0) {
             await Console.Out.WriteLineAsync($"No daemon files found under {DaemonLockPaths.Directory}.");
+            await ReportInstalledServices();
 
             return 0;
         }
@@ -460,6 +479,8 @@ public static class DaemonCommands {
         if (staleCount > 0 && !clean) {
             await Console.Out.WriteLineAsync("Re-run with --clean to remove stale entries.");
         }
+
+        await ReportInstalledServices();
 
         return 0;
     }
@@ -611,6 +632,104 @@ public static class DaemonCommands {
         await Console.Error.WriteLineAsync($"\n--- {LogPath} ({lines.Length} lines total) ---");
 
         return 0;
+    }
+
+    // ── service (OS supervisor: launchd / systemd / scheduled task) ───────────
+
+    static async Task<int> ServiceAsync(string[] args) {
+        if (args.Length == 0) return ServiceUsage();
+
+        var action  = args[0];
+        var rest    = args[1..];
+        var noStart = rest.Contains("--no-start");
+
+        IServiceManager manager;
+        try {
+            manager = ServiceManagerFactory.ForCurrentOs();
+        } catch (PlatformNotSupportedException ex) {
+            await Console.Error.WriteLineAsync(ex.Message);
+            return 1;
+        }
+
+        var id = ServiceText.ServiceId(ResolveName(rest));
+
+        switch (action) {
+            case "install":   return await ServiceInstall(manager, rest, id, startNow: !noStart);
+            case "uninstall": manager.Uninstall(id); await Console.Out.WriteLineAsync($"Service '{id}' uninstalled ({manager.Describe()})."); return 0;
+            case "start":     manager.Start(id);     await Console.Out.WriteLineAsync($"Service '{id}' started.");   return 0;
+            case "stop":      manager.Stop(id);      await Console.Out.WriteLineAsync($"Service '{id}' stopped (still installed)."); return 0;
+            case "status":    return await ServiceStatus(manager, id);
+            default:          return ServiceUsage();
+        }
+    }
+
+    static async Task<int> ServiceInstall(IServiceManager manager, string[] args, string id, bool startNow) {
+        var daemonPath = ResolveDaemonBinary();
+        if (daemonPath is null) { await Console.Error.WriteLineAsync(DaemonNotFoundMessage()); return 1; }
+
+        var profileName = ExtractFlagValue(args, "--profile") ?? AppConfig.ResolvedProfile?.ProfileName;
+        var env         = ServiceEnvironment.Capture(profileName);
+
+        var extra = new List<string>();
+        if (ExtractFlagValue(args, "--max-agents") is { } mx) { extra.Add("--max-agents"); extra.Add(mx); }
+
+        var logPath = PathHelpers.ConfigPath($"daemon-{id}.log");
+        var spec    = new ServiceSpec(id, daemonPath, logPath, env, extra);
+
+        manager.Install(spec, startNow);
+
+        await Console.Out.WriteLineAsync($"Service '{id}' installed ({manager.Describe()}).");
+        await Console.Out.WriteLineAsync("  Auto-restarts on crash/SIGKILL; starts at login.");
+        await Console.Out.WriteLineAsync($"  Log:       {logPath}");
+        await Console.Out.WriteLineAsync($"  Stop:      kcap daemon service stop --name {id}");
+        await Console.Out.WriteLineAsync($"  Remove:    kcap daemon service uninstall --name {id}");
+        return 0;
+    }
+
+    static async Task<int> ServiceStatus(IServiceManager manager, string id) {
+        var status = manager.Status(id);
+        await Console.Out.WriteLineAsync($"Service '{id}': {status.State} ({manager.Describe()})");
+        if (status.BinaryPath is { } bin) await Console.Out.WriteLineAsync($"  binary: {bin}");
+        return 0;
+    }
+
+    static int ServiceUsage() {
+        Console.Error.WriteLine("Usage: kcap daemon service <install|uninstall|start|stop|status> [--name N]");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("  install [--name N] [--profile P] [--max-agents N] [--no-start]");
+        Console.Error.WriteLine("  uninstall [--name N]   Stop and remove the service unit");
+        Console.Error.WriteLine("  start [--name N]       Start the installed service now");
+        Console.Error.WriteLine("  stop [--name N]        Stop the running service (stays installed)");
+        Console.Error.WriteLine("  status [--name N]      Show installed/running state");
+        return 1;
+    }
+
+    /// <summary>Service manager for this OS, or null if the OS is unsupported.</summary>
+    static IServiceManager? TryServiceManager() {
+        try { return ServiceManagerFactory.ForCurrentOs(); }
+        catch (PlatformNotSupportedException) { return null; }
+    }
+
+    /// <summary>
+    /// Doctor add-on: list OS-installed services and flag any whose baked binary
+    /// path no longer exists (e.g. a moved npm prefix — fixed by re-running
+    /// <c>kcap daemon service install</c>). No-op on unsupported OSes / when none.
+    /// </summary>
+    static async Task ReportInstalledServices() {
+        var manager = TryServiceManager();
+        if (manager is null) return;
+
+        var installed = manager.ListInstalled();
+        if (installed.Count == 0) return;
+
+        await Console.Out.WriteLineAsync($"\nInstalled services ({manager.Describe()}):");
+
+        foreach (var sid in installed) {
+            var st   = manager.Status(sid);
+            var bad  = st.BinaryPath is { } b && !File.Exists(b);
+            var note = bad ? "  ⚠ binary missing — re-run `kcap daemon service install`" : "";
+            await Console.Out.WriteLineAsync($"  {sid,-20}  {st.State}{note}");
+        }
     }
 
     /// <summary>

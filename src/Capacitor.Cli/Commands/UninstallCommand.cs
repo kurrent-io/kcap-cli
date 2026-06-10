@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Cursor;
+using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Commands;
 
@@ -73,6 +74,23 @@ public static class UninstallCommand {
         // removal). Individual remove commands keep printing their own output
         // — this flag captures the boolean for the final decision only.
         var hadFailures = false;
+
+        // Deregister any OS-managed daemon services FIRST. `daemon stop` defers to
+        // the supervisor for service-managed daemons (a raw kill would be
+        // auto-restarted), so without this the launchd/systemd/Scheduled-Task unit
+        // would survive uninstall and keep relaunching a daemon whose config we're
+        // about to delete. Uninstalling the unit also stops the running instance
+        // (launchctl bootout / systemctl disable --now), after which the plain
+        // `daemon stop --yes` below mops up any non-service daemons.
+        try {
+            var services = ServiceManagerFactory.ForCurrentOs();
+            foreach (var id in services.ListInstalled()) {
+                services.Uninstall(id);
+                await Console.Out.WriteLineAsync($"  • Removed daemon service '{id}' ({services.Describe()})");
+            }
+        } catch (PlatformNotSupportedException) {
+            // No service backend on this OS — nothing to deregister.
+        }
 
         // Stop daemons first — they hold lock files inside the config dir we're
         // about to delete. --yes silences the multi-daemon confirmation so this

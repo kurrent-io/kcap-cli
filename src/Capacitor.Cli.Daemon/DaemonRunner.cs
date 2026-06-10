@@ -203,8 +203,14 @@ public static partial class DaemonRunner {
         // Lifetime-driven log lines — pair with the AppDomain/signal hooks so
         // we can distinguish a cooperative StopApplication (e.g. NameInUse,
         // Ctrl+C consumed by ConsoleLifetime) from an outside-the-runtime kill.
-        lifetime.ApplicationStopping.Register(() => LogLifetimeStopping(logger));
-        lifetime.ApplicationStopped.Register(() => LogLifetimeStopped(logger));
+        lifetime.ApplicationStopping.Register(() => {
+            DeathRattle("Lifetime: ApplicationStopping fired");
+            LogLifetimeStopping(logger);
+        });
+        lifetime.ApplicationStopped.Register(() => {
+            DeathRattle("Lifetime: ApplicationStopped fired");
+            LogLifetimeStopped(logger);
+        });
 
         // AI-630: if the server rejects our DaemonConnect because another
         // live daemon owns the (owner, name) slot, signal host shutdown
@@ -315,11 +321,13 @@ public static partial class DaemonRunner {
     static void RegisterDeathRattle(ILogger logger, IHostApplicationLifetime lifetime) {
         AppDomain.CurrentDomain.UnhandledException += (_, args) => {
             if (args.ExceptionObject is Exception ex) {
+                DeathRattle($"AppDomain.UnhandledException (terminating={args.IsTerminating}): {ex.GetType().Name}: {ex.Message}");
                 LogUnhandledException(logger, ex, args.IsTerminating);
             }
         };
 
         TaskScheduler.UnobservedTaskException += (_, args) => {
+            DeathRattle($"TaskScheduler.UnobservedTaskException: {args.Exception.GetType().Name}: {args.Exception.Message}");
             LogUnobservedTaskException(logger, args.Exception);
             // Mark observed so the default policy (a no-op in .NET 5+, but a
             // process-killing rethrow on legacy/AOT configurations) can't
@@ -327,7 +335,10 @@ public static partial class DaemonRunner {
             args.SetObserved();
         };
 
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => LogProcessExit(logger);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => {
+            DeathRattle("AppDomain.ProcessExit fired (this is the last log line)");
+            LogProcessExit(logger);
+        };
 
         // POSIX signal hooks. ConsoleLifetime already wires SIGINT and SIGTERM
         // to lifetime.StopApplication(); our registration is additive (multiple
@@ -345,6 +356,7 @@ public static partial class DaemonRunner {
         foreach (var signal in new[] { PosixSignal.SIGINT, PosixSignal.SIGTERM, PosixSignal.SIGHUP, PosixSignal.SIGQUIT }) {
             try {
                 _signalRegistrations.Add(PosixSignalRegistration.Create(signal, ctx => {
+                    DeathRattle($"Received POSIX signal {ctx.Signal} — requesting cooperative shutdown");
                     LogPosixSignal(logger, ctx.Signal);
                     ctx.Cancel = true;
                     lifetime.StopApplication();
@@ -368,4 +380,24 @@ public static partial class DaemonRunner {
     /// lifetime as the process.
     /// </summary>
     static readonly List<PosixSignalRegistration> _signalRegistrations = [];
+
+    /// <summary>
+    /// Synchronous stderr backstop for death-rattle messages. The default
+    /// <c>AddSimpleConsole</c> provider uses a background-thread queue
+    /// (<c>ConsoleLoggerProcessor</c>) that can drop messages enqueued during
+    /// runtime teardown — so a <c>ProcessExit</c> or signal-handler log line
+    /// may never reach the terminal even though the hook fired. Writing
+    /// directly to <see cref="Console.Error"/> bypasses the queue and lands
+    /// on stderr immediately. Best-effort: a closed terminal or broken pipe
+    /// must not throw out of an exit hook.
+    /// </summary>
+    static void DeathRattle(string message) {
+        try {
+            Console.Error.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [death-rattle] {message}");
+            Console.Error.Flush();
+        } catch {
+            // Stderr might be redirected to a closed pipe, the terminal
+            // might be gone, etc. Already exiting — nothing useful to do.
+        }
+    }
 }

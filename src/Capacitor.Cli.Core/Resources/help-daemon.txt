@@ -8,6 +8,7 @@ Subcommands:
   status [--name N]       Show daemon status (lists all when --name omitted)
   logs                    Show recent daemon log output
   doctor [--clean]        Diagnose lock-file state, optionally clean stale entries
+  service <action>        Manage the OS service (launchd/systemd/Scheduled Task)
 
 Options for start:
   --name <name>           Daemon name (defaults to OS username)
@@ -27,6 +28,17 @@ Options for doctor:
   --clean                 Remove stale entries (lock files whose holder is
                           gone). Held entries are never touched. Without
                           --clean, doctor reports state without modifying.
+
+Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at login):
+  install [--name N] [--profile P] [--max-agents N] [--no-start]
+                          Register the daemon as an OS service and start it.
+                          Pins the profile via KCAP_PROFILE and captures PATH so
+                          claude/codex resolve as they do in your shell.
+  uninstall [--name N]    Stop and remove the service unit.
+  start [--name N]        Start the installed service now.
+  stop [--name N]         Stop the running service (stays installed; returns at
+                          next login or `service start`).
+  status [--name N]       Show installed / running state.
 
 Notes:
   Each daemon holds an exclusive flock on ~/.config/kcap/daemons/<name>.lock

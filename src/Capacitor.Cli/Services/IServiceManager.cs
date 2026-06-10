@@ -1,0 +1,36 @@
+namespace Capacitor.Cli.Services;
+
+/// <summary>Which OS service backend a manager targets.</summary>
+enum ServicePlatform { Launchd, Systemd, WindowsScheduledTask }
+
+/// <summary>Lifecycle state of an installed service for one id.</summary>
+enum ServiceState { NotInstalled, Installed, Running }
+
+/// <summary>A file the manager writes at install time (absolute path + content).</summary>
+record GeneratedFile(string Path, string Content);
+
+/// <summary>Status plus the binary path baked into the installed unit (for doctor).</summary>
+record ServiceStatus(ServiceState State, string? BinaryPath);
+
+/// <summary>
+/// Everything needed to render and register one per-user service.
+/// <paramref name="ServiceId"/> is the sanitized id (see <see cref="ServiceText.ServiceId"/>)
+/// used for the filename/label/instance/task AND the daemon <c>--name</c>.
+/// </summary>
+record ServiceSpec(
+    string                              ServiceId,
+    string                              DaemonBinaryPath,
+    string                              LogPath,
+    IReadOnlyDictionary<string, string> Environment,
+    IReadOnlyList<string>               ExtraArgs);
+
+interface IServiceManager {
+    string Describe();
+    IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec);
+    IReadOnlyList<string>        ListInstalled();
+    ServiceStatus                Status(string serviceId);
+    void Install(ServiceSpec spec, bool startNow);
+    void Uninstall(string serviceId);
+    void Start(string serviceId);
+    void Stop(string serviceId);
+}
