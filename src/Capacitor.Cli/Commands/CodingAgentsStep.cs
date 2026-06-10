@@ -8,9 +8,9 @@ namespace Capacitor.Cli.Commands;
 /// can drive every branch without touching ~/.claude, ~/.codex, or AnsiConsole.
 /// </summary>
 internal static class CodingAgentsStep {
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool NoPrompt);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt);
 
-    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor);
+    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot);
 
     internal record Paths(
             string  ClaudeSettingsPath,
@@ -18,6 +18,7 @@ internal static class CodingAgentsStep {
             string? PluginDir,
             string  CodexHooksPath,
             string  CursorHooksPath,
+            string  CopilotHooksPath,
             string  AgentsSkillsDir,
             string  LegacyCodexSkillsDir
         );
@@ -26,6 +27,7 @@ internal static class CodingAgentsStep {
             Func<string /*settingsPath*/, string /*pluginDir*/, bool> InstallClaudePlugin,
             Func<string /*hooksPath*/, bool>                          InstallCodexHooks,
             Func<string /*hooksPath*/, bool>                          InstallCursorHooks,
+            Func<string /*hooksPath*/, bool>                          InstallCopilotHooks,
             Func<bool>                                                CapacitorOnPath,
             Func<string /*srcDir*/, string /*dstDir*/, bool>          InstallAgentSkills,
             Func<string /*legacyDir*/, bool>                          CleanLegacyCodexSkills
@@ -35,7 +37,8 @@ internal static class CodingAgentsStep {
             bool ClaudeInstalled,
             bool CodexHooksInstalled,
             bool CodexSkillsInstalled,
-            bool CursorHooksInstalled
+            bool CursorHooksInstalled,
+            bool CopilotHooksInstalled
         );
 
     /// <summary>
@@ -51,13 +54,14 @@ internal static class CodingAgentsStep {
             Func<string, bool> prompt,
             Action<string>     writeLine
         ) {
-        var claudeInstalled      = HandleClaude(options, detected, paths, installers, prompt, writeLine);
-        var codexHooksInstalled  = HandleCodexHooks(options, detected, paths, installers, prompt, writeLine);
-        var codexSkillsInstalled = codexHooksInstalled && HandleCodexSkills(paths, installers, writeLine);
-        var cursorHooksInstalled = HandleCursorHooks(options, detected, paths, installers, prompt, writeLine);
+        var claudeInstalled       = HandleClaude(options, detected, paths, installers, prompt, writeLine);
+        var codexHooksInstalled   = HandleCodexHooks(options, detected, paths, installers, prompt, writeLine);
+        var codexSkillsInstalled  = codexHooksInstalled && HandleCodexSkills(paths, installers, writeLine);
+        var cursorHooksInstalled  = HandleCursorHooks(options, detected, paths, installers, prompt, writeLine);
+        var copilotHooksInstalled = HandleCopilotHooks(options, detected, paths, installers, prompt, writeLine);
 
-        if (detected is { Claude: false, Codex: false, Cursor: false }) {
-            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, or Cursor to start capturing sessions.");
+        if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false }) {
+            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, or Copilot CLI to start capturing sessions.");
         }
 
         return Task.FromResult(
@@ -65,9 +69,63 @@ internal static class CodingAgentsStep {
                 claudeInstalled,
                 codexHooksInstalled,
                 codexSkillsInstalled,
-                cursorHooksInstalled
+                cursorHooksInstalled,
+                copilotHooksInstalled
             )
         );
+    }
+
+    static bool HandleCopilotHooks(
+            Options            options,
+            DetectedAgents     detected,
+            Paths              paths,
+            Installers         installers,
+            Func<string, bool> prompt,
+            Action<string>     writeLine
+        ) {
+        if (!detected.Copilot) {
+            writeLine("  [dim]· Copilot CLI not detected — skipping[/]");
+
+            return false;
+        }
+
+        writeLine("  [green]✓[/] Copilot CLI detected");
+
+        if (options.SkipCopilot) {
+            writeLine("  [dim]· Copilot CLI hooks skipped by flag[/]");
+
+            return false;
+        }
+
+        var shouldInstall = options.NoPrompt || prompt("Install Copilot CLI hooks?");
+
+        if (!shouldInstall) {
+            writeLine("  [dim]· Copilot hooks not installed (you can run kcap plugin install --copilot later)[/]");
+
+            return false;
+        }
+
+        // kcap.json writes the bare "kcap hook --copilot" command and relies
+        // on Copilot finding it on PATH — same precheck as the Cursor branch.
+        if (!installers.CapacitorOnPath()) {
+            writeLine("  [yellow]⚠[/] Copilot hooks not installed — 'kcap' is not on PATH.");
+            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+
+            return false;
+        }
+
+        var ok = installers.InstallCopilotHooks(paths.CopilotHooksPath);
+
+        if (!ok) {
+            writeLine("  [yellow]⚠[/] Could not write Copilot hooks file.");
+
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] Copilot hooks installed ({Markup.Escape(paths.CopilotHooksPath)})");
+        writeLine("  [dim]  Note: Copilot loads hook config at startup — restart any running copilot session to pick them up.[/]");
+
+        return true;
     }
 
     static bool HandleCodexSkills(

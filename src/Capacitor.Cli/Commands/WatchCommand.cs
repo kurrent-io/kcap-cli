@@ -307,7 +307,7 @@ static partial class WatchCommand {
     /// Used to reject unexpected --vendor input before interpolating into the URL
     /// path (defence-in-depth against path traversal even though the CLI runs locally).
     /// </summary>
-    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex" };
+    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot" };
 
     /// <summary>
     /// Total time budget for the parent-exit session-end POST. Covers /auth/config
@@ -632,9 +632,11 @@ static partial class WatchCommand {
     }
 
     internal static string? TryExtractAssistantText(string line, string vendor = "claude") =>
-        vendor == "codex"
-            ? TryExtractCodexAssistantText(line)
-            : TryExtractClaudeAssistantText(line);
+        vendor switch {
+            "codex"   => TryExtractCodexAssistantText(line),
+            "copilot" => TryExtractCopilotAssistantText(line),
+            _         => TryExtractClaudeAssistantText(line)
+        };
 
     static string? TryExtractClaudeAssistantText(string line) {
         try {
@@ -687,6 +689,14 @@ static partial class WatchCommand {
             using var doc  = JsonDocument.Parse(line);
             var       root = doc.RootElement;
 
+            if (vendor == "copilot") {
+                // user.message / assistant.message are the only conversational
+                // envelopes; everything else (hook.*, system.*, tool.*,
+                // session.*) is plumbing and must not count toward the
+                // title-generation event threshold.
+                return root.Str("type") is "user.message" or "assistant.message";
+            }
+
             if (vendor == "codex") {
                 // Codex rolls everything into a top-level response_item envelope;
                 // a "message" payload (user or assistant) is the analog of Claude's
@@ -718,9 +728,52 @@ static partial class WatchCommand {
     }
 
     internal static string? TryExtractUserText(string line, string vendor = "claude") =>
-        vendor == "codex"
-            ? TryExtractCodexUserText(line)
-            : TryExtractClaudeUserText(line);
+        vendor switch {
+            "codex"   => TryExtractCodexUserText(line),
+            "copilot" => TryExtractCopilotUserText(line),
+            _         => TryExtractClaudeUserText(line)
+        };
+
+    // ── Copilot extractors (AI-815) ────────────────────────────────────────
+    //
+    // Copilot's events.jsonl envelope: {type, data, id, timestamp, parentId,
+    // agentId?}. Subagent-tagged events (agentId set) are skipped — a
+    // subagent's user.message is the parent's task prompt, not something the
+    // human typed, and using it for the title would mislabel the session.
+
+    static string? TryExtractCopilotUserText(string line) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Str("type") != "user.message") return null;
+            if (root.Str("agentId") is not null) return null;
+
+            // data.content is the clean prompt; transformedContent wraps it in
+            // injected <current_datetime>/<system_reminder> noise.
+            var text = root.Obj("data")?.Str("content")?.Trim();
+
+            return string.IsNullOrEmpty(text) ? null : text;
+        } catch {
+            return null;
+        }
+    }
+
+    static string? TryExtractCopilotAssistantText(string line) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Str("type") != "assistant.message") return null;
+            if (root.Str("agentId") is not null) return null;
+
+            var text = root.Obj("data")?.Str("content")?.Trim();
+
+            return string.IsNullOrEmpty(text) ? null : text;
+        } catch {
+            return null;
+        }
+    }
 
     static string? TryExtractClaudeUserText(string line) {
         try {

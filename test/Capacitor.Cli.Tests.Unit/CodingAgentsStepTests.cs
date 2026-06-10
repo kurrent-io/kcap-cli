@@ -7,9 +7,9 @@ public class CodingAgentsStepTests {
     public async Task Claude_detected_and_accepted_calls_installer_with_settings_path() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, NoPrompt: false);
+        var options  = new Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
         var paths    = TestPaths();
-        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false);
+        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false, Copilot: false);
 
         var result = await RunAsync(
             options,
@@ -29,8 +29,8 @@ public class CodingAgentsStepTests {
     public async Task Claude_detected_and_declined_skips_installer() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false);
+        var options  = new Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false, Copilot: false);
 
         var result = await RunAsync(
             options,
@@ -51,8 +51,8 @@ public class CodingAgentsStepTests {
         var sink        = new Sink();
         var calls       = new InstallerCalls();
         var promptCount = 0;
-        var options     = new Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, NoPrompt: false);
-        var detected    = new DetectedAgents(Claude: false, Codex: false, Cursor: false);
+        var options     = new Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected    = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false);
 
         var result = await RunAsync(
             options,
@@ -77,8 +77,8 @@ public class CodingAgentsStepTests {
     public async Task Claude_installer_failure_emits_warning_and_returns_false() {
         var sink     = new Sink();
         var calls    = new InstallerCalls { ClaudeReturns = false };
-        var options  = new Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false);
+        var options  = new Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false, Copilot: false);
 
         var result = await RunAsync(
             options,
@@ -98,8 +98,8 @@ public class CodingAgentsStepTests {
     public async Task Codex_detected_and_accepted_installs_hooks_and_prints_trust_hint() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
 
         var result = await RunAsync(
             options,
@@ -120,8 +120,8 @@ public class CodingAgentsStepTests {
     public async Task Codex_detected_and_declined_skips_installer_and_trust_hint() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
 
         var result = await RunAsync(
             options,
@@ -141,8 +141,8 @@ public class CodingAgentsStepTests {
     public async Task Codex_not_detected_skips_prompt_and_emits_skip_line() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false);
 
         var result = await RunAsync(
             options,
@@ -162,8 +162,8 @@ public class CodingAgentsStepTests {
     public async Task Codex_hooks_installer_failure_emits_warning_and_skips_trust_hint() {
         var sink     = new Sink();
         var calls    = new InstallerCalls { CodexHooksReturns = false };
-        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
 
         var result = await RunAsync(
             options,
@@ -184,8 +184,8 @@ public class CodingAgentsStepTests {
     public async Task Codex_skills_installed_when_hooks_succeed_and_plugin_dir_present() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
 
         var result = await RunAsync(
             options,
@@ -205,8 +205,8 @@ public class CodingAgentsStepTests {
     public async Task Codex_skills_not_attempted_when_hooks_fail() {
         var sink     = new Sink();
         var calls    = new InstallerCalls { CodexHooksReturns = false };
-        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
 
         var result = await RunAsync(
             options,
@@ -225,8 +225,8 @@ public class CodingAgentsStepTests {
     public async Task Codex_skills_failure_still_keeps_trust_hint() {
         var sink     = new Sink();
         var calls    = new InstallerCalls { AgentSkillsReturns = false };
-        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
 
         var result = await RunAsync(
             options,
@@ -247,8 +247,8 @@ public class CodingAgentsStepTests {
     public async Task Plugin_dir_null_skips_claude_install_but_keeps_codex_hooks() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: false, SkipCodex: false, SkipCursor: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: true, Codex: true, Cursor: false);
+        var options  = new Options(SkipClaude: false, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: true, Codex: true, Cursor: false, Copilot: false);
         var paths    = TestPaths() with { PluginDir = null };
 
         var result = await RunAsync(
@@ -274,8 +274,8 @@ public class CodingAgentsStepTests {
     public async Task Neither_detected_emits_warning_and_no_installer_calls() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: false, SkipCodex: false, SkipCursor: false, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false);
+        var options  = new Options(SkipClaude: false, SkipCodex: false, SkipCursor: false, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false);
 
         var result = await RunAsync(
             options,
@@ -299,8 +299,8 @@ public class CodingAgentsStepTests {
     public async Task Project_scope_claude_path_is_passed_through_to_installer() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false);
+        var options  = new Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false, Copilot: false);
 
         // Caller (SetupCommand) selects the project-scope path AND the matching label.
         // The step's contract is to honour both faithfully.
@@ -327,8 +327,8 @@ public class CodingAgentsStepTests {
     public async Task Legacy_cleanup_invoked_after_successful_codex_skills_install() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
 
         await RunAsync(
             options,
@@ -347,8 +347,8 @@ public class CodingAgentsStepTests {
     public async Task Legacy_cleanup_not_invoked_when_codex_skills_install_fails() {
         var sink     = new Sink();
         var calls    = new InstallerCalls { AgentSkillsReturns = false };
-        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
 
         await RunAsync(
             options,
@@ -367,8 +367,8 @@ public class CodingAgentsStepTests {
     public async Task Claude_path_with_markup_special_chars_does_not_break_output() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false);
+        var options  = new Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false, Copilot: false);
 
         // [ and ] are legal in paths; if not escaped, Spectre.MarkupLine throws.
         var paths = TestPaths() with {
@@ -394,8 +394,8 @@ public class CodingAgentsStepTests {
     public async Task Cursor_detected_and_accepted_installs_hooks() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true);
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
 
         var result = await RunAsync(
             options, detected, TestPaths(), calls.AsInstallers(),
@@ -410,8 +410,8 @@ public class CodingAgentsStepTests {
     public async Task Cursor_detected_and_declined_skips_installer() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true);
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
 
         var result = await RunAsync(
             options, detected, TestPaths(), calls.AsInstallers(),
@@ -426,8 +426,8 @@ public class CodingAgentsStepTests {
     public async Task Cursor_not_detected_emits_skip_line() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false);
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false);
 
         await RunAsync(
             options, detected, TestPaths(), calls.AsInstallers(),
@@ -441,8 +441,8 @@ public class CodingAgentsStepTests {
     public async Task Cursor_skipped_by_flag_emits_skip_line() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();
-        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true);
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
 
         await RunAsync(
             options, detected, TestPaths(), calls.AsInstallers(),
@@ -456,8 +456,8 @@ public class CodingAgentsStepTests {
     public async Task Cursor_installer_failure_emits_warning() {
         var sink     = new Sink();
         var calls    = new InstallerCalls { CursorHooksReturns = false };
-        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true);
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
 
         var result = await RunAsync(
             options, detected, TestPaths(), calls.AsInstallers(),
@@ -472,8 +472,8 @@ public class CodingAgentsStepTests {
     public async Task Cursor_kcap_not_on_path_aborts_install_without_writing_hooks() {
         var sink     = new Sink();
         var calls    = new InstallerCalls { CapacitorOnPathReturns = false };
-        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true);
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
 
         var result = await RunAsync(
             options, detected, TestPaths(), calls.AsInstallers(),
@@ -485,12 +485,109 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("'kcap' is not on PATH"));
     }
 
+    [Test]
+    public async Task Copilot_detected_and_accepted_installs_hooks() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CopilotHooksInstalled).IsTrue();
+        await Assert.That(calls.CopilotHooksArg).IsEqualTo("/fake/.copilot/hooks/kcap.json");
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Copilot hooks installed"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("restart any running copilot session"));
+    }
+
+    [Test]
+    public async Task Copilot_detected_and_declined_skips_installer() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => false, writeLine: sink.Write);
+
+        await Assert.That(result.CopilotHooksInstalled).IsFalse();
+        await Assert.That(calls.CopilotHooksCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Copilot hooks not installed"));
+    }
+
+    [Test]
+    public async Task Copilot_not_detected_emits_skip_line() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false);
+
+        await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.CopilotHooksCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Copilot CLI not detected"));
+    }
+
+    [Test]
+    public async Task Copilot_skipped_by_flag_emits_skip_line() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: true);
+
+        await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.CopilotHooksCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Copilot CLI hooks skipped by flag"));
+    }
+
+    [Test]
+    public async Task Copilot_installer_failure_emits_warning() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CopilotHooksReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CopilotHooksInstalled).IsFalse();
+        await Assert.That(calls.CopilotHooksCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write Copilot hooks"));
+    }
+
+    [Test]
+    public async Task Copilot_kcap_not_on_path_aborts_install_without_writing_hooks() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CapacitorOnPathReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CopilotHooksInstalled).IsFalse();
+        await Assert.That(calls.CapacitorOnPathCalled).IsTrue();
+        await Assert.That(calls.CopilotHooksCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("'kcap' is not on PATH"));
+    }
+
     static Paths TestPaths() => new(
         ClaudeSettingsPath:   "/fake/.claude/settings.json",
         ClaudeScopeLabel:     "user",
         PluginDir:            "/fake/plugin",
         CodexHooksPath:       "/fake/.codex/hooks.json",
         CursorHooksPath:      "/fake/.cursor/hooks.json",
+        CopilotHooksPath:     "/fake/.copilot/hooks/kcap.json",
         AgentsSkillsDir:      "/fake/.agents/skills",
         LegacyCodexSkillsDir: "/fake/.codex/skills"
     );
@@ -512,6 +609,10 @@ public class CodingAgentsStepTests {
         public bool    CursorHooksCalled  { get; private set; }
         public string? CursorHooksArg     { get; private set; }
         public bool    CursorHooksReturns { get; set; } = true;
+
+        public bool    CopilotHooksCalled  { get; private set; }
+        public string? CopilotHooksArg     { get; private set; }
+        public bool    CopilotHooksReturns { get; set; } = true;
 
         public bool CapacitorOnPathCalled  { get; private set; }
         public bool CapacitorOnPathReturns { get; set; } = true;
@@ -542,6 +643,12 @@ public class CodingAgentsStepTests {
                 CursorHooksArg    = h;
 
                 return CursorHooksReturns;
+            },
+            InstallCopilotHooks: h => {
+                CopilotHooksCalled = true;
+                CopilotHooksArg    = h;
+
+                return CopilotHooksReturns;
             },
             CapacitorOnPath: () => {
                 CapacitorOnPathCalled = true;
