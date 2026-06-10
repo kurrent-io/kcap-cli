@@ -29,6 +29,19 @@ public class WindowsTaskUnitTests {
     }
 
     [Test]
+    public async Task BinaryFromWrapper_extracts_daemon_path_not_wrapper() {
+        var bin = WindowsTaskUnit.BinaryFromWrapper(WindowsTaskUnit.Wrapper(Spec()));
+        await Assert.That(bin).IsEqualTo(@"C:\kcap\kcap-daemon.exe");
+    }
+
+    [Test]
+    public async Task BinaryFromWrapper_unescapes_doubled_percent() {
+        var spec = Spec() with { DaemonBinaryPath = @"C:\dir%x\kcap-daemon.exe" };
+        await Assert.That(WindowsTaskUnit.BinaryFromWrapper(WindowsTaskUnit.Wrapper(spec)))
+            .IsEqualTo(@"C:\dir%x\kcap-daemon.exe");
+    }
+
+    [Test]
     public async Task TaskXml_is_well_formed_and_runs_cmd_wrapper() {
         var xml = WindowsTaskUnit.TaskXml(Spec(), @"C:\Users\u\.config\kcap\daemon-service-laptop.cmd");
         XDocument.Parse(xml); // throws if malformed

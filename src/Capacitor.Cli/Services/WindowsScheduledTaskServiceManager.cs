@@ -27,7 +27,10 @@ sealed class WindowsScheduledTaskServiceManager : IServiceManager {
 
     public ServiceStatus Status(string serviceId) {
         var (code, stdout, _) = ServiceProcess.Run("schtasks", WindowsTaskUnit.QueryArgs(serviceId));
-        var bin = File.Exists(WindowsTaskUnit.WrapperPath(serviceId)) ? WindowsTaskUnit.WrapperPath(serviceId) : null;
+        var wrapper = WindowsTaskUnit.WrapperPath(serviceId);
+        // Report the daemon binary baked inside the wrapper (not the wrapper itself)
+        // so doctor catches a moved kcap-daemon.exe even when the wrapper still exists.
+        var bin = File.Exists(wrapper) ? WindowsTaskUnit.BinaryFromWrapper(File.ReadAllText(wrapper)) : null;
         return new ServiceStatus(WindowsTaskUnit.StatusFromQuery(code, stdout), bin);
     }
 

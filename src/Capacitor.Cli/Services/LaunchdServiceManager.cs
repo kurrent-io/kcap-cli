@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Xml.Linq;
 
 namespace Capacitor.Cli.Services;
 
@@ -25,8 +24,7 @@ sealed partial class LaunchdServiceManager : IServiceManager {
     public ServiceStatus Status(string serviceId) {
         var path = LaunchdUnit.PlistPath(serviceId);
         if (!File.Exists(path)) return new ServiceStatus(ServiceState.NotInstalled, null);
-        // First <string> in the plist is the daemon binary (ProgramArguments[0]) — for doctor.
-        var bin = XDocument.Load(path).Descendants("string").FirstOrDefault()?.Value;
+        var bin = LaunchdUnit.BinaryFromPlist(File.ReadAllText(path)); // ProgramArguments[0], not the Label
         var (code, stdout, _) = ServiceProcess.Run("launchctl", LaunchdUnit.PrintArgs(Uid(), serviceId));
         return new ServiceStatus(LaunchdUnit.StatusFromPrint(code, stdout), bin);
     }

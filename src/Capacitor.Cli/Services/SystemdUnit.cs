@@ -23,10 +23,12 @@ static class SystemdUnit {
 
         sb.Append("[Service]\n");
         foreach (var (k, v) in spec.Environment)
-            sb.Append($"Environment={ServiceText.SystemdValue(k)}={ServiceText.SystemdValue(v)}\n");
+            sb.Append($"Environment={EnvAssignment(k, ServiceText.SystemdValue(v))}\n");
 
-        var args = string.Join(' ', new[] { "--name", spec.ServiceId, "--log-file", spec.LogPath }.Concat(spec.ExtraArgs));
-        sb.Append($"ExecStart={spec.DaemonBinaryPath} {args}\n");
+        var parts = new[] { spec.DaemonBinaryPath, "--name", spec.ServiceId, "--log-file", spec.LogPath }
+            .Concat(spec.ExtraArgs)
+            .Select(QuoteArg);
+        sb.Append($"ExecStart={string.Join(' ', parts)}\n");
         sb.Append("Restart=on-failure\n");
         sb.Append("RestartSec=5\n");
         sb.Append("StartLimitIntervalSec=60\n");
@@ -56,4 +58,19 @@ static class SystemdUnit {
         if (activeOut.Trim().Equals("active", StringComparison.OrdinalIgnoreCase)) return ServiceState.Running;
         return enabledExit == 0 ? ServiceState.Installed : ServiceState.NotInstalled;
     }
+
+    // ── systemd value/argument quoting ──
+    // systemd splits Environment= and ExecStart on unquoted whitespace, so any
+    // value/path with a space must be double-quoted (with \ and " escaped).
+    static bool NeedsQuote(string s) =>
+        s.Length == 0 || s.Any(c => char.IsWhiteSpace(c) || c is '"' or '\\');
+
+    static string Esc(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+    /// <summary>An ExecStart argument, double-quoted only when it contains whitespace/quotes.</summary>
+    static string QuoteArg(string a) => NeedsQuote(a) ? $"\"{Esc(a)}\"" : a;
+
+    /// <summary>An <c>Environment=</c> assignment; the whole <c>KEY=VALUE</c> is quoted when VALUE needs it.</summary>
+    static string EnvAssignment(string key, string value) =>
+        NeedsQuote(value) ? $"\"{key}={Esc(value)}\"" : $"{key}={value}";
 }

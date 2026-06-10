@@ -1,4 +1,5 @@
 using System.Text;
+using System.Xml.Linq;
 using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Services;
@@ -59,6 +60,17 @@ static class LaunchdUnit {
         return name.StartsWith(LabelPrefix, StringComparison.Ordinal)
             ? name[LabelPrefix.Length..]
             : null;
+    }
+
+    /// <summary>
+    /// The daemon binary baked into a plist — <c>ProgramArguments[0]</c>, i.e. the
+    /// first <c>&lt;string&gt;</c> inside the (sole) <c>&lt;array&gt;</c>. NOT the
+    /// document's first <c>&lt;string&gt;</c>, which is the <c>Label</c>. Used by
+    /// <c>daemon doctor</c> to detect a moved binary.
+    /// </summary>
+    public static string? BinaryFromPlist(string plistXml) {
+        var array = XDocument.Parse(plistXml).Descendants("array").FirstOrDefault();
+        return array?.Elements("string").FirstOrDefault()?.Value;
     }
 
     // ── command vectors (uid passed in so these stay pure) ──

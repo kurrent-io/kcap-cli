@@ -57,6 +57,19 @@ static class WindowsTaskUnit {
     public static string? IdFromTaskName(string taskName) =>
         taskName.StartsWith(Prefix, StringComparison.Ordinal) ? taskName[Prefix.Length..] : null;
 
+    /// <summary>
+    /// The daemon binary the wrapper exec's — the first quoted token of its exec
+    /// line. <c>daemon doctor</c> checks THIS (not the wrapper's own existence),
+    /// since the wrapper can survive while the baked kcap-daemon.exe path is stale.
+    /// Reverses the <c>%%</c> cmd-escaping applied at write time.
+    /// </summary>
+    public static string? BinaryFromWrapper(string wrapperText) {
+        var line = wrapperText.Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.StartsWith('"'));
+        if (line is null) return null;
+        var end = line.IndexOf('"', 1);
+        return end > 1 ? line[1..end].Replace("%%", "%") : null;
+    }
+
     // ── command vectors (schtasks) ──
     public static string[] CreateArgs(string id, string xmlPath) => ["/Create", "/TN", TaskName(id), "/XML", xmlPath, "/F"];
     public static string[] DeleteArgs(string id)                 => ["/Delete", "/TN", TaskName(id), "/F"];

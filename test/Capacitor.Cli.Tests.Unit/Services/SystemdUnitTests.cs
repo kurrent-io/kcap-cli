@@ -24,6 +24,19 @@ public class SystemdUnitTests {
     }
 
     [Test]
+    public async Task Unit_quotes_values_and_args_with_spaces() {
+        var spec = Spec() with {
+            DaemonBinaryPath = "/opt/k cap/kcap-daemon",
+            LogPath          = "/home/u/my logs/daemon-laptop.log",
+            Environment      = new Dictionary<string, string> { ["PATH"] = "/a b:/c", ["KCAP_PROFILE"] = "work" },
+        };
+        var unit = SystemdUnit.Unit(spec);
+        await Assert.That(unit).Contains("Environment=\"PATH=/a b:/c\"");
+        await Assert.That(unit).Contains("Environment=KCAP_PROFILE=work"); // no space → unquoted
+        await Assert.That(unit).Contains("ExecStart=\"/opt/k cap/kcap-daemon\" --name laptop --log-file \"/home/u/my logs/daemon-laptop.log\" --max-agents 8");
+    }
+
+    [Test]
     public async Task IdFromUnitFileName_extracts_id() {
         await Assert.That(SystemdUnit.IdFromUnitFileName("kcap-daemon-laptop.service")).IsEqualTo("laptop");
         await Assert.That(SystemdUnit.IdFromUnitFileName("other.service")).IsNull();

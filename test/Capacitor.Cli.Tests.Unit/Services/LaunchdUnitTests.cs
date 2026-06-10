@@ -46,6 +46,14 @@ public class LaunchdUnitTests {
     }
 
     [Test]
+    public async Task BinaryFromPlist_returns_program_argument_zero_not_the_label() {
+        var plist = LaunchdUnit.Plist(Spec());
+        // Regression: the Label is the first <string> in the document; the binary
+        // is the first <string> inside <array> (ProgramArguments).
+        await Assert.That(LaunchdUnit.BinaryFromPlist(plist)).IsEqualTo("/opt/kcap/kcap-daemon");
+    }
+
+    [Test]
     public async Task StatusFromPrint_maps_exit_and_state() {
         await Assert.That(LaunchdUnit.StatusFromPrint(exitCode: 1, stdout: "")).IsEqualTo(ServiceState.NotInstalled);
         await Assert.That(LaunchdUnit.StatusFromPrint(0, "state = running")).IsEqualTo(ServiceState.Running);
