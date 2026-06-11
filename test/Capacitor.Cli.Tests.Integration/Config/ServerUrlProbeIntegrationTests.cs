@@ -20,12 +20,16 @@ public class ServerUrlProbeIntegrationTests : IDisposable {
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
-        var port  = new Uri(_server.Url!).Port;
-        var input = $"localhost:{port}";
+        // Derive the scheme-less input from WireMock's actual host:port rather than
+        // hardcoding "localhost": WireMock binds 127.0.0.1, and on Windows "localhost"
+        // resolves to ::1 first, so a hardcoded localhost probe can't reach the server.
+        // Using the real host keeps this a scheme-less loopback → http check. AI-820.
+        var uri   = new Uri(_server.Url!);
+        var input = $"{uri.Host}:{uri.Port}";
 
         var result = await ServerUrlNormalizer.NormalizeAsync(input, skipProbe: false, CancellationToken.None);
 
-        await Assert.That(result.Url).IsEqualTo($"http://localhost:{port}");
+        await Assert.That(result.Url).IsEqualTo($"http://{uri.Host}:{uri.Port}");
         await Assert.That(result.Warning).IsNull();
     }
 
