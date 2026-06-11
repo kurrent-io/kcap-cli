@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 
 namespace Capacitor.Cli.Commands;
@@ -25,6 +26,7 @@ public sealed record PluginEnvironment(
     public string CodexHome           => Path.Combine(HomeDirectory, ".codex");
     public string CodexUserHooksJson  => Path.Combine(CodexHome, "hooks.json");
     public string CursorUserHooksJson => CursorPaths.UserHooksJson(HomeDirectory);
+    public string CopilotKcapHooksJson => CopilotPaths.KcapHooksJson(HomeDirectory);
     public string AgentsSkillsDir     => Path.Combine(HomeDirectory, ".agents", "skills");
     public string LegacyCodexSkills   => Path.Combine(CodexHome, "skills");
 

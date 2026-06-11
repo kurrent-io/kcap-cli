@@ -38,7 +38,7 @@ var command = args[0];
 // nested headless invocation.
 if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
  && command == "hook"
- && (args.Contains("--claude") || args.Contains("--cursor"))) {
+ && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot"))) {
     return 0;
 }
 
@@ -458,6 +458,7 @@ switch (command) {
             new ClaudeImportSource(),
             new CodexImportSource(),
             new CursorImportSource(),
+            new CopilotImportSource(),
         };
         IReadOnlyList<IImportSource> sources = explicitVendorSelection
             ? allSources.Where(s => vsel.Vendors.Contains(s.Vendor)).ToList()
@@ -500,7 +501,7 @@ switch (command) {
             currentRepo:             currentRepo);
     }
     case "watch" when args.Length < 3:
-        Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex]");
+        Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex|copilot]");
 
         return 1;
     case "watch": {
@@ -594,8 +595,11 @@ switch (command) {
         if (args.Contains("--cursor")) {
             return await CursorHookCommand.Handle(baseUrl!, Console.In);
         }
+        if (args.Contains("--copilot")) {
+            return await CopilotHookCommand.Handle(baseUrl!, Console.In, args);
+        }
         Console.Error.WriteLine("kcap hook requires a vendor flag (for example --claude)");
-        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor");
+        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor, --copilot");
         return 1;
     }
     case "cursor":

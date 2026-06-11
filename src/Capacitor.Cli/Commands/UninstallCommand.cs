@@ -44,6 +44,7 @@ public static class UninstallCommand {
         await Console.Out.WriteLineAsync($"  • Remove kcap entries from {ClaudePaths.UserSettings}");
         await Console.Out.WriteLineAsync($"  • Remove kcap entries from {CodexPaths.UserHooksJson}");
         await Console.Out.WriteLineAsync($"  • Remove kcap entries from {CursorPaths.UserHooksJson()}");
+        await Console.Out.WriteLineAsync($"  • Remove {Capacitor.Cli.Core.Copilot.CopilotPaths.KcapHooksJson()}");
         await Console.Out.WriteLineAsync($"  • Remove agent skills under {AgentsPaths.UserSkillsDir}");
 
         if (projectRoot is not null) {
@@ -107,6 +108,7 @@ public static class UninstallCommand {
         if (await PluginCommand.HandleAsync(["plugin", "remove"]) != 0) hadFailures = true;            // Claude
         if (await PluginCommand.HandleAsync(["plugin", "remove", "--codex"]) != 0) hadFailures = true; // Codex hooks + skills + legacy
         if (await PluginCommand.HandleAsync(["plugin", "remove", "--cursor"]) != 0) hadFailures = true;
+        if (await PluginCommand.HandleAsync(["plugin", "remove", "--copilot"]) != 0) hadFailures = true;
 
         // Skills are removed by --codex above, but call --skills explicitly in
         // case the user only ever installed Cursor / agent-agnostic skills and

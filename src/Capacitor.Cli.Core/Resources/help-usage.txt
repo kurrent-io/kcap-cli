@@ -42,7 +42,7 @@ Session:
   validate-plan [id]               Validate plan completion for a session
   eval [--model N] [--chain] [id]  Run LLM-as-judge evaluation over a session
   generate-whats-done [--codex] <id>  Generate what's-done summary (--codex uses `codex exec`)
-  import [vendor-filters] [options]   Import local sessions (Claude, Codex, Cursor)
+  import [vendor-filters] [options]   Import local sessions (Claude, Codex, Cursor, Copilot)
   set-title <title>                Set session title
   disable                          Stop recording and delete session data
   hide                             Hide session (owner-only visibility)
@@ -64,10 +64,11 @@ Maintenance:
   --version                        Show version
   --help                           Show this help
 
-Hooks (internal — invoked by Claude Code / Codex / Cursor):
+Hooks (internal — invoked by Claude Code / Codex / Cursor / Copilot):
   hook --claude                    Dispatch a Claude Code hook event (reads payload from stdin)
   hook --codex                     Dispatch a Codex CLI hook event
   hook --cursor                    Dispatch a Cursor IDE hook event
+  hook --copilot --event <name>    Dispatch a GitHub Copilot CLI hook event
 
 Environment:
   KCAP_URL              Server URL (overrides config file)

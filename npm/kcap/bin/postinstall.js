@@ -33,10 +33,11 @@ const launcher = path.join(__dirname, "kcap.js");
 // One entry per agent. Order is independent — each refresh is gated by
 // its own marker.
 const refreshes = [
-  ["plugin", "install", "--skills", "--if-installed"],
-  ["plugin", "install", "--codex",  "--if-installed"],
-  ["plugin", "install", "--cursor", "--if-installed"],
-  ["plugin", "install",             "--if-installed"], // Claude
+  ["plugin", "install", "--skills",  "--if-installed"],
+  ["plugin", "install", "--codex",   "--if-installed"],
+  ["plugin", "install", "--cursor",  "--if-installed"],
+  ["plugin", "install", "--copilot", "--if-installed"],
+  ["plugin", "install",              "--if-installed"], // Claude
 ];
 
 for (const argv of refreshes) {

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 
 namespace Capacitor.Cli.Commands;
@@ -8,8 +9,9 @@ namespace Capacitor.Cli.Commands;
 public static class PluginCommand {
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
-    const string CodexHookCommand  = "kcap hook --codex";
-    const string CursorHookCommand = "kcap hook --cursor";
+    const string CodexHookCommand   = "kcap hook --codex";
+    const string CursorHookCommand  = "kcap hook --cursor";
+    const string CopilotHookCommand = "kcap hook --copilot";
 
     // PermissionRequest must wait for the dashboard's decision; the daemon-side
     // bridge call is intentionally infinite. 86400s = 24h keeps Codex from
@@ -33,12 +35,15 @@ public static class PluginCommand {
         };
     }
 
+    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--skills"];
+
+    static bool HasConflictingTargets(string[] args) =>
+        ExclusiveTargetFlags.Count(args.Contains) > 1;
+
     static async Task<int> Install(string[] args, PluginEnvironment env) {
-        if ((args.Contains("--codex")  && args.Contains("--skills"))
-         || (args.Contains("--cursor") && args.Contains("--skills"))
-         || (args.Contains("--cursor") && args.Contains("--codex"))) {
+        if (HasConflictingTargets(args)) {
             await env.Stderr.WriteLineAsync(
-                "--cursor, --codex, and --skills are mutually exclusive."
+                "--cursor, --codex, --copilot, and --skills are mutually exclusive."
             );
 
             return 1;
@@ -47,16 +52,15 @@ public static class PluginCommand {
         if (args.Contains("--skills")) return await InstallSkills(args, env);
         if (args.Contains("--codex")) return await InstallCodex(args, env);
         if (args.Contains("--cursor")) return await InstallCursor(args, env);
+        if (args.Contains("--copilot")) return await InstallCopilot(args, env);
 
         return await InstallClaude(args, env);
     }
 
     static async Task<int> Remove(string[] args, PluginEnvironment env) {
-        if ((args.Contains("--codex")  && args.Contains("--skills"))
-         || (args.Contains("--cursor") && args.Contains("--skills"))
-         || (args.Contains("--cursor") && args.Contains("--codex"))) {
+        if (HasConflictingTargets(args)) {
             await env.Stderr.WriteLineAsync(
-                "--cursor, --codex, and --skills are mutually exclusive."
+                "--cursor, --codex, --copilot, and --skills are mutually exclusive."
             );
 
             return 1;
@@ -65,6 +69,7 @@ public static class PluginCommand {
         if (args.Contains("--skills")) return await RemoveSkills(args, env);
         if (args.Contains("--codex")) return await RemoveCodex(args, env);
         if (args.Contains("--cursor")) return await RemoveCursor(args, env);
+        if (args.Contains("--copilot")) return await RemoveCopilot(args, env);
 
         return await RemoveClaude(args, env);
     }
@@ -666,6 +671,117 @@ public static class PluginCommand {
 
             return true;
         } catch { return false; }
+    }
+
+    static async Task<int> InstallCopilot(string[] args, PluginEnvironment env) {
+        var hooksPath = GetArg(args, "--copilot-hooks-path") ?? env.CopilotKcapHooksJson;
+
+        var refreshOnly = args.Contains("--if-installed");
+
+        switch (refreshOnly) {
+            case true when !CopilotHooksInstaller.IsInstalled(hooksPath):
+            case true when CopilotHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current():
+                return 0;
+            // Same PATH precheck rationale as Cursor: kcap.json writes the bare
+            // `kcap hook --copilot` command, so Copilot must find kcap on PATH.
+            // Skipped on the postinstall (--if-installed) path — see InstallCursor.
+            case false when !AgentDetector.IsInstalled("kcap"):
+                await env.Stderr.WriteLineAsync(
+                    "Cannot install Copilot hooks: 'kcap' is not on PATH. "
+                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                );
+
+                return 1;
+        }
+
+        if (!InstallCopilotHooks(hooksPath)) {
+            if (refreshOnly) return 0;
+
+            await env.Stderr.WriteLineAsync("Could not write Copilot hooks file.");
+
+            return 1;
+        }
+
+        await env.Stdout.WriteLineAsync(
+            refreshOnly
+                ? $"Copilot hooks refreshed ({hooksPath})"
+                : $"Copilot hooks installed ({hooksPath})"
+        );
+
+        return 0;
+    }
+
+    static async Task<int> RemoveCopilot(string[] args, PluginEnvironment env) {
+        var hooksPath = GetArg(args, "--copilot-hooks-path") ?? env.CopilotKcapHooksJson;
+
+        try {
+            var removed = RemoveCopilotHooks(hooksPath);
+
+            await env.Stdout.WriteLineAsync(
+                removed
+                    ? $"Copilot hooks removed ({hooksPath})"
+                    : "Nothing to remove — Copilot hooks file not found."
+            );
+
+            return 0;
+        } catch (Exception ex) {
+            await env.Stderr.WriteLineAsync($"Could not remove Copilot hooks at {hooksPath}: {ex.Message}");
+
+            return 1;
+        }
+    }
+
+    /// <summary>
+    /// Writes kcap's own Copilot hooks file. Copilot merges every
+    /// <c>*.json</c> under <c>~/.copilot/hooks/</c> at startup, so kcap owns
+    /// <c>kcap.json</c> wholesale — no merge with user-authored entries is
+    /// needed (unlike the shared-file Cursor/Codex installers). Each entry
+    /// embeds the event name in the command because Copilot hook payloads
+    /// carry no uniform event-name field (see <see cref="CopilotHookCommand"/>).
+    /// </summary>
+    public static bool InstallCopilotHooks(string hooksPath) {
+        try {
+            var hooks = new JsonObject();
+
+            foreach (var evt in CopilotHooksParser.CopilotHookEvents) {
+                hooks[evt] = new JsonArray(
+                    new JsonObject {
+                        ["type"]       = "command",
+                        ["command"]    = $"{CopilotHookCommand} --event {evt}",
+                        ["timeoutSec"] = DefaultHookTimeout
+                    }
+                );
+            }
+
+            var root = new JsonObject {
+                ["version"] = 1,
+                ["hooks"]   = hooks
+            };
+
+            Directory.CreateDirectory(Path.GetDirectoryName(hooksPath)!);
+            File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
+            CopilotHooksInstaller.WriteMarker(hooksPath);
+
+            return true;
+        } catch { return false; }
+    }
+
+    /// <summary>
+    /// Deletes kcap's Copilot hooks file (kcap owns it wholesale — there are
+    /// no user-authored entries to preserve). Returns true when the file
+    /// existed; throws on I/O failure.
+    /// </summary>
+    public static bool RemoveCopilotHooks(string hooksPath) {
+        var removed = false;
+
+        if (File.Exists(hooksPath)) {
+            File.Delete(hooksPath);
+            removed = true;
+        }
+
+        CopilotHooksInstaller.DeleteMarker(hooksPath);
+
+        return removed;
     }
 
     /// <summary>

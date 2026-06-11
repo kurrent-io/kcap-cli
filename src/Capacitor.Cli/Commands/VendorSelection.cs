@@ -12,28 +12,29 @@ public static class VendorSelection {
         public bool HasError => Error is not null;
     }
 
-    static readonly string[] KnownVendorFlags = ["--claude", "--codex", "--cursor"];
+    static readonly string[] KnownVendorFlags = ["--claude", "--codex", "--cursor", "--copilot"];
 
     public static Result Parse(string[] args) {
         var vendors = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var a in args) {
             switch (a) {
-                case "--claude": vendors.Add("claude"); break;
-                case "--codex":  vendors.Add("codex");  break;
-                case "--cursor": vendors.Add("cursor"); break;
+                case "--claude":  vendors.Add("claude");  break;
+                case "--codex":   vendors.Add("codex");   break;
+                case "--cursor":  vendors.Add("cursor");  break;
+                case "--copilot": vendors.Add("copilot"); break;
             }
         }
 
-        // Reject unknown --cursor-/--claude-/--codex- prefixed flags. The legacy
-        // SQLite-era options (--cursor-workspace, --cursor-all-workspaces) were
-        // dropped in AI-737; the JSONL walker doesn't need workspace filtering
-        // since the transcript path already encodes the workspace.
+        // Reject unknown vendor-prefixed flags. The legacy SQLite-era options
+        // (--cursor-workspace, --cursor-all-workspaces) were dropped in
+        // AI-737; the JSONL walkers don't need workspace filtering since the
+        // transcript path already encodes the workspace.
         foreach (var a in args) {
             if (!a.StartsWith("--")) continue;
             if (Array.IndexOf(KnownVendorFlags, a) >= 0) continue;
 
-            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-")) {
+            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-")) {
                 return new(vendors, $"Unknown source option: {a}.");
             }
         }
@@ -42,7 +43,7 @@ public static class VendorSelection {
         foreach (var a in args) {
             if (!a.StartsWith("--")) continue;
             if (Array.IndexOf(KnownVendorFlags, a) >= 0) continue;
-            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-")) continue;
+            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-")) continue;
 
             string? hint = null;
             var bestDist = int.MaxValue;
