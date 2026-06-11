@@ -17,11 +17,12 @@ public class ProcessHelpersHandleInheritanceTests {
     const uint HANDLE_FLAG_INHERIT = 0x00000001;
 
     [Test]
-    public async Task PreventInheritedStdHandles_never_throws() {
-        // Runs on every watcher spawn — must be exception-free on every platform.
-        ProcessHelpers.PreventInheritedStdHandles();
-
-        // Invalid handles are rejected, not crashed on (Windows); no-op success off Windows.
+    public async Task TryClearInheritFlag_is_a_safe_noop_on_invalid_handles() {
+        // Must never throw and must reject NULL/INVALID handles rather than act on them.
+        // We deliberately do NOT call PreventInheritedStdHandles() here: it clears the
+        // inherit flag on the test host's *real* std handles and never restores them,
+        // which would leave process-global state mutated for the rest of the run. The
+        // actual clearing behaviour is covered in isolation by the pipe-handle test below.
         await Assert.That(ProcessHelpers.TryClearInheritFlag(0)).IsEqualTo(!OperatingSystem.IsWindows());
         await Assert.That(ProcessHelpers.TryClearInheritFlag(-1)).IsEqualTo(!OperatingSystem.IsWindows());
     }

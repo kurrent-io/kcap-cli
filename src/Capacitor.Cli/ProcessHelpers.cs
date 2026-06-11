@@ -129,14 +129,36 @@ static partial class ProcessHelpers {
             return;
         }
 
-        ClearStdHandleInherit(STD_INPUT_HANDLE);
-        ClearStdHandleInherit(STD_OUTPUT_HANDLE);
-        ClearStdHandleInherit(STD_ERROR_HANDLE);
+        ClearStdHandleInherit(STD_INPUT_HANDLE,  "stdin");
+        ClearStdHandleInherit(STD_OUTPUT_HANDLE, "stdout");
+        ClearStdHandleInherit(STD_ERROR_HANDLE,  "stderr");
     }
 
-    static void ClearStdHandleInherit(int stdHandleId) {
+    static bool stdHandleInheritWarned;
+
+    static void ClearStdHandleInherit(int stdHandleId, string streamName) {
         try {
-            TryClearInheritFlag(GetStdHandle(stdHandleId));
+            var handle = GetStdHandle(stdHandleId);
+
+            // No handle for this stream (NULL/INVALID) — nothing to clear, not a failure.
+            if (handle == 0 || handle == -1) {
+                return;
+            }
+
+            if (TryClearInheritFlag(handle)) {
+                return;
+            }
+
+            // SetHandleInformation genuinely failed on a valid handle: the AI-820
+            // mitigation did not apply, so a spawned watcher may still inherit this
+            // pipe and reintroduce the hang/leak. Surface one diagnostic per process
+            // (don't spam the agent's hook output) and never throw.
+            if (!stdHandleInheritWarned) {
+                stdHandleInheritWarned = true;
+                Console.Error.WriteLine(
+                    $"[kcap] warning: could not clear HANDLE_FLAG_INHERIT on {streamName} "
+                  + $"(win32 error {Marshal.GetLastPInvokeError()}); a spawned watcher may inherit std handles (AI-820).");
+            }
         } catch {
             // Best effort — handle hygiene must never crash the spawn path.
         }
