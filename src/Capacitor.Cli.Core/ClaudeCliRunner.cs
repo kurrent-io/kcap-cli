@@ -66,14 +66,17 @@ static class ClaudeCliRunner {
     /// during the run (today: the DEV-1484 retrospective judge, which
     /// pulls session details via <c>kcap mcp judge</c> instead of
     /// having the full trace embedded in its prompt). When
-    /// <paramref name="mcpConfigJson"/> is supplied, the runner flips out
-    /// of the text-only lockdown (<c>--strict-mcp-config</c> / empty
-    /// <c>--tools</c> / <c>--disallowedTools LSP</c>) and instead loads
-    /// the caller-supplied MCP config via <c>--mcp-config</c>, restricting
-    /// the model to exactly <paramref name="allowedTools"/> via
-    /// <c>--allowedTools</c>. <c>--disable-slash-commands</c> stays on in
-    /// both modes. Leaving both null preserves the text-only behaviour
-    /// every other caller relies on.
+    /// <paramref name="mcpConfigJson"/> is supplied, the runner loads the
+    /// caller-supplied MCP config via <c>--mcp-config</c> and restricts the
+    /// model to exactly <paramref name="allowedTools"/> via
+    /// <c>--allowedTools</c>, dropping only the text-only tool lockdown
+    /// (empty <c>--tools</c> / <c>--disallowedTools LSP</c>).
+    /// <c>--strict-mcp-config</c> and <c>--disable-slash-commands</c> stay
+    /// on in both modes — strict-mcp-config is what keeps the user's global
+    /// or plugin MCP servers (e.g. <c>kcap-sessions</c> from the kcap Claude
+    /// Code plugin) from leaking in and getting permission-blocked under
+    /// the allowlist (AI-803). Leaving both null preserves the text-only
+    /// behaviour every other caller relies on.
     /// </para>
     ///
     /// <para>
@@ -185,74 +188,9 @@ static class ClaudeCliRunner {
         if (!ProviderApiKeyPolicy.ShouldKeepProviderKey()) {
             psi.Environment.Remove("ANTHROPIC_API_KEY");
         }
-        psi.ArgumentList.Add("-p");
 
-        if (!promptViaStdin) {
-            // When piping stdin, `claude -p` reads the prompt from stdin; don't
-            // also pass it as a positional arg.
-            psi.ArgumentList.Add(prompt);
-        }
-
-        psi.ArgumentList.Add("--output-format");
-        psi.ArgumentList.Add("json");
-        psi.ArgumentList.Add("--max-turns");
-        psi.ArgumentList.Add(maxTurns.ToString());
-        psi.ArgumentList.Add("--model");
-        psi.ArgumentList.Add(model);
-
-        if (maxBudgetUsd is { } budget) {
-            psi.ArgumentList.Add("--max-budget-usd");
-            psi.ArgumentList.Add(budget.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
-        }
-
-        if (mcpConfigJson is null) {
-            // Text-only mode (title generation, per-question judges): block
-            // MCP servers, all tools, and the LSP probe.
-            //
-            // `--tools ""` is not enough for headless single-turn judge runs:
-            //   - MCP servers from the user's global config still load, so we
-            //     need `--strict-mcp-config` (with no `--mcp-config`) to load zero.
-            //   - The built-in `LSP` tool is attached regardless of `--tools`,
-            //     and Claude eagerly probes any file paths it sees in the
-            //     compacted trace, blowing past `--max-turns 1` with
-            //     `stop_reason=tool_use`. `--disallowedTools LSP` blocks it.
-            // Without both flags, real eval traces (which mention file paths)
-            // fail every question with `error_max_turns`.
-            psi.ArgumentList.Add("--strict-mcp-config");
-            psi.ArgumentList.Add("--tools");
-            psi.ArgumentList.Add("");
-            psi.ArgumentList.Add("--disallowedTools");
-            psi.ArgumentList.Add("LSP");
-        } else {
-            // Tool-using mode (DEV-1484 retrospective): load the caller-supplied
-            // MCP config, and restrict the model to exactly the MCP tools the
-            // caller named. The `--tools ""` / `--disallowedTools LSP` lockdown
-            // from the text-only branch is dropped — the explicit `--allowedTools`
-            // allowlist is the only tool surface the model sees.
-            psi.ArgumentList.Add("--mcp-config");
-            psi.ArgumentList.Add(mcpConfigJson);
-            if (allowedTools is { Length: > 0 }) {
-                psi.ArgumentList.Add("--allowedTools");
-                psi.ArgumentList.Add(string.Join(",", allowedTools));
-            }
-        }
-
-        // Skills load ~200 entries into the system prompt and the
-        // `using-superpowers` skill auto-invokes `Skill` on every session.
-        // Both are pure overhead for a headless judge: they inflate the
-        // prompt (contributing to the 200K-token auto-compact that
-        // destroys verdicts) and burn turns on skill dispatch that never
-        // produces a StructuredOutput reply. Applies in both text-only and
-        // tool-using modes.
-        psi.ArgumentList.Add("--disable-slash-commands");
-
-        if (!string.IsNullOrEmpty(jsonSchema)) {
-            // --json-schema makes the CLI enforce a structured reply via an
-            // internal StructuredOutput tool; the matched object lands in
-            // the top-level `structured_output` field (and `result` is
-            // empty). ParseJsonResponseOnly prefers that field.
-            psi.ArgumentList.Add("--json-schema");
-            psi.ArgumentList.Add(jsonSchema);
+        foreach (var arg in BuildClaudeArgs(prompt, promptViaStdin, model, maxTurns, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd)) {
+            psi.ArgumentList.Add(arg);
         }
 
         using var process = Process.Start(psi);
@@ -372,6 +310,106 @@ static class ClaudeCliRunner {
 
             return null;
         }
+    }
+
+    /// <summary>
+    /// Builds the ordered <c>claude</c> CLI argument list for a headless run.
+    /// Extracted as an internal seam so the flag composition (especially the
+    /// MCP / text-only branching) can be asserted in unit tests without
+    /// spawning the real <c>claude</c> binary.
+    /// </summary>
+    internal static List<string> BuildClaudeArgs(
+            string    prompt,
+            bool      promptViaStdin,
+            string    model,
+            int       maxTurns,
+            string?   jsonSchema,
+            string?   mcpConfigJson,
+            string[]? allowedTools,
+            double?   maxBudgetUsd
+        ) {
+        var args = new List<string> { "-p" };
+
+        if (!promptViaStdin) {
+            // When piping stdin, `claude -p` reads the prompt from stdin; don't
+            // also pass it as a positional arg.
+            args.Add(prompt);
+        }
+
+        args.Add("--output-format");
+        args.Add("json");
+        args.Add("--max-turns");
+        args.Add(maxTurns.ToString());
+        args.Add("--model");
+        args.Add(model);
+
+        if (maxBudgetUsd is { } budget) {
+            args.Add("--max-budget-usd");
+            args.Add(budget.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        // `--strict-mcp-config` is on in BOTH modes: it tells claude to load
+        // ONLY the servers from `--mcp-config` (or zero servers when none is
+        // given), ignoring the user's global/project/plugin MCP config.
+        //   - Text-only mode: no `--mcp-config`, so zero MCP servers load.
+        //   - MCP mode: only the caller's inline session-scoped judge server
+        //     loads. Without this, a client with the `kcap` Claude Code plugin
+        //     installed would leak its global `kcap-sessions` (and a colliding
+        //     `kcap-review`) servers into the headless judge; the judge then
+        //     reaches for those un-allowlisted tools and every call is blocked
+        //     by permission restrictions, degrading verdicts to "unable to
+        //     investigate" (AI-803).
+        args.Add("--strict-mcp-config");
+
+        if (mcpConfigJson is null) {
+            // Text-only mode (title generation, per-question judges): block
+            // all tools and the LSP probe on top of loading zero MCP servers.
+            //
+            // `--tools ""` is not enough for headless single-turn judge runs:
+            //   - The built-in `LSP` tool is attached regardless of `--tools`,
+            //     and Claude eagerly probes any file paths it sees in the
+            //     compacted trace, blowing past `--max-turns 1` with
+            //     `stop_reason=tool_use`. `--disallowedTools LSP` blocks it.
+            // Without these, real eval traces (which mention file paths)
+            // fail every question with `error_max_turns`.
+            args.Add("--tools");
+            args.Add("");
+            args.Add("--disallowedTools");
+            args.Add("LSP");
+        } else {
+            // Tool-using mode (DEV-1484 retrospective + DEV-1486 per-question):
+            // load the caller-supplied MCP config and restrict the model to
+            // exactly the MCP tools the caller named. The `--tools ""` /
+            // `--disallowedTools LSP` lockdown from the text-only branch is
+            // dropped — the explicit `--allowedTools` allowlist is the only
+            // tool surface the model sees.
+            args.Add("--mcp-config");
+            args.Add(mcpConfigJson);
+            if (allowedTools is { Length: > 0 }) {
+                args.Add("--allowedTools");
+                args.Add(string.Join(",", allowedTools));
+            }
+        }
+
+        // Skills load ~200 entries into the system prompt and the
+        // `using-superpowers` skill auto-invokes `Skill` on every session.
+        // Both are pure overhead for a headless judge: they inflate the
+        // prompt (contributing to the 200K-token auto-compact that
+        // destroys verdicts) and burn turns on skill dispatch that never
+        // produces a StructuredOutput reply. Applies in both text-only and
+        // tool-using modes.
+        args.Add("--disable-slash-commands");
+
+        if (!string.IsNullOrEmpty(jsonSchema)) {
+            // --json-schema makes the CLI enforce a structured reply via an
+            // internal StructuredOutput tool; the matched object lands in
+            // the top-level `structured_output` field (and `result` is
+            // empty). ParseJsonResponseOnly prefers that field.
+            args.Add("--json-schema");
+            args.Add(jsonSchema);
+        }
+
+        return args;
     }
 
     internal static ClaudeCliResult? ParseResponse(string stdout) {
