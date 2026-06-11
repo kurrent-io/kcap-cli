@@ -170,6 +170,30 @@ public class CopilotImportSourceTests {
         await Assert.That(CopilotWorkspaceYaml.Unquote(raw)).IsEqualTo(expected);
     }
 
+    // The server watermark is the max persisted canonical $lineNumber, and
+    // every Copilot transcript ends with lines the server normalizer skips
+    // (session.shutdown + the sessionEnd hook's own hook.start/hook.end pair).
+    // Classification must compare against the last RELEVANT line or complete
+    // imports re-classify Partial forever.
+    [Test]
+    [Arguments("""{"type":"session.start","data":{"sessionId":"x","context":{"cwd":"/w"}},"id":"1","timestamp":"2026-06-10T20:23:49Z","parentId":null}""", true)]
+    [Arguments("""{"type":"user.message","data":{"content":"hi","transformedContent":"<x/>hi"},"id":"2","timestamp":"2026-06-10T20:23:50Z","parentId":null}""", true)]
+    [Arguments("""{"type":"user.message","data":{"content":"","attachments":[]},"id":"3","timestamp":"2026-06-10T20:23:50Z","parentId":null}""", false)]
+    [Arguments("""{"type":"assistant.message","data":{"content":"ok","toolRequests":[],"outputTokens":5},"id":"4","timestamp":"2026-06-10T20:23:55Z","parentId":null}""", true)]
+    [Arguments("""{"type":"assistant.message","data":{"content":"","toolRequests":[{"toolCallId":"t1","name":"write","arguments":{}}]},"id":"5","timestamp":"2026-06-10T20:23:55Z","parentId":null}""", true)]
+    [Arguments("""{"type":"assistant.message","data":{"content":"","reasoningText":"thinking","toolRequests":[]},"id":"6","timestamp":"2026-06-10T20:23:55Z","parentId":null}""", true)]
+    [Arguments("""{"type":"assistant.message","data":{"content":"","toolRequests":[]},"id":"7","timestamp":"2026-06-10T20:23:55Z","parentId":null}""", false)]
+    [Arguments("""{"type":"tool.execution_complete","data":{"toolCallId":"t1","success":true,"result":{"content":"done"}},"id":"8","timestamp":"2026-06-10T20:23:56Z","parentId":null}""", true)]
+    [Arguments("""{"type":"tool.execution_start","data":{"toolCallId":"t1","toolName":"write"},"id":"9","timestamp":"2026-06-10T20:23:56Z","parentId":null}""", false)]
+    [Arguments("""{"type":"session.shutdown","data":{"shutdownType":"routine","totalPremiumRequests":1},"id":"10","timestamp":"2026-06-10T20:24:40Z","parentId":null}""", false)]
+    [Arguments("""{"type":"hook.start","data":{"hookInvocationId":"h1","hookType":"sessionEnd","input":{}},"id":"11","timestamp":"2026-06-10T20:24:41Z","parentId":null}""", false)]
+    [Arguments("""{"type":"hook.end","data":{"hookInvocationId":"h1","hookType":"sessionEnd","success":true},"id":"12","timestamp":"2026-06-10T20:24:41Z","parentId":null}""", false)]
+    [Arguments("""{"type":"assistant.turn_end","data":{"turnId":"0"},"id":"13","timestamp":"2026-06-10T20:23:59Z","parentId":null}""", false)]
+    [Arguments("not json", false)]
+    public async Task import_relevance_mirrors_the_server_normalizer_mapping(string line, bool expected) {
+        await Assert.That(CopilotImportSource.IsImportRelevantLine(line)).IsEqualTo(expected);
+    }
+
     static void WriteSession(string root, string dashedSid, string? cwd, string? name = null, string? createdAt = null) {
         var dir = Path.Combine(root, dashedSid);
         Directory.CreateDirectory(dir);

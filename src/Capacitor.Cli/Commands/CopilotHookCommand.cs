@@ -75,6 +75,15 @@ static class CopilotHookCommand {
 
         if (string.IsNullOrEmpty(dashedSessionId)) return 0;
 
+        // Copilot session ids are UUIDs (the session-state dir name) — but
+        // subagent-scoped hook firings reuse the spawning toolCallId as
+        // sessionId (captured v1.0.61 agentStop: sessionId:"toolu_01…",
+        // transcriptPath:""). Those are not sessions: routing them onward
+        // would spawn idle watchers (pid files + SignalR registrations) keyed
+        // on tool-call ids. Subagent activity is already inlined in the
+        // parent session's transcript, so dropping these loses nothing.
+        if (!Guid.TryParse(dashedSessionId, out _)) return 0;
+
         var sessionId = dashedSessionId.Replace("-", "");
 
         // Mirror the Claude/Codex disabled-session fast path: `kcap disable`
@@ -263,8 +272,12 @@ static class CopilotHookCommand {
 
     static async Task EnsureWatcherAsync(string baseUrl, string dashedSessionId, string sessionId, JsonNode node, string? cwd) {
         // agentStop payloads carry transcriptPath; sessionStart's don't —
-        // derive it from the session-state layout in that case.
-        var transcriptPath = TryGetString(node, "transcriptPath") ?? TranscriptPathFor(dashedSessionId);
+        // derive it from the session-state layout in that case. Copilot also
+        // ships transcriptPath as an EMPTY STRING on some firings, so treat
+        // empty as absent rather than spawning a watcher on "".
+        var transcriptPath = TryGetString(node, "transcriptPath") is { Length: > 0 } tp
+            ? tp
+            : TranscriptPathFor(dashedSessionId);
 
         await WatcherManager.EnsureWatcherRunning(
             baseUrl, sessionId, transcriptPath,

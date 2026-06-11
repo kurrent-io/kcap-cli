@@ -151,9 +151,10 @@ internal sealed class CopilotImportSource : IImportSource {
             };
 
             int? lastNonBlankIndex;
+            int? lastRelevantIndex;
             int  nonBlankCount;
             try {
-                (lastNonBlankIndex, nonBlankCount) = await ReadTranscriptStatsAsync(transcriptPath, ct);
+                (lastNonBlankIndex, lastRelevantIndex, nonBlankCount) = await ReadTranscriptStatsAsync(transcriptPath, ct);
             } catch {
                 results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, totalLines: 0,
                                                probeErrorReason: "transcript read failed"));
@@ -204,8 +205,19 @@ internal sealed class CopilotImportSource : IImportSource {
             var status       = ImportCommand.ClassificationStatus.New;
             var resumeFromLn = 0;
 
+            // Compare the server watermark against the last IMPORT-RELEVANT
+            // line, not the last raw line: the watermark is the max persisted
+            // canonical $lineNumber, and every Copilot transcript ENDS with
+            // lines the server normalizer intentionally skips
+            // (session.shutdown plus the hook.start/hook.end pair the
+            // sessionEnd hook itself writes). Compared against the raw tail, a
+            // fully-imported session would re-classify Partial on every run,
+            // forever re-sending noise lines that can never advance the
+            // watermark.
+            var lastImportable = lastRelevantIndex ?? lastNonBlankIndex.Value;
+
             if (serverLastLine is { } srv) {
-                if (srv >= lastNonBlankIndex.Value) {
+                if (srv >= lastImportable) {
                     status = ImportCommand.ClassificationStatus.AlreadyLoaded;
                 } else {
                     status       = ImportCommand.ClassificationStatus.Partial;
@@ -367,24 +379,63 @@ internal sealed class CopilotImportSource : IImportSource {
         SourceMeta       = s.SourceMeta,
     };
 
-    static async Task<(int? LastNonBlankIndex, int NonBlankCount)> ReadTranscriptStatsAsync(
+    static async Task<(int? LastNonBlankIndex, int? LastRelevantIndex, int NonBlankCount)> ReadTranscriptStatsAsync(
         string transcriptPath, CancellationToken ct
     ) {
         await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using var       reader = new StreamReader(stream);
 
-        int? lastIdx = null;
-        var  count   = 0;
-        var  lineIdx = 0;
+        int? lastIdx         = null;
+        int? lastRelevantIdx = null;
+        var  count           = 0;
+        var  lineIdx         = 0;
 
         while (await reader.ReadLineAsync(ct) is { } line) {
             if (!string.IsNullOrWhiteSpace(line)) {
                 lastIdx = lineIdx;
                 count++;
+
+                if (IsImportRelevantLine(line)) lastRelevantIdx = lineIdx;
             }
             lineIdx++;
         }
-        return (lastIdx, count);
+        return (lastIdx, lastRelevantIdx, count);
+    }
+
+    /// <summary>
+    /// True when the line maps to at least one canonical event under the
+    /// server's CopilotTranscriptNormalizer — the contract this mirrors:
+    /// <c>session.start</c> always emits; <c>user.message</c> emits for
+    /// non-empty <c>content</c>; <c>assistant.message</c> emits per non-empty
+    /// reasoningText / content / toolRequests entry;
+    /// <c>tool.execution_complete</c> emits when <c>toolCallId</c> is present.
+    /// Everything else (hook.*, system.*, assistant.turn_*, session.* telemetry,
+    /// subagent.*, tool.execution_start) is skipped server-side and can never
+    /// advance the transcript watermark. Fail direction on drift: treating a
+    /// skipped line as relevant re-classifies a complete session as Partial
+    /// (today's bug); treating an emitting line as noise marks AlreadyLoaded
+    /// while its events are unsent — so keep this list in sync with the
+    /// normalizer when the mapping grows.
+    /// </summary>
+    internal static bool IsImportRelevantLine(string line) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Obj("data") is not { } data) return false;
+
+            return root.Str("type") switch {
+                "session.start"           => true,
+                "user.message"            => data.Str("content") is { Length: > 0 },
+                "assistant.message"       => data.Str("content") is { Length: > 0 }
+                                          || data.Str("reasoningText") is { Length: > 0 }
+                                          || data.Arr("toolRequests") is { } requests && requests.GetArrayLength() > 0,
+                "tool.execution_complete" => data.Str("toolCallId") is not null,
+                _                         => false
+            };
+        } catch {
+            return false;
+        }
     }
 
     static async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct) {
