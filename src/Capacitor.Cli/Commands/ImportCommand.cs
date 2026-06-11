@@ -1729,17 +1729,40 @@ static class ImportCommand {
         return roots;
 
         static bool HasAncestorIn(string path, IReadOnlySet<string> set) {
-            // Walk parent directories: /a/b/c → /a/b → /a → / (stop at root or
-            // when GetDirectoryName returns null/empty).
-            var parent = Path.GetDirectoryName(path);
+            // Walk parent directories: /a/b/c → /a/b → /a (stop at the first
+            // segment). Trim the last separator-delimited segment ourselves
+            // instead of Path.GetDirectoryName, which on Windows normalizes
+            // '/' → '\' and would break the Ordinal set comparison for
+            // forward-slash transcript cwds (AI-820). Both '/' and '\' are
+            // honored so mixed-style paths collapse consistently on every OS.
+            var parent = TrimLastSegment(path);
 
-            while (!string.IsNullOrEmpty(parent) && parent != path) {
+            while (parent is not null) {
                 if (set.Contains(parent)) return true;
-                path   = parent;
-                parent = Path.GetDirectoryName(parent);
+                parent = TrimLastSegment(parent);
             }
 
             return false;
+
+            static string? TrimLastSegment(string p) {
+                var i = p.Length - 1;
+
+                // Skip trailing separators (e.g. a stray "/a/b/").
+                while (i >= 0 && CwdRemapper.IsSeparator(p[i])) i--;
+
+                // Find the separator that ends the parent segment.
+                while (i >= 0 && !CwdRemapper.IsSeparator(p[i])) i--;
+
+                // No separator left, or only a leading-root separator remains
+                // ("/foo" → root) → no further ancestor to test.
+                if (i <= 0) return null;
+
+                // Collapse any run of separators so "/a//b" trims cleanly to "/a".
+                var end = i;
+                while (end > 0 && CwdRemapper.IsSeparator(p[end - 1])) end--;
+
+                return end <= 0 ? null : p[..end];
+            }
         }
     }
 

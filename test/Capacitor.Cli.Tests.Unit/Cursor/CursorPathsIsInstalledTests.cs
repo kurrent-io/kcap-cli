@@ -42,13 +42,13 @@ public class CursorPathsIsInstalledTests {
     [Test]
     public async Task UserHooksJson_is_dot_cursor_hooks_json_under_home() {
         var resolved = CursorPaths.UserHooksJson(home: "/tmp/h");
-        await Assert.That(resolved).IsEqualTo("/tmp/h/.cursor/hooks.json");
+        await Assert.That(resolved).IsEqualTo(Path.Combine("/tmp/h", ".cursor", "hooks.json"));
     }
 
     [Test]
     public async Task SpoolDir_is_dot_cursor_kcap_pending_under_home() {
         var resolved = CursorPaths.SpoolDir(home: "/tmp/h");
-        await Assert.That(resolved).IsEqualTo("/tmp/h/.cursor/kcap-pending");
+        await Assert.That(resolved).IsEqualTo(Path.Combine("/tmp/h", ".cursor", "kcap-pending"));
     }
 
     sealed class TempHome : IDisposable {
