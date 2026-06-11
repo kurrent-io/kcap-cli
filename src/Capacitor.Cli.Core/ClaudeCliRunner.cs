@@ -354,10 +354,10 @@ static class ClaudeCliRunner {
         //   - Text-only mode: no `--mcp-config`, so zero MCP servers load.
         //   - MCP mode: only the caller's inline session-scoped judge server
         //     loads. Without this, a client with the `kcap` Claude Code plugin
-        //     installed would leak its global `kcap-sessions` (and a colliding
-        //     `kcap-review`) servers into the headless judge; the judge then
-        //     reaches for those un-allowlisted tools and every call is blocked
-        //     by permission restrictions, degrading verdicts to "unable to
+        //     installed would leak its global `kcap-sessions` server (and
+        //     others) into the headless judge; the judge then reaches for
+        //     those un-allowlisted tools and every call is blocked by
+        //     permission restrictions, degrading verdicts to "unable to
         //     investigate" (AI-803).
         args.Add("--strict-mcp-config");
 

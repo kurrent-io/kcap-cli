@@ -166,8 +166,8 @@ public class ClaudeCliRunnerTests {
             model:          "sonnet[1m]",
             maxTurns:       15,
             jsonSchema:     null,
-            mcpConfigJson:  """{"mcpServers":{"kcap-review":{"command":"kcap","args":["mcp","judge"]}}}""",
-            allowedTools:   ["mcp__kcap-review__get_session_summary"],
+            mcpConfigJson:  """{"mcpServers":{"kcap-judge":{"command":"kcap","args":["mcp","judge"]}}}""",
+            allowedTools:   ["mcp__kcap-judge__get_session_summary"],
             maxBudgetUsd:   1.0
         );
 
@@ -176,7 +176,7 @@ public class ClaudeCliRunnerTests {
 
     [Test]
     public async Task BuildClaudeArgs_McpMode_PassesConfigAndAllowlist() {
-        const string mcpConfig = """{"mcpServers":{"kcap-review":{"command":"kcap"}}}""";
+        const string mcpConfig = """{"mcpServers":{"kcap-judge":{"command":"kcap"}}}""";
 
         var args = ClaudeCliRunner.BuildClaudeArgs(
             prompt:         "irrelevant",
@@ -185,13 +185,13 @@ public class ClaudeCliRunnerTests {
             maxTurns:       15,
             jsonSchema:     null,
             mcpConfigJson:  mcpConfig,
-            allowedTools:   ["mcp__kcap-review__get_session_summary", "mcp__kcap-review__search_session"],
+            allowedTools:   ["mcp__kcap-judge__get_session_summary", "mcp__kcap-judge__search_session"],
             maxBudgetUsd:   null
         );
 
         await Assert.That(FlagValue(args, "--mcp-config")).IsEqualTo(mcpConfig);
         await Assert.That(FlagValue(args, "--allowedTools"))
-            .IsEqualTo("mcp__kcap-review__get_session_summary,mcp__kcap-review__search_session");
+            .IsEqualTo("mcp__kcap-judge__get_session_summary,mcp__kcap-judge__search_session");
         // The text-only lockdown flags must NOT leak into MCP mode — the
         // allowlist is the tool restriction there, not `--tools ""`.
         await Assert.That(args).DoesNotContain("--tools");

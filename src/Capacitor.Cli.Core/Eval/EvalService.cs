@@ -83,18 +83,48 @@ public static class EvalService {
 
     static readonly TimeSpan ToolsPerQuestionTimeout = TimeSpan.FromMinutes(10);
 
+    // The inline judge MCP server is registered under this key in the
+    // --mcp-config we pass to claude; the key becomes the `mcp__<key>__<tool>`
+    // prefix claude uses. Named after `kcap mcp judge`'s own serverInfo so it
+    // never collides with the plugin-registered `kcap-review` (`kcap mcp
+    // review`) server when both load (AI-803).
+    internal const string JudgeMcpServerName = "kcap-judge";
+
     // Shared between RunRetrospectiveAsync and the tools-enabled per-question
-    // branch of RunQuestionAsync. Keeping a single list keeps the
-    // call_id → tool_name accounting surface aligned across both judge runs
-    // and prevents drift when new MCP tools are added.
-    static readonly string[] JudgeMcpAllowedTools = [
-        "mcp__kcap-review__get_session_recap",
-        "mcp__kcap-review__get_session_errors",
-        "mcp__kcap-review__get_transcript",
-        "mcp__kcap-review__get_session_summary",
-        "mcp__kcap-review__search_session",
-        "mcp__kcap-review__get_tool_result"
+    // branch of RunQuestionAsync. Built from JudgeMcpServerName so the
+    // allowlist prefix can never drift from the server key we register —
+    // a mismatch would push every judge tool call outside the allowlist and
+    // get it permission-blocked. Keeping a single list keeps the call_id →
+    // tool_name accounting surface aligned across both judge runs.
+    internal static readonly string[] JudgeMcpAllowedTools = [
+        $"mcp__{JudgeMcpServerName}__get_session_recap",
+        $"mcp__{JudgeMcpServerName}__get_session_errors",
+        $"mcp__{JudgeMcpServerName}__get_transcript",
+        $"mcp__{JudgeMcpServerName}__get_session_summary",
+        $"mcp__{JudgeMcpServerName}__search_session",
+        $"mcp__{JudgeMcpServerName}__get_tool_result"
     ];
+
+    /// <summary>
+    /// Builds the inline <c>--mcp-config</c> JSON for a session-scoped judge
+    /// run: a single <see cref="JudgeMcpServerName"/> server that shells out
+    /// to <c>kcap mcp judge --session &lt;id&gt;</c> with <c>KCAP_URL</c>
+    /// pinned to the resolved server. Shared by the per-question and
+    /// retrospective judge paths so the two never drift. <paramref name="baseUrl"/>
+    /// is injected so the child uses the exact server the parent resolved
+    /// (which may have come from <c>--server-url</c> and so isn't reachable
+    /// via the child's own config lookup).
+    /// </summary>
+    internal static string BuildJudgeMcpConfig(string commandPath, string sessionId, string baseUrl) =>
+        new JsonObject {
+            ["mcpServers"] = new JsonObject {
+                [JudgeMcpServerName] = new JsonObject {
+                    ["command"] = commandPath,
+                    ["args"]    = new JsonArray("mcp", "judge", "--session", sessionId),
+                    ["env"]     = new JsonObject { ["KCAP_URL"] = baseUrl }
+                }
+            }
+        }.ToJsonString();
 
     /// <summary>
     /// Resolves a caller-supplied model alias to the variant we actually
@@ -349,16 +379,7 @@ public static class EvalService {
                 ctx.ToolsPromptTemplate, ctx.SessionId, ctx.EvalRunId, question, patterns);
 
             var commandPath = Environment.ProcessPath ?? "kcap";
-
-            var mcpConfig = new JsonObject {
-                ["mcpServers"] = new JsonObject {
-                    ["kcap-review"] = new JsonObject {
-                        ["command"] = commandPath,
-                        ["args"]    = new JsonArray("mcp", "judge", "--session", ctx.SessionId),
-                        ["env"]     = new JsonObject { ["KCAP_URL"] = baseUrl }
-                    }
-                }
-            }.ToJsonString();
+            var mcpConfig   = BuildJudgeMcpConfig(commandPath, ctx.SessionId, baseUrl);
 
             result = await ClaudeCliRunner.RunAsync(
                 prompt,
@@ -996,24 +1017,9 @@ public static class EvalService {
         // DEV-1484: instead of embedding the compacted trace (which blew
         // past Sonnet's 200K-token window on real sessions), launch a
         // per-session MCP judge server and let the judge pull recap /
-        // errors / transcript slices on demand. MCP config built with
-        // JsonObject/JsonArray — same pattern as ReviewCommand.cs.
+        // errors / transcript slices on demand.
         var commandPath = Environment.ProcessPath ?? "kcap";
-
-        // Inject KCAP_URL so the child process uses the exact server the
-        // parent daemon resolved (which may have come from --server-url and
-        // therefore isn't reachable via the child's own config lookup).
-        // Matches the pattern in ReviewCommand.cs for the `kcap review`
-        // MCP launch.
-        var mcpConfig = new JsonObject {
-            ["mcpServers"] = new JsonObject {
-                ["kcap-review"] = new JsonObject {
-                    ["command"] = commandPath,
-                    ["args"]    = new JsonArray("mcp", "judge", "--session", sessionId),
-                    ["env"]     = new JsonObject { ["KCAP_URL"] = baseUrl }
-                }
-            }
-        }.ToJsonString();
+        var mcpConfig   = BuildJudgeMcpConfig(commandPath, sessionId, baseUrl);
 
         try {
             var result = await ClaudeCliRunner.RunAsync(

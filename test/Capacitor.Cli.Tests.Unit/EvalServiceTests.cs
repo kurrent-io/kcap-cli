@@ -12,6 +12,42 @@ public class EvalServiceTests {
         Prompt   = "Did the agent run destructive commands?"
     };
 
+    // ── Judge MCP config ───────────────────────────────────────────────────
+
+    // AI-803 follow-up: the inline judge server is named `kcap-judge` (not
+    // `kcap-review`) so it never collides with the plugin-registered
+    // `kcap-review` (`kcap mcp review`) server, and the allowlist prefix must
+    // track that server key exactly — otherwise every judge tool call lands
+    // outside the allowlist and gets permission-blocked.
+    [Test]
+    public async Task JudgeMcpServerName_IsKcapJudge_NotReview() {
+        // Must differ from the plugin's `kcap-review` server key so the two
+        // never collide in a non-strict merge.
+        await Assert.That(EvalService.JudgeMcpServerName).IsEqualTo("kcap-judge");
+    }
+
+    [Test]
+    public async Task JudgeMcpAllowedTools_AreAllScopedToTheJudgeServer() {
+        var prefix = $"mcp__{EvalService.JudgeMcpServerName}__";
+
+        await Assert.That(EvalService.JudgeMcpAllowedTools).IsNotEmpty();
+        await Assert.That(EvalService.JudgeMcpAllowedTools.All(t => t.StartsWith(prefix, StringComparison.Ordinal)))
+            .IsTrue();
+    }
+
+    [Test]
+    public async Task BuildJudgeMcpConfig_RegistersServerUnderJudgeName() {
+        var json = EvalService.BuildJudgeMcpConfig("kcap", "session-1", "http://localhost:5108");
+
+        using var doc     = JsonDocument.Parse(json);
+        var       servers = doc.RootElement.GetProperty("mcpServers");
+
+        await Assert.That(servers.TryGetProperty(EvalService.JudgeMcpServerName, out _)).IsTrue();
+        // The session id flows into the judge subprocess args so it stays bound.
+        var args = servers.GetProperty(EvalService.JudgeMcpServerName).GetProperty("args");
+        await Assert.That(args.EnumerateArray().Select(a => a.GetString())).Contains("session-1");
+    }
+
     // ── ParseVerdict ───────────────────────────────────────────────────────
 
     [Test]
