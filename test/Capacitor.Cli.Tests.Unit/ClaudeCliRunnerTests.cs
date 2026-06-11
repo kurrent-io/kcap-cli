@@ -123,12 +123,13 @@ public class ClaudeCliRunnerTests {
     }
 
     // DEV-1484 contract: when a caller opts into MCP mode, they must name the
-    // tools they want exposed. Without an allowlist the runner would drop the
-    // built-in lockdown (no --strict-mcp-config / --tools "") without a
-    // replacement restriction — effectively widening the permission surface to
-    // every tool on every configured MCP server. Guard at the entry point so
-    // the misuse surfaces as an ArgumentException instead of a silent
-    // broadening.
+    // tools they want exposed. `--strict-mcp-config` already limits which MCP
+    // *servers* load to just the caller's inline config (AI-803), but without
+    // an allowlist the runner would drop the text-only `--tools ""` lockdown
+    // and expose every tool that inline config's servers offer. Requiring a
+    // non-empty allowlist keeps the callable-tool surface explicit. Guard at
+    // the entry point so the misuse surfaces as an ArgumentException instead
+    // of a silent broadening.
     [Test]
     public async Task RunAsync_WithMcpConfigAndNullAllowedTools_Throws() =>
         await AssertAllowedToolsGuard(allowedTools: null);
@@ -149,6 +150,79 @@ public class ClaudeCliRunnerTests {
         );
 
         await Assert.That(ex?.ParamName).IsEqualTo("allowedTools");
+    }
+
+    // AI-803: the tool-using (MCP) judge branch must keep `--strict-mcp-config`
+    // on so claude loads ONLY the caller's inline session-scoped judge server.
+    // Without it, a client machine with the `kcap` Claude Code plugin installed
+    // leaks its global `kcap-sessions` server into the headless judge; the judge
+    // calls those un-allowlisted tools and every call is blocked by permission
+    // restrictions, degrading the verdict to "unable to investigate".
+    [Test]
+    public async Task BuildClaudeArgs_McpMode_IncludesStrictMcpConfig() {
+        var args = ClaudeCliRunner.BuildClaudeArgs(
+            prompt:         "irrelevant",
+            promptViaStdin: true,
+            model:          "sonnet[1m]",
+            maxTurns:       15,
+            jsonSchema:     null,
+            mcpConfigJson:  """{"mcpServers":{"kcap-judge":{"command":"kcap","args":["mcp","judge"]}}}""",
+            allowedTools:   ["mcp__kcap-judge__get_session_summary"],
+            maxBudgetUsd:   1.0
+        );
+
+        await Assert.That(args).Contains("--strict-mcp-config");
+    }
+
+    [Test]
+    public async Task BuildClaudeArgs_McpMode_PassesConfigAndAllowlist() {
+        const string mcpConfig = """{"mcpServers":{"kcap-judge":{"command":"kcap"}}}""";
+
+        var args = ClaudeCliRunner.BuildClaudeArgs(
+            prompt:         "irrelevant",
+            promptViaStdin: true,
+            model:          "sonnet[1m]",
+            maxTurns:       15,
+            jsonSchema:     null,
+            mcpConfigJson:  mcpConfig,
+            allowedTools:   ["mcp__kcap-judge__get_session_summary", "mcp__kcap-judge__search_session"],
+            maxBudgetUsd:   null
+        );
+
+        await Assert.That(FlagValue(args, "--mcp-config")).IsEqualTo(mcpConfig);
+        await Assert.That(FlagValue(args, "--allowedTools"))
+            .IsEqualTo("mcp__kcap-judge__get_session_summary,mcp__kcap-judge__search_session");
+        // The text-only lockdown flags must NOT leak into MCP mode — the
+        // allowlist is the tool restriction there, not `--tools ""`.
+        await Assert.That(args).DoesNotContain("--tools");
+        await Assert.That(args).DoesNotContain("LSP");
+    }
+
+    [Test]
+    public async Task BuildClaudeArgs_TextOnlyMode_LocksDownToolsAndMcp() {
+        var args = ClaudeCliRunner.BuildClaudeArgs(
+            prompt:         "irrelevant",
+            promptViaStdin: true,
+            model:          "haiku",
+            maxTurns:       1,
+            jsonSchema:     null,
+            mcpConfigJson:  null,
+            allowedTools:   null,
+            maxBudgetUsd:   null
+        );
+
+        await Assert.That(args).Contains("--strict-mcp-config");
+        await Assert.That(args).Contains("--tools");
+        await Assert.That(FlagValue(args, "--disallowedTools")).IsEqualTo("LSP");
+        // No MCP config means no caller-supplied servers.
+        await Assert.That(args).DoesNotContain("--mcp-config");
+        await Assert.That(args).DoesNotContain("--allowedTools");
+    }
+
+    /// <summary>Returns the argument immediately following <paramref name="flag"/>, or null.</summary>
+    static string? FlagValue(List<string> args, string flag) {
+        var i = args.IndexOf(flag);
+        return i >= 0 && i + 1 < args.Count ? args[i + 1] : null;
     }
 
     // AI-755: the CLI returns is_error:true with the API failure text in
