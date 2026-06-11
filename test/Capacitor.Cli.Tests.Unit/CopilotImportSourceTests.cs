@@ -136,6 +136,40 @@ public class CopilotImportSourceTests {
         await Assert.That(meta.UpdatedAt).IsEqualTo(DateTimeOffset.Parse("2026-06-10T20:23:37.838Z"));
     }
 
+    [Test]
+    public async Task workspace_yaml_parser_strips_scalar_quotes_from_names() {
+        // Copilot quotes the name when it contains YAML-special sequences —
+        // the captured fixture has `name: 'Reply with exactly: ok'`. Without
+        // unquoting, the literal quotes leak into imported session titles.
+        using var tmp = new TempDir();
+
+        var path = Path.Combine(tmp.Path, "workspace.yaml");
+        await File.WriteAllTextAsync(path, """
+            id: e18d0fe8-95e1-4bd3-87e1-54318e4f3c54
+            cwd: '/private/tmp/quoted dir'
+            name: 'Reply with exactly: ok'
+            created_at: '2026-06-10T20:23:21.000Z'
+            """);
+
+        var meta = CopilotWorkspaceYaml.TryRead(path);
+
+        await Assert.That(meta).IsNotNull();
+        await Assert.That(meta!.Name).IsEqualTo("Reply with exactly: ok");
+        await Assert.That(meta.Cwd).IsEqualTo("/private/tmp/quoted dir");
+        await Assert.That(meta.CreatedAt).IsEqualTo(DateTimeOffset.Parse("2026-06-10T20:23:21.000Z"));
+    }
+
+    [Test]
+    [Arguments("'Reply with exactly: ok'", "Reply with exactly: ok")]
+    [Arguments("'It''s done: finally'", "It's done: finally")]
+    [Arguments("\"Fix the \\\"bug\\\": now\"", "Fix the \"bug\": now")]
+    [Arguments("plain value", "plain value")]
+    [Arguments("'unterminated", "'unterminated")]
+    [Arguments("''", "")]
+    public async Task unquote_handles_yaml_scalar_quote_forms(string raw, string expected) {
+        await Assert.That(CopilotWorkspaceYaml.Unquote(raw)).IsEqualTo(expected);
+    }
+
     static void WriteSession(string root, string dashedSid, string? cwd, string? name = null, string? createdAt = null) {
         var dir = Path.Combine(root, dashedSid);
         Directory.CreateDirectory(dir);

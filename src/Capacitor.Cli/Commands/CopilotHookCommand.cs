@@ -223,11 +223,16 @@ static class CopilotHookCommand {
     }
 
     static async Task<int> HandleNotification(string baseUrl, JsonNode node, string sessionId, string? cwd) {
-        // The server's NotificationHook requires message + notification_type;
-        // Copilot's payload carries both natively (it already ships the
-        // Claude-compatible snake_case keys for them).
+        // The server's NotificationHook requires message + notification_type.
+        // Copilot's command-hook stdin ships the Claude-compatible snake_case
+        // key today (verified against captured v1.0.61 payloads), but its
+        // internal event model uses camelCase `notificationType` (visible in
+        // the transcript's hook.start input echo) — read both so a future
+        // Copilot release dropping the compat transformation degrades to
+        // "still recorded" instead of silently losing every notification.
         var message          = TryGetString(node, "message");
-        var notificationType = TryGetString(node, "notification_type");
+        var notificationType = TryGetString(node, "notification_type")
+                            ?? TryGetString(node, "notificationType");
 
         if (message is null || notificationType is null) return 0;
 
