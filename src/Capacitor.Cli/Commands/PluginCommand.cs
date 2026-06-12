@@ -112,6 +112,17 @@ public static class PluginCommand {
                     ? $"Plugin refreshed ({scope}: {settingsPath})"
                     : $"Plugin installed ({scope}: {settingsPath})"
             );
+
+            // AI-836: Claude Code only loads hooks at session start. A fresh install from
+            // inside a running session won't record it live until the user restarts. The
+            // refresh path (npm postinstall) is silent — it isn't an interactive moment and
+            // existing sessions already had hooks, so the reminder would be noise.
+            if (!refreshOnly) {
+                await env.Stdout.WriteLineAsync(
+                    "Live recording begins on a new Claude Code session — restart Claude "
+                  + "(or run `claude --continue`) for the hooks to take effect."
+                );
+            }
         } else {
             if (refreshOnly) return 0;
 

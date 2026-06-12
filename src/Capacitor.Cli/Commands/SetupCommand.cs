@@ -214,7 +214,7 @@ public static class SetupCommand {
 
         void WriteLine(string line) => AnsiConsole.MarkupLine(line);
 
-        var _ = await CodingAgentsStep.RunAsync(
+        var installResult = await CodingAgentsStep.RunAsync(
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
 
         // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
@@ -323,6 +323,13 @@ public static class SetupCommand {
         grid.AddRow("[bold]Config[/]", Markup.Escape(AppConfig.GetConfigPath()));
 
         AnsiConsole.Write(grid);
+
+        // AI-836: hooks only load at coding-agent session start. The common case is a user
+        // running `kcap setup` from inside an already-running session, which won't stream
+        // live until it restarts — so tell them, but only when something was actually
+        // installed (no point promising recording we never wired up).
+        var restartTip = LiveRecordingRestartTip(installResult);
+        if (restartTip is not null) AnsiConsole.MarkupLine($"\n{restartTip}");
 
         // Setup itself is user-scope and works fine outside a repo, but sessions recorded
         // from non-repo directories have no owner/repo/branch/PR enrichment (see
@@ -466,6 +473,28 @@ public static class SetupCommand {
         } catch {
             // Swallow — see method-doc.
         }
+    }
+
+    /// <summary>
+    /// AI-836 — the end-of-setup reminder that live recording only starts on a
+    /// <em>new</em> coding-agent session. Claude Code (and the other agents) load hooks
+    /// at session start, so a session that was already running when setup installed the
+    /// hooks keeps running without them and never streams live. Returns the Spectre-markup
+    /// note when at least one agent's hooks were installed, or <c>null</c> when nothing was
+    /// wired up (so we don't promise recording that can't happen).
+    /// </summary>
+    internal static string? LiveRecordingRestartTip(CodingAgentsStep.Result result) {
+        var anyInstalled = result.ClaudeInstalled
+                        || result.CodexHooksInstalled
+                        || result.CursorHooksInstalled
+                        || result.CopilotHooksInstalled;
+
+        if (!anyInstalled) return null;
+
+        return
+            "[yellow]![/] Live recording begins on a [bold]new[/] coding-agent session — hooks only load at session start.\n"
+          + "  Restart your agent (or run [cyan]claude --continue[/]) to begin streaming; a session that was already\n"
+          + "  running when you ran setup isn't being recorded yet.";
     }
 
     static string? GetArg(string[] args, string name) {

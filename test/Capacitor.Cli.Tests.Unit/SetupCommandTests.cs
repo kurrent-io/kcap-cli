@@ -139,6 +139,47 @@ public class SetupCommandTests {
         await Assert.That(reloaded.Profiles["acme"].ServerUrl).IsEqualTo("https://a.example");
     }
 
+    [Test]
+    public async Task LiveRecordingRestartTip_returns_note_when_any_agent_installed() {
+        var result = new CodingAgentsStep.Result(
+            ClaudeInstalled:       true,
+            CodexHooksInstalled:   false,
+            CodexSkillsInstalled:  false,
+            CursorHooksInstalled:  false,
+            CopilotHooksInstalled: false);
+
+        var tip = SetupCommand.LiveRecordingRestartTip(result);
+
+        await Assert.That(tip).IsNotNull();
+        await Assert.That(tip!).Contains("new");
+        await Assert.That(tip!).Contains("claude --continue");
+    }
+
+    [Test]
+    public async Task LiveRecordingRestartTip_note_fires_for_non_claude_agents_too() {
+        var result = new CodingAgentsStep.Result(
+            ClaudeInstalled:       false,
+            CodexHooksInstalled:   false,
+            CodexSkillsInstalled:  false,
+            CursorHooksInstalled:  false,
+            CopilotHooksInstalled: true);
+
+        await Assert.That(SetupCommand.LiveRecordingRestartTip(result)).IsNotNull();
+    }
+
+    [Test]
+    public async Task LiveRecordingRestartTip_is_null_when_nothing_installed() {
+        // Skills-only (e.g. all agents declined) shouldn't promise live recording.
+        var result = new CodingAgentsStep.Result(
+            ClaudeInstalled:       false,
+            CodexHooksInstalled:   false,
+            CodexSkillsInstalled:  true,
+            CursorHooksInstalled:  false,
+            CopilotHooksInstalled: false);
+
+        await Assert.That(SetupCommand.LiveRecordingRestartTip(result)).IsNull();
+    }
+
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
