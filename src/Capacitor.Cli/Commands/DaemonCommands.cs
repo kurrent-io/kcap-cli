@@ -543,24 +543,25 @@ public static class DaemonCommands {
     /// <summary>
     /// Verify that a PID belongs to our daemon. The strong check is start-token
     /// equality — PIDs get recycled, but a recycled process won't share the
-    /// same kernel start instant (<see cref="ProcessStartToken"/>). A token
-    /// mismatch is conclusive: the PID is a different incarnation, so we return
-    /// false rather than fall back to the weaker name check (which can't tell
-    /// two of our own daemons apart). The name fallback applies only when the
-    /// token can't be read at all, or for legacy PID files written without one.
+    /// same kernel start instant (<see cref="ProcessStartToken"/>). A
+    /// same-scheme token mismatch is conclusive (a different incarnation), so we
+    /// return false rather than fall back to the weaker name check, which can't
+    /// tell two of our own daemons apart.
+    ///
+    /// The name fallback applies only when the token can't be compared at all:
+    /// no token recorded, the live token is unreadable, or the recorded token is
+    /// a legacy/foreign scheme — notably a pre-AI-839 PID file that stored bare
+    /// <c>Process.StartTime</c> ticks. Falling back there keeps a still-running
+    /// old daemon manageable across an upgrade instead of stranding it.
     /// </summary>
     static bool IsOurDaemon(int pid, string? expectedStartToken) {
         try {
             using var process = Process.GetProcessById(pid);
 
-            if (expectedStartToken is not null) {
-                var actual = ProcessStartToken.ForPid(pid);
+            if (expectedStartToken is not null && ProcessStartToken.Matches(pid, expectedStartToken) is { } matched)
+                return matched;
 
-                // Token readable → authoritative. Unreadable → name fallback.
-                if (actual is not null) return actual == expectedStartToken;
-            }
-
-            // Legacy PID file (no token recorded) or token unreadable:
+            // No token, unreadable, or a legacy/foreign scheme we can't compare:
             // best-effort match by process image name.
             var daemonPath = ResolveDaemonBinary();
 
