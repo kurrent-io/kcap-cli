@@ -476,12 +476,12 @@ kcap config show    # show current configuration
 kcap config set <key> <value>
 ```
 
-**Default session visibility** controls how your sessions appear to other users. Set during `kcap setup` or change at any time:
+**Default session visibility** controls how your sessions appear to other users in the same Kurrent Capacitor account. Set during `kcap setup` or change at any time:
 
 ```bash
 kcap config set default_visibility private      # only you can see your sessions
 kcap config set default_visibility org_public   # org repos visible, others private (default)
-kcap config set default_visibility public       # all sessions visible to everyone
+kcap config set default_visibility public       # all sessions visible to others in your account
 ```
 
 **Repository exclusions** prevent specific repos from sending any data to the server — hooks are silently skipped, no session is recorded:
