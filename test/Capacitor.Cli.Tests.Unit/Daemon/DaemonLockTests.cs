@@ -167,6 +167,35 @@ public class DaemonLockTests {
         }
     }
 
+    /// <summary>
+    /// AI-839: the daemon must write a PID file whose first line is its PID and
+    /// whose second line is the cross-process-stable start token, so the CLI's
+    /// <c>status</c>/<c>stop</c>/<c>doctor</c> (separate processes) can confirm
+    /// the live daemon instead of misreading it as a stale entry. The PID file
+    /// (unlike the lock file) is not held exclusively, so we can read it back.
+    /// </summary>
+    [Test]
+    public async Task TryAcquire_WritesPidFile_WithPidAndStableStartToken() {
+        var dir = CreateScratchDir();
+
+        try {
+            using var l = DaemonLock.TryAcquire("alpha");
+            await Assert.That(l).IsNotNull();
+
+            var lines = (await File.ReadAllTextAsync(DaemonLockPaths.PidPath("alpha")))
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            await Assert.That(lines.Length).IsEqualTo(2);
+            await Assert.That(lines[0]).IsEqualTo(Environment.ProcessId.ToString());
+            // The test process IS the "daemon" here, so the recorded token must
+            // match what a reader computes for this same PID.
+            await Assert.That(lines[1]).IsEqualTo(ProcessStartToken.ForCurrent());
+        } finally {
+            Restore();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Test]
     public async Task TryAcquire_AfterStaleLockFileLeftBehind_StillAcquires() {
         var dir = CreateScratchDir();
