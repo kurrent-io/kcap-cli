@@ -156,6 +156,8 @@ public static class SetupCommand {
                         "public"     => "All public — everyone can see all your sessions",
                         _            => v
                     }));
+
+            await Console.Out.WriteLineAsync($"  Default visibility: {defaultVisibility}");
         }
 
         await Console.Out.WriteLineAsync();
