@@ -39,7 +39,17 @@ internal static class CodingAgentsStep {
             bool CodexSkillsInstalled,
             bool CursorHooksInstalled,
             bool CopilotHooksInstalled
-        );
+        ) {
+        /// <summary>
+        /// True when at least one agent's hooks were installed — i.e. there's a
+        /// session that will start streaming on the agent's next launch. Skills-only
+        /// installs don't count: skills add recall/commands, not the SessionStart hook
+        /// that records transcripts. Co-located with the record so the set stays in sync
+        /// as agents are added (consumers like SetupCommand's restart tip key off this).
+        /// </summary>
+        internal bool AnyHooksInstalled =>
+            ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled;
+    }
 
     /// <summary>
     /// Drives the agent-detection branches and dispatches to the installer

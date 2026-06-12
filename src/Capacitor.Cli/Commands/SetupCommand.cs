@@ -484,12 +484,7 @@ public static class SetupCommand {
     /// wired up (so we don't promise recording that can't happen).
     /// </summary>
     internal static string? LiveRecordingRestartTip(CodingAgentsStep.Result result) {
-        var anyInstalled = result.ClaudeInstalled
-                        || result.CodexHooksInstalled
-                        || result.CursorHooksInstalled
-                        || result.CopilotHooksInstalled;
-
-        if (!anyInstalled) return null;
+        if (!result.AnyHooksInstalled) return null;
 
         return
             "[yellow]![/] Live recording begins on a [bold]new[/] coding-agent session — hooks only load at session start.\n"

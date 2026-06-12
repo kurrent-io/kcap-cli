@@ -168,12 +168,13 @@ public class SetupCommandTests {
     }
 
     [Test]
-    public async Task LiveRecordingRestartTip_is_null_when_nothing_installed() {
-        // Skills-only (e.g. all agents declined) shouldn't promise live recording.
+    public async Task LiveRecordingRestartTip_is_null_when_no_hooks_installed() {
+        // No hooks wired up (e.g. every agent declined or none detected) — don't
+        // promise live recording that won't happen.
         var result = new CodingAgentsStep.Result(
             ClaudeInstalled:       false,
             CodexHooksInstalled:   false,
-            CodexSkillsInstalled:  true,
+            CodexSkillsInstalled:  false,
             CursorHooksInstalled:  false,
             CopilotHooksInstalled: false);
 
