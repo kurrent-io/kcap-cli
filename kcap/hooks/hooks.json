@@ -39,7 +39,8 @@
           {
             "type": "command",
             "command": "kcap hook --claude",
-            "timeout": 5
+            "timeout": 5,
+            "async": true
           }
         ]
       }
@@ -50,7 +51,8 @@
           {
             "type": "command",
             "command": "kcap hook --claude",
-            "timeout": 5
+            "timeout": 5,
+            "async": true
           }
         ]
       }

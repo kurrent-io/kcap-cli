@@ -56,12 +56,16 @@ internal sealed class CursorImportSource : IImportSource {
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
 
+    // Normalize separators to '/' and drop any trailing slash WITHOUT calling
+    // Path.GetFullPath: on Windows GetFullPath rebases a driveless rooted path
+    // (e.g. "/Users/me/dev/foo") onto the current drive ("C:\Users\me\dev\foo"),
+    // which neither Cursor's sanitized project-dir naming nor a caller-supplied
+    // --cwd ever carries — breaking the sanitized-key match (AI-820). Must stay
+    // byte-identical to BuildSanitizedToFolderMap's normalization.
     static string NormalizeForComparison(string path) {
-        try {
-            return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        } catch {
-            return path.TrimEnd('/', '\\');
-        }
+        var p = path.Replace('\\', '/').TrimEnd('/');
+
+        return p.Length == 0 ? "/" : p;
     }
 
     public string Vendor => "cursor";
@@ -526,13 +530,10 @@ internal sealed class CursorImportSource : IImportSource {
 
             if (folder is null) continue;
 
-            var    stripped = StripFileUri(folder);
-            string normalized;
-            try {
-                normalized = Path.GetFullPath(stripped).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            } catch {
-                continue;
-            }
+            // Separator-normalize only (see NormalizeForComparison): NOT
+            // Path.GetFullPath, which injects the current drive for driveless
+            // rooted paths on Windows and breaks the sanitized-key match.
+            var normalized = NormalizeForComparison(StripFileUri(folder));
 
             var sanitized = EncodeWorkspacePath(normalized);
 

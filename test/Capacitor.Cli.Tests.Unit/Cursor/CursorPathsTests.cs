@@ -24,6 +24,6 @@ public class CursorPathsTests {
 
     [Test]
     public async Task ProjectsDir_is_under_dot_cursor_on_every_platform() {
-        await Assert.That(CursorPaths.ProjectsDir(home: "/Users/me")).IsEqualTo("/Users/me/.cursor/projects");
+        await Assert.That(CursorPaths.ProjectsDir(home: "/Users/me")).IsEqualTo(Path.Combine("/Users/me", ".cursor", "projects"));
     }
 }

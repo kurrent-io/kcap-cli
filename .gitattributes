@@ -1,0 +1,5 @@
+# Embedded prompt/help resources are baked into the binary at build time and
+# compared byte-for-byte at runtime (e.g. kcap-subsession prompt detection).
+# Pin them to LF so a Windows checkout (core.autocrlf) can't smuggle CRLF into
+# the embedded copy and break those comparisons. See AI-820.
+src/Capacitor.Cli.Core/Resources/*.txt text eol=lf

@@ -43,6 +43,13 @@ static partial class ProcessHelpers {
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial nint GetCurrentProcess();
 
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial nint GetStdHandle(int nStdHandle);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetHandleInformation(nint hObject, uint dwMask, uint dwFlags);
+
     [LibraryImport("ntdll.dll")]
     private static partial int NtQueryInformationProcess(
         nint                          processHandle,
@@ -65,6 +72,12 @@ static partial class ProcessHelpers {
     const uint SYNCHRONIZE   = 0x00100000;
     const uint WAIT_TIMEOUT  = 258;
 
+    // GetStdHandle ids and the SetHandleInformation inherit flag.
+    const int  STD_INPUT_HANDLE   = -10;
+    const int  STD_OUTPUT_HANDLE  = -11;
+    const int  STD_ERROR_HANDLE   = -12;
+    const uint HANDLE_FLAG_INHERIT = 0x00000001;
+
     /// <summary>
     /// Returns the parent process id of the current process, or <c>null</c> on failure.
     /// </summary>
@@ -82,6 +95,95 @@ static partial class ProcessHelpers {
         var status = NtQueryInformationProcess(handle, 0, ref pbi, Unsafe.SizeOf<ProcessBasicInformation>(), out _);
 
         return status == 0 ? (int)pbi.InheritedFromUniqueProcessId : null;
+    }
+
+    /// <summary>
+    /// Clears <c>HANDLE_FLAG_INHERIT</c> on this process's standard input/output/error
+    /// handles (Windows only) so that child processes started afterwards do NOT inherit
+    /// them. Call this immediately before spawning a long-lived detached process such as
+    /// the transcript watcher.
+    /// </summary>
+    /// <remarks>
+    /// Background (AI-820): hooks are invoked by the coding agent (Claude/Codex) with their
+    /// stdio wired to pipes the agent reads. .NET's <see cref="System.Diagnostics.Process"/>
+    /// always passes <c>bInheritHandles: true</c> to <c>CreateProcess</c> when any stream is
+    /// redirected, so a watcher spawned from inside a hook inherits the hook process's own
+    /// std handles — i.e. the agent's pipe write-ends. Closing the watcher's redirected
+    /// streams on the parent side does nothing about those inherited copies, so the watcher
+    /// holds the agent's pipe open for its entire (long) lifetime. The agent's read of the
+    /// hook's stdout therefore never reaches EOF: a synchronous <c>SubagentStart</c> hook
+    /// stalls until its timeout, surfacing as <c>[Tool result missing due to internal error]</c>
+    /// from the Agent/Task tool, and the watcher is then orphaned because the disrupted flow
+    /// never fires the matching <c>SubagentStop</c> that would reap it.
+    ///
+    /// Unix is unaffected: <c>fork</c>+<c>exec</c> <c>dup2</c>s the redirect pipes over fds
+    /// 0/1/2 in the child and the agent's original pipe fds are not retained, so there is no
+    /// inherited copy to leak. Hence this is a no-op off Windows.
+    ///
+    /// Clearing the flag does not close the handles or stop the hook from writing its own
+    /// output to the agent — it only prevents subsequently-spawned children from inheriting
+    /// them.
+    /// </remarks>
+    public static void PreventInheritedStdHandles() {
+        if (!OperatingSystem.IsWindows()) {
+            return;
+        }
+
+        ClearStdHandleInherit(STD_INPUT_HANDLE,  "stdin");
+        ClearStdHandleInherit(STD_OUTPUT_HANDLE, "stdout");
+        ClearStdHandleInherit(STD_ERROR_HANDLE,  "stderr");
+    }
+
+    static bool stdHandleInheritWarned;
+
+    static void ClearStdHandleInherit(int stdHandleId, string streamName) {
+        try {
+            var handle = GetStdHandle(stdHandleId);
+
+            // No handle for this stream (NULL/INVALID) — nothing to clear, not a failure.
+            if (handle == 0 || handle == -1) {
+                return;
+            }
+
+            if (TryClearInheritFlag(handle)) {
+                return;
+            }
+
+            // SetHandleInformation genuinely failed on a valid handle: the AI-820
+            // mitigation did not apply, so a spawned watcher may still inherit this
+            // pipe and reintroduce the hang/leak. Surface one diagnostic per process
+            // (don't spam the agent's hook output) and never throw.
+            if (!stdHandleInheritWarned) {
+                stdHandleInheritWarned = true;
+                Console.Error.WriteLine(
+                    $"[kcap] warning: could not clear HANDLE_FLAG_INHERIT on {streamName} "
+                  + $"(win32 error {Marshal.GetLastPInvokeError()}); a spawned watcher may inherit std handles (AI-820).");
+            }
+        } catch {
+            // Best effort — handle hygiene must never crash the spawn path.
+        }
+    }
+
+    /// <summary>
+    /// Clears <c>HANDLE_FLAG_INHERIT</c> on a single Windows handle so processes spawned
+    /// afterwards won't inherit it. Returns <c>true</c> on success, and (off Windows) as a
+    /// defined no-op. This seam exists so the inherit-clearing behaviour used by
+    /// <see cref="PreventInheritedStdHandles"/> can be tested against an arbitrary handle
+    /// without mutating the test host's own standard handles.
+    /// </summary>
+    internal static bool TryClearInheritFlag(nint handle) {
+        if (!OperatingSystem.IsWindows()) {
+            return true;
+        }
+
+        // GetStdHandle returns NULL (0) when the stream has no handle and
+        // INVALID_HANDLE_VALUE (-1) on error; SetHandleInformation fails harmlessly on
+        // either, so reject them up front rather than make a doomed call.
+        if (handle == 0 || handle == -1) {
+            return false;
+        }
+
+        return SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
     }
 
     /// <summary>

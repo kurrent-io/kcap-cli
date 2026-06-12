@@ -197,7 +197,7 @@ public class CodingAgentsStepTests {
         );
 
         await Assert.That(result.CodexSkillsInstalled).IsTrue();
-        await Assert.That(calls.AgentSkillsArgs).IsEqualTo(("/fake/plugin/skills", "/fake/.agents/skills"));
+        await Assert.That(calls.AgentSkillsArgs).IsEqualTo((Path.Combine("/fake/plugin", "skills"), "/fake/.agents/skills"));
         await Assert.That(sink.Lines).Contains(l => l.Contains("Agent skills installed"));
     }
 

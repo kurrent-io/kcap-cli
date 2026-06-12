@@ -82,6 +82,11 @@ static class WatcherManager {
                 Environment            = { ["KCAP_URL"] = baseUrl }
             };
 
+            // Stop the watcher from inheriting the coding agent's std handles on Windows;
+            // otherwise it holds the agent's hook-stdout pipe open for its whole lifetime,
+            // hanging synchronous subagent hooks and orphaning the watcher (AI-820).
+            ProcessHelpers.PreventInheritedStdHandles();
+
             var process = Process.Start(psi);
 
             if (process is null) {
@@ -221,6 +226,10 @@ static class WatcherManager {
             if (vendor == "codex") {
                 psi.ArgumentList.Add("--codex");
             }
+
+            // Don't let this detached child inherit the agent's std handles on Windows
+            // (AI-820) — same pipe-leak hazard as the watcher spawn above.
+            ProcessHelpers.PreventInheritedStdHandles();
 
             var process = Process.Start(psi);
 

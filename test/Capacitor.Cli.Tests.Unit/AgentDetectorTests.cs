@@ -9,7 +9,7 @@ public class AgentDetectorTests {
             binaryName: "claude",
             paths:      ["/usr/local/bin", "/usr/bin"],
             extensions: [""],
-            isExecutable: path => path == "/usr/local/bin/claude");
+            isExecutable: path => path == Path.Combine("/usr/local/bin", "claude"));
 
         await Assert.That(found).IsTrue();
     }
@@ -64,7 +64,7 @@ public class AgentDetectorTests {
             binaryName: "claude",
             paths:      ["", "/usr/local/bin"],
             extensions: [""],
-            isExecutable: path => path == "/usr/local/bin/claude");
+            isExecutable: path => path == Path.Combine("/usr/local/bin", "claude"));
 
         await Assert.That(found).IsTrue();
     }

@@ -4,7 +4,7 @@ public enum OsPlatform { MacOs, Linux, Windows }
 
 public sealed record CursorPaths(string UserDir, string WorkspaceStorageDir) {
     public static CursorPaths Resolve(string? home = null, OsPlatform? platform = null, string? appData = null) {
-        home     ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        home     ??= PathHelpers.HomeDirectory;
         platform ??= OperatingSystem.IsMacOS()   ? OsPlatform.MacOs
                   :  OperatingSystem.IsWindows() ? OsPlatform.Windows
                   :                                OsPlatform.Linux;
@@ -30,7 +30,7 @@ public sealed record CursorPaths(string UserDir, string WorkspaceStorageDir) {
     /// command on PATH must still be detected (AI-730 design, Q7).
     /// </summary>
     public static bool IsInstalled(string? home = null, OsPlatform? platform = null, string? appData = null) {
-        home     ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        home     ??= PathHelpers.HomeDirectory;
         platform ??= OperatingSystem.IsMacOS()   ? OsPlatform.MacOs
                   :  OperatingSystem.IsWindows() ? OsPlatform.Windows
                   :                                OsPlatform.Linux;
@@ -51,13 +51,13 @@ public sealed record CursorPaths(string UserDir, string WorkspaceStorageDir) {
 
     /// <summary>Path to <c>~/.cursor/hooks.json</c> — same on every OS.</summary>
     public static string UserHooksJson(string? home = null) {
-        home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        home ??= PathHelpers.HomeDirectory;
         return Path.Combine(home, ".cursor", "hooks.json");
     }
 
     /// <summary>Hook-event spool directory at <c>~/.cursor/kcap-pending/</c>.</summary>
     public static string SpoolDir(string? home = null) {
-        home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        home ??= PathHelpers.HomeDirectory;
         return Path.Combine(home, ".cursor", "kcap-pending");
     }
 
@@ -68,7 +68,7 @@ public sealed record CursorPaths(string UserDir, string WorkspaceStorageDir) {
     /// user's home dir, not the per-platform Electron user dir.
     /// </summary>
     public static string ProjectsDir(string? home = null) {
-        home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        home ??= PathHelpers.HomeDirectory;
         return Path.Combine(home, ".cursor", "projects");
     }
 }
