@@ -605,22 +605,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 LogGracefulExitTimedOut(agentId, GracefulExitWait.TotalSeconds);
             }
 
-            // Tell the server to end the session. Idempotent server-side: if claude
-            // did fire session-end during the graceful window, this is a no-op
-            // (returns GenerateWhatsDone=false and the CLI's session-end handler
-            // already spawned the what's-done generator on its end).
-            try {
-                var result = await _server.EndAgentSessionAsync(agentId, agent.PendingEndReason);
-
-                if (result is { GenerateWhatsDone: true, SessionId: not null }) {
-                    SpawnWhatsDoneGenerator(result.SessionId);
-                }
-            } catch (Exception ex) {
-                LogEndSessionFailed(ex, agentId);
-            }
-
-            // Cancel the read loop, then terminate the process if it didn't exit gracefully.
-            // The read loop's finally block will handle CleanupAgentAsync.
+            // Cancel the read loop and terminate the process. We deliberately do NOT end
+            // the AgentSession here: EndAgentSessionAsync now retries across SignalR
+            // reconnects (so it can block while a dropped connection recovers), and a
+            // user-initiated stop must not wait on that. Cancelling ReadCts unblocks the
+            // read loop, whose finally block runs FinalizeAgentRunAsync once the process
+            // exits — that ends the session (with retry) using agent.PendingEndReason
+            // ("agent_stopped") and spawns the what's-done generator if the server asks.
+            // So session-end is reliable as the post-exit backstop without delaying
+            // teardown, and is idempotent: if claude already fired its own session-end
+            // during the graceful window above, the backstop call is a server-side no-op.
             await agent.ReadCts.CancelAsync();
             await agent.Process.TerminateAsync(TimeSpan.FromSeconds(10));
         } catch (Exception ex) {

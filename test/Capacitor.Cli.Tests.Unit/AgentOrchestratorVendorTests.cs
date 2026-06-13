@@ -329,7 +329,83 @@ public class AgentOrchestratorVendorTests {
         }
     }
 
+    [Test]
+    public async Task Stopping_an_agent_terminates_promptly_even_when_end_session_is_blocked() {
+        // Option B: EndAgentSession is the post-exit backstop and retries across SignalR
+        // reconnects, so it can block while the connection recovers. A user-initiated stop
+        // must NOT wait on it — HandleStopAgent terminates the process, and the read-loop's
+        // finalize backstop ends the session afterwards. With EndAgentSession blocked,
+        // termination must still happen promptly (before the fix HandleStopAgent awaited
+        // its own EndAgentSession call and never reached TerminateAsync).
+        var (repoPath, cleanup) = CreateGitRepo();
+        using var endSessionBlock = new CancellationTokenSource();
+
+        try {
+            var terminated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var server     = new CaptureServerConnection { EndSessionBlockUntil = endSessionBlock };
+            var ptyFactory = new FixedPtyProcessFactory(new TerminateSignalingPtyProcess(terminated));
+            var launchers  = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") };
+
+            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+
+            await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+                AgentId: "agent-stop",
+                Prompt: "go",
+                Model: "opus",
+                Effort: null,
+                RepoPath: repoPath,
+                Tools: null,
+                AttachmentIds: null,
+                Vendor: "claude"
+            ));
+
+            // Fire-and-forget: before the fix, HandleStopAgent awaits the blocked
+            // EndAgentSession and never reaches termination, so we must not await it here.
+            _ = orch.HandleStopAgentForTest("agent-stop");
+
+            // The process must be terminated even though EndAgentSession is still blocked.
+            await terminated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        } finally {
+            endSessionBlock.Cancel(); // release the finalize backstop's blocked end-session
+            cleanup();
+        }
+    }
+
     // ── Test doubles ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// PTY that reports already-exited (so HandleStopAgent's graceful window is instant)
+    /// and signals when TerminateAsync runs. ReadOutputAsync blocks until ReadCts cancels,
+    /// keeping the read loop alive until the stop.
+    /// </summary>
+    sealed class TerminateSignalingPtyProcess(TaskCompletionSource terminated) : IPtyProcess {
+        public int  Pid       => 4243;
+        public bool HasExited => true;
+        public int? ExitCode  => 0;
+
+        public ValueTask DisposeAsync() => default;
+        public Task WaitForExitAsync(TimeSpan? _) => Task.CompletedTask;
+
+        public Task TerminateAsync(TimeSpan? _) {
+            terminated.TrySetResult();
+
+            return Task.CompletedTask;
+        }
+
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, ct); } catch (OperationCanceledException) {
+                /* released on stop */
+            }
+
+            yield break;
+        }
+
+        public Task WriteAsync(string _) => Task.CompletedTask;
+        public Task WriteAsync(byte[] _) => Task.CompletedTask;
+        public void Resize(ushort     _, ushort __) { }
+        public void SendInterrupt() { }
+    }
 
     sealed class SpyHostedAgentLauncher(string vendor, string cliPath) : IHostedAgentLauncher {
         public string Vendor  { get; } = vendor;
@@ -455,6 +531,13 @@ public class AgentOrchestratorVendorTests {
     ) {
         public List<(string AgentId, string Reason)> LaunchFailedCalls { get; } = [];
 
+        /// <summary>When set, EndAgentSessionAsync blocks until this token is cancelled,
+        /// simulating a session-end call stuck waiting for a SignalR reconnect.</summary>
+        public CancellationTokenSource? EndSessionBlockUntil { get; init; }
+
+        /// <summary>Reasons passed to EndAgentSessionAsync, in call order.</summary>
+        public List<string> EndSessionReasons { get; } = [];
+
         public override Task LaunchFailedAsync(string agentId, string reason) {
             LaunchFailedCalls.Add((agentId, reason));
 
@@ -496,8 +579,17 @@ public class AgentOrchestratorVendorTests {
         public override Task AppendAgentRunEventAsync(string agentId, object evt)
             => Task.CompletedTask;
 
-        public override Task<EndAgentSessionResult> EndAgentSessionAsync(string agentId, string reason)
-            => Task.FromResult(new EndAgentSessionResult());
+        public override async Task<EndAgentSessionResult> EndAgentSessionAsync(string agentId, string reason) {
+            EndSessionReasons.Add(reason);
+
+            if (EndSessionBlockUntil is { } cts) {
+                try { await Task.Delay(Timeout.InfiniteTimeSpan, cts.Token); } catch (OperationCanceledException) {
+                    /* released by the test */
+                }
+            }
+
+            return new EndAgentSessionResult();
+        }
 
         public override Task<PermissionDecision> RequestPermissionAsync(
                 string            sessionId,
