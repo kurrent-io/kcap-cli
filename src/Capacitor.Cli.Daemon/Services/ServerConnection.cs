@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -173,6 +174,16 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     Task?                         _terminalSenderTask;
 
     /// <summary>
+    /// <see cref="Stopwatch.GetTimestamp"/> taken each time the hub reaches a
+    /// connected+registered state. Logged as connection uptime in
+    /// <see cref="OnClosed"/> so the daemon log shows how long each connection
+    /// survived — the cadence that distinguishes a steady transport from one
+    /// flapping every few seconds (AI-840 diagnostics). Zero until the first
+    /// successful connect.
+    /// </summary>
+    long _connectedTimestamp;
+
+    /// <summary>
     /// Sentinel prefix the server (<c>DaemonRegistry.NameInUseErrorCode</c>)
     /// embeds in the <see cref="Microsoft.AspNetCore.SignalR.HubException"/>
     /// message when <c>DaemonConnect</c> is rejected because another live
@@ -210,6 +221,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 LogConnecting(_config.ServerUrl);
                 await _hub.StartAsync(ct);
                 await RegisterDaemon();
+                _connectedTimestamp = Stopwatch.GetTimestamp();
                 LogConnected(_config.Name);
 
                 return;
@@ -239,7 +251,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             return;
         }
 
-        LogConnectionClosed(ex);
+        var uptimeSeconds = _connectedTimestamp == 0 ? 0 : Stopwatch.GetElapsedTime(_connectedTimestamp).TotalSeconds;
+        LogConnectionClosed(ex, uptimeSeconds);
 
         try {
             await ConnectWithRetryAsync(_ct);
@@ -301,6 +314,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     async Task OnReconnected(string? connectionId) {
         LogReconnected();
         await RegisterDaemon();
+        _connectedTimestamp = Stopwatch.GetTimestamp();
         OnReconnectedCallback?.Invoke();
     }
 
@@ -565,8 +579,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     [LoggerMessage(Level = LogLevel.Warning, Message = "Connection attempt {Attempt} failed, retrying in {Delay}s")]
     partial void LogConnectionAttemptFailed(Exception ex, int attempt, int delay);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "SignalR connection closed, will reconnect")]
-    partial void LogConnectionClosed(Exception? ex);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "SignalR connection closed after {UptimeSeconds:F1}s uptime, will reconnect")]
+    partial void LogConnectionClosed(Exception? ex, double uptimeSeconds);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Reconnected to server, re-registering daemon")]
     partial void LogReconnected();
