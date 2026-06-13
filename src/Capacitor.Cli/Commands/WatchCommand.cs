@@ -563,23 +563,25 @@ static partial class WatchCommand {
                 return;
             }
 
-            // Serialize repository payload to JSON string for the hub method
-            var repoJson = repoToSend is not null
-                ? JsonSerializer.Serialize(repoToSend, CapacitorJsonContext.Default.RepositoryPayload)
-                : null;
-
             try {
-                // Arg count must match `CapacitorHub.SendTranscriptBatch` exactly —
-                // SignalR's protocol layer does a strict arity match and does NOT
-                // auto-supply defaults for missing args (PR #576 / v0.4.0 incident).
+                // SendTranscriptBatch takes a single TranscriptBatch record (arity 1) —
+                // SignalR matches on argument COUNT and does NOT auto-supply C# optional
+                // defaults (PR #576 / v0.4.0 incident), so a parameter object keeps the
+                // contract stable: adding a field stays backward-compatible (this client
+                // omits a null vendor; servers ignore unknown fields). This calls the
+                // record-based `SendTranscriptBatch2` added in AI-850 (the legacy
+                // positional `SendTranscriptBatch` stays on the server for older CLIs),
+                // so it requires a server deployed with that method — server-before-CLI.
                 await hubConnection.InvokeAsync(
-                    "SendTranscriptBatch",
-                    sessionId,
-                    agentId,
-                    newLines.ToArray(),
-                    newLineNumbers.ToArray(),
-                    repoJson,
-                    vendor,
+                    "SendTranscriptBatch2",
+                    new TranscriptBatch {
+                        SessionId   = sessionId,
+                        AgentId     = agentId,
+                        Lines       = newLines.ToArray(),
+                        LineNumbers = newLineNumbers.ToArray(),
+                        Repository  = repoToSend,
+                        Vendor      = vendor,
+                    },
                     ct
                 );
 
