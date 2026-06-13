@@ -128,6 +128,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
         _terminalSender = new TerminalOutputSender(
             (agentId, base64, ct) => _hub.SendAsync("SendTerminalOutput", new TerminalOutput(agentId, base64), ct),
+            isConnected: () => _hub.State == HubConnectionState.Connected,
             logger
         );
     }
@@ -170,8 +171,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     volatile bool     _disposed;
     Task?             _eventProcessorTask;
 
-    readonly TerminalOutputSender _terminalSender;
-    Task?                         _terminalSenderTask;
+    readonly TerminalOutputSender    _terminalSender;
+    Task?                            _terminalSenderTask;
+    CancellationTokenSource?         _terminalSenderCts;
 
     /// <summary>
     /// <see cref="Stopwatch.GetTimestamp"/> taken each time the hub reaches a
@@ -208,7 +210,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public async Task ConnectAsync(CancellationToken ct) {
         _ct                 = ct;
         _eventProcessorTask = ProcessEventQueueAsync(ct);
-        _terminalSenderTask = _terminalSender.RunAsync(ct);
+        // Linked to ct but separately cancellable so DisposeAsync can stop the
+        // sender even if the caller's token never fires — otherwise a chunk held
+        // through an outage could block disposal.
+        _terminalSenderCts  = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _terminalSenderTask = _terminalSender.RunAsync(_terminalSenderCts.Token);
         await ConnectWithRetryAsync(ct);
     }
 
@@ -559,10 +565,17 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             await _eventProcessorTask;
         }
 
+        // Cancel the sender's own token so a chunk being held through an outage
+        // can't block disposal regardless of the caller's token state.
+        if (_terminalSenderCts is not null) {
+            await _terminalSenderCts.CancelAsync();
+        }
+
         if (_terminalSenderTask is not null) {
             await _terminalSenderTask;
         }
 
+        _terminalSenderCts?.Dispose();
         _httpClient?.Dispose();
         await _hub.DisposeAsync();
     }

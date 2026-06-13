@@ -23,18 +23,21 @@ namespace Capacitor.Cli.Daemon.Services;
 internal sealed partial class TerminalOutputSender {
     readonly Channel<(string AgentId, string Base64Data)> _channel;
     readonly Func<string, string, CancellationToken, Task> _send;
+    readonly Func<bool>                                   _isConnected;
     readonly ILogger                                       _logger;
     readonly TimeSpan                                      _retryDelay;
 
     public TerminalOutputSender(
             Func<string, string, CancellationToken, Task> send,
-            ILogger                                        logger,
-            int                                            capacity   = 2000,
-            TimeSpan?                                      retryDelay = null
+            Func<bool>                                    isConnected,
+            ILogger                                       logger,
+            int                                           capacity   = 2000,
+            TimeSpan?                                     retryDelay = null
         ) {
-        _send       = send;
-        _logger     = logger;
-        _retryDelay = retryDelay ?? TimeSpan.FromMilliseconds(500);
+        _send        = send;
+        _isConnected = isConnected;
+        _logger      = logger;
+        _retryDelay  = retryDelay ?? TimeSpan.FromMilliseconds(500);
         _channel = Channel.CreateBounded<(string, string)>(
             new BoundedChannelOptions(capacity) { FullMode = BoundedChannelFullMode.DropOldest }
         );
@@ -48,10 +51,16 @@ internal sealed partial class TerminalOutputSender {
     public void Complete() => _channel.Writer.TryComplete();
 
     /// <summary>
-    /// Drains the channel, sending each chunk in order. A send that throws is
-    /// retried with the same chunk after <c>retryDelay</c> so a transport outage
-    /// holds the stream in place rather than dropping bytes; cancellation (daemon
-    /// shutdown) ends the loop even while a chunk is being retried.
+    /// Drains the channel, sending each chunk in order. A send that fails
+    /// <em>while the transport is down</em> is retried with the same chunk after
+    /// <c>retryDelay</c>, so a reconnect outage holds the stream in place rather
+    /// than dropping bytes mid-escape-sequence. A send that fails <em>while the
+    /// hub reports Connected</em> won't succeed on blind retry (it's not a
+    /// transport-down condition), so that chunk is logged and dropped and the
+    /// loop moves on — this is the safety valve that stops one stuck chunk from
+    /// wedging the single shared loop (and, with it, <c>DisposeAsync</c>) for
+    /// every later chunk. Cancellation (daemon shutdown) ends the loop even
+    /// while a chunk is being held for retry.
     /// </summary>
     public async Task RunAsync(CancellationToken ct) {
         try {
@@ -64,6 +73,15 @@ internal sealed partial class TerminalOutputSender {
                     } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                         return;
                     } catch (Exception ex) {
+                        if (_isConnected()) {
+                            // Connected yet the send threw — not a transport
+                            // outage. Retrying the same chunk would spin forever,
+                            // so drop it and continue rather than block the loop.
+                            LogSendDropped(ex, agentId);
+
+                            break;
+                        }
+
                         LogSendRetry(ex, agentId, _retryDelay.TotalSeconds);
 
                         try {
@@ -79,6 +97,9 @@ internal sealed partial class TerminalOutputSender {
         }
     }
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Terminal output send for agent {AgentId} failed (transport down?), retrying in {Delay}s")]
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Terminal output send for agent {AgentId} failed while transport down, holding and retrying in {Delay}s")]
     partial void LogSendRetry(Exception ex, string agentId, double delay);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Terminal output send for agent {AgentId} failed while connected — dropping chunk and continuing")]
+    partial void LogSendDropped(Exception ex, string agentId);
 }

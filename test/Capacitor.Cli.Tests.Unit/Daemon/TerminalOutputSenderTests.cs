@@ -24,6 +24,7 @@ public class TerminalOutputSenderTests {
 
                 return Task.CompletedTask;
             },
+            isConnected: () => true,
             NullLogger.Instance,
             retryDelay: FastRetry
         );
@@ -37,8 +38,14 @@ public class TerminalOutputSenderTests {
         sender.Complete();
         await run;
 
-        await Assert.That(delivered).HasCount().EqualTo(50);
-        await Assert.That(delivered.ToArray()).IsEquivalentTo(Enumerable.Range(0, 50).Select(i => $"chunk-{i}").ToArray());
+        // Order-sensitive, by index: IsEquivalentTo is permutation-tolerant and
+        // would pass for any order, defeating the point of an ordering test.
+        var arr = delivered.ToArray();
+        await Assert.That(arr.Length).IsEqualTo(50);
+
+        for (var i = 0; i < 50; i++) {
+            await Assert.That(arr[i]).IsEqualTo($"chunk-{i}");
+        }
     }
 
     [Test]
@@ -56,6 +63,7 @@ public class TerminalOutputSenderTests {
 
                 return Task.CompletedTask;
             },
+            isConnected: () => false, // transport down — failures must be held and retried, not dropped
             NullLogger.Instance,
             retryDelay: FastRetry
         );
@@ -71,7 +79,47 @@ public class TerminalOutputSenderTests {
 
         // "first" must still arrive before "second"/"third" even though it failed
         // repeatedly: the drain loop holds the head chunk and retries it in place.
-        await Assert.That(delivered.ToArray()).IsEquivalentTo(new[] { "first", "second", "third" });
+        // Asserted by index — IsEquivalentTo would pass for any order.
+        var arr = delivered.ToArray();
+        await Assert.That(arr.Length).IsEqualTo(3);
+        await Assert.That(arr[0]).IsEqualTo("first");
+        await Assert.That(arr[1]).IsEqualTo("second");
+        await Assert.That(arr[2]).IsEqualTo("third");
+    }
+
+    [Test]
+    public async Task Send_failure_while_connected_drops_the_chunk_and_keeps_delivering_later_chunks() {
+        var delivered = new ConcurrentQueue<string>();
+
+        // The hub reports Connected, but the send for "poison" throws. A blind
+        // retry would spin forever and wedge the single shared loop; the sender
+        // must instead drop that chunk and keep delivering the rest.
+        var sender = new TerminalOutputSender(
+            (_, base64, _) => {
+                if (base64 == "poison") throw new InvalidOperationException("boom");
+
+                delivered.Enqueue(base64);
+
+                return Task.CompletedTask;
+            },
+            isConnected: () => true,
+            NullLogger.Instance,
+            retryDelay: FastRetry
+        );
+
+        var run = sender.RunAsync(CancellationToken.None);
+
+        sender.Enqueue("agent-1", "poison");
+        sender.Enqueue("agent-1", "after-1");
+        sender.Enqueue("agent-1", "after-2");
+
+        sender.Complete();
+        await run.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var arr = delivered.ToArray();
+        await Assert.That(arr.Length).IsEqualTo(2);
+        await Assert.That(arr[0]).IsEqualTo("after-1");
+        await Assert.That(arr[1]).IsEqualTo("after-2");
     }
 
     [Test]
@@ -80,6 +128,7 @@ public class TerminalOutputSenderTests {
 
         var sender = new TerminalOutputSender(
             (_, _, _) => throw new InvalidOperationException("connection is not active"),
+            isConnected: () => false, // held (not dropped), so the loop is genuinely stuck until cancelled
             NullLogger.Instance,
             retryDelay: FastRetry
         );
