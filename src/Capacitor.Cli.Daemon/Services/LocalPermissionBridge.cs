@@ -200,11 +200,12 @@ internal sealed partial class LocalPermissionBridge(
             var suggestions = ExtractElement(node, "permission_suggestions");
 
             // The HttpListener API doesn't expose a per-request "client disconnected" token,
-            // so the SignalR call is bound to the daemon-shutdown token only. If Claude exits
-            // mid-wait, the server hub call stays open until the user decides or the session
-            // ends — wasteful but bounded by the ServerConnection's connection lifetime.
-            // Switching to Kestrel + HttpContext.RequestAborted would give us per-request
-            // cancellation; out of scope for this PR.
+            // so the SignalR call is bound to the daemon-shutdown token only. RequestPermissionAsync
+            // now retries across reconnects, so if Claude exits mid-wait the server hub call can
+            // stay open across reconnects until the user decides or the daemon shuts down — it is
+            // NOT bounded by a single connection's lifetime (the hook client's ~10h timeout is the
+            // practical end-to-end ceiling). Switching to Kestrel + HttpContext.RequestAborted
+            // would give us per-request cancellation; out of scope for this PR.
             PermissionDecision decision;
 
             try {

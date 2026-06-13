@@ -17,6 +17,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     readonly HubConnection             _hub;
     readonly DaemonConfig              _config;
     readonly ILogger<ServerConnection> _logger;
+    readonly RegistrationGate          _gate = new();
+
+    static readonly TimeSpan PermissionRetryPollInterval = TimeSpan.FromMilliseconds(500);
 
     // Events for incoming commands from server
     public event Func<LaunchAgentCommand, Task>?    OnLaunchAgent;
@@ -123,8 +126,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
         RegisterUiBroadcastSinks();
 
-        _hub.Reconnected += OnReconnected;
-        _hub.Closed      += OnClosed;
+        _hub.Reconnecting += OnReconnecting;
+        _hub.Reconnected  += OnReconnected;
+        _hub.Closed       += OnClosed;
 
         _terminalSender = new TerminalOutputSender(
             (agentId, base64, ct) => _hub.SendAsync("SendTerminalOutput", new TerminalOutput(agentId, base64), ct),
@@ -253,6 +257,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     async Task OnClosed(Exception? ex) {
+        _gate.MarkUnregistered();
+
         if (_disposed || _ct.IsCancellationRequested) {
             return;
         }
@@ -274,6 +280,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     async Task RegisterDaemon() {
+        // Drop readiness for the whole duration of (re-)registration. This is the
+        // ONLY thing that clears readiness on the heartbeat slot-displacement path
+        // (DaemonHeartbeatLoop.cs:77 → ReRegisterAsync), where the transport stays
+        // up and no Reconnecting/Closed event fires.
+        _gate.MarkUnregistered();
+
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
         var repoPaths = await MergeRepoPathsAsync();
         var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
@@ -287,6 +299,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 ),
                 cancellationToken: _ct
             );
+
+            _gate.MarkRegistered();
         } catch (Exception ex) when (IsNameInUse(ex)) {
             // AI-630: server refused our (owner, name) slot because another
             // live daemon owns it. Surface to DaemonRunner before re-throwing
@@ -316,6 +330,27 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
         return [..merged];
     }
+
+    /// <summary>
+    /// Auto-reconnect started: the transport is no longer Connected and the
+    /// server-side registration for this connection is stale. Clear readiness so
+    /// nothing invokes a daemon-scoped hub method until <see cref="OnReconnected"/>
+    /// re-runs <see cref="RegisterDaemon"/>.
+    /// </summary>
+    Task OnReconnecting(Exception? error) {
+        _gate.MarkUnregistered();
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// True when the hub is Connected AND this connection has completed
+    /// <c>DaemonConnect</c>. The permission-request retry loop waits on this
+    /// rather than raw <see cref="HubConnectionState.Connected"/> so a retry can't
+    /// race re-registration. Mirrors the point already signalled by
+    /// <see cref="OnReconnectedCallback"/>, as a pollable predicate.
+    /// </summary>
+    internal bool IsReady => _gate.IsReady(_hub.State);
 
     async Task OnReconnected(string? connectionId) {
         LogReconnected();
@@ -431,12 +466,18 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             JsonElement?      suggestions,
             CancellationToken ct = default
         ) =>
-        _hub.InvokeAsync<PermissionDecision>(
-            "RequestPermission",
-            sessionId,
-            toolName,
-            toolInput,
-            suggestions,
+        ConnectionRetry.InvokeWithConnectionRetryAsync(
+            () => _hub.InvokeAsync<PermissionDecision>(
+                "RequestPermission",
+                sessionId,
+                toolName,
+                toolInput,
+                suggestions,
+                ct
+            ),
+            () => IsReady,
+            PermissionRetryPollInterval,
+            attempt => LogPermissionRetry(sessionId, attempt),
             ct
         );
 
@@ -597,6 +638,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Reconnected to server, re-registering daemon")]
     partial void LogReconnected();
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "RequestPermission for session {SessionId} interrupted by a connection drop (retry {Attempt}); waiting for the daemon connection to recover before retrying")]
+    partial void LogPermissionRetry(string sessionId, int attempt);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to post agent run event, retrying in {Delay}s")]
     partial void LogEventPostFailed(Exception ex, double delay);
