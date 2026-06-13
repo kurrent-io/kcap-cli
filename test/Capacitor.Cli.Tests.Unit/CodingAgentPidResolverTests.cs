@@ -59,6 +59,19 @@ public class CodingAgentPidResolverTests {
     }
 
     [Test]
+    public async Task Resolves_copilot_skipping_a_transient_launcher() {
+        // Copilot is the third watcher vendor (CopilotHookCommand spawns kcap watch
+        // --vendor copilot). GetCodingAgentPid now walks the ancestry for it too, so the
+        // resolver must match "copilot" by name like the others.
+        // hook(100) -> sh(90) -> copilot(50) -> zsh(20)
+        var lookup = ProcTable.Of((90, 50, "sh"), (50, 20, "copilot"), (20, 1, "-zsh"));
+
+        var pid = ProcessHelpers.ResolveCodingAgentPid(startPid: 90, vendor: "copilot", lookup);
+
+        await Assert.That(pid).IsEqualTo(50);
+    }
+
+    [Test]
     public async Task Returns_nearest_agent_ancestor_when_several_match() {
         // Nested agents (a hosted agent's claude under an outer claude). The nearest
         // ancestor is the one whose death should end THIS watcher's session.

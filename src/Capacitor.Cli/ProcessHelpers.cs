@@ -226,22 +226,26 @@ static partial class ProcessHelpers {
 
     /// <summary>
     /// Resolves the PID of the long-lived coding-agent process for
-    /// <paramref name="vendor"/> ("claude"/"codex"), suitable for the watcher's
-    /// parent-PID watchdog. On Unix it first walks the ppid ancestry looking for the
-    /// agent by name (<see cref="ResolveCodingAgentPid"/> + <see cref="GetProcessInfo"/>),
-    /// which is robust to whatever process-group/launcher topology the agent uses to
-    /// spawn its hook — notably Claude, whose hook runs in a separate transient
-    /// process group that makes the bare <c>getpgrp()</c> heuristic resolve an
-    /// already-dead PID. It falls back to that legacy heuristic when no agent is found
-    /// on the chain (or <paramref name="vendor"/> is unknown), preserving prior
-    /// behaviour for Codex.
+    /// <paramref name="vendor"/> (claude/codex/copilot, or a future one), suitable for
+    /// the watcher's parent-PID watchdog. On Unix it first walks the ppid ancestry
+    /// looking for the agent by name (<see cref="ResolveCodingAgentPid"/> +
+    /// <see cref="GetProcessInfo"/>), which is robust to whatever process-group/launcher
+    /// topology the agent uses to spawn its hook — notably Claude, whose hook runs in a
+    /// separate transient process group that makes the bare <c>getpgrp()</c> heuristic
+    /// resolve an already-dead PID. It falls back to that legacy heuristic when no agent
+    /// is found on the chain (or <paramref name="vendor"/> is null/empty), preserving
+    /// prior behaviour for Codex and any vendor whose process isn't named after it.
     /// </summary>
     public static int? GetCodingAgentPid(string? vendor) {
         if (OperatingSystem.IsWindows()) {
             return GetParentPidWindows();
         }
 
-        if (vendor is "claude" or "codex"
+        // Walk the ancestry for any named vendor. The match is by the vendor's process
+        // name and falls back to the legacy heuristic below when no agent is found, so
+        // this can't regress a vendor whose process isn't named after it (e.g. an npm
+        // shim) — it only adds coverage where the name matches.
+        if (!string.IsNullOrEmpty(vendor)
          && ResolveCodingAgentPid(getppid_native(), vendor, GetProcessInfo) is { } agentPid) {
             return agentPid;
         }
