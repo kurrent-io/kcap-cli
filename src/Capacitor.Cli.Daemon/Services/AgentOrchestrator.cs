@@ -429,6 +429,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task ReadAgentOutputAsync(AgentInstance agent) {
+        // The terminal-output enqueue back-pressures (awaits) when the send queue is
+        // full. Tie that await to BOTH this agent's stop (ReadCts) and daemon shutdown
+        // so HandleStopAgent releasing ReadCts unblocks the read loop — otherwise a
+        // stop mid-outage would leave the finally-block finalization/cleanup stalled
+        // until the whole daemon exits (AI-846).
+        using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(agent.ReadCts.Token, _shutdownCts.Token);
+
         try {
             await foreach (var data in agent.Process.ReadOutputAsync(agent.ReadCts.Token)) {
                 agent.LastOutputAt      = DateTime.UtcNow;
@@ -441,7 +448,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 agent.OutputBuffer.Append(data);
                 var base64 = Convert.ToBase64String(data);
-                _ = _server.SendTerminalOutputAsync(agent.Id, base64);
+                // Await the enqueue: TerminalOutputSender back-pressures here when its
+                // queue is full (slow/down transport) so a chunk is never dropped to
+                // keep up — losing one byte garbles the whole redraw-TUI mirror (AI-844).
+                // sendCts releases this await on agent stop or daemon shutdown (AI-846).
+                await _server.SendTerminalOutputAsync(agent.Id, base64, sendCts.Token);
             }
         } catch (OperationCanceledException) {
             /* expected on stop */
@@ -1024,6 +1035,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// without going through SignalR. Keeps the private handler private to everyone else.
     /// </summary>
     internal Task HandleLaunchAgentForTest(LaunchAgentCommand cmd) => HandleLaunchAgent(cmd);
+
+    /// <summary>Test-only entry point to the private stop handler (mirrors <see cref="HandleLaunchAgentForTest"/>).</summary>
+    internal Task HandleStopAgentForTest(string agentId) => HandleStopAgent(agentId);
 }
 
 /// <summary>
