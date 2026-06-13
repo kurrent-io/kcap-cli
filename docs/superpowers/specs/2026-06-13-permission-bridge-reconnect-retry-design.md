@@ -39,10 +39,9 @@ Per decision, the conditions that end the wait and fall back to deny are:
 1. **Daemon shutdown** — the bridge's cancellation token (`ct`) fires.
 2. **Genuine server rejection** — the hub method throws a `HubException` (server-side
    logic error), which retrying cannot fix.
-3. **A fault while the connection is ready** — an `InvalidOperationException`
-   ("connection is not active") raised while the hub is connected-and-registered, or
-   any other unrecognized exception. Retrying these would spin without recovering, so
-   they propagate immediately (see "Core logic" for why this case exists).
+3. **An unrecognized fault** — any exception that isn't a connection-drop signal
+   (anything other than `OperationCanceledException`/`InvalidOperationException`).
+   Retrying these would not recover, so they propagate immediately (see "Core logic").
 
 There is **no daemon-side attempt cap** for the transient-disconnect case: as long as
 the daemon is alive and the hub is recovering, we keep waiting and retrying. Auto-reconnect
@@ -97,48 +96,57 @@ testable without a real `HubConnection`:
 ```
 InvokeWithConnectionRetryAsync(invoke, isReady, pollInterval, onRetry, ct):
   loop:
+    // Wait for readiness before EVERY attempt, including the first.
+    while (!ct.IsCancellationRequested && !isReady()):
+      await Task.Delay(pollInterval, ct)        // wait until connected AND re-registered
     ct.ThrowIfCancellationRequested()
     try:
       return await invoke()
-    catch ex when (!ct.IsCancellationRequested && IsTransientDisconnect(ex, isReady)):
+    catch ex when (!ct.IsCancellationRequested && IsTransientDisconnect(ex)):
       onRetry(attempt)                          // log: interrupted by drop, will retry
-      await Task.Delay(pollInterval, ct)        // covers the "already recovered" race
-                                                // and prevents a hot loop
-      while (!ct.IsCancellationRequested && !isReady()):
-        await Task.Delay(pollInterval, ct)      // wait until connected AND re-registered
+      await Task.Delay(pollInterval, ct)        // brief delay; can't spin hot
     // loops until invoke() succeeds, or ct (daemon shutdown) fires,
     // or a non-transient exception propagates
 ```
 
-**Classifying the failure** — `IsTransientDisconnect(ex, isReady)`:
+The readiness wait sits at the **top of every attempt**, so the *first* invoke is gated
+too — a request that arrives mid-reconnect/re-register doesn't fire against a connection
+the server hasn't registered (which could surface as a `HubException` and become a
+spurious deny). This is the single readiness gate; there is no separate ungated
+first-attempt path.
 
-- `ex is OperationCanceledException` (includes `TaskCanceledException`) — the transport
-  killed an **in-flight** invoke. This is the exact failure in the bug log and is
-  unambiguously a connection loss. Always treated as transient → wait for readiness,
-  retry. (The `when` clause already excludes the daemon-shutdown token via
-  `!ct.IsCancellationRequested`, so a real shutdown `OperationCanceledException`
-  propagates → bridge denies.)
-- `ex is InvalidOperationException` (SignalR's "connection is not active") — **only**
-  transient when raised while `!isReady()` (hub down / re-registering). If raised while
-  the hub is ready (connected + registered), it indicates a permanent client/protocol
-  fault, not a blip; retrying would spin forever with no recovery. So it propagates →
-  deny. This mirrors the established `TerminalOutputSender` safety valve
-  (`TerminalOutputSender.cs:75-83`): retry only while the transport is down, drop/propagate
-  while connected.
+**Classifying the failure** — `IsTransientDisconnect(ex)` (note: no `isReady`
+dependency — see below):
+
+- `ex is OperationCanceledException` (includes `TaskCanceledException`) — SignalR
+  killed an **in-flight** invoke when the transport dropped. The exact failure in the
+  bug log; unambiguously a connection loss → retry. (The `when` clause excludes the
+  daemon-shutdown token via `!ct.IsCancellationRequested`, so a real shutdown
+  `OperationCanceledException` propagates → bridge denies.)
+- `ex is InvalidOperationException` (SignalR's "connection is not active") — because we
+  only invoke *after* observing readiness, an IOE here means the transport dropped in
+  the gap between the readiness check and the call. That is a transient disconnect, so
+  it is retried too. The classifier deliberately does **not** consult `isReady()` at
+  catch time: doing so was racy (readiness could flip between the throw and the filter,
+  misclassifying a transient drop as final — Qodo #152 Bug 3) and is unnecessary once
+  the first attempt is gated.
 - Anything else — `HubException` (server rejected) or any unrecognized exception —
   propagates → deny (safe default).
 
-Why no generic cap is needed: the only failure mode that could loop without recovering
-is "ready hub keeps faulting," and that path now propagates immediately rather than
-retrying. The genuinely transient path (`OperationCanceledException` / IOE-while-down) is
-bounded by `ct` on the daemon side and by the ~10h hook-client timeout end-to-end.
+Why no spin and no generic cap: `InvokeAsync`'s IOE is purely a connection-state signal,
+so an IOE only occurs around a real drop; the next loop iteration re-waits for readiness
+before retrying, and the unconditional post-failure `Task.Delay` guarantees the loop can
+never spin hot. A genuine permanent fault surfaces as `HubException` or another type and
+propagates → deny. The transient path is bounded by `ct` on the daemon side and by the
+~10h hook-client timeout end-to-end.
 
 - A `ForceReconnect` (heartbeat-detected wedged transport) does *not* cancel the bridge's
   `ct`, so we correctly wait through the brief not-ready window it produces rather than
   denying.
-- The unconditional `Task.Delay(pollInterval, ct)` before the readiness-wait handles the
-  race where the connection already recovered by the time we catch (the `while` would
-  exit immediately) and guarantees the loop can never spin hot.
+- After the wait loop exits we `ct.ThrowIfCancellationRequested()` before invoking, so a
+  wait that ended because the daemon is shutting down (rather than because the hub became
+  ready) propagates an `OperationCanceledException` → bridge denies, instead of invoking
+  against a dead connection.
 
 ### Readiness signal: connected AND re-registered
 
@@ -210,27 +218,28 @@ whole method) and all `LocalPermissionBridgeTests` compile and pass untouched.
   This replaces the current per-blip `LogRequestPermissionFailed` warning-with-full-
   stack-trace, which is noise for an expected, now-recovered condition.
 - Keep the bridge's deny-fallback warning, but it now only fires on a genuinely
-  non-recoverable outcome: daemon shutdown, a `HubException`, an
-  `InvalidOperationException` raised while the hub is ready, or any other unrecognized
+  non-recoverable outcome: daemon shutdown, a `HubException`, or any other unrecognized
   fault — not on a transient blip that recovered.
 
 ## Tests
 
 Unit tests against the helper with fakes (`isReady` delegate + a scripted `invoke`):
 
-1. **Recovers after a blip** — `invoke` throws `TaskCanceledException` N times while
-   `isReady` returns `false`, then `isReady` flips to `true` and `invoke` succeeds →
-   helper returns the decision; `onRetry` called N times.
-2. **Daemon shutdown mid-wait** — cancel `ct` while waiting → helper throws
-   `OperationCanceledException` (bridge would deny).
-3. **Server rejection not retried** — `invoke` throws `HubException` → rethrown
+1. **Waits for readiness before the first invoke** — `isReady` is `false` for the first
+   few polls then `true`; `invoke` is called exactly once and only after readiness was
+   reached (proves attempt 1 is gated, not just retries).
+2. **Recovers after a blip** — `invoke` throws `TaskCanceledException` once while ready,
+   then succeeds → helper returns the decision; `onRetry` called once.
+3. **Cancellation during readiness wait** — never ready, `ct` cancels while waiting →
+   helper throws `OperationCanceledException` and `invoke` is never called.
+4. **Cancellation after a transient failure** — ready, `invoke` throws
+   `TaskCanceledException`, `onRetry` cancels `ct` → helper throws
+   `OperationCanceledException`.
+5. **Server rejection not retried** — `invoke` throws `HubException` → rethrown
    immediately, `onRetry` never called.
-4. **`InvalidOperationException` while not ready is transient** — `invoke` throws IOE
-   while `isReady` is `false`, then recovers → retried and succeeds.
-5. **`InvalidOperationException` while ready is final** — `invoke` throws IOE while
-   `isReady` is `true` → rethrown immediately, not retried (guards against an infinite
-   wait on a permanent client/protocol fault that retrying cannot recover).
-6. **Already-recovered race** — `invoke` throws `TaskCanceledException` once while
+6. **`InvalidOperationException` is transient** — `invoke` throws IOE once then succeeds
+   → retried and returns the decision (IOE is a connection-state signal; always retried).
+7. **Already-recovered race** — `invoke` throws `TaskCanceledException` once while
    `isReady` already returns `true` → after the poll delay it re-invokes and succeeds
    (no spin, no deny).
 
@@ -238,16 +247,16 @@ Focused unit tests on `RegistrationGate` (the helper tests above only validate a
 *supplied* `isReady` delegate and would not catch mis-wiring of the real flag, so the
 gate needs its own coverage):
 
-7. **Not ready until registered** — fresh gate with `state = Connected` →
-   `IsReady` is `false`; after `OnRegistered()` → `true`.
-8. **Connection loss clears readiness** — after `OnRegistered()`, `OnConnectionLost()`
+8. **Not ready until registered** — fresh gate with `state = Connected` →
+   `IsReady` is `false`; after `MarkRegistered()` → `true`.
+9. **Connection loss clears readiness** — after `MarkRegistered()`, `MarkUnregistered()`
    makes `IsReady` `false` even when `state` is still reported `Connected` (the
    `Reconnected`-before-`RegisterDaemon` window).
-9. **Disconnected state is never ready** — `state = Reconnecting`/`Disconnected` →
-   `IsReady` is `false` regardless of the registered flag.
-10. **Re-registration restores readiness** — `MarkUnregistered()` then `MarkRegistered()`
+10. **Disconnected state is never ready** — `state = Reconnecting`/`Disconnected` →
+    `IsReady` is `false` regardless of the registered flag.
+11. **Re-registration restores readiness** — `MarkUnregistered()` then `MarkRegistered()`
     (the `ReRegisterAsync`/`OnReconnected` path) → `IsReady` is `true` again.
-11. **Heartbeat slot-displacement without transport loss** — model the
+12. **Heartbeat slot-displacement without transport loss** — model the
     `RegisterDaemon()` bracket directly: from a ready gate (`state` stays `Connected`,
     no transport event), `MarkUnregistered()` (re-register start) makes `IsReady` `false`,
     and it returns to `true` only after `MarkRegistered()` (re-register success). Proves

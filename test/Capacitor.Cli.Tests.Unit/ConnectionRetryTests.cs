@@ -7,11 +7,31 @@ public class ConnectionRetryTests {
     static readonly TimeSpan FastPoll = TimeSpan.FromMilliseconds(1);
 
     [Test]
-    public async Task Recovers_after_transient_disconnect_once_ready() {
+    public async Task Waits_for_readiness_before_the_first_invoke() {
         var invokeCalls = 0;
         var pollCount   = 0;
         // Not ready for the first two readiness polls, then ready.
         Func<bool> isReady = () => ++pollCount > 2;
+
+        Func<Task<string>> invoke = () => {
+            invokeCalls++;
+            return Task.FromResult("decision");
+        };
+
+        var result = await ConnectionRetry.InvokeWithConnectionRetryAsync(
+            invoke, isReady, FastPoll, _ => { }, CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo("decision");
+        // Invoked exactly once, and only after readiness was reached — never
+        // fired against a not-yet-ready connection.
+        await Assert.That(invokeCalls).IsEqualTo(1);
+        await Assert.That(pollCount).IsGreaterThanOrEqualTo(3);
+    }
+
+    [Test]
+    public async Task Recovers_after_transient_disconnect_once_ready() {
+        var invokeCalls = 0;
+        Func<bool> isReady = () => true;
         var retries = new List<int>();
 
         Func<Task<string>> invoke = () => {
@@ -29,12 +49,28 @@ public class ConnectionRetryTests {
     }
 
     [Test]
-    public async Task Cancellation_during_wait_propagates() {
+    public async Task Cancellation_during_readiness_wait_propagates_without_invoking() {
+        using var cts = new CancellationTokenSource();
+        var invoked = false;
+
+        Func<Task<string>> invoke = () => { invoked = true; return Task.FromResult("nope"); };
+        // Never ready, and cancel the token the first time readiness is polled.
+        Func<bool> isReady = () => { cts.Cancel(); return false; };
+
+        await Assert.That(async () => await ConnectionRetry.InvokeWithConnectionRetryAsync(
+                invoke, isReady, FastPoll, _ => { }, cts.Token))
+            .Throws<OperationCanceledException>();
+
+        await Assert.That(invoked).IsFalse();
+    }
+
+    [Test]
+    public async Task Cancellation_after_transient_failure_propagates() {
         using var cts = new CancellationTokenSource();
         var retries = 0;
 
         Func<Task<string>> invoke = () => throw new TaskCanceledException();
-        Func<bool>         isReady = () => false; // would otherwise wait forever
+        Func<bool>         isReady = () => true; // ready, so attempt 1 invokes immediately
         Action<int>        onRetry = _ => { retries++; cts.Cancel(); };
 
         await Assert.That(async () => await ConnectionRetry.InvokeWithConnectionRetryAsync(
@@ -58,38 +94,20 @@ public class ConnectionRetryTests {
     }
 
     [Test]
-    public async Task InvalidOperationException_while_not_ready_is_retried() {
+    public async Task InvalidOperationException_is_treated_as_transient_and_retried() {
         var invokeCalls = 0;
-        var ready       = false;
-        var retries     = 0;
 
         Func<Task<string>> invoke = () => {
             invokeCalls++;
             if (invokeCalls == 1) throw new InvalidOperationException("connection is not active");
             return Task.FromResult("decision");
         };
-        Func<bool>  isReady = () => ready;
-        Action<int> onRetry = _ => { retries++; ready = true; };
 
         var result = await ConnectionRetry.InvokeWithConnectionRetryAsync(
-            invoke, isReady, FastPoll, onRetry, CancellationToken.None);
+            invoke, () => true, FastPoll, _ => { }, CancellationToken.None);
 
         await Assert.That(result).IsEqualTo("decision");
         await Assert.That(invokeCalls).IsEqualTo(2);
-        await Assert.That(retries).IsEqualTo(1);
-    }
-
-    [Test]
-    public async Task InvalidOperationException_while_ready_is_final() {
-        var retries = 0;
-
-        Func<Task<string>> invoke = () => throw new InvalidOperationException("boom");
-
-        await Assert.That(async () => await ConnectionRetry.InvokeWithConnectionRetryAsync(
-                invoke, () => true, FastPoll, _ => retries++, CancellationToken.None))
-            .Throws<InvalidOperationException>();
-
-        await Assert.That(retries).IsEqualTo(0);
     }
 
     [Test]
