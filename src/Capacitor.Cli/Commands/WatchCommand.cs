@@ -167,7 +167,7 @@ static partial class WatchCommand {
 
             // Re-register with server and check if it's behind us (gap recovery)
             try {
-                var serverPosition = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, cancellationToken: cts.Token);
+                var serverPosition = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, CountFileLines(transcriptPath), cancellationToken: cts.Token);
 
                 if (serverPosition < state.LinesProcessed) {
                     Log($"Server behind ({serverPosition} vs {state.LinesProcessed}), rewinding to resend gap");
@@ -218,8 +218,11 @@ static partial class WatchCommand {
             return 0;
         }
 
-        // Register with server and get resume position
-        state.LinesProcessed = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, cts.Token);
+        // Register with server and get resume position. Report our local transcript
+        // line count so the server can tell a genuine resume of an ended session
+        // (we have lines past its resume point) from a watcher with nothing new —
+        // the former must not be stopped with session_already_ended.
+        state.LinesProcessed = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, CountFileLines(transcriptPath), cancellationToken: cts.Token);
         Log($"Connected via SignalR, resuming from line {state.LinesProcessed}");
 
         try {
