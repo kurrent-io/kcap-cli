@@ -19,6 +19,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     readonly ILogger<ServerConnection> _logger;
     readonly RegistrationGate          _gate = new();
 
+    static readonly TimeSpan PermissionRetryPollInterval = TimeSpan.FromMilliseconds(500);
+
     // Events for incoming commands from server
     public event Func<LaunchAgentCommand, Task>?    OnLaunchAgent;
     public event Func<string, Task>?                OnStopAgent; // agentId
@@ -464,12 +466,18 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             JsonElement?      suggestions,
             CancellationToken ct = default
         ) =>
-        _hub.InvokeAsync<PermissionDecision>(
-            "RequestPermission",
-            sessionId,
-            toolName,
-            toolInput,
-            suggestions,
+        ConnectionRetry.InvokeWithConnectionRetryAsync(
+            () => _hub.InvokeAsync<PermissionDecision>(
+                "RequestPermission",
+                sessionId,
+                toolName,
+                toolInput,
+                suggestions,
+                ct
+            ),
+            () => IsReady,
+            PermissionRetryPollInterval,
+            attempt => LogPermissionRetry(sessionId, attempt),
             ct
         );
 
@@ -630,6 +638,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Reconnected to server, re-registering daemon")]
     partial void LogReconnected();
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "RequestPermission for session {SessionId} interrupted by a connection drop (retry {Attempt}); waiting for the daemon connection to recover before retrying")]
+    partial void LogPermissionRetry(string sessionId, int attempt);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to post agent run event, retrying in {Delay}s")]
     partial void LogEventPostFailed(Exception ex, double delay);
