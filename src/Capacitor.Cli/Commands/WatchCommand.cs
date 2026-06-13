@@ -11,6 +11,30 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Capacitor.Cli.Commands;
 
 static partial class WatchCommand {
+    /// <summary>Outcome of deciding whether the parent-exit watchdog can run.</summary>
+    internal enum ParentWatchdog {
+        /// <summary>Parent PID is alive — start the 5s liveness poll.</summary>
+        Monitor,
+
+        /// <summary>No parent PID was supplied — nothing to monitor.</summary>
+        NoParentPid,
+
+        /// <summary>A parent PID was supplied but it's already dead at startup
+        /// (typically a transient process from bad PID resolution). Must be surfaced,
+        /// never silently skipped.</summary>
+        ParentAlreadyDead
+    }
+
+    /// <summary>
+    /// Decides whether the parent-exit watchdog should run. Pure so the three
+    /// outcomes — including the dead-at-startup case that caused stuck sessions —
+    /// are unit-testable without spawning processes.
+    /// </summary>
+    internal static ParentWatchdog DecideParentWatchdog(int? parentPid, Func<int, bool> isAlive) =>
+        parentPid is not { } ppid ? ParentWatchdog.NoParentPid
+        : !isAlive(ppid)          ? ParentWatchdog.ParentAlreadyDead
+        :                           ParentWatchdog.Monitor;
+
     public static async Task<int> RunWatch(
             string  baseUrl,
             string  sessionId,
@@ -85,26 +109,47 @@ static partial class WatchCommand {
             ctx.Cancel = true;
         });
 
-        // Watch the spawning claude process. If it dies without firing session-end
-        // (crash, force-kill, IDE-detach), self-terminate within ~5s instead of orphaning.
-        if (parentPid is { } ppid && ProcessHelpers.IsProcessAlive(ppid)) {
-            Log($"Monitoring parent pid {ppid}");
-            _ = Task.Run(async () => {
-                while (!cts.Token.IsCancellationRequested) {
-                    try {
-                        await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
-                    } catch (OperationCanceledException) {
-                        return;
-                    }
+        // Watch the spawning coding-agent process. If it dies without firing
+        // session-end (crash, force-kill, IDE-detach), self-terminate within ~5s and
+        // POST session-end instead of orphaning. Crucially, the cases where we DON'T
+        // monitor are now logged: a silently-skipped watchdog is exactly the failure
+        // that left sessions stuck "active" with the watcher still connected — the
+        // resolved parent PID was already dead at startup and nothing recorded it.
+        switch (DecideParentWatchdog(parentPid, ProcessHelpers.IsProcessAlive)) {
+            case ParentWatchdog.NoParentPid:
+                Log("No parent pid supplied; parent-exit watchdog disabled (session-end relies on the agent's own hook)");
 
-                    if (!ProcessHelpers.IsProcessAlive(ppid)) {
-                        Log($"Parent pid {ppid} exited; shutting down watcher");
-                        Interlocked.Exchange(ref parentExited, 1);
-                        cts.Cancel();
-                        return;
+                break;
+
+            case ParentWatchdog.ParentAlreadyDead:
+                Log($"Parent pid {parentPid} already dead at watcher startup; parent-exit watchdog NOT started — "
+                  + "session-end will not be POSTed if the agent ends abruptly. This usually means parent-PID "
+                  + "resolution returned a transient process; see ProcessHelpers.GetCodingAgentPid.");
+
+                break;
+
+            case ParentWatchdog.Monitor:
+                var ppid = parentPid!.Value;
+                Log($"Monitoring parent pid {ppid}");
+                _ = Task.Run(async () => {
+                    while (!cts.Token.IsCancellationRequested) {
+                        try {
+                            await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
+                        } catch (OperationCanceledException) {
+                            return;
+                        }
+
+                        if (!ProcessHelpers.IsProcessAlive(ppid)) {
+                            Log($"Parent pid {ppid} exited; shutting down watcher");
+                            Interlocked.Exchange(ref parentExited, 1);
+                            cts.Cancel();
+
+                            return;
+                        }
                     }
-                }
-            }, cts.Token);
+                }, cts.Token);
+
+                break;
         }
 
         var state = new WatchState();
