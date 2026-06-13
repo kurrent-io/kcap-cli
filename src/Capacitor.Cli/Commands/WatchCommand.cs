@@ -167,7 +167,7 @@ static partial class WatchCommand {
 
             // Re-register with server and check if it's behind us (gap recovery)
             try {
-                var serverPosition = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, CountFileLines(transcriptPath), cancellationToken: cts.Token);
+                var serverPosition = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, LocalLineCountForConnect(transcriptPath), cancellationToken: cts.Token);
 
                 if (serverPosition < state.LinesProcessed) {
                     Log($"Server behind ({serverPosition} vs {state.LinesProcessed}), rewinding to resend gap");
@@ -221,8 +221,10 @@ static partial class WatchCommand {
         // Register with server and get resume position. Report our local transcript
         // line count so the server can tell a genuine resume of an ended session
         // (we have lines past its resume point) from a watcher with nothing new —
-        // the former must not be stopped with session_already_ended.
-        state.LinesProcessed = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, CountFileLines(transcriptPath), cancellationToken: cts.Token);
+        // the former must not be stopped with session_already_ended. A missing or
+        // unreadable transcript reports -1 ("unknown") so the server fails open
+        // rather than mistaking it for an empty (nothing-new) transcript.
+        state.LinesProcessed = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, LocalLineCountForConnect(transcriptPath), cancellationToken: cts.Token);
         Log($"Connected via SignalR, resuming from line {state.LinesProcessed}");
 
         try {
@@ -971,22 +973,38 @@ static partial class WatchCommand {
 
     public static int CountFileLines(string path) {
         try {
-            if (!File.Exists(path)) {
-                return 0;
-            }
-
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var reader = new StreamReader(stream);
-            var       count  = 0;
-
-            while (reader.ReadLine() is not null) {
-                count++;
-            }
-
-            return count;
+            return File.Exists(path) ? CountLines(path) : 0;
         } catch {
             return 0;
         }
+    }
+
+    /// <summary>
+    /// Local transcript line count to report on <c>WatcherConnect</c>, or <c>-1</c>
+    /// when the file is missing or can't be read. A negative ("unknown") count makes
+    /// the server's resume guard fail open — it won't stop a possibly-resuming watcher
+    /// without a confirmed count — whereas a fabricated <c>0</c> (which is what
+    /// <see cref="CountFileLines"/> returns on a read failure) would read as "nothing
+    /// new" and wrongly stop a live resume. (Qodo review on #151 / AI-847.)
+    /// </summary>
+    public static int LocalLineCountForConnect(string path) {
+        try {
+            return File.Exists(path) ? CountLines(path) : -1;
+        } catch {
+            return -1;
+        }
+    }
+
+    static int CountLines(string path) {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        var       count  = 0;
+
+        while (reader.ReadLine() is not null) {
+            count++;
+        }
+
+        return count;
     }
 
     [GeneratedRegex("<command-name>(.*?)</command-name>", RegexOptions.Compiled)]

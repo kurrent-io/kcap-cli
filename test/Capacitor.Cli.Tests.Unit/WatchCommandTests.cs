@@ -193,6 +193,27 @@ public class CountFileLinesTests {
     [Test]
     public async Task MissingFile_ReturnsZero() =>
         await Assert.That(WatchCommand.CountFileLines("/tmp/nonexistent_" + Guid.NewGuid())).IsEqualTo(0);
+
+    // LocalLineCountForConnect mirrors CountFileLines for a readable file but reports
+    // -1 ("unknown") when the file is missing/unreadable, so the server's resume guard
+    // fails open instead of mistaking an unreadable transcript for an empty one.
+    [Test]
+    [Arguments("line1\nline2\nline3\n", 3)]
+    [Arguments("", 0)]
+    public async Task LocalLineCountForConnect_CountsReadableFile(string content, int expected) {
+        var path = Path.GetTempFileName();
+
+        try {
+            await File.WriteAllTextAsync(path, content);
+            await Assert.That(WatchCommand.LocalLineCountForConnect(path)).IsEqualTo(expected);
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task LocalLineCountForConnect_MissingFile_ReturnsMinusOne() =>
+        await Assert.That(WatchCommand.LocalLineCountForConnect("/tmp/nonexistent_" + Guid.NewGuid())).IsEqualTo(-1);
 }
 
 public class WatchCommandTests {
