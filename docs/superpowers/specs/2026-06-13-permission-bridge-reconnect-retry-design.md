@@ -63,8 +63,11 @@ expose one and the `RequestPermission` invoke is bound to the daemon-shutdown to
 (`LocalPermissionBridge.cs:202-207`). Consequently, if the hook client gives up (10h
 timeout, or Claude exits mid-wait), the daemon-side retry loop keeps running and may
 re-invoke `RequestPermission` after a reconnect, producing a fresh server-side prompt
-that no client will ever consume (an orphan handler). This is bounded by the connection
-lifetime / daemon shutdown but is otherwise unaddressed here: switching the bridge to
+that no client will ever consume (an orphan handler). Because this design deliberately
+rides through reconnects and `ForceReconnect`, the orphan is **not** bounded by a single
+SignalR connection's lifetime — it persists until the daemon shuts down (`ct`), the
+server eventually responds, or a non-recoverable failure propagates, whichever comes
+first. It is otherwise unaddressed here: switching the bridge to
 Kestrel + `HttpContext.RequestAborted` for true per-request cancellation is explicitly
 **out of scope** for this change (consistent with the existing code comment). We accept
 the orphan-handler tradeoff for now.
@@ -146,15 +149,32 @@ connect, `:322` on reconnect). Retrying the instant `_hub.State` flips to `Conne
 before re-registration completes — could race the server and surface as a `HubException`,
 which we'd then treat as a final deny. That reintroduces the very bug class we're fixing.
 
-So `ServerConnection` exposes readiness as **connected and registered**:
+So `ServerConnection` exposes readiness as **connected and registered**, with the flag
+logic isolated in a tiny testable seam rather than scattered as a raw field:
 
-- Add a `volatile bool _registered` flag.
-- Set it `false` when the connection is lost — subscribe `_hub.Reconnecting` and reset at
-  the start of `OnClosed` — and `true` immediately after each successful
-  `RegisterDaemon()` (both in `ConnectWithRetryAsync` and `OnReconnected`).
-- `bool IsReady => _hub.State == HubConnectionState.Connected && _registered;`
+```csharp
+sealed class RegistrationGate {
+    volatile bool _registered;
+    public void OnConnectionLost() => _registered = false;
+    public void OnRegistered()     => _registered = true;
+    public bool IsReady(HubConnectionState state) =>
+        state == HubConnectionState.Connected && _registered;
+}
+```
 
-The helper receives `() => IsReady` as its `isReady` delegate. This is the same
+Wiring in `ServerConnection`:
+
+- Call `_gate.OnRegistered()` **inside `RegisterDaemon()` on success** — the single exit
+  point covers *every* caller (`ConnectWithRetryAsync`, `OnReconnected`, and the
+  heartbeat's `ReRegisterAsync`), so no path can complete registration without flipping
+  the flag.
+- Call `_gate.OnConnectionLost()` when the connection drops: subscribe `_hub.Reconnecting`
+  and also reset at the start of `OnClosed`. This closes the window where `_hub.State`
+  has flipped to `Connected` (auto-reconnect's `Reconnected`) but `OnReconnected`'s
+  `RegisterDaemon()` has not yet re-run.
+- `bool IsReady => _gate.IsReady(_hub.State);`
+
+The retry helper receives `() => IsReady` as its `isReady` delegate. This is the same
 "connected + registered" point already signaled by `OnReconnectedCallback`, expressed as
 a pollable predicate for the retry loop.
 
@@ -208,9 +228,19 @@ Unit tests against the helper with fakes (`isReady` delegate + a scripted `invok
    `isReady` already returns `true` → after the poll delay it re-invokes and succeeds
    (no spin, no deny).
 
-`ServerConnection` readiness wiring (`_registered` flag transitions) is covered
-indirectly; a focused test is added if the flag is extracted into a testable seam,
-otherwise it is exercised via the helper tests above using the `isReady` delegate.
+Focused unit tests on `RegistrationGate` (the helper tests above only validate a
+*supplied* `isReady` delegate and would not catch mis-wiring of the real flag, so the
+gate needs its own coverage):
+
+7. **Not ready until registered** — fresh gate with `state = Connected` →
+   `IsReady` is `false`; after `OnRegistered()` → `true`.
+8. **Connection loss clears readiness** — after `OnRegistered()`, `OnConnectionLost()`
+   makes `IsReady` `false` even when `state` is still reported `Connected` (the
+   `Reconnected`-before-`RegisterDaemon` window).
+9. **Disconnected state is never ready** — `state = Reconnecting`/`Disconnected` →
+   `IsReady` is `false` regardless of the registered flag.
+10. **Re-registration restores readiness** — `OnConnectionLost()` then `OnRegistered()`
+    (the `ReRegisterAsync`/`OnReconnected` path) → `IsReady` is `true` again.
 
 Existing `LocalPermissionBridgeTests` remain green (they mock `RequestPermissionAsync`
 and never exercise the helper), including `ServerFailureFallsBackToDeny`.
