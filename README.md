@@ -422,6 +422,17 @@ KCAP_CLAUDE_PATH=/opt/claude/bin/claude kcap daemon
 KCAP_CODEX_PATH=/opt/codex/bin/codex  kcap daemon
 ```
 
+#### Daemon log verbosity
+
+The daemon logs at `Information` by default. Raise the level for transport diagnostics — for example, per-tick `DaemonPing` round-trip times (logged at `Debug`) are useful for telling whether SignalR reconnects are caused by network/proxy latency. Set it either way:
+
+```bash
+kcap daemon start --log-level debug        # foreground or with -d; forwarded to the daemon
+KCAP_DAEMON_LOG_LEVEL=debug kcap daemon    # env var; read directly, works in any launch mode (service, container)
+```
+
+Accepted values: `trace`, `debug`, `information` (default), `warning`, `error`, `critical`, `none`. The `--log-level` flag wins over the env var when both are set. `Debug` is verbose — it also enables the SignalR client's framework logs — so use it for a diagnostic window rather than steady state.
+
 ### Repository paths
 
 Manage known repo paths for the agent launch dialog. Repos are automatically added when agents are launched, but you can also manage the list manually:
