@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -120,13 +121,69 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _hub.On<FindRepoForRemoteRequest, string[]>("FindRepoForRemote",
             req => FindRepoForRemoteHandler?.Invoke(req) ?? Task.FromResult(Array.Empty<string>()));
 
+        RegisterUiBroadcastSinks();
+
         _hub.Reconnected += OnReconnected;
         _hub.Closed      += OnClosed;
+
+        _terminalSender = new TerminalOutputSender(
+            (agentId, base64, ct) => _hub.SendAsync("SendTerminalOutput", new TerminalOutput(agentId, base64), ct),
+            isConnected: () => _hub.State == HubConnectionState.Connected,
+            logger
+        );
+    }
+
+    /// <summary>
+    /// Registers no-op client handlers for the UI-only broadcasts a daemon can
+    /// receive on its hub connection (AI-841). The server adds every
+    /// authenticated connection — daemons included — to its <c>org-members</c>
+    /// UI group in <c>CapacitorHub.OnConnectedAsync</c>, and only removes the
+    /// daemon again inside <c>DaemonConnect</c>. In the window between the
+    /// WebSocket connecting and <c>DaemonConnect</c> completing — which recurs on
+    /// every (re)connect — the daemon receives these broadcasts with no matching
+    /// handler, and SignalR's <c>JsonHubProtocol</c> logs a "Failed to find
+    /// handler" warning plus an argument-bind failure for each one ("Invocation
+    /// provides N argument(s) but target expects 0"). Registering sinks at the
+    /// server's current arities, with <see cref="JsonElement"/> parameters that
+    /// bind to any payload shape, silences the flood even against an
+    /// already-deployed server. The permanent fix is server-side: never add a
+    /// daemon connection to the UI group in the first place.
+    /// </summary>
+    void RegisterUiBroadcastSinks() {
+        static Task Sink() => Task.CompletedTask;
+
+        _hub.On("AgentInstancesChanged", Sink);
+        _hub.On("DaemonsChanged",        Sink);
+        _hub.On("WelcomeStateChanged",   Sink);
+
+        _hub.On<JsonElement>("ActiveSessionAdded",   _ => Sink());
+        _hub.On<JsonElement>("ActiveSessionChanged", _ => Sink());
+        _hub.On<JsonElement>("ActiveSessionRemoved", _ => Sink());
+
+        _hub.On<JsonElement, JsonElement>("LaunchFailed",        (_, _) => Sink());
+        _hub.On<JsonElement, JsonElement>("PermissionResponded", (_, _) => Sink());
+
+        _hub.On<JsonElement, JsonElement, JsonElement, JsonElement, JsonElement>(
+            "PermissionRequested", (_, _, _, _, _) => Sink());
     }
 
     CancellationToken _ct;
     volatile bool     _disposed;
     Task?             _eventProcessorTask;
+
+    readonly TerminalOutputSender    _terminalSender;
+    Task?                            _terminalSenderTask;
+    CancellationTokenSource?         _terminalSenderCts;
+
+    /// <summary>
+    /// <see cref="Stopwatch.GetTimestamp"/> taken each time the hub reaches a
+    /// connected+registered state. Logged as connection uptime in
+    /// <see cref="OnClosed"/> so the daemon log shows how long each connection
+    /// survived — the cadence that distinguishes a steady transport from one
+    /// flapping every few seconds (AI-840 diagnostics). Zero until the first
+    /// successful connect.
+    /// </summary>
+    long _connectedTimestamp;
 
     /// <summary>
     /// Sentinel prefix the server (<c>DaemonRegistry.NameInUseErrorCode</c>)
@@ -153,6 +210,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public async Task ConnectAsync(CancellationToken ct) {
         _ct                 = ct;
         _eventProcessorTask = ProcessEventQueueAsync(ct);
+        // Linked to ct but separately cancellable so DisposeAsync can stop the
+        // sender even if the caller's token never fires — otherwise a chunk held
+        // through an outage could block disposal.
+        _terminalSenderCts  = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _terminalSenderTask = _terminalSender.RunAsync(_terminalSenderCts.Token);
         await ConnectWithRetryAsync(ct);
     }
 
@@ -165,6 +227,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 LogConnecting(_config.ServerUrl);
                 await _hub.StartAsync(ct);
                 await RegisterDaemon();
+                _connectedTimestamp = Stopwatch.GetTimestamp();
                 LogConnected(_config.Name);
 
                 return;
@@ -194,7 +257,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             return;
         }
 
-        LogConnectionClosed(ex);
+        var uptimeSeconds = _connectedTimestamp == 0 ? 0 : Stopwatch.GetElapsedTime(_connectedTimestamp).TotalSeconds;
+        LogConnectionClosed(ex, uptimeSeconds);
 
         try {
             await ConnectWithRetryAsync(_ct);
@@ -256,6 +320,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     async Task OnReconnected(string? connectionId) {
         LogReconnected();
         await RegisterDaemon();
+        _connectedTimestamp = Stopwatch.GetTimestamp();
         OnReconnectedCallback?.Invoke();
     }
 
@@ -375,8 +440,18 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             ct
         );
 
-    public virtual Task SendTerminalOutputAsync(string agentId, string base64Data)
-        => _hub.SendAsync("SendTerminalOutput", new TerminalOutput(agentId, base64Data), cancellationToken: _ct);
+    /// <summary>
+    /// Queues a base64 PTY chunk for the hosted-agent terminal mirror. AI-842:
+    /// chunks are drained by <see cref="TerminalOutputSender"/>'s single ordered
+    /// loop instead of being fired at <c>SendAsync</c> fire-and-forget, so they
+    /// reach the server in PTY order and a chunk sent while the transport is down
+    /// is held and retried rather than silently lost mid-escape-sequence.
+    /// </summary>
+    public virtual Task SendTerminalOutputAsync(string agentId, string base64Data) {
+        _terminalSender.Enqueue(agentId, base64Data);
+
+        return Task.CompletedTask;
+    }
 
     // ── Eval progress events (DEV-1440) ────────────────────────────────────
 
@@ -484,11 +559,23 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public async ValueTask DisposeAsync() {
         _disposed = true;
         _eventChannel.Writer.TryComplete();
+        _terminalSender.Complete();
 
         if (_eventProcessorTask is not null) {
             await _eventProcessorTask;
         }
 
+        // Cancel the sender's own token so a chunk being held through an outage
+        // can't block disposal regardless of the caller's token state.
+        if (_terminalSenderCts is not null) {
+            await _terminalSenderCts.CancelAsync();
+        }
+
+        if (_terminalSenderTask is not null) {
+            await _terminalSenderTask;
+        }
+
+        _terminalSenderCts?.Dispose();
         _httpClient?.Dispose();
         await _hub.DisposeAsync();
     }
@@ -505,8 +592,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     [LoggerMessage(Level = LogLevel.Warning, Message = "Connection attempt {Attempt} failed, retrying in {Delay}s")]
     partial void LogConnectionAttemptFailed(Exception ex, int attempt, int delay);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "SignalR connection closed, will reconnect")]
-    partial void LogConnectionClosed(Exception? ex);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "SignalR connection closed after {UptimeSeconds:F1}s uptime, will reconnect")]
+    partial void LogConnectionClosed(Exception? ex, double uptimeSeconds);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Reconnected to server, re-registering daemon")]
     partial void LogReconnected();

@@ -15,6 +15,10 @@ Options for start:
   --server-url <url>      Server URL
   --max-agents <n>        Max concurrent hosted coding agents (default: 5)
   --log-file <path>       Log to file instead of console
+  --log-level <level>     Log verbosity: trace|debug|information|warning|error|
+                          critical|none (default: information). Also settable via
+                          KCAP_DAEMON_LOG_LEVEL; the flag wins when both are set.
+                          Use debug for transport diagnostics (e.g. DaemonPing RTT).
   -d, --detach            Run in background (logs to file automatically)
 
 Options for stop:
