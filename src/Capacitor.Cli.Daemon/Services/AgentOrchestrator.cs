@@ -91,6 +91,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     static readonly TimeSpan PingDeadline = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// How long <see cref="FinalizeAgentRunAsync"/> waits on the (reconnect-retrying)
+    /// EndAgentSession call before proceeding with local cleanup regardless. Covers a
+    /// typical transient SignalR blip with margin; a longer outage proceeds to cleanup
+    /// while the retry continues in the background. Settable so tests don't wait 30s.
+    /// </summary>
+    internal TimeSpan EndAgentSessionBudget { get; set; } = TimeSpan.FromSeconds(30);
+
     // Linked to IHostApplicationLifetime.ApplicationStopping so the shutdown gate
     // trips as soon as the host begins stopping — the same instant ServerConnection's
     // _ct (also ApplicationStopping) cancels SignalR calls. Otherwise there's a
@@ -526,12 +534,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // its own session-end hook on SIGTERM/exit, so without this call the
             // session would stay "active" forever in the read model. Server-side is
             // idempotent — if claude did fire session-end first, this is a no-op.
-            // Reason is read from agent.PendingEndReason so that if HandleStopAgent's
-            // own call failed (transient SignalR error) and this finally-block call
-            // is the one that lands, a user-initiated stop is still recorded as
-            // "agent_stopped" rather than "agent_exited".
+            // Reason is read from agent.PendingEndReason so a user-initiated stop is
+            // recorded as "agent_stopped" rather than "agent_exited".
+            //
+            // EndAgentSessionAsync retries across SignalR reconnects, so it can block
+            // for the length of an outage. We must NOT let that stall local cleanup
+            // (worktree/process disposal, removing the agent from _agents), so bound how
+            // long we WAIT on it to EndAgentSessionBudget. The retry keeps running in the
+            // background — a reconnect shortly after still lands the session-end — and a
+            // genuinely long outage falls back to server-side daemon-disconnect reconcile.
+            var endTask = _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
+
             try {
-                var result = await _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
+                var result = await endTask.WaitAsync(EndAgentSessionBudget, _shutdownCts.Token);
 
                 // The daemon doesn't track sessionId on its own (only agentId), so
                 // the server returns it in the result. Spawn what's-done locally
@@ -539,14 +554,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (result is { GenerateWhatsDone: true, SessionId: not null }) {
                     SpawnWhatsDoneGenerator(result.SessionId);
                 }
+            } catch (TimeoutException) {
+                // Outage outlasted the budget. Don't block cleanup; the retry continues
+                // in the background (observed below so a later fault isn't unobserved).
+                LogEndSessionTimedOut(agent.Id, EndAgentSessionBudget.TotalSeconds);
+                ObserveEndSessionInBackground(endTask, agent.Id);
             } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) {
-                // Shutdown fired mid-call — connection is being torn down. Server
+                // Shutdown fired mid-wait — connection is being torn down. Server
                 // detects daemon disconnection independently. No warning needed.
             } catch (Exception ex) {
                 LogEndSessionFailed(ex, agent.Id);
             }
 
-            // Clean up worktree and unregister from server
+            // Clean up worktree and unregister from server. Runs unconditionally — even
+            // when end-session timed out and is still retrying in the background — so a
+            // prolonged outage can never pin the agent in _agents or leak its worktree.
             await CleanupAgentAsync(agent.Id);
         } catch (Exception ex) {
             LogCleanupError(ex, agent.Id);
@@ -621,6 +643,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             LogStopError(ex, agentId);
         }
     }
+
+    /// <summary>
+    /// Observes a background EndAgentSession retry that outlived the finalize budget so a
+    /// later fault isn't an unobserved task exception. Success and shutdown-cancellation
+    /// are intentionally ignored; only a genuine fault is logged.
+    /// </summary>
+    void ObserveEndSessionInBackground(Task<EndAgentSessionResult> endTask, string agentId) =>
+        _ = endTask.ContinueWith(
+            t => LogEndSessionFailed(t.Exception!.GetBaseException(), agentId),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
 
     /// <summary>
     /// Spawns <c>kcap generate-whats-done {sessionId}</c> as a detached process.
@@ -1011,6 +1046,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to end session for agent {AgentId} (server may not record SessionEnded)")]
     partial void LogEndSessionFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "EndAgentSession for agent {AgentId} did not complete within {Seconds}s; proceeding with cleanup while the retry continues in the background (server reconciles on daemon disconnect)")]
+    partial void LogEndSessionTimedOut(string agentId, double seconds);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Spawned what's-done generator for session {SessionId} (PID {Pid})")]
     partial void LogWhatsDoneSpawned(string sessionId, int pid);

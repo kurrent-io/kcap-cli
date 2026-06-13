@@ -372,7 +372,73 @@ public class AgentOrchestratorVendorTests {
         }
     }
 
+    [Test]
+    public async Task Cleanup_runs_even_when_end_session_never_recovers() {
+        // Qodo: EndAgentSession now retries across reconnects, so it can block for a whole
+        // outage. FinalizeAgentRunAsync must not stall local cleanup on it — it waits only
+        // up to EndAgentSessionBudget, then proceeds to CleanupAgentAsync (which unregisters
+        // the agent) while the retry continues in the background. Here end-session never
+        // recovers, yet cleanup must still run.
+        var (repoPath, cleanup) = CreateGitRepo();
+        using var neverRecovers = new CancellationTokenSource();
+
+        try {
+            var unregistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var server = new CaptureServerConnection {
+                EndSessionBlockUntil = neverRecovers,                  // end-session blocks for the whole test
+                OnAgentUnregistered  = () => unregistered.TrySetResult() // fires when cleanup completes
+            };
+            var ptyFactory = new FixedPtyProcessFactory(new ImmediateExitPtyProcess());
+            var launchers  = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") };
+
+            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+            orch.EndAgentSessionBudget = TimeSpan.FromMilliseconds(250); // don't wait the real 30s in a test
+
+            await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+                AgentId: "agent-x",
+                Prompt: "go",
+                Model: "opus",
+                Effort: null,
+                RepoPath: repoPath,
+                Tools: null,
+                AttachmentIds: null,
+                Vendor: "claude"
+            ));
+
+            // The PTY exits immediately → the read loop ends → FinalizeAgentRunAsync runs.
+            // End-session blocks (never recovers), but cleanup must still run after the budget.
+            await unregistered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        } finally {
+            neverRecovers.Cancel(); // release the background end-session task
+            cleanup();
+        }
+    }
+
     // ── Test doubles ─────────────────────────────────────────────────────
+
+    /// <summary>PTY that has already exited and produces no output, so the read loop ends
+    /// immediately and FinalizeAgentRunAsync runs right after launch.</summary>
+    sealed class ImmediateExitPtyProcess : IPtyProcess {
+        public int  Pid       => 4244;
+        public bool HasExited => true;
+        public int? ExitCode  => 0;
+
+        public ValueTask DisposeAsync() => default;
+        public Task WaitForExitAsync(TimeSpan? _) => Task.CompletedTask;
+        public Task TerminateAsync(TimeSpan?   _) => Task.CompletedTask;
+
+#pragma warning disable CS1998
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken _ = default) {
+            yield break;
+        }
+#pragma warning restore CS1998
+
+        public Task WriteAsync(string _) => Task.CompletedTask;
+        public Task WriteAsync(byte[] _) => Task.CompletedTask;
+        public void Resize(ushort     _, ushort __) { }
+        public void SendInterrupt() { }
+    }
 
     /// <summary>
     /// PTY that reports already-exited (so HandleStopAgent's graceful window is instant)
@@ -550,8 +616,15 @@ public class AgentOrchestratorVendorTests {
         public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId)
             => Task.CompletedTask;
 
-        public override Task AgentUnregisteredAsync(string agentId)
-            => Task.CompletedTask;
+        /// <summary>Invoked when AgentUnregisteredAsync runs — the last step of
+        /// CleanupAgentAsync, so a useful signal that local cleanup completed.</summary>
+        public Action? OnAgentUnregistered { get; init; }
+
+        public override Task AgentUnregisteredAsync(string agentId) {
+            OnAgentUnregistered?.Invoke();
+
+            return Task.CompletedTask;
+        }
 
         public override Task UpdateRepoPathsAsync()
             => Task.CompletedTask;
