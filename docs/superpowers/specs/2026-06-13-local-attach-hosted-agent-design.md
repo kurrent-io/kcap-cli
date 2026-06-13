@@ -72,8 +72,9 @@ kcap ls
 | Transport | **Hybrid.** Local terminal over a new local socket; teammates + continue-remotely over existing SignalR. |
 | Server dependency | **Phase 1 adds no new server *contract*, but is not offline.** The daemon still requires `ServerUrl` + a SignalR connection at startup exactly as today; local attach rides alongside it. True offline-daemon operation is a possible later enhancement, not in scope. |
 | Remote control (Phase 2) | **Write by default once shared**, mirroring current hosted-agent run permissions. Observe-only is served by the existing read-only session-sharing path, not by attach. |
-| Resize | **Clamp the one PTY to the smallest attached client** (tmux semantics); no last-writer fighting. |
-| Terminal stream | **Lossless per sink.** Never `DropOldest`; a sink that overflows is force-detached and replays on rejoin (see plumbing). |
+| Resize | **Min-clamp the PTY across attached *local* clients** (tmux semantics) in Phase 1; clamping web clients too needs a Phase 2 server-side resize contract (SignalR has only one agent-level resize today). |
+| Terminal stream | **No silent partial-stream corruption.** Never `DropOldest`; an overflowing sink is force-detached and re-syncs via a clean replay on rejoin (bounded by the 2 MB `OutputBuffer`) rather than rendering a corrupted partial stream (see plumbing). |
+| Vendor passthrough | **Launcher-agnostic.** Part of the `IHostedAgentLauncher` contract; both `run-agent claude` and `run-agent codex` work in v1. |
 
 ### Out of scope (explicitly deferred / rejected)
 
@@ -125,9 +126,9 @@ connects to it over the local socket. The daemon still requires `ServerUrl` + Si
 start (`DaemonConfig.Validate` `DaemonConfig.cs:58`, gated at `DaemonRunner.cs:122`;
 `ConnectAsync` at `DaemonRunner.cs:244`), so `run-agent` is **not** an offline command and
 is **not** added to the `offlineCommands` list. `--worktree` is consumed by kcap (never
-forwarded). Args after `--` flow into a **new passthrough branch** of
-`ClaudeLauncher.BuildArgs` (`src/Capacitor.Cli.Daemon/Services/ClaudeLauncher.cs:57`),
-distinct from the existing structured server-request branch in the same method.
+forwarded). Args after `--` are forwarded verbatim via a **launcher-agnostic passthrough contract**
+on `IHostedAgentLauncher` (see *Vendor passthrough* under Plumbing), not by re-deriving
+each flag — so `run-agent codex -- …` works too, not just Claude.
 
 ## Plumbing
 
@@ -166,7 +167,7 @@ alongside the PID/lock files in the existing daemon-file lifecycle.
 
 1. **Socket listener** — a new hosted service that accepts local connections, parses
    frames, and routes them to `AgentOrchestrator`. This is the only net-new subsystem.
-2. **N-client output fan-out (lossless per sink)** — `ReadAgentOutputAsync`
+2. **N-client output fan-out (per sink, no partial-stream corruption)** — `ReadAgentOutputAsync`
    (`AgentOrchestrator.cs:431`) currently calls `SendTerminalOutputAsync` for the single
    web sink. Refactor to push each PTY chunk to a **list of registered sinks**: the
    SignalR sink (existing `TerminalOutputSender`) plus zero or more local-socket sinks.
@@ -175,14 +176,16 @@ alongside the PID/lock files in the existing daemon-file lifecycle.
    silently discarded chunks under back-pressure and desynced Claude's cursor-addressing
    redraw stream (AI-844), so it now uses `BoundedChannelFullMode.Wait`. The per-client
    design must hold two things at once:
-   - **No silent byte loss** — a sink at capacity must not discard terminal bytes.
+   - **No silent partial-stream corruption** — a sink must never render a stream with a
+     hole in it; one dropped or reordered chunk desyncs every later repaint.
    - **No cross-client coupling** — one slow/stalled sink must not stall the shared PTY
      read loop (and thus the agent and every *other* client), which is exactly what
      naive `Wait` back-pressure on a shared producer would cause.
    Resolution: the fan-out enqueue is **non-blocking per sink**; when a single sink's
    bounded queue overflows, that **one client is force-detached and marked dirty**, and on
-   reattach it gets a fresh `OutputBuffer` replay + repaint — recovering losslessly from a
-   clean frame rather than consuming a corrupted partial stream. Other sinks and the PTY
+   reattach it gets a fresh `OutputBuffer` replay + repaint — re-syncing from a clean frame
+   (bounded by the 2 MB `OutputBuffer`: a long stall may lose scrollback, but the live view
+   is never corrupted) rather than consuming a partial stream. Other sinks and the PTY
    loop are unaffected. (Implementation-plan detail: whether the existing web/SignalR sink
    keeps its current agent-back-pressure-on-tunnel-stall behaviour or also adopts
    force-detach is settled in the Phase 1 plan, biased toward **not** coupling local
@@ -192,26 +195,44 @@ alongside the PID/lock files in the existing daemon-file lifecycle.
    arbitration, all writers hit the one master fd. Raw local Ctrl-C flows through as byte
    `0x03`; the PTY line discipline turns it into SIGINT for the agent (no special
    handling, unlike the web `SendInterrupt` path). **Resize is the exception to
-   free-for-all:** each client reports its own dimensions and the daemon sets the one PTY
-   to the **smallest cols × smallest rows across all attached clients** (tmux semantics)
-   via `Resize` (`:786`), re-clamped on every attach/detach/resize. Last-writer-wins would
-   let a large web viewer and a small local terminal fight and corrupt each other's
-   redraw; min-clamp keeps every attached client's view valid.
-4. **Local-launch path + owned-vs-borrowed cwd** — a `Spawn` frame runs the same
-   orchestrator launch the server uses (vendor `Prepare()`, `forkpty`), differing in two
-   ways: a **passthrough** `LaunchArgs` from the verbatim args, and an explicit
-   **work-location kind** on the agent:
-   - `--worktree` → an **owned worktree** the daemon created (safe to remove on cleanup,
-     exactly as today).
-   - default in-place → a **borrowed cwd** the user owns.
+   free-for-all.** In **Phase 1** the daemon min-clamps the PTY to the smallest cols ×
+   rows across the **local socket clients** (each reports its dimensions via `Resize`,
+   re-clamped on attach/detach/resize) — tmux semantics, so two local terminals of
+   different sizes don't corrupt each other. The existing web `ResizeTerminal` (`:786`)
+   stays agent-level as today. **Phase 2 caveat:** SignalR carries only one agent-level
+   `ResizeTerminalCommand` (`ServerConnection.cs:29,102`) with no per-web-client
+   attach/dimensions, so clamping local *and* web together needs server-side aggregate
+   dimensions or a new per-client resize contract — tracked under Phase 2, not assumed here.
+4. **Local-launch path: passthrough, work-location, server-privacy** — a `Spawn` frame
+   runs the orchestrator launch (vendor `Prepare()`, `forkpty`) with three deviations from
+   the server path:
+   - **Passthrough args** — `LaunchArgs` from the verbatim post-`--` args (see *Vendor
+     passthrough*), not structured fields.
+   - **Work-location kind** — `--worktree` → an **owned worktree** the daemon created (safe
+     to remove on cleanup, as today); default in-place → a **borrowed cwd the user owns**.
+     For a borrowed cwd, vendor `Prepare()` MUST skip its repo-mutating steps — it must not
+     write into the user's checkout or global vendor config. Today `Prepare()` overlays
+     settings, writes `.mcp.json`, edits `.claude/settings.local.json` + `~/.claude.json`
+     trust (`ClaudeLauncher.cs:37,43,325`), and for Codex overlays `.codex`, enforces
+     hooks, and trusts the cwd in `~/.codex/config.toml` (`CodexLauncher.cs:18-54`) — all
+     to make a *fresh worktree* mirror the source repo. The user's own checkout is already
+     a trusted, configured repo, so the only allowed pre-launch effects for a borrowed cwd
+     are read-only/idempotent ones (e.g. Codex's hooks preflight *check*, which fails fast
+     without writing). A test asserts an in-place launch creates/modifies no repo or
+     global-config files.
+   - **Private-local server state** — a locally-launched agent starts **`PrivateLocal`**:
+     the orchestrator suppresses *all* server interaction — no `AgentRegisteredAsync`
+     (`AgentOrchestrator.cs:327`), no run-started/status events (`:329`), no
+     `SendTerminalOutputAsync` (`:455`), no `AgentUnregisteredAsync`. The SignalR sink is
+     simply **not attached** to this agent's fan-out; the agent exists only on the local
+     socket until an explicit share (Phase 2) transitions it.
    `CleanupAgentAsync` (`AgentOrchestrator.cs:888`) today unconditionally calls
-   `WorktreeManager.RemoveAsync(agent.Worktree)` (`:900`), which does
-   `Directory.Delete(path, recursive)` for a standalone worktree or `git worktree remove
-   --force` + `git branch -D` otherwise (`WorktreeManager.cs:54-67`). **For a borrowed cwd
-   that is catastrophic** — it would delete the user's working directory and branch on
-   agent exit. Cleanup MUST skip all worktree/branch removal for borrowed-cwd agents and
-   only ever remove daemon-owned worktrees. This is the single most important safety
-   invariant in the design and has an explicit test (below).
+   `WorktreeManager.RemoveAsync(agent.Worktree)` (`:900`) — `Directory.Delete(path,
+   recursive)` for standalone or `git worktree remove --force` + `git branch -D` otherwise
+   (`WorktreeManager.cs:54-67`). **For a borrowed cwd that is catastrophic** — it would
+   delete the user's working directory and branch on exit. Cleanup MUST skip all
+   worktree/branch removal for borrowed-cwd agents. This is the top safety invariant, with
+   an explicit test (below).
 5. **Conditional env handling** — `UnixPtyProcess.Spawn` currently scrubs
    `ANTHROPIC_API_KEY` and unsets `CLAUDECODE`/`CLAUDE_CODE_ENTRYPOINT`
    (`UnixPtyProcess.cs:58`). That is correct for headless hosted launches but wrong for
@@ -219,11 +240,13 @@ alongside the PID/lock files in the existing daemon-file lifecycle.
    auth. Env scrubbing becomes **conditional on launch type** (headless-hosted vs
    local-interactive). This interacts with the provider-API-key-scrub policy
    (`ProviderApiKeyPolicy` / `KCAP_USE_PROVIDER_API_KEY`).
-6. **Server-announce (Phase 2 only)** — so teammates see a locally-started agent in the
-   web UI, the daemon registers it with the server as if it were server-initiated.
-   Today launches flow server→daemon; this adds a daemon→server "I started agent X"
-   registration. **This is the one place the server contract changes**, which is why it
-   is deferred to Phase 2.
+6. **Share = `PrivateLocal`→`Shared` transition (Phase 2 only)** — an explicit `kcap
+   share` flips the agent from `PrivateLocal` to `Shared`: it attaches the SignalR sink,
+   runs the deferred `AgentRegisteredAsync` + run-started event, and begins streaming, so
+   teammates see the agent in the web UI as if it were server-initiated. Today launches
+   flow server→daemon; this adds a daemon→server "I started agent X" registration. **This
+   is the one place the server contract changes** — which, with all web involvement, is why
+   it is deferred to Phase 2.
 
 ### c) Local terminal client (`kcap run-agent` / `kcap attach`)
 
@@ -242,6 +265,24 @@ A thin foreground process — the dumb-pipe end of the socket:
 5. **Replay + repaint on attach** — render the `Attached` buffer snapshot, then send one
    `Resize` to nudge the TUI's alternate-screen buffer to repaint cleanly (raw scrollback
    replay alone can leave cursor artifacts; a resize-triggered repaint is the cheap fix).
+
+### d) Vendor passthrough (launcher-agnostic)
+
+`<vendor>` is generic, so passthrough is part of the `IHostedAgentLauncher` contract — not
+Claude-specific. Today `ClaudeLauncher.BuildArgs` (`ClaudeLauncher.cs:57`) and
+`CodexLauncher.BuildArgs` (`CodexLauncher.cs:56`) each *construct* argv from structured
+server fields. Add a passthrough mode each launcher implements: emit only the **mandatory
+daemon-level flags** the launcher must always set, then append the user's verbatim
+post-`--` args.
+
+- **Claude** — nothing mandatory (cwd is set via `forkpty` chdir); append verbatim.
+- **Codex** — must still inject `--cd <cwd>` and `--no-alt-screen` (the terminal mirror and
+  buffer replay depend on the primary screen) and run its hooks preflight in `Prepare()`;
+  its sandbox/approval defaults are emitted unless the user overrides them in the verbatim
+  args.
+
+Conflict policy: a user-supplied flag that collides with a non-mandatory daemon default
+wins; the mandatory flags (`--cd`, `--no-alt-screen`) are always enforced.
 
 ## Lifecycle & edge cases
 
@@ -287,7 +328,8 @@ A thin foreground process — the dumb-pipe end of the socket:
 ## Phasing
 
 - **Phase 1 — "tmux for your agent" (no web involvement, no new server contract).** Local
-  socket + framing, daemon N-client fan-out refactor (lossless per sink), resize
+  socket + framing, daemon N-client fan-out refactor (per-sink, no partial-stream
+  corruption), resize
   min-clamp, `run-agent`/`attach`/`ls`, raw-mode client, detach/reattach, persistence, the
   **owned-vs-borrowed cleanup guard**, conditional env handling. Delivers: start local →
   detach → reattach → survives terminal close. The daemon still connects to the server as
@@ -303,14 +345,21 @@ A thin foreground process — the dumb-pipe end of the socket:
 ## Testing
 
 - **Unit:** frame codec round-trips; N-client fan-out (a slow/dead sink is force-detached
-  and replays on rejoin — **never drops bytes and never stalls the shared PTY loop or
-  other sinks**); resize min-clamp across two clients with different dimensions;
-  detach-sequence scanner (including a prefix split across reads); passthrough arg
-  assembly + `--worktree` consumption.
-- **Cleanup safety (the critical one):** an in-place (borrowed-cwd) agent exiting — and
-  daemon `DisposeAsync` — leaves the user's cwd **and** its git branch fully intact (no
-  `Directory.Delete`, no `git worktree remove`, no `git branch -D`); conversely an
-  owned-worktree agent is still cleaned up exactly as today.
+  and re-syncs via clean replay on rejoin — **never renders a corrupted partial stream and
+  never stalls the shared PTY loop or other sinks**; replay bounded by the 2 MB
+  `OutputBuffer`); resize min-clamp across two *local* clients of different dimensions;
+  detach-sequence scanner (including a prefix split across reads); launcher-agnostic
+  passthrough assembly for **both** Claude and Codex (incl. Codex's mandatory `--cd` /
+  `--no-alt-screen` injection) + `--worktree` consumption.
+- **In-place safety (the critical one):** for a borrowed-cwd agent, (a) `Prepare()` writes
+  **no** files into the user's checkout or global vendor config (`.mcp.json`,
+  `settings.local.json`, `~/.claude.json`, `~/.codex/config.toml` untouched), and (b) exit
+  + daemon `DisposeAsync` leave the cwd **and** its git branch fully intact (no
+  `Directory.Delete` / `git worktree remove` / `git branch -D`). Conversely an owned-
+  worktree agent is still prepared and cleaned up exactly as today.
+- **Privacy:** a `PrivateLocal` agent makes **zero** server calls (no `AgentRegistered`,
+  status, run events, terminal output, or unregister) across its whole lifecycle until an
+  explicit share; only after share do registration + streaming begin.
 - **Integration:** spawn a trivial PTY program (e.g. a tiny echo / `cat`) over the
   socket; assert stdin→stdout round-trip, resize, detach-leaves-running, and
   reattach-replays-buffer. TUnit + existing PTY test patterns.
