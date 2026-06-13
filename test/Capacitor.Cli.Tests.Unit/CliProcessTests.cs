@@ -12,10 +12,14 @@ public class CliProcessTests {
     // "process is null → return null" path instead of crashing the process.
     [Test]
     public async Task TryStart_MissingExecutable_ReturnsNullAndLogs() {
+        // Unique absolute path that cannot exist — deterministic ENOENT on every
+        // OS, independent of the test host's PATH and free of collisions with any
+        // pre-existing temp file.
+        var missing = Path.Combine(Path.GetTempPath(), $"kcap-nonexistent-binary-{Guid.NewGuid():N}");
+        await Assert.That(File.Exists(missing)).IsFalse();
+
         var psi = new ProcessStartInfo {
-            // Absolute path that cannot exist — deterministic ENOENT on every OS,
-            // independent of the test host's PATH.
-            FileName               = Path.Combine(Path.GetTempPath(), "kcap-nonexistent-binary-7f3a2b9c"),
+            FileName               = missing,
             UseShellExecute        = false,
             RedirectStandardOutput = true,
         };

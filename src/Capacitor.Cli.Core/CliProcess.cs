@@ -18,12 +18,20 @@ static class CliProcess {
     /// callers fall through their existing "process is null → return null"
     /// handling and exit gracefully.
     /// </para>
+    /// <para>
+    /// The catch is intentionally broad: the whole point is that no launch
+    /// failure — missing executable, denied permission, bad
+    /// <see cref="ProcessStartInfo"/> — may crash the CLI. Narrowing it to a
+    /// known subset would let an unanticipated launch exception escape and
+    /// re-introduce the abort. The exception type is logged so the distinct
+    /// failure modes the broad catch collapses stay diagnosable.
+    /// </para>
     /// </summary>
     internal static Process? TryStart(ProcessStartInfo psi, Action<string> log) {
         try {
             return Process.Start(psi);
         } catch (Exception ex) {
-            log($"Failed to start {psi.FileName}: {ex.Message}");
+            log($"Failed to start {psi.FileName}: {ex.GetType().Name}: {ex.Message}");
 
             return null;
         }
