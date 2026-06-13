@@ -42,7 +42,9 @@ kcap ls
   what makes "close the terminal, keep going, drive from the web" work — the terminal
   is an *attachable/detachable client*, never the owner.
 - The **local terminal** attaches over a **new local IPC socket** (low latency,
-  offline-capable, detach/reattach).
+  detach/reattach). The local socket is for *latency* — keystrokes don't round-trip
+  through the cloud — **not** an offline-operation claim; the daemon still requires
+  `ServerUrl` + SignalR as today (see *Server dependency* in the decisions table).
 - **Teammates / remote control** attach over the **existing SignalR** channel.
 - Both are interchangeable *clients* of one PTY: output is fanned to all of them,
   input is **merged with no arbitration (free-for-all)**, and a newly-attached client
@@ -68,10 +70,17 @@ kcap ls
 | Arg passing | **Thin-wrapper passthrough** with a `--` boundary. kcap flags before `--`; everything after is handed to the agent CLI verbatim. |
 | Concurrent input | **Free-for-all.** All clients' input feeds the one PTY master; humans coordinate socially (like pairing in tmux). No driver lock. |
 | Transport | **Hybrid.** Local terminal over a new local socket; teammates + continue-remotely over existing SignalR. |
+| Server dependency | **Phase 1 adds no new server *contract*, but is not offline.** The daemon still requires `ServerUrl` + a SignalR connection at startup exactly as today; local attach rides alongside it. True offline-daemon operation is a possible later enhancement, not in scope. |
+| Remote control (Phase 2) | **Write by default once shared**, mirroring current hosted-agent run permissions. Observe-only is served by the existing read-only session-sharing path, not by attach. |
+| Resize | **Clamp the one PTY to the smallest attached client** (tmux semantics); no last-writer fighting. |
+| Terminal stream | **Lossless per sink.** Never `DropOldest`; a sink that overflows is force-detached and replays on rejoin (see plumbing). |
 
 ### Out of scope (explicitly deferred / rejected)
 
 - **Driver-lock / turn-taking / request-control.** Free-for-all chosen for v1.
+- **Offline-daemon mode (no `ServerUrl`).** The daemon still requires the server at
+  startup exactly as today; running fully cloud-less is a possible later enhancement, not
+  this design.
 - **Cross-machine local attach.** The agent runs on *your* daemon; the only "remote"
   control is the web/SignalR path. There is no local socket across machines.
 - **A server-side screen model for pixel-perfect replay.** Raw `OutputBuffer` replay
@@ -110,12 +119,15 @@ kcap run-agent claude --worktree -- --model opus --resume "fix the bug"
        └─ kcap ─┘  └────── verbatim to the `claude` CLI ──────┘
 ```
 
-`run-agent` joins the top-level command switch in `src/Capacitor.Cli/Program.cs` and
-the `offlineCommands` list (`Program.cs:70`) — it ensures a *local* daemon and does not
-itself require the cloud. `--worktree` is consumed by kcap (never forwarded). Args after
-`--` flow into a **new passthrough branch** of `ClaudeLauncher.BuildArgs`
-(`src/Capacitor.Cli.Daemon/Services/ClaudeLauncher.cs:57`), distinct from the existing
-structured server-request branch in the same method.
+`run-agent` joins the top-level command switch in `src/Capacitor.Cli/Program.cs`. It
+ensures a daemon is running for the resolved name (auto-starting one if needed) and
+connects to it over the local socket. The daemon still requires `ServerUrl` + SignalR to
+start (`DaemonConfig.Validate` `DaemonConfig.cs:58`, gated at `DaemonRunner.cs:122`;
+`ConnectAsync` at `DaemonRunner.cs:244`), so `run-agent` is **not** an offline command and
+is **not** added to the `offlineCommands` list. `--worktree` is consumed by kcap (never
+forwarded). Args after `--` flow into a **new passthrough branch** of
+`ClaudeLauncher.BuildArgs` (`src/Capacitor.Cli.Daemon/Services/ClaudeLauncher.cs:57`),
+distinct from the existing structured server-request branch in the same method.
 
 ## Plumbing
 
@@ -135,7 +147,7 @@ types:
 
 | Direction | Frame | Payload |
 |---|---|---|
-| client→daemon | `Spawn` | vendor, worktree-or-in-place, cwd, verbatim agent args, initial cols/rows |
+| client→daemon | `Spawn` | vendor, work-location kind (owned-worktree \| borrowed-cwd), cwd, verbatim agent args, initial cols/rows |
 | client→daemon | `Attach` | agentId |
 | client→daemon | `Stdin` | raw bytes |
 | client→daemon | `Resize` | cols, rows |
@@ -154,22 +166,52 @@ alongside the PID/lock files in the existing daemon-file lifecycle.
 
 1. **Socket listener** — a new hosted service that accepts local connections, parses
    frames, and routes them to `AgentOrchestrator`. This is the only net-new subsystem.
-2. **N-client output fan-out** — `ReadAgentOutputAsync` (`AgentOrchestrator.cs:431`)
-   currently calls `SendTerminalOutputAsync` for the single web sink. Refactor to push
-   each PTY chunk to a **list of registered sinks**: the SignalR sink (existing
-   `TerminalOutputSender`) plus zero or more local-socket sinks. **Each sink keeps its
-   own bounded, drop-oldest, ordered queue** — the `TerminalOutputSender` pattern
-   (`src/Capacitor.Cli.Daemon/Services/TerminalOutputSender.cs`) generalized per-client,
-   so a stalled local socket cannot wedge the web stream and vice-versa.
-3. **Input merge** — local `Stdin`/`Resize` frames call the same
-   `agent.Process.WriteAsync` / `Resize` the web handlers already use (`:682`, `:786`).
-   Free-for-all = no arbitration; all writers hit the one master fd. Raw local Ctrl-C
-   flows through as byte `0x03`; the PTY line discipline turns it into SIGINT for the
-   agent (no special handling, unlike the web `SendInterrupt` path).
-4. **Local-launch path** — a `Spawn` frame runs the same orchestrator launch the server
-   uses (worktree prep *or* in-place, vendor `Prepare()`, `forkpty`), differing in one
-   branch: a **passthrough** `LaunchArgs` built from the verbatim args rather than
-   structured fields.
+2. **N-client output fan-out (lossless per sink)** — `ReadAgentOutputAsync`
+   (`AgentOrchestrator.cs:431`) currently calls `SendTerminalOutputAsync` for the single
+   web sink. Refactor to push each PTY chunk to a **list of registered sinks**: the
+   SignalR sink (existing `TerminalOutputSender`) plus zero or more local-socket sinks.
+   Each sink keeps its **own bounded, ordered, *lossless* queue — never `DropOldest`**.
+   `TerminalOutputSender` (`TerminalOutputSender.cs:17-38`) documents why: `DropOldest`
+   silently discarded chunks under back-pressure and desynced Claude's cursor-addressing
+   redraw stream (AI-844), so it now uses `BoundedChannelFullMode.Wait`. The per-client
+   design must hold two things at once:
+   - **No silent byte loss** — a sink at capacity must not discard terminal bytes.
+   - **No cross-client coupling** — one slow/stalled sink must not stall the shared PTY
+     read loop (and thus the agent and every *other* client), which is exactly what
+     naive `Wait` back-pressure on a shared producer would cause.
+   Resolution: the fan-out enqueue is **non-blocking per sink**; when a single sink's
+   bounded queue overflows, that **one client is force-detached and marked dirty**, and on
+   reattach it gets a fresh `OutputBuffer` replay + repaint — recovering losslessly from a
+   clean frame rather than consuming a corrupted partial stream. Other sinks and the PTY
+   loop are unaffected. (Implementation-plan detail: whether the existing web/SignalR sink
+   keeps its current agent-back-pressure-on-tunnel-stall behaviour or also adopts
+   force-detach is settled in the Phase 1 plan, biased toward **not** coupling local
+   terminal responsiveness to a remote tunnel stall.)
+3. **Input merge + resize arbitration** — local `Stdin` frames call the same
+   `agent.Process.WriteAsync` the web handler uses (`:682`); free-for-all = no
+   arbitration, all writers hit the one master fd. Raw local Ctrl-C flows through as byte
+   `0x03`; the PTY line discipline turns it into SIGINT for the agent (no special
+   handling, unlike the web `SendInterrupt` path). **Resize is the exception to
+   free-for-all:** each client reports its own dimensions and the daemon sets the one PTY
+   to the **smallest cols × smallest rows across all attached clients** (tmux semantics)
+   via `Resize` (`:786`), re-clamped on every attach/detach/resize. Last-writer-wins would
+   let a large web viewer and a small local terminal fight and corrupt each other's
+   redraw; min-clamp keeps every attached client's view valid.
+4. **Local-launch path + owned-vs-borrowed cwd** — a `Spawn` frame runs the same
+   orchestrator launch the server uses (vendor `Prepare()`, `forkpty`), differing in two
+   ways: a **passthrough** `LaunchArgs` from the verbatim args, and an explicit
+   **work-location kind** on the agent:
+   - `--worktree` → an **owned worktree** the daemon created (safe to remove on cleanup,
+     exactly as today).
+   - default in-place → a **borrowed cwd** the user owns.
+   `CleanupAgentAsync` (`AgentOrchestrator.cs:888`) today unconditionally calls
+   `WorktreeManager.RemoveAsync(agent.Worktree)` (`:900`), which does
+   `Directory.Delete(path, recursive)` for a standalone worktree or `git worktree remove
+   --force` + `git branch -D` otherwise (`WorktreeManager.cs:54-67`). **For a borrowed cwd
+   that is catastrophic** — it would delete the user's working directory and branch on
+   agent exit. Cleanup MUST skip all worktree/branch removal for borrowed-cwd agents and
+   only ever remove daemon-owned worktrees. This is the single most important safety
+   invariant in the design and has an explicit test (below).
 5. **Conditional env handling** — `UnixPtyProcess.Spawn` currently scrubs
    `ANTHROPIC_API_KEY` and unsets `CLAUDECODE`/`CLAUDE_CODE_ENTRYPOINT`
    (`UnixPtyProcess.cs:58`). That is correct for headless hosted launches but wrong for
@@ -217,31 +259,58 @@ A thin foreground process — the dumb-pipe end of the socket:
 - **Stale socket file.** Cleaned up alongside the PID/lock files in the existing daemon
   file lifecycle.
 
-## Security & visibility
+## Security, visibility & control
 
 - **Local socket = owner-only (0600).** Same trust level as the daemon PID files,
   locked to the OS user.
-- **Visibility (Phase 2).** A locally-started agent announced to the server follows the
-  existing **account-scoped** visibility model (per commit `b77e9f97c`) — visible to
-  your account/tenant by default so teammates can join, not public. No new visibility
+- **Private until shared (Phase 2).** A locally-started agent is reachable only over the
+  owner's local socket by default. It becomes visible to teammates only via an
+  **explicit** share/announce action (`kcap share <agent>` or `run-agent --share`) — it is
+  never auto-exposed by merely launching it.
+- **Visibility = account-scoped, never public.** Once shared, the agent follows the
+  existing account/tenant visibility model (per commit `b77e9f97c`). No new visibility
   concept.
+- **Remote control defaults to write — by design.** Once shared, a teammate attaching via
+  the web UI gets the same **write/input** control today's hosted agents grant. This is
+  deliberate: a *view-only* attach would be a strictly worse version of the existing
+  read-only session-sharing feature, so **observe-only is served by sharing, and attach is
+  for control**. We therefore do **not** gate input behind a separate control-grant; the
+  permission model mirrors hosted-agent runs exactly.
+- **Accepted trade-off (noted for reviewers).** This intentionally widens the *blast
+  radius* versus today's hosted agents, though not the *permission model*: a hosted agent
+  runs in an **isolated worktree under daemon-managed auth**, whereas a default in-place
+  local agent runs in the **user's real checkout with the user's personal credentials**.
+  The accepted mitigations are (a) private-until-explicitly-shared, (b) account-scoped
+  (never public) visibility, and (c) `--worktree` for users who want isolation. A tighter
+  per-session boundary is out of scope unless later required.
 
 ## Phasing
 
-- **Phase 1 — "tmux for your agent" (local only, no server contract change).** Local
-  socket + framing, daemon N-client fan-out refactor, `run-agent`/`attach`/`ls`,
-  raw-mode client, detach/reattach, persistence, conditional env handling. Delivers:
-  start local → detach → reattach → survives terminal close. De-risks all the new infra
-  before touching the server.
-- **Phase 2 — pairing & continue-from-web.** Daemon→server announce of local agents +
-  web clients attaching/injecting via the existing SignalR fan-out (now just another
-  sink). Delivers both headline goals: pair programming and continue-from-anywhere.
+- **Phase 1 — "tmux for your agent" (no web involvement, no new server contract).** Local
+  socket + framing, daemon N-client fan-out refactor (lossless per sink), resize
+  min-clamp, `run-agent`/`attach`/`ls`, raw-mode client, detach/reattach, persistence, the
+  **owned-vs-borrowed cleanup guard**, conditional env handling. Delivers: start local →
+  detach → reattach → survives terminal close. The daemon still connects to the server as
+  it does today — Phase 1 is *not* offline; it simply adds no new server endpoints and the
+  local-attach feature involves no web client. De-risks all the new infra before touching
+  the server.
+- **Phase 2 — pairing & continue-from-web.** An **explicit** daemon→server announce
+  (`kcap share <agent>` / `run-agent --share`; private to the launching user until then)
+  + web clients attaching/injecting via the existing SignalR fan-out (now just another
+  sink), with **write control by default once shared** (see *Security, visibility &
+  control*). Delivers both headline goals: pair programming and continue-from-anywhere.
 
 ## Testing
 
-- **Unit:** frame codec round-trips; N-client fan-out (one slow/dead sink does not stall
-  others; drop-oldest under load); detach-sequence scanner (including a prefix split
-  across reads); passthrough arg assembly + `--worktree` consumption.
+- **Unit:** frame codec round-trips; N-client fan-out (a slow/dead sink is force-detached
+  and replays on rejoin — **never drops bytes and never stalls the shared PTY loop or
+  other sinks**); resize min-clamp across two clients with different dimensions;
+  detach-sequence scanner (including a prefix split across reads); passthrough arg
+  assembly + `--worktree` consumption.
+- **Cleanup safety (the critical one):** an in-place (borrowed-cwd) agent exiting — and
+  daemon `DisposeAsync` — leaves the user's cwd **and** its git branch fully intact (no
+  `Directory.Delete`, no `git worktree remove`, no `git branch -D`); conversely an
+  owned-worktree agent is still cleaned up exactly as today.
 - **Integration:** spawn a trivial PTY program (e.g. a tiny echo / `cat`) over the
   socket; assert stdin→stdout round-trip, resize, detach-leaves-running, and
   reattach-replays-buffer. TUnit + existing PTY test patterns.
