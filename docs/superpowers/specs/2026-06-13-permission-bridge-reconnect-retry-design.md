@@ -34,23 +34,48 @@ A transient connection drop during a permission wait must **not** turn into a si
 deny. The request should survive the blip: wait for the connection to recover, then
 re-issue the request so the user's prompt reappears and the flow continues.
 
-Per decision, the only conditions that end the wait and fall back to deny are:
+Per decision, the conditions that end the wait and fall back to deny are:
 
-1. **Daemon shutdown** — the bridge's cancellation token fires.
+1. **Daemon shutdown** — the bridge's cancellation token (`ct`) fires.
 2. **Genuine server rejection** — the hub method throws a `HubException` (server-side
    logic error), which retrying cannot fix.
+3. **A fault while the connection is ready** — an `InvalidOperationException`
+   ("connection is not active") raised while the hub is connected-and-registered, or
+   any other unrecognized exception. Retrying these would spin without recovering, so
+   they propagate immediately (see "Core logic" for why this case exists).
 
-There is **no** attempt/time cap: as long as the daemon is alive and the hub is
-recovering, we keep waiting. Auto-reconnect never permanently gives up, so a prolonged
-outage keeps the hook waiting rather than denying — this is the explicitly chosen
-behavior (a hosted-agent permission prompt can legitimately wait a long time).
+There is **no daemon-side attempt cap** for the transient-disconnect case: as long as
+the daemon is alive and the hub is recovering, we keep waiting and retrying. Auto-reconnect
+never permanently gives up, so a prolonged outage keeps the request waiting rather than
+denying — this is the explicitly chosen behavior (a hosted-agent permission prompt can
+legitimately wait a long time).
+
+### End-to-end bound and orphan handler (known tradeoff)
+
+The daemon-side wait is bounded only by `ct`, but the **end-to-end** flow has a real
+ceiling: the CLI hook's HTTP client (`PermissionRequestCommand.cs:96`) caps the POST at
+`10h + 1m`, after which it tears down the request, prints `permission-request timed out`,
+and exits non-zero. So the practical upper bound on a hosted-agent permission wait is
+~10 hours regardless of daemon-side retrying.
+
+The bridge has **no per-request "client disconnected" signal** — `HttpListener` doesn't
+expose one and the `RequestPermission` invoke is bound to the daemon-shutdown token only
+(`LocalPermissionBridge.cs:202-207`). Consequently, if the hook client gives up (10h
+timeout, or Claude exits mid-wait), the daemon-side retry loop keeps running and may
+re-invoke `RequestPermission` after a reconnect, producing a fresh server-side prompt
+that no client will ever consume (an orphan handler). This is bounded by the connection
+lifetime / daemon shutdown but is otherwise unaddressed here: switching the bridge to
+Kestrel + `HttpContext.RequestAborted` for true per-request cancellation is explicitly
+**out of scope** for this change (consistent with the existing code comment). We accept
+the orphan-handler tradeoff for now.
 
 ## Approach
 
 Add reconnect-aware retry **inside `ServerConnection.RequestPermissionAsync`**, which
 owns the `HubConnection` and its reconnect lifecycle. `LocalPermissionBridge` is left
 unchanged: its existing `catch → deny` becomes the *final* fallback that now only fires
-on daemon shutdown or a `HubException`, not on a transient blip.
+on a non-recoverable outcome (see the Goal section's deny conditions), not on a
+transient blip.
 
 Rejected alternatives:
 
@@ -67,35 +92,71 @@ Extract the retry loop into a small helper with **injected delegates** so it is 
 testable without a real `HubConnection`:
 
 ```
-InvokeWithConnectionRetryAsync(invoke, getState, pollInterval, onRetry, ct):
+InvokeWithConnectionRetryAsync(invoke, isReady, pollInterval, onRetry, ct):
   loop:
     ct.ThrowIfCancellationRequested()
     try:
       return await invoke()
-    catch ex when (!ct.IsCancellationRequested && IsConnectionException(ex)):
+    catch ex when (!ct.IsCancellationRequested && IsTransientDisconnect(ex, isReady)):
       onRetry(attempt)                          // log: interrupted by drop, will retry
       await Task.Delay(pollInterval, ct)        // covers the "already recovered" race
                                                 // and prevents a hot loop
-      while (!ct.IsCancellationRequested && getState() != Connected):
-        await Task.Delay(pollInterval, ct)      // wait out the reconnect
+      while (!ct.IsCancellationRequested && !isReady()):
+        await Task.Delay(pollInterval, ct)      // wait until connected AND re-registered
     // loops until invoke() succeeds, or ct (daemon shutdown) fires,
-    // or a non-connection exception propagates
+    // or a non-transient exception propagates
 ```
 
-- **`IsConnectionException(ex)`** = `ex is OperationCanceledException` (includes
-  `TaskCanceledException`) `or InvalidOperationException` (SignalR's "connection is not
-  active" when the hub is down). `HubException` derives from neither, so a genuine
-  server rejection propagates → bridge denies. Any other unrecognized exception also
+**Classifying the failure** — `IsTransientDisconnect(ex, isReady)`:
+
+- `ex is OperationCanceledException` (includes `TaskCanceledException`) — the transport
+  killed an **in-flight** invoke. This is the exact failure in the bug log and is
+  unambiguously a connection loss. Always treated as transient → wait for readiness,
+  retry. (The `when` clause already excludes the daemon-shutdown token via
+  `!ct.IsCancellationRequested`, so a real shutdown `OperationCanceledException`
+  propagates → bridge denies.)
+- `ex is InvalidOperationException` (SignalR's "connection is not active") — **only**
+  transient when raised while `!isReady()` (hub down / re-registering). If raised while
+  the hub is ready (connected + registered), it indicates a permanent client/protocol
+  fault, not a blip; retrying would spin forever with no recovery. So it propagates →
+  deny. This mirrors the established `TerminalOutputSender` safety valve
+  (`TerminalOutputSender.cs:75-83`): retry only while the transport is down, drop/propagate
+  while connected.
+- Anything else — `HubException` (server rejected) or any unrecognized exception —
   propagates → deny (safe default).
-- The `when` clause already excludes caller cancellation
-  (`!ct.IsCancellationRequested`), so a shutdown-token `OperationCanceledException` is
-  never swallowed — it propagates and the bridge denies (correct: we're going away).
-- **No attempt cap.** The loop is bounded only by `ct`. A `ForceReconnect`
-  (heartbeat-detected wedged transport) does *not* cancel the bridge's `ct`, so we
-  correctly wait through the brief `Disconnected` window it produces rather than denying.
-- The unconditional `Task.Delay(pollInterval, ct)` before the state-wait handles the
+
+Why no generic cap is needed: the only failure mode that could loop without recovering
+is "ready hub keeps faulting," and that path now propagates immediately rather than
+retrying. The genuinely transient path (`OperationCanceledException` / IOE-while-down) is
+bounded by `ct` on the daemon side and by the ~10h hook-client timeout end-to-end.
+
+- A `ForceReconnect` (heartbeat-detected wedged transport) does *not* cancel the bridge's
+  `ct`, so we correctly wait through the brief not-ready window it produces rather than
+  denying.
+- The unconditional `Task.Delay(pollInterval, ct)` before the readiness-wait handles the
   race where the connection already recovered by the time we catch (the `while` would
   exit immediately) and guarantees the loop can never spin hot.
+
+### Readiness signal: connected AND re-registered
+
+The wait predicate is **not** raw `_hub.State == HubConnectionState.Connected`. After a
+reconnect the daemon must re-run `RegisterDaemon()` before the server can route a
+`RequestPermission` for this daemon's sessions (`ServerConnection.cs:229` on first
+connect, `:322` on reconnect). Retrying the instant `_hub.State` flips to `Connected` —
+before re-registration completes — could race the server and surface as a `HubException`,
+which we'd then treat as a final deny. That reintroduces the very bug class we're fixing.
+
+So `ServerConnection` exposes readiness as **connected and registered**:
+
+- Add a `volatile bool _registered` flag.
+- Set it `false` when the connection is lost — subscribe `_hub.Reconnecting` and reset at
+  the start of `OnClosed` — and `true` immediately after each successful
+  `RegisterDaemon()` (both in `ConnectWithRetryAsync` and `OnReconnected`).
+- `bool IsReady => _hub.State == HubConnectionState.Connected && _registered;`
+
+The helper receives `() => IsReady` as its `isReady` delegate. This is the same
+"connected + registered" point already signaled by `OnReconnectedCallback`, expressed as
+a pollable predicate for the retry loop.
 
 ### Wiring
 
@@ -107,8 +168,8 @@ public virtual Task<PermissionDecision> RequestPermissionAsync(
     InvokeWithConnectionRetryAsync(
         () => _hub.InvokeAsync<PermissionDecision>(
                   "RequestPermission", sessionId, toolName, toolInput, suggestions, ct),
-        () => _hub.State,
-        ConnectionRetryPollInterval,                 // e.g. 500 ms
+        () => IsReady,                               // connected AND re-registered
+        ConnectionRetryPollInterval,                 // 500 ms
         attempt => LogPermissionRetry(_logger, sessionId, attempt),
         ct);
 ```
@@ -122,22 +183,34 @@ whole method) and all `LocalPermissionBridgeTests` compile and pass untouched.
   {SessionId} interrupted by a connection drop (retry {Attempt}); waiting for reconnect."
   This replaces the current per-blip `LogRequestPermissionFailed` warning-with-full-
   stack-trace, which is noise for an expected, now-recovered condition.
-- Keep the bridge's deny-fallback warning, but it now only fires on true exhaustion
-  (shutdown) or a `HubException`.
+- Keep the bridge's deny-fallback warning, but it now only fires on a genuinely
+  non-recoverable outcome: daemon shutdown, a `HubException`, an
+  `InvalidOperationException` raised while the hub is ready, or any other unrecognized
+  fault — not on a transient blip that recovered.
 
 ## Tests
 
-Unit tests against the helper with fakes (`getState` delegate + a scripted `invoke`):
+Unit tests against the helper with fakes (`isReady` delegate + a scripted `invoke`):
 
 1. **Recovers after a blip** — `invoke` throws `TaskCanceledException` N times while
-   `getState` returns `Reconnecting`, then `getState` flips to `Connected` and `invoke`
-   succeeds → helper returns the decision; `onRetry` called N times.
+   `isReady` returns `false`, then `isReady` flips to `true` and `invoke` succeeds →
+   helper returns the decision; `onRetry` called N times.
 2. **Daemon shutdown mid-wait** — cancel `ct` while waiting → helper throws
    `OperationCanceledException` (bridge would deny).
 3. **Server rejection not retried** — `invoke` throws `HubException` → rethrown
    immediately, `onRetry` never called.
-4. **Already-recovered race** — `invoke` throws once while `getState` already returns
-   `Connected` → after the poll delay it re-invokes and succeeds (no spin, no deny).
+4. **`InvalidOperationException` while not ready is transient** — `invoke` throws IOE
+   while `isReady` is `false`, then recovers → retried and succeeds.
+5. **`InvalidOperationException` while ready is final** — `invoke` throws IOE while
+   `isReady` is `true` → rethrown immediately, not retried (guards against an infinite
+   wait on a permanent client/protocol fault that retrying cannot recover).
+6. **Already-recovered race** — `invoke` throws `TaskCanceledException` once while
+   `isReady` already returns `true` → after the poll delay it re-invokes and succeeds
+   (no spin, no deny).
+
+`ServerConnection` readiness wiring (`_registered` flag transitions) is covered
+indirectly; a focused test is added if the flag is extracted into a testable seam,
+otherwise it is exercised via the helper tests above using the `isReady` delegate.
 
 Existing `LocalPermissionBridgeTests` remain green (they mock `RequestPermissionAsync`
 and never exercise the helper), including `ServerFailureFallsBackToDeny`.
@@ -145,7 +218,12 @@ and never exercise the helper), including `ServerFailureFallsBackToDeny`.
 ## AOT
 
 Helper is plain generic async over delegates — no reflection, no dynamic code. No new
-IL2026/IL3050 surface. Verify with `dotnet publish -c Release` per project convention.
+IL2026/IL3050 surface. The changed code ships in the separate **daemon** AOT binary, so
+verify against that project explicitly:
+
+```bash
+dotnet publish src/Capacitor.Cli.Daemon/Capacitor.Cli.Daemon.csproj -c Release 2>&1 | grep -E 'IL[23][01][0-9]{2}'
+```
 
 ## Accepted tradeoff
 
