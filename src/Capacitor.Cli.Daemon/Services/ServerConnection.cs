@@ -446,11 +446,16 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// instead of being fired at <c>SendAsync</c> fire-and-forget, so they reach the
     /// server in PTY order. The enqueue awaits when the queue is full — the caller
     /// (the PTY read loop) awaits this, so a stalled transport back-pressures the PTY
-    /// rather than dropping bytes mid-escape-sequence. Bound to the daemon lifetime
-    /// token so a blocked enqueue unblocks on shutdown.
+    /// rather than dropping bytes mid-escape-sequence.
     /// </summary>
-    public virtual Task SendTerminalOutputAsync(string agentId, string base64Data) =>
-        _terminalSender.EnqueueAsync(agentId, base64Data, _ct).AsTask();
+    /// <param name="ct">
+    /// Cancels a blocked (back-pressured) enqueue. The read loop passes a token tied
+    /// to BOTH the per-agent stop (<c>ReadCts</c>) and daemon shutdown, so stopping a
+    /// single agent releases its read loop even mid-outage — otherwise the loop's
+    /// finally-block finalization/cleanup would stall until daemon shutdown (AI-846).
+    /// </param>
+    public virtual Task SendTerminalOutputAsync(string agentId, string base64Data, CancellationToken ct = default) =>
+        _terminalSender.EnqueueAsync(agentId, base64Data, ct).AsTask();
 
     // ── Eval progress events (DEV-1440) ────────────────────────────────────
 

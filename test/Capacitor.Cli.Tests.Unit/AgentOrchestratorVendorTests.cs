@@ -285,6 +285,50 @@ public class AgentOrchestratorVendorTests {
         }
     }
 
+    [Test]
+    public async Task Stopping_an_agent_releases_a_read_loop_blocked_on_a_full_terminal_queue() {
+        var (repoPath, cleanup) = CreateGitRepo();
+
+        try {
+            // The send blocks (full/down queue) until its ct cancels; the PTY keeps the
+            // stream open so the read loop is genuinely parked inside the blocked send.
+            var sendEntered   = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var sendUnblocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var server     = new CaptureServerConnection { SendEntered = sendEntered, SendUnblocked = sendUnblocked };
+            var ptyFactory = new FixedPtyProcessFactory(new OneChunkThenBlockPtyProcess());
+            var claudeSpy  = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
+
+            var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
+
+            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+
+            await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+                AgentId: "agent-bp",
+                Prompt: "go",
+                Model: "opus",
+                Effort: null,
+                RepoPath: repoPath,
+                Tools: null,
+                AttachmentIds: null,
+                Vendor: "claude"
+            ));
+
+            // Wait until the read loop has produced a chunk and is parked in the blocked send.
+            await sendEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            // Stopping the agent cancels ReadCts. The blocked enqueue MUST be released by
+            // that cancellation; otherwise the read loop (and its finally-block cleanup)
+            // stalls until daemon shutdown (AI-846). Before the fix the enqueue awaited the
+            // daemon-lifetime token instead, so this never completes.
+            await orch.HandleStopAgentForTest("agent-bp");
+
+            await sendUnblocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        } finally {
+            cleanup();
+        }
+    }
+
     // ── Test doubles ─────────────────────────────────────────────────────
 
     sealed class SpyHostedAgentLauncher(string vendor, string cliPath) : IHostedAgentLauncher {
@@ -313,6 +357,46 @@ public class AgentOrchestratorVendorTests {
         public void Cleanup(AgentInstance agent) {
             CleanupCalls++;
         }
+    }
+
+    /// <summary>Returns a caller-supplied PTY process so a test can control its output behaviour.</summary>
+    sealed class FixedPtyProcessFactory(IPtyProcess process) : IPtyProcessFactory {
+        public IPtyProcess Spawn(
+                string                      command,
+                string[]                    args,
+                string                      cwd,
+                Dictionary<string, string>? extraEnv = null,
+                ushort                      cols     = 120,
+                ushort                      rows     = 40
+            ) => process;
+    }
+
+    /// <summary>
+    /// Emits one chunk (so the read loop calls SendTerminalOutputAsync) then keeps the
+    /// stream open by awaiting the read token — the loop parks in the blocked send until
+    /// the agent is stopped. HasExited is true so HandleStopAgent's graceful path is quick.
+    /// </summary>
+    sealed class OneChunkThenBlockPtyProcess : IPtyProcess {
+        public int  Pid       => 4242;
+        public bool HasExited => true;
+        public int? ExitCode  => 0;
+
+        public ValueTask DisposeAsync() => default;
+        public Task WaitForExitAsync(TimeSpan? _) => Task.CompletedTask;
+        public Task TerminateAsync(TimeSpan?   _) => Task.CompletedTask;
+
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
+            yield return "x"u8.ToArray();
+
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+
+            yield break;
+        }
+
+        public Task WriteAsync(string _) => Task.CompletedTask;
+        public Task WriteAsync(byte[] _) => Task.CompletedTask;
+        public void Resize(ushort     _, ushort __) { }
+        public void SendInterrupt() { }
     }
 
     sealed class SpyPtyProcessFactory : IPtyProcessFactory {
@@ -389,8 +473,25 @@ public class AgentOrchestratorVendorTests {
         public override Task UpdateRepoPathsAsync()
             => Task.CompletedTask;
 
-        public override Task SendTerminalOutputAsync(string agentId, string base64Data)
-            => Task.CompletedTask;
+        /// <summary>Set both to make the send block (simulating a full/down terminal
+        /// queue) until its <c>ct</c> is cancelled — used by the AI-846 back-pressure
+        /// test. Left null for every other test, where the send is a no-op.</summary>
+        public TaskCompletionSource? SendEntered   { get; init; }
+        public TaskCompletionSource? SendUnblocked { get; init; }
+
+        public override async Task SendTerminalOutputAsync(string agentId, string base64Data, CancellationToken ct = default) {
+            if (SendEntered is null) return;
+
+            SendEntered.TrySetResult();
+
+            try {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            } catch (OperationCanceledException) {
+                /* released by the read loop's stop-linked token */
+            } finally {
+                SendUnblocked?.TrySetResult();
+            }
+        }
 
         public override Task AppendAgentRunEventAsync(string agentId, object evt)
             => Task.CompletedTask;
