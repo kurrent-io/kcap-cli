@@ -441,7 +441,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 agent.OutputBuffer.Append(data);
                 var base64 = Convert.ToBase64String(data);
-                _ = _server.SendTerminalOutputAsync(agent.Id, base64);
+                // Await the enqueue: TerminalOutputSender back-pressures here when its
+                // queue is full (slow/down transport) so a chunk is never dropped to
+                // keep up — losing one byte garbles the whole redraw-TUI mirror (AI-844).
+                await _server.SendTerminalOutputAsync(agent.Id, base64);
             }
         } catch (OperationCanceledException) {
             /* expected on stop */
