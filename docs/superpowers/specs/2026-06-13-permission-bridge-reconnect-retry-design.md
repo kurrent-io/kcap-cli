@@ -155,8 +155,8 @@ logic isolated in a tiny testable seam rather than scattered as a raw field:
 ```csharp
 sealed class RegistrationGate {
     volatile bool _registered;
-    public void OnConnectionLost() => _registered = false;
-    public void OnRegistered()     => _registered = true;
+    public void MarkUnregistered() => _registered = false;
+    public void MarkRegistered()   => _registered = true;
     public bool IsReady(HubConnectionState state) =>
         state == HubConnectionState.Connected && _registered;
 }
@@ -164,14 +164,20 @@ sealed class RegistrationGate {
 
 Wiring in `ServerConnection`:
 
-- Call `_gate.OnRegistered()` **inside `RegisterDaemon()` on success** — the single exit
-  point covers *every* caller (`ConnectWithRetryAsync`, `OnReconnected`, and the
-  heartbeat's `ReRegisterAsync`), so no path can complete registration without flipping
-  the flag.
-- Call `_gate.OnConnectionLost()` when the connection drops: subscribe `_hub.Reconnecting`
-  and also reset at the start of `OnClosed`. This closes the window where `_hub.State`
-  has flipped to `Connected` (auto-reconnect's `Reconnected`) but `OnReconnected`'s
-  `RegisterDaemon()` has not yet re-run.
+- **Bracket every `RegisterDaemon()` with the gate**: call `_gate.MarkUnregistered()` at
+  its *start* and `_gate.MarkRegistered()` only on *success*. Because every registration
+  attempt flows through `RegisterDaemon()` (`ConnectWithRetryAsync`, `OnReconnected`, and
+  the heartbeat's `ReRegisterAsync`), this single point guarantees `IsReady` is `false`
+  for the whole duration of any re-registration and only true once it completes.
+  Critically, this covers the **heartbeat slot-displaced** path
+  (`DaemonHeartbeatLoop.cs:77`): when `PingAsync` returns `!alive` the transport is still
+  up, so no `Reconnecting`/`OnClosed` event fires — clearing at `RegisterDaemon()` start
+  is the only thing that drops readiness during that re-registration window, preventing a
+  retry from invoking against a connection the server no longer recognizes.
+- Also call `_gate.MarkUnregistered()` on transport loss — subscribe `_hub.Reconnecting`
+  and reset at the start of `OnClosed`. This closes the window where `_hub.State` has
+  flipped to `Connected` (auto-reconnect's `Reconnected`) but `OnReconnected`'s
+  `RegisterDaemon()` has not yet started.
 - `bool IsReady => _gate.IsReady(_hub.State);`
 
 The retry helper receives `() => IsReady` as its `isReady` delegate. This is the same
@@ -239,8 +245,14 @@ gate needs its own coverage):
    `Reconnected`-before-`RegisterDaemon` window).
 9. **Disconnected state is never ready** — `state = Reconnecting`/`Disconnected` →
    `IsReady` is `false` regardless of the registered flag.
-10. **Re-registration restores readiness** — `OnConnectionLost()` then `OnRegistered()`
+10. **Re-registration restores readiness** — `MarkUnregistered()` then `MarkRegistered()`
     (the `ReRegisterAsync`/`OnReconnected` path) → `IsReady` is `true` again.
+11. **Heartbeat slot-displacement without transport loss** — model the
+    `RegisterDaemon()` bracket directly: from a ready gate (`state` stays `Connected`,
+    no transport event), `MarkUnregistered()` (re-register start) makes `IsReady` `false`,
+    and it returns to `true` only after `MarkRegistered()` (re-register success). Proves
+    readiness drops during a `PingAsync()==false` re-register even though the transport
+    never dropped.
 
 Existing `LocalPermissionBridgeTests` remain green (they mock `RequestPermissionAsync`
 and never exercise the helper), including `ServerFailureFallsBackToDeny`.
