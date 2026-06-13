@@ -800,10 +800,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath);
                     await _server.AgentStatusChangedAsync(agent.Id, agent.Status, agent.SessionId);
 
-                    // Replay terminal buffer so the UI has terminal history
-                    foreach (var base64 in agent.OutputBuffer.GetAll().Select(Convert.ToBase64String)) {
-                        await _server.SendTerminalOutputAsync(agent.Id, base64);
-                    }
+                    // AI-842: do NOT replay the full output buffer here. The old
+                    // replay re-sent the entire 2 MB ring on every reconnect, which
+                    // the server appended to its own buffer and live-broadcast on
+                    // top of the current screen — duplicated, and interleaved with
+                    // the read loop's concurrent live sends, producing the garbled
+                    // Terminal tab. The server retains its own per-agent buffer
+                    // across a daemon rebind (it only clears on reconcile-to-Failed),
+                    // so late-joining web clients still get history via the server's
+                    // SubscribeToTerminal replay. Continuity of in-flight output is
+                    // handled by TerminalOutputSender, which holds unsent chunks
+                    // while the transport is down and flushes them, in order, once
+                    // the connection is back.
                 } catch (Exception ex) {
                     LogReRegisterFailed(ex, agent.Id);
                 }
