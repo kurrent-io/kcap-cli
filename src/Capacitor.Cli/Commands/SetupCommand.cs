@@ -148,12 +148,12 @@ public static class SetupCommand {
         } else {
             defaultVisibility = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
-                    .Title("How should your sessions be visible to others by default?")
+                    .Title("Which of your sessions should be readable by other users in the same Kurrent Capacitor account by default?")
                     .AddChoices("org_public", "private", "public")
                     .UseConverter(v => v switch {
                         "private"    => "All private — only you can see your sessions",
                         "org_public" => "Org repos public, others private (default)",
-                        "public"     => "All public — everyone can see all your sessions",
+                        "public"     => "All public — others can see all your sessions",
                         _            => v
                     }));
 
