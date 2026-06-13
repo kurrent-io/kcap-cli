@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace Capacitor.Cli;
 
@@ -29,6 +30,18 @@ static partial class ProcessHelpers {
     [LibraryImport("libc", EntryPoint = "setsid", SetLastError = true)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     private static partial int setsid_native();
+
+    // macOS: proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) fills a
+    // proc_bsdinfo struct. We read only pbi_ppid (offset 16) and pbi_name (offset
+    // 64, 32 bytes) out of the 136-byte struct, so no struct marshalling is needed.
+    [LibraryImport("libproc", EntryPoint = "proc_pidinfo")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe partial int proc_pidinfo(int pid, int flavor, ulong arg, byte* buffer, int buffersize);
+
+    const int ProcPidTBsdInfo  = 3;
+    const int ProcBsdInfoSize  = 136;
+    const int ProcBsdInfoPpid  = 16;
+    const int ProcBsdInfoName  = 64; // pbi_name[2*MAXCOMLEN] = 32 bytes
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial nint OpenProcess(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwProcessId);
@@ -209,9 +222,28 @@ static partial class ProcessHelpers {
     /// parent PID. Codex on Windows is uncommon and the Claude path is already
     /// covered by Claude's own SessionEnd hook.
     /// </remarks>
-    public static int? GetCodingAgentPid() {
+    public static int? GetCodingAgentPid() => GetCodingAgentPid(vendor: null);
+
+    /// <summary>
+    /// Resolves the PID of the long-lived coding-agent process for
+    /// <paramref name="vendor"/> ("claude"/"codex"), suitable for the watcher's
+    /// parent-PID watchdog. On Unix it first walks the ppid ancestry looking for the
+    /// agent by name (<see cref="ResolveCodingAgentPid"/> + <see cref="GetProcessInfo"/>),
+    /// which is robust to whatever process-group/launcher topology the agent uses to
+    /// spawn its hook — notably Claude, whose hook runs in a separate transient
+    /// process group that makes the bare <c>getpgrp()</c> heuristic resolve an
+    /// already-dead PID. It falls back to that legacy heuristic when no agent is found
+    /// on the chain (or <paramref name="vendor"/> is unknown), preserving prior
+    /// behaviour for Codex.
+    /// </summary>
+    public static int? GetCodingAgentPid(string? vendor) {
         if (OperatingSystem.IsWindows()) {
             return GetParentPidWindows();
+        }
+
+        if (vendor is "claude" or "codex"
+         && ResolveCodingAgentPid(getppid_native(), vendor, GetProcessInfo) is { } agentPid) {
+            return agentPid;
         }
 
         // Fall back to getppid for the degenerate cases: pgid <= 1 means no
@@ -220,6 +252,138 @@ static partial class ProcessHelpers {
         var pgid = getpgrp_native();
 
         return pgid > 1 && pgid != getpid_native() ? pgid : getppid_native();
+    }
+
+    /// <summary>
+    /// Walks the parent-process chain from <paramref name="startPid"/> and returns
+    /// the PID of the nearest ancestor whose executable name identifies the coding
+    /// agent for <paramref name="vendor"/> ("claude"/"codex"), or null if none is
+    /// found within <paramref name="maxHops"/>. Pure: the process table is supplied
+    /// via <paramref name="lookup"/> (pid → (ppid, comm)) so it is unit-testable
+    /// with synthetic ancestries and shared across platforms.
+    /// </summary>
+    /// <remarks>
+    /// The durable coding-agent process always sits on the ppid chain above the
+    /// short-lived hook/launcher process, whatever the process-group topology —
+    /// which is why the chain walk is reliable where <c>getpgrp()</c>/<c>getppid()</c>
+    /// alone are not. Claude in particular spawns its hook in a separate, transient
+    /// process group, so <c>getpgrp()</c> resolved a PID that was already dead by the
+    /// time the watcher checked it, and the parent-PID watchdog silently never started.
+    /// </remarks>
+    internal static int? ResolveCodingAgentPid(
+            int                                 startPid,
+            string                              vendor,
+            Func<int, (int ppid, string comm)?> lookup,
+            int                                 maxHops = 16
+        ) {
+        var pid = startPid;
+
+        for (var hop = 0; hop < maxHops && pid > 1; hop++) {
+            if (lookup(pid) is not { } info) {
+                return null;
+            }
+
+            if (MatchesAgentName(info.comm, vendor)) {
+                return pid;
+            }
+
+            pid = info.ppid;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns <c>(ppid, comm)</c> for an arbitrary live PID, or null if the process
+    /// can't be inspected (gone, or unsupported platform). Feeds the ancestry walk in
+    /// <see cref="ResolveCodingAgentPid"/>. Unix-only — Windows keeps the legacy
+    /// parent-PID path (codex/Windows is uncommon and claude has its own SessionEnd
+    /// hook there), so this returns null on Windows.
+    /// </summary>
+    public static (int ppid, string comm)? GetProcessInfo(int pid) {
+        if (pid <= 0 || OperatingSystem.IsWindows()) {
+            return null;
+        }
+
+        return OperatingSystem.IsMacOS() ? GetProcessInfoMac(pid) : GetProcessInfoLinux(pid);
+    }
+
+    static unsafe (int ppid, string comm)? GetProcessInfoMac(int pid) {
+        Span<byte> buf = stackalloc byte[ProcBsdInfoSize];
+        buf.Clear();
+
+        int written;
+
+        fixed (byte* p = buf) {
+            written = proc_pidinfo(pid, ProcPidTBsdInfo, 0, p, ProcBsdInfoSize);
+        }
+
+        // proc_pidinfo returns the number of bytes written; anything short of the
+        // full struct means the call failed (e.g. no such process).
+        if (written < ProcBsdInfoSize) {
+            return null;
+        }
+
+        var ppid = BitConverter.ToInt32(buf.Slice(ProcBsdInfoPpid, sizeof(int)));
+
+        var nameSpan = buf.Slice(ProcBsdInfoName, 32);
+        var nul      = nameSpan.IndexOf((byte)0);
+        var comm     = Encoding.UTF8.GetString(nul >= 0 ? nameSpan[..nul] : nameSpan);
+
+        return (ppid, comm);
+    }
+
+    static (int ppid, string comm)? GetProcessInfoLinux(int pid) {
+        string stat;
+
+        try {
+            stat = File.ReadAllText($"/proc/{pid}/stat");
+        } catch {
+            return null;
+        }
+
+        // Format: "pid (comm) state ppid ...". comm can contain spaces and parens,
+        // so anchor on the LAST ')': name is between the first '(' and last ')',
+        // and ppid is the 2nd whitespace field after it (state is the 1st).
+        var open  = stat.IndexOf('(');
+        var close = stat.LastIndexOf(')');
+
+        if (open < 0 || close <= open) {
+            return null;
+        }
+
+        var comm = stat.Substring(open + 1, close - open - 1);
+        var rest = stat[(close + 1)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        return rest.Length >= 2 && int.TryParse(rest[1], out var ppid) ? (ppid, comm) : null;
+    }
+
+    /// <summary>
+    /// True when <paramref name="comm"/> names the coding-agent executable for
+    /// <paramref name="vendor"/>. Matches the basename exactly (optionally plus a
+    /// single file extension like <c>.exe</c>), case-insensitively — never a loose
+    /// substring, so descriptive names such as the Electron desktop "Claude Helper
+    /// (Renderer)" don't masquerade as the <c>claude</c> CLI.
+    /// </summary>
+    static bool MatchesAgentName(string comm, string vendor) {
+        if (string.IsNullOrEmpty(comm)) {
+            return false;
+        }
+
+        var slash    = comm.LastIndexOfAny(['/', '\\']);
+        var basename  = slash >= 0 ? comm[(slash + 1)..] : comm;
+
+        if (basename.Equals(vendor, StringComparison.OrdinalIgnoreCase)) {
+            return true;
+        }
+
+        // "claude.exe" style: vendor token followed by a single extension and nothing else.
+        var dot = basename.IndexOf('.');
+
+        return dot > 0
+            && basename[..dot].Equals(vendor, StringComparison.OrdinalIgnoreCase)
+            && !basename.AsSpan(dot + 1).Contains('.')
+            && !basename.AsSpan(dot + 1).Contains(' ');
     }
 
     /// <summary>
