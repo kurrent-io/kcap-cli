@@ -29,12 +29,13 @@ internal partial class AgentOrchestrator {
             return;
         }
 
-        var           agentId = Guid.NewGuid().ToString("N");
+        var           agentId       = Guid.NewGuid().ToString("N");
         AgentInstance agent;
+        WorktreeInfo? ownedWorktree = null; // tracked so a failure after creation cleans it up
 
         try {
             var worktree = work == WorkLocation.OwnedWorktree
-                ? await _worktreeManager.CreateAsync(cwd)
+                ? ownedWorktree = await _worktreeManager.CreateAsync(cwd)
                 : WorktreeInfo.Borrowed(cwd);
 
             var ctx = new LauncherContext(
@@ -68,6 +69,12 @@ internal partial class AgentOrchestrator {
             };
             _agents[agentId] = agent;
         } catch (Exception ex) {
+            // Don't leak a daemon-created worktree if Prepare / passthrough-arg building /
+            // spawn fails after the worktree was created (mirrors the server launch path).
+            if (ownedWorktree is { } leaked) {
+                try { await WorktreeManager.RemoveAsync(leaked); } catch { /* best-effort */ }
+            }
+
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Launch failed: {ex.Message}"), ct);
             return;
         }
@@ -100,11 +107,19 @@ internal partial class AgentOrchestrator {
         }
 
         var sink = new LocalSocketSink(capacity: 4096, (chunk, _) => Send(LocalFrame.Stdout(chunk)));
-        lock (agent.SinksLock) agent.LocalSinks.Add(sink);
+
+        // Snapshot the replay buffer AND register the sink atomically under SinksLock (paired
+        // with the read loop's locked append+enqueue) so no chunk is both replayed and sent
+        // live, and none is dropped between the two.
+        byte[] snapshot;
+        lock (agent.SinksLock) {
+            snapshot = agent.OutputBuffer.Snapshot();
+            agent.LocalSinks.Add(sink);
+        }
 
         try {
             // Bounded replay BEFORE any live chunk so the client paints a coherent screen.
-            await Send(FrameCodec.Attached(agent.Id, agent.OutputBuffer.Snapshot()));
+            await Send(FrameCodec.Attached(agent.Id, snapshot));
             var pump = sink.RunAsync(ct);
 
             // Break this read loop when the agent exits on its own (CleanupAgentAsync trips
@@ -153,20 +168,29 @@ internal partial class AgentOrchestrator {
             lock (agent.SinksLock) {
                 agent.LocalSinks.Remove(sink);
                 agent.ClientDims.Remove(sink);
+                ClampPtyLocked(agent); // a departing (possibly smaller) client must not leave the rest clamped
             }
         }
     }
 
-    /// <summary>
-    /// Min-clamp the one PTY across all attached local clients (tmux semantics): size it
-    /// to the smallest cols × rows any client reports, so no client's redraw is corrupted.
-    /// </summary>
     void ApplyResizeClamp(AgentInstance agent, ITerminalSink sink, ushort cols, ushort rows) {
         lock (agent.SinksLock) {
             agent.ClientDims[sink] = new AgentInstance.Dim(cols, rows);
-            var c = agent.ClientDims.Values.Min(d => d.Cols);
-            var r = agent.ClientDims.Values.Min(d => d.Rows);
-            agent.Process.Resize(c == 0 ? cols : c, r == 0 ? rows : r);
+            ClampPtyLocked(agent);
         }
+    }
+
+    /// <summary>
+    /// Min-clamp the one PTY to the smallest cols × rows across the attached local clients
+    /// (tmux semantics), so no client's redraw is corrupted. Recomputed on attach/detach/
+    /// resize. Caller holds <see cref="AgentInstance.SinksLock"/>; no-op when no client has a
+    /// reported size.
+    /// </summary>
+    void ClampPtyLocked(AgentInstance agent) {
+        if (agent.ClientDims.Count == 0) return;
+
+        var c = agent.ClientDims.Values.Min(d => d.Cols);
+        var r = agent.ClientDims.Values.Min(d => d.Rows);
+        if (c > 0 && r > 0) agent.Process.Resize(c, r);
     }
 }

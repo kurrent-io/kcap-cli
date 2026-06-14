@@ -50,6 +50,12 @@ kcap ls
   input is **merged with no arbitration (free-for-all)**, and a newly-attached client
   gets the existing per-agent `OutputBuffer` replayed so its screen is populated.
 
+> **Phasing:** the **local-socket transport** (terminal client) is **Phase 1**; the
+> **web/SignalR client** and the agent being **registered/visible in the web UI** are
+> **Phase 2** (see *Phasing*). The "interchangeable clients / drive-from-the-web" picture
+> here is the full design the architecture supports — **Phase 1 ships terminal-only**: a
+> local agent is unregistered and not yet visible from the web.
+
 ```
                          ┌─────────────── daemon (persistent) ───────────────┐
   local terminal ──UDS/pipe──▶ local socket listener ─┐                       │

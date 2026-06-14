@@ -491,14 +491,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     if (!agent.IsPrivate) _ = _server.AgentStatusChangedAsync(agent.Id, "Running", agent.SessionId);
                 }
 
-                agent.OutputBuffer.Append(data);
-
-                // Fan out to attached local-terminal clients (Phase 1). Non-blocking per
-                // sink: a slow client is force-detached inside TryEnqueue, never stalling
-                // this shared loop or the other clients.
-                ITerminalSink[] sinks;
-                lock (agent.SinksLock) sinks = [.. agent.LocalSinks];
-                foreach (var sink in sinks) sink.TryEnqueue(data);
+                // Append to the replay buffer AND fan out to local sinks atomically under
+                // SinksLock — paired with attach taking its snapshot + subscribing under the
+                // same lock, so a chunk can't land in both a new client's replay and its live
+                // stream (duplication), nor in neither (gap). TryEnqueue is non-blocking so the
+                // lock is held only briefly; a slow client force-detaches inside TryEnqueue.
+                lock (agent.SinksLock) {
+                    agent.OutputBuffer.Append(data);
+                    foreach (var sink in agent.LocalSinks) sink.TryEnqueue(data);
+                }
 
                 if (!agent.IsPrivate) {
                     var base64 = Convert.ToBase64String(data);
