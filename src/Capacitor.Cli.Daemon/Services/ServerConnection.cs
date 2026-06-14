@@ -20,6 +20,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     readonly RegistrationGate          _gate = new();
 
     static readonly TimeSpan PermissionRetryPollInterval = TimeSpan.FromMilliseconds(500);
+    static readonly TimeSpan EndSessionRetryPollInterval  = TimeSpan.FromMilliseconds(500);
 
     // Events for incoming commands from server
     public event Func<LaunchAgentCommand, Task>?    OnLaunchAgent;
@@ -439,7 +440,13 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// behaviour of the CLI session-end handler for the local-claude case.
     /// </summary>
     public virtual Task<EndAgentSessionResult> EndAgentSessionAsync(string agentId, string reason)
-        => _hub.InvokeAsync<EndAgentSessionResult>("EndAgentSession", agentId, reason, cancellationToken: _ct);
+        => ConnectionRetry.InvokeWithConnectionRetryAsync(
+            () => _hub.InvokeAsync<EndAgentSessionResult>("EndAgentSession", agentId, reason, cancellationToken: _ct),
+            () => IsReady,
+            EndSessionRetryPollInterval,
+            attempt => LogEndSessionRetry(agentId, attempt),
+            _ct
+        );
 
     /// <summary>
     /// Forwards a hosted-agent permission request to the server's <c>RequestPermission</c>
@@ -645,6 +652,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     [LoggerMessage(Level = LogLevel.Information, Message = "RequestPermission for session {SessionId} interrupted by a connection drop (retry {Attempt}); waiting for the daemon connection to recover before retrying")]
     partial void LogPermissionRetry(string sessionId, int attempt);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "EndAgentSession for agent {AgentId} interrupted by a connection drop (retry {Attempt}); waiting for the daemon connection to recover before retrying")]
+    partial void LogEndSessionRetry(string agentId, int attempt);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to post agent run event, retrying in {Delay}s")]
     partial void LogEventPostFailed(Exception ex, double delay);
