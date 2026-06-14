@@ -65,6 +65,31 @@ public class FrameCodecTests {
         var r = await FrameCodec.ReadAsync(choppy, default);
         await Assert.That(r!.Bytes.Length).IsEqualTo(5000);
     }
+
+    [Test]
+    public async Task Spawn_with_bogus_arg_count_throws_protocol_error_not_oom() {
+        // work(1)=0, cols(2), rows(2), vendorLen(4)=0, cwdLen(4)=0, argCount(4)=int.MaxValue
+        using var ms = new MemoryStream();
+        ms.WriteByte(0);
+        ms.Write([0, 80]); ms.Write([0, 24]);           // cols, rows (BE)
+        ms.Write([0, 0, 0, 0]); ms.Write([0, 0, 0, 0]); // vendorLen=0, cwdLen=0
+        ms.Write([0x7f, 0xff, 0xff, 0xff]);             // argCount = int.MaxValue
+        var frame = new LocalFrame(FrameType.Spawn) { Bytes = ms.ToArray() };
+
+        await Assert.That(() => FrameCodec.Spawn(frame)).Throws<InvalidDataException>();
+    }
+
+    [Test]
+    public async Task Spawn_with_truncated_string_length_throws_protocol_error() {
+        // work(1)=0, cols(2), rows(2), vendorLen(4)=1000 but no bytes follow
+        using var ms = new MemoryStream();
+        ms.WriteByte(0);
+        ms.Write([0, 80]); ms.Write([0, 24]);
+        ms.Write([0, 0, 0x03, 0xe8]); // vendorLen = 1000, payload ends here
+        var frame = new LocalFrame(FrameType.Spawn) { Bytes = ms.ToArray() };
+
+        await Assert.That(() => FrameCodec.Spawn(frame)).Throws<InvalidDataException>();
+    }
 }
 
 /// Stream that returns at most `chunk` bytes per ReadAsync to simulate partial socket reads.

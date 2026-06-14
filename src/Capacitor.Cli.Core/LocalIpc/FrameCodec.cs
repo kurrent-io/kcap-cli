@@ -77,15 +77,32 @@ public static class FrameCodec {
     public static (string vendor, WorkLocation work, string cwd, string[] args, ushort cols, ushort rows) Spawn(LocalFrame f)
         => ParseSpawn(f.Bytes);
 
+    const int MaxSpawnArgs = 4096; // sane cap; the wire arg-count is untrusted (local 0600 socket, same-user)
+
     static (string vendor, WorkLocation work, string cwd, string[] args, ushort cols, ushort rows) ParseSpawn(byte[] p) {
         var o = 0;
+        Require(p, o, 5); // work(1) + cols(2) + rows(2)
         var work = (WorkLocation)p[o++];
         var cols = Be16(p, o); o += 2; var rows = Be16(p, o); o += 2;
         var vendor = ReadLp(p, ref o); var cwd = ReadLp(p, ref o);
+
+        Require(p, o, 4);
         var n = BinaryPrimitives.ReadInt32BigEndian(p.AsSpan(o)); o += 4;
+        // Validate the arg count against a cap AND remaining bytes before allocating, so a
+        // malformed/huge count can't force an OOM (each arg has at least a 4-byte prefix).
+        if (n is < 0 or > MaxSpawnArgs) throw new InvalidDataException($"Spawn arg count out of range: {n}");
+        if ((long)(p.Length - o) < (long)n * 4) throw new InvalidDataException("Spawn arg count exceeds payload");
+
         var args = new string[n];
         for (var i = 0; i < n; i++) args[i] = ReadLp(p, ref o);
         return (vendor, work, cwd, args, cols, rows);
+    }
+
+    /// <summary>Throws <see cref="InvalidDataException"/> unless <paramref name="count"/> bytes
+    /// remain at offset <paramref name="o"/> — keeps malformed frames a clean protocol error
+    /// rather than an <c>ArgumentOutOfRangeException</c> or oversized allocation.</summary>
+    static void Require(byte[] p, int o, int count) {
+        if (o < 0 || count < 0 || (long)o + count > p.Length) throw new InvalidDataException("Frame payload truncated");
     }
 
     // --- Attached structured payload: [4B agentIdLen][agentId][snapshot...] ---
@@ -107,5 +124,11 @@ public static class FrameCodec {
     static void WriteBe16(Stream s, ushort v) { var b = new byte[2]; BinaryPrimitives.WriteUInt16BigEndian(b, v); s.Write(b); }
     static void WriteBe32(Stream s, int v) { var b = new byte[4]; BinaryPrimitives.WriteInt32BigEndian(b, v); s.Write(b); }
     static void WriteLp(Stream s, string v) { var u = Encoding.UTF8.GetBytes(v); WriteBe32(s, u.Length); s.Write(u); }
-    static string ReadLp(byte[] p, ref int o) { var n = BinaryPrimitives.ReadInt32BigEndian(p.AsSpan(o)); o += 4; var v = Encoding.UTF8.GetString(p, o, n); o += n; return v; }
+    static string ReadLp(byte[] p, ref int o) {
+        Require(p, o, 4);
+        var n = BinaryPrimitives.ReadInt32BigEndian(p.AsSpan(o)); o += 4;
+        if (n < 0) throw new InvalidDataException($"Negative length-prefix: {n}");
+        Require(p, o, n);
+        var v = Encoding.UTF8.GetString(p, o, n); o += n; return v;
+    }
 }

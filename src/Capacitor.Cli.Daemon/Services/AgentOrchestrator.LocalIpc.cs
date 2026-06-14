@@ -107,11 +107,20 @@ internal partial class AgentOrchestrator {
             await Send(FrameCodec.Attached(agent.Id, agent.OutputBuffer.Snapshot()));
             var pump = sink.RunAsync(ct);
 
-            // Wake this read loop when the agent exits on its own (CleanupAgentAsync trips
-            // ExitedCts), not only when the client sends input. Otherwise a self-exiting agent
-            // (e.g. typing /exit) leaves us blocked on the client read and we never flush the
-            // final output or send Exited — the client would just hang.
+            // Break this read loop when the agent exits on its own (CleanupAgentAsync trips
+            // ExitedCts) — not only on client input — so a self-exiting agent (e.g. /exit)
+            // doesn't leave us blocked here and never flush the final output or send Exited.
             using var loopCts = CancellationTokenSource.CreateLinkedTokenSource(ct, agent.ExitedCts.Token);
+
+            // ...and break it when the sink force-detaches (overflow / send failure). The sink
+            // stops accepting output and completes its channel, so its pump finishes with
+            // Detached set; without this the client keeps typing into a dead output path
+            // (blind). Cancelling ends the loop so the client disconnects and reattaches for a
+            // fresh replay — the intended force-detach behaviour.
+            var detachMonitor = pump.ContinueWith(
+                _ => { if (sink.Detached) { try { loopCts.Cancel(); } catch (ObjectDisposedException) { } } },
+                TaskScheduler.Default
+            );
 
             try {
                 while (!loopCts.Token.IsCancellationRequested) {
@@ -124,10 +133,17 @@ internal partial class AgentOrchestrator {
                     }
                 }
             } catch (Exception ex) when (ex is EndOfStreamException or IOException or OperationCanceledException) {
-                /* client gone */
+                /* client gone or session ended */
             } finally {
                 sink.Complete();
                 await pump.ConfigureAwait(false);
+                await detachMonitor.ConfigureAwait(false); // ensure the cancel ran before loopCts disposes
+            }
+
+            if (sink.Detached && !agent.Process.HasExited) {
+                // We dropped this client because its output overflowed — tell it so the user
+                // reattaches (a fresh `kcap attach` replays the buffer from a clean frame).
+                try { await Send(LocalFrame.Error("terminal output overflowed — detached; reattach with `kcap attach`")); } catch { /* client already gone */ }
             }
 
             if (agent.Process.HasExited) {
