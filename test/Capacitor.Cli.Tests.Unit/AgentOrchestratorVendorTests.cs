@@ -19,7 +19,7 @@ namespace Capacitor.Cli.Tests.Unit;
 ///   • <see cref="CodexHooksNotInstalledException"/> from Prepare surfaces as a
 ///     LaunchFailed with the exception's message and no PTY ever spawns.
 /// </summary>
-public class AgentOrchestratorVendorTests {
+public partial class AgentOrchestratorVendorTests {
     static (string repoPath, Action cleanup) CreateGitRepo() {
         var repoPath = Path.Combine(Path.GetTempPath(), "kcap-orch-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(repoPath);

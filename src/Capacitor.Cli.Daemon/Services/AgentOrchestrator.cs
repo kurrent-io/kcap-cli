@@ -968,7 +968,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             try { launcher.Cleanup(agent); } catch (Exception ex) { LogCleanupStepFailed(ex, "launcher.Cleanup", agentId); }
         }
 
-        try { await WorktreeManager.RemoveAsync(agent.Worktree); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
+        // Owned worktrees are daemon-created and safe to remove. A borrowed cwd is the
+        // user's own checkout (local in-place launch) — NEVER delete it or its branch:
+        // RemoveAsync would Directory.Delete / `git worktree remove --force` + `branch -D`.
+        // This is the spec's top safety invariant.
+        if (agent.Work == WorkLocation.OwnedWorktree) {
+            try { await WorktreeManager.RemoveAsync(agent.Worktree); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
+        }
 
         // Skip server unregister during shutdown — _ct is cancelled and the call
         // would throw TaskCanceledException. The server detects the daemon
@@ -1109,6 +1115,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// without going through SignalR. Keeps the private handler private to everyone else.
     /// </summary>
     internal Task HandleLaunchAgentForTest(LaunchAgentCommand cmd) => HandleLaunchAgent(cmd);
+
+    /// <summary>Test-only: register a pre-built agent so cleanup/lifecycle can be driven directly.</summary>
+    internal void RegisterAgentForTest(AgentInstance agent) => _agents[agent.Id] = agent;
+
+    /// <summary>Test-only entry point to the private cleanup path.</summary>
+    internal Task CleanupAgentForTest(string agentId) => CleanupAgentAsync(agentId);
 
     /// <summary>Test-only entry point to the private stop handler (mirrors <see cref="HandleLaunchAgentForTest"/>).</summary>
     internal Task HandleStopAgentForTest(string agentId) => HandleStopAgent(agentId);
