@@ -94,6 +94,24 @@ public class CodingAgentPidResolverTests {
     }
 
     [Test]
+    public async Task Matches_windows_exe_path_with_backslashes() {
+        // On Windows the per-PID lookup (GetProcessInfo) returns the full image path
+        // from QueryFullProcessImageNameW, e.g. "C:\...\claude.exe". The walk must match
+        // it by basename plus a single ".exe" extension so the Windows parent-PID
+        // watchdog can resolve the durable agent past the transient hook executor (AI-822).
+        // hook(100) -> cmd(90) -> claude.exe(50) -> explorer(20)
+        var lookup = ProcTable.Of(
+            (90, 50, @"C:\Windows\System32\cmd.exe"),
+            (50, 20, @"C:\Users\me\AppData\Local\Programs\claude\claude.exe"),
+            (20, 1, @"C:\Windows\explorer.exe")
+        );
+
+        var pid = ProcessHelpers.ResolveCodingAgentPid(startPid: 90, vendor: "claude", lookup);
+
+        await Assert.That(pid).IsEqualTo(50);
+    }
+
+    [Test]
     public async Task Returns_null_when_no_agent_in_chain() {
         // No claude/codex ancestor — caller falls back to the legacy heuristic.
         var lookup = ProcTable.Of((90, 20, "sh"), (20, 1, "-zsh"));

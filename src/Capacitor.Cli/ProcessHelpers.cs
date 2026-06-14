@@ -56,6 +56,13 @@ static partial class ProcessHelpers {
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial nint GetCurrentProcess();
 
+    // Fills lpExeName with the full path of the process image (e.g. "C:\...\claude.exe").
+    // On input lpdwSize is the buffer size in chars; on success it's set to the number of
+    // chars written (excluding the terminating null). dwFlags 0 = Win32 path format.
+    [LibraryImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static unsafe partial bool QueryFullProcessImageName(nint hProcess, uint dwFlags, char* lpExeName, ref uint lpdwSize);
+
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial nint GetStdHandle(int nStdHandle);
 
@@ -84,6 +91,14 @@ static partial class ProcessHelpers {
 
     const uint SYNCHRONIZE   = 0x00100000;
     const uint WAIT_TIMEOUT  = 258;
+
+    // QueryFullProcessImageName sets this when lpExeName is too small for the image path.
+    const int ERROR_INSUFFICIENT_BUFFER = 122;
+
+    // Minimal access right that still permits NtQueryInformationProcess(ProcessBasicInformation)
+    // and QueryFullProcessImageName on Vista+. Cheaper than PROCESS_QUERY_INFORMATION and
+    // succeeds for same-user processes even when they're protected/elevated-adjacent.
+    const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
     // GetStdHandle ids and the SetHandleInformation inherit flag.
     const int  STD_INPUT_HANDLE   = -10;
@@ -218,9 +233,10 @@ static partial class ProcessHelpers {
     /// the fallback is <c>getppid</c> — monitoring ourselves would let the
     /// watcher self-terminate immediately.
     ///
-    /// On Windows there's no process-group equivalent so we fall back to the
-    /// parent PID. Codex on Windows is uncommon and the Claude path is already
-    /// covered by Claude's own SessionEnd hook.
+    /// On Windows there's no process-group equivalent, so the vendor-aware overload
+    /// walks the parent-PID ancestry by process name instead (see
+    /// <see cref="GetCodingAgentPid(string?)"/>); this parameterless overload, with no
+    /// vendor to match, falls back to the immediate parent PID.
     /// </remarks>
     public static int? GetCodingAgentPid() => GetCodingAgentPid(vendor: null);
 
@@ -238,7 +254,23 @@ static partial class ProcessHelpers {
     /// </summary>
     public static int? GetCodingAgentPid(string? vendor) {
         if (OperatingSystem.IsWindows()) {
-            return GetParentPidWindows();
+            // Walk the ppid ancestry by process name to skip the transient per-hook
+            // executor. GetParentPidWindows() alone returns that executor, which has
+            // usually already exited by the time the watcher boots — so the parent-PID
+            // watchdog saw a dead PID at startup and silently never armed (AI-822).
+            // Falls back to the immediate parent when no agent is found on the chain
+            // (preserving prior behaviour for the no-vendor / unmatched cases). PID reuse
+            // is a known Windows hazard for ppid walks, but the by-name match means a
+            // recycled PID would have to *be* the agent's executable to falsely match.
+            var startPid = GetParentPidWindows();
+
+            if (!string.IsNullOrEmpty(vendor)
+             && startPid is { } sp
+             && ResolveCodingAgentPid(sp, vendor, GetProcessInfo) is { } winAgentPid) {
+                return winAgentPid;
+            }
+
+            return startPid;
         }
 
         // Walk the ancestry for any named vendor. The match is by the vendor's process
@@ -299,17 +331,80 @@ static partial class ProcessHelpers {
 
     /// <summary>
     /// Returns <c>(ppid, comm)</c> for an arbitrary live PID, or null if the process
-    /// can't be inspected (gone, or unsupported platform). Feeds the ancestry walk in
-    /// <see cref="ResolveCodingAgentPid"/>. Unix-only — Windows keeps the legacy
-    /// parent-PID path (codex/Windows is uncommon and claude has its own SessionEnd
-    /// hook there), so this returns null on Windows.
+    /// can't be inspected (gone, access denied, or unsupported platform). Feeds the
+    /// ancestry walk in <see cref="ResolveCodingAgentPid"/> on every platform — the
+    /// Windows implementation (AI-822) reads the parent PID via
+    /// <c>NtQueryInformationProcess</c> and the image name via
+    /// <c>QueryFullProcessImageName</c>.
     /// </summary>
     public static (int ppid, string comm)? GetProcessInfo(int pid) {
-        if (pid <= 0 || OperatingSystem.IsWindows()) {
+        if (pid <= 0) {
             return null;
         }
 
+        if (OperatingSystem.IsWindows()) {
+            return GetProcessInfoWindows(pid);
+        }
+
         return OperatingSystem.IsMacOS() ? GetProcessInfoMac(pid) : GetProcessInfoLinux(pid);
+    }
+
+    static unsafe (int ppid, string comm)? GetProcessInfoWindows(int pid) {
+        var handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)pid);
+
+        if (handle == 0) {
+            return null;
+        }
+
+        try {
+            var pbi    = default(ProcessBasicInformation);
+            var status = NtQueryInformationProcess(handle, 0, ref pbi, Unsafe.SizeOf<ProcessBasicInformation>(), out _);
+
+            if (status != 0) {
+                return null;
+            }
+
+            var ppid = (int)pbi.InheritedFromUniqueProcessId;
+
+            // comm is the full image path; MatchesAgentName takes the basename. An empty
+            // string on failure still lets the ancestry walk continue past this node (it
+            // just won't match here) — but if it's the agent's own path that fails to read,
+            // resolution falls back to the immediate parent and the watchdog can mis-arm,
+            // so QueryImageName grows the buffer rather than giving up on long paths.
+            return (ppid, QueryImageName(handle) ?? "");
+        } finally {
+            CloseHandle(handle);
+        }
+    }
+
+    /// <summary>
+    /// Reads a process's full image path via <c>QueryFullProcessImageName</c>, retrying on a
+    /// heap buffer if the path exceeds the initial stack buffer (Windows long paths can reach
+    /// ~32K chars). Returns null if the call fails for any reason other than buffer size.
+    /// </summary>
+    static unsafe string? QueryImageName(nint handle) {
+        const int stackCap = 1024;
+        char*     stackBuf = stackalloc char[stackCap];
+        var       len      = (uint)stackCap;
+
+        if (QueryFullProcessImageName(handle, 0, stackBuf, ref len)) {
+            return new string(stackBuf, 0, (int)len);
+        }
+
+        if (Marshal.GetLastPInvokeError() != ERROR_INSUFFICIENT_BUFFER) {
+            return null;
+        }
+
+        // Extended-length path maximum (\\?\-prefixed paths). One retry covers every
+        // realistic case; too large for stackalloc, so use a heap buffer.
+        const int maxCap   = 32768;
+        var       heapBuf  = new char[maxCap];
+
+        fixed (char* p = heapBuf) {
+            len = maxCap;
+
+            return QueryFullProcessImageName(handle, 0, p, ref len) ? new string(p, 0, (int)len) : null;
+        }
     }
 
     static unsafe (int ppid, string comm)? GetProcessInfoMac(int pid) {
