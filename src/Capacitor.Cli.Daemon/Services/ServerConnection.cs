@@ -17,7 +17,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     readonly HubConnection             _hub;
     readonly DaemonConfig              _config;
     readonly ILogger<ServerConnection> _logger;
-    readonly RegistrationGate          _gate = new();
+    readonly RegistrationGate          _gate                = new();
+    readonly PendingPermissionRegistry _pendingPermissions  = new();
 
     static readonly TimeSpan PermissionRetryPollInterval = TimeSpan.FromMilliseconds(500);
     static readonly TimeSpan EndSessionRetryPollInterval  = TimeSpan.FromMilliseconds(500);
@@ -124,6 +125,16 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         // startup) so the server treats this daemon as having no matches.
         _hub.On<FindRepoForRemoteRequest, string[]>("FindRepoForRemote",
             req => FindRepoForRemoteHandler?.Invoke(req) ?? Task.FromResult(Array.Empty<string>()));
+
+        // Server→client push carrying the user's decision for a hosted-agent permission request
+        // (AI-864). Paired with the RequestPermission2 invocation in RequestPermissionAsync: that
+        // invocation returns a requestId immediately (so it can't occupy the connection's single
+        // parallel-invocation slot and starve DaemonPing), and the decision arrives later via
+        // this message. Resolve() completes the awaiting RequestPermissionAsync call, or buffers
+        // the decision if it raced ahead of the await. Single-record payload (arity 1) so the push
+        // contract can evolve without breaking mixed-version daemons.
+        _hub.On<PermissionResolution>("PermissionResolved",
+            res => _pendingPermissions.Resolve(res.RequestId, res.Decision));
 
         RegisterUiBroadcastSinks();
 
@@ -269,7 +280,6 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
         try {
             await ConnectWithRetryAsync(_ct);
-            OnReconnectedCallback?.Invoke();
         } catch (OperationCanceledException) when (_ct.IsCancellationRequested) {
             // Shutting down, ignore
         } catch (Exception ex2) when (IsNameInUse(ex2)) {
@@ -280,13 +290,23 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         }
     }
 
-    async Task RegisterDaemon() {
-        // Drop readiness for the whole duration of (re-)registration. This is the
-        // ONLY thing that clears readiness on the heartbeat slot-displacement path
-        // (DaemonHeartbeatLoop.cs:77 → ReRegisterAsync), where the transport stays
-        // up and no Reconnecting/Closed event fires.
-        _gate.MarkUnregistered();
+    /// <summary>
+    /// Runs a full (re-)registration through <see cref="RegistrationGate.RunRegistrationAsync"/>:
+    /// <c>DaemonConnect</c>, then per-agent re-registration (<see cref="ReRegisterAgentsHook"/>),
+    /// and only THEN restores readiness. Folding agent re-registration into the readiness bracket
+    /// closes the window where a permission invoke could fire after <c>DaemonConnect</c> but
+    /// before the server re-established per-session ownership (AI-864). The gate clears readiness
+    /// at the start of the bracket, which is also what drops readiness on the heartbeat
+    /// slot-displacement path (DaemonHeartbeatLoop.cs → ReRegisterAsync), where the transport
+    /// stays up and no Reconnecting/Closed event fires.
+    /// </summary>
+    Task RegisterDaemon() =>
+        _gate.RunRegistrationAsync(
+            daemonConnect: DaemonConnectAsync,
+            reRegisterAgents: () => ReRegisterAgentsHook?.Invoke() ?? Task.CompletedTask
+        );
 
+    async Task DaemonConnectAsync() {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
         var repoPaths = await MergeRepoPathsAsync();
         var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
@@ -300,20 +320,28 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 ),
                 cancellationToken: _ct
             );
-
-            _gate.MarkRegistered();
         } catch (Exception ex) when (IsNameInUse(ex)) {
             // AI-630: server refused our (owner, name) slot because another
             // live daemon owns it. Surface to DaemonRunner before re-throwing
             // so the host can shut down cleanly; the heartbeat loop's
             // SafeReRegisterAsync filters this exception out so we don't
-            // escalate to a pointless force-reconnect.
+            // escalate to a pointless force-reconnect. RunRegistrationAsync
+            // leaves readiness cleared and skips agent re-registration.
             LogNameInUse(_config.Name, ex.Message);
             OnNameInUse?.Invoke(ex.Message);
 
             throw;
         }
     }
+
+    /// <summary>
+    /// Set by <see cref="AgentOrchestrator"/>: re-registers this daemon's live agents with the
+    /// server (AgentRegistered + AgentStatusChanged) so per-session ownership is restored after a
+    /// (re-)connect. Invoked inside <see cref="RegisterDaemon"/> BEFORE readiness is restored, so
+    /// a permission invoke gated on <see cref="IsReady"/> can't beat session-ownership recovery.
+    /// Null until wired (early startup / tests) — treated as a no-op.
+    /// </summary>
+    internal Func<Task>? ReRegisterAgentsHook { get; set; }
 
     async Task<string[]> MergeRepoPathsAsync() {
         var persisted = await RepoPathStore.GetSortedPathsAsync();
@@ -345,11 +373,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     /// <summary>
-    /// True when the hub is Connected AND this connection has completed
-    /// <c>DaemonConnect</c>. The permission-request retry loop waits on this
-    /// rather than raw <see cref="HubConnectionState.Connected"/> so a retry can't
-    /// race re-registration. Mirrors the point already signalled by
-    /// <see cref="OnReconnectedCallback"/>, as a pollable predicate.
+    /// True when the hub is Connected AND this connection has completed a full
+    /// (re-)registration — <c>DaemonConnect</c> AND per-agent re-registration (see
+    /// <see cref="RegisterDaemon"/>). The permission-request retry loop waits on this rather than
+    /// raw <see cref="HubConnectionState.Connected"/> so a retry can't race re-registration.
     /// </summary>
     internal bool IsReady => _gate.IsReady(_hub.State);
 
@@ -357,10 +384,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         LogReconnected();
         await RegisterDaemon();
         _connectedTimestamp = Stopwatch.GetTimestamp();
-        OnReconnectedCallback?.Invoke();
     }
-
-    public event Action? OnReconnectedCallback;
 
     /// <summary>
     /// Round-trip liveness probe (AI-566). Calls <c>DaemonPing</c> on the server
@@ -461,32 +485,60 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// The bridge knows the vendor ("claude" or "codex") locally to pick the right hook
     /// response shape in <c>LocalPermissionBridge.BuildHookResponseJson</c>, but the
     /// server's permission flow is vendor-agnostic so it is NOT forwarded over the wire.
-    /// Sending it would add a 5th positional argument that <c>JsonHubProtocol.BindArguments</c>
-    /// strict-count-matches against the server signature (default values are not honoured
-    /// by the binder), breaking every hosted-agent permission prompt against any server
-    /// build whose hub method doesn't declare a matching 5th parameter.
+    /// The wire payload is a single <see cref="HostedPermissionRequest"/> record (arity 1):
+    /// SignalR binds hub arguments by count, so a record lets the contract gain fields without
+    /// the positional-arity fragility that broke earlier hosted-permission changes.
     /// </summary>
-    public virtual Task<PermissionDecision> RequestPermissionAsync(
+    public virtual async Task<PermissionDecision> RequestPermissionAsync(
             string            sessionId,
             string?           toolName,
             JsonElement?      toolInput,
             JsonElement?      suggestions,
             CancellationToken ct = default
-        ) =>
-        ConnectionRetry.InvokeWithConnectionRetryAsync(
-            () => _hub.InvokeAsync<PermissionDecision>(
-                "RequestPermission",
-                sessionId,
-                toolName,
-                toolInput,
-                suggestions,
+        ) {
+        // RequestPermission2 is a SHORT invocation: the server tracks the request, broadcasts the
+        // prompt to the UI, and returns a requestId right away — it does NOT stay pending for the
+        // whole elicitation wait. That keeps the connection's single parallel-invocation slot free
+        // so DaemonPing isn't starved (the AI-864 reconnect-storm / spurious-deny bug). The user's
+        // decision arrives later via the "PermissionResolved" push, correlated by requestId.
+        //
+        // The invoke is still wrapped in ConnectionRetry: a SignalR blip while obtaining the
+        // requestId is transient (gated on IsReady so it can't fire against an unregistered
+        // connection). Once we have the requestId, the await survives reconnects on its own — the
+        // pending entry lives in-process, and the server re-resolves the daemon connection at push
+        // time, so a reconnect between request and decision is transparent.
+        //
+        // isRetriableServerError closes the residual ownership race: if IsReady is true but a
+        // specific agent's re-registration didn't restore server-side ownership, RequestPermission2
+        // throws "Caller is not the daemon owning session". Retry that a bounded number of times
+        // (giving re-registration a moment) rather than treating it as a final deny.
+        var requestId = await ConnectionRetry.InvokeWithConnectionRetryAsync(
+            () => _hub.InvokeAsync<string>(
+                "RequestPermission2",
+                new HostedPermissionRequest(sessionId, toolName, toolInput, suggestions),
                 ct
             ),
             () => IsReady,
             PermissionRetryPollInterval,
             attempt => LogPermissionRetry(sessionId, attempt),
-            ct
+            ct,
+            isRetriableServerError: IsOwnershipNotReady,
+            maxServerErrorRetries: OwnershipNotReadyMaxRetries
         );
+
+        return await _pendingPermissions.AwaitDecisionAsync(requestId, ct);
+    }
+
+    /// <summary>
+    /// Max bounded retries for the post-reconnect "Caller is not the daemon owning session"
+    /// HubException (AI-864). ≈ this × <see cref="PermissionRetryPollInterval"/> of grace for
+    /// per-agent re-registration to restore ownership before the request falls through to a deny.
+    /// </summary>
+    const int OwnershipNotReadyMaxRetries = 6;
+
+    static bool IsOwnershipNotReady(Exception ex) =>
+        ex is Microsoft.AspNetCore.SignalR.HubException he
+        && he.Message.Contains("owning session", StringComparison.Ordinal);
 
     /// <summary>
     /// Queues a base64 PTY chunk for the hosted-agent terminal mirror. AI-842/AI-844:

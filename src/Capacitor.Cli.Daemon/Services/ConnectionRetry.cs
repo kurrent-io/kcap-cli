@@ -18,19 +18,31 @@ namespace Capacitor.Cli.Daemon.Services;
 /// rejected) or anything unrecognized — propagates to the caller (→ the bridge
 /// denies).
 ///
-/// The loop is bounded only by <paramref name="ct"/> (daemon shutdown). The
+/// The transient-disconnect loop is bounded only by <paramref name="ct"/> (daemon shutdown). The
 /// caller's shutdown token is excluded from the transient classification, so a
 /// shutdown <see cref="OperationCanceledException"/> propagates rather than
 /// being retried.
+///
+/// A caller may additionally supply <paramref name="isRetriableServerError"/> +
+/// <paramref name="maxServerErrorRetries"/> to retry a BOUNDED number of times on specific
+/// server-rejection exceptions (AI-864: the "Caller is not the daemon owning session"
+/// <c>HubException</c> that can appear briefly after a reconnect, before per-agent
+/// re-registration has restored ownership — retrying past that window avoids a spurious deny).
+/// Unlike transient disconnects, these retries are capped so a genuinely-permanent server error
+/// still surfaces (→ deny) instead of looping forever.
 /// </summary>
 internal static class ConnectionRetry {
     public static async Task<T> InvokeWithConnectionRetryAsync<T>(
-            Func<Task<T>>     invoke,
-            Func<bool>        isReady,
-            TimeSpan          pollInterval,
-            Action<int>       onRetry,
-            CancellationToken ct
+            Func<Task<T>>      invoke,
+            Func<bool>         isReady,
+            TimeSpan           pollInterval,
+            Action<int>        onRetry,
+            CancellationToken  ct,
+            Func<Exception, bool>? isRetriableServerError = null,
+            int                maxServerErrorRetries = 0
         ) {
+        var serverErrorRetries = 0;
+
         for (var attempt = 1; ; attempt++) {
             // Wait for readiness before EVERY attempt, including the first. A
             // permission request can arrive while the daemon is mid-reconnect or
@@ -50,6 +62,13 @@ internal static class ConnectionRetry {
 
                 // Brief delay before looping back to the readiness wait, so the
                 // loop can never spin hot even if isReady() flips true instantly.
+                await Task.Delay(pollInterval, ct);
+            } catch (Exception ex) when (!ct.IsCancellationRequested
+                                      && isRetriableServerError is not null
+                                      && serverErrorRetries < maxServerErrorRetries
+                                      && isRetriableServerError(ex)) {
+                serverErrorRetries++;
+                onRetry(attempt);
                 await Task.Delay(pollInterval, ct);
             }
         }
