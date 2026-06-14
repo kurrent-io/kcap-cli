@@ -237,15 +237,26 @@ alongside the PID/lock files in the existing daemon-file lifecycle.
         not attached.
      2. **Spawned agent → server (its own kcap hooks).** The launch env (`:294-309`) sets
         `KCAP_RENDERED_AGENT`, `KCAP_AGENT_ID`, `KCAP_URL`, `KCAP_DAEMON_URL`; the agent's
-        Claude/Codex hooks use these to post events and bridge permissions independently of
-        the orchestrator. A private launch **omits the hosted-agent vars** (`KCAP_AGENT_ID`,
-        `KCAP_DAEMON_URL`, `KCAP_RENDERED_AGENT`) so the agent behaves like a normal local
-        run — **permission prompts render natively in the terminal** (no daemon
-        permission-bridge) and it is not a controllable hosted agent. `KCAP_URL` is
-        **kept**, so the session records to the account exactly like any local
-        kcap-instrumented run (per the recording decision): "private" means *not a live,
-        controllable hosted agent*, **not** *unrecorded*. On share, the hosted-agent env is
-        applied to *subsequent* hook invocations.
+        Claude/Codex hooks read these at runtime to tag events and bridge permissions
+        independently of the orchestrator — and **process env is fixed at `execvp`
+        (`UnixPtyProcess.cs:62`), so it can never change after spawn.** A private launch
+        therefore sets, once, the env it wants for the agent's *whole life*:
+        - **`KCAP_URL` kept** — the session records to the account like any local
+          kcap-instrumented run. "Private" means *not a live, controllable hosted agent*,
+          **not** *unrecorded*.
+        - **`KCAP_AGENT_ID` kept** — it is only a tag (sets `agent_host_id` on recorded
+          events, `ClaudeHookCommand.cs:49` / `CodexHookCommand.cs:87`) and triggers **no**
+          server call, so the deny-all above is unaffected. Keeping it makes the transcript
+          **link-ready**: when the agent is later shared, the server associates the
+          already-tagged session with the now-registered hosted agent (the *tag-and-link*
+          decision). The server must tolerate events carrying an `agent_host_id` for an
+          agent it has not yet seen registered — part of the Phase 2 contract.
+        - **`KCAP_RENDERED_AGENT` + `KCAP_DAEMON_URL` omitted** — the agent isn't treated as
+          headless and there is no daemon permission-bridge, so **permission prompts render
+          natively in the terminal** where the local user answers them. Because env is fixed
+          at spawn, this holds for the agent's whole life — **sharing does not move
+          permission prompts to the web UI** (an accepted limitation; the local driver, or a
+          remote one via the mirrored PTY, answers in-band).
    `CleanupAgentAsync` (`AgentOrchestrator.cs:888`) today unconditionally calls
    `WorktreeManager.RemoveAsync(agent.Worktree)` (`:900`) — `Directory.Delete(path,
    recursive)` for standalone or `git worktree remove --force` + `git branch -D` otherwise
@@ -262,16 +273,22 @@ alongside the PID/lock files in the existing daemon-file lifecycle.
    (`ProviderApiKeyPolicy` / `KCAP_USE_PROVIDER_API_KEY`).
 6. **Share = `PrivateLocal`→`Shared` transition (Phase 2 only)** — an explicit `kcap
    share` flips the agent from `PrivateLocal` to `Shared`: it runs the deferred
-   `AgentRegisteredAsync` + run-started event, **replays the agent's accumulated terminal
-   history**, then attaches the SignalR sink for live chunks, so teammates see the agent in
+   `AgentRegisteredAsync` + run-started event using the **same `KCAP_AGENT_ID`** the agent
+   was launched with, so the server **links** the already-recorded transcript (whose events
+   were tagged with that `agent_host_id`) to the now-live hosted agent — one unified record
+   (the *tag-and-link* decision). It then **replays the agent's accumulated terminal
+   history** and attaches the SignalR sink for live chunks, so teammates see the agent in
    the web UI as if it were server-initiated. **The one-time replay is required and
    special:** the reconnect path deliberately does *not* replay the `OutputBuffer` (`:814`)
    because the server keeps its own per-agent buffer across a daemon rebind — but a
    freshly-shared `PrivateLocal` agent **the server has never seen has no such buffer**, so
    share sends a one-time, bounded (2 MB `OutputBuffer`) replay *before* the first live
-   chunk, ordered ahead of the live stream. Today launches flow server→daemon; this adds a
-   daemon→server "I started agent X" registration. **This is the one place the server
-   contract changes** — which, with all web involvement, is why it is deferred to Phase 2.
+   chunk, ordered ahead of the live stream. Permission routing is **not** changed by share
+   (env is fixed at spawn — see the `PrivateLocal` rule); prompts stay native. Today
+   launches flow server→daemon; this adds a daemon→server "I started agent X" registration
+   **plus the server tolerating and late-linking a pre-tagged session**. **This is where the
+   server contract changes** — which, with all web involvement, is why it is deferred to
+   Phase 2.
 
 ### c) Local terminal client (`kcap run-agent` / `kcap attach`)
 
@@ -307,7 +324,11 @@ post-`--` args.
   args.
 
 Conflict policy: a user-supplied flag that collides with a non-mandatory daemon default
-wins; the mandatory flags (`--cd`, `--no-alt-screen`) are always enforced.
+wins. A user-supplied **duplicate of a mandatory flag** (`--cd`, `--no-alt-screen`) is
+**rejected with a clear error**, not appended — relying on Codex's arg precedence (last-
+vs first-wins) to make the daemon's value stick is fragile, so the collision is refused
+outright. (Working dir and primary-screen mirroring are daemon invariants, not
+user-tunable.)
 
 ## Lifecycle & edge cases
 
@@ -389,10 +410,11 @@ wins; the mandatory flags (`--cd`, `--no-alt-screen`) are always enforced.
 - **Privacy (strict mock):** with a mock `ServerConnection` that **fails the test on any
   per-agent method call**, a `PrivateLocal` agent's full lifecycle (launch → run →
   heartbeat → exit/finalize → cleanup, incl. a simulated reconnect) triggers **none** of
-  them; the spawn env omits the hosted-agent vars
-  (`KCAP_AGENT_ID`/`KCAP_DAEMON_URL`/`KCAP_RENDERED_AGENT`) while `KCAP_URL` is present
-  (recording stays on). On share: registration + a one-time bounded buffer replay + live
-  streaming begin.
+  them. Spawn-env assertions: `KCAP_RENDERED_AGENT` and `KCAP_DAEMON_URL` **absent** (native
+  terminal permissions); `KCAP_URL` **and** `KCAP_AGENT_ID` **present** (recording on;
+  transcript tagged + link-ready). On share: registration with that same id + a one-time
+  bounded buffer replay + live streaming begin, and a recorded event's `agent_host_id`
+  matches the shared agent.
 - **Integration:** spawn a trivial PTY program (e.g. a tiny echo / `cat`) over the
   socket; assert stdin→stdout round-trip, resize, detach-leaves-running, and
   reattach-replays-buffer. TUnit + existing PTY test patterns.
