@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
@@ -42,6 +43,26 @@ public record AgentInstance(
     /// finally-block call is the only one that lands.
     /// </summary>
     public string PendingEndReason { get; set; } = "agent_exited";
+
+    // ── Local terminal attach (Phase 1) ──────────────────────────────────
+    // Internal: these expose the daemon-internal ITerminalSink, so they can't be public
+    // on this public record (CS0053). They're only touched inside the daemon assembly.
+    /// <summary>Local-terminal clients attached over the control socket.</summary>
+    internal List<ITerminalSink> LocalSinks { get; } = [];
+    internal Lock                SinksLock  { get; } = new();
+    /// <summary>Each attached local client's last-reported size, for the resize min-clamp.</summary>
+    internal Dictionary<ITerminalSink, Dim> ClientDims { get; } = [];
+    public readonly record struct Dim(ushort Cols, ushort Rows);
+
+    /// <summary>
+    /// True for locally-launched agents: the orchestrator makes no per-agent server call
+    /// and does not attach the SignalR sink. An explicit share (Phase 2) clears this.
+    /// </summary>
+    public bool IsPrivate { get; init; }
+
+    /// <summary>Owned worktree (daemon-created — safe to remove on cleanup) vs borrowed cwd
+    /// (the user's own checkout — never removed).</summary>
+    public WorkLocation Work { get; init; } = WorkLocation.OwnedWorktree;
 }
 
 /// <summary>Ring buffer that keeps the last 2 MB of terminal output.</summary>
@@ -64,6 +85,17 @@ public class TerminalOutputBuffer {
 
     public List<byte[]> GetAll() {
         lock (_chunks) { return [.._chunks]; }
+    }
+
+    /// <summary>Flattens the retained ring into one buffer for a one-time replay to a
+    /// newly-attached client (bounded by <see cref="MaxBytes"/>).</summary>
+    public byte[] Snapshot() {
+        lock (_chunks) {
+            var ms = new MemoryStream(_totalBytes);
+            foreach (var c in _chunks) ms.Write(c);
+
+            return ms.ToArray();
+        }
     }
 }
 
@@ -451,16 +483,26 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 if (agent.Status == "Starting") {
                     agent.Status = "Running";
-                    _            = _server.AgentStatusChangedAsync(agent.Id, "Running", agent.SessionId);
+                    if (!agent.IsPrivate) _ = _server.AgentStatusChangedAsync(agent.Id, "Running", agent.SessionId);
                 }
 
                 agent.OutputBuffer.Append(data);
-                var base64 = Convert.ToBase64String(data);
-                // Await the enqueue: TerminalOutputSender back-pressures here when its
-                // queue is full (slow/down transport) so a chunk is never dropped to
-                // keep up — losing one byte garbles the whole redraw-TUI mirror (AI-844).
-                // sendCts releases this await on agent stop or daemon shutdown (AI-846).
-                await _server.SendTerminalOutputAsync(agent.Id, base64, sendCts.Token);
+
+                // Fan out to attached local-terminal clients (Phase 1). Non-blocking per
+                // sink: a slow client is force-detached inside TryEnqueue, never stalling
+                // this shared loop or the other clients.
+                ITerminalSink[] sinks;
+                lock (agent.SinksLock) sinks = [.. agent.LocalSinks];
+                foreach (var sink in sinks) sink.TryEnqueue(data);
+
+                if (!agent.IsPrivate) {
+                    var base64 = Convert.ToBase64String(data);
+                    // Await the enqueue: TerminalOutputSender back-pressures here when its
+                    // queue is full (slow/down transport) so a chunk is never dropped to
+                    // keep up — losing one byte garbles the whole redraw-TUI mirror (AI-844).
+                    // sendCts releases this await on agent stop or daemon shutdown (AI-846).
+                    await _server.SendTerminalOutputAsync(agent.Id, base64, sendCts.Token);
+                }
             }
         } catch (OperationCanceledException) {
             /* expected on stop */
