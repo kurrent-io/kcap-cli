@@ -1,0 +1,19 @@
+namespace Capacitor.Cli.Core.LocalIpc;
+
+/// Wire contract for the daemon↔local-client socket. Values are explicit and
+/// MUST be append-only — they are serialized as a single byte (see FrameCodec).
+public enum FrameType : byte {
+    // client → daemon
+    Spawn   = 1,
+    Attach  = 2,
+    Stdin   = 3,
+    Resize  = 4,
+    Detach  = 5,
+    List    = 6,   // request the daemon's agent list (for `kcap ls`)
+    // daemon → client
+    Attached  = 64,
+    Stdout    = 65,
+    Exited    = 66,
+    Error     = 67,
+    AgentList = 68, // UTF-8 table payload: one `id\tstatus\tcwd` line per agent
+}
