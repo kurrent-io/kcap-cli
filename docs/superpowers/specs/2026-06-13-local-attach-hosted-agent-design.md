@@ -407,11 +407,9 @@ user-tunable.)
 - **Privacy (strict mock):** with a mock `ServerConnection` that **fails the test on any
   per-agent method call**, a `PrivateLocal` agent's full lifecycle (launch → run →
   heartbeat → exit/finalize → cleanup, incl. a simulated reconnect) triggers **none** of
-  them. Spawn-env assertions: `KCAP_RENDERED_AGENT` and `KCAP_DAEMON_URL` **absent** (native
-  terminal permissions); `KCAP_URL` **and** `KCAP_AGENT_ID` **present** (recording on;
-  transcript tagged + link-ready). On share: registration with that same id + a one-time
-  bounded buffer replay + live streaming begin, and a recorded event's `agent_host_id`
-  matches the shared agent.
+  them. Spawn-env assertions: `KCAP_RENDERED_AGENT`, `KCAP_DAEMON_URL`, **and**
+  `KCAP_AGENT_ID` are **absent** (native terminal permissions; records as a plain local
+  session with no `agent_host_id` tag), while `KCAP_URL` is **present** (recording on).
 - **Integration:** spawn a trivial PTY program (e.g. a tiny echo / `cat`) over the
   socket; assert stdin→stdout round-trip, resize, detach-leaves-running, and
   reattach-replays-buffer. TUnit + existing PTY test patterns.

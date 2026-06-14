@@ -31,9 +31,13 @@ internal static class LocalAgentClient {
         // uses the raw fds directly (TerminalRawMode.ReadStdin/WriteStdout).
         _ = TrySize();
 
-        using var raw      = TerminalRawMode.Enable();
-        var       writeLock = new SemaphoreSlim(1, 1);
-        var       exitCode = 0;
+        using var raw       = TerminalRawMode.Enable();
+        var       writeLock  = new SemaphoreSlim(1, 1);
+        var       exitCode   = 0;
+        var       gotExited  = false; // daemon told us the agent exited
+        var       errored    = false; // daemon sent an Error frame (already printed)
+        var       detached   = false; // user pressed the detach sequence
+        var       inputClosed = false; // local stdin reached EOF
 
         async Task Send(LocalFrame f) {
             await writeLock.WaitAsync(ct);
@@ -60,12 +64,14 @@ internal static class LocalAgentClient {
 
                             break;
                         case FrameType.Exited:
-                            exitCode = f.ExitCode;
+                            exitCode  = f.ExitCode;
+                            gotExited = true;
 
                             return;
                         case FrameType.Error:
                             await Console.Error.WriteLineAsync($"\r\nkcap: {f.Text}");
                             exitCode = 1;
+                            errored  = true;
 
                             return;
                     }
@@ -99,11 +105,11 @@ internal static class LocalAgentClient {
             try {
                 while (!ct.IsCancellationRequested) {
                     var n = TerminalRawMode.ReadStdin(buf);
-                    if (n <= 0) break;
+                    if (n <= 0) { inputClosed = true; break; }
 
                     var (forward, detach) = scanner.Process(buf.AsSpan(0, n));
                     if (forward.Length > 0) await Send(LocalFrame.Stdin(forward));
-                    if (detach) { await Send(LocalFrame.Detach()); break; }
+                    if (detach) { detached = true; await Send(LocalFrame.Detach()); break; }
                 }
             } catch (Exception ex) when (ex is OperationCanceledException or IOException) {
                 /* shutting down */
@@ -113,6 +119,14 @@ internal static class LocalAgentClient {
         // Return as soon as the agent exits (outPump) or the user detaches/EOFs (stdinPump).
         await Task.WhenAny(outPump, stdinPump);
         await cts.CancelAsync();
+
+        // If the connection ended without an explicit detach, stdin EOF, an Exited frame, or a
+        // reported Error, the daemon dropped unexpectedly (crash / socket loss). Surface that
+        // as a failure rather than letting it look like a clean exit (code 0).
+        if (!detached && !inputClosed && !gotExited && !errored) {
+            await Console.Error.WriteLineAsync("\r\nkcap: lost connection to the daemon");
+            exitCode = 1;
+        }
 
         // raw mode is restored by `using raw` on return.
         return exitCode;

@@ -815,20 +815,20 @@ git commit -m "feat(daemon): PrivateLocal agents make no per-agent server calls 
 - Modify: `AgentOrchestrator.cs` (`:294-309`) and `UnixPtyProcess.Spawn` (`:54-66`).
 - Test: extend `PrivateLocalNoServerCallsTests.cs` with an env-assertion test (capture the env dict passed to a fake `IPtyProcessFactory`).
 
-- [ ] **Step 1: Failing test** — fake `IPtyProcessFactory` records `extraEnv`; assert for a private local launch: `KCAP_URL` present, `KCAP_AGENT_ID` present, `KCAP_RENDERED_AGENT` **absent**, `KCAP_DAEMON_URL` **absent**; and that `ANTHROPIC_API_KEY` is **not** scrubbed (local-interactive keeps user auth).
+- [ ] **Step 1: Failing test** — fake `IPtyProcessFactory` records `extraEnv`; assert for a private local launch: `KCAP_URL` present, `ANTHROPIC_API_KEY` present (local-interactive keeps user auth), and `KCAP_AGENT_ID` / `KCAP_RENDERED_AGENT` / `KCAP_DAEMON_URL` all **absent** (plain local session — no `agent_host_id` tag; native terminal permissions).
 
 - [ ] **Step 2: Run, expect FAIL.**
 
-- [ ] **Step 3: Implement** — build the env conditionally:
+- [ ] **Step 3: Implement** — a Phase 1 local agent records as a *plain local session*: keep `KCAP_URL`, re-add `ANTHROPIC_API_KEY`, and omit the hosted-agent vars entirely:
 ```csharp
-var env = new Dictionary<string, string> { ["KCAP_AGENT_ID"] = agentId };
+var env = new Dictionary<string, string>();
 if (!string.IsNullOrEmpty(_config.ServerUrl)) env["KCAP_URL"] = _config.ServerUrl;
-if (!isLocalInteractive) {                       // headless hosted only
-    env["KCAP_RENDERED_AGENT"] = "1";
-    if (_permissionBridge.BaseUrl is { } u) env["KCAP_DAEMON_URL"] = u;
-}
+var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+if (!string.IsNullOrEmpty(apiKey)) env["ANTHROPIC_API_KEY"] = apiKey;
+// KCAP_AGENT_ID / KCAP_RENDERED_AGENT / KCAP_DAEMON_URL omitted — not a registered hosted
+// agent yet (Phase 2 adds them with registration).
 ```
-Thread `isLocalInteractive` from the spawn path (Task D5). In `UnixPtyProcess.Spawn`, gate the `unsetenv("ANTHROPIC_API_KEY")` on a `scrubProviderKeys` parameter (true for hosted, false for local-interactive).
+`UnixPtyProcess.Spawn` unsets `KCAP_AGENT_ID`/`KCAP_RENDERED_AGENT`/`KCAP_DAEMON_URL` (and `ANTHROPIC_API_KEY`) in the PTY child before applying `extraEnv`, so re-adding `ANTHROPIC_API_KEY` here restores the user's auth while the omitted hosted-agent vars stay unset (no leak from the daemon's own env).
 
 - [ ] **Step 4: Run, expect PASS.** Commit:
 ```bash
