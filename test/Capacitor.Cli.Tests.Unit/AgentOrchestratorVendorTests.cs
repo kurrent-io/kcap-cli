@@ -96,6 +96,29 @@ public partial class AgentOrchestratorVendorTests {
         public void StopApplication() { }
     }
 
+    // AI-864: re-registration is awaited inside RegisterDaemon before readiness is restored.
+    // A transient per-agent failure must be retried (not swallowed on first try), so the agent's
+    // ownership is restored before the daemon flips ready — narrowing the "ready despite reregister
+    // failure" window qodo flagged.
+    [Test]
+    public async Task ReRegister_retries_a_transient_per_agent_failure_then_succeeds() {
+        var server = new CaptureServerConnection { AgentRegisteredFailTimes = 1 };
+
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        orch.RegisterAgentForTest(new AgentInstance(
+            "agent-rereg", null, "", null, "/tmp", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/tmp", "", "/tmp", IsStandalone: true), new CancellationTokenSource()
+        ));
+
+        // The orchestrator wires ReRegisterAgentsHook in its ctor; invoking it runs the same
+        // path RegisterDaemon awaits on reconnect.
+        await server.ReRegisterAgentsHook!();
+
+        // First attempt threw a transient failure; the bounded retry succeeded on the second.
+        await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(2);
+    }
+
     [Test]
     public async Task Launch_with_unknown_vendor_emits_launch_failed_and_does_not_spawn_pty() {
         var server     = new CaptureServerConnection();
@@ -616,8 +639,18 @@ public partial class AgentOrchestratorVendorTests {
             return Task.CompletedTask;
         }
 
-        public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath)
-            => Task.CompletedTask;
+        /// <summary>Number of times to fail AgentRegisteredAsync before succeeding (AI-864:
+        /// drives the bounded per-agent re-registration retry test).</summary>
+        public int AgentRegisteredFailTimes { get; init; }
+        public int AgentRegisteredCallCount { get; private set; }
+
+        public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath) {
+            AgentRegisteredCallCount++;
+
+            return AgentRegisteredCallCount <= AgentRegisteredFailTimes
+                ? Task.FromException(new InvalidOperationException("transient re-register failure"))
+                : Task.CompletedTask;
+        }
 
         public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId)
             => Task.CompletedTask;

@@ -23,4 +23,26 @@ internal sealed class RegistrationGate {
 
     public bool IsReady(HubConnectionState state) =>
         state == HubConnectionState.Connected && _registered;
+
+    /// <summary>
+    /// Runs a full (re-)registration as one bracket so readiness is restored only after BOTH
+    /// the daemon-level <c>DaemonConnect</c> AND per-agent re-registration have completed:
+    /// MarkUnregistered → <paramref name="daemonConnect"/> → <paramref name="reRegisterAgents"/>
+    /// → MarkRegistered.
+    ///
+    /// Without this, <see cref="IsReady"/> would flip true the instant <c>DaemonConnect</c>
+    /// returned — before the server re-established per-session ownership via the separate agent
+    /// re-registration path. A permission invoke gated on <see cref="IsReady"/> could then fire
+    /// into that gap and get a "Caller is not the daemon owning session" HubException, which the
+    /// retry layer treats as fatal → a spurious deny (the residual half of the AI-864 bug).
+    ///
+    /// If <paramref name="daemonConnect"/> throws (e.g. name-in-use), the exception propagates
+    /// and readiness stays cleared — re-registration is skipped and MarkRegistered never runs.
+    /// </summary>
+    public async Task RunRegistrationAsync(Func<Task> daemonConnect, Func<Task> reRegisterAgents) {
+        MarkUnregistered();
+        await daemonConnect();
+        await reRegisterAgents();
+        MarkRegistered();
+    }
 }

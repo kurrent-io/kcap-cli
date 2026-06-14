@@ -172,7 +172,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.OnSendInput              += HandleSendInput;
         _server.OnSendSpecialKey         += HandleSendSpecialKey;
         _server.OnResizeTerminal         += HandleResizeTerminal;
-        _server.OnReconnectedCallback    += ReRegisterAgents;
+        _server.ReRegisterAgentsHook     =  ReRegisterAgentsAsync;
         _server.FindRepoForRemoteHandler =  HandleFindRepoForRemote;
 
         _server.GetLiveAgentIds = () => [
@@ -885,14 +885,28 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         return Task.CompletedTask;
     }
 
-    void ReRegisterAgents() {
-        _ = ReRegisterAgentsAsync();
+    static readonly TimeSpan ReRegisterRetryDelay = TimeSpan.FromMilliseconds(250);
+    const           int      ReRegisterMaxAttempts = 3;
 
-        return;
-
-        async Task ReRegisterAgentsAsync() {
-            // PrivateLocal agents are never registered with the server, so never re-register them.
-            foreach (var agent in _agents.Values.Where(a => (a.Status is "Starting" or "Running") && !a.IsPrivate)) {
+    /// <summary>
+    /// Re-registers this daemon's live agents with the server (AgentRegistered +
+    /// AgentStatusChanged) so per-session ownership is restored after a (re-)connect. Wired into
+    /// <see cref="ServerConnection.ReRegisterAgentsHook"/> and awaited inside
+    /// <see cref="ServerConnection.RegisterDaemon"/> BEFORE readiness is restored — so a
+    /// permission invoke gated on <c>IsReady</c> can't fire before ownership recovery (AI-864).
+    ///
+    /// Each agent's re-registration is retried a bounded number of times before giving up, so a
+    /// transient blip doesn't leave that agent's ownership unrestored while the daemon still
+    /// flips ready (the qodo "ready despite reregister failures" gap). On final failure we log and
+    /// move on rather than throw: one agent's persistent failure must NOT withhold readiness for
+    /// the whole daemon (that would block every other agent's permissions and loop reconnects).
+    /// The bounded ownership-retry in <see cref="ServerConnection.RequestPermissionAsync"/> is the
+    /// final safety net for the residual case.
+    /// </summary>
+    async Task ReRegisterAgentsAsync() {
+        // PrivateLocal agents are never registered with the server, so never re-register them.
+        foreach (var agent in _agents.Values.Where(a => (a.Status is "Starting" or "Running") && !a.IsPrivate)) {
+            for (var attempt = 1; ; attempt++) {
                 try {
                     await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath);
                     await _server.AgentStatusChangedAsync(agent.Id, agent.Status, agent.SessionId);
@@ -909,8 +923,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // handled by TerminalOutputSender, which holds unsent chunks
                     // while the transport is down and flushes them, in order, once
                     // the connection is back.
+                    break;
+                } catch (Exception) when (attempt < ReRegisterMaxAttempts && !_shutdownCts.IsCancellationRequested) {
+                    try {
+                        await Task.Delay(ReRegisterRetryDelay, _shutdownCts.Token);
+                    } catch (OperationCanceledException) {
+                        return;
+                    }
                 } catch (Exception ex) {
                     LogReRegisterFailed(ex, agent.Id);
+
+                    break;
                 }
             }
         }

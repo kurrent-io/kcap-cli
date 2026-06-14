@@ -126,4 +126,65 @@ public class ConnectionRetryTests {
         await Assert.That(result).IsEqualTo("decision");
         await Assert.That(invokeCalls).IsEqualTo(2);
     }
+
+    // AI-864: a HubException matching the retriable-server-error predicate is retried up to a
+    // BOUND (unlike transient disconnects, which retry until the daemon shuts down). Used for the
+    // "Caller is not the daemon owning session" error that can appear briefly after a reconnect
+    // before per-agent re-registration restores ownership — retrying past that window avoids a
+    // spurious deny, while the bound still lets a genuinely-permanent ownership error surface.
+    static bool IsOwnershipError(Exception ex) =>
+        ex is HubException he && he.Message.Contains("owning session", StringComparison.Ordinal);
+
+    [Test]
+    public async Task Retriable_server_error_is_retried_up_to_the_bound_then_succeeds() {
+        var calls = 0;
+
+        Func<Task<string>> invoke = () => {
+            calls++;
+            if (calls <= 2) throw new HubException("Caller is not the daemon owning session abc");
+            return Task.FromResult("decision");
+        };
+
+        var result = await ConnectionRetry.InvokeWithConnectionRetryAsync(
+            invoke, () => true, FastPoll, _ => { }, CancellationToken.None,
+            isRetriableServerError: IsOwnershipError, maxServerErrorRetries: 5);
+
+        await Assert.That(result).IsEqualTo("decision");
+        await Assert.That(calls).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task Retriable_server_error_propagates_after_exhausting_the_bound() {
+        var calls = 0;
+
+        Func<Task<string>> invoke = () => {
+            calls++;
+            throw new HubException("Caller is not the daemon owning session abc");
+        };
+
+        await Assert.That(async () => await ConnectionRetry.InvokeWithConnectionRetryAsync(
+                invoke, () => true, FastPoll, _ => { }, CancellationToken.None,
+                isRetriableServerError: IsOwnershipError, maxServerErrorRetries: 3))
+            .Throws<HubException>();
+
+        // initial attempt + 3 bounded retries
+        await Assert.That(calls).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task Server_error_not_matching_predicate_is_not_retried() {
+        var calls = 0;
+
+        Func<Task<string>> invoke = () => {
+            calls++;
+            throw new HubException("some unrelated server error");
+        };
+
+        await Assert.That(async () => await ConnectionRetry.InvokeWithConnectionRetryAsync(
+                invoke, () => true, FastPoll, _ => { }, CancellationToken.None,
+                isRetriableServerError: IsOwnershipError, maxServerErrorRetries: 3))
+            .Throws<HubException>();
+
+        await Assert.That(calls).IsEqualTo(1);
+    }
 }
