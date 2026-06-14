@@ -47,12 +47,14 @@ internal partial class AgentOrchestrator {
             launcher.Prepare(ctx);
             var built = launcher.BuildPassthrough(ctx, args);
 
-            // PrivateLocal hook env: omit KCAP_RENDERED_AGENT / KCAP_DAEMON_URL so the agent
-            // isn't treated as headless and permissions prompt natively in the terminal.
-            // Keep KCAP_AGENT_ID (tags events for tag-and-link) and KCAP_URL (records the
-            // session). Re-add ANTHROPIC_API_KEY so the user's normal local auth survives
-            // UnixPtyProcess.Spawn's headless scrub (it applies extraEnv after unsetenv).
-            var env = new Dictionary<string, string> { ["KCAP_AGENT_ID"] = agentId };
+            // Phase 1 records as a plain local session. Keep KCAP_URL (records, under the
+            // user's default_visibility) and re-add ANTHROPIC_API_KEY so normal local auth
+            // survives UnixPtyProcess.Spawn's headless scrub (it applies extraEnv after
+            // unsetenv). Omit the hosted-agent vars: KCAP_AGENT_ID (the agent isn't a
+            // registered hosted agent yet, so no agent_host_id tag on events), and
+            // KCAP_RENDERED_AGENT / KCAP_DAEMON_URL (not headless → permissions prompt
+            // natively in the terminal). Phase 2 adds them when it registers like a UI agent.
+            var env = new Dictionary<string, string>();
             if (!string.IsNullOrEmpty(_config.ServerUrl)) env["KCAP_URL"] = _config.ServerUrl;
             var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
             if (!string.IsNullOrEmpty(apiKey)) env["ANTHROPIC_API_KEY"] = apiKey;

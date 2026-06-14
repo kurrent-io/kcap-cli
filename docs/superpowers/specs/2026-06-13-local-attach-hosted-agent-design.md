@@ -71,7 +71,8 @@ kcap ls
 | Concurrent input | **Free-for-all.** All clients' input feeds the one PTY master; humans coordinate socially (like pairing in tmux). No driver lock. |
 | Transport | **Hybrid.** Local terminal over a new local socket; teammates + continue-remotely over existing SignalR. |
 | Server dependency | **Phase 1 adds no new server *contract*, but is not offline.** The daemon still requires `ServerUrl` + a SignalR connection at startup exactly as today; local attach rides alongside it. True offline-daemon operation is a possible later enhancement, not in scope. |
-| Remote control (Phase 2) | **Write by default once shared**, mirroring current hosted-agent run permissions. Observe-only is served by the existing read-only session-sharing path, not by attach. |
+| Visibility & sharing (Phase 2) | A local agent **registers exactly like a UI-launched agent** and inherits the *identical, server-authoritative* model: **owner-only by default** — visible/controllable by you across your own surfaces (terminal **and** your web UI) immediately — and shared to teammates via the **existing web UI "share"**. Not a kcap concept; no bespoke daemon→server share contract. A convenience `kcap share` CLI (in-chat skill, like `kcap hide`) is a later follow-up (AI-861). |
+| Remote control once shared (Phase 2) | When *you* share to teammates, they get the same **write/input** control today's hosted agents grant — sharing is for control, mirroring hosted-agent permissions. |
 | Resize | **Min-clamp the PTY across attached *local* clients** (tmux semantics) in Phase 1; clamping web clients too needs a Phase 2 server-side resize contract (SignalR has only one agent-level resize today). |
 | Terminal stream | **No silent partial-stream corruption.** Never `DropOldest`; an overflowing sink is force-detached and re-syncs via a clean replay on rejoin (bounded by the 2 MB `OutputBuffer`) rather than rendering a corrupted partial stream (see plumbing). |
 | Vendor passthrough | **Launcher-agnostic.** Part of the `IHostedAgentLauncher` contract; both `run-agent claude` and `run-agent codex` work in v1. |
@@ -82,6 +83,10 @@ kcap ls
 - **Offline-daemon mode (no `ServerUrl`).** The daemon still requires the server at
   startup exactly as today; running fully cloud-less is a possible later enhancement, not
   this design.
+- **A kcap-specific share command / `--share` flag.** Sharing is server/UI-authoritative
+  (agents are owner-only until the web UI "share"); local agents inherit it by registering
+  like a UI-launched agent. A convenience `kcap share` CLI (an in-chat skill, like
+  `kcap hide`) is a later follow-up tracked as **AI-861**, not this design.
 - **Cross-machine local attach.** The agent runs on *your* daemon; the only "remote"
   control is the web/SignalR path. There is no local socket across machines.
 - **A server-side screen model for pixel-perfect replay.** Raw `OutputBuffer` replay
@@ -99,9 +104,7 @@ kcap run-agent <vendor> [kcap flags] -- [agent args passed verbatim]
     # kcap flags (before --):  --worktree (default: in-place),
     #                          --name <id>      select which daemon (existing convention),
     #                          --detached       spawn without attaching this terminal
-    #                                           (start in background, attach later),
-    #                          --share          [Phase 2] announce to the account so
-    #                                           teammates can join (default: private)
+    #                                           (start in background, attach later)
     # everything after --:     handed to the `claude`/`codex` CLI as-is
 
 kcap ls
@@ -235,28 +238,24 @@ alongside the PID/lock files in the existing daemon-file lifecycle.
         `PrivateLocal` — enforced by a **strict mock `ServerConnection` that fails the test
         on *any* method invoked for a private agent**. The SignalR output sink is simply
         not attached.
-     2. **Spawned agent → server (its own kcap hooks).** The launch env (`:294-309`) sets
+     2. **Spawned agent → server (its own kcap hooks).** The launch env (`:294-309`) can set
         `KCAP_RENDERED_AGENT`, `KCAP_AGENT_ID`, `KCAP_URL`, `KCAP_DAEMON_URL`; the agent's
         Claude/Codex hooks read these at runtime to tag events and bridge permissions
         independently of the orchestrator — and **process env is fixed at `execvp`
-        (`UnixPtyProcess.cs:62`), so it can never change after spawn.** A private launch
-        therefore sets, once, the env it wants for the agent's *whole life*:
-        - **`KCAP_URL` kept** — the session records to the account like any local
-          kcap-instrumented run. "Private" means *not a live, controllable hosted agent*,
-          **not** *unrecorded*.
-        - **`KCAP_AGENT_ID` kept** — it is only a tag (sets `agent_host_id` on recorded
-          events, `ClaudeHookCommand.cs:49` / `CodexHookCommand.cs:87`) and triggers **no**
-          server call, so the deny-all above is unaffected. Keeping it makes the transcript
-          **link-ready**: when the agent is later shared, the server associates the
-          already-tagged session with the now-registered hosted agent (the *tag-and-link*
-          decision). The server must tolerate events carrying an `agent_host_id` for an
-          agent it has not yet seen registered — part of the Phase 2 contract.
+        (`UnixPtyProcess.cs:62`), so it can never change after spawn.** A **Phase 1** local
+        launch sets, once, the env of a *plain local run*:
+        - **`KCAP_URL` kept** — the session records to the account exactly like a normal
+          local `claude`/`codex` run (subject to the user's `default_visibility`).
+        - **`KCAP_AGENT_ID` omitted in Phase 1** — the agent isn't a registered hosted agent
+          yet, so its events carry **no** `agent_host_id` and it records as an ordinary local
+          session (no dangling tag, no server-tolerance assumption). Phase 2 — which registers
+          the agent like a UI launch — sets it so the session links to the hosted agent the
+          normal way.
         - **`KCAP_RENDERED_AGENT` + `KCAP_DAEMON_URL` omitted** — the agent isn't treated as
-          headless and there is no daemon permission-bridge, so **permission prompts render
-          natively in the terminal** where the local user answers them. Because env is fixed
-          at spawn, this holds for the agent's whole life — **sharing does not move
-          permission prompts to the web UI** (an accepted limitation; the local driver, or a
-          remote one via the mirrored PTY, answers in-band).
+          headless and there's no daemon permission-bridge, so **permission prompts render
+          natively in the terminal**. Env is fixed at spawn, so this holds for the agent's
+          whole life — even after a Phase 2 share, prompts stay native (the local driver, or
+          a remote one via the mirrored PTY, answers in-band).
    `CleanupAgentAsync` (`AgentOrchestrator.cs:888`) today unconditionally calls
    `WorktreeManager.RemoveAsync(agent.Worktree)` (`:900`) — `Directory.Delete(path,
    recursive)` for standalone or `git worktree remove --force` + `git branch -D` otherwise
@@ -271,24 +270,19 @@ alongside the PID/lock files in the existing daemon-file lifecycle.
    auth. Env scrubbing becomes **conditional on launch type** (headless-hosted vs
    local-interactive). This interacts with the provider-API-key-scrub policy
    (`ProviderApiKeyPolicy` / `KCAP_USE_PROVIDER_API_KEY`).
-6. **Share = `PrivateLocal`→`Shared` transition (Phase 2 only)** — an explicit `kcap
-   share` flips the agent from `PrivateLocal` to `Shared`: it runs the deferred
-   `AgentRegisteredAsync` + run-started event using the **same `KCAP_AGENT_ID`** the agent
-   was launched with, so the server **links** the already-recorded transcript (whose events
-   were tagged with that `agent_host_id`) to the now-live hosted agent — one unified record
-   (the *tag-and-link* decision). It then **replays the agent's accumulated terminal
-   history** and attaches the SignalR sink for live chunks, so teammates see the agent in
-   the web UI as if it were server-initiated. **The one-time replay is required and
-   special:** the reconnect path deliberately does *not* replay the `OutputBuffer` (`:814`)
-   because the server keeps its own per-agent buffer across a daemon rebind — but a
-   freshly-shared `PrivateLocal` agent **the server has never seen has no such buffer**, so
-   share sends a one-time, bounded (2 MB `OutputBuffer`) replay *before* the first live
-   chunk, ordered ahead of the live stream. Permission routing is **not** changed by share
-   (env is fixed at spawn — see the `PrivateLocal` rule); prompts stay native. Today
-   launches flow server→daemon; this adds a daemon→server "I started agent X" registration
-   **plus the server tolerating and late-linking a pre-tagged session**. **This is where the
-   server contract changes** — which, with all web involvement, is why it is deferred to
-   Phase 2.
+6. **Server registration = Phase 2 (the one server-contract change).** Phase 1 keeps a
+   local agent **unregistered** — terminal-only, no `AgentRegistered`/status/stream (that is
+   the deny-all above: "not registered yet", not a privacy model). **Phase 2** registers it
+   on spawn **exactly like a UI-launched agent** (`AgentRegisteredAsync` + run-started, then
+   the SignalR sink joins the fan-out as just another client), so the **owner sees and
+   drives it from their web UI immediately** — owner-only by the server's model until they
+   hit **share** in the UI. Because it registers from the start, the recorded session links
+   the normal way (no "tag-and-link a pre-registered agent"). **Replay caveat:** the
+   reconnect path skips `OutputBuffer` replay (`:814`) because the server keeps its own
+   buffer across a daemon rebind; a web client *first* subscribing to an agent that started
+   locally has no server-side buffer yet, so that first subscribe needs a one-time bounded
+   replay. Permission routing stays native in the terminal (env is fixed at spawn — see
+   channel 2). Sharing is a UI action; a `kcap share` CLI is a later follow-up (AI-861).
 
 ### c) Local terminal client (`kcap run-agent` / `kcap attach`)
 
@@ -350,30 +344,25 @@ user-tunable.)
 
 - **Local socket = owner-only (0600).** Same trust level as the daemon PID files,
   locked to the OS user.
-- **Private until shared (Phase 2).** A locally-started agent is reachable as a *live,
-  controllable hosted agent* only over the owner's local socket by default. It becomes a
-  joinable hosted agent for teammates only via an **explicit** share/announce action
-  (`kcap share <agent>` or `run-agent --share`) — never auto-exposed by merely launching
-  it. "Private" is about live control/visibility, **not** recording: the session still
-  records its transcript to the account through the normal hooks and is viewable in recap,
-  like any local kcap session (see the `PrivateLocal` two-channel rule under *Daemon
-  changes*).
-- **Visibility = account-scoped, never public.** Once shared, the agent follows the
-  existing account/tenant visibility model (per commit `b77e9f97c`). No new visibility
-  concept.
-- **Remote control defaults to write — by design.** Once shared, a teammate attaching via
-  the web UI gets the same **write/input** control today's hosted agents grant. This is
-  deliberate: a *view-only* attach would be a strictly worse version of the existing
-  read-only session-sharing feature, so **observe-only is served by sharing, and attach is
-  for control**. We therefore do **not** gate input behind a separate control-grant; the
-  permission model mirrors hosted-agent runs exactly.
-- **Accepted trade-off (noted for reviewers).** This intentionally widens the *blast
-  radius* versus today's hosted agents, though not the *permission model*: a hosted agent
-  runs in an **isolated worktree under daemon-managed auth**, whereas a default in-place
-  local agent runs in the **user's real checkout with the user's personal credentials**.
-  The accepted mitigations are (a) private-until-explicitly-shared, (b) account-scoped
-  (never public) visibility, and (c) `--worktree` for users who want isolation. A tighter
-  per-session boundary is out of scope unless later required.
+- **Visibility/sharing is server-authoritative — local agents inherit the UI model.** This
+  repo defines no agent visibility: `AgentRegistered` carries only
+  `(agentId, prompt, model, effort, repoPath)` (`Models.cs:691`), and there is no "share"
+  concept in the CLI/daemon. The server decides, keyed on the authenticated owner. A
+  locally-launched agent **registers exactly like a UI-launched one** (Phase 2) and gets the
+  *same* behavior: **owner-only by default** — you see and drive it from your own web UI
+  immediately (your "remote control"), with no extra step — and teammates get access only
+  when you hit **share** in the web UI. Seeing your *own* agent on another of your surfaces
+  is **not** sharing and crosses no new trust boundary.
+- **Recording is independent of all this.** The transcript records to the account via the
+  normal hooks under the existing `default_visibility` setting (private/org_public/public,
+  commit `b77e9f97c`) like any local kcap run — orthogonal to the live hosted-agent surface.
+- **The in-place / local-creds blast radius applies only once you share to others.** A
+  hosted agent runs in an isolated worktree under daemon-managed auth; a default in-place
+  local agent runs in your real checkout with your personal credentials. By default that's
+  fine (owner-only). When you *share*, teammates get write control (same as hosted-agent
+  runs) over a process in your checkout with your creds — a conscious, owner-initiated
+  trade-off, with `--worktree` available for isolation. Same permission model as any shared
+  hosted agent; larger exposure only because of in-place + local auth.
 
 ## Phasing
 
@@ -386,11 +375,13 @@ user-tunable.)
   it does today — Phase 1 is *not* offline; it simply adds no new server endpoints and the
   local-attach feature involves no web client. De-risks all the new infra before touching
   the server.
-- **Phase 2 — pairing & continue-from-web.** An **explicit** daemon→server announce
-  (`kcap share <agent>` / `run-agent --share`; private to the launching user until then)
-  + web clients attaching/injecting via the existing SignalR fan-out (now just another
-  sink), with **write control by default once shared** (see *Security, visibility &
-  control*). Delivers both headline goals: pair programming and continue-from-anywhere.
+- **Phase 2 — continue-from-web, then pairing.** Register the local agent on spawn **like a
+  UI-launched agent** (the one server-contract change) so the **owner** sees and drives it
+  from their own web UI immediately (continue-from-anywhere) — owner-only until they hit
+  **share** in the UI, which widens to teammates (pairing, write control) via the existing
+  mechanism. Web clients attach/inject through the existing SignalR fan-out (now just another
+  sink). No kcap-specific share/visibility logic; a `kcap share` CLI convenience is a
+  follow-up (AI-861).
 
 ## Testing
 

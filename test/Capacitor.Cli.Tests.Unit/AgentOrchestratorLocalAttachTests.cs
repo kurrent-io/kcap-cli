@@ -138,9 +138,9 @@ public partial class AgentOrchestratorVendorTests {
             while (orch.ActiveAgentCountForTest > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
 
             await Assert.That(server.Calls.Count).IsEqualTo(0);
-            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_AGENT_ID")).IsTrue();
-            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_URL")).IsTrue();
-            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_RENDERED_AGENT")).IsFalse();
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_URL")).IsTrue();            // records as a plain local session
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_AGENT_ID")).IsFalse();      // unregistered in Phase 1 → no agent_host_id tag
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_RENDERED_AGENT")).IsFalse(); // native terminal permissions
             await Assert.That(pty.LastEnv!.ContainsKey("KCAP_DAEMON_URL")).IsFalse();
         } finally {
             Directory.Delete(dir.FullName, true);

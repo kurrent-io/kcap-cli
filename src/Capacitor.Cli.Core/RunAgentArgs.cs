@@ -41,10 +41,6 @@ public sealed class RunAgentArgs {
                     r.DaemonName = kcap[++i];
 
                     break;
-                case "--share":
-                    r.Error = "--share is Phase 2 and not yet supported";
-
-                    return r;
                 default:
                     r.Error = $"unknown flag {kcap[i]} (agent args go after `--`)";
 
