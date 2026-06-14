@@ -559,15 +559,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                     LogStartupFailed(agent.Id, exitCode, reason);
 
-                    _ = _server.LaunchFailedAsync(agent.Id, reason);
+                    if (!agent.IsPrivate) _ = _server.LaunchFailedAsync(agent.Id, reason);
                 }
 
                 agent.Status = status;
-                await _server.AgentStatusChangedAsync(agent.Id, status, agent.SessionId);
 
-                var stopReason = status == "Completed" ? "exited" : "failed";
+                // PrivateLocal agents make no per-agent server calls (deny-all).
+                if (!agent.IsPrivate) {
+                    await _server.AgentStatusChangedAsync(agent.Id, status, agent.SessionId);
 
-                await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(stopReason, exitCode));
+                    var stopReason = status == "Completed" ? "exited" : "failed";
+
+                    await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(stopReason, exitCode));
+                }
             }
 
             LogAgentExited(agent.Id, exitCode);
@@ -585,27 +589,31 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // long we WAIT on it to EndAgentSessionBudget. The retry keeps running in the
             // background — a reconnect shortly after still lands the session-end — and a
             // genuinely long outage falls back to server-side daemon-disconnect reconcile.
-            var endTask = _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
+            //
+            // PrivateLocal agents have no server-side session to end (deny-all).
+            if (!agent.IsPrivate) {
+                var endTask = _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
 
-            try {
-                var result = await endTask.WaitAsync(EndAgentSessionBudget, _shutdownCts.Token);
+                try {
+                    var result = await endTask.WaitAsync(EndAgentSessionBudget, _shutdownCts.Token);
 
-                // The daemon doesn't track sessionId on its own (only agentId), so
-                // the server returns it in the result. Spawn what's-done locally
-                // when the server says yes.
-                if (result is { GenerateWhatsDone: true, SessionId: not null }) {
-                    SpawnWhatsDoneGenerator(result.SessionId);
+                    // The daemon doesn't track sessionId on its own (only agentId), so
+                    // the server returns it in the result. Spawn what's-done locally
+                    // when the server says yes.
+                    if (result is { GenerateWhatsDone: true, SessionId: not null }) {
+                        SpawnWhatsDoneGenerator(result.SessionId);
+                    }
+                } catch (TimeoutException) {
+                    // Outage outlasted the budget. Don't block cleanup; the retry continues
+                    // in the background (observed below so a later fault isn't unobserved).
+                    LogEndSessionTimedOut(agent.Id, EndAgentSessionBudget.TotalSeconds);
+                    ObserveEndSessionInBackground(endTask, agent.Id);
+                } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) {
+                    // Shutdown fired mid-wait — connection is being torn down. Server
+                    // detects daemon disconnection independently. No warning needed.
+                } catch (Exception ex) {
+                    LogEndSessionFailed(ex, agent.Id);
                 }
-            } catch (TimeoutException) {
-                // Outage outlasted the budget. Don't block cleanup; the retry continues
-                // in the background (observed below so a later fault isn't unobserved).
-                LogEndSessionTimedOut(agent.Id, EndAgentSessionBudget.TotalSeconds);
-                ObserveEndSessionInBackground(endTask, agent.Id);
-            } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) {
-                // Shutdown fired mid-wait — connection is being torn down. Server
-                // detects daemon disconnection independently. No warning needed.
-            } catch (Exception ex) {
-                LogEndSessionFailed(ex, agent.Id);
             }
 
             // Clean up worktree and unregister from server. Runs unconditionally — even
@@ -877,7 +885,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         return;
 
         async Task ReRegisterAgentsAsync() {
-            foreach (var agent in _agents.Values.Where(a => a.Status is "Starting" or "Running")) {
+            // PrivateLocal agents are never registered with the server, so never re-register them.
+            foreach (var agent in _agents.Values.Where(a => (a.Status is "Starting" or "Running") && !a.IsPrivate)) {
                 try {
                     await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath);
                     await _server.AgentStatusChangedAsync(agent.Id, agent.Status, agent.SessionId);
@@ -920,7 +929,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     async Task RunHeartbeatLoopAsync(CancellationToken ct) {
         while (await _heartbeatTimer.WaitForNextTickAsync(ct)) {
-            foreach (var agent in _agents.Values.Where(a => a.Status is "Starting" or "Running")) {
+            // PrivateLocal agents get no heartbeats and no stuck-Starting auto-stop (deny-all;
+            // the local user is present and drives them directly).
+            foreach (var agent in _agents.Values.Where(a => (a.Status is "Starting" or "Running") && !a.IsPrivate)) {
                 // Detect agents stuck in "Starting" with no output
                 if (agent.Status                         == "Starting" &&
                     DateTime.UtcNow - agent.LastOutputAt > StartupTimeout) {
@@ -980,7 +991,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // would throw TaskCanceledException. The server detects the daemon
         // disconnection through SignalR's transport-level signals. Filtered
         // catch covers the residual race where shutdown fires mid-call.
-        if (!_shutdownCts.IsCancellationRequested) {
+        // PrivateLocal agents were never registered, so never unregister them (deny-all).
+        if (!agent.IsPrivate && !_shutdownCts.IsCancellationRequested) {
             try { await _server.AgentUnregisteredAsync(agentId); } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) { } catch (Exception ex) {
                 LogCleanupStepFailed(ex, "unregistering", agentId);
             }
@@ -1121,6 +1133,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Test-only entry point to the private cleanup path.</summary>
     internal Task CleanupAgentForTest(string agentId) => CleanupAgentAsync(agentId);
+
+    /// <summary>Test-only: number of agents currently tracked (for awaiting cleanup).</summary>
+    internal int ActiveAgentCountForTest => _agents.Count;
 
     /// <summary>Test-only entry point to the private stop handler (mirrors <see cref="HandleLaunchAgentForTest"/>).</summary>
     internal Task HandleStopAgentForTest(string agentId) => HandleStopAgent(agentId);

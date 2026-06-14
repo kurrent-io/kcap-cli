@@ -1,5 +1,9 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon;
+using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -105,5 +109,92 @@ public partial class AgentOrchestratorVendorTests {
         } finally {
             try { Directory.Delete(dir.FullName, true); } catch { /* already gone — that's the assertion */ }
         }
+    }
+
+    [Test]
+    public async Task PrivateLocal_spawn_makes_no_server_calls_and_omits_hosted_agent_env() {
+        var dir = Directory.CreateTempSubdirectory("kcap-priv-");
+
+        try {
+            var server    = new TripwireServerConnection();
+            var pty       = new EnvCapturingPtyFactory();
+            var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+
+            await using var orch = BuildOrchestrator(server, pty, launchers);
+
+            // Client read side: one Detach frame so the attach loop returns promptly.
+            var readBuf = new MemoryStream();
+            await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+            readBuf.Position = 0;
+            using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+            var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, dir.FullName, ["--model", "opus"], 80, 24);
+            await orch.HandleLocalSpawnAsync(spawn, client, default);
+
+            // Let the fire-and-forget read loop + cleanup finish, then assert no server call landed.
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (orch.ActiveAgentCountForTest > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
+
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_AGENT_ID")).IsTrue();
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_URL")).IsTrue();
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_RENDERED_AGENT")).IsFalse();
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_DAEMON_URL")).IsFalse();
+        } finally {
+            Directory.Delete(dir.FullName, true);
+        }
+    }
+
+    // ── Test doubles for the local-spawn lifecycle ──────────────────────
+
+    sealed class EnvCapturingPtyFactory : IPtyProcessFactory {
+        public Dictionary<string, string>? LastEnv { get; private set; }
+
+        public IPtyProcess Spawn(string command, string[] args, string cwd, Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40) {
+            LastEnv = extraEnv;
+
+            return new StubPtyProcess();
+        }
+    }
+
+    /// Read and write go to separate underlying streams, so a test can preload client input
+    /// while the daemon's frames are captured/discarded independently (a MemoryStream can't
+    /// do both at once — it has a single position).
+    sealed class DuplexTestStream(Stream readSide, Stream writeSide) : Stream {
+        public override int Read(byte[] b, int o, int c) => readSide.Read(b, o, c);
+        public override ValueTask<int> ReadAsync(Memory<byte> b, CancellationToken ct = default) => readSide.ReadAsync(b, ct);
+        public override void Write(byte[] b, int o, int c) => writeSide.Write(b, o, c);
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> b, CancellationToken ct = default) => writeSide.WriteAsync(b, ct);
+        public override void Flush() => writeSide.Flush();
+        public override Task FlushAsync(CancellationToken ct) => writeSide.FlushAsync(ct);
+        public override bool CanRead => true; public override bool CanWrite => true; public override bool CanSeek => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set { } }
+        public override long Seek(long o, SeekOrigin s) => throw new NotSupportedException();
+        public override void SetLength(long v) => throw new NotSupportedException();
+        protected override void Dispose(bool disposing) { if (disposing) { readSide.Dispose(); writeSide.Dispose(); } }
+    }
+
+    /// Records the name of any per-agent server method invoked. A PrivateLocal agent must
+    /// invoke none of them — the test asserts Calls is empty.
+    sealed class TripwireServerConnection() : ServerConnection(
+        new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
+        NullLoggerFactory.Instance,
+        NullLogger<ServerConnection>.Instance
+    ) {
+        public ConcurrentBag<string> Calls { get; } = [];
+
+        public override Task LaunchFailedAsync(string agentId, string reason) { Calls.Add(nameof(LaunchFailedAsync)); return Task.CompletedTask; }
+        public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath) { Calls.Add(nameof(AgentRegisteredAsync)); return Task.CompletedTask; }
+        public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) { Calls.Add(nameof(AgentStatusChangedAsync)); return Task.CompletedTask; }
+        public override Task AgentUnregisteredAsync(string agentId) { Calls.Add(nameof(AgentUnregisteredAsync)); return Task.CompletedTask; }
+        public override Task UpdateRepoPathsAsync() { Calls.Add(nameof(UpdateRepoPathsAsync)); return Task.CompletedTask; }
+        public override Task SendTerminalOutputAsync(string agentId, string base64Data, CancellationToken ct = default) { Calls.Add(nameof(SendTerminalOutputAsync)); return Task.CompletedTask; }
+        public override Task AppendAgentRunEventAsync(string agentId, object evt) { Calls.Add(nameof(AppendAgentRunEventAsync)); return Task.CompletedTask; }
+        public override Task<EndAgentSessionResult> EndAgentSessionAsync(string agentId, string reason) { Calls.Add(nameof(EndAgentSessionAsync)); return Task.FromResult(new EndAgentSessionResult()); }
+
+        public override Task<PermissionDecision> RequestPermissionAsync(
+                string sessionId, string? toolName, JsonElement? toolInput, JsonElement? suggestions, CancellationToken ct = default
+            ) { Calls.Add(nameof(RequestPermissionAsync)); return Task.FromResult(new PermissionDecision("deny", null, null)); }
     }
 }

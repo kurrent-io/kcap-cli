@@ -53,7 +53,7 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     static AgentOrchestrator BuildOrchestrator(
-            CaptureServerConnection                           server,
+            ServerConnection                                  server,
             IPtyProcessFactory                                ptyFactory,
             IReadOnlyDictionary<string, IHostedAgentLauncher> launchers,
             string?                                           allowedRepoPath = null
