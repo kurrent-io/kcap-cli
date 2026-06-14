@@ -1,0 +1,56 @@
+using System.Net.Sockets;
+using Capacitor.Cli.Core.LocalIpc;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
+namespace Capacitor.Cli.Daemon.Services;
+
+/// Accepts local (Unix-domain-socket / named-pipe) client connections and routes each
+/// opening frame to <see cref="AgentOrchestrator"/>. The socket file is owner-only (0600)
+/// — anything that can open it can spawn processes and stream a terminal, so it sits at
+/// the same trust boundary as the daemon PID/lock files.
+internal sealed partial class LocalControlServer(
+        DaemonConfig config, AgentOrchestrator orchestrator, ILogger<LocalControlServer> logger
+    ) : BackgroundService {
+    protected override async Task ExecuteAsync(CancellationToken ct) {
+        var path = LocalSocketPaths.Socket(config.Name);
+        try { if (File.Exists(path)) File.Delete(path); } catch { /* stale; bind fails loudly below */ }
+
+        using var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        listener.Bind(new UnixDomainSocketEndPoint(path));
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite); // 0600
+        listener.Listen(16);
+        LogListening(path);
+
+        try {
+            while (!ct.IsCancellationRequested) {
+                var conn = await listener.AcceptAsync(ct);
+                _ = HandleConnectionAsync(conn, ct); // fire-and-forget; handler owns its lifetime
+            }
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) { /* shutdown */ }
+        finally { try { File.Delete(path); } catch { /* best-effort */ } }
+    }
+
+    async Task HandleConnectionAsync(Socket conn, CancellationToken ct) {
+        using var _ = conn;
+        await using var stream = new NetworkStream(conn, ownsSocket: false);
+        try {
+            var first = await FrameCodec.ReadAsync(stream, ct);
+            if (first is null) return;
+            switch (first.Type) {
+                case FrameType.Spawn:  await orchestrator.HandleLocalSpawnAsync(first, stream, ct); break;
+                case FrameType.Attach: await orchestrator.HandleLocalAttachAsync(first.Text, stream, ct); break;
+                case FrameType.List:   await orchestrator.HandleLocalListAsync(stream, ct); break;
+                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/List, got {first.Type}"), ct); break;
+            }
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            LogConnectionError(ex);
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Local control socket listening at {Path}")]
+    partial void LogListening(string path);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Local control connection faulted")]
+    partial void LogConnectionError(Exception ex);
+}

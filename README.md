@@ -433,6 +433,29 @@ KCAP_DAEMON_LOG_LEVEL=debug kcap daemon    # env var; read directly, works in an
 
 Accepted values: `trace`, `debug`, `information` (default), `warning`, `error`, `critical`, `none`. The `--log-level` flag wins over the env var when both are set. `Debug` is verbose — it also enables the SignalR client's framework logs — so use it for a diagnostic window rather than steady state.
 
+### Local agents (run-agent / attach / ls)
+
+Start a coding agent from your own terminal that the daemon hosts for you. Because the daemon owns the agent (not your terminal), you can **detach and the agent keeps running**, then **re-attach later** — like `tmux` for your coding agent.
+
+```bash
+kcap run-agent claude                       # start Claude in the current directory, attached
+kcap run-agent claude -- --model opus       # everything after `--` is passed to the agent CLI verbatim
+kcap run-agent codex --worktree -- -m gpt-5 # run in an isolated git worktree instead of in place
+kcap run-agent claude --detached            # start without attaching; prints the agent id
+```
+
+- **`--` boundary:** flags before `--` are kcap's; everything after `--` is forwarded to the `claude`/`codex` CLI unchanged. kcap flags: `--worktree`, `--name <daemon>`, `--detached`.
+- **Work location:** by default the agent runs **in place in your current directory** (it edits your real files). Pass `--worktree` to run in a throwaway git worktree instead.
+- **Detach** without stopping the agent with the prefix key **`Ctrl-Q` then `d`**. The agent keeps running in the daemon.
+- **Permissions** prompt natively in your terminal, exactly like running the agent directly.
+
+```bash
+kcap ls                 # list daemon-hosted agents (id, status, repo)
+kcap attach <agent-id>  # re-attach your terminal to a running agent
+```
+
+`run-agent` auto-starts the daemon if one isn't already running. It needs a configured server (like the rest of kcap) — it is not an offline command. This release is **local-only**: starting an agent locally does not yet expose it to teammates in the web UI (planned for a later release). Unix only for now.
+
 ### Repository paths
 
 Manage known repo paths for the agent launch dialog. Repos are automatically added when agents are launched, but you can also manage the list manually:

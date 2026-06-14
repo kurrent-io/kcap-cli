@@ -19,7 +19,7 @@ namespace Capacitor.Cli.Tests.Unit;
 ///   • <see cref="CodexHooksNotInstalledException"/> from Prepare surfaces as a
 ///     LaunchFailed with the exception's message and no PTY ever spawns.
 /// </summary>
-public class AgentOrchestratorVendorTests {
+public partial class AgentOrchestratorVendorTests {
     static (string repoPath, Action cleanup) CreateGitRepo() {
         var repoPath = Path.Combine(Path.GetTempPath(), "kcap-orch-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(repoPath);
@@ -53,7 +53,7 @@ public class AgentOrchestratorVendorTests {
     }
 
     static AgentOrchestrator BuildOrchestrator(
-            CaptureServerConnection                           server,
+            ServerConnection                                  server,
             IPtyProcessFactory                                ptyFactory,
             IReadOnlyDictionary<string, IHostedAgentLauncher> launchers,
             string?                                           allowedRepoPath = null
@@ -494,6 +494,12 @@ public class AgentOrchestratorVendorTests {
             BuildArgsCalls++;
 
             return new LaunchArgs(Args: [], McpConfigPath: null);
+        }
+
+        public LaunchArgs BuildPassthrough(LauncherContext ctx, IReadOnlyList<string> userArgs) {
+            BuildArgsCalls++;
+
+            return new LaunchArgs(Args: [.. userArgs], McpConfigPath: null);
         }
 
         public void Cleanup(AgentInstance agent) {

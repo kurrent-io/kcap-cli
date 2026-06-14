@@ -9,7 +9,11 @@ namespace Capacitor.Cli.Daemon.Services;
 /// Tracked so <see cref="WorktreeManager.RemoveAsync"/> can delete it on
 /// cleanup. Null for non-review launches.
 /// </summary>
-public record WorktreeInfo(string Path, string Branch, string SourceRepo, bool IsStandalone = false, string? FetchedRef = null);
+public record WorktreeInfo(string Path, string Branch, string SourceRepo, bool IsStandalone = false, string? FetchedRef = null) {
+    /// <summary>A borrowed cwd (local in-place launch) the daemon does NOT own. Cleanup
+    /// never removes it — the <see cref="AgentInstance.Work"/> guard enforces that.</summary>
+    public static WorktreeInfo Borrowed(string cwd) => new(cwd, "", cwd, IsStandalone: false);
+}
 
 public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManager> logger) {
     public async Task<WorktreeInfo> CreateAsync(string repoPath, string? name = null, string? baseRef = null) {

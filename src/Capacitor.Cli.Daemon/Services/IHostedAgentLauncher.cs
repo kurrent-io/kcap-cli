@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Commands;
+using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Daemon.Services;
 
@@ -40,8 +41,15 @@ internal interface IHostedAgentLauncher {
     /// </summary>
     void Prepare(LauncherContext ctx);
 
-    /// <summary>Build the argv array passed to the CLI.</summary>
+    /// <summary>Build the argv array passed to the CLI from structured server fields.</summary>
     LaunchArgs BuildArgs(LauncherContext ctx);
+
+    /// <summary>
+    /// Build argv for a local <c>run-agent</c> launch: emit only the mandatory daemon-level
+    /// flags this vendor must always set, then append the user's verbatim post-<c>--</c>
+    /// args. Used by the local-attach path instead of <see cref="BuildArgs"/>.
+    /// </summary>
+    LaunchArgs BuildPassthrough(LauncherContext ctx, IReadOnlyList<string> userArgs);
 
     /// <summary>Per-vendor cleanup AFTER the agent exits / is stopped.</summary>
     void Cleanup(AgentInstance agent);
@@ -58,6 +66,10 @@ internal sealed record LauncherContext(
         bool                              IsReview,
         ReviewLaunchInfo?                 Review,
         ReviewLaunchBuilder.ReviewLaunch? ReviewLaunch
-    );
+    ) {
+    /// <summary>Owned worktree (daemon-created) vs borrowed cwd (the user's own checkout).
+    /// Borrowed-cwd launches skip repo-mutating <c>Prepare()</c> steps.</summary>
+    public WorkLocation Work { get; init; } = WorkLocation.OwnedWorktree;
+}
 
 internal readonly record struct LaunchArgs(string[] Args, string? McpConfigPath);
