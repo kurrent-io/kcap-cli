@@ -183,6 +183,11 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<EvalContextCache>();
         builder.Services.AddSingleton<EvalRunner>();
 
+        // Local control socket: lets `kcap run-agent`/`attach`/`ls` drive daemon-hosted
+        // agents from the user's own terminal (AI local-attach Phase 1).
+        builder.Services.AddSingleton<LocalControlServer>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<LocalControlServer>());
+
         var host   = builder.Build();
         var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("kcap.Daemon");
 
