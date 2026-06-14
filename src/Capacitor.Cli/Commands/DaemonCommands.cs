@@ -760,13 +760,14 @@ public static class DaemonCommands {
         $"kcap-daemon binary not found next to {AppContext.BaseDirectory}. Reinstall the kcap package.";
 
     static int PrintUsage() {
-        Console.Error.WriteLine("Usage: kcap daemon <start|stop|status|logs|doctor>");
+        Console.Error.WriteLine("Usage: kcap daemon <start|stop|status|logs|doctor|service>");
         Console.Error.WriteLine();
         Console.Error.WriteLine("  start [-d] [--name <n>]    Start the daemon (foreground, or -d for background)");
         Console.Error.WriteLine("  stop [--name <n>] [--yes]  Stop a running daemon (prompts on multi unless --yes)");
         Console.Error.WriteLine("  status [--name <n>]        Show daemon status (lists all when --name omitted)");
         Console.Error.WriteLine("  logs                       Show recent daemon log output");
         Console.Error.WriteLine("  doctor [--clean]           Diagnose lock-file state, optionally clean stale entries");
+        Console.Error.WriteLine("  service <action>           Manage the OS service (launchd/systemd/Scheduled Task)");
         Console.Error.WriteLine();
         Console.Error.WriteLine("Options for start:");
         Console.Error.WriteLine("  --name <name>         Daemon name (defaults to OS username)");
