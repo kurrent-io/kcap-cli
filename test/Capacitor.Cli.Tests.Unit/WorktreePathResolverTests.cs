@@ -1,5 +1,3 @@
-using Capacitor.Cli;
-
 namespace Capacitor.Cli.Tests.Unit;
 
 public class WorktreePathResolverTests {
@@ -117,7 +115,7 @@ public class WorktreePathResolverTests {
     public async Task Resolve_returns_cwd_unchanged_when_it_exists() {
         var (path, stripped) = WorktreePathResolver.Resolve(
             "/dev/kcap-cli/.claude/worktrees/slug",
-            _ => true                              // cwd exists → no strip even though pattern matches
+            _ => true // cwd exists → no strip even though pattern matches
         );
 
         await Assert.That(path).IsEqualTo("/dev/kcap-cli/.claude/worktrees/slug");
@@ -171,9 +169,14 @@ public class WorktreePathResolverTests {
         // must run before any filesystem probe so non-matching paths
         // never touch the disk.
         var probes = 0;
+
         var (path, stripped) = WorktreePathResolver.Resolve(
             "/dev/kcap-cli/src/Foo",
-            _ => { probes++; return true; }
+            _ => {
+                probes++;
+
+                return true;
+            }
         );
 
         await Assert.That(path).IsEqualTo("/dev/kcap-cli/src/Foo");
@@ -186,9 +189,14 @@ public class WorktreePathResolverTests {
         // Sanity check the other half of the perf ordering: when the
         // pattern matches we DO need to call exists.
         var probes = 0;
+
         WorktreePathResolver.Resolve(
             "/dev/kcap-cli/.claude/worktrees/slug",
-            _ => { probes++; return false; }
+            _ => {
+                probes++;
+
+                return false;
+            }
         );
 
         await Assert.That(probes).IsGreaterThan(0);

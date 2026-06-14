@@ -1,7 +1,5 @@
 using System.Text.Json;
 using Capacitor.Cli.Core;
-using TUnit.Core;
-using TUnit.Assertions;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -14,11 +12,11 @@ public class V2ModelSerializationTests {
             OverallScore = 4,
             Summary      = "ok",
             Categories   = [],
-            Retrospective = new EvalRetrospectiveV2 {
+            Retrospective = new() {
                 OverallSummary = "fine",
-                Suggestions    = [
-                    new RetrospectiveSuggestion { Text = "Run tests before commit",  Audience = "agent" },
-                    new RetrospectiveSuggestion { Text = "Discuss design with team", Audience = "human" }
+                Suggestions = [
+                    new() { Text = "Run tests before commit", Audience  = "agent" },
+                    new() { Text = "Discuss design with team", Audience = "human" }
                 ]
             }
         };
@@ -32,7 +30,7 @@ public class V2ModelSerializationTests {
 
     [Test]
     public async Task EvalRetrospectiveV2_coerces_null_lists_to_empty() {
-        var json = """{"overall":"x","strengths":null,"issues":null,"suggestions":null}""";
+        var json   = """{"overall":"x","strengths":null,"issues":null,"suggestions":null}""";
         var parsed = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.EvalRetrospectiveV2)!;
 
         await Assert.That(parsed.Strengths).IsNotNull();
@@ -61,13 +59,60 @@ public class V2ModelSerializationTests {
 
         var json = JsonSerializer.Serialize(src, CapacitorJsonContext.Default.SessionEvalCompletedPayloadV2);
 
-        await Assert.That(json).Contains(@"""eval_run_id""");
-        await Assert.That(json).Contains(@"""judge_model""");
-        await Assert.That(json).Contains(@"""overall_score""");
-        await Assert.That(json).Contains(@"""retrospective""");
-        await Assert.That(json).Contains(@"""suggestions""");
-        await Assert.That(json).Contains(@"""text""");
-        await Assert.That(json).Contains(@"""audience""");
-        await Assert.That(json).Contains(@"""overall"":"); // EvalRetrospectiveV2.OverallSummary maps to "overall"
+        await Assert.That(json)
+            .Contains(
+                """
+                "eval_run_id"
+                """
+            );
+
+        await Assert.That(json)
+            .Contains(
+                """
+                "judge_model"
+                """
+            );
+
+        await Assert.That(json)
+            .Contains(
+                """
+                "overall_score"
+                """
+            );
+
+        await Assert.That(json)
+            .Contains(
+                """
+                "retrospective"
+                """
+            );
+
+        await Assert.That(json)
+            .Contains(
+                """
+                "suggestions"
+                """
+            );
+
+        await Assert.That(json)
+            .Contains(
+                """
+                "text"
+                """
+            );
+
+        await Assert.That(json)
+            .Contains(
+                """
+                "audience"
+                """
+            );
+
+        await Assert.That(json)
+            .Contains(
+                """
+                "overall":
+                """
+            ); // EvalRetrospectiveV2.OverallSummary maps to "overall"
     }
 }
