@@ -99,7 +99,9 @@ kcap run-agent <vendor> [kcap flags] -- [agent args passed verbatim]
     # kcap flags (before --):  --worktree (default: in-place),
     #                          --name <id>      select which daemon (existing convention),
     #                          --detached       spawn without attaching this terminal
-    #                                           (start in background, attach later)
+    #                                           (start in background, attach later),
+    #                          --share          [Phase 2] announce to the account so
+    #                                           teammates can join (default: private)
     # everything after --:     handed to the `claude`/`codex` CLI as-is
 
 kcap ls
@@ -220,12 +222,30 @@ alongside the PID/lock files in the existing daemon-file lifecycle.
      are read-only/idempotent ones (e.g. Codex's hooks preflight *check*, which fails fast
      without writing). A test asserts an in-place launch creates/modifies no repo or
      global-config files.
-   - **Private-local server state** — a locally-launched agent starts **`PrivateLocal`**:
-     the orchestrator suppresses *all* server interaction — no `AgentRegisteredAsync`
-     (`AgentOrchestrator.cs:327`), no run-started/status events (`:329`), no
-     `SendTerminalOutputAsync` (`:455`), no `AgentUnregisteredAsync`. The SignalR sink is
-     simply **not attached** to this agent's fan-out; the agent exists only on the local
-     socket until an explicit share (Phase 2) transitions it.
+   - **Private-local state — two channels to silence.** A locally-launched agent starts
+     **`PrivateLocal`**, and "private" must hold on *both* paths that reach the server:
+     1. **Orchestrator → server (control plane): deny-all.** The orchestrator makes **no
+        per-agent `ServerConnection` call whatsoever** for a `PrivateLocal` agent — not
+        just `AgentRegisteredAsync` (`:327`) and `SendTerminalOutputAsync` (`:455`), but
+        also `AppendAgentRunEvent` started/stopped (`:329`/`:520`), the repo-path announce
+        `DaemonUpdateRepoPaths` (`:334`/`ServerConnection.cs:406`), `LaunchFailedAsync`
+        (`:512`), `AgentStatusChangedAsync` (`:516`), `EndAgentSessionAsync` (`:534`),
+        reconnect re-register (`:811`), and the per-agent heartbeat (`:862`). Implement as
+        a single guard — route every per-agent server call through one gate that no-ops for
+        `PrivateLocal` — enforced by a **strict mock `ServerConnection` that fails the test
+        on *any* method invoked for a private agent**. The SignalR output sink is simply
+        not attached.
+     2. **Spawned agent → server (its own kcap hooks).** The launch env (`:294-309`) sets
+        `KCAP_RENDERED_AGENT`, `KCAP_AGENT_ID`, `KCAP_URL`, `KCAP_DAEMON_URL`; the agent's
+        Claude/Codex hooks use these to post events and bridge permissions independently of
+        the orchestrator. A private launch **omits the hosted-agent vars** (`KCAP_AGENT_ID`,
+        `KCAP_DAEMON_URL`, `KCAP_RENDERED_AGENT`) so the agent behaves like a normal local
+        run — **permission prompts render natively in the terminal** (no daemon
+        permission-bridge) and it is not a controllable hosted agent. `KCAP_URL` is
+        **kept**, so the session records to the account exactly like any local
+        kcap-instrumented run (per the recording decision): "private" means *not a live,
+        controllable hosted agent*, **not** *unrecorded*. On share, the hosted-agent env is
+        applied to *subsequent* hook invocations.
    `CleanupAgentAsync` (`AgentOrchestrator.cs:888`) today unconditionally calls
    `WorktreeManager.RemoveAsync(agent.Worktree)` (`:900`) — `Directory.Delete(path,
    recursive)` for standalone or `git worktree remove --force` + `git branch -D` otherwise
@@ -241,12 +261,17 @@ alongside the PID/lock files in the existing daemon-file lifecycle.
    local-interactive). This interacts with the provider-API-key-scrub policy
    (`ProviderApiKeyPolicy` / `KCAP_USE_PROVIDER_API_KEY`).
 6. **Share = `PrivateLocal`→`Shared` transition (Phase 2 only)** — an explicit `kcap
-   share` flips the agent from `PrivateLocal` to `Shared`: it attaches the SignalR sink,
-   runs the deferred `AgentRegisteredAsync` + run-started event, and begins streaming, so
-   teammates see the agent in the web UI as if it were server-initiated. Today launches
-   flow server→daemon; this adds a daemon→server "I started agent X" registration. **This
-   is the one place the server contract changes** — which, with all web involvement, is why
-   it is deferred to Phase 2.
+   share` flips the agent from `PrivateLocal` to `Shared`: it runs the deferred
+   `AgentRegisteredAsync` + run-started event, **replays the agent's accumulated terminal
+   history**, then attaches the SignalR sink for live chunks, so teammates see the agent in
+   the web UI as if it were server-initiated. **The one-time replay is required and
+   special:** the reconnect path deliberately does *not* replay the `OutputBuffer` (`:814`)
+   because the server keeps its own per-agent buffer across a daemon rebind — but a
+   freshly-shared `PrivateLocal` agent **the server has never seen has no such buffer**, so
+   share sends a one-time, bounded (2 MB `OutputBuffer`) replay *before* the first live
+   chunk, ordered ahead of the live stream. Today launches flow server→daemon; this adds a
+   daemon→server "I started agent X" registration. **This is the one place the server
+   contract changes** — which, with all web involvement, is why it is deferred to Phase 2.
 
 ### c) Local terminal client (`kcap run-agent` / `kcap attach`)
 
@@ -304,10 +329,14 @@ wins; the mandatory flags (`--cd`, `--no-alt-screen`) are always enforced.
 
 - **Local socket = owner-only (0600).** Same trust level as the daemon PID files,
   locked to the OS user.
-- **Private until shared (Phase 2).** A locally-started agent is reachable only over the
-  owner's local socket by default. It becomes visible to teammates only via an
-  **explicit** share/announce action (`kcap share <agent>` or `run-agent --share`) — it is
-  never auto-exposed by merely launching it.
+- **Private until shared (Phase 2).** A locally-started agent is reachable as a *live,
+  controllable hosted agent* only over the owner's local socket by default. It becomes a
+  joinable hosted agent for teammates only via an **explicit** share/announce action
+  (`kcap share <agent>` or `run-agent --share`) — never auto-exposed by merely launching
+  it. "Private" is about live control/visibility, **not** recording: the session still
+  records its transcript to the account through the normal hooks and is viewable in recap,
+  like any local kcap session (see the `PrivateLocal` two-channel rule under *Daemon
+  changes*).
 - **Visibility = account-scoped, never public.** Once shared, the agent follows the
   existing account/tenant visibility model (per commit `b77e9f97c`). No new visibility
   concept.
@@ -357,9 +386,13 @@ wins; the mandatory flags (`--cd`, `--no-alt-screen`) are always enforced.
   + daemon `DisposeAsync` leave the cwd **and** its git branch fully intact (no
   `Directory.Delete` / `git worktree remove` / `git branch -D`). Conversely an owned-
   worktree agent is still prepared and cleaned up exactly as today.
-- **Privacy:** a `PrivateLocal` agent makes **zero** server calls (no `AgentRegistered`,
-  status, run events, terminal output, or unregister) across its whole lifecycle until an
-  explicit share; only after share do registration + streaming begin.
+- **Privacy (strict mock):** with a mock `ServerConnection` that **fails the test on any
+  per-agent method call**, a `PrivateLocal` agent's full lifecycle (launch → run →
+  heartbeat → exit/finalize → cleanup, incl. a simulated reconnect) triggers **none** of
+  them; the spawn env omits the hosted-agent vars
+  (`KCAP_AGENT_ID`/`KCAP_DAEMON_URL`/`KCAP_RENDERED_AGENT`) while `KCAP_URL` is present
+  (recording stays on). On share: registration + a one-time bounded buffer replay + live
+  streaming begin.
 - **Integration:** spawn a trivial PTY program (e.g. a tiny echo / `cat`) over the
   socket; assert stdin→stdout round-trip, resize, detach-leaves-running, and
   reattach-replays-buffer. TUnit + existing PTY test patterns.
