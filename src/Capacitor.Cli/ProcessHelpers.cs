@@ -92,6 +92,9 @@ static partial class ProcessHelpers {
     const uint SYNCHRONIZE   = 0x00100000;
     const uint WAIT_TIMEOUT  = 258;
 
+    // QueryFullProcessImageName sets this when lpExeName is too small for the image path.
+    const int ERROR_INSUFFICIENT_BUFFER = 122;
+
     // Minimal access right that still permits NtQueryInformationProcess(ProcessBasicInformation)
     // and QueryFullProcessImageName on Vista+. Cheaper than PROCESS_QUERY_INFORMATION and
     // succeeds for same-user processes even when they're protected/elevated-adjacent.
@@ -363,19 +366,44 @@ static partial class ProcessHelpers {
 
             var ppid = (int)pbi.InheritedFromUniqueProcessId;
 
-            // Full image path → MatchesAgentName takes the basename. MAX_PATH is not a hard
-            // limit for long paths, but the agent executable lives well within 1024 chars.
-            const int max = 1024;
-            char*     buf = stackalloc char[max];
-            var       len = (uint)max;
-
-            var comm = QueryFullProcessImageName(handle, 0, buf, ref len)
-                ? new string(buf, 0, (int)len)
-                : "";
-
-            return (ppid, comm);
+            // comm is the full image path; MatchesAgentName takes the basename. An empty
+            // string on failure still lets the ancestry walk continue past this node (it
+            // just won't match here) — but if it's the agent's own path that fails to read,
+            // resolution falls back to the immediate parent and the watchdog can mis-arm,
+            // so QueryImageName grows the buffer rather than giving up on long paths.
+            return (ppid, QueryImageName(handle) ?? "");
         } finally {
             CloseHandle(handle);
+        }
+    }
+
+    /// <summary>
+    /// Reads a process's full image path via <c>QueryFullProcessImageName</c>, retrying on a
+    /// heap buffer if the path exceeds the initial stack buffer (Windows long paths can reach
+    /// ~32K chars). Returns null if the call fails for any reason other than buffer size.
+    /// </summary>
+    static unsafe string? QueryImageName(nint handle) {
+        const int stackCap = 1024;
+        char*     stackBuf = stackalloc char[stackCap];
+        var       len      = (uint)stackCap;
+
+        if (QueryFullProcessImageName(handle, 0, stackBuf, ref len)) {
+            return new string(stackBuf, 0, (int)len);
+        }
+
+        if (Marshal.GetLastPInvokeError() != ERROR_INSUFFICIENT_BUFFER) {
+            return null;
+        }
+
+        // Extended-length path maximum (\\?\-prefixed paths). One retry covers every
+        // realistic case; too large for stackalloc, so use a heap buffer.
+        const int maxCap   = 32768;
+        var       heapBuf  = new char[maxCap];
+
+        fixed (char* p = heapBuf) {
+            len = maxCap;
+
+            return QueryFullProcessImageName(handle, 0, p, ref len) ? new string(p, 0, (int)len) : null;
         }
     }
 
