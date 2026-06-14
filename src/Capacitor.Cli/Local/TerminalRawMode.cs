@@ -16,6 +16,7 @@ namespace Capacitor.Cli.Local;
 /// </summary>
 internal static partial class TerminalRawMode {
     const int StdinFd         = 0;
+    const int StdoutFd        = 1;
     const int TCSANOW         = 0;
     const int TermiosBlobSize = 128; // > sizeof(struct termios) on Linux (~60) and macOS (~72)
 
@@ -30,6 +31,34 @@ internal static partial class TerminalRawMode {
     [LibraryImport("libc")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     private static partial void cfmakeraw(byte[] termios);
+
+    [LibraryImport("libc", SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial nint read(int fd, byte[] buf, nint count);
+
+    [LibraryImport("libc", SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial nint write(int fd, byte[] buf, nint count);
+
+    /// <summary>
+    /// Blocking raw read of stdin (fd 0). We deliberately bypass <see cref="Console"/>: on
+    /// Unix its stream layer re-cooks the terminal, which would defeat raw mode (double echo,
+    /// line buffering, LF-instead-of-CR on Enter). Returns bytes read, 0 on EOF.
+    /// </summary>
+    public static int ReadStdin(byte[] buf) => (int)read(StdinFd, buf, buf.Length);
+
+    /// <summary>Writes <paramref name="length"/> bytes of <paramref name="data"/> to stdout
+    /// (fd 1), looping over partial writes. Bypasses <see cref="Console"/> for the same reason.</summary>
+    public static void WriteStdout(byte[] data, int length) {
+        var off = 0;
+        while (off < length) {
+            var slice = off == 0 ? data : data[off..length];
+            var n     = (int)write(StdoutFd, slice, length - off);
+            if (n <= 0) break; // error/EOF — caller's read loop will notice the closed stream
+
+            off += n;
+        }
+    }
 
     /// <summary>
     /// Enables raw mode and returns a token whose <see cref="IDisposable.Dispose"/> restores

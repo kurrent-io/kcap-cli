@@ -26,8 +26,12 @@ internal static class LocalAgentClient {
 
         await FrameCodec.WriteAsync(stream, opening, ct);
 
+        // Touch the Console size getter once BEFORE enabling raw mode, so .NET's lazy console
+        // init can't re-cook the terminal after we set raw. All real I/O bypasses Console and
+        // uses the raw fds directly (TerminalRawMode.ReadStdin/WriteStdout).
+        _ = TrySize();
+
         using var raw      = TerminalRawMode.Enable();
-        var       stdout   = Console.OpenStandardOutput();
         var       writeLock = new SemaphoreSlim(1, 1);
         var       exitCode = 0;
 
@@ -45,16 +49,12 @@ internal static class LocalAgentClient {
 
                     switch (f.Type) {
                         case FrameType.Stdout:
-                            await stdout.WriteAsync(f.Bytes, ct);
-                            await stdout.FlushAsync(ct);
+                            TerminalRawMode.WriteStdout(f.Bytes, f.Bytes.Length);
 
                             break;
                         case FrameType.Attached:
                             var (_, snapshot) = FrameCodec.Attached(f);
-                            if (snapshot.Length > 0) {
-                                await stdout.WriteAsync(snapshot, ct);
-                                await stdout.FlushAsync(ct);
-                            }
+                            if (snapshot.Length > 0) TerminalRawMode.WriteStdout(snapshot, snapshot.Length);
 
                             await Send(SizeFrame()); // nudge a clean repaint at our size
 
@@ -90,15 +90,16 @@ internal static class LocalAgentClient {
             }
         }, ct);
 
-        // client → daemon (raw stdin), with detach-sequence interception
+        // client → daemon (raw stdin via fd 0), with detach-sequence interception. read() is
+        // blocking and not cancellable; on detach we break, and on agent exit the process
+        // exits (Task.WhenAny below returns), abandoning this thread — which is fine.
         var stdinPump = Task.Run(async () => {
             var scanner = new DetachScanner();
-            var stdin   = Console.OpenStandardInput();
             var buf     = new byte[4096];
             try {
                 while (!ct.IsCancellationRequested) {
-                    var n = await stdin.ReadAsync(buf, ct);
-                    if (n == 0) break;
+                    var n = TerminalRawMode.ReadStdin(buf);
+                    if (n <= 0) break;
 
                     var (forward, detach) = scanner.Process(buf.AsSpan(0, n));
                     if (forward.Length > 0) await Send(LocalFrame.Stdin(forward));
