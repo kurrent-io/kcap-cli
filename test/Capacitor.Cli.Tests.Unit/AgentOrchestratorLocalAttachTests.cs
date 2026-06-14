@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
@@ -142,6 +144,53 @@ public partial class AgentOrchestratorVendorTests {
             await Assert.That(pty.LastEnv!.ContainsKey("KCAP_DAEMON_URL")).IsFalse();
         } finally {
             Directory.Delete(dir.FullName, true);
+        }
+    }
+
+    [Test]
+    public async Task Local_socket_list_round_trips_registered_agents_over_a_real_socket() {
+        if (OperatingSystem.IsWindows()) return; // Unix-domain socket path
+
+        var sockDir = Directory.CreateTempSubdirectory("kcap-sock-");
+        DaemonLockPaths.OverrideDirectoryForTesting(sockDir.FullName);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+        LocalControlServer? listener = null;
+        AgentOrchestrator?  orch     = null;
+
+        try {
+            orch = BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+            orch.RegisterAgentForTest(new AgentInstance(
+                "agent-xyz", null, "", null, "/tmp/repo", "claude",
+                new StubPtyProcess(), new WorktreeInfo("/tmp/repo", "", "/tmp/repo"), new CancellationTokenSource()
+            ) {
+                IsPrivate = true, Work = WorkLocation.BorrowedCwd, Status = "Running"
+            });
+
+            var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" };
+            listener = new LocalControlServer(config, orch, NullLogger<LocalControlServer>.Instance);
+            await listener.StartAsync(cts.Token);
+
+            var sockPath = LocalSocketPaths.Socket("test");
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (!File.Exists(sockPath) && DateTime.UtcNow < deadline) await Task.Delay(20, cts.Token);
+            await Assert.That(File.Exists(sockPath)).IsTrue();
+
+            using var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), cts.Token);
+            await using var stream = new NetworkStream(sock, ownsSocket: false);
+
+            await FrameCodec.WriteAsync(stream, new LocalFrame(FrameType.List), cts.Token);
+            var resp = await FrameCodec.ReadAsync(stream, cts.Token);
+
+            await Assert.That(resp!.Type).IsEqualTo(FrameType.AgentList);
+            await Assert.That(resp.Text).Contains("agent-xyz");
+            await Assert.That(resp.Text).Contains("Running");
+        } finally {
+            if (orch is not null) await orch.DisposeAsync();
+            if (listener is not null) { await listener.StopAsync(CancellationToken.None); listener.Dispose(); }
+            DaemonLockPaths.OverrideDirectoryForTesting(null);
+            try { Directory.Delete(sockDir.FullName, true); } catch { /* best-effort */ }
         }
     }
 

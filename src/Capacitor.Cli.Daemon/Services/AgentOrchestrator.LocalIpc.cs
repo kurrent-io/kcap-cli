@@ -4,8 +4,12 @@ namespace Capacitor.Cli.Daemon.Services;
 
 /// Local-socket entry points invoked by <see cref="LocalControlServer"/>.
 internal partial class AgentOrchestrator {
-    // Filled in E4 (agent list).
-    public Task HandleLocalListAsync(Stream stream, CancellationToken ct) => Task.CompletedTask;
+    /// <summary>Reply to a <c>kcap ls</c> request with a tab-separated agent table.</summary>
+    public Task HandleLocalListAsync(Stream stream, CancellationToken ct) {
+        var lines = _agents.Values.Select(a => $"{a.Id}\t{a.Status}\t{a.RepoPath}");
+
+        return FrameCodec.WriteAsync(stream, new LocalFrame(FrameType.AgentList) { Text = string.Join('\n', lines) }, ct);
+    }
 
     /// <summary>
     /// Spawn a new agent from a local <c>run-agent</c> request, then attach the requesting
