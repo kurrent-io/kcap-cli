@@ -54,6 +54,11 @@ public record AgentInstance(
     internal Dictionary<ITerminalSink, Dim> ClientDims { get; } = [];
     public readonly record struct Dim(ushort Cols, ushort Rows);
 
+    /// <summary>Tripped when the agent terminates (CleanupAgentAsync) so an attached local
+    /// client that's blocked waiting on the user's keystrokes wakes, flushes the last output,
+    /// and sends an Exited frame instead of hanging.</summary>
+    internal CancellationTokenSource ExitedCts { get; } = new();
+
     /// <summary>
     /// True for locally-launched agents: the orchestrator makes no per-agent server call
     /// and does not attach the SignalR sink. An explicit share (Phase 2) clears this.
@@ -971,6 +976,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (!_agents.TryRemove(agentId, out var agent)) {
             return;
         }
+
+        // Wake any attached local clients blocked on the user's stdin so they can flush the
+        // last output and send Exited (the agent is going away). The exit code is already
+        // captured on agent.Process, so disposing it below doesn't lose it.
+        try { await agent.ExitedCts.CancelAsync(); } catch { /* best-effort */ }
 
         // Each cleanup step is best-effort so later steps still run
         try { await agent.Process.DisposeAsync(); } catch (Exception ex) { LogCleanupStepFailed(ex, "disposing process", agentId); }

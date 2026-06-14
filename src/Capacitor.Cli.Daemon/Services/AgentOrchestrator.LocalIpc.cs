@@ -105,9 +105,15 @@ internal partial class AgentOrchestrator {
             await Send(FrameCodec.Attached(agent.Id, agent.OutputBuffer.Snapshot()));
             var pump = sink.RunAsync(ct);
 
+            // Wake this read loop when the agent exits on its own (CleanupAgentAsync trips
+            // ExitedCts), not only when the client sends input. Otherwise a self-exiting agent
+            // (e.g. typing /exit) leaves us blocked on the client read and we never flush the
+            // final output or send Exited — the client would just hang.
+            using var loopCts = CancellationTokenSource.CreateLinkedTokenSource(ct, agent.ExitedCts.Token);
+
             try {
-                while (!ct.IsCancellationRequested) {
-                    var f = await FrameCodec.ReadAsync(stream, ct);
+                while (!loopCts.Token.IsCancellationRequested) {
+                    var f = await FrameCodec.ReadAsync(stream, loopCts.Token);
                     if (f is null || f.Type == FrameType.Detach) break;
 
                     switch (f.Type) {
