@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
@@ -16,21 +17,27 @@ internal sealed partial class CodexLauncher(
     static readonly string[] CriticalHookEvents = ["SessionStart", "Stop", "PermissionRequest"];
 
     public void Prepare(LauncherContext ctx) {
-        // Step 1: overlay source/.codex into worktree FIRST so project-scope
-        // hooks (kcap plugin install --codex --project) become visible to
-        // the preflight in step 2. Best-effort.
-        try {
-            var sourceCodexDir = Path.Combine(ctx.SourceRepoPath, ".codex");
+        // A borrowed cwd is the user's own repo: skip the repo-mutating steps (overlay,
+        // ~/.codex trust write). Only the read-only hooks preflight runs for it.
+        var owned = ctx.Work == WorkLocation.OwnedWorktree;
 
-            if (Directory.Exists(sourceCodexDir)) {
-                FileSystemOverlay.OverlayDirectory(sourceCodexDir, Path.Combine(ctx.Worktree.Path, ".codex"));
+        if (owned) {
+            // Step 1: overlay source/.codex into worktree FIRST so project-scope
+            // hooks (kcap plugin install --codex --project) become visible to
+            // the preflight in step 2. Best-effort.
+            try {
+                var sourceCodexDir = Path.Combine(ctx.SourceRepoPath, ".codex");
+
+                if (Directory.Exists(sourceCodexDir)) {
+                    FileSystemOverlay.OverlayDirectory(sourceCodexDir, Path.Combine(ctx.Worktree.Path, ".codex"));
+                }
+            } catch (Exception ex) {
+                LogOverlayFailed(ex, ctx.AgentId);
             }
-        } catch (Exception ex) {
-            LogOverlayFailed(ex, ctx.AgentId);
         }
 
-        // Step 2: hook preflight (fail-fast). Either worktree-scope (after overlay)
-        // OR user-scope is sufficient.
+        // Step 2: hook preflight (fail-fast, read-only). Either worktree/cwd-scope OR
+        // user-scope is sufficient. Runs for borrowed cwd too — it only reads.
         var worktreeHooks = Path.Combine(ctx.Worktree.Path, ".codex", "hooks.json");
 
         if (!HooksInstalledIn(worktreeHooks) && !HooksInstalledIn(CodexPaths.UserHooksJson)) {
@@ -41,11 +48,13 @@ internal sealed partial class CodexLauncher(
             );
         }
 
-        // Step 3: pre-trust the worktree in ~/.codex/config.toml. Best-effort.
-        try {
-            CodexConfigWriter.TrustWorktree(ctx.Worktree.Path, logger);
-        } catch (Exception ex) {
-            LogTrustFailed(ex, ctx.AgentId);
+        if (owned) {
+            // Step 3: pre-trust the worktree in ~/.codex/config.toml. Best-effort.
+            try {
+                CodexConfigWriter.TrustWorktree(ctx.Worktree.Path, logger);
+            } catch (Exception ex) {
+                LogTrustFailed(ex, ctx.AgentId);
+            }
         }
 
         if (ctx.Tools is { Length: > 0 }) {
@@ -82,6 +91,31 @@ internal sealed partial class CodexLauncher(
             args.Add("--");
             args.Add(ctx.Prompt);
         }
+
+        return new([.. args], McpConfigPath: null);
+    }
+
+    /// Local launch: emit the mandatory daemon-level flags Codex always needs, then append
+    /// the user's verbatim post-`--` args. A user duplicate of a mandatory flag is rejected
+    /// outright (relying on Codex's arg precedence to make ours win is fragile).
+    public LaunchArgs BuildPassthrough(LauncherContext ctx, IReadOnlyList<string> userArgs) {
+        string[] mandatory = ["--cd", "--no-alt-screen"];
+
+        foreach (var m in mandatory) {
+            if (userArgs.Contains(m)) {
+                throw new ArgumentException($"{m} is set by kcap and cannot be overridden in `run-agent codex -- …`");
+            }
+        }
+
+        // --cd sets the working dir; --no-alt-screen keeps the mirror/replay on the primary
+        // screen. sandbox/approval defaults match the hosted path but stay user-overridable.
+        var args = new List<string> {
+            "--cd", ctx.Worktree.Path,
+            "--sandbox", "workspace-write",
+            "--ask-for-approval", "on-request",
+            "--no-alt-screen"
+        };
+        args.AddRange(userArgs);
 
         return new([.. args], McpConfigPath: null);
     }

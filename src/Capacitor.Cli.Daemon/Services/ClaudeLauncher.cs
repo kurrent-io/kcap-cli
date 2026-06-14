@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
@@ -19,6 +20,11 @@ internal sealed partial class ClaudeLauncher(
     static readonly JsonSerializerOptions IndentedJsonOpts = new() { WriteIndented = true };
 
     public void Prepare(LauncherContext ctx) {
+        // A borrowed cwd is the user's own, already-trusted, already-configured repo — do
+        // NOT overlay settings, write .mcp.json, edit settings.local.json, or write
+        // ~/.claude.json trust into it (local in-place launch). Touch nothing.
+        if (ctx.Work == WorkLocation.BorrowedCwd) return;
+
         // Overlay .claude/ local settings from source repo into worktree.
         try {
             var sourceClaudeDir = Path.Combine(ctx.SourceRepoPath, ".claude");
@@ -89,6 +95,11 @@ internal sealed partial class ClaudeLauncher(
 
         return new LaunchArgs(args.ToArray(), mcpConfigPath);
     }
+
+    /// Claude needs no mandatory daemon-level flags (cwd is set via forkpty chdir), so a
+    /// local launch forwards the user's post-`--` args verbatim.
+    public LaunchArgs BuildPassthrough(LauncherContext ctx, IReadOnlyList<string> userArgs)
+        => new([.. userArgs], McpConfigPath: null);
 
     public void Cleanup(AgentInstance agent) {
         try { RemoveClaudeProjectSymlink(agent.Worktree.Path); } catch (Exception ex) {

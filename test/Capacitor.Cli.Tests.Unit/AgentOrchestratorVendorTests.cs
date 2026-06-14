@@ -496,6 +496,12 @@ public partial class AgentOrchestratorVendorTests {
             return new LaunchArgs(Args: [], McpConfigPath: null);
         }
 
+        public LaunchArgs BuildPassthrough(LauncherContext ctx, IReadOnlyList<string> userArgs) {
+            BuildArgsCalls++;
+
+            return new LaunchArgs(Args: [.. userArgs], McpConfigPath: null);
+        }
+
         public void Cleanup(AgentInstance agent) {
             CleanupCalls++;
         }
