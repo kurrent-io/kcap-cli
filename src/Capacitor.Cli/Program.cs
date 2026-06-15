@@ -255,7 +255,7 @@ switch (command) {
     case "repos":
         return await ReposCommand.HandleAsync(args);
     case "update":
-        return await UpdateCommand.HandleAsync();
+        return await UpdateCommand.HandleAsync(args);
     case "review": {
         if (args.Length < 2) {
             Console.Error.WriteLine("Usage: kcap review <pr-url-or-shorthand>");

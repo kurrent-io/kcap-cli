@@ -95,9 +95,9 @@ public class VersionNudgeEmitterTests {
     }
 
     [Test]
-    public async Task Fragment_contains_npm_install_command() {
+    public async Task Fragment_contains_update_command() {
         var result = VersionNudgeEmitter.BuildFragment(ResponseWithVersion("0.6.5"), "0.6.3")!;
-        await Assert.That(result).Contains("npm install -g @kurrent/kcap");
+        await Assert.That(result).Contains("kcap update");
     }
 
     [Test]

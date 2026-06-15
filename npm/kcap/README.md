@@ -24,7 +24,7 @@ kcap status                 Show server, auth, and daemon status
 kcap daemon start [-d]      Start the daemon
 kcap daemon stop            Stop the daemon
 kcap review <pr>            Launch Claude Code with PR review context
-kcap update                 Check for updates
+kcap update                 Upgrade the CLI and refresh agent plugins
 kcap --version              Show version
 kcap --help                 Show all commands
 ```
