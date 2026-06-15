@@ -16,7 +16,14 @@ public static class UpdateCommand {
         if (checkOnly) {
             // Machine-readable probe consumed by the npm launcher (kcap.js).
             // One JSON line on stdout; exit 1 only when the check itself failed.
-            var newer = latest is not null && current is not null && IsNewer(latest, current);
+            //
+            // `newer` is a tri-state: true => upgrade, false => confidently up to
+            // date, null => can't tell (current version unknown or registry check
+            // failed). The launcher must NOT skip on null — otherwise a binary
+            // that reports "unknown" would strand the user on a stale CLI.
+            bool? newer = string.IsNullOrEmpty(current) || latest is null
+                ? null
+                : IsNewer(latest, current);
 
             var obj = new JsonObject {
                 ["current"] = current,

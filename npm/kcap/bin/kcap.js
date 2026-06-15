@@ -133,7 +133,11 @@ function runUpdate(binaryPath) {
     // else (e.g. a git-remote warning) landed on stdout first.
     const line = out.split(/\r?\n/).reverse().find((l) => l.trim().startsWith("{"));
     const info = JSON.parse(line);
-    if (info && info.newer === false) {
+    // Only short-circuit when the probe is CONFIDENT we're up to date: `newer`
+    // explicitly false AND a known current version. `newer: null` (version
+    // unknown / check failed) falls through to the upgrade rather than stranding
+    // the user on a stale CLI.
+    if (info && info.newer === false && info.current) {
       console.log(`Already up to date: ${info.current}`);
       process.exit(0);
     }
