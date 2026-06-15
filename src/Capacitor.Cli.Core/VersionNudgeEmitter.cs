@@ -30,7 +30,7 @@ public static class VersionNudgeEmitter {
         // CLI (e.g. "0.6.3") rather than the MinVer commit-SHA form.
         return
             $"A newer kcap version is available: {StripBuildMetadata(currentCliVersion)} → {StripBuildMetadata(serverVersion)}.\n" +
-            "Offer the user to upgrade by running: npm install -g @kurrent/kcap";
+            "Offer the user to upgrade by running: kcap update";
     }
 
     static string StripBuildMetadata(string? v) {

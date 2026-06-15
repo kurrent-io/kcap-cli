@@ -8,8 +8,26 @@ namespace Capacitor.Cli.Commands;
 public static class UpdateCommand {
     static readonly string CachePath = PathHelpers.ConfigPath("update-check.json");
 
-    public static async Task<int> HandleAsync() {
+    public static async Task<int> HandleAsync(string[] args) {
+        var checkOnly = args.Contains("--check");
+
         var (latest, current) = await CheckForUpdateAsync(forceCheck: true);
+
+        if (checkOnly) {
+            // Machine-readable probe consumed by the npm launcher (kcap.js).
+            // One JSON line on stdout; exit 1 only when the check itself failed.
+            var newer = latest is not null && current is not null && IsNewer(latest, current);
+
+            var obj = new JsonObject {
+                ["current"] = current,
+                ["latest"]  = latest,
+                ["newer"]   = newer,
+            };
+
+            await Console.Out.WriteLineAsync(obj.ToJsonString());
+
+            return latest is null ? 1 : 0;
+        }
 
         if (latest is null) {
             await Console.Error.WriteLineAsync("Could not check for updates.");
@@ -29,10 +47,13 @@ public static class UpdateCommand {
             return 0;
         }
 
+        // Reached only when the native binary is run WITHOUT the npm launcher
+        // (e.g. invoking the platform binary directly). For npm-global installs
+        // the launcher intercepts `update` and performs the upgrade itself.
         await Console.Out.WriteLineAsync($"Update available: {current} → {latest}");
         await Console.Out.WriteLineAsync();
-        await Console.Out.WriteLineAsync("Run:");
-        await Console.Out.WriteLineAsync("  npm update -g @kurrent/kcap");
+        await Console.Out.WriteLineAsync("Run `kcap update` to update, or upgrade directly:");
+        await Console.Out.WriteLineAsync("  npm install -g @kurrent/kcap@latest");
 
         return 0;
     }
@@ -52,7 +73,7 @@ public static class UpdateCommand {
             if (latest is not null && current is not null && IsNewer(latest, current)) {
                 await Console.Error.WriteLineAsync();
                 await Console.Error.WriteLineAsync($"Update available: {current} → {latest}");
-                await Console.Error.WriteLineAsync("Run `npm update -g @kurrent/kcap` to update");
+                await Console.Error.WriteLineAsync("Run `kcap update` to update");
             }
         } catch {
             // Best effort — never break the CLI for update checks

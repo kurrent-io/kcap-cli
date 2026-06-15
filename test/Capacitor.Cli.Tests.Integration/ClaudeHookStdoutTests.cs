@@ -75,7 +75,7 @@ public class ClaudeHookStdoutTests : IDisposable {
 
         var ctx = json["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
         await Assert.That(ctx).Contains("999.0.0");
-        await Assert.That(ctx).Contains("npm install -g @kurrent/kcap");
+        await Assert.That(ctx).Contains("kcap update");
         await Assert.That(ctx).DoesNotContain("## Known patterns");
         await Assert.That(ctx).DoesNotContain("## Guidance from past sessions");
     }
@@ -117,7 +117,7 @@ public class ClaudeHookStdoutTests : IDisposable {
         await Assert.That(ctx).Contains("## Known patterns");
         await Assert.That(ctx).Contains("- always close the writer");
         await Assert.That(ctx).Contains("999.0.0");
-        await Assert.That(ctx).Contains("npm install -g @kurrent/kcap");
+        await Assert.That(ctx).Contains("kcap update");
     }
 
     [Test, NotInParallel("Console_Out")]

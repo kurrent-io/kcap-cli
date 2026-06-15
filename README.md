@@ -44,7 +44,10 @@ The CLI is compiled with NativeAOT — fast startup, no runtime dependency.
 > allow-scripts[]=@kurrent/kcap
 > ```
 >
-> Without either, re-run `kcap plugin install [--codex|--cursor|--copilot|--skills] --if-installed` manually after each upgrade.
+> Without either, upgrade with **`kcap update`** instead of `npm install -g` — it
+> runs the global npm upgrade and then refreshes your agent plugins itself, so it
+> works regardless of the install-script gate. (You can also re-run `kcap plugin
+> install [--codex|--cursor|--copilot|--skills] --if-installed` manually.)
 
 ### 2. Run setup
 
@@ -75,7 +78,7 @@ kcap setup --server-url https://my-tenant.kcap.ai --default-visibility org_publi
 In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, `--skip-cursor-hooks`, and/or `--skip-copilot-hooks`.
 
 > **Need hooks for an agent installed after setup, or scoped to a single repo?**
-> Run `kcap plugin install [--codex|--cursor|--copilot]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, the next `codex` launch prompts to trust the new hooks — accept once to trust them all (run `/hooks` inside Codex if you'd rather trust each entry individually). After a `--project` install, also run `codex` once in the repo and accept the workspace trust prompt. Re-running after a kcap upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kcap` (npm 11+ blocks install scripts by default; add `allow-scripts[]=@kurrent/kcap` to `~/.npmrc` to opt in once).
+> Run `kcap plugin install [--codex|--cursor|--copilot]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, the next `codex` launch prompts to trust the new hooks — accept once to trust them all (run `/hooks` inside Codex if you'd rather trust each entry individually). After a `--project` install, also run `codex` once in the repo and accept the workspace trust prompt. Re-running after a kcap upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kcap`, and `kcap update` refreshes them too (npm 11+ blocks install scripts by default — `kcap update` works regardless, or add `allow-scripts[]=@kurrent/kcap` to `~/.npmrc` to opt the postinstall in once).
 
 > **Need at least one agent to capture sessions:** the setup wizard runs to completion without an agent CLI on `PATH` (it'll still configure your profile, auth, and daemon), but kcap only records work once Claude Code or Codex CLI is installed and the hooks are in place.
 
@@ -115,7 +118,7 @@ Once set up, Capacitor runs silently in the background. Every Claude Code (and C
 - **Tool usage** — every tool call with timing and results
 - **Token consumption** — input/output/cache token counts per interaction
 - **Repository context** — git repo, branch, and PR linkage
-- **In-agent upgrade prompts** — in Claude Code sessions, when the server is running a newer kcap release than the local CLI, additional context is injected into the session so the agent can offer the user an upgrade via `npm install -g @kurrent/kcap`. The stderr `kcap` update hint continues to fire for direct command-line use.
+- **In-agent upgrade prompts** — in Claude Code sessions, when the server is running a newer kcap release than the local CLI, additional context is injected into the session so the agent can offer the user an upgrade via `kcap update`. The stderr `kcap` update hint continues to fire for direct command-line use.
 - **SessionStart context injection** — at every session start the server injects top evaluation-derived fact clusters for the current repo into Claude's `additionalContext`. The injected block is split into two sections: `## Known patterns` (repo/project facts relevant to any reader) and `## Guidance from past sessions` (agent-targeted action items derived from prior eval suggestions with `audience: "agent"`). Opt out by setting `disable_session_guidelines: true` in `~/.config/kcap/config.json` or via `kcap config set disable_session_guidelines true`.
 
 ## CLI commands
@@ -367,7 +370,7 @@ All five auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionI
 
 The daemon starts Codex with `--sandbox workspace-write` and `--ask-for-approval on-request`. This lets Codex edit files in the agent's worktree but escalates sensitive operations (e.g. network calls, shell commands outside the worktree) through the daemon's permission bridge to the dashboard.
 
-> **Upgrading from an earlier version of kcap?** The npm postinstall hook refreshes all user-scope kcap installations on every `npm install -g @kurrent/kcap`, so you always pick up the current CLI version's skills (`~/.agents/skills/kcap-*`), Codex hook commands (`~/.codex/hooks.json`), and Claude plugin registration (`~/.claude/settings.json`). Each refresh is gated on a marker file written by your previous setup — fresh systems that never opted in are left untouched. Project-scope installs (`--project`) are not auto-refreshed; re-run `kcap plugin install [--codex] --project` after upgrading if you want the latest config for a specific repo.
+> **Upgrading from an earlier version of kcap?** Run `kcap update` (or `npm install -g @kurrent/kcap`) — the npm postinstall hook, and `kcap update` itself, refresh all user-scope kcap installations, so you always pick up the current CLI version's skills (`~/.agents/skills/kcap-*`), Codex hook commands (`~/.codex/hooks.json`), and Claude plugin registration (`~/.claude/settings.json`). Each refresh is gated on a marker file written by your previous setup — fresh systems that never opted in are left untouched. Project-scope installs (`--project`) are not auto-refreshed; re-run `kcap plugin install [--codex] --project` after upgrading if you want the latest config for a specific repo.
 >
 > npm 11+ blocks install scripts by default. Add `allow-scripts[]=@kurrent/kcap` to your `~/.npmrc` (or pass `--allow-scripts=@kurrent/kcap` on the install command line) to opt in to the auto-refresh; otherwise re-run the relevant `kcap plugin install ... --if-installed` commands manually after each upgrade. (`npm approve-scripts` does not work for global installs — that's a known npm UX bug.)
 
@@ -594,11 +597,16 @@ kcap status         # server health check
 kcap whoami         # show current authenticated user
 kcap login          # authenticate via OAuth (browser flow by default)
 kcap login --device # force device-code flow (use in SSH / headless envs)
-kcap update         # check for CLI updates
+kcap update         # upgrade the CLI and refresh agent plugins (npm-global installs)
 kcap logout         # delete stored tokens
 ```
 
-## Upgrading from v1
+> `kcap update` is the one-step upgrade for npm-global installs: it checks the
+> registry, runs `npm install -g @kurrent/kcap@latest`, then refreshes your
+> opted-in agent plugins — so it picks up new skills/hooks even when your package
+> manager blocks install scripts. It exits early if you're already up to date,
+> and tells you what to run instead for non-npm installs (e.g. Homebrew). Use
+> `kcap update --check` for a machine-readable `{current, latest, newer}` probe.
 
 The v1 config format stored `server_url` as a bare host name without a
 scheme. If `kcap` crashes with `An invalid request URI was provided`
