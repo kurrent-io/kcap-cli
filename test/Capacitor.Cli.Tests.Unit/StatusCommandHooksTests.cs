@@ -99,6 +99,28 @@ public class StatusCommandHooksTests {
         await Assert.That(StatusCommand.IsCodexHooksInstalled(path)).IsFalse();
     }
 
+    [Test]
+    public async Task HooksStatusLine_includes_all_five_agents() {
+        // Regression for AI-886: status must surface Pi (and Cursor/Copilot)
+        // alongside Claude/Codex so a Pi install can be verified from `kcap status`.
+        var line = StatusCommand.BuildHooksStatusLine(
+            claude: true, codex: false, cursor: false, copilot: false, pi: true);
+
+        await Assert.That(line).Contains("Claude ✓");
+        await Assert.That(line).Contains("Codex ✗");
+        await Assert.That(line).Contains("Cursor ✗");
+        await Assert.That(line).Contains("Copilot ✗");
+        await Assert.That(line).Contains("Pi ✓");
+    }
+
+    [Test]
+    public async Task HooksStatusLine_marks_pi_not_installed() {
+        var line = StatusCommand.BuildHooksStatusLine(
+            claude: false, codex: false, cursor: false, copilot: false, pi: false);
+
+        await Assert.That(line).Contains("Pi ✗");
+    }
+
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),

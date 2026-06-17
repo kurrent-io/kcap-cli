@@ -1,6 +1,9 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Copilot;
+using Capacitor.Cli.Core.Cursor;
+using Capacitor.Cli.Core.Pi;
 
 namespace Capacitor.Cli.Commands;
 
@@ -49,15 +52,14 @@ public static class StatusCommand {
         // Hooks
         await Console.Out.WriteAsync("  Hooks:   ");
 
-        var claudeInstalled = IsClaudePluginInstalled(ClaudePaths.UserSettings);
-        var codexInstalled  = IsCodexHooksInstalled(CodexPaths.UserHooksJson);
+        var line = BuildHooksStatusLine(
+            claude:  IsClaudePluginInstalled(ClaudePaths.UserSettings),
+            codex:   IsCodexHooksInstalled(CodexPaths.UserHooksJson),
+            cursor:  CursorHooksInstaller.IsInstalled(CursorPaths.UserHooksJson()),
+            copilot: CopilotHooksInstaller.IsInstalled(CopilotPaths.KcapHooksJson()),
+            pi:      PiExtensionInstaller.IsInstalled(PiPaths.KcapExtension()));
 
-        var parts = new List<string> {
-            claudeInstalled ? "Claude ✓" : "Claude ✗",
-            codexInstalled ? "Codex ✓" : "Codex ✗"
-        };
-
-        await Console.Out.WriteLineAsync(string.Join("  ", parts));
+        await Console.Out.WriteLineAsync(line);
 
         // Daemon — AI-630: read per-name PID files under
         // ~/.config/kcap/daemons/ instead of the pre-AI-630 singleton
@@ -137,6 +139,21 @@ public static class StatusCommand {
             }
         }
     }
+
+    /// <summary>
+    /// Renders the Hooks status line for every supported agent. Pi tracks an
+    /// "extension" rather than a hooks file (it has no shell hooks), but shares
+    /// the line for at-a-glance parity. Pure — the I/O detection happens in the
+    /// caller so this stays unit-testable.
+    /// </summary>
+    internal static string BuildHooksStatusLine(bool claude, bool codex, bool cursor, bool copilot, bool pi) =>
+        string.Join("  ", new[] {
+            claude  ? "Claude ✓"  : "Claude ✗",
+            codex   ? "Codex ✓"   : "Codex ✗",
+            cursor  ? "Cursor ✓"  : "Cursor ✗",
+            copilot ? "Copilot ✓" : "Copilot ✗",
+            pi      ? "Pi ✓"      : "Pi ✗"
+        });
 
     /// <summary>
     /// True iff <paramref name="settingsPath"/> exists and has
