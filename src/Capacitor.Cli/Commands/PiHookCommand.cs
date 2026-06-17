@@ -46,13 +46,14 @@ static class PiHookCommand {
         var file = GetArg(args, "--file");
         if (string.IsNullOrWhiteSpace(file)) return 0; // ephemeral / no session file — nothing to record
 
-        var header          = await TryReadHeaderAsync(file);
-        var dashedSessionId = header?.SessionUuid ?? Path.GetFileNameWithoutExtension(file);
+        var header = await TryReadHeaderAsync(file);
 
-        // Pi session ids are UUIDs; anything else (a stray .jsonl) isn't a session.
-        if (string.IsNullOrEmpty(dashedSessionId) || !Guid.TryParse(dashedSessionId, out _)) return 0;
-
-        var sessionId = dashedSessionId.Replace("-", "");
+        // Session id: prefer the header uuid, but Pi can hand us the session file
+        // before its header line is flushed (session_start fires first), so fall
+        // back to the uuid embedded in the filename ("<timestamp>_<uuid>.jsonl").
+        // Without the suffix parse, a not-yet-flushed session-start would derive a
+        // non-uuid id and silently drop the session + watcher.
+        if (ExtractSessionId(file, header?.SessionUuid) is not { } sessionId) return 0;
         var cwd       = GetArg(args, "--cwd") ?? header?.Cwd;
         var reason    = GetArg(args, "--reason");
 
@@ -161,6 +162,22 @@ static class PiHookCommand {
     // ── helpers ─────────────────────────────────────────────────────────────
 
     sealed record PiHeader(string? SessionUuid, string? Cwd, DateTimeOffset? Timestamp);
+
+    /// <summary>
+    /// Dashless Pi session id: the header's uuid when readable, else the uuid
+    /// suffix of the <c>&lt;timestamp&gt;_&lt;uuid&gt;.jsonl</c> filename (Pi can
+    /// hand us the file before its header line is flushed). Returns null when
+    /// neither yields a uuid (a stray, non-Pi <c>.jsonl</c>).
+    /// </summary>
+    internal static string? ExtractSessionId(string file, string? headerUuid) {
+        if (headerUuid is { Length: > 0 } h && Guid.TryParse(h, out _))
+            return h.Replace("-", "");
+
+        var stem      = Path.GetFileNameWithoutExtension(file);
+        var candidate = stem.Contains('_') ? stem[(stem.LastIndexOf('_') + 1)..] : stem;
+
+        return Guid.TryParse(candidate, out _) ? candidate.Replace("-", "") : null;
+    }
 
     static async Task<PiHeader?> TryReadHeaderAsync(string path) {
         try {
