@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
+using Capacitor.Cli.Core.Gemini;
 
 namespace Capacitor.Cli.Commands;
 
@@ -35,7 +36,7 @@ public static class PluginCommand {
         };
     }
 
-    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--skills"];
+    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--skills"];
 
     static bool HasConflictingTargets(string[] args) =>
         ExclusiveTargetFlags.Count(args.Contains) > 1;
@@ -43,7 +44,7 @@ public static class PluginCommand {
     static async Task<int> Install(string[] args, PluginEnvironment env) {
         if (HasConflictingTargets(args)) {
             await env.Stderr.WriteLineAsync(
-                "--cursor, --codex, --copilot, and --skills are mutually exclusive."
+                "--cursor, --codex, --copilot, --gemini, and --skills are mutually exclusive."
             );
 
             return 1;
@@ -53,6 +54,7 @@ public static class PluginCommand {
         if (args.Contains("--codex")) return await InstallCodex(args, env);
         if (args.Contains("--cursor")) return await InstallCursor(args, env);
         if (args.Contains("--copilot")) return await InstallCopilot(args, env);
+        if (args.Contains("--gemini")) return await InstallGemini(args, env);
 
         return await InstallClaude(args, env);
     }
@@ -60,7 +62,7 @@ public static class PluginCommand {
     static async Task<int> Remove(string[] args, PluginEnvironment env) {
         if (HasConflictingTargets(args)) {
             await env.Stderr.WriteLineAsync(
-                "--cursor, --codex, --copilot, and --skills are mutually exclusive."
+                "--cursor, --codex, --copilot, --gemini, and --skills are mutually exclusive."
             );
 
             return 1;
@@ -70,6 +72,7 @@ public static class PluginCommand {
         if (args.Contains("--codex")) return await RemoveCodex(args, env);
         if (args.Contains("--cursor")) return await RemoveCursor(args, env);
         if (args.Contains("--copilot")) return await RemoveCopilot(args, env);
+        if (args.Contains("--gemini")) return await RemoveGemini(args, env);
 
         return await RemoveClaude(args, env);
     }
@@ -830,6 +833,156 @@ public static class PluginCommand {
         if (changed) {
             File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
             CursorHooksInstaller.DeleteMarker(hooksPath);
+        }
+
+        return changed;
+    }
+
+    static async Task<int> InstallGemini(string[] args, PluginEnvironment env) {
+        var settingsPath = GetArg(args, "--gemini-settings-path") ?? env.GeminiSettingsJson;
+
+        var refreshOnly = args.Contains("--if-installed");
+
+        switch (refreshOnly) {
+            case true when !GeminiHooksInstaller.IsInstalled(settingsPath):
+            case true when GeminiHooksInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current():
+                return 0;
+            // Gemini's settings.json writes the bare `kcap hook --gemini` command;
+            // verify Gemini will actually find kcap on PATH. Skip on the
+            // postinstall (--if-installed) refresh, same as the Cursor branch.
+            case false when !AgentDetector.IsInstalled("kcap"):
+                await env.Stderr.WriteLineAsync(
+                    "Cannot install Gemini hooks: 'kcap' is not on PATH. "
+                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                );
+
+                return 1;
+        }
+
+        if (!InstallGeminiHooks(settingsPath)) {
+            if (refreshOnly) return 0;
+
+            await env.Stderr.WriteLineAsync("Could not write Gemini settings file.");
+
+            return 1;
+        }
+
+        await env.Stdout.WriteLineAsync(
+            refreshOnly
+                ? $"Gemini hooks refreshed ({settingsPath})"
+                : $"Gemini hooks installed ({settingsPath})"
+        );
+
+        return 0;
+    }
+
+    static async Task<int> RemoveGemini(string[] args, PluginEnvironment env) {
+        var settingsPath = GetArg(args, "--gemini-settings-path") ?? env.GeminiSettingsJson;
+
+        if (!File.Exists(settingsPath)) {
+            await env.Stdout.WriteLineAsync("Nothing to remove — Gemini settings file not found.");
+
+            return 0;
+        }
+
+        try {
+            var removed = RemoveGeminiHooks(settingsPath);
+
+            await env.Stdout.WriteLineAsync(
+                removed
+                    ? $"Gemini hooks removed ({settingsPath})"
+                    : "Gemini hooks were not installed."
+            );
+
+            return 0;
+        } catch (Exception ex) {
+            await env.Stderr.WriteLineAsync($"Could not update Gemini hooks at {settingsPath}: {ex.Message}");
+
+            return 1;
+        }
+    }
+
+    /// <summary>
+    /// Merges kcap's command hooks into Gemini's shared
+    /// <c>~/.gemini/settings.json</c> for every event in
+    /// <see cref="GeminiHooksParser.GeminiHookEvents"/>. Touches ONLY the
+    /// <c>hooks</c> block (every other settings key is preserved) and keeps
+    /// user-authored hook entries; replaces existing kcap entries.
+    /// </summary>
+    public static bool InstallGeminiHooks(string settingsPath) {
+        try {
+            JsonObject root = [];
+
+            if (File.Exists(settingsPath)) {
+                try {
+                    if (JsonNode.Parse(File.ReadAllText(settingsPath)) is JsonObject obj) root = obj;
+                } catch {
+                    /* Malformed — start fresh */
+                }
+            }
+
+            if (root["hooks"] is not JsonObject hooks) {
+                hooks         = [];
+                root["hooks"] = hooks;
+            }
+
+            foreach (var evt in GeminiHooksParser.GeminiHookEvents) {
+                if (hooks[evt] is not JsonArray entries) {
+                    hooks[evt] = new JsonArray(GeminiHooksParser.BuildKcapEntry());
+
+                    continue;
+                }
+
+                var preserved = new JsonArray();
+
+                foreach (var entry in entries) {
+                    if (entry is null) continue;
+
+                    if (!GeminiHooksParser.EntryReferencesCapacitorGeminiHook(entry)) {
+                        preserved.Add(entry.DeepClone());
+                    }
+                }
+
+                preserved.Add(GeminiHooksParser.BuildKcapEntry());
+                hooks[evt] = preserved;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+            File.WriteAllText(settingsPath, root.ToJsonString(WriteOpts));
+            GeminiHooksInstaller.WriteMarker(settingsPath);
+
+            return true;
+        } catch { return false; }
+    }
+
+    public static bool RemoveGeminiHooks(string settingsPath) {
+        if (!File.Exists(settingsPath)) return false;
+        if (JsonNode.Parse(File.ReadAllText(settingsPath)) is not JsonObject root) return false;
+        if (root["hooks"] is not JsonObject hooks) return false;
+
+        var changed = false;
+
+        foreach (var evt in GeminiHooksParser.GeminiHookEvents) {
+            if (hooks[evt] is not JsonArray entries) continue;
+
+            var preserved = new JsonArray();
+
+            foreach (var entry in entries) {
+                if (entry is null) continue;
+
+                if (GeminiHooksParser.EntryReferencesCapacitorGeminiHook(entry)) {
+                    changed = true;
+                } else {
+                    preserved.Add(entry.DeepClone());
+                }
+            }
+
+            hooks[evt] = preserved;
+        }
+
+        if (changed) {
+            File.WriteAllText(settingsPath, root.ToJsonString(WriteOpts));
+            GeminiHooksInstaller.DeleteMarker(settingsPath);
         }
 
         return changed;
