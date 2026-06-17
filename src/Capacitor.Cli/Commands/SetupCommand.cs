@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
+using Capacitor.Cli.Core.Kiro;
 using Spectre.Console;
 using Profile = Capacitor.Cli.Core.Config.Profile;
 
@@ -19,6 +20,7 @@ public static class SetupCommand {
         var skipCodexFlag    = args.Contains("--skip-codex-hooks");
         var skipCursorFlag   = args.Contains("--skip-cursor-hooks");
         var skipCopilotFlag  = args.Contains("--skip-copilot-hooks");
+        var skipKiroFlag     = args.Contains("--skip-kiro-hooks");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
@@ -173,7 +175,11 @@ public static class SetupCommand {
             // Dir presence covers users who launch Copilot through an IDE
             // wrapper; the PATH probe covers fresh installs that haven't run
             // yet (no ~/.copilot until first launch).
-            Copilot: CopilotPaths.IsInstalled() || AgentDetector.IsInstalled("copilot"));
+            Copilot: CopilotPaths.IsInstalled() || AgentDetector.IsInstalled("copilot"),
+            // Same dual signal for Kiro: the ~/.kiro tree or the conversation DB
+            // covers IDE-launched users; the PATH probe (kiro / kiro-cli) covers
+            // fresh CLI installs.
+            Kiro:    KiroPaths.IsInstalled() || AgentDetector.IsInstalled("kiro") || AgentDetector.IsInstalled("kiro-cli"));
 
         // gitRoot is guaranteed non-null here when legacyProjectScope is true (the early
         // guard at the top of HandleAsync returns 1 otherwise).
@@ -186,6 +192,7 @@ public static class SetupCommand {
             SkipCodex:   skipCodexFlag,
             SkipCursor:  skipCursorFlag,
             SkipCopilot: skipCopilotFlag,
+            SkipKiro:    skipKiroFlag,
             NoPrompt:    noPrompt);
 
         var stepPaths = new CodingAgentsStep.Paths(
@@ -196,7 +203,8 @@ public static class SetupCommand {
             CursorHooksPath:      CursorPaths.UserHooksJson(),
             CopilotHooksPath:     CopilotPaths.KcapHooksJson(),
             AgentsSkillsDir:      AgentsPaths.UserSkillsDir,
-            LegacyCodexSkillsDir: Path.Combine(CodexPaths.Home, "skills"));
+            LegacyCodexSkillsDir: Path.Combine(CodexPaths.Home, "skills"),
+            KiroHooksPath:        KiroPaths.KcapAgentJson());
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -205,7 +213,8 @@ public static class SetupCommand {
             InstallCopilotHooks:    PluginCommand.InstallCopilotHooks,
             CapacitorOnPath:        () => AgentDetector.IsInstalled("kcap"),
             InstallAgentSkills:     AgentsSkillsInstaller.Install,
-            CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny);
+            CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny,
+            InstallKiroHooks:       PluginCommand.InstallKiroHooks);
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });

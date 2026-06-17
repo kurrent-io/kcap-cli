@@ -581,6 +581,71 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("'kcap' is not on PATH"));
     }
 
+    [Test]
+    public async Task Kiro_detected_and_accepted_installs_hooks() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipKiro: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.KiroHooksInstalled).IsTrue();
+        await Assert.That(calls.KiroHooksArg).IsEqualTo("/fake/.kiro/agents/kcap.json");
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Kiro hooks installed"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("restart any running kiro session"));
+    }
+
+    [Test]
+    public async Task Kiro_detected_and_declined_skips_installer() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipKiro: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => false, writeLine: sink.Write);
+
+        await Assert.That(result.KiroHooksInstalled).IsFalse();
+        await Assert.That(calls.KiroHooksCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Kiro hooks not installed"));
+    }
+
+    [Test]
+    public async Task Kiro_not_detected_emits_skip_line() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipKiro: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: false);
+
+        await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.KiroHooksCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Kiro CLI not detected"));
+    }
+
+    [Test]
+    public async Task Kiro_kcap_not_on_path_aborts_install_without_writing_hooks() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CapacitorOnPathReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipKiro: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.KiroHooksInstalled).IsFalse();
+        await Assert.That(calls.CapacitorOnPathCalled).IsTrue();
+        await Assert.That(calls.KiroHooksCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("'kcap' is not on PATH"));
+    }
+
     static Paths TestPaths() => new(
         ClaudeSettingsPath:   "/fake/.claude/settings.json",
         ClaudeScopeLabel:     "user",
@@ -589,7 +654,8 @@ public class CodingAgentsStepTests {
         CursorHooksPath:      "/fake/.cursor/hooks.json",
         CopilotHooksPath:     "/fake/.copilot/hooks/kcap.json",
         AgentsSkillsDir:      "/fake/.agents/skills",
-        LegacyCodexSkillsDir: "/fake/.codex/skills"
+        LegacyCodexSkillsDir: "/fake/.codex/skills",
+        KiroHooksPath:        "/fake/.kiro/agents/kcap.json"
     );
 
     sealed class Sink {
@@ -613,6 +679,10 @@ public class CodingAgentsStepTests {
         public bool    CopilotHooksCalled  { get; private set; }
         public string? CopilotHooksArg     { get; private set; }
         public bool    CopilotHooksReturns { get; set; } = true;
+
+        public bool    KiroHooksCalled  { get; private set; }
+        public string? KiroHooksArg     { get; private set; }
+        public bool    KiroHooksReturns { get; set; } = true;
 
         public bool CapacitorOnPathCalled  { get; private set; }
         public bool CapacitorOnPathReturns { get; set; } = true;
@@ -653,6 +723,12 @@ public class CodingAgentsStepTests {
             CapacitorOnPath: () => {
                 CapacitorOnPathCalled = true;
                 return CapacitorOnPathReturns;
+            },
+            InstallKiroHooks: h => {
+                KiroHooksCalled = true;
+                KiroHooksArg    = h;
+
+                return KiroHooksReturns;
             },
             InstallAgentSkills: (s, d) => {
                 AgentSkillsCalled = true;

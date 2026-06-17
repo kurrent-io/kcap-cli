@@ -28,7 +28,7 @@ The CLI is compiled with NativeAOT — fast startup, no runtime dependency.
 > **npm 11+ blocks install scripts by default.** You'll see a warning like
 > `1 package has install scripts not yet covered by allowScripts`. The `kcap`
 > binary works without the script; it only refreshes already-installed agent
-> plugins (Claude / Codex / Cursor / Copilot) on upgrade. The warning suggests
+> plugins (Claude / Codex / Cursor / Copilot / Kiro) on upgrade. The warning suggests
 > `npm approve-scripts @kurrent/kcap`, but that command rejects global installs
 > (`EGLOBAL`) — a known npm UX bug. Instead, opt in one of two ways:
 >
@@ -44,7 +44,7 @@ The CLI is compiled with NativeAOT — fast startup, no runtime dependency.
 > allow-scripts[]=@kurrent/kcap
 > ```
 >
-> Without either, re-run `kcap plugin install [--codex|--cursor|--copilot|--skills] --if-installed` manually after each upgrade.
+> Without either, re-run `kcap plugin install [--codex|--cursor|--copilot|--kiro|--skills] --if-installed` manually after each upgrade.
 
 ### 2. Run setup
 
@@ -57,7 +57,7 @@ The setup wizard walks you through:
 1. **Server URL** — enter the URL your admin provided
 2. **Login** — authenticates via GitHub Device Flow (if the server requires auth)
 3. **Default visibility** — choose how your sessions are visible to others
-4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH`, Cursor by user-dir presence (`~/.cursor/`), and GitHub Copilot CLI by `~/.copilot/` or `copilot` on `PATH`, then offers to install hooks/skills for each (user-wide)
+4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH`, Cursor by user-dir presence (`~/.cursor/`), GitHub Copilot CLI by `~/.copilot/` or `copilot` on `PATH`, and AWS Kiro CLI by `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`, then offers to install hooks/skills for each (user-wide)
 5. **Daemon** — configure the daemon name for remote agent execution
 
 When setup finishes, `kcap` sends a best-effort POST to the server's `/api/users/me/cli-setup` endpoint so the dashboard can mark your CLI as registered and surface the import-past-sessions hint. The call is capped at 5 seconds and failures are silent — they do not affect setup completion.
@@ -70,10 +70,10 @@ For non-interactive environments:
 kcap setup --server-url https://my-tenant.kcap.ai --default-visibility org_public --no-prompt
 ```
 
-In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, `--skip-cursor-hooks`, and/or `--skip-copilot-hooks`.
+In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, `--skip-cursor-hooks`, `--skip-copilot-hooks`, and/or `--skip-kiro-hooks`.
 
 > **Need hooks for an agent installed after setup, or scoped to a single repo?**
-> Run `kcap plugin install [--codex|--cursor|--copilot]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, the next `codex` launch prompts to trust the new hooks — accept once to trust them all (run `/hooks` inside Codex if you'd rather trust each entry individually). After a `--project` install, also run `codex` once in the repo and accept the workspace trust prompt. Re-running after a kcap upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kcap` (npm 11+ blocks install scripts by default; add `allow-scripts[]=@kurrent/kcap` to `~/.npmrc` to opt in once).
+> Run `kcap plugin install [--codex|--cursor|--copilot|--kiro]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, the next `codex` launch prompts to trust the new hooks — accept once to trust them all (run `/hooks` inside Codex if you'd rather trust each entry individually). After a `--project` install, also run `codex` once in the repo and accept the workspace trust prompt. Re-running after a kcap upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kcap` (npm 11+ blocks install scripts by default; add `allow-scripts[]=@kurrent/kcap` to `~/.npmrc` to opt in once).
 
 > **Need at least one agent to capture sessions:** the setup wizard runs to completion without an agent CLI on `PATH` (it'll still configure your profile, auth, and daemon), but kcap only records work once Claude Code or Codex CLI is installed and the hooks are in place.
 
@@ -82,14 +82,15 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 ### 3. Import existing sessions (optional)
 
 ```bash
-kcap import                     # every detected agent (Claude, Codex, Cursor, Copilot)
+kcap import                     # every detected agent (Claude, Codex, Cursor, Copilot, Kiro)
 kcap import --org               # sessions for the org bound to your active profile
 kcap import --repo owner/repo   # sessions for one specific repo
 kcap import --cursor            # only Cursor
 kcap import --copilot           # only Copilot
+kcap import --kiro              # only Kiro
 ```
 
-This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), and `~/.copilot/session-state/` (Copilot) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, or `--copilot` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
+This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), and the AWS Kiro CLI SQLite DB `~/Library/Application Support/kiro-cli/data.sqlite3` (Kiro) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, or `--kiro` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
 
 You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org` uses the active profile name as the GitHub org login — it works out of the box when the profile was created by `kcap setup` (which names it after the picked tenant), and errors otherwise. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
@@ -125,7 +126,7 @@ kcap setup                                   # interactive wizard
 kcap setup --server-url <url> --no-prompt    # CI / scripted
 ```
 
-The setup wizard detects every supported coding agent and offers to install hooks for each, then configures the daemon. Claude Code and Codex CLI are detected via `PATH`; Cursor is detected by user-dir presence (`~/.cursor/`), so IDE users without the `cursor` shell command are covered; GitHub Copilot CLI is detected via `~/.copilot/` or `copilot` on `PATH`. Re-run any time to update the configuration.
+The setup wizard detects every supported coding agent and offers to install hooks for each, then configures the daemon. Claude Code and Codex CLI are detected via `PATH`; Cursor is detected by user-dir presence (`~/.cursor/`), so IDE users without the `cursor` shell command are covered; GitHub Copilot CLI is detected via `~/.copilot/` or `copilot` on `PATH`; AWS Kiro CLI is detected via `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`. Re-run any time to update the configuration.
 
 In `--no-prompt` mode, hooks install for every detected agent by default. Opt out per agent:
 
@@ -258,7 +259,7 @@ The server is repo-aware — it resolves the current working directory to a repo
 
 ### Loading historical sessions
 
-Backfill older sessions from every detected coding agent in a single run. All four agents ship per-session `.jsonl` transcripts (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/<sanitized-workspace>/agent-transcripts/`, `~/.copilot/session-state/`). They're discovered automatically and the command requires an explicit scope so personal/private repos aren't uploaded by accident:
+Backfill older sessions from every detected coding agent in a single run. Most agents ship per-session `.jsonl` transcripts (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/<sanitized-workspace>/agent-transcripts/`, `~/.copilot/session-state/`); AWS Kiro CLI keeps its conversations in a SQLite DB (`~/Library/Application Support/kiro-cli/data.sqlite3`) that kcap flattens to the same per-turn form. They're discovered automatically and the command requires an explicit scope so personal/private repos aren't uploaded by accident:
 
 ```bash
 kcap import --all                            # every discovered session from every agent
@@ -279,9 +280,12 @@ kcap import --codex --org                    # only Codex rollouts
 kcap import --cursor --all                   # only Cursor — every discovered transcript
 kcap import --cursor --cwd /path/to/proj     # only Cursor sessions whose workspace folder matches
 kcap import --copilot --all                  # only Copilot — every discovered transcript
+kcap import --kiro --all                     # only Kiro — every conversation in the SQLite DB
 ```
 
 Cursor historical import walks every JSONL transcript under `~/.cursor/projects/*/agent-transcripts/*/*.jsonl` and posts each line through the same `POST /hooks/transcript` route the live hook path uses, so live and historical ingest converge on one canonical event stream. The walker resolves each session's working directory by matching its sanitized workspace name against `~/Library/Application Support/Cursor/User/workspaceStorage/*/workspace.json` (on Linux: `~/.config/Cursor/User/...`); sessions whose workspace can't be resolved are still imported, just without `cwd` and git owner/repo enrichment.
+
+Kiro historical import reads the SQLite `conversations_v2` table (legacy `conversations` fallback) **copy-first, read-only** so it never contends with a live `kiro-cli`, flattens each conversation's `history[]` into the same per-turn JSONL the live watcher streams, and posts it through `POST /hooks/transcript`. Set `KIRO_CLI_DB_FILE` (or `KIRO_HOME`) to point at a non-default DB location. Kiro persists no token counts, so imported Kiro sessions show no token usage (by design). Re-imports are idempotent — event ids are deterministic over `(conversation_id, request_id, kind)`.
 
 Additional flags:
 
@@ -390,6 +394,17 @@ kcap plugin remove --copilot                # deletes ~/.copilot/hooks/kcap.json
 ```
 
 Live sessions stream from `~/.copilot/session-state/<session-id>/events.jsonl` (`$COPILOT_HOME` is honoured); historical sessions import via `kcap import --copilot`, which also forwards Copilot's auto-generated session names as titles. Sessions resumed with `copilot --continue` / `--resume` reattach to the same recorded session.
+
+#### AWS Kiro CLI hooks
+
+AWS Kiro CLI (the rebranded Amazon Q Developer CLI) is detected via `~/.kiro/` or the `kiro` / `kiro-cli` binary on `PATH`. kcap writes its own agent file — Kiro reads every `agents/*.json` at startup, so restart any running `kiro` session after installing.
+
+```bash
+kcap plugin install --kiro                  # writes ~/.kiro/agents/kcap.json
+kcap plugin remove --kiro                   # deletes ~/.kiro/agents/kcap.json
+```
+
+Kiro's conversations live in a SQLite DB (`~/Library/Application Support/kiro-cli/data.sqlite3`; Linux `~/.local/share/kiro-cli/`; honours `KIRO_CLI_DB_FILE` / `KIRO_HOME`), not an append-only JSONL. The kcap watcher polls that DB (copy-first, read-only) and flattens new turns into the transcript stream. Lifecycle comes from Kiro's `agentSpawn` hook (fires every prompt → deduped server-side); since Kiro has **no session-end trigger**, the watcher synthesizes session-end on `kiro-cli` exit. Historical sessions import via `kcap import --kiro`. Kiro persists no token counts, so Kiro sessions show no token usage by design.
 
 Cursor uses a single user-scope `hooks.json`; there is no project-scope variant.
 

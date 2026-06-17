@@ -35,6 +35,14 @@ public class VendorSelectionTests {
     }
 
     [Test]
+    public async Task kiro_flag_selects_only_kiro() {
+        var r = VendorSelection.Parse(["--kiro"]);
+        await Assert.That(r.HasError).IsFalse();
+        await Assert.That(r.Vendors.Count).IsEqualTo(1);
+        await Assert.That(r.Vendors.Contains("kiro")).IsTrue();
+    }
+
+    [Test]
     public async Task multiple_vendor_flags_are_additive() {
         var r = VendorSelection.Parse(["--claude", "--codex"]);
         await Assert.That(r.HasError).IsFalse();

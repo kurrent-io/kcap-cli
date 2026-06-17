@@ -1,4 +1,4 @@
-kcap plugin — Manage hooks and skills for Claude Code, Codex CLI, Cursor, Copilot CLI, and other agents
+kcap plugin — Manage hooks and skills for Claude Code, Codex CLI, Cursor, Copilot CLI, Kiro CLI, and other agents
 
 Usage: kcap plugin <subcommand> [options]
 
@@ -17,6 +17,9 @@ Options:
                       ~/.copilot/hooks/kcap.json (honours $COPILOT_HOME). Copilot
                       merges every *.json in that directory, so user-authored
                       hook files are never touched.
+  --kiro              Target AWS Kiro CLI: write kcap's own agent-hooks file to
+                      ~/.kiro/agents/kcap.json (honours $KIRO_HOME). Subscribes
+                      to agentSpawn only; session-end is synthesized on exit.
   --skills            Install only the agent-agnostic skills to ~/.agents/skills/.
                       Use this if you only have Cursor (or another agent that
                       reads ~/.agents/skills/) and don't want Codex hooks.
@@ -49,6 +52,11 @@ Notes:
   so restart any running copilot session after install. Copilot has no
   project-scope hooks dir, so --project has no effect with --copilot.
 
+  --kiro writes kcap's own agent file ~/.kiro/agents/kcap.json (kcap owns it
+  wholesale; remove deletes it). Kiro reads agents/*.json at startup, so restart
+  any running kiro session after install. Kiro has no project-scope hooks, so
+  --project has no effect with --kiro.
+
   --if-installed is scoped to user-wide installs only — the npm postinstall hook
   does not refresh --project installs.
 
@@ -59,10 +67,12 @@ Examples:
   kcap plugin install --project --codex     # Codex hooks in <repo>/.codex/hooks.json, skills user-wide
   kcap plugin install --cursor              # Install Cursor hooks (~/.cursor/hooks.json)
   kcap plugin install --copilot             # Install Copilot hooks (~/.copilot/hooks/kcap.json)
+  kcap plugin install --kiro                # Install Kiro hooks (~/.kiro/agents/kcap.json)
   kcap plugin install --skills --if-installed   # Refresh skills if previously installed (used by npm postinstall)
   kcap plugin install --codex --if-installed    # Refresh Codex hooks if previously installed (used by npm postinstall)
   kcap plugin install --if-installed            # Refresh Claude plugin registration if previously installed
   kcap plugin remove --codex                # Remove Codex hooks + agent skills + legacy ~/.codex/skills
   kcap plugin remove --cursor               # Remove Cursor hooks from ~/.cursor/hooks.json
   kcap plugin remove --copilot              # Delete ~/.copilot/hooks/kcap.json
+  kcap plugin remove --kiro                 # Delete ~/.kiro/agents/kcap.json
   kcap plugin remove --skills               # Remove agent skills + legacy ~/.codex/skills

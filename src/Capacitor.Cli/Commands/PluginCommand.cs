@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
+using Capacitor.Cli.Core.Kiro;
 
 namespace Capacitor.Cli.Commands;
 
@@ -12,6 +13,7 @@ public static class PluginCommand {
     const string CodexHookCommand   = "kcap hook --codex";
     const string CursorHookCommand  = "kcap hook --cursor";
     const string CopilotHookCommand = "kcap hook --copilot";
+    const string KiroHookCommand    = "kcap hook --kiro";
 
     // PermissionRequest must wait for the dashboard's decision; the daemon-side
     // bridge call is intentionally infinite. 86400s = 24h keeps Codex from
@@ -35,7 +37,7 @@ public static class PluginCommand {
         };
     }
 
-    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--skills"];
+    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--kiro", "--skills"];
 
     static bool HasConflictingTargets(string[] args) =>
         ExclusiveTargetFlags.Count(args.Contains) > 1;
@@ -43,7 +45,7 @@ public static class PluginCommand {
     static async Task<int> Install(string[] args, PluginEnvironment env) {
         if (HasConflictingTargets(args)) {
             await env.Stderr.WriteLineAsync(
-                "--cursor, --codex, --copilot, and --skills are mutually exclusive."
+                "--cursor, --codex, --copilot, --kiro, and --skills are mutually exclusive."
             );
 
             return 1;
@@ -53,6 +55,7 @@ public static class PluginCommand {
         if (args.Contains("--codex")) return await InstallCodex(args, env);
         if (args.Contains("--cursor")) return await InstallCursor(args, env);
         if (args.Contains("--copilot")) return await InstallCopilot(args, env);
+        if (args.Contains("--kiro")) return await InstallKiro(args, env);
 
         return await InstallClaude(args, env);
     }
@@ -60,7 +63,7 @@ public static class PluginCommand {
     static async Task<int> Remove(string[] args, PluginEnvironment env) {
         if (HasConflictingTargets(args)) {
             await env.Stderr.WriteLineAsync(
-                "--cursor, --codex, --copilot, and --skills are mutually exclusive."
+                "--cursor, --codex, --copilot, --kiro, and --skills are mutually exclusive."
             );
 
             return 1;
@@ -70,6 +73,7 @@ public static class PluginCommand {
         if (args.Contains("--codex")) return await RemoveCodex(args, env);
         if (args.Contains("--cursor")) return await RemoveCursor(args, env);
         if (args.Contains("--copilot")) return await RemoveCopilot(args, env);
+        if (args.Contains("--kiro")) return await RemoveKiro(args, env);
 
         return await RemoveClaude(args, env);
     }
@@ -780,6 +784,115 @@ public static class PluginCommand {
         }
 
         CopilotHooksInstaller.DeleteMarker(hooksPath);
+
+        return removed;
+    }
+
+    static async Task<int> InstallKiro(string[] args, PluginEnvironment env) {
+        var agentPath = GetArg(args, "--kiro-agent-path") ?? env.KiroKcapAgentJson;
+
+        var refreshOnly = args.Contains("--if-installed");
+
+        switch (refreshOnly) {
+            case true when !KiroHooksInstaller.IsInstalled(agentPath):
+            case true when KiroHooksInstaller.ReadMarker(agentPath) == CapacitorVersion.Current():
+                return 0;
+            // Same PATH precheck as Copilot/Cursor: the agent JSON writes the
+            // bare `kcap hook --kiro` command, so Kiro must find kcap on PATH.
+            case false when !AgentDetector.IsInstalled("kcap"):
+                await env.Stderr.WriteLineAsync(
+                    "Cannot install Kiro hooks: 'kcap' is not on PATH. "
+                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                );
+
+                return 1;
+        }
+
+        if (!InstallKiroHooks(agentPath)) {
+            if (refreshOnly) return 0;
+
+            await env.Stderr.WriteLineAsync("Could not write Kiro agent hooks file.");
+
+            return 1;
+        }
+
+        await env.Stdout.WriteLineAsync(
+            refreshOnly
+                ? $"Kiro hooks refreshed ({agentPath})"
+                : $"Kiro hooks installed ({agentPath})"
+        );
+
+        return 0;
+    }
+
+    static async Task<int> RemoveKiro(string[] args, PluginEnvironment env) {
+        var agentPath = GetArg(args, "--kiro-agent-path") ?? env.KiroKcapAgentJson;
+
+        try {
+            var removed = RemoveKiroHooks(agentPath);
+
+            await env.Stdout.WriteLineAsync(
+                removed
+                    ? $"Kiro hooks removed ({agentPath})"
+                    : "Nothing to remove — Kiro agent hooks file not found."
+            );
+
+            return 0;
+        } catch (Exception ex) {
+            await env.Stderr.WriteLineAsync($"Could not remove Kiro hooks at {agentPath}: {ex.Message}");
+
+            return 1;
+        }
+    }
+
+    /// <summary>
+    /// Writes kcap's own Kiro agent-hooks file (<c>~/.kiro/agents/kcap.json</c>).
+    /// Kiro reads <c>agents/*.json</c>, so kcap owns its own file wholesale — no
+    /// merge with user agents. Kiro hook entries carry the shell command under
+    /// <c>command</c> with a <c>timeout_ms</c> budget; the event name is embedded
+    /// in the command (agentSpawn delivers no event-name field kcap can branch
+    /// on beyond the installed flag — see <see cref="KiroHookCommand"/>).
+    /// </summary>
+    public static bool InstallKiroHooks(string agentJsonPath) {
+        try {
+            var hooks = new JsonObject();
+
+            foreach (var evt in KiroHooksParser.KiroHookEvents) {
+                hooks[evt] = new JsonArray(
+                    new JsonObject {
+                        ["command"]    = $"{KiroHookCommand} --event {evt}",
+                        ["timeout_ms"] = 5000
+                    }
+                );
+            }
+
+            var root = new JsonObject {
+                ["name"]        = "kcap",
+                ["description"] = "Kurrent Capacitor session recording hooks (AWS Kiro CLI ingest)",
+                ["hooks"]       = hooks
+            };
+
+            Directory.CreateDirectory(Path.GetDirectoryName(agentJsonPath)!);
+            File.WriteAllText(agentJsonPath, root.ToJsonString(WriteOpts));
+            KiroHooksInstaller.WriteMarker(agentJsonPath);
+
+            return true;
+        } catch { return false; }
+    }
+
+    /// <summary>
+    /// Deletes kcap's Kiro agent-hooks file (kcap owns it wholesale). Returns
+    /// true when the file existed; throws on I/O failure.
+    /// </summary>
+    public static bool RemoveKiroHooks(string agentJsonPath) {
+        var removed = false;
+
+        if (File.Exists(agentJsonPath)) {
+            File.Delete(agentJsonPath);
+            removed = true;
+        }
+
+        KiroHooksInstaller.DeleteMarker(agentJsonPath);
 
         return removed;
     }

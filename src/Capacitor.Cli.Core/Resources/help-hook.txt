@@ -9,8 +9,8 @@ Description:
   dispatcher; the event is taken from the payload.
 
   The command is registered via 'kcap setup' or
-  'kcap plugin install [--claude|--codex|--cursor|--copilot]', which writes
-  the appropriate hook configuration for the detected vendor.
+  'kcap plugin install [--claude|--codex|--cursor|--copilot|--kiro]', which
+  writes the appropriate hook configuration for the detected vendor.
 
 Options:
   --claude    Dispatch the event as a Claude Code hook.
@@ -19,6 +19,10 @@ Options:
   --copilot   Dispatch the event as a GitHub Copilot CLI hook. Copilot
               payloads carry no event-name field, so the installer embeds
               it in the registered command (--event <name>).
+  --kiro      Dispatch the event as an AWS Kiro CLI hook. kcap subscribes
+              only to agentSpawn (session start; fires every prompt, deduped
+              server-side); session-end is synthesized by the watcher on
+              kiro-cli exit. Always exits 0 with empty stdout.
 
 Exit codes:
   0   Normal exit (including budget expiry, malformed payload, and

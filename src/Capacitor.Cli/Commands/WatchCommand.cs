@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Kiro;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -105,6 +106,22 @@ static partial class WatchCommand {
                     }
                 }
             }, cts.Token);
+        }
+
+        // Kiro has no on-disk JSONL transcript — its conversation lives in a
+        // SQLite blob. Materialize it (copy-first, read-only) into the kcap-owned
+        // transcriptPath so the shared file-tail drain below consumes it exactly
+        // like every other vendor. The watcher key is the dashless id; the
+        // SQLite conversation_id is the dashed UUID, so reconstruct it.
+        Task? kiroMaterializer = null;
+        if (vendor == "kiro") {
+            var conversationId = Guid.TryParse(sessionId, out var g) ? g.ToString() : sessionId;
+            var dbPath         = KiroPaths.DbPath();
+            kiroMaterializer = Task.Run(
+                () => KiroTranscriptReader.RunMaterializerLoopAsync(
+                    dbPath, conversationId, cwd, transcriptPath, TimeSpan.FromSeconds(2), cts.Token),
+                CancellationToken.None);
+            Log($"Kiro materializer started (db={dbPath}, conversation={conversationId})");
         }
 
         var state = new WatchState();
@@ -254,6 +271,13 @@ static partial class WatchCommand {
             // Expected
         }
 
+        // Let the Kiro materializer flush its final state to disk (its loop does
+        // a last MaterializeOnce on cancellation) before the final drain reads it.
+        if (kiroMaterializer is not null) {
+            try { await kiroMaterializer.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (Exception ex) { Log($"Kiro materializer final flush wait: {ex.Message}"); }
+        }
+
         // Final drain before exit
         if (agentId is null && !state.ThresholdReached) {
             // Session watcher never reached threshold — short-lived session.
@@ -307,7 +331,7 @@ static partial class WatchCommand {
     /// Used to reject unexpected --vendor input before interpolating into the URL
     /// path (defence-in-depth against path traversal even though the CLI runs locally).
     /// </summary>
-    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot" };
+    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "kiro" };
 
     /// <summary>
     /// Total time budget for the parent-exit session-end POST. Covers /auth/config
@@ -635,6 +659,7 @@ static partial class WatchCommand {
         vendor switch {
             "codex"   => TryExtractCodexAssistantText(line),
             "copilot" => TryExtractCopilotAssistantText(line),
+            "kiro"    => TryExtractKiroAssistantText(line),
             _         => TryExtractClaudeAssistantText(line)
         };
 
@@ -697,6 +722,12 @@ static partial class WatchCommand {
                 return root.Str("type") is "user.message" or "assistant.message";
             }
 
+            if (vendor == "kiro") {
+                // One flattened "turn" = a user+assistant exchange; the leading
+                // "session" header is not a conversational event.
+                return root.Str("type") is "turn";
+            }
+
             if (vendor == "codex") {
                 // Codex rolls everything into a top-level response_item envelope;
                 // a "message" payload (user or assistant) is the analog of Claude's
@@ -731,8 +762,51 @@ static partial class WatchCommand {
         vendor switch {
             "codex"   => TryExtractCodexUserText(line),
             "copilot" => TryExtractCopilotUserText(line),
+            "kiro"    => TryExtractKiroUserText(line),
             _         => TryExtractClaudeUserText(line)
         };
+
+    // ── Kiro extractors (AI-888) ───────────────────────────────────────────
+    //
+    // The kcap CLI materializes Kiro's SQLite conversation into the flattened
+    // envelope the server normalizer consumes: a {"type":"session",…} header
+    // then one {"type":"turn","user":{…},"assistant":{…},…} line per history
+    // entry. user.content / assistant are Rust externally-tagged enums
+    // ({"Prompt":{…}}, {"ToolUse":{…}}). For titles we want the first real user
+    // prompt and the first assistant text.
+
+    static string? TryExtractKiroUserText(string line) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Str("type") != "turn") return null;
+
+            // Only the Prompt variant is a typed-by-human message; ToolUseResults
+            // / CancelledToolUses turns carry tool output, not a prompt.
+            var text = root.Obj("user")?.Obj("content")?.Obj("Prompt")?.Str("prompt")?.Trim();
+
+            return string.IsNullOrEmpty(text) ? null : text;
+        } catch {
+            return null;
+        }
+    }
+
+    static string? TryExtractKiroAssistantText(string line) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Str("type") != "turn") return null;
+
+            var assistant = root.Obj("assistant");
+            var text = (assistant?.Obj("Response") ?? assistant?.Obj("ToolUse"))?.Str("content")?.Trim();
+
+            return string.IsNullOrEmpty(text) ? null : text;
+        } catch {
+            return null;
+        }
+    }
 
     // ── Copilot extractors (AI-815) ────────────────────────────────────────
     //
