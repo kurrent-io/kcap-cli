@@ -54,8 +54,8 @@ MCP servers (stdio):
   mcp sessions                       Search/inspect past sessions from agents
 
 Plugin:
-  plugin install [--project] [--codex]   Register hooks (Claude or --codex for Codex)
-  plugin remove  [--project] [--codex]   Remove hooks (Claude or --codex for Codex)
+  plugin install [--project] [--codex|--cursor|--copilot|--skills]   Register hooks/skills (Claude default; flag picks the vendor)
+  plugin remove  [--project] [--codex|--cursor|--copilot|--skills]   Remove hooks/skills (Claude default; flag picks the vendor)
 
 Maintenance:
   update                           Check for and install updates
