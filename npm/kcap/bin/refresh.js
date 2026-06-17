@@ -1,5 +1,6 @@
 // Refreshes user-scope kcap agent installations so users pick up new or updated
-// skills, Codex/Cursor/Copilot hook commands, and Claude plugin registration.
+// skills, Codex/Cursor/Copilot hook commands, the Pi live-ingest extension, and
+// Claude plugin registration.
 //
 // Shared by:
 // - postinstall.js — runs after `npm install -g @kurrent/kcap` (incl. upgrades),
@@ -17,6 +18,7 @@ const REFRESHES = [
   ["plugin", "install", "--codex",   "--if-installed"],
   ["plugin", "install", "--cursor",  "--if-installed"],
   ["plugin", "install", "--copilot", "--if-installed"],
+  ["plugin", "install", "--pi",      "--if-installed"], // Pi extension (~/.pi/agent/extensions/kcap.ts)
   ["plugin", "install",              "--if-installed"], // Claude
 ];
 

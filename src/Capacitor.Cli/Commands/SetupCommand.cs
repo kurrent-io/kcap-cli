@@ -494,9 +494,20 @@ public static class SetupCommand {
     internal static string? LiveRecordingRestartTip(CodingAgentsStep.Result result) {
         if (!result.AnyHooksInstalled) return null;
 
+        // The "how to restart" hint is agent-specific: Claude can resume with
+        // --continue; Pi loads the kcap extension at process start; Codex/Cursor/
+        // Copilot just need a fresh session. Build it from what was actually
+        // installed instead of always naming Claude — the old text read as a
+        // Claude instruction even on a Pi/Cursor/Copilot-only setup.
+        var how = result.ClaudeInstalled
+            ? "Restart your agent (or run [cyan]claude --continue[/])"
+            : result.PiExtensionInstalled
+                ? "Restart [cyan]pi[/] so the kcap extension loads"
+                : "Restart your agent";
+
         return
             "[yellow]![/] Live recording begins on a [bold]new[/] coding-agent session — hooks only load at session start.\n"
-          + "  Restart your agent (or run [cyan]claude --continue[/]) to begin streaming; a session that was already\n"
+          + $"  {how} to begin streaming; a session that was already\n"
           + "  running when you ran setup isn't being recorded yet.";
     }
 

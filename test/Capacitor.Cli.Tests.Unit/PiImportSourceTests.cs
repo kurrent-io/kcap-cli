@@ -122,6 +122,15 @@ public class PiImportSourceTests {
         await Assert.That(source.IsAvailable).IsFalse();
     }
 
+    [Test]
+    public async Task does_not_support_title_generation() {
+        // Pi is a routed source (FilePath=""), so it never reaches the chain
+        // title worker. Like Copilot/Cursor it relies on the server-side fallback
+        // title; advertising true would be a no-op contract lie.
+        var source = new PiImportSource("/nonexistent");
+        await Assert.That(source.SupportsTitleGeneration).IsFalse();
+    }
+
     // Mirrors the server PiTranscriptNormalizer's emit/skip set — keep in sync.
     [Test]
     [Arguments("""{"type":"session","id":"x","cwd":"/w"}""", true)]

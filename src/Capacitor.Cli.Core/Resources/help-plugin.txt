@@ -1,4 +1,4 @@
-kcap plugin — Manage hooks and skills for Claude Code, Codex CLI, Cursor, Copilot CLI, and other agents
+kcap plugin — Manage hooks and skills for Claude Code, Codex CLI, Cursor, Copilot CLI, Pi, and other agents
 
 Usage: kcap plugin <subcommand> [options]
 
@@ -17,6 +17,11 @@ Options:
                       ~/.copilot/hooks/kcap.json (honours $COPILOT_HOME). Copilot
                       merges every *.json in that directory, so user-authored
                       hook files are never touched.
+  --pi                Target Pi (badlogic/pi-mono): install the live-ingest
+                      extension to ~/.pi/agent/extensions/kcap.ts. Pi has no
+                      shell hooks; the extension auto-loads on `pi` startup and
+                      streams each session. User-wide only — --project has no
+                      effect with --pi.
   --skills            Install only the agent-agnostic skills to ~/.agents/skills/.
                       Use this if you only have Cursor (or another agent that
                       reads ~/.agents/skills/) and don't want Codex hooks.
@@ -49,6 +54,13 @@ Notes:
   so restart any running copilot session after install. Copilot has no
   project-scope hooks dir, so --project has no effect with --copilot.
 
+  --pi writes a single extension file (~/.pi/agent/extensions/kcap.ts) instead
+  of a hooks file — Pi exposes no shell hooks, only an in-process extension API.
+  The extension shells out to `kcap hook --pi` on session start/end, so kcap
+  must be on PATH. Pi loads extensions at startup, so restart any running `pi`
+  session after install. Pi has no project-scope extensions dir, so --project
+  has no effect with --pi.
+
   --if-installed is scoped to user-wide installs only — the npm postinstall hook
   does not refresh --project installs.
 
@@ -59,6 +71,7 @@ Examples:
   kcap plugin install --project --codex     # Codex hooks in <repo>/.codex/hooks.json, skills user-wide
   kcap plugin install --cursor              # Install Cursor hooks (~/.cursor/hooks.json)
   kcap plugin install --copilot             # Install Copilot hooks (~/.copilot/hooks/kcap.json)
+  kcap plugin install --pi                  # Install Pi extension (~/.pi/agent/extensions/kcap.ts)
   kcap plugin install --skills --if-installed   # Refresh skills if previously installed (used by npm postinstall)
   kcap plugin install --codex --if-installed    # Refresh Codex hooks if previously installed (used by npm postinstall)
   kcap plugin install --if-installed            # Refresh Claude plugin registration if previously installed

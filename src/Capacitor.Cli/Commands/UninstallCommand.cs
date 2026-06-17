@@ -7,8 +7,9 @@ namespace Capacitor.Cli.Commands;
 /// <summary>
 /// Completely removes kcap from the local machine: stops daemons, kills
 /// watcher processes, strips kcap entries from user-level Claude / Codex /
-/// Cursor hook files, removes agent skills (and legacy Codex skills), and
-/// deletes the kcap config directory.
+/// Cursor / Copilot hook files, deletes the Pi live-ingest extension
+/// (~/.pi/agent/extensions/kcap.ts), removes agent skills (and legacy Codex
+/// skills), and deletes the kcap config directory.
 ///
 /// With <c>--project</c>, also strips kcap entries from the cwd's git-root
 /// <c>.claude/settings.local.json</c> and <c>.codex/hooks.json</c>. Project-scope
@@ -45,6 +46,7 @@ public static class UninstallCommand {
         await Console.Out.WriteLineAsync($"  • Remove kcap entries from {CodexPaths.UserHooksJson}");
         await Console.Out.WriteLineAsync($"  • Remove kcap entries from {CursorPaths.UserHooksJson()}");
         await Console.Out.WriteLineAsync($"  • Remove {Capacitor.Cli.Core.Copilot.CopilotPaths.KcapHooksJson()}");
+        await Console.Out.WriteLineAsync($"  • Remove {Capacitor.Cli.Core.Pi.PiPaths.KcapExtension()}");
         await Console.Out.WriteLineAsync($"  • Remove agent skills under {AgentsPaths.UserSkillsDir}");
 
         if (projectRoot is not null) {
@@ -109,6 +111,7 @@ public static class UninstallCommand {
         if (await PluginCommand.HandleAsync(["plugin", "remove", "--codex"]) != 0) hadFailures = true; // Codex hooks + skills + legacy
         if (await PluginCommand.HandleAsync(["plugin", "remove", "--cursor"]) != 0) hadFailures = true;
         if (await PluginCommand.HandleAsync(["plugin", "remove", "--copilot"]) != 0) hadFailures = true;
+        if (await PluginCommand.HandleAsync(["plugin", "remove", "--pi"]) != 0) hadFailures = true;       // Pi extension (~/.pi/agent/extensions/kcap.ts)
 
         // Skills are removed by --codex above, but call --skills explicitly in
         // case the user only ever installed Cursor / agent-agnostic skills and

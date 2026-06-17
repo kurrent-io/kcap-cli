@@ -3,14 +3,17 @@ kcap hook — dispatch a vendor hook event
 Usage: kcap hook --<vendor>
 
 Description:
-  Invoked by a coding agent's hook system, NOT by users directly. Reads
-  the hook payload as JSON from stdin (including `hook_event_name`) and
-  forwards it to the kcap server. The vendor flag selects the per-agent
-  dispatcher; the event is taken from the payload.
+  Invoked by a coding agent's hook system, NOT by users directly. For most
+  vendors it reads the hook payload as JSON from stdin (including
+  `hook_event_name`) and forwards it to the kcap server; the vendor flag
+  selects the per-agent dispatcher and the event is taken from the payload.
+
+  Pi is the exception: it has no shell hooks, so its dispatch is argument-
+  driven (no stdin payload) — see --pi below.
 
   The command is registered via 'kcap setup' or
-  'kcap plugin install [--claude|--codex|--cursor|--copilot]', which writes
-  the appropriate hook configuration for the detected vendor.
+  'kcap plugin install [--claude|--codex|--cursor|--copilot|--pi]', which writes
+  the appropriate hook configuration (or, for Pi, the extension) for the vendor.
 
 Options:
   --claude    Dispatch the event as a Claude Code hook.
@@ -19,6 +22,13 @@ Options:
   --copilot   Dispatch the event as a GitHub Copilot CLI hook. Copilot
               payloads carry no event-name field, so the installer embeds
               it in the registered command (--event <name>).
+  --pi        Dispatch a Pi (badlogic/pi-mono) lifecycle event. Pi has no
+              shell hooks; the shipped kcap.ts extension invokes this with
+              arguments instead of a stdin payload:
+                kcap hook --pi --event <session-start|session-end> \
+                  --file <session-file> [--cwd <cwd>] [--reason <reason>]
+              The session id, cwd, and start time are read from the Pi
+              session JSONL header.
 
 Exit codes:
   0   Normal exit (including budget expiry, malformed payload, and

@@ -52,12 +52,17 @@ internal sealed class PiImportSource : IImportSource {
     public bool IsAvailable => Directory.Exists(_sessionsDir);
 
     /// <summary>
-    /// True — Pi doesn't reliably name its sessions (the optional
-    /// <c>session_info</c> entry the normalizer skips), so the LLM title
-    /// pipeline should run, same as Claude/Codex. The session-end hook still
-    /// stamps a fallback title server-side when none is generated.
+    /// False — Pi is a routed import source (classifications set
+    /// <c>FilePath = ""</c>, so they run through <c>ImportSessionAsync</c>, not
+    /// the chain worker). Only the chain worker's <c>OnTitleTaskReady</c> queues
+    /// <c>GenerateTitleForImportAsync</c>, and that path is Claude-shaped anyway
+    /// (it can't read Pi's <c>type:"message"</c> + <c>message.role</c> lines), so
+    /// a routed Pi import never reaches LLM titling. Matching Copilot/Cursor, the
+    /// title for an imported Pi session is the server-side fallback stamped by
+    /// <c>PiHookHandlers</c> on the synthesized session-end; LIVE Pi sessions
+    /// still get an LLM title via the watcher's Pi-aware title extractors.
     /// </summary>
-    public bool SupportsTitleGeneration => true;
+    public bool SupportsTitleGeneration => false;
 
     public async Task<IReadOnlyList<DiscoveredSession>> DiscoverAsync(DiscoveryFilters filters, CancellationToken ct) {
         if (!Directory.Exists(_sessionsDir)) return [];
