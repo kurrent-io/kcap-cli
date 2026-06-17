@@ -116,6 +116,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly IReadOnlyDictionary<string, IHostedAgentLauncher> _launchers;
     readonly ILogger<AgentOrchestrator>                        _logger;
 
+    // Hosted-agent PTYs are spawned at a fixed size and never resized. The daemon
+    // reports these dims to the server right after the agent registers (and on
+    // reconnect) so the read-only viewers (web/desktop xterm) lock to exactly the
+    // width Claude drew for — otherwise the viewer auto-fits its panel and the
+    // mismatched columns garble the TUI (AI-884). PtyDefaults is the single source
+    // of truth, shared with IPtyProcessFactory.Spawn's defaults so they can't drift.
+    const ushort HostedPtyCols = PtyDefaults.Cols;
+    const ushort HostedPtyRows = PtyDefaults.Rows;
+
     readonly PeriodicTimer _heartbeatTimer = new(TimeSpan.FromSeconds(30));
 
     // AI-79: heartbeat tightened from 60 s SendAsync to round-trip Ping.
@@ -357,7 +366,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 env["KCAP_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
             }
 
-            var process = _ptyFactory.Spawn(launcher.CliPath, args, worktree.Path, env);
+            var process = _ptyFactory.Spawn(launcher.CliPath, args, worktree.Path, env, HostedPtyCols, HostedPtyRows);
 
             LogAgentSpawned(agentId, process.Pid, worktree.Path, launcher.CliPath);
 
@@ -370,6 +379,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // Notify server
             await _server.AgentRegisteredAsync(agentId, prompt, model, effort, repoPath);
+
+            // Report the fixed PTY size so read-only viewers lock their xterm to it
+            // (see HostedPtyCols/Rows). Best-effort: a failed send must not fail the
+            // launch (late delivery is harmless — the viewer reflows when dims
+            // arrive), but observe the fault here with agent context rather than
+            // leaving it to the global unobserved-task handler.
+            try {
+                await _server.SendTerminalDimensionsAsync(agentId, HostedPtyCols, HostedPtyRows);
+            } catch (Exception ex) {
+                LogTerminalDimsSendFailed(ex, agentId);
+            }
 
             _ = _server.AppendAgentRunEventAsync(
                 agentId,
@@ -911,6 +931,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath);
                     await _server.AgentStatusChangedAsync(agent.Id, agent.Status, agent.SessionId);
 
+                    // Re-send the fixed PTY dims. The server stores them in memory, so a
+                    // server restart (not just a daemon blip) wipes them — without this
+                    // resend the read-only viewers never re-lock and the TUI garbles
+                    // again exactly as before the fix (AI-884). Best-effort: its own
+                    // catch keeps a dims-send failure from escaping to the retry handler
+                    // (which would re-register the agent) or withholding readiness.
+                    try {
+                        await _server.SendTerminalDimensionsAsync(agent.Id, HostedPtyCols, HostedPtyRows);
+                    } catch (Exception ex) {
+                        LogTerminalDimsSendFailed(ex, agent.Id);
+                    }
+
                     // AI-842: do NOT replay the full output buffer here. The old
                     // replay re-sent the entire 2 MB ring on every reconnect, which
                     // the server appended to its own buffer and live-broadcast on
@@ -1113,6 +1145,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to re-register agent {AgentId}")]
     partial void LogReRegisterFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to send terminal dimensions for agent {AgentId} (read-only viewers may render garbled until the next reconnect)")]
+    partial void LogTerminalDimsSendFailed(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} stuck in Starting for {Seconds:F1}s with no output (PID={Pid}, exited={Exited}), terminating")]
     partial void LogAgentStuck(string agentId, double seconds, int pid, bool exited);
