@@ -75,9 +75,13 @@ internal sealed class PiImportSource : IImportSource {
             ct.ThrowIfCancellationRequested();
 
             var header = await TryReadHeaderAsync(jsonl, ct);
-            if (header is not { SessionUuid: { Length: > 0 } uuid }) continue; // not a Pi session file
+            if (header is null) continue; // not a Pi session file (no {"type":"session"} header)
 
-            var dashless = uuid.Replace("-", "");
+            // Validate + normalize the session id the SAME way the live hook path
+            // does (PiHookCommand.ExtractSessionId): a valid header uuid wins, else
+            // the uuid suffix of "<timestamp>_<uuid>.jsonl". A corrupt/malformed
+            // header must NOT mint an arbitrary non-GUID session id and import it.
+            if (PiHookCommand.ExtractSessionId(jsonl, header.SessionUuid) is not { } dashless) continue;
 
             if (!seen.Add(dashless)) continue;
             if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal)) continue;

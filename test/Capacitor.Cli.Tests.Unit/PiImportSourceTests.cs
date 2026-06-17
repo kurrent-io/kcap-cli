@@ -61,6 +61,44 @@ public class PiImportSourceTests {
     }
 
     [Test]
+    public async Task discovery_skips_session_with_non_guid_header_id() {
+        using var tmp = new TempDir();
+        // Well-formed {"type":"session"} header but a corrupt, non-GUID id, in a
+        // file whose name also yields no uuid. Discovery must skip it rather than
+        // minting an arbitrary non-GUID session id — mirrors the live hook path
+        // (PiHookCommand.ExtractSessionId rejects non-GUID headers/filenames).
+        await File.WriteAllLinesAsync(Path.Combine(tmp.Path, "corrupt.jsonl"), new[] {
+            """{"type":"session","version":3,"id":"not-a-guid","timestamp":"2026-06-12T10:00:00.000Z","cwd":"/work/x"}""",
+            """{"type":"message","id":"a1","parentId":null,"message":{"role":"user","content":"hello"}}"""
+        });
+
+        var source   = new PiImportSource(tmp.Path);
+        var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+
+        await Assert.That(sessions.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task discovery_recovers_session_id_from_filename_when_header_id_missing() {
+        using var tmp = new TempDir();
+        // Header without an id, but the file is named "<timestamp>_<uuid>.jsonl"
+        // (Pi's on-disk convention). Discovery falls back to the filename uuid,
+        // the same recovery the live hook path uses for an unflushed header.
+        await File.WriteAllLinesAsync(
+            Path.Combine(tmp.Path, "2026-06-12T10-00-00_" + Sid1 + ".jsonl"),
+            new[] {
+                """{"type":"session","version":3,"timestamp":"2026-06-12T10:00:00.000Z","cwd":"/work/a"}""",
+                """{"type":"message","id":"a1","parentId":null,"message":{"role":"user","content":"hi"}}"""
+            });
+
+        var source   = new PiImportSource(tmp.Path);
+        var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+
+        await Assert.That(sessions.Count).IsEqualTo(1);
+        await Assert.That(sessions[0].SessionId).IsEqualTo(Sid1.Replace("-", ""));
+    }
+
+    [Test]
     public async Task discovery_applies_session_and_cwd_filters() {
         using var tmp = new TempDir();
         WriteSession(tmp.Path, Sid1, cwd: "/work/a");

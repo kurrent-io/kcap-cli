@@ -906,7 +906,7 @@ public static class PluginCommand {
 
     static int PrintUsage() {
         Console.Error.WriteLine(
-            "Usage: kcap plugin <install|remove> [--project] [--codex|--cursor|--skills] [--if-installed]"
+            "Usage: kcap plugin <install|remove> [--project] [--codex|--cursor|--copilot|--pi|--skills] [--if-installed]"
         );
 
         return 1;
