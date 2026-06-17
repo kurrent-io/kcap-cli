@@ -211,6 +211,38 @@ public class SecretRedactorTests {
     }
 
     [Test]
+    [Arguments("client-secret: a8f3b2c91d4e7f0123456789abcdef01", "a8f3b2c91d4e7f0123456789abcdef01")] // hyphen in key
+    [Arguments("aws.secret.access.key: AKIAIOSFODNN7EXAMPLE99", "AKIAIOSFODNN7EXAMPLE99")]               // dots in key
+    public async Task RedactsLine_YamlStyleSecret_KeyWithSeparators_InToolResult(string kv, string secret) {
+        // The key gap is `[\w.\-]*`, so hyphen- and dot-separated key names still match.
+        var line = $$$"""
+            {"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"{{{kv}}}","is_error":false}]}}
+            """.Trim();
+
+        var result = SecretRedactor.RedactLine(line);
+
+        await Assert.That(result).DoesNotContain(secret);
+        await Assert.That(result).Contains("[REDACTED]");
+    }
+
+    [Test]
+    public async Task DoesNotRedact_YamlStyleSecret_ProseColonAfterUpstreamKeyword() {
+        // Regression: a secret keyword anywhere earlier in a prose sentence used to reach across the
+        // old `[^:\n]*` gap to an unrelated prose colon, redacting the next 8+-char word. Here
+        // "access token" sits upstream and "model-id" (exactly 8 chars) followed "real risk:" — it
+        // was wrongly replaced with [REDACTED]. The `[\w.\-]*` gap requires the keyword to be part of
+        // the key token, so this prose now passes through untouched.
+        var line = """
+            {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"We send the access token. The one real risk: model-id matching is fragile here."}]}}
+            """.Trim();
+
+        var result = SecretRedactor.RedactLine(line);
+
+        await Assert.That(result).IsEqualTo(line);
+        await Assert.That(result).Contains("model-id matching");
+    }
+
+    [Test]
     public async Task RedactsLine_ConnectionStringPassword_InToolResult() {
         var line = """
             {"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"Server=localhost;Database=mydb;Password=hunter2;User Id=sa","is_error":false}]}}
