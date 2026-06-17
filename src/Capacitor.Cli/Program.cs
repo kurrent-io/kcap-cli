@@ -465,6 +465,7 @@ switch (command) {
             new CodexImportSource(),
             new CursorImportSource(),
             new CopilotImportSource(),
+            new GeminiImportSource(),
         };
         IReadOnlyList<IImportSource> sources = explicitVendorSelection
             ? allSources.Where(s => vsel.Vendors.Contains(s.Vendor)).ToList()

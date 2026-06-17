@@ -943,7 +943,9 @@ public static class PluginCommand {
                     }
                 }
 
-                preserved.Add(GeminiHooksParser.BuildKcapEntry());
+                // Cast to JsonNode so this binds to JsonArray.Add(JsonNode?), not
+                // the generic Add<T>(T) — the generic trips IL2026/IL3050 under AOT.
+                preserved.Add((JsonNode)GeminiHooksParser.BuildKcapEntry());
                 hooks[evt] = preserved;
             }
 

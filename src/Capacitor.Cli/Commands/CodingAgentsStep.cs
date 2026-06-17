@@ -8,9 +8,12 @@ namespace Capacitor.Cli.Commands;
 /// can drive every branch without touching ~/.claude, ~/.codex, or AnsiConsole.
 /// </summary>
 internal static class CodingAgentsStep {
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool SkipGemini, bool NoPrompt);
+    // SkipGemini / Gemini / GeminiHooksInstalled default so existing call sites
+    // (and the broad CodingAgentsStep test suite) compile unchanged — Gemini was
+    // added (AI-887) after the other four vendors.
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false);
 
-    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini);
+    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false);
 
     internal record Paths(
             string  ClaudeSettingsPath,
@@ -41,7 +44,7 @@ internal static class CodingAgentsStep {
             bool CodexSkillsInstalled,
             bool CursorHooksInstalled,
             bool CopilotHooksInstalled,
-            bool GeminiHooksInstalled
+            bool GeminiHooksInstalled = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
