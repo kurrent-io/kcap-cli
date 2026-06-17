@@ -188,7 +188,7 @@ internal static class CodingAgentsStep {
         var ok = installers.InstallGeminiHooks(paths.GeminiSettingsPath);
 
         if (!ok) {
-            writeLine("  [yellow]⚠[/] Could not write Gemini settings file.");
+            writeLine("  [yellow]⚠[/] Could not install Gemini hooks — ensure settings.json is valid JSON (left untouched).");
 
             return false;
         }

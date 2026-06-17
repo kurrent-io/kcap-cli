@@ -862,7 +862,11 @@ public static class PluginCommand {
         if (!InstallGeminiHooks(settingsPath)) {
             if (refreshOnly) return 0;
 
-            await env.Stderr.WriteLineAsync("Could not write Gemini settings file.");
+            await env.Stderr.WriteLineAsync(
+                $"Could not install Gemini hooks. If {settingsPath} exists, make sure it is valid JSON — "
+              + "kcap leaves an unparseable settings.json untouched rather than overwrite your settings. "
+              + "Fix or remove it, then re-run."
+            );
 
             return 1;
         }
@@ -914,11 +918,22 @@ public static class PluginCommand {
             JsonObject root = [];
 
             if (File.Exists(settingsPath)) {
+                // settings.json is SHARED user config, not a kcap-owned hook file.
+                // If it exists but won't parse into a JSON object (malformed, empty,
+                // or half-written), FAIL CLOSED and leave it untouched. Starting
+                // fresh here would have File.WriteAllText overwrite the whole file
+                // with only kcap hooks, silently dropping the user's unrelated Gemini
+                // settings. (Cursor/Copilot own their dedicated hooks file and may
+                // safely start fresh — this shared file must not.)
+                JsonNode? parsed;
                 try {
-                    if (JsonNode.Parse(File.ReadAllText(settingsPath)) is JsonObject obj) root = obj;
-                } catch {
-                    /* Malformed — start fresh */
+                    parsed = JsonNode.Parse(File.ReadAllText(settingsPath));
+                } catch (JsonException) {
+                    return false;
                 }
+
+                if (parsed is not JsonObject obj) return false;
+                root = obj;
             }
 
             if (root["hooks"] is not JsonObject hooks) {

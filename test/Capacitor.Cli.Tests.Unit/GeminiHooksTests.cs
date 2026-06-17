@@ -89,6 +89,35 @@ public class GeminiHooksTests {
         await Assert.That(root["security"]!["auth"]!["selectedType"]!.GetValue<string>()).IsEqualTo("oauth-personal");
     }
 
+    [Test]
+    public async Task install_leaves_malformed_settings_untouched() {
+        using var tmp = new TempDir();
+        var settingsPath = Path.Combine(tmp.Path, "settings.json");
+
+        // A shared settings.json that is half-written / not valid JSON, but carries
+        // user content we must never destroy by "starting fresh".
+        const string original = "{ \"theme\": \"dark\", \"hooks\": { \"SessionStart\": [ {{ broken";
+        await File.WriteAllTextAsync(settingsPath, original);
+
+        var ok = PluginCommand.InstallGeminiHooks(settingsPath);
+
+        await Assert.That(ok).IsFalse();                                            // fails closed
+        await Assert.That(await File.ReadAllTextAsync(settingsPath)).IsEqualTo(original); // untouched
+    }
+
+    [Test]
+    public async Task install_leaves_non_object_settings_untouched() {
+        using var tmp = new TempDir();
+        var settingsPath = Path.Combine(tmp.Path, "settings.json");
+
+        // Valid JSON, but not an object — still not something we can safely merge into.
+        const string original = "[1, 2, 3]";
+        await File.WriteAllTextAsync(settingsPath, original);
+
+        await Assert.That(PluginCommand.InstallGeminiHooks(settingsPath)).IsFalse();
+        await Assert.That(await File.ReadAllTextAsync(settingsPath)).IsEqualTo(original);
+    }
+
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
