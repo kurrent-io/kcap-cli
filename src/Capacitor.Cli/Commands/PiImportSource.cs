@@ -367,11 +367,12 @@ internal sealed class PiImportSource : IImportSource {
     /// <summary>
     /// True when the line maps to at least one canonical event under the
     /// server's <c>PiTranscriptNormalizer</c>: the <c>session</c> header always
-    /// emits; <c>message</c> emits for roles user/assistant (non-empty content),
+    /// emits; <c>compaction</c> emits a <c>ContextCompacted</c> (AI-892);
+    /// <c>message</c> emits for roles user/assistant (non-empty content),
     /// toolResult (has toolCallId), bashExecution (has command). Everything else
-    /// (model_change / thinking_level_change / compaction / branch_summary /
-    /// label / session_info / custom*) is skipped server-side and can never
-    /// advance the watermark. Keep in sync with the normalizer.
+    /// (model_change / thinking_level_change / branch_summary / label /
+    /// session_info / custom*) is skipped server-side and can never advance the
+    /// watermark. Keep in sync with the normalizer.
     /// </summary>
     internal static bool IsImportRelevantLine(string line) {
         try {
@@ -379,7 +380,8 @@ internal sealed class PiImportSource : IImportSource {
             var       root = doc.RootElement;
 
             switch (root.Str("type")) {
-                case "session": return true;
+                case "session":    return true;
+                case "compaction": return true;
                 case "message":
                     if (root.Obj("message") is not { } msg) return false;
                     return msg.Str("role") switch {

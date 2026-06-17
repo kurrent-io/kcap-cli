@@ -139,7 +139,7 @@ public class PiImportSourceTests {
     [Arguments("""{"type":"message","id":"a","message":{"role":"toolResult","toolCallId":"c1","content":[]}}""", true)]
     [Arguments("""{"type":"message","id":"a","message":{"role":"bashExecution","command":"ls"}}""", true)]
     [Arguments("""{"type":"model_change","id":"a","modelId":"gpt-5"}""", false)]
-    [Arguments("""{"type":"compaction","id":"a","summary":"x"}""", false)]
+    [Arguments("""{"type":"compaction","id":"a","summary":"x"}""", true)]  // AI-892: compaction → ContextCompacted
     [Arguments("""{"type":"label","id":"a","label":"x"}""", false)]
     [Arguments("""{"type":"session_info","id":"a","name":"x"}""", false)]
     [Arguments("""{"type":"message","id":"a","message":{"role":"toolResult","content":[]}}""", false)]
