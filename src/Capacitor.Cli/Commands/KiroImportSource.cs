@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -8,26 +9,23 @@ using Capacitor.Cli.Core.Kiro;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Discover + classify + import historical AWS Kiro CLI sessions from the SQLite
-/// <c>data.sqlite3</c> DB (<c>conversations_v2</c>, legacy fallback
-/// <c>conversations</c>). Unlike the file-tailing vendors there is no on-disk
-/// JSONL: <see cref="KiroTranscriptReader"/> flattens each
-/// <c>ConversationState</c> blob into the per-turn envelope the server
-/// normalizer consumes, so historical and live import converge on the same
-/// <c>KiroTranscriptNormalizer</c>. Every flattened line maps to a canonical
-/// event (a <c>session</c> header + one <c>turn</c> per history entry), so the
-/// "last import-relevant line" is simply the last line — no skip-list to keep in
-/// sync (contrast Copilot's noise-line filtering).
+/// Discover + classify + import historical AWS Kiro CLI sessions from the
+/// append-only JSONL logs under <c>~/.kiro/sessions/cli/{id}.jsonl</c> (each the
+/// same lines the live watcher tails, so live and historical ingest converge on
+/// the server's <c>KiroTranscriptNormalizer</c>). The sibling <c>{id}.json</c>
+/// carries cwd / model / title / timestamps. Every JSONL line maps to a canonical
+/// event (<c>Prompt</c> / <c>AssistantMessage</c> / <c>ToolResults</c>), so the
+/// "last import-relevant line" is simply the last non-blank line.
 /// </summary>
 internal sealed class KiroImportSource : IImportSource {
-    readonly string                                 _dbPath;
+    readonly string                                 _sessionsDir;
     readonly Func<string, Task<RepositoryPayload?>> _repoDetector;
 
     public KiroImportSource(
-        string?                                 dbPathOverride = null,
-        Func<string, Task<RepositoryPayload?>>? repoDetector   = null
+        string?                                 sessionsDirOverride = null,
+        Func<string, Task<RepositoryPayload?>>? repoDetector        = null
     ) {
-        _dbPath       = dbPathOverride ?? KiroPaths.DbPath();
+        _sessionsDir  = sessionsDirOverride ?? KiroPaths.SessionsDir();
         _repoDetector = repoDetector ?? RepositoryDetection.DetectRepositoryAsync;
     }
 
@@ -46,13 +44,12 @@ internal sealed class KiroImportSource : IImportSource {
 
     public string Vendor => "kiro";
 
-    public bool IsAvailable => File.Exists(_dbPath);
+    public bool IsAvailable => Directory.Exists(_sessionsDir);
 
     /// <summary>
-    /// False — Kiro carries no session title in the conversation blob, so the
-    /// server's session-end handler derives a fallback title from the first user
-    /// message. (Scheduling LLM title generation would need the on-disk
-    /// transcript the file-based vendors have; Kiro has none.)
+    /// False — Kiro names each session in the sibling <c>{id}.json</c>, which
+    /// ImportSessionAsync forwards via <c>/hooks/set-title</c>, so the LLM title
+    /// pipeline would only burn tokens to overwrite a good title.
     /// </summary>
     public bool SupportsTitleGeneration => false;
 
@@ -65,39 +62,49 @@ internal sealed class KiroImportSource : IImportSource {
 
         var result = new List<DiscoveredSession>();
 
-        foreach (var row in KiroTranscriptReader.DiscoverAll(_dbPath)) {
+        if (!Directory.Exists(_sessionsDir))
+            return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
+
+        foreach (var jsonl in Directory.EnumerateFiles(_sessionsDir, "*.jsonl")) {
             ct.ThrowIfCancellationRequested();
 
-            var dashless = row.ConversationId.Replace("-", "");
+            // Filename stem is the dashed session UUID Kiro uses for both files.
+            var dashed   = Path.GetFileNameWithoutExtension(jsonl);
+            var dashless = dashed.Replace("-", "");
 
             if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
                 continue;
 
+            // The metadata sibling sits next to the .jsonl (respects a custom
+            // sessions dir), so derive it from the discovered path rather than
+            // the global ~/.kiro location.
+            var meta = KiroSessionMeta.TryRead(Path.ChangeExtension(jsonl, ".json"));
+
             if (normalizedCwd is not null
-             && (row.Cwd is null || !NormalizeForComparison(row.Cwd).Equals(normalizedCwd, PathComparison)))
+             && (meta?.Cwd is null || !NormalizeForComparison(meta.Cwd).Equals(normalizedCwd, PathComparison)))
                 continue;
 
-            // started_at proxy: the DB created_at (or the first turn's timestamp
-            // baked into the flattened header by FlattenRow).
-            var firstTimestamp = row.CreatedAt;
+            // Session-start proxy: the .json created_at, else the transcript's
+            // filesystem birth time (Linux ext4 reports mtime — best effort).
+            var firstTimestamp = meta?.CreatedAt;
+            if (firstTimestamp is null) {
+                try { firstTimestamp = File.GetCreationTimeUtc(jsonl); } catch { /* best effort */ }
+            }
 
             if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) continue;
-
-            // Flatten now (post-filter) so classify/import reuse it without a
-            // second SQLite read.
-            var lines = KiroTranscriptReader.FlattenRow(row);
-            if (lines.Count == 0) continue;
 
             result.Add(new DiscoveredSession(
                 SessionId:      dashless,
                 Vendor:         Vendor,
-                Cwd:            row.Cwd,
+                Cwd:            meta?.Cwd,
                 FirstTimestamp: firstTimestamp,
                 SourceMeta:     new Dictionary<string, object?> {
-                    ["ConversationId"] = row.ConversationId,
-                    ["Cwd"]            = row.Cwd,
-                    ["Lines"]          = lines,
-                    ["LastTimestamp"]  = row.UpdatedAt,
+                    ["TranscriptPath"]    = jsonl,
+                    ["DashedSessionId"]   = dashed,
+                    ["Cwd"]               = meta?.Cwd,
+                    ["Title"]             = meta?.Title,
+                    ["Model"]             = meta?.Model,
+                    ["LastTimestamp"]     = meta?.UpdatedAt,
                 }));
         }
 
@@ -114,7 +121,7 @@ internal sealed class KiroImportSource : IImportSource {
         var hasExcludes = ctx.ExcludedRepos is { Count: > 0 };
 
         foreach (var s in sessions) {
-            var lines = (List<string>)s.SourceMeta!["Lines"]!;
+            var transcriptPath = (string)s.SourceMeta!["TranscriptPath"]!;
 
             var meta = new SessionMetadata {
                 SessionId      = s.SessionId,
@@ -123,7 +130,22 @@ internal sealed class KiroImportSource : IImportSource {
                 LastTimestamp  = s.SourceMeta!.TryGetValue("LastTimestamp", out var lt) ? lt as DateTimeOffset? : null,
             };
 
-            var nonBlankCount = lines.Count(l => !string.IsNullOrWhiteSpace(l));
+            int? lastNonBlankIndex;
+            int? lastRelevantIndex;
+            int  nonBlankCount;
+            try {
+                (lastNonBlankIndex, lastRelevantIndex, nonBlankCount) = await ReadTranscriptStatsAsync(transcriptPath, ct);
+            } catch {
+                results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, totalLines: 0,
+                                               probeErrorReason: "transcript read failed"));
+                continue;
+            }
+
+            if (lastNonBlankIndex is null) {
+                results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, totalLines: 0,
+                                               probeErrorReason: "empty transcript"));
+                continue;
+            }
 
             if (nonBlankCount < ctx.MinLines) {
                 results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.TooShort, totalLines: nonBlankCount));
@@ -138,6 +160,8 @@ internal sealed class KiroImportSource : IImportSource {
                                                probeErrorReason: "watermark probe failed"));
                 continue;
             }
+
+            meta.LastTimestamp ??= TryGetLastWriteUtc(transcriptPath);
 
             string? repoKey = null;
             if (hasExcludes && s.Cwd is { } cwd) {
@@ -157,9 +181,7 @@ internal sealed class KiroImportSource : IImportSource {
             var status       = ImportCommand.ClassificationStatus.New;
             var resumeFromLn = 0;
 
-            // Every flattened Kiro line emits a canonical event, so the last
-            // import-relevant line is just the last line index.
-            var lastImportable = lines.Count - 1;
+            var lastImportable = lastRelevantIndex ?? lastNonBlankIndex.Value;
 
             if (serverLastLine is { } srv) {
                 if (srv >= lastImportable) {
@@ -195,18 +217,23 @@ internal sealed class KiroImportSource : IImportSource {
             ImportContext                       ctx,
             CancellationToken                   ct
         ) {
-        var lines = (List<string>)classification.SourceMeta!["Lines"]!;
-        if (lines.Count == 0) return ImportOutcome.Skipped;
+        var transcriptPath = (string)classification.SourceMeta!["TranscriptPath"]!;
+        if (!File.Exists(transcriptPath)) return ImportOutcome.Failed;
 
-        var cwd = classification.SourceMeta!.TryGetValue("Cwd", out var cwdObj) ? cwdObj as string : null;
+        var cwd    = classification.SourceMeta!.TryGetValue("Cwd", out var c) ? c as string : null;
+        var dashed = classification.SourceMeta!.TryGetValue("DashedSessionId", out var d) ? d as string : null;
+        var model  = classification.SourceMeta!.TryGetValue("Model", out var m) ? m as string : null;
 
-        // Lifecycle-before-transcript ordering (see CursorImportSource): a
-        // transcript that advances the watermark past a failed lifecycle POST
-        // would leave the session permanently lifecycle-less. Re-runs are
-        // idempotent server-side (deterministic lifecycle event ids).
+        // Lifecycle uses the dashed id (matches the live agentSpawn hook so a
+        // re-import of a live session dedupes); the transcript route uses the
+        // dashless id (the canonical stream key). Lifecycle-before-transcript:
+        // a transcript that advances the watermark past a failed lifecycle POST
+        // would leave the session permanently lifecycle-less.
+        var lifecycleId = dashed ?? classification.SessionId;
+
         var startOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-start/kiro",
-            BuildSessionStartPayload(classification.SessionId, cwd, classification.Meta.FirstTimestamp),
+            BuildSessionStartPayload(lifecycleId, cwd, model, classification.Meta.FirstTimestamp),
             ct);
         if (!startOk) return ImportOutcome.Failed;
 
@@ -216,31 +243,31 @@ internal sealed class KiroImportSource : IImportSource {
             _                                                => 0,
         };
 
-        // SendTranscriptBatches reads from a file; Kiro has none, so materialize
-        // the flattened lines to a temp file for the send, then clean up.
-        var tempPath = Path.Combine(Path.GetTempPath(), $"kcap-kiro-import-{classification.SessionId}-{Guid.NewGuid():N}.jsonl");
-
         int sent;
         try {
-            await File.WriteAllLinesAsync(tempPath, lines, ct);
-
             sent = await SessionImporter.SendTranscriptBatches(
                 httpClient: ctx.HttpClient,
                 baseUrl:    ctx.BaseUrl,
                 sessionId:  classification.SessionId,
-                filePath:   tempPath,
+                filePath:   transcriptPath,
                 agentId:    null,
                 startLine:  startLine,
                 vendor:     Vendor);
         } catch {
             return ImportOutcome.Failed;
-        } finally {
-            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* best effort */ }
+        }
+
+        // Forward Kiro's own session title (best-effort — a title miss must not
+        // fail the import).
+        if (classification.SourceMeta!.TryGetValue("Title", out var titleObj)
+         && titleObj is string title
+         && !string.IsNullOrWhiteSpace(title)) {
+            await PostSetTitleAsync(ctx.HttpClient, ctx.BaseUrl, classification.SessionId, title, ct);
         }
 
         var endOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-end/kiro",
-            BuildSessionEndPayload(classification.SessionId, cwd, classification.Meta.LastTimestamp),
+            BuildSessionEndPayload(lifecycleId, cwd, classification.Meta.LastTimestamp),
             ct);
         if (!endOk) return ImportOutcome.Failed;
 
@@ -249,12 +276,13 @@ internal sealed class KiroImportSource : IImportSource {
         return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
     }
 
-    static JsonObject BuildSessionStartPayload(string sessionId, string? cwd, DateTimeOffset? startedAt) {
+    static JsonObject BuildSessionStartPayload(string sessionId, string? cwd, string? model, DateTimeOffset? startedAt) {
         var payload = new JsonObject {
             ["hook_event_name"] = "agentSpawn",
             ["session_id"]      = sessionId,
         };
         if (cwd is not null) payload["cwd"] = cwd;
+        if (model is not null) payload["model"] = model;
         if (startedAt is { } ts) payload["started_at"] = ts.ToString("O");
         return payload;
     }
@@ -282,6 +310,26 @@ internal sealed class KiroImportSource : IImportSource {
         }
     }
 
+    static async Task PostSetTitleAsync(HttpClient client, string baseUrl, string sessionId, string title, CancellationToken ct) {
+        if (title.Length > 120) title = title[..120];
+
+        var payload = new JsonObject {
+            ["session_id"] = sessionId,
+            ["title"]      = title,
+        };
+
+        try {
+            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            using var _       = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, ct: ct);
+        } catch {
+            // Best effort.
+        }
+    }
+
+    static DateTimeOffset? TryGetLastWriteUtc(string path) {
+        try { return File.GetLastWriteTimeUtc(path); } catch { return null; }
+    }
+
     static ImportCommand.SessionClassification MakeClassification(
         DiscoveredSession                  s,
         SessionMetadata                    meta,
@@ -299,6 +347,44 @@ internal sealed class KiroImportSource : IImportSource {
         TotalLines       = totalLines,
         SourceMeta       = s.SourceMeta,
     };
+
+    static async Task<(int? LastNonBlankIndex, int? LastRelevantIndex, int NonBlankCount)> ReadTranscriptStatsAsync(
+        string transcriptPath, CancellationToken ct
+    ) {
+        await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var       reader = new StreamReader(stream);
+
+        int? lastIdx         = null;
+        int? lastRelevantIdx = null;
+        var  count           = 0;
+        var  lineIdx         = 0;
+
+        while (await reader.ReadLineAsync(ct) is { } line) {
+            if (!string.IsNullOrWhiteSpace(line)) {
+                lastIdx = lineIdx;
+                count++;
+
+                if (IsImportRelevantLine(line)) lastRelevantIdx = lineIdx;
+            }
+            lineIdx++;
+        }
+        return (lastIdx, lastRelevantIdx, count);
+    }
+
+    /// <summary>
+    /// True when the line maps to a canonical event under the server's
+    /// KiroTranscriptNormalizer — kind <c>Prompt</c> / <c>AssistantMessage</c> /
+    /// <c>ToolResults</c>. Other kinds are skipped server-side and never advance
+    /// the transcript watermark, so a fully-imported session stays AlreadyLoaded.
+    /// </summary>
+    internal static bool IsImportRelevantLine(string line) {
+        try {
+            using var doc = JsonDocument.Parse(line);
+            return doc.RootElement.Str("kind") is "Prompt" or "AssistantMessage" or "ToolResults";
+        } catch {
+            return false;
+        }
+    }
 
     static async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct) {
         using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct: ct);
@@ -334,4 +420,32 @@ internal sealed class KiroImportSource : IImportSource {
         }
         return (excludedRepoKey, excludedPathKey);
     }
+}
+
+/// <summary>
+/// Minimal reader for Kiro's per-session <c>{id}.json</c> metadata sibling — the
+/// few fields import needs (cwd, title, model, timestamps). A parse failure must
+/// never break discovery (returns null / partial data).
+/// </summary>
+internal sealed record KiroSessionMeta(string? Cwd, string? Title, string? Model, DateTimeOffset? CreatedAt, DateTimeOffset? UpdatedAt) {
+    public static KiroSessionMeta? TryRead(string jsonPath) {
+        try {
+            if (!File.Exists(jsonPath)) return null;
+            if (JsonNode.Parse(File.ReadAllText(jsonPath)) is not JsonObject root) return null;
+
+            return new KiroSessionMeta(
+                Cwd:       root["cwd"]?.GetValue<string>(),
+                Title:     root["title"]?.GetValue<string>(),
+                Model:     root["session_state"]?["rts_model_state"]?["model_info"]?["model_id"]?.GetValue<string>(),
+                CreatedAt: ParseTimestamp(root["created_at"]?.GetValue<string>()),
+                UpdatedAt: ParseTimestamp(root["updated_at"]?.GetValue<string>()));
+        } catch {
+            return null;
+        }
+    }
+
+    static DateTimeOffset? ParseTimestamp(string? value) =>
+        DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ts)
+            ? ts
+            : null;
 }

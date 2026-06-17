@@ -106,6 +106,13 @@ static class KiroHookCommand {
             forwarded["default_visibility"] = visibility;
         }
 
+        // Model lives in the sibling {id}.json (the JSONL turn lines carry none),
+        // so the server gets it only from this hook. Best-effort: at agentSpawn the
+        // file may not exist yet — the next agentSpawn (fires every prompt) backfills.
+        if (ReadKiroModel(dashedSessionId) is { } model) {
+            forwarded["model"] = model;
+        }
+
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(forwarded.ToJsonString());
 
         if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
@@ -117,12 +124,12 @@ static class KiroHookCommand {
         var exit = await PostHookAsync(baseUrl, "session-start/kiro", enriched);
         if (exit != 0) return exit;
 
-        // The watcher tails a kcap-owned file that it materializes from the
-        // SQLite conversation (Kiro has no on-disk JSONL transcript). It also
-        // owns session-end: GetCodingAgentPid() inside SpawnWatcher passes the
-        // kiro-cli pid as --parent-pid, so the watcher POSTs session-end/kiro
-        // when kiro-cli exits.
-        var transcriptPath = KiroPaths.MaterializedTranscript(sessionId);
+        // The watcher tails Kiro's own append-only session log
+        // ~/.kiro/sessions/cli/{id}.jsonl (the file is named with the dashed id).
+        // The watcher also owns session-end: GetCodingAgentPid() inside
+        // SpawnWatcher passes the kiro-cli pid as --parent-pid, so the watcher
+        // POSTs session-end/kiro when kiro-cli exits.
+        var transcriptPath = KiroPaths.SessionJsonl(dashedSessionId);
 
         await WatcherManager.EnsureWatcherRunning(
             baseUrl, sessionId, transcriptPath,
@@ -149,6 +156,26 @@ static class KiroHookCommand {
         } catch (HttpRequestException ex) {
             HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
             return 1;
+        }
+    }
+
+    /// <summary>
+    /// Reads the session model from the sibling <c>{id}.json</c>
+    /// (<c>session_state.rts_model_state.model_info.model_id</c>, e.g. "auto").
+    /// Returns null when the file is absent (agentSpawn can fire before Kiro
+    /// writes it) or unparseable — model is best-effort enrichment.
+    /// </summary>
+    static string? ReadKiroModel(string dashedSessionId) {
+        try {
+            var path = KiroPaths.SessionJson(dashedSessionId);
+            if (!File.Exists(path)) return null;
+
+            var model = JsonNode.Parse(File.ReadAllText(path))
+                ?["session_state"]?["rts_model_state"]?["model_info"]?["model_id"]?.GetValue<string>();
+
+            return string.IsNullOrWhiteSpace(model) ? null : model;
+        } catch {
+            return null;
         }
     }
 

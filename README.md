@@ -90,7 +90,7 @@ kcap import --copilot           # only Copilot
 kcap import --kiro              # only Kiro
 ```
 
-This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), and the AWS Kiro CLI SQLite DB `~/Library/Application Support/kiro-cli/data.sqlite3` (Kiro) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, or `--kiro` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
+This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), and `~/.kiro/sessions/cli/` (Kiro) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, or `--kiro` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
 
 You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org` uses the active profile name as the GitHub org login — it works out of the box when the profile was created by `kcap setup` (which names it after the picked tenant), and errors otherwise. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
@@ -259,7 +259,7 @@ The server is repo-aware — it resolves the current working directory to a repo
 
 ### Loading historical sessions
 
-Backfill older sessions from every detected coding agent in a single run. Most agents ship per-session `.jsonl` transcripts (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/<sanitized-workspace>/agent-transcripts/`, `~/.copilot/session-state/`); AWS Kiro CLI keeps its conversations in a SQLite DB (`~/Library/Application Support/kiro-cli/data.sqlite3`) that kcap flattens to the same per-turn form. They're discovered automatically and the command requires an explicit scope so personal/private repos aren't uploaded by accident:
+Backfill older sessions from every detected coding agent in a single run. Each agent ships per-session `.jsonl` transcripts (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/<sanitized-workspace>/agent-transcripts/`, `~/.copilot/session-state/`, `~/.kiro/sessions/cli/`). They're discovered automatically and the command requires an explicit scope so personal/private repos aren't uploaded by accident:
 
 ```bash
 kcap import --all                            # every discovered session from every agent
@@ -280,12 +280,12 @@ kcap import --codex --org                    # only Codex rollouts
 kcap import --cursor --all                   # only Cursor — every discovered transcript
 kcap import --cursor --cwd /path/to/proj     # only Cursor sessions whose workspace folder matches
 kcap import --copilot --all                  # only Copilot — every discovered transcript
-kcap import --kiro --all                     # only Kiro — every conversation in the SQLite DB
+kcap import --kiro --all                     # only Kiro — every session log under ~/.kiro/sessions/cli
 ```
 
 Cursor historical import walks every JSONL transcript under `~/.cursor/projects/*/agent-transcripts/*/*.jsonl` and posts each line through the same `POST /hooks/transcript` route the live hook path uses, so live and historical ingest converge on one canonical event stream. The walker resolves each session's working directory by matching its sanitized workspace name against `~/Library/Application Support/Cursor/User/workspaceStorage/*/workspace.json` (on Linux: `~/.config/Cursor/User/...`); sessions whose workspace can't be resolved are still imported, just without `cwd` and git owner/repo enrichment.
 
-Kiro historical import reads the SQLite `conversations_v2` table (legacy `conversations` fallback) **copy-first, read-only** so it never contends with a live `kiro-cli`, flattens each conversation's `history[]` into the same per-turn JSONL the live watcher streams, and posts it through `POST /hooks/transcript`. Set `KIRO_CLI_DB_FILE` (or `KIRO_HOME`) to point at a non-default DB location. Kiro persists no token counts, so imported Kiro sessions show no token usage (by design). Re-imports are idempotent — event ids are deterministic over `(conversation_id, request_id, kind)`.
+Kiro historical import reads each session's append-only log at `~/.kiro/sessions/cli/{id}.jsonl` (plus the sibling `{id}.json` for cwd / model / title) and posts the lines through `POST /hooks/transcript` — the same lines the live watcher tails, so live and historical ingest converge. Set `KIRO_HOME` to point at a non-default location. Kiro persists no token counts, so imported Kiro sessions show no token usage (by design). Re-imports are idempotent — event ids are deterministic over `(session id, message/tool id, kind)`.
 
 Additional flags:
 
@@ -404,7 +404,7 @@ kcap plugin install --kiro                  # writes ~/.kiro/agents/kcap.json
 kcap plugin remove --kiro                   # deletes ~/.kiro/agents/kcap.json
 ```
 
-Kiro's conversations live in a SQLite DB (`~/Library/Application Support/kiro-cli/data.sqlite3`; Linux `~/.local/share/kiro-cli/`; honours `KIRO_CLI_DB_FILE` / `KIRO_HOME`), not an append-only JSONL. The kcap watcher polls that DB (copy-first, read-only) and flattens new turns into the transcript stream. Lifecycle comes from Kiro's `agentSpawn` hook (fires every prompt → deduped server-side); since Kiro has **no session-end trigger**, the watcher synthesizes session-end on `kiro-cli` exit. Historical sessions import via `kcap import --kiro`. Kiro persists no token counts, so Kiro sessions show no token usage by design.
+Kiro writes an append-only JSONL log per session at `~/.kiro/sessions/cli/{id}.jsonl` (plus a sibling `{id}.json` for cwd / model / title; honours `KIRO_HOME`), so the kcap watcher tails it like every other vendor. Lifecycle comes from Kiro's `agentSpawn` hook (fires every prompt → deduped server-side); since Kiro has **no session-end trigger**, the watcher synthesizes session-end on `kiro-cli` exit. Historical sessions import via `kcap import --kiro`. Kiro persists no token counts, so Kiro sessions show no token usage by design.
 
 Cursor uses a single user-scope `hooks.json`; there is no project-scope variant.
 

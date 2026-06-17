@@ -1,15 +1,13 @@
 kcap import — Import local sessions from every detected coding agent
 
 Discovers Claude, Codex, Cursor, Copilot, and Kiro sessions on this machine and
-imports them in a single run. Most agents ship a per-session .jsonl transcript;
-Kiro keeps its conversations in a SQLite DB that kcap flattens to the same form:
+imports them in a single run. Each agent ships a per-session .jsonl transcript:
   Claude  — ~/.claude/projects/<encoded-cwd>/<sid>.jsonl
   Codex   — ~/.codex/sessions/.../rollout-<sid>.jsonl
   Cursor  — ~/.cursor/projects/<sanitized-workspace>/agent-transcripts/<sid>/<sid>.jsonl
   Copilot — ~/.copilot/session-state/<sid>/events.jsonl (plus the pre-GA
             history-session-state/ root; dirs without events.jsonl are skipped)
-  Kiro    — ~/Library/Application Support/kiro-cli/data.sqlite3 (conversations_v2;
-            Linux ~/.local/share/kiro-cli/; honours KIRO_CLI_DB_FILE / KIRO_HOME)
+  Kiro    — ~/.kiro/sessions/cli/<sid>.jsonl (+ <sid>.json metadata; honours KIRO_HOME)
 kcap discovers all five the same way.
 
 Usage: kcap import [vendor-filters] [scope] [options]
@@ -23,7 +21,7 @@ Vendor filters (additive — pass one or more to restrict the run):
   --codex                 Import Codex rollouts
   --cursor                Import Cursor agent-session transcripts
   --copilot               Import GitHub Copilot CLI session transcripts
-  --kiro                  Import AWS Kiro CLI sessions (from the SQLite DB)
+  --kiro                  Import AWS Kiro CLI sessions (~/.kiro/sessions/cli)
 
 Scope (one of, required for non-interactive use):
   --all                   Import every discovered session

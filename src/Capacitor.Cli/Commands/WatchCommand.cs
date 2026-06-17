@@ -5,7 +5,6 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
-using Capacitor.Cli.Core.Kiro;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -106,22 +105,6 @@ static partial class WatchCommand {
                     }
                 }
             }, cts.Token);
-        }
-
-        // Kiro has no on-disk JSONL transcript — its conversation lives in a
-        // SQLite blob. Materialize it (copy-first, read-only) into the kcap-owned
-        // transcriptPath so the shared file-tail drain below consumes it exactly
-        // like every other vendor. The watcher key is the dashless id; the
-        // SQLite conversation_id is the dashed UUID, so reconstruct it.
-        Task? kiroMaterializer = null;
-        if (vendor == "kiro") {
-            var conversationId = Guid.TryParse(sessionId, out var g) ? g.ToString() : sessionId;
-            var dbPath         = KiroPaths.DbPath();
-            kiroMaterializer = Task.Run(
-                () => KiroTranscriptReader.RunMaterializerLoopAsync(
-                    dbPath, conversationId, cwd, transcriptPath, TimeSpan.FromSeconds(2), cts.Token),
-                CancellationToken.None);
-            Log($"Kiro materializer started (db={dbPath}, conversation={conversationId})");
         }
 
         var state = new WatchState();
@@ -269,13 +252,6 @@ static partial class WatchCommand {
             }
         } catch (OperationCanceledException) {
             // Expected
-        }
-
-        // Let the Kiro materializer flush its final state to disk (its loop does
-        // a last MaterializeOnce on cancellation) before the final drain reads it.
-        if (kiroMaterializer is not null) {
-            try { await kiroMaterializer.WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch (Exception ex) { Log($"Kiro materializer final flush wait: {ex.Message}"); }
         }
 
         // Final drain before exit
@@ -723,9 +699,10 @@ static partial class WatchCommand {
             }
 
             if (vendor == "kiro") {
-                // One flattened "turn" = a user+assistant exchange; the leading
-                // "session" header is not a conversational event.
-                return root.Str("type") is "turn";
+                // Prompt / AssistantMessage are the conversational lines;
+                // ToolResults is plumbing and must not count toward the
+                // title-generation event threshold.
+                return root.Str("kind") is "Prompt" or "AssistantMessage";
             }
 
             if (vendor == "codex") {
@@ -768,44 +745,32 @@ static partial class WatchCommand {
 
     // ── Kiro extractors (AI-888) ───────────────────────────────────────────
     //
-    // The kcap CLI materializes Kiro's SQLite conversation into the flattened
-    // envelope the server normalizer consumes: a {"type":"session",…} header
-    // then one {"type":"turn","user":{…},"assistant":{…},…} line per history
-    // entry. user.content / assistant are Rust externally-tagged enums
-    // ({"Prompt":{…}}, {"ToolUse":{…}}). For titles we want the first real user
-    // prompt and the first assistant text.
+    // Kiro CLI writes ~/.kiro/sessions/cli/{id}.jsonl as {"version","kind","data"}
+    // lines: kind "Prompt" (user) / "AssistantMessage" / "ToolResults", whose
+    // data.content[] holds {"kind":"text"|"toolUse"|"toolResult","data":…} blocks.
+    // For titles we want the first user prompt and the first assistant text.
 
-    static string? TryExtractKiroUserText(string line) {
+    static string? TryExtractKiroUserText(string line) => KiroLineText(line, "Prompt");
+
+    static string? TryExtractKiroAssistantText(string line) => KiroLineText(line, "AssistantMessage");
+
+    static string? KiroLineText(string line, string kind) {
         try {
             using var doc  = JsonDocument.Parse(line);
             var       root = doc.RootElement;
 
-            if (root.Str("type") != "turn") return null;
+            if (root.Str("kind") != kind) return null;
+            if (root.Obj("data")?.Arr("content") is not { } content) return null;
 
-            // Only the Prompt variant is a typed-by-human message; ToolUseResults
-            // / CancelledToolUses turns carry tool output, not a prompt.
-            var text = root.Obj("user")?.Obj("content")?.Obj("Prompt")?.Str("prompt")?.Trim();
-
-            return string.IsNullOrEmpty(text) ? null : text;
+            foreach (var block in content.EnumerateArray()) {
+                if (block.Str("kind") == "text" && block.Str("data")?.Trim() is { Length: > 0 } text)
+                    return text;
+            }
         } catch {
-            return null;
+            // Ignore parse errors
         }
-    }
 
-    static string? TryExtractKiroAssistantText(string line) {
-        try {
-            using var doc  = JsonDocument.Parse(line);
-            var       root = doc.RootElement;
-
-            if (root.Str("type") != "turn") return null;
-
-            var assistant = root.Obj("assistant");
-            var text = (assistant?.Obj("Response") ?? assistant?.Obj("ToolUse"))?.Str("content")?.Trim();
-
-            return string.IsNullOrEmpty(text) ? null : text;
-        } catch {
-            return null;
-        }
+        return null;
     }
 
     // ── Copilot extractors (AI-815) ────────────────────────────────────────

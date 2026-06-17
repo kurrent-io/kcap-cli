@@ -11,12 +11,6 @@
         <EmbeddedResource Include="Resources\**\*" />
     </ItemGroup>
     <ItemGroup>
-        <!-- AWS Kiro CLI stores conversations in SQLite (conversations_v2); the
-             Kiro transcript reader opens it copy-first/read-only. The bundle pulls
-             the native e_sqlite3 per-RID, which NativeAOT links statically. -->
-        <PackageReference Include="Microsoft.Data.Sqlite" />
-    </ItemGroup>
-    <ItemGroup>
         <InternalsVisibleTo Include="kcap" />
         <InternalsVisibleTo Include="kcap-daemon" />
         <InternalsVisibleTo Include="Capacitor.Cli.Tests.Unit" />
