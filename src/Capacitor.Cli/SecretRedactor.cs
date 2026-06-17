@@ -97,7 +97,15 @@ static partial class SecretRedactor {
 
     // YAML-style: secret_name: value (key containing secret keyword followed by colon, space, and value)
     // Excludes " and \ to avoid crossing JSON string boundaries. Minimum 8 chars to reduce false positives.
-    [GeneratedRegex(@"((?:secret|token|password|passwd|pwd|api_key|apikey|private_key|credentials|client_secret|access_key|auth_token)[^:\n]*:[ \t]+)([^\s""\\]{8,})", RegexOptions.IgnoreCase)]
+    //
+    // The gap between the keyword and the colon is `[\w.\-]*` — only key-name characters — NOT the
+    // former `[^:\n]*`. `[^:\n]*` matched any run of non-colon chars, so a secret keyword appearing
+    // anywhere earlier in a prose sentence reached across to an unrelated prose colon and redacted
+    // whatever 8+-char word followed it: `"...access token. The one real risk: model-id matching"`
+    // had `model-id` (exactly 8 chars) replaced with [REDACTED]. Constraining the gap to identifier
+    // characters forces the keyword to actually be part of the `key:` token, while still allowing
+    // real keys like `client-secret:`, `aws.secret.access.key:`, and `auth_token:`.
+    [GeneratedRegex(@"((?:secret|token|password|passwd|pwd|api_key|apikey|private_key|credentials|client_secret|access_key|auth_token)[\w.\-]*:[ \t]+)([^\s""\\]{8,})", RegexOptions.IgnoreCase)]
     private static partial Regex YamlStyleSecretRx();
 
     static readonly Regex YamlStyleSecretRegex = YamlStyleSecretRx();
