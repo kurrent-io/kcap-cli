@@ -12,7 +12,7 @@ public static class VendorSelection {
         public bool HasError => Error is not null;
     }
 
-    static readonly string[] KnownVendorFlags = ["--claude", "--codex", "--cursor", "--copilot"];
+    static readonly string[] KnownVendorFlags = ["--claude", "--codex", "--cursor", "--copilot", "--pi"];
 
     public static Result Parse(string[] args) {
         var vendors = new HashSet<string>(StringComparer.Ordinal);
@@ -23,6 +23,7 @@ public static class VendorSelection {
                 case "--codex":   vendors.Add("codex");   break;
                 case "--cursor":  vendors.Add("cursor");  break;
                 case "--copilot": vendors.Add("copilot"); break;
+                case "--pi":      vendors.Add("pi");      break;
             }
         }
 

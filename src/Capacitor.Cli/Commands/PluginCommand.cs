@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
+using Capacitor.Cli.Core.Pi;
 
 namespace Capacitor.Cli.Commands;
 
@@ -35,7 +36,7 @@ public static class PluginCommand {
         };
     }
 
-    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--skills"];
+    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--pi", "--skills"];
 
     static bool HasConflictingTargets(string[] args) =>
         ExclusiveTargetFlags.Count(args.Contains) > 1;
@@ -43,7 +44,7 @@ public static class PluginCommand {
     static async Task<int> Install(string[] args, PluginEnvironment env) {
         if (HasConflictingTargets(args)) {
             await env.Stderr.WriteLineAsync(
-                "--cursor, --codex, --copilot, and --skills are mutually exclusive."
+                "--cursor, --codex, --copilot, --pi, and --skills are mutually exclusive."
             );
 
             return 1;
@@ -53,6 +54,7 @@ public static class PluginCommand {
         if (args.Contains("--codex")) return await InstallCodex(args, env);
         if (args.Contains("--cursor")) return await InstallCursor(args, env);
         if (args.Contains("--copilot")) return await InstallCopilot(args, env);
+        if (args.Contains("--pi")) return await InstallPi(args, env);
 
         return await InstallClaude(args, env);
     }
@@ -60,7 +62,7 @@ public static class PluginCommand {
     static async Task<int> Remove(string[] args, PluginEnvironment env) {
         if (HasConflictingTargets(args)) {
             await env.Stderr.WriteLineAsync(
-                "--cursor, --codex, --copilot, and --skills are mutually exclusive."
+                "--cursor, --codex, --copilot, --pi, and --skills are mutually exclusive."
             );
 
             return 1;
@@ -70,6 +72,7 @@ public static class PluginCommand {
         if (args.Contains("--codex")) return await RemoveCodex(args, env);
         if (args.Contains("--cursor")) return await RemoveCursor(args, env);
         if (args.Contains("--copilot")) return await RemoveCopilot(args, env);
+        if (args.Contains("--pi")) return await RemovePi(args, env);
 
         return await RemoveClaude(args, env);
     }
@@ -682,6 +685,66 @@ public static class PluginCommand {
 
             return true;
         } catch { return false; }
+    }
+
+    // ── Pi (badlogic/pi-mono): a TypeScript extension, not a hooks.json ──────
+
+    static async Task<int> InstallPi(string[] args, PluginEnvironment env) {
+        var extensionPath = GetArg(args, "--pi-extension-path") ?? env.PiKcapExtension;
+
+        var refreshOnly = args.Contains("--if-installed");
+
+        switch (refreshOnly) {
+            case true when !PiExtensionInstaller.IsInstalled(extensionPath):
+            case true when PiExtensionInstaller.ReadMarker(extensionPath) == CapacitorVersion.Current():
+                return 0;
+            // The extension shells out to the bare `kcap hook --pi` command, so
+            // pi (and therefore kcap) must find kcap on PATH. Skipped on the
+            // postinstall (--if-installed) refresh path, like the other vendors.
+            case false when !AgentDetector.IsInstalled("kcap"):
+                await env.Stderr.WriteLineAsync(
+                    "Cannot install the Pi extension: 'kcap' is not on PATH. "
+                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                );
+
+                return 1;
+        }
+
+        if (!PiExtensionInstaller.Install(extensionPath)) {
+            if (refreshOnly) return 0;
+
+            await env.Stderr.WriteLineAsync("Could not write the Pi extension file.");
+
+            return 1;
+        }
+
+        await env.Stdout.WriteLineAsync(
+            refreshOnly
+                ? $"Pi extension refreshed ({extensionPath})"
+                : $"Pi extension installed ({extensionPath})"
+        );
+
+        return 0;
+    }
+
+    static async Task<int> RemovePi(string[] args, PluginEnvironment env) {
+        var extensionPath = GetArg(args, "--pi-extension-path") ?? env.PiKcapExtension;
+
+        try {
+            var removed = PiExtensionInstaller.Remove(extensionPath);
+
+            await env.Stdout.WriteLineAsync(
+                removed
+                    ? $"Pi extension removed ({extensionPath})"
+                    : "Nothing to remove — Pi extension file not found."
+            );
+
+            return 0;
+        } catch (Exception ex) {
+            await env.Stderr.WriteLineAsync($"Could not remove the Pi extension at {extensionPath}: {ex.Message}");
+
+            return 1;
+        }
     }
 
     static async Task<int> InstallCopilot(string[] args, PluginEnvironment env) {
