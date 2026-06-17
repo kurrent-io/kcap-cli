@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Pi;
 using Capacitor.Cli.Core.Auth;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
@@ -781,8 +782,8 @@ static partial class WatchCommand {
                 if (root.Obj("message") is not { } piMsg) return false;
 
                 return piMsg.Str("role") switch {
-                    "user"      => PiUserHasContent(piMsg),
-                    "assistant" => PiAssistantHasContent(piMsg),
+                    "user"      => PiContent.HasUserContent(piMsg),
+                    "assistant" => PiContent.HasAssistantContent(piMsg),
                     _           => false
                 };
             }
@@ -895,31 +896,6 @@ static partial class WatchCommand {
         }
 
         return null;
-    }
-
-    // Content predicates mirroring the server PiTranscriptNormalizer's emit
-    // condition (and PiImportSource.IsImportRelevantLine.HasContent): a
-    // user/assistant message only produces a canonical event — and so only
-    // counts toward the title-event threshold — when it actually carries content.
-    static bool PiUserHasContent(JsonElement msg) {
-        if (msg.Str("content") is { Length: > 0 }) return true;
-        if (msg.Arr("content") is { } content) {
-            foreach (var block in content.EnumerateArray()) {
-                if (block.Str("type") == "text" && block.Str("text") is { Length: > 0 }) return true;
-            }
-        }
-        return false;
-    }
-
-    static bool PiAssistantHasContent(JsonElement msg) {
-        if (msg.Arr("content") is not { } content) return false;
-        foreach (var block in content.EnumerateArray()) {
-            if (block.Str("type") == "thinking" && block.Str("thinking") is { Length: > 0 }) return true;
-            if (block.Str("type") == "text"     && block.Str("text") is { Length: > 0 }) return true;
-            if (block.Str("type") == "toolCall"
-             && block.Str("id") is { Length: > 0 } && block.Str("name") is { Length: > 0 }) return true;
-        }
-        return false;
     }
 
     static string? TryExtractClaudeUserText(string line) {

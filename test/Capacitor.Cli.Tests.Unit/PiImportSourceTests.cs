@@ -97,6 +97,13 @@ public class PiImportSourceTests {
     [Arguments("""{"type":"session_info","id":"a","name":"x"}""", false)]
     [Arguments("""{"type":"message","id":"a","message":{"role":"toolResult","content":[]}}""", false)]
     [Arguments("not valid json", false)]
+    // Content-gated to match PiTranscriptNormalizer's emit condition (not just role):
+    // assistant with only unsupported/empty blocks, or an empty/contentless user, emit nothing.
+    [Arguments("""{"type":"message","id":"a","message":{"role":"assistant","content":[{"type":"image","data":"x"}]}}""", false)]
+    [Arguments("""{"type":"message","id":"a","message":{"role":"assistant","content":[]}}""", false)]
+    [Arguments("""{"type":"message","id":"a","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"bash"}]}}""", true)]
+    [Arguments("""{"type":"message","id":"a","message":{"role":"user","content":[{"type":"image","data":"x"}]}}""", false)]
+    [Arguments("""{"type":"message","id":"a","message":{"role":"user","content":""}}""", false)]
     public async Task is_import_relevant_line_matches_normalizer(string line, bool expected) {
         await Assert.That(PiImportSource.IsImportRelevantLine(line)).IsEqualTo(expected);
     }

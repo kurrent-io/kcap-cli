@@ -374,8 +374,8 @@ internal sealed class PiImportSource : IImportSource {
                 case "message":
                     if (root.Obj("message") is not { } msg) return false;
                     return msg.Str("role") switch {
-                        "user"          => HasContent(msg),
-                        "assistant"     => HasContent(msg),
+                        "user"          => PiContent.HasUserContent(msg),
+                        "assistant"     => PiContent.HasAssistantContent(msg),
                         "toolResult"    => msg.Str("toolCallId") is { Length: > 0 },
                         "bashExecution" => msg.Str("command") is { Length: > 0 },
                         _               => false
@@ -386,10 +386,6 @@ internal sealed class PiImportSource : IImportSource {
             return false;
         }
     }
-
-    static bool HasContent(JsonElement msg) =>
-        msg.Str("content") is { Length: > 0 }
-     || (msg.Arr("content") is { } arr && arr.GetArrayLength() > 0);
 
     static async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct) {
         using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct: ct);
