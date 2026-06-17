@@ -243,18 +243,38 @@ internal sealed class KiroImportSource : IImportSource {
             _                                                => 0,
         };
 
+        // Enrich the turn-final assistant lines with per-turn usage (credits /
+        // context%) read from the sibling {id}.json — Kiro's JSONL carries none.
+        // When there's usage, send an enriched copy (same lines/order/numbers, a
+        // _kcap_usage field added to the anchor lines); otherwise send the file
+        // as-is. The enriched copy is a temp file SendTranscriptBatches reads.
+        var anchors  = KiroUsage.AnchorMap(SafeReadText(Path.ChangeExtension(transcriptPath, ".json")));
+        var sendPath = transcriptPath;
+        string? enrichedTemp = null;
+
+        if (anchors.Count > 0) {
+            enrichedTemp = Path.Combine(Path.GetTempPath(), $"kcap-kiro-usage-{classification.SessionId}-{Guid.NewGuid():N}.jsonl");
+            var enriched = (await File.ReadAllLinesAsync(transcriptPath, ct))
+                .Select(l => string.IsNullOrWhiteSpace(l) ? l : KiroUsage.EnrichLine(l, anchors));
+            await File.WriteAllLinesAsync(enrichedTemp, enriched, ct);
+            sendPath = enrichedTemp;
+        }
+
         int sent;
         try {
             sent = await SessionImporter.SendTranscriptBatches(
                 httpClient: ctx.HttpClient,
                 baseUrl:    ctx.BaseUrl,
                 sessionId:  classification.SessionId,
-                filePath:   transcriptPath,
+                filePath:   sendPath,
                 agentId:    null,
                 startLine:  startLine,
                 vendor:     Vendor);
         } catch {
             return ImportOutcome.Failed;
+        } finally {
+            try { if (enrichedTemp is not null && File.Exists(enrichedTemp)) File.Delete(enrichedTemp); }
+            catch { /* best effort */ }
         }
 
         // Forward Kiro's own session title (best-effort — a title miss must not
@@ -328,6 +348,11 @@ internal sealed class KiroImportSource : IImportSource {
 
     static DateTimeOffset? TryGetLastWriteUtc(string path) {
         try { return File.GetLastWriteTimeUtc(path); } catch { return null; }
+    }
+
+    static string SafeReadText(string path) {
+        try { return File.Exists(path) ? File.ReadAllText(path) : ""; }
+        catch { return ""; }
     }
 
     static ImportCommand.SessionClassification MakeClassification(
