@@ -333,6 +333,15 @@ public class PiTitleHelperTests {
     [Arguments("""{"type":"session","id":"11111111-2222-3333-4444-555555555555","cwd":"/w"}""", false)]
     [Arguments("""{"type":"model_change","id":"d1","modelId":"gpt-5"}""", false)]
     [Arguments("""{"type":"user","message":{"content":"claude shape"}}""", false)]
+    // Empty/contentless Pi user & assistant envelopes must NOT count toward the
+    // title-event threshold — they produce no canonical event (mirrors the server
+    // normalizer / PiImportSource.IsImportRelevantLine).
+    [Arguments("""{"type":"message","id":"e1","message":{"role":"user","content":""}}""", false)]
+    [Arguments("""{"type":"message","id":"e2","message":{"role":"user","content":[]}}""", false)]
+    [Arguments("""{"type":"message","id":"e3","message":{"role":"user","content":[{"type":"image","data":"x"}]}}""", false)]
+    [Arguments("""{"type":"message","id":"e4","message":{"role":"assistant","content":[]}}""", false)]
+    // Tool-only assistant turns DO count (NormalizeAssistant emits a tool-call event).
+    [Arguments("""{"type":"message","id":"e5","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"bash"}]}}""", true)]
     public async Task IsEvent_Pi_OnlyCountsMessageUserOrAssistant(string line, bool expected) {
         await Assert.That(WatchCommand.IsEvent(line, "pi")).IsEqualTo(expected);
     }

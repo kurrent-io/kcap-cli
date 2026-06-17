@@ -772,10 +772,19 @@ static partial class WatchCommand {
             if (vendor == "pi") {
                 // Pi conversational envelopes are type:"message" with
                 // message.role user/assistant (Pi has no top-level user/assistant
-                // type). Everything else (model_change, compaction, tool results,
-                // labels, …) is plumbing and must not count toward the threshold.
-                return root.Str("type") == "message"
-                    && root.Obj("message")?.Str("role") is "user" or "assistant";
+                // type). Gate on CONTENT, not just role: an empty user/assistant
+                // envelope produces no canonical event (the server's NormalizeUser
+                // returns null for empty content, NormalizeAssistant for zero
+                // parts), so it must not count toward the title-event threshold
+                // either. Mirrors PiImportSource.IsImportRelevantLine.
+                if (root.Str("type") != "message") return false;
+                if (root.Obj("message") is not { } piMsg) return false;
+
+                return piMsg.Str("role") switch {
+                    "user"      => PiUserHasContent(piMsg),
+                    "assistant" => PiAssistantHasContent(piMsg),
+                    _           => false
+                };
             }
 
             return root.Str("type") is "user" or "assistant";
@@ -886,6 +895,31 @@ static partial class WatchCommand {
         }
 
         return null;
+    }
+
+    // Content predicates mirroring the server PiTranscriptNormalizer's emit
+    // condition (and PiImportSource.IsImportRelevantLine.HasContent): a
+    // user/assistant message only produces a canonical event — and so only
+    // counts toward the title-event threshold — when it actually carries content.
+    static bool PiUserHasContent(JsonElement msg) {
+        if (msg.Str("content") is { Length: > 0 }) return true;
+        if (msg.Arr("content") is { } content) {
+            foreach (var block in content.EnumerateArray()) {
+                if (block.Str("type") == "text" && block.Str("text") is { Length: > 0 }) return true;
+            }
+        }
+        return false;
+    }
+
+    static bool PiAssistantHasContent(JsonElement msg) {
+        if (msg.Arr("content") is not { } content) return false;
+        foreach (var block in content.EnumerateArray()) {
+            if (block.Str("type") == "thinking" && block.Str("thinking") is { Length: > 0 }) return true;
+            if (block.Str("type") == "text"     && block.Str("text") is { Length: > 0 }) return true;
+            if (block.Str("type") == "toolCall"
+             && block.Str("id") is { Length: > 0 } && block.Str("name") is { Length: > 0 }) return true;
+        }
+        return false;
     }
 
     static string? TryExtractClaudeUserText(string line) {
