@@ -116,6 +116,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly IReadOnlyDictionary<string, IHostedAgentLauncher> _launchers;
     readonly ILogger<AgentOrchestrator>                        _logger;
 
+    // Hosted-agent PTYs are spawned at a fixed size and never resized. The daemon
+    // reports these dims to the server right after the agent registers so the
+    // read-only viewers (web/desktop xterm) lock to exactly the width Claude drew
+    // for — otherwise the viewer auto-fits its panel and the mismatched columns
+    // garble the TUI (AI-884). Keep in sync with IPtyProcessFactory.Spawn defaults.
+    const ushort HostedPtyCols = 120;
+    const ushort HostedPtyRows = 40;
+
     readonly PeriodicTimer _heartbeatTimer = new(TimeSpan.FromSeconds(30));
 
     // AI-79: heartbeat tightened from 60 s SendAsync to round-trip Ping.
@@ -357,7 +365,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 env["KCAP_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
             }
 
-            var process = _ptyFactory.Spawn(launcher.CliPath, args, worktree.Path, env);
+            var process = _ptyFactory.Spawn(launcher.CliPath, args, worktree.Path, env, HostedPtyCols, HostedPtyRows);
 
             LogAgentSpawned(agentId, process.Pid, worktree.Path, launcher.CliPath);
 
@@ -370,6 +378,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // Notify server
             await _server.AgentRegisteredAsync(agentId, prompt, model, effort, repoPath);
+
+            // Report the fixed PTY size so read-only viewers lock their xterm to it
+            // (see HostedPtyCols/Rows). Fire-and-forget — late delivery is harmless,
+            // the viewer reflows whenever the dims arrive.
+            _ = _server.SendTerminalDimensionsAsync(agentId, HostedPtyCols, HostedPtyRows);
 
             _ = _server.AppendAgentRunEventAsync(
                 agentId,

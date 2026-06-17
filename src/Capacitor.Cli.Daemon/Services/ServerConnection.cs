@@ -441,6 +441,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public virtual Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath)
         => _hub.InvokeAsync("AgentRegistered", new AgentRegistered(agentId, prompt, model, effort, repoPath), cancellationToken: _ct);
 
+    /// <summary>
+    /// Reports the hosted agent's fixed PTY dimensions to the server, which stores
+    /// them and broadcasts to subscribed read-only viewers so their xterm locks to
+    /// the source size instead of auto-fitting its panel (which garbles the TUI).
+    /// </summary>
+    public virtual Task SendTerminalDimensionsAsync(string agentId, int cols, int rows)
+        => _hub.SendAsync("SendTerminalDimensions", agentId, cols, rows, cancellationToken: _ct);
+
     public virtual Task AgentStatusChangedAsync(string agentId, string status, string? sessionId)
         => _hub.InvokeAsync("AgentStatusChanged", new AgentStatusChanged(agentId, status, sessionId), cancellationToken: _ct);
 
