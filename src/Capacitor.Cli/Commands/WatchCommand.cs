@@ -682,6 +682,7 @@ static partial class WatchCommand {
         vendor switch {
             "codex"   => TryExtractCodexAssistantText(line),
             "copilot" => TryExtractCopilotAssistantText(line),
+            "pi"      => TryExtractPiAssistantText(line),
             _         => TryExtractClaudeAssistantText(line)
         };
 
@@ -768,6 +769,15 @@ static partial class WatchCommand {
                 };
             }
 
+            if (vendor == "pi") {
+                // Pi conversational envelopes are type:"message" with
+                // message.role user/assistant (Pi has no top-level user/assistant
+                // type). Everything else (model_change, compaction, tool results,
+                // labels, …) is plumbing and must not count toward the threshold.
+                return root.Str("type") == "message"
+                    && root.Obj("message")?.Str("role") is "user" or "assistant";
+            }
+
             return root.Str("type") is "user" or "assistant";
         } catch {
             return false;
@@ -778,6 +788,7 @@ static partial class WatchCommand {
         vendor switch {
             "codex"   => TryExtractCodexUserText(line),
             "copilot" => TryExtractCopilotUserText(line),
+            "pi"      => TryExtractPiUserText(line),
             _         => TryExtractClaudeUserText(line)
         };
 
@@ -820,6 +831,61 @@ static partial class WatchCommand {
         } catch {
             return null;
         }
+    }
+
+    // ── Pi extractors (AI-886) ─────────────────────────────────────────────
+    //
+    // Pi emits type:"message" with message.role user/assistant — NOT Claude's
+    // top-level type:"user"/"assistant" — so the watcher title path needs its
+    // own branch (mirrors the server PiTranscriptNormalizer mapping). Content is
+    // a string or an array of {type:"text",text} blocks.
+
+    static string? TryExtractPiUserText(string line) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Str("type") != "message") return null;
+            if (root.Obj("message") is not { } msg) return null;
+            if (msg.Str("role") != "user") return null;
+
+            if (msg.Str("content")?.Trim() is { Length: > 0 } strContent) return strContent;
+
+            if (msg.Arr("content") is { } content) {
+                foreach (var block in content.EnumerateArray()) {
+                    if (block.Str("type") == "text" && block.Str("text")?.Trim() is { Length: > 0 } text) {
+                        return text;
+                    }
+                }
+            }
+        } catch {
+            // Ignore parse errors
+        }
+
+        return null;
+    }
+
+    static string? TryExtractPiAssistantText(string line) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Str("type") != "message") return null;
+            if (root.Obj("message") is not { } msg) return null;
+            if (msg.Str("role") != "assistant") return null;
+
+            if (msg.Arr("content") is { } content) {
+                foreach (var block in content.EnumerateArray()) {
+                    if (block.Str("type") == "text" && block.Str("text")?.Trim() is { Length: > 0 } text) {
+                        return text;
+                    }
+                }
+            }
+        } catch {
+            // Ignore parse errors
+        }
+
+        return null;
     }
 
     static string? TryExtractClaudeUserText(string line) {

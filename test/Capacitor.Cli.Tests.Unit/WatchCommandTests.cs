@@ -303,3 +303,45 @@ public class CodexTranscriptExtractionTests {
         await Assert.That(result).IsFalse();
     }
 }
+
+// AI-886 / PR #162: Pi emits type:"message" with message.role (not Claude's
+// top-level user/assistant), so the watcher title helpers need a Pi branch —
+// otherwise live Pi sessions never get the initial/LLM title.
+public class PiTitleHelperTests {
+    [Test]
+    public async Task UserText_StringContent() {
+        const string line = """{"type":"message","id":"a1","message":{"role":"user","content":"build the thing"}}""";
+        await Assert.That(WatchCommand.TryExtractUserText(line, "pi")).IsEqualTo("build the thing");
+    }
+
+    [Test]
+    public async Task UserText_ArrayContent_FirstTextBlock_ImagesSkipped() {
+        const string line = """{"type":"message","id":"a1","message":{"role":"user","content":[{"type":"image","data":"x"},{"type":"text","text":"look at this"}]}}""";
+        await Assert.That(WatchCommand.TryExtractUserText(line, "pi")).IsEqualTo("look at this");
+    }
+
+    [Test]
+    public async Task AssistantText_FirstTextBlock_ThinkingSkipped() {
+        const string line = """{"type":"message","id":"b1","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"on it"}]}}""";
+        await Assert.That(WatchCommand.TryExtractAssistantText(line, "pi")).IsEqualTo("on it");
+    }
+
+    [Test]
+    [Arguments("""{"type":"message","id":"a1","message":{"role":"user","content":"hi"}}""", true)]
+    [Arguments("""{"type":"message","id":"b1","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}""", true)]
+    [Arguments("""{"type":"message","id":"c1","message":{"role":"toolResult","toolCallId":"t1","content":[]}}""", false)]
+    [Arguments("""{"type":"session","id":"11111111-2222-3333-4444-555555555555","cwd":"/w"}""", false)]
+    [Arguments("""{"type":"model_change","id":"d1","modelId":"gpt-5"}""", false)]
+    [Arguments("""{"type":"user","message":{"content":"claude shape"}}""", false)]
+    public async Task IsEvent_Pi_OnlyCountsMessageUserOrAssistant(string line, bool expected) {
+        await Assert.That(WatchCommand.IsEvent(line, "pi")).IsEqualTo(expected);
+    }
+
+    [Test]
+    [Arguments("""{"type":"model_change","id":"d1","modelId":"gpt-5"}""")]
+    [Arguments("""{"type":"message","id":"c1","message":{"role":"toolResult","toolCallId":"t1","content":[]}}""")]
+    public async Task TitleHelpers_ReturnNull_ForNonConversationalPiLines(string line) {
+        await Assert.That(WatchCommand.TryExtractUserText(line, "pi")).IsNull();
+        await Assert.That(WatchCommand.TryExtractAssistantText(line, "pi")).IsNull();
+    }
+}
