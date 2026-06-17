@@ -35,7 +35,7 @@ public static class VendorSelection {
             if (!a.StartsWith("--")) continue;
             if (Array.IndexOf(KnownVendorFlags, a) >= 0) continue;
 
-            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-")) {
+            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-") || a.StartsWith("--pi-")) {
                 return new(vendors, $"Unknown source option: {a}.");
             }
         }
@@ -44,7 +44,7 @@ public static class VendorSelection {
         foreach (var a in args) {
             if (!a.StartsWith("--")) continue;
             if (Array.IndexOf(KnownVendorFlags, a) >= 0) continue;
-            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-")) continue;
+            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-") || a.StartsWith("--pi-")) continue;
 
             string? hint = null;
             var bestDist = int.MaxValue;

@@ -44,6 +44,23 @@ public class VendorSelectionTests {
     }
 
     [Test]
+    public async Task pi_flag_selects_only_pi() {
+        var r = VendorSelection.Parse(["--pi"]);
+        await Assert.That(r.HasError).IsFalse();
+        await Assert.That(r.Vendors.Count).IsEqualTo(1);
+        await Assert.That(r.Vendors.Contains("pi")).IsTrue();
+    }
+
+    [Test]
+    public async Task unknown_pi_prefix_flag_is_rejected() {
+        // --pi is a known vendor flag, but --pi-<x> typos / future options must be
+        // rejected as unknown source options, not silently ignored.
+        var r = VendorSelection.Parse(["--pi-session", "abc"]);
+        await Assert.That(r.HasError).IsTrue();
+        await Assert.That(r.Error!).Contains("--pi-session");
+    }
+
+    [Test]
     public async Task legacy_cursor_workspace_flag_is_rejected() {
         // --cursor-workspace and --cursor-all-workspaces were dropped in AI-737
         // when the SQLite import path was retired. The JSONL walker doesn't need
