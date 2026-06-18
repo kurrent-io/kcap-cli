@@ -28,7 +28,7 @@ The CLI is compiled with NativeAOT — fast startup, no runtime dependency.
 > **npm 11+ blocks install scripts by default.** You'll see a warning like
 > `1 package has install scripts not yet covered by allowScripts`. The `kcap`
 > binary works without the script; it only refreshes already-installed agent
-> plugins (Claude / Codex / Cursor / Copilot) on upgrade. The warning suggests
+> plugins (Claude / Codex / Cursor / Copilot / Pi) on upgrade. The warning suggests
 > `npm approve-scripts @kurrent/kcap`, but that command rejects global installs
 > (`EGLOBAL`) — a known npm UX bug. Instead, opt in one of two ways:
 >
@@ -47,7 +47,7 @@ The CLI is compiled with NativeAOT — fast startup, no runtime dependency.
 > Without either, upgrade with **`kcap update`** instead of `npm install -g` — it
 > runs the global npm upgrade and then refreshes your agent plugins itself, so it
 > works regardless of the install-script gate. (You can also re-run `kcap plugin
-> install [--codex|--cursor|--copilot|--skills] --if-installed` manually.)
+> install [--codex|--cursor|--copilot|--pi|--skills] --if-installed` manually.)
 
 ### 2. Run setup
 
@@ -60,7 +60,7 @@ The setup wizard walks you through:
 1. **Server URL** — enter the URL your admin provided
 2. **Login** — authenticates via GitHub Device Flow (if the server requires auth)
 3. **Default visibility** — choose how your sessions are visible to others
-4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH`, Cursor by user-dir presence (`~/.cursor/`), and GitHub Copilot CLI by `~/.copilot/` or `copilot` on `PATH`, then offers to install hooks/skills for each (user-wide)
+4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH`, Cursor by user-dir presence (`~/.cursor/`), GitHub Copilot CLI by `~/.copilot/` or `copilot` on `PATH`, and Pi by `~/.pi/` or `pi` on `PATH`, then offers to install hooks/skills (or, for Pi, the live-ingest extension) for each (user-wide)
 5. **Daemon** — configure the daemon name for remote agent execution
 
 When setup finishes, `kcap` sends a best-effort POST to the server's `/api/users/me/cli-setup` endpoint so the dashboard can mark your CLI as registered and surface the import-past-sessions hint. The call is capped at 5 seconds and failures are silent — they do not affect setup completion.
@@ -97,7 +97,7 @@ kcap import --pi                # only Pi (badlogic/pi-mono)
 
 > **Pi** has no shell hooks, so live capture uses a shipped Pi extension rather than a hooks file: run `kcap plugin install --pi` (or accept the `kcap setup` prompt) to write `~/.pi/agent/extensions/kcap.ts`, which `pi` auto-loads and streams each session live. Historical `kcap import --pi` works with or without it.
 
-This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), and `~/.copilot/session-state/` (Copilot) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, or `--pi` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
+This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), and `~/.pi/agent/sessions/` (Pi) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, or `--pi` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
 
 You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org` uses the active profile name as the GitHub org login — it works out of the box when the profile was created by `kcap setup` (which names it after the picked tenant), and errors otherwise. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
@@ -266,7 +266,7 @@ The server is repo-aware — it resolves the current working directory to a repo
 
 ### Loading historical sessions
 
-Backfill older sessions from every detected coding agent in a single run. All four agents ship per-session `.jsonl` transcripts (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/<sanitized-workspace>/agent-transcripts/`, `~/.copilot/session-state/`). They're discovered automatically and the command requires an explicit scope so personal/private repos aren't uploaded by accident:
+Backfill older sessions from every detected coding agent in a single run. All five agents ship per-session `.jsonl` transcripts (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/<sanitized-workspace>/agent-transcripts/`, `~/.copilot/session-state/`, `~/.pi/agent/sessions/`). They're discovered automatically and the command requires an explicit scope so personal/private repos aren't uploaded by accident:
 
 ```bash
 kcap import --all                            # every discovered session from every agent
@@ -588,11 +588,11 @@ kcap uninstall --project --yes  # also strip project-scope hooks in cwd's repo
 kcap uninstall --keep-config    # remove integrations, keep ~/.config/kcap
 ```
 
-`uninstall` covers every supported agent: it stops running daemons and watcher processes, strips kcap entries from user-level Claude Code, Codex CLI, and Cursor hook files (preserving any non-kcap entries), removes agent skills under `~/.agents/skills/` (plus the legacy `~/.codex/skills/kcap-*` folders), and deletes `~/.config/kcap/`.
+`uninstall` covers every supported agent: it stops running daemons and watcher processes, strips kcap entries from user-level Claude Code, Codex CLI, Cursor, and Copilot CLI hook files (preserving any non-kcap entries), deletes the Pi live-ingest extension (`~/.pi/agent/extensions/kcap.ts`), removes agent skills under `~/.agents/skills/` (plus the legacy `~/.codex/skills/kcap-*` folders), and deletes `~/.config/kcap/`.
 
 `--project` additionally cleans up `<repo>/.claude/settings.local.json` and `<repo>/.codex/hooks.json` in the current git working tree (errors if you're not inside one). Cursor only has a user-scope `hooks.json`, so `--project` does not affect it. Project-scope hooks in other repos are not touched — re-run from each repo that has them.
 
-Use `--keep-config` to preserve profiles, tokens, and ignore lists when you plan to reinstall. Per-agent selective cleanup is not exposed here — use `kcap plugin remove [--codex|--cursor|--copilot|--skills]` for finer-grained removal.
+Use `--keep-config` to preserve profiles, tokens, and ignore lists when you plan to reinstall. Per-agent selective cleanup is not exposed here — use `kcap plugin remove [--codex|--cursor|--copilot|--pi|--skills]` for finer-grained removal.
 
 ### Other commands
 
