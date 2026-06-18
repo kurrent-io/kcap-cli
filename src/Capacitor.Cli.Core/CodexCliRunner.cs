@@ -114,7 +114,7 @@ static class CodexCliRunner {
         // backticks) don't need escaping.
         psi.ArgumentList.Add("-");
 
-        using var process = Process.Start(psi);
+        using var process = CliProcess.TryStart(psi, log);
 
         if (process is null) {
             log("Failed to start codex process");

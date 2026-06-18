@@ -577,6 +577,8 @@ public record RepoEntry {
 [JsonSerializable(typeof(AgentRunStopped))]
 [JsonSerializable(typeof(AgentRunHeartbeat))]
 [JsonSerializable(typeof(PermissionDecision))]
+[JsonSerializable(typeof(HostedPermissionRequest))]
+[JsonSerializable(typeof(PermissionResolution))]
 [JsonSerializable(typeof(EndAgentSessionResult))]
 [JsonSerializable(typeof(int))]
 [JsonSerializable(typeof(string))]
@@ -604,6 +606,30 @@ public readonly record struct PermissionDecision(
         string       Behavior,
         JsonElement? ApplyPermissions,
         JsonElement? UpdatedInput
+    );
+
+/// <summary>
+/// Single-argument payload for the <c>RequestPermission2</c> hub invocation (AI-864). SignalR
+/// binds hub-method arguments by count, so a record keeps the arity fixed at 1 and lets the wire
+/// contract gain fields without breaking mixed-version servers. Mirrors the server-side record of
+/// the same name in Capacitor.Server; property names must stay in sync (snake_case on the wire).
+/// </summary>
+public readonly record struct HostedPermissionRequest(
+        string       SessionId,
+        string?      ToolName,
+        JsonElement? ToolInput,
+        JsonElement? Suggestions
+    );
+
+/// <summary>
+/// Payload of the <c>PermissionResolved</c> server→client push (AI-864): the user's decision for a
+/// hosted-agent permission request, correlated by <see cref="RequestId"/>. A single record (not
+/// positional args) so the push contract can gain fields without breaking mixed-version daemons —
+/// SignalR binds by argument count. Mirrors the server-side record of the same name.
+/// </summary>
+public readonly record struct PermissionResolution(
+        string             RequestId,
+        PermissionDecision Decision
     );
 
 /// <summary>Commands sent from the server to daemon clients via SignalR.</summary>

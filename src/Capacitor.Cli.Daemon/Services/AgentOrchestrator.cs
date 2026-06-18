@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
@@ -42,6 +43,31 @@ public record AgentInstance(
     /// finally-block call is the only one that lands.
     /// </summary>
     public string PendingEndReason { get; set; } = "agent_exited";
+
+    // ── Local terminal attach (Phase 1) ──────────────────────────────────
+    // Internal: these expose the daemon-internal ITerminalSink, so they can't be public
+    // on this public record (CS0053). They're only touched inside the daemon assembly.
+    /// <summary>Local-terminal clients attached over the control socket.</summary>
+    internal List<ITerminalSink> LocalSinks { get; } = [];
+    internal Lock                SinksLock  { get; } = new();
+    /// <summary>Each attached local client's last-reported size, for the resize min-clamp.</summary>
+    internal Dictionary<ITerminalSink, Dim> ClientDims { get; } = [];
+    public readonly record struct Dim(ushort Cols, ushort Rows);
+
+    /// <summary>Tripped when the agent terminates (CleanupAgentAsync) so an attached local
+    /// client that's blocked waiting on the user's keystrokes wakes, flushes the last output,
+    /// and sends an Exited frame instead of hanging.</summary>
+    internal CancellationTokenSource ExitedCts { get; } = new();
+
+    /// <summary>
+    /// True for locally-launched agents: the orchestrator makes no per-agent server call
+    /// and does not attach the SignalR sink. An explicit share (Phase 2) clears this.
+    /// </summary>
+    public bool IsPrivate { get; init; }
+
+    /// <summary>Owned worktree (daemon-created — safe to remove on cleanup) vs borrowed cwd
+    /// (the user's own checkout — never removed).</summary>
+    public WorkLocation Work { get; init; } = WorkLocation.OwnedWorktree;
 }
 
 /// <summary>Ring buffer that keeps the last 2 MB of terminal output.</summary>
@@ -65,6 +91,17 @@ public class TerminalOutputBuffer {
     public List<byte[]> GetAll() {
         lock (_chunks) { return [.._chunks]; }
     }
+
+    /// <summary>Flattens the retained ring into one buffer for a one-time replay to a
+    /// newly-attached client (bounded by <see cref="MaxBytes"/>).</summary>
+    public byte[] Snapshot() {
+        lock (_chunks) {
+            var ms = new MemoryStream(_totalBytes);
+            foreach (var c in _chunks) ms.Write(c);
+
+            return ms.ToArray();
+        }
+    }
 }
 
 internal partial class AgentOrchestrator : IAsyncDisposable {
@@ -79,6 +116,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly IReadOnlyDictionary<string, IHostedAgentLauncher> _launchers;
     readonly ILogger<AgentOrchestrator>                        _logger;
 
+    // Hosted-agent PTYs are spawned at a fixed size and never resized. The daemon
+    // reports these dims to the server right after the agent registers (and on
+    // reconnect) so the read-only viewers (web/desktop xterm) lock to exactly the
+    // width Claude drew for — otherwise the viewer auto-fits its panel and the
+    // mismatched columns garble the TUI (AI-884). PtyDefaults is the single source
+    // of truth, shared with IPtyProcessFactory.Spawn's defaults so they can't drift.
+    const ushort HostedPtyCols = PtyDefaults.Cols;
+    const ushort HostedPtyRows = PtyDefaults.Rows;
+
     readonly PeriodicTimer _heartbeatTimer = new(TimeSpan.FromSeconds(30));
 
     // AI-79: heartbeat tightened from 60 s SendAsync to round-trip Ping.
@@ -90,6 +136,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly PeriodicTimer _daemonHeartbeat = new(TimeSpan.FromSeconds(7));
 
     static readonly TimeSpan PingDeadline = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// How long <see cref="FinalizeAgentRunAsync"/> waits on the (reconnect-retrying)
+    /// EndAgentSession call before proceeding with local cleanup regardless. Covers a
+    /// typical transient SignalR blip with margin; a longer outage proceeds to cleanup
+    /// while the retry continues in the background. Settable so tests don't wait 30s.
+    /// </summary>
+    internal TimeSpan EndAgentSessionBudget { get; set; } = TimeSpan.FromSeconds(30);
 
     // Linked to IHostApplicationLifetime.ApplicationStopping so the shutdown gate
     // trips as soon as the host begins stopping — the same instant ServerConnection's
@@ -127,7 +181,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.OnSendInput              += HandleSendInput;
         _server.OnSendSpecialKey         += HandleSendSpecialKey;
         _server.OnResizeTerminal         += HandleResizeTerminal;
-        _server.OnReconnectedCallback    += ReRegisterAgents;
+        _server.ReRegisterAgentsHook     =  ReRegisterAgentsAsync;
         _server.FindRepoForRemoteHandler =  HandleFindRepoForRemote;
 
         _server.GetLiveAgentIds = () => [
@@ -312,7 +366,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 env["KCAP_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
             }
 
-            var process = _ptyFactory.Spawn(launcher.CliPath, args, worktree.Path, env);
+            var process = _ptyFactory.Spawn(launcher.CliPath, args, worktree.Path, env, HostedPtyCols, HostedPtyRows);
 
             LogAgentSpawned(agentId, process.Pid, worktree.Path, launcher.CliPath);
 
@@ -325,6 +379,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // Notify server
             await _server.AgentRegisteredAsync(agentId, prompt, model, effort, repoPath);
+
+            // Report the fixed PTY size so read-only viewers lock their xterm to it
+            // (see HostedPtyCols/Rows). Best-effort: a failed send must not fail the
+            // launch (late delivery is harmless — the viewer reflows when dims
+            // arrive), but observe the fault here with agent context rather than
+            // leaving it to the global unobserved-task handler.
+            try {
+                await _server.SendTerminalDimensionsAsync(agentId, HostedPtyCols, HostedPtyRows);
+            } catch (Exception ex) {
+                LogTerminalDimsSendFailed(ex, agentId);
+            }
 
             _ = _server.AppendAgentRunEventAsync(
                 agentId,
@@ -429,6 +494,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task ReadAgentOutputAsync(AgentInstance agent) {
+        // The terminal-output enqueue back-pressures (awaits) when the send queue is
+        // full. Tie that await to BOTH this agent's stop (ReadCts) and daemon shutdown
+        // so HandleStopAgent releasing ReadCts unblocks the read loop — otherwise a
+        // stop mid-outage would leave the finally-block finalization/cleanup stalled
+        // until the whole daemon exits (AI-846).
+        using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(agent.ReadCts.Token, _shutdownCts.Token);
+
         try {
             await foreach (var data in agent.Process.ReadOutputAsync(agent.ReadCts.Token)) {
                 agent.LastOutputAt      = DateTime.UtcNow;
@@ -436,12 +508,27 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 if (agent.Status == "Starting") {
                     agent.Status = "Running";
-                    _            = _server.AgentStatusChangedAsync(agent.Id, "Running", agent.SessionId);
+                    if (!agent.IsPrivate) _ = _server.AgentStatusChangedAsync(agent.Id, "Running", agent.SessionId);
                 }
 
-                agent.OutputBuffer.Append(data);
-                var base64 = Convert.ToBase64String(data);
-                _ = _server.SendTerminalOutputAsync(agent.Id, base64);
+                // Append to the replay buffer AND fan out to local sinks atomically under
+                // SinksLock — paired with attach taking its snapshot + subscribing under the
+                // same lock, so a chunk can't land in both a new client's replay and its live
+                // stream (duplication), nor in neither (gap). TryEnqueue is non-blocking so the
+                // lock is held only briefly; a slow client force-detaches inside TryEnqueue.
+                lock (agent.SinksLock) {
+                    agent.OutputBuffer.Append(data);
+                    foreach (var sink in agent.LocalSinks) sink.TryEnqueue(data);
+                }
+
+                if (!agent.IsPrivate) {
+                    var base64 = Convert.ToBase64String(data);
+                    // Await the enqueue: TerminalOutputSender back-pressures here when its
+                    // queue is full (slow/down transport) so a chunk is never dropped to
+                    // keep up — losing one byte garbles the whole redraw-TUI mirror (AI-844).
+                    // sendCts releases this await on agent stop or daemon shutdown (AI-846).
+                    await _server.SendTerminalOutputAsync(agent.Id, base64, sendCts.Token);
+                }
             }
         } catch (OperationCanceledException) {
             /* expected on stop */
@@ -498,15 +585,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                     LogStartupFailed(agent.Id, exitCode, reason);
 
-                    _ = _server.LaunchFailedAsync(agent.Id, reason);
+                    if (!agent.IsPrivate) _ = _server.LaunchFailedAsync(agent.Id, reason);
                 }
 
                 agent.Status = status;
-                await _server.AgentStatusChangedAsync(agent.Id, status, agent.SessionId);
 
-                var stopReason = status == "Completed" ? "exited" : "failed";
+                // PrivateLocal agents make no per-agent server calls (deny-all).
+                if (!agent.IsPrivate) {
+                    await _server.AgentStatusChangedAsync(agent.Id, status, agent.SessionId);
 
-                await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(stopReason, exitCode));
+                    var stopReason = status == "Completed" ? "exited" : "failed";
+
+                    await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(stopReason, exitCode));
+                }
             }
 
             LogAgentExited(agent.Id, exitCode);
@@ -515,27 +606,45 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // its own session-end hook on SIGTERM/exit, so without this call the
             // session would stay "active" forever in the read model. Server-side is
             // idempotent — if claude did fire session-end first, this is a no-op.
-            // Reason is read from agent.PendingEndReason so that if HandleStopAgent's
-            // own call failed (transient SignalR error) and this finally-block call
-            // is the one that lands, a user-initiated stop is still recorded as
-            // "agent_stopped" rather than "agent_exited".
-            try {
-                var result = await _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
+            // Reason is read from agent.PendingEndReason so a user-initiated stop is
+            // recorded as "agent_stopped" rather than "agent_exited".
+            //
+            // EndAgentSessionAsync retries across SignalR reconnects, so it can block
+            // for the length of an outage. We must NOT let that stall local cleanup
+            // (worktree/process disposal, removing the agent from _agents), so bound how
+            // long we WAIT on it to EndAgentSessionBudget. The retry keeps running in the
+            // background — a reconnect shortly after still lands the session-end — and a
+            // genuinely long outage falls back to server-side daemon-disconnect reconcile.
+            //
+            // PrivateLocal agents have no server-side session to end (deny-all).
+            if (!agent.IsPrivate) {
+                var endTask = _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
 
-                // The daemon doesn't track sessionId on its own (only agentId), so
-                // the server returns it in the result. Spawn what's-done locally
-                // when the server says yes.
-                if (result is { GenerateWhatsDone: true, SessionId: not null }) {
-                    SpawnWhatsDoneGenerator(result.SessionId);
+                try {
+                    var result = await endTask.WaitAsync(EndAgentSessionBudget, _shutdownCts.Token);
+
+                    // The daemon doesn't track sessionId on its own (only agentId), so
+                    // the server returns it in the result. Spawn what's-done locally
+                    // when the server says yes.
+                    if (result is { GenerateWhatsDone: true, SessionId: not null }) {
+                        SpawnWhatsDoneGenerator(result.SessionId);
+                    }
+                } catch (TimeoutException) {
+                    // Outage outlasted the budget. Don't block cleanup; the retry continues
+                    // in the background (observed below so a later fault isn't unobserved).
+                    LogEndSessionTimedOut(agent.Id, EndAgentSessionBudget.TotalSeconds);
+                    ObserveEndSessionInBackground(endTask, agent.Id);
+                } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) {
+                    // Shutdown fired mid-wait — connection is being torn down. Server
+                    // detects daemon disconnection independently. No warning needed.
+                } catch (Exception ex) {
+                    LogEndSessionFailed(ex, agent.Id);
                 }
-            } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) {
-                // Shutdown fired mid-call — connection is being torn down. Server
-                // detects daemon disconnection independently. No warning needed.
-            } catch (Exception ex) {
-                LogEndSessionFailed(ex, agent.Id);
             }
 
-            // Clean up worktree and unregister from server
+            // Clean up worktree and unregister from server. Runs unconditionally — even
+            // when end-session timed out and is still retrying in the background — so a
+            // prolonged outage can never pin the agent in _agents or leak its worktree.
             await CleanupAgentAsync(agent.Id);
         } catch (Exception ex) {
             LogCleanupError(ex, agent.Id);
@@ -594,28 +703,35 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 LogGracefulExitTimedOut(agentId, GracefulExitWait.TotalSeconds);
             }
 
-            // Tell the server to end the session. Idempotent server-side: if claude
-            // did fire session-end during the graceful window, this is a no-op
-            // (returns GenerateWhatsDone=false and the CLI's session-end handler
-            // already spawned the what's-done generator on its end).
-            try {
-                var result = await _server.EndAgentSessionAsync(agentId, agent.PendingEndReason);
-
-                if (result is { GenerateWhatsDone: true, SessionId: not null }) {
-                    SpawnWhatsDoneGenerator(result.SessionId);
-                }
-            } catch (Exception ex) {
-                LogEndSessionFailed(ex, agentId);
-            }
-
-            // Cancel the read loop, then terminate the process if it didn't exit gracefully.
-            // The read loop's finally block will handle CleanupAgentAsync.
+            // Cancel the read loop and terminate the process. We deliberately do NOT end
+            // the AgentSession here: EndAgentSessionAsync now retries across SignalR
+            // reconnects (so it can block while a dropped connection recovers), and a
+            // user-initiated stop must not wait on that. Cancelling ReadCts unblocks the
+            // read loop, whose finally block runs FinalizeAgentRunAsync once the process
+            // exits — that ends the session (with retry) using agent.PendingEndReason
+            // ("agent_stopped") and spawns the what's-done generator if the server asks.
+            // So session-end is reliable as the post-exit backstop without delaying
+            // teardown, and is idempotent: if claude already fired its own session-end
+            // during the graceful window above, the backstop call is a server-side no-op.
             await agent.ReadCts.CancelAsync();
             await agent.Process.TerminateAsync(TimeSpan.FromSeconds(10));
         } catch (Exception ex) {
             LogStopError(ex, agentId);
         }
     }
+
+    /// <summary>
+    /// Observes a background EndAgentSession retry that outlived the finalize budget so a
+    /// later fault isn't an unobserved task exception. Success and shutdown-cancellation
+    /// are intentionally ignored; only a genuine fault is logged.
+    /// </summary>
+    void ObserveEndSessionInBackground(Task<EndAgentSessionResult> endTask, string agentId) =>
+        _ = endTask.ContinueWith(
+            t => LogEndSessionFailed(t.Exception!.GetBaseException(), agentId),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
 
     /// <summary>
     /// Spawns <c>kcap generate-whats-done {sessionId}</c> as a detached process.
@@ -789,23 +905,67 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         return Task.CompletedTask;
     }
 
-    void ReRegisterAgents() {
-        _ = ReRegisterAgentsAsync();
+    static readonly TimeSpan ReRegisterRetryDelay = TimeSpan.FromMilliseconds(250);
+    const           int      ReRegisterMaxAttempts = 3;
 
-        return;
-
-        async Task ReRegisterAgentsAsync() {
-            foreach (var agent in _agents.Values.Where(a => a.Status is "Starting" or "Running")) {
+    /// <summary>
+    /// Re-registers this daemon's live agents with the server (AgentRegistered +
+    /// AgentStatusChanged) so per-session ownership is restored after a (re-)connect. Wired into
+    /// <see cref="ServerConnection.ReRegisterAgentsHook"/> and awaited inside
+    /// <see cref="ServerConnection.RegisterDaemon"/> BEFORE readiness is restored — so a
+    /// permission invoke gated on <c>IsReady</c> can't fire before ownership recovery (AI-864).
+    ///
+    /// Each agent's re-registration is retried a bounded number of times before giving up, so a
+    /// transient blip doesn't leave that agent's ownership unrestored while the daemon still
+    /// flips ready (the qodo "ready despite reregister failures" gap). On final failure we log and
+    /// move on rather than throw: one agent's persistent failure must NOT withhold readiness for
+    /// the whole daemon (that would block every other agent's permissions and loop reconnects).
+    /// The bounded ownership-retry in <see cref="ServerConnection.RequestPermissionAsync"/> is the
+    /// final safety net for the residual case.
+    /// </summary>
+    async Task ReRegisterAgentsAsync() {
+        // PrivateLocal agents are never registered with the server, so never re-register them.
+        foreach (var agent in _agents.Values.Where(a => (a.Status is "Starting" or "Running") && !a.IsPrivate)) {
+            for (var attempt = 1; ; attempt++) {
                 try {
                     await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath);
                     await _server.AgentStatusChangedAsync(agent.Id, agent.Status, agent.SessionId);
 
-                    // Replay terminal buffer so the UI has terminal history
-                    foreach (var base64 in agent.OutputBuffer.GetAll().Select(Convert.ToBase64String)) {
-                        await _server.SendTerminalOutputAsync(agent.Id, base64);
+                    // Re-send the fixed PTY dims. The server stores them in memory, so a
+                    // server restart (not just a daemon blip) wipes them — without this
+                    // resend the read-only viewers never re-lock and the TUI garbles
+                    // again exactly as before the fix (AI-884). Best-effort: its own
+                    // catch keeps a dims-send failure from escaping to the retry handler
+                    // (which would re-register the agent) or withholding readiness.
+                    try {
+                        await _server.SendTerminalDimensionsAsync(agent.Id, HostedPtyCols, HostedPtyRows);
+                    } catch (Exception ex) {
+                        LogTerminalDimsSendFailed(ex, agent.Id);
+                    }
+
+                    // AI-842: do NOT replay the full output buffer here. The old
+                    // replay re-sent the entire 2 MB ring on every reconnect, which
+                    // the server appended to its own buffer and live-broadcast on
+                    // top of the current screen — duplicated, and interleaved with
+                    // the read loop's concurrent live sends, producing the garbled
+                    // Terminal tab. The server retains its own per-agent buffer
+                    // across a daemon rebind (it only clears on reconcile-to-Failed),
+                    // so late-joining web clients still get history via the server's
+                    // SubscribeToTerminal replay. Continuity of in-flight output is
+                    // handled by TerminalOutputSender, which holds unsent chunks
+                    // while the transport is down and flushes them, in order, once
+                    // the connection is back.
+                    break;
+                } catch (Exception) when (attempt < ReRegisterMaxAttempts && !_shutdownCts.IsCancellationRequested) {
+                    try {
+                        await Task.Delay(ReRegisterRetryDelay, _shutdownCts.Token);
+                    } catch (OperationCanceledException) {
+                        return;
                     }
                 } catch (Exception ex) {
                     LogReRegisterFailed(ex, agent.Id);
+
+                    break;
                 }
             }
         }
@@ -830,7 +990,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     async Task RunHeartbeatLoopAsync(CancellationToken ct) {
         while (await _heartbeatTimer.WaitForNextTickAsync(ct)) {
-            foreach (var agent in _agents.Values.Where(a => a.Status is "Starting" or "Running")) {
+            // PrivateLocal agents get no heartbeats and no stuck-Starting auto-stop (deny-all;
+            // the local user is present and drives them directly).
+            foreach (var agent in _agents.Values.Where(a => (a.Status is "Starting" or "Running") && !a.IsPrivate)) {
                 // Detect agents stuck in "Starting" with no output
                 if (agent.Status                         == "Starting" &&
                     DateTime.UtcNow - agent.LastOutputAt > StartupTimeout) {
@@ -871,6 +1033,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
+        // Wake any attached local clients blocked on the user's stdin so they can flush the
+        // last output and send Exited (the agent is going away). The exit code is already
+        // captured on agent.Process, so disposing it below doesn't lose it.
+        try { await agent.ExitedCts.CancelAsync(); } catch { /* best-effort */ }
+
         // Each cleanup step is best-effort so later steps still run
         try { await agent.Process.DisposeAsync(); } catch (Exception ex) { LogCleanupStepFailed(ex, "disposing process", agentId); }
 
@@ -878,13 +1045,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             try { launcher.Cleanup(agent); } catch (Exception ex) { LogCleanupStepFailed(ex, "launcher.Cleanup", agentId); }
         }
 
-        try { await WorktreeManager.RemoveAsync(agent.Worktree); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
+        // Owned worktrees are daemon-created and safe to remove. A borrowed cwd is the
+        // user's own checkout (local in-place launch) — NEVER delete it or its branch:
+        // RemoveAsync would Directory.Delete / `git worktree remove --force` + `branch -D`.
+        // This is the spec's top safety invariant.
+        if (agent.Work == WorkLocation.OwnedWorktree) {
+            try { await WorktreeManager.RemoveAsync(agent.Worktree); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
+        }
 
         // Skip server unregister during shutdown — _ct is cancelled and the call
         // would throw TaskCanceledException. The server detects the daemon
         // disconnection through SignalR's transport-level signals. Filtered
         // catch covers the residual race where shutdown fires mid-call.
-        if (!_shutdownCts.IsCancellationRequested) {
+        // PrivateLocal agents were never registered, so never unregister them (deny-all).
+        if (!agent.IsPrivate && !_shutdownCts.IsCancellationRequested) {
             try { await _server.AgentUnregisteredAsync(agentId); } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) { } catch (Exception ex) {
                 LogCleanupStepFailed(ex, "unregistering", agentId);
             }
@@ -972,6 +1146,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to re-register agent {AgentId}")]
     partial void LogReRegisterFailed(Exception ex, string agentId);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to send terminal dimensions for agent {AgentId} (read-only viewers may render garbled until the next reconnect)")]
+    partial void LogTerminalDimsSendFailed(Exception ex, string agentId);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} stuck in Starting for {Seconds:F1}s with no output (PID={Pid}, exited={Exited}), terminating")]
     partial void LogAgentStuck(string agentId, double seconds, int pid, bool exited);
 
@@ -999,6 +1176,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to end session for agent {AgentId} (server may not record SessionEnded)")]
     partial void LogEndSessionFailed(Exception ex, string agentId);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "EndAgentSession for agent {AgentId} did not complete within {Seconds}s; proceeding with cleanup while the retry continues in the background (server reconciles on daemon disconnect)")]
+    partial void LogEndSessionTimedOut(string agentId, double seconds);
+
     [LoggerMessage(Level = LogLevel.Information, Message = "Spawned what's-done generator for session {SessionId} (PID {Pid})")]
     partial void LogWhatsDoneSpawned(string sessionId, int pid);
 
@@ -1016,6 +1196,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// without going through SignalR. Keeps the private handler private to everyone else.
     /// </summary>
     internal Task HandleLaunchAgentForTest(LaunchAgentCommand cmd) => HandleLaunchAgent(cmd);
+
+    /// <summary>Test-only: register a pre-built agent so cleanup/lifecycle can be driven directly.</summary>
+    internal void RegisterAgentForTest(AgentInstance agent) => _agents[agent.Id] = agent;
+
+    /// <summary>Test-only entry point to the private cleanup path.</summary>
+    internal Task CleanupAgentForTest(string agentId) => CleanupAgentAsync(agentId);
+
+    /// <summary>Test-only: number of agents currently tracked (for awaiting cleanup).</summary>
+    internal int ActiveAgentCountForTest => _agents.Count;
+
+    /// <summary>Test-only entry point to the private stop handler (mirrors <see cref="HandleLaunchAgentForTest"/>).</summary>
+    internal Task HandleStopAgentForTest(string agentId) => HandleStopAgent(agentId);
 }
 
 /// <summary>

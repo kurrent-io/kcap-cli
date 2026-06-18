@@ -11,6 +11,30 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Capacitor.Cli.Commands;
 
 static partial class WatchCommand {
+    /// <summary>Outcome of deciding whether the parent-exit watchdog can run.</summary>
+    internal enum ParentWatchdog {
+        /// <summary>Parent PID is alive — start the 5s liveness poll.</summary>
+        Monitor,
+
+        /// <summary>No parent PID was supplied — nothing to monitor.</summary>
+        NoParentPid,
+
+        /// <summary>A parent PID was supplied but it's already dead at startup
+        /// (typically a transient process from bad PID resolution). Must be surfaced,
+        /// never silently skipped.</summary>
+        ParentAlreadyDead
+    }
+
+    /// <summary>
+    /// Decides whether the parent-exit watchdog should run. Pure so the three
+    /// outcomes — including the dead-at-startup case that caused stuck sessions —
+    /// are unit-testable without spawning processes.
+    /// </summary>
+    internal static ParentWatchdog DecideParentWatchdog(int? parentPid, Func<int, bool> isAlive) =>
+        parentPid is not { } ppid ? ParentWatchdog.NoParentPid
+        : !isAlive(ppid)          ? ParentWatchdog.ParentAlreadyDead
+        :                           ParentWatchdog.Monitor;
+
     public static async Task<int> RunWatch(
             string  baseUrl,
             string  sessionId,
@@ -85,26 +109,47 @@ static partial class WatchCommand {
             ctx.Cancel = true;
         });
 
-        // Watch the spawning claude process. If it dies without firing session-end
-        // (crash, force-kill, IDE-detach), self-terminate within ~5s instead of orphaning.
-        if (parentPid is { } ppid && ProcessHelpers.IsProcessAlive(ppid)) {
-            Log($"Monitoring parent pid {ppid}");
-            _ = Task.Run(async () => {
-                while (!cts.Token.IsCancellationRequested) {
-                    try {
-                        await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
-                    } catch (OperationCanceledException) {
-                        return;
-                    }
+        // Watch the spawning coding-agent process. If it dies without firing
+        // session-end (crash, force-kill, IDE-detach), self-terminate within ~5s and
+        // POST session-end instead of orphaning. Crucially, the cases where we DON'T
+        // monitor are now logged: a silently-skipped watchdog is exactly the failure
+        // that left sessions stuck "active" with the watcher still connected — the
+        // resolved parent PID was already dead at startup and nothing recorded it.
+        switch (DecideParentWatchdog(parentPid, ProcessHelpers.IsProcessAlive)) {
+            case ParentWatchdog.NoParentPid:
+                Log("No parent pid supplied; parent-exit watchdog disabled (session-end relies on the agent's own hook)");
 
-                    if (!ProcessHelpers.IsProcessAlive(ppid)) {
-                        Log($"Parent pid {ppid} exited; shutting down watcher");
-                        Interlocked.Exchange(ref parentExited, 1);
-                        cts.Cancel();
-                        return;
+                break;
+
+            case ParentWatchdog.ParentAlreadyDead:
+                Log($"Parent pid {parentPid} already dead at watcher startup; parent-exit watchdog NOT started — "
+                  + "session-end will not be POSTed if the agent ends abruptly. This usually means parent-PID "
+                  + "resolution returned a transient process; see ProcessHelpers.GetCodingAgentPid.");
+
+                break;
+
+            case ParentWatchdog.Monitor:
+                var ppid = parentPid!.Value;
+                Log($"Monitoring parent pid {ppid}");
+                _ = Task.Run(async () => {
+                    while (!cts.Token.IsCancellationRequested) {
+                        try {
+                            await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
+                        } catch (OperationCanceledException) {
+                            return;
+                        }
+
+                        if (!ProcessHelpers.IsProcessAlive(ppid)) {
+                            Log($"Parent pid {ppid} exited; shutting down watcher");
+                            Interlocked.Exchange(ref parentExited, 1);
+                            cts.Cancel();
+
+                            return;
+                        }
                     }
-                }
-            }, cts.Token);
+                }, cts.Token);
+
+                break;
         }
 
         var state = new WatchState();
@@ -307,7 +352,7 @@ static partial class WatchCommand {
     /// Used to reject unexpected --vendor input before interpolating into the URL
     /// path (defence-in-depth against path traversal even though the CLI runs locally).
     /// </summary>
-    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "kiro" };
+    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro" };
 
     /// <summary>
     /// Total time budget for the parent-exit session-end POST. Covers /auth/config
@@ -563,23 +608,25 @@ static partial class WatchCommand {
                 return;
             }
 
-            // Serialize repository payload to JSON string for the hub method
-            var repoJson = repoToSend is not null
-                ? JsonSerializer.Serialize(repoToSend, CapacitorJsonContext.Default.RepositoryPayload)
-                : null;
-
             try {
-                // Arg count must match `CapacitorHub.SendTranscriptBatch` exactly —
-                // SignalR's protocol layer does a strict arity match and does NOT
-                // auto-supply defaults for missing args (PR #576 / v0.4.0 incident).
+                // SendTranscriptBatch takes a single TranscriptBatch record (arity 1) —
+                // SignalR matches on argument COUNT and does NOT auto-supply C# optional
+                // defaults (PR #576 / v0.4.0 incident), so a parameter object keeps the
+                // contract stable: adding a field stays backward-compatible (this client
+                // omits a null vendor; servers ignore unknown fields). This calls the
+                // record-based `SendTranscriptBatch2` added in AI-850 (the legacy
+                // positional `SendTranscriptBatch` stays on the server for older CLIs),
+                // so it requires a server deployed with that method — server-before-CLI.
                 await hubConnection.InvokeAsync(
-                    "SendTranscriptBatch",
-                    sessionId,
-                    agentId,
-                    newLines.ToArray(),
-                    newLineNumbers.ToArray(),
-                    repoJson,
-                    vendor,
+                    "SendTranscriptBatch2",
+                    new TranscriptBatch {
+                        SessionId   = sessionId,
+                        AgentId     = agentId,
+                        Lines       = newLines.ToArray(),
+                        LineNumbers = newLineNumbers.ToArray(),
+                        Repository  = repoToSend,
+                        Vendor      = vendor,
+                    },
                     ct
                 );
 

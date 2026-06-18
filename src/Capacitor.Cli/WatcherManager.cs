@@ -65,12 +65,15 @@ static class WatcherManager {
             Directory.CreateDirectory(watcherDir);
 
             var kcapPath = Environment.ProcessPath ?? "kcap";
-            // Use the coding-agent's PID (process group leader on Unix) rather than
-            // getppid(): coding agents invoke hooks through a transient executor that
-            // dies the moment the hook returns, so by the time the watcher checks
-            // IsProcessAlive it sees a dead PID and never starts the monitor task —
-            // leaving Codex sessions stuck "active" because session-end is never POSTed.
-            var parentPid     = ProcessHelpers.GetCodingAgentPid();
+            // Resolve the long-lived coding-agent PID rather than getppid(): coding
+            // agents invoke hooks through a transient executor that dies the moment the
+            // hook returns, so by the time the watcher checks IsProcessAlive it sees a
+            // dead PID and never starts the monitor task — leaving sessions stuck
+            // "active" because session-end is never POSTed. The vendor-aware resolver
+            // walks the ppid ancestry to find the agent by name, which is robust to the
+            // differing process-group topologies of Claude (transient hook group → bare
+            // getpgrp() resolves a dead PID) and Codex (inherits the agent's group).
+            var parentPid     = ProcessHelpers.GetCodingAgentPid(vendor);
             var arguments     = BuildSpawnArgs(key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, parentPid, vendor);
 
             var psi = new ProcessStartInfo(kcapPath, arguments) {
@@ -81,6 +84,11 @@ static class WatcherManager {
                 CreateNoWindow         = true,
                 Environment            = { ["KCAP_URL"] = baseUrl }
             };
+
+            // Stop the watcher from inheriting the coding agent's std handles on Windows;
+            // otherwise it holds the agent's hook-stdout pipe open for its whole lifetime,
+            // hanging synchronous subagent hooks and orphaning the watcher (AI-820).
+            ProcessHelpers.PreventInheritedStdHandles();
 
             var process = Process.Start(psi);
 
@@ -221,6 +229,10 @@ static class WatcherManager {
             if (vendor == "codex") {
                 psi.ArgumentList.Add("--codex");
             }
+
+            // Don't let this detached child inherit the agent's std handles on Windows
+            // (AI-820) — same pipe-leak hazard as the watcher spawn above.
+            ProcessHelpers.PreventInheritedStdHandles();
 
             var process = Process.Start(psi);
 

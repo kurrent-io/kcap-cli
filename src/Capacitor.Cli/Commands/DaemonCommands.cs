@@ -76,7 +76,7 @@ public static class DaemonCommands {
         }
 
         try {
-            if (ReadPidFile(name) is { } existing && IsOurDaemon(existing.Pid, existing.StartTicks)) {
+            if (ReadPidFile(name) is { } existing && IsOurDaemon(existing.Pid, existing.StartToken)) {
                 await Console.Error.WriteLineAsync(
                     $"Daemon '{name}' already running (PID {existing.Pid}). "
                   + $"Use `kcap daemon stop --name {name}` first."
@@ -151,7 +151,7 @@ public static class DaemonCommands {
 
         using var _ = startLock;
 
-        if (ReadPidFile(name) is { } existing && IsOurDaemon(existing.Pid, existing.StartTicks)) {
+        if (ReadPidFile(name) is { } existing && IsOurDaemon(existing.Pid, existing.StartToken)) {
             Console.Error.WriteLine(
                 $"Daemon '{name}' already running (PID {existing.Pid}). "
               + $"Use `kcap daemon stop --name {name}` first."
@@ -168,12 +168,20 @@ public static class DaemonCommands {
             return 1;
         }
 
+        // Redirect ALL three standard streams so the detached daemon does not
+        // inherit our stdout/stderr (AI-839). Left un-redirected, the daemon
+        // keeps the terminal — or a capturing parent's pipe — open for its
+        // whole lifetime, so `kcap daemon start -d` appears to hang: it returns
+        // and the daemon reparents to init, but anything reading our piped
+        // output blocks on EOF that never comes. The daemon logs to --log-file,
+        // so it has no use for these streams. (Same pipe-leak hazard and fix as
+        // the AI-820 watcher / what's-done spawns.)
         var psi = new ProcessStartInfo {
             FileName               = daemonPath,
             UseShellExecute        = false,
             RedirectStandardInput  = true,
-            RedirectStandardOutput = false,
-            RedirectStandardError  = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
             CreateNoWindow         = true
         };
         psi.ArgumentList.Add("--log-file");
@@ -183,11 +191,18 @@ public static class DaemonCommands {
             psi.ArgumentList.Add(arg);
         }
 
+        // Windows: clear HANDLE_FLAG_INHERIT on our own std handles so the child
+        // doesn't inherit a capturing parent's pipe handles (AI-820). No-op on Unix.
+        ProcessHelpers.PreventInheritedStdHandles();
+
         var process = new Process { StartInfo = psi };
         process.Start();
 
-        // Close stdin so the child doesn't wait for input
+        // Close the redirected streams from our side so we don't hold pipe FDs
+        // open and the child doesn't wait on stdin.
         process.StandardInput.Close();
+        process.StandardOutput.Close();
+        process.StandardError.Close();
 
         // AI-630: the daemon binary acquires its own per-name flock at
         // startup and exits with code 2 if another live daemon already
@@ -293,7 +308,7 @@ public static class DaemonCommands {
         }
 
         try {
-            if (!IsOurDaemon(entry.Pid, entry.StartTicks)) {
+            if (!IsOurDaemon(entry.Pid, entry.StartToken)) {
                 Console.Out.WriteLine($"Daemon '{name}' was not running (stale PID file).");
                 File.Delete(DaemonLockPaths.PidPath(name));
 
@@ -343,7 +358,7 @@ public static class DaemonCommands {
         foreach (var name in names) {
             if (ReadPidFile(name) is not { } entry) {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': not running");
-            } else if (IsOurDaemon(entry.Pid, entry.StartTicks)) {
+            } else if (IsOurDaemon(entry.Pid, entry.StartToken)) {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': running (PID {entry.Pid})");
             } else {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': not running (stale PID file)");
@@ -429,7 +444,7 @@ public static class DaemonCommands {
                 case null when hasLock: {
                     heldCount++;
                     var pidEntry = ReadPidFile(name);
-                    var alive    = pidEntry is { } e && IsOurDaemon(e.Pid, e.StartTicks);
+                    var alive    = pidEntry is { } e && IsOurDaemon(e.Pid, e.StartToken);
                     var pidStr   = pidEntry is { } e2 ? e2.Pid.ToString() : "?";
 
                     var aliveStr = alive
@@ -487,24 +502,19 @@ public static class DaemonCommands {
 
     // ── shared helpers ──────────────────────────────────────────────────────
 
-    record struct PidEntry(int Pid, long? StartTicks);
+    record struct PidEntry(int Pid, string? StartToken);
 
     static void WritePidFile(string daemonName, Process process) {
         var pidPath = DaemonLockPaths.PidPath(daemonName);
         DaemonLockPaths.EnsureDirectory();
 
-        long? startTicks = null;
-
-        try {
-            startTicks = process.StartTime.ToUniversalTime().Ticks;
-        } catch (Exception) {
-            // Best-effort: if StartTime isn't readable (race with rapid exit, OS
-            // permission quirks), fall back to PID-only — IsOurDaemon will then
-            // use the ProcessName check.
-        }
-
-        var content = startTicks is { } t
-            ? $"{process.Id}\n{t}"
+        // Second line is a cross-process-stable start token (AI-839). The daemon
+        // writes the same thing for the same PID, so this redundant supervisor
+        // write agrees with it byte-for-byte instead of racing on a different
+        // value. Null token falls back to PID-only and a ProcessName check.
+        var token   = ProcessStartToken.ForPid(process.Id);
+        var content = token is not null
+            ? $"{process.Id}\n{token}"
             : process.Id.ToString();
 
         File.WriteAllText(pidPath, content);
@@ -525,30 +535,33 @@ public static class DaemonCommands {
             return null;
         }
 
-        long? startTicks = lines.Length > 1 && long.TryParse(lines[1], out var ticks) ? ticks : null;
+        var startToken = lines.Length > 1 ? lines[1] : null;
 
-        return new PidEntry(pid, startTicks);
+        return new PidEntry(pid, startToken);
     }
 
     /// <summary>
-    /// Verify that a PID belongs to our daemon. The strong check is StartTime
-    /// equality — PIDs get recycled, but a recycled process won't have the
-    /// same start instant. Falls back to ProcessName for legacy PID files
-    /// written before StartTime was recorded.
+    /// Verify that a PID belongs to our daemon. The strong check is start-token
+    /// equality — PIDs get recycled, but a recycled process won't share the
+    /// same kernel start instant (<see cref="ProcessStartToken"/>). A
+    /// same-scheme token mismatch is conclusive (a different incarnation), so we
+    /// return false rather than fall back to the weaker name check, which can't
+    /// tell two of our own daemons apart.
+    ///
+    /// The name fallback applies only when the token can't be compared at all:
+    /// no token recorded, the live token is unreadable, or the recorded token is
+    /// a legacy/foreign scheme — notably a pre-AI-839 PID file that stored bare
+    /// <c>Process.StartTime</c> ticks. Falling back there keeps a still-running
+    /// old daemon manageable across an upgrade instead of stranding it.
     /// </summary>
-    static bool IsOurDaemon(int pid, long? expectedStartTicks) {
+    static bool IsOurDaemon(int pid, string? expectedStartToken) {
         try {
-            var process = Process.GetProcessById(pid);
+            using var process = Process.GetProcessById(pid);
 
-            if (expectedStartTicks is { } expected) {
-                try {
-                    return process.StartTime.ToUniversalTime().Ticks == expected;
-                } catch (Exception) {
-                    // StartTime read failed — fall through to name-based check
-                }
-            }
+            if (expectedStartToken is not null && ProcessStartToken.Matches(pid, expectedStartToken) is { } matched)
+                return matched;
 
-            // Legacy PID file (no StartTime recorded) or StartTime unreadable:
+            // No token, unreadable, or a legacy/foreign scheme we can't compare:
             // best-effort match by process image name.
             var daemonPath = ResolveDaemonBinary();
 
@@ -747,13 +760,14 @@ public static class DaemonCommands {
         $"kcap-daemon binary not found next to {AppContext.BaseDirectory}. Reinstall the kcap package.";
 
     static int PrintUsage() {
-        Console.Error.WriteLine("Usage: kcap daemon <start|stop|status|logs|doctor>");
+        Console.Error.WriteLine("Usage: kcap daemon <start|stop|status|logs|doctor|service>");
         Console.Error.WriteLine();
         Console.Error.WriteLine("  start [-d] [--name <n>]    Start the daemon (foreground, or -d for background)");
         Console.Error.WriteLine("  stop [--name <n>] [--yes]  Stop a running daemon (prompts on multi unless --yes)");
         Console.Error.WriteLine("  status [--name <n>]        Show daemon status (lists all when --name omitted)");
         Console.Error.WriteLine("  logs                       Show recent daemon log output");
         Console.Error.WriteLine("  doctor [--clean]           Diagnose lock-file state, optionally clean stale entries");
+        Console.Error.WriteLine("  service <action>           Manage the OS service (launchd/systemd/Scheduled Task)");
         Console.Error.WriteLine();
         Console.Error.WriteLine("Options for start:");
         Console.Error.WriteLine("  --name <name>         Daemon name (defaults to OS username)");

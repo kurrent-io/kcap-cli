@@ -19,7 +19,7 @@ namespace Capacitor.Cli.Tests.Unit;
 ///   • <see cref="CodexHooksNotInstalledException"/> from Prepare surfaces as a
 ///     LaunchFailed with the exception's message and no PTY ever spawns.
 /// </summary>
-public class AgentOrchestratorVendorTests {
+public partial class AgentOrchestratorVendorTests {
     static (string repoPath, Action cleanup) CreateGitRepo() {
         var repoPath = Path.Combine(Path.GetTempPath(), "kcap-orch-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(repoPath);
@@ -53,7 +53,7 @@ public class AgentOrchestratorVendorTests {
     }
 
     static AgentOrchestrator BuildOrchestrator(
-            CaptureServerConnection                           server,
+            ServerConnection                                  server,
             IPtyProcessFactory                                ptyFactory,
             IReadOnlyDictionary<string, IHostedAgentLauncher> launchers,
             string?                                           allowedRepoPath = null
@@ -94,6 +94,29 @@ public class AgentOrchestratorVendorTests {
         public CancellationToken ApplicationStopping => CancellationToken.None;
         public CancellationToken ApplicationStopped  => CancellationToken.None;
         public void StopApplication() { }
+    }
+
+    // AI-864: re-registration is awaited inside RegisterDaemon before readiness is restored.
+    // A transient per-agent failure must be retried (not swallowed on first try), so the agent's
+    // ownership is restored before the daemon flips ready — narrowing the "ready despite reregister
+    // failure" window qodo flagged.
+    [Test]
+    public async Task ReRegister_retries_a_transient_per_agent_failure_then_succeeds() {
+        var server = new CaptureServerConnection { AgentRegisteredFailTimes = 1 };
+
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        orch.RegisterAgentForTest(new AgentInstance(
+            "agent-rereg", null, "", null, "/tmp", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/tmp", "", "/tmp", IsStandalone: true), new CancellationTokenSource()
+        ));
+
+        // The orchestrator wires ReRegisterAgentsHook in its ctor; invoking it runs the same
+        // path RegisterDaemon awaits on reconnect.
+        await server.ReRegisterAgentsHook!();
+
+        // First attempt threw a transient failure; the bounded retry succeeded on the second.
+        await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(2);
     }
 
     [Test]
@@ -285,7 +308,193 @@ public class AgentOrchestratorVendorTests {
         }
     }
 
+    [Test]
+    public async Task Stopping_an_agent_releases_a_read_loop_blocked_on_a_full_terminal_queue() {
+        var (repoPath, cleanup) = CreateGitRepo();
+
+        try {
+            // The send blocks (full/down queue) until its ct cancels; the PTY keeps the
+            // stream open so the read loop is genuinely parked inside the blocked send.
+            var sendEntered   = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var sendUnblocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var server     = new CaptureServerConnection { SendEntered = sendEntered, SendUnblocked = sendUnblocked };
+            var ptyFactory = new FixedPtyProcessFactory(new OneChunkThenBlockPtyProcess());
+            var claudeSpy  = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
+
+            var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
+
+            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+
+            await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+                AgentId: "agent-bp",
+                Prompt: "go",
+                Model: "opus",
+                Effort: null,
+                RepoPath: repoPath,
+                Tools: null,
+                AttachmentIds: null,
+                Vendor: "claude"
+            ));
+
+            // Wait until the read loop has produced a chunk and is parked in the blocked send.
+            await sendEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            // Stopping the agent cancels ReadCts. The blocked enqueue MUST be released by
+            // that cancellation; otherwise the read loop (and its finally-block cleanup)
+            // stalls until daemon shutdown (AI-846). Before the fix the enqueue awaited the
+            // daemon-lifetime token instead, so this never completes.
+            await orch.HandleStopAgentForTest("agent-bp");
+
+            await sendUnblocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        } finally {
+            cleanup();
+        }
+    }
+
+    [Test]
+    public async Task Stopping_an_agent_terminates_promptly_even_when_end_session_is_blocked() {
+        // Option B: EndAgentSession is the post-exit backstop and retries across SignalR
+        // reconnects, so it can block while the connection recovers. A user-initiated stop
+        // must NOT wait on it — HandleStopAgent terminates the process, and the read-loop's
+        // finalize backstop ends the session afterwards. With EndAgentSession blocked,
+        // termination must still happen promptly (before the fix HandleStopAgent awaited
+        // its own EndAgentSession call and never reached TerminateAsync).
+        var (repoPath, cleanup) = CreateGitRepo();
+        using var endSessionBlock = new CancellationTokenSource();
+
+        try {
+            var terminated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var server     = new CaptureServerConnection { EndSessionBlockUntil = endSessionBlock };
+            var ptyFactory = new FixedPtyProcessFactory(new TerminateSignalingPtyProcess(terminated));
+            var launchers  = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") };
+
+            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+
+            await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+                AgentId: "agent-stop",
+                Prompt: "go",
+                Model: "opus",
+                Effort: null,
+                RepoPath: repoPath,
+                Tools: null,
+                AttachmentIds: null,
+                Vendor: "claude"
+            ));
+
+            // Fire-and-forget: before the fix, HandleStopAgent awaits the blocked
+            // EndAgentSession and never reaches termination, so we must not await it here.
+            _ = orch.HandleStopAgentForTest("agent-stop");
+
+            // The process must be terminated even though EndAgentSession is still blocked.
+            await terminated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        } finally {
+            endSessionBlock.Cancel(); // release the finalize backstop's blocked end-session
+            cleanup();
+        }
+    }
+
+    [Test]
+    public async Task Cleanup_runs_even_when_end_session_never_recovers() {
+        // Qodo: EndAgentSession now retries across reconnects, so it can block for a whole
+        // outage. FinalizeAgentRunAsync must not stall local cleanup on it — it waits only
+        // up to EndAgentSessionBudget, then proceeds to CleanupAgentAsync (which unregisters
+        // the agent) while the retry continues in the background. Here end-session never
+        // recovers, yet cleanup must still run.
+        var (repoPath, cleanup) = CreateGitRepo();
+        using var neverRecovers = new CancellationTokenSource();
+
+        try {
+            var unregistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var server = new CaptureServerConnection {
+                EndSessionBlockUntil = neverRecovers,                  // end-session blocks for the whole test
+                OnAgentUnregistered  = () => unregistered.TrySetResult() // fires when cleanup completes
+            };
+            var ptyFactory = new FixedPtyProcessFactory(new ImmediateExitPtyProcess());
+            var launchers  = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") };
+
+            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+            orch.EndAgentSessionBudget = TimeSpan.FromMilliseconds(250); // don't wait the real 30s in a test
+
+            await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+                AgentId: "agent-x",
+                Prompt: "go",
+                Model: "opus",
+                Effort: null,
+                RepoPath: repoPath,
+                Tools: null,
+                AttachmentIds: null,
+                Vendor: "claude"
+            ));
+
+            // The PTY exits immediately → the read loop ends → FinalizeAgentRunAsync runs.
+            // End-session blocks (never recovers), but cleanup must still run after the budget.
+            await unregistered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        } finally {
+            neverRecovers.Cancel(); // release the background end-session task
+            cleanup();
+        }
+    }
+
     // ── Test doubles ─────────────────────────────────────────────────────
+
+    /// <summary>PTY that has already exited and produces no output, so the read loop ends
+    /// immediately and FinalizeAgentRunAsync runs right after launch.</summary>
+    sealed class ImmediateExitPtyProcess : IPtyProcess {
+        public int  Pid       => 4244;
+        public bool HasExited => true;
+        public int? ExitCode  => 0;
+
+        public ValueTask DisposeAsync() => default;
+        public Task WaitForExitAsync(TimeSpan? _) => Task.CompletedTask;
+        public Task TerminateAsync(TimeSpan?   _) => Task.CompletedTask;
+
+#pragma warning disable CS1998
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken _ = default) {
+            yield break;
+        }
+#pragma warning restore CS1998
+
+        public Task WriteAsync(string _) => Task.CompletedTask;
+        public Task WriteAsync(byte[] _) => Task.CompletedTask;
+        public void Resize(ushort     _, ushort __) { }
+        public void SendInterrupt() { }
+    }
+
+    /// <summary>
+    /// PTY that reports already-exited (so HandleStopAgent's graceful window is instant)
+    /// and signals when TerminateAsync runs. ReadOutputAsync blocks until ReadCts cancels,
+    /// keeping the read loop alive until the stop.
+    /// </summary>
+    sealed class TerminateSignalingPtyProcess(TaskCompletionSource terminated) : IPtyProcess {
+        public int  Pid       => 4243;
+        public bool HasExited => true;
+        public int? ExitCode  => 0;
+
+        public ValueTask DisposeAsync() => default;
+        public Task WaitForExitAsync(TimeSpan? _) => Task.CompletedTask;
+
+        public Task TerminateAsync(TimeSpan? _) {
+            terminated.TrySetResult();
+
+            return Task.CompletedTask;
+        }
+
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, ct); } catch (OperationCanceledException) {
+                /* released on stop */
+            }
+
+            yield break;
+        }
+
+        public Task WriteAsync(string _) => Task.CompletedTask;
+        public Task WriteAsync(byte[] _) => Task.CompletedTask;
+        public void Resize(ushort     _, ushort __) { }
+        public void SendInterrupt() { }
+    }
 
     sealed class SpyHostedAgentLauncher(string vendor, string cliPath) : IHostedAgentLauncher {
         public string Vendor  { get; } = vendor;
@@ -310,9 +519,55 @@ public class AgentOrchestratorVendorTests {
             return new LaunchArgs(Args: [], McpConfigPath: null);
         }
 
+        public LaunchArgs BuildPassthrough(LauncherContext ctx, IReadOnlyList<string> userArgs) {
+            BuildArgsCalls++;
+
+            return new LaunchArgs(Args: [.. userArgs], McpConfigPath: null);
+        }
+
         public void Cleanup(AgentInstance agent) {
             CleanupCalls++;
         }
+    }
+
+    /// <summary>Returns a caller-supplied PTY process so a test can control its output behaviour.</summary>
+    sealed class FixedPtyProcessFactory(IPtyProcess process) : IPtyProcessFactory {
+        public IPtyProcess Spawn(
+                string                      command,
+                string[]                    args,
+                string                      cwd,
+                Dictionary<string, string>? extraEnv = null,
+                ushort                      cols     = 120,
+                ushort                      rows     = 40
+            ) => process;
+    }
+
+    /// <summary>
+    /// Emits one chunk (so the read loop calls SendTerminalOutputAsync) then keeps the
+    /// stream open by awaiting the read token — the loop parks in the blocked send until
+    /// the agent is stopped. HasExited is true so HandleStopAgent's graceful path is quick.
+    /// </summary>
+    sealed class OneChunkThenBlockPtyProcess : IPtyProcess {
+        public int  Pid       => 4242;
+        public bool HasExited => true;
+        public int? ExitCode  => 0;
+
+        public ValueTask DisposeAsync() => default;
+        public Task WaitForExitAsync(TimeSpan? _) => Task.CompletedTask;
+        public Task TerminateAsync(TimeSpan?   _) => Task.CompletedTask;
+
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
+            yield return "x"u8.ToArray();
+
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+
+            yield break;
+        }
+
+        public Task WriteAsync(string _) => Task.CompletedTask;
+        public Task WriteAsync(byte[] _) => Task.CompletedTask;
+        public void Resize(ushort     _, ushort __) { }
+        public void SendInterrupt() { }
     }
 
     sealed class SpyPtyProcessFactory : IPtyProcessFactory {
@@ -371,32 +626,82 @@ public class AgentOrchestratorVendorTests {
     ) {
         public List<(string AgentId, string Reason)> LaunchFailedCalls { get; } = [];
 
+        /// <summary>When set, EndAgentSessionAsync blocks until this token is cancelled,
+        /// simulating a session-end call stuck waiting for a SignalR reconnect.</summary>
+        public CancellationTokenSource? EndSessionBlockUntil { get; init; }
+
+        /// <summary>Reasons passed to EndAgentSessionAsync, in call order.</summary>
+        public List<string> EndSessionReasons { get; } = [];
+
         public override Task LaunchFailedAsync(string agentId, string reason) {
             LaunchFailedCalls.Add((agentId, reason));
 
             return Task.CompletedTask;
         }
 
-        public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath)
-            => Task.CompletedTask;
+        /// <summary>Number of times to fail AgentRegisteredAsync before succeeding (AI-864:
+        /// drives the bounded per-agent re-registration retry test).</summary>
+        public int AgentRegisteredFailTimes { get; init; }
+        public int AgentRegisteredCallCount { get; private set; }
+
+        public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath) {
+            AgentRegisteredCallCount++;
+
+            return AgentRegisteredCallCount <= AgentRegisteredFailTimes
+                ? Task.FromException(new InvalidOperationException("transient re-register failure"))
+                : Task.CompletedTask;
+        }
 
         public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId)
             => Task.CompletedTask;
 
-        public override Task AgentUnregisteredAsync(string agentId)
-            => Task.CompletedTask;
+        /// <summary>Invoked when AgentUnregisteredAsync runs — the last step of
+        /// CleanupAgentAsync, so a useful signal that local cleanup completed.</summary>
+        public Action? OnAgentUnregistered { get; init; }
+
+        public override Task AgentUnregisteredAsync(string agentId) {
+            OnAgentUnregistered?.Invoke();
+
+            return Task.CompletedTask;
+        }
 
         public override Task UpdateRepoPathsAsync()
             => Task.CompletedTask;
 
-        public override Task SendTerminalOutputAsync(string agentId, string base64Data)
-            => Task.CompletedTask;
+        /// <summary>Set both to make the send block (simulating a full/down terminal
+        /// queue) until its <c>ct</c> is cancelled — used by the AI-846 back-pressure
+        /// test. Left null for every other test, where the send is a no-op.</summary>
+        public TaskCompletionSource? SendEntered   { get; init; }
+        public TaskCompletionSource? SendUnblocked { get; init; }
+
+        public override async Task SendTerminalOutputAsync(string agentId, string base64Data, CancellationToken ct = default) {
+            if (SendEntered is null) return;
+
+            SendEntered.TrySetResult();
+
+            try {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            } catch (OperationCanceledException) {
+                /* released by the read loop's stop-linked token */
+            } finally {
+                SendUnblocked?.TrySetResult();
+            }
+        }
 
         public override Task AppendAgentRunEventAsync(string agentId, object evt)
             => Task.CompletedTask;
 
-        public override Task<EndAgentSessionResult> EndAgentSessionAsync(string agentId, string reason)
-            => Task.FromResult(new EndAgentSessionResult());
+        public override async Task<EndAgentSessionResult> EndAgentSessionAsync(string agentId, string reason) {
+            EndSessionReasons.Add(reason);
+
+            if (EndSessionBlockUntil is { } cts) {
+                try { await Task.Delay(Timeout.InfiniteTimeSpan, cts.Token); } catch (OperationCanceledException) {
+                    /* released by the test */
+                }
+            }
+
+            return new EndAgentSessionResult();
+        }
 
         public override Task<PermissionDecision> RequestPermissionAsync(
                 string            sessionId,

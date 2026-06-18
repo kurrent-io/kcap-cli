@@ -1,4 +1,7 @@
 bin/
+# The npm launcher sources live in a dir literally named bin/ — keep them
+# tracked (the platform-package bin/ dirs stay ignored: they hold build output).
+!npm/kcap/bin/
 obj/
 /packages/
 riderModule.iml

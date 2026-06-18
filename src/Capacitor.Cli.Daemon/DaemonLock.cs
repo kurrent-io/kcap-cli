@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Daemon;
@@ -83,17 +82,13 @@ internal sealed class DaemonLock : IDisposable {
     }
 
     static void WritePidFile(string pidPath) {
-        var process    = Process.GetCurrentProcess();
-        long? startTicks = null;
-
-        try {
-            startTicks = process.StartTime.ToUniversalTime().Ticks;
-        } catch {
-            // Best-effort — StartTime can fail on some sandboxed/macOS
-            // permission paths. The PID alone is still useful for stop.
-        }
-
-        var content = startTicks is { } t ? $"{process.Id}\n{t}" : process.Id.ToString();
+        // The second line is a cross-process-stable start token (AI-839): on
+        // Linux Process.StartTime differs between the daemon that writes it and
+        // the CLI that later reads it, so we persist the kernel's boot-relative
+        // starttime instead. Best-effort — a null token falls back to PID-only,
+        // and the CLI's IsOurDaemon then uses a process-name check.
+        var token   = ProcessStartToken.ForCurrent();
+        var content = token is not null ? $"{Environment.ProcessId}\n{token}" : Environment.ProcessId.ToString();
         File.WriteAllText(pidPath, content);
     }
 

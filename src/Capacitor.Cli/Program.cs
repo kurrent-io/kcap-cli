@@ -38,7 +38,7 @@ var command = args[0];
 // nested headless invocation.
 if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
  && command == "hook"
- && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot") || args.Contains("--kiro"))) {
+ && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot") || args.Contains("--gemini") || args.Contains("--kiro"))) {
     return 0;
 }
 
@@ -230,6 +230,12 @@ switch (command) {
     }
     case "daemon":
         return await DaemonCommands.HandleAsync(args);
+    case "run-agent":
+        return await RunAgentCommand.RunAsync(args[1..]);
+    case "attach":
+        return await RunAgentCommand.AttachAsync(args[1..]);
+    case "ls":
+        return await RunAgentCommand.ListAsync(args[1..]);
     case "setup":
         return await SetupCommand.HandleAsync(args);
     case "plugin":
@@ -249,7 +255,7 @@ switch (command) {
     case "repos":
         return await ReposCommand.HandleAsync(args);
     case "update":
-        return await UpdateCommand.HandleAsync();
+        return await UpdateCommand.HandleAsync(args);
     case "review": {
         if (args.Length < 2) {
             Console.Error.WriteLine("Usage: kcap review <pr-url-or-shorthand>");
@@ -459,6 +465,7 @@ switch (command) {
             new CodexImportSource(),
             new CursorImportSource(),
             new CopilotImportSource(),
+            new GeminiImportSource(),
             new KiroImportSource(),
         };
         IReadOnlyList<IImportSource> sources = explicitVendorSelection
@@ -599,11 +606,14 @@ switch (command) {
         if (args.Contains("--copilot")) {
             return await CopilotHookCommand.Handle(baseUrl!, Console.In, args);
         }
+        if (args.Contains("--gemini")) {
+            return await GeminiHookCommand.Handle(baseUrl!, Console.In);
+        }
         if (args.Contains("--kiro")) {
             return await KiroHookCommand.Handle(baseUrl!, Console.In, args);
         }
         Console.Error.WriteLine("kcap hook requires a vendor flag (for example --claude)");
-        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor, --copilot, --kiro");
+        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor, --copilot, --gemini, --kiro");
         return 1;
     }
     case "cursor":

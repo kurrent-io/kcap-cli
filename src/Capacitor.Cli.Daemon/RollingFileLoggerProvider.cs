@@ -7,16 +7,18 @@ namespace Capacitor.Cli.Daemon;
 /// Keeps one current file and one rolled-over backup (.1).
 /// </summary>
 sealed class RollingFileLoggerProvider : ILoggerProvider {
-    readonly string _path;
-    readonly long   _maxSize;
-    readonly Lock   _lock = new();
-    StreamWriter?   _writer;
+    readonly string   _path;
+    readonly long     _maxSize;
+    readonly LogLevel _minLevel;
+    readonly Lock     _lock = new();
+    StreamWriter?     _writer;
 
     const long DefaultMaxSize = 10 * 1024 * 1024; // 10 MB
 
-    public RollingFileLoggerProvider(string path, long maxSize = DefaultMaxSize) {
-        _path    = path;
-        _maxSize = maxSize;
+    public RollingFileLoggerProvider(string path, long maxSize = DefaultMaxSize, LogLevel minLevel = LogLevel.Information) {
+        _path     = path;
+        _maxSize  = maxSize;
+        _minLevel = minLevel;
 
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
@@ -25,7 +27,7 @@ sealed class RollingFileLoggerProvider : ILoggerProvider {
         };
     }
 
-    public ILogger CreateLogger(string categoryName) => new FileLogger(this, categoryName);
+    public ILogger CreateLogger(string categoryName) => new FileLogger(this, categoryName, _minLevel);
 
     void Write(string category, LogLevel level, string message) {
         lock (_lock) {
@@ -82,9 +84,9 @@ sealed class RollingFileLoggerProvider : ILoggerProvider {
         }
     }
 
-    sealed class FileLogger(RollingFileLoggerProvider provider, string category) : ILogger {
+    sealed class FileLogger(RollingFileLoggerProvider provider, string category, LogLevel minLevel) : ILogger {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool         IsEnabled(LogLevel        logLevel)                     => logLevel >= LogLevel.Information;
+        public bool         IsEnabled(LogLevel        logLevel)                     => logLevel >= minLevel && logLevel != LogLevel.None;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) {
             if (!IsEnabled(logLevel)) return;

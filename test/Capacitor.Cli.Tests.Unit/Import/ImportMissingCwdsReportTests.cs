@@ -179,6 +179,8 @@ public class ImportMissingCwdsReportTests {
         } finally {
             Console.SetOut(prevOut);
         }
-        return sw.ToString();
+        // Normalize CRLF→LF so line-anchored assertions (e.g. Contains("…\n"))
+        // hold on Windows, where the writer emits Environment.NewLine. AI-820.
+        return sw.ToString().Replace("\r\n", "\n");
     }
 }

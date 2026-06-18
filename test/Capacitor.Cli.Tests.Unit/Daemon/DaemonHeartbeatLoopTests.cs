@@ -1,4 +1,5 @@
 using Capacitor.Cli.Daemon.Services;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit.Daemon;
@@ -46,6 +47,76 @@ public class DaemonHeartbeatLoopTests {
 
     static DaemonHeartbeatLoop CreateLoop(FakePort port, TimeSpan? deadline = null)
         => new(port, deadline ?? TimeSpan.FromSeconds(10), NullLogger.Instance);
+
+    /// <summary>Minimal <see cref="ILogger"/> that records the rendered message and level of every entry.</summary>
+    sealed class CaptureLogger : ILogger {
+        public readonly List<(LogLevel Level, string Message)> Entries = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool         IsEnabled(LogLevel logLevel)                            => true;
+
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? ex, Func<TState, Exception?, string> formatter)
+            => Entries.Add((level, formatter(state, ex)));
+    }
+
+    [Test]
+    public async Task Tick_HealthyPing_RecordsRttAtDebug() {
+        var logger = new CaptureLogger();
+        var port   = new FakePort { PingHandler = _ => Task.FromResult(true) };
+        var loop   = new DaemonHeartbeatLoop(port, TimeSpan.FromSeconds(5), logger);
+
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(port.ForceReconnectCalls).IsEqualTo(0);
+        await Assert.That(logger.Entries).Contains(e => e.Level == LogLevel.Debug && e.Message.Contains("DaemonPing ok") && e.Message.Contains("RTT"));
+    }
+
+    [Test]
+    public async Task Tick_SlowButSuccessfulPing_WarnsBeforeDeadlineWithoutReconnecting() {
+        var logger = new CaptureLogger();
+
+        // Ping succeeds, but takes longer than the slow threshold (and less than
+        // the deadline) — the loop must warn about climbing latency yet NOT force
+        // a reconnect, since the ping still came back in time.
+        var port = new FakePort {
+            PingHandler = async _ => {
+                await Task.Delay(60);
+
+                return true;
+            }
+        };
+        var loop = new DaemonHeartbeatLoop(
+            port,
+            pingDeadline: TimeSpan.FromSeconds(5),
+            logger,
+            slowPingThreshold: TimeSpan.FromMilliseconds(20)
+        );
+
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(port.ForceReconnectCalls).IsEqualTo(0);
+        await Assert.That(port.ReRegisterCalls).IsEqualTo(0);
+        await Assert.That(logger.Entries).Contains(e => e.Level == LogLevel.Warning && e.Message.Contains("DaemonPing slow"));
+    }
+
+    [Test]
+    public async Task Tick_DeadlineExceeded_LogsCauseAndForcesReconnect() {
+        var logger = new CaptureLogger();
+        var port = new FakePort {
+            PingHandler = ct => {
+                var tcs = new TaskCompletionSource<bool>();
+                ct.Register(() => tcs.TrySetCanceled(ct));
+
+                return tcs.Task;
+            }
+        };
+        var loop = new DaemonHeartbeatLoop(port, TimeSpan.FromMilliseconds(50), logger);
+
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(port.ForceReconnectCalls).IsEqualTo(1);
+        await Assert.That(logger.Entries).Contains(e => e.Message.Contains("cause=ping_deadline_exceeded"));
+    }
 
     [Test]
     public async Task Tick_ServerSaysHealthy_DoesNothing() {

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 
@@ -22,7 +23,23 @@ internal interface IDaemonHeartbeatPort {
     Task       ForceReconnectAsync();
 }
 
-internal sealed class DaemonHeartbeatLoop(IDaemonHeartbeatPort port, TimeSpan pingDeadline, ILogger logger) {
+internal sealed class DaemonHeartbeatLoop(
+        IDaemonHeartbeatPort port,
+        TimeSpan             pingDeadline,
+        ILogger              logger,
+        TimeSpan?            slowPingThreshold = null
+    ) {
+    /// <summary>
+    /// Round-trip time at or above which a <c>DaemonPing</c> is logged as a
+    /// warning rather than at debug (AI-840 diagnostics). Defaults to half the
+    /// per-tick deadline: pings that take this long aren't yet failing, but the
+    /// transport latency is climbing toward the deadline that triggers a forced
+    /// reconnect, so surfacing them shows degradation building up *before* the
+    /// connection actually flaps — the key signal for deciding whether the
+    /// cloudflared tunnel (vs the server itself) is the latency source.
+    /// </summary>
+    readonly TimeSpan _slowPingThreshold = slowPingThreshold ?? TimeSpan.FromTicks(pingDeadline.Ticks / 2);
+
     /// <summary>
     /// Total — never throws (modulo outer cancellation, which is expected at
     /// shutdown). The loop in <c>AgentOrchestrator.RunDaemonHeartbeatLoopAsync</c>
@@ -32,16 +49,33 @@ internal sealed class DaemonHeartbeatLoop(IDaemonHeartbeatPort port, TimeSpan pi
     /// <see cref="IDaemonHeartbeatPort.ForceReconnectAsync"/>) are individually
     /// guarded since both ultimately call into SignalR (<c>InvokeAsync</c> /
     /// <c>StopAsync</c>) and can throw on transient transport state.
+    ///
+    /// Each tick also records the <c>DaemonPing</c> round-trip time and the
+    /// cause of any forced reconnect, so the daemon log carries the data needed
+    /// to characterise transport stability (RTT distribution over time, and
+    /// whether reconnects are deadline-exceeded vs ping-threw vs slot-displaced).
     /// </summary>
     public async Task TickAsync(CancellationToken ct) {
+        var sw = Stopwatch.StartNew();
+
         try {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(pingDeadline);
 
             var alive = await port.PingAsync(cts.Token);
+            sw.Stop();
+
+            if (sw.Elapsed >= _slowPingThreshold) {
+                logger.LogWarning(
+                    "Heartbeat: DaemonPing slow — {RttMs:F0} ms RTT (deadline {DeadlineMs:F0} ms); transport latency climbing toward a forced reconnect",
+                    sw.Elapsed.TotalMilliseconds, pingDeadline.TotalMilliseconds
+                );
+            } else {
+                logger.LogDebug("Heartbeat: DaemonPing ok — {RttMs:F0} ms RTT", sw.Elapsed.TotalMilliseconds);
+            }
 
             if (!alive) {
-                logger.LogWarning("Heartbeat: server does not recognise this connection — re-registering daemon");
+                logger.LogWarning("Heartbeat: server does not recognise this connection (cause=slot_displaced) — re-registering daemon");
                 await SafeReRegisterAsync();
             }
         } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
@@ -49,12 +83,16 @@ internal sealed class DaemonHeartbeatLoop(IDaemonHeartbeatPort port, TimeSpan pi
             // WebSocket is hung; force WithAutomaticReconnect by stopping
             // the hub and letting OnClosed → ConnectWithRetryAsync rebuild
             // it under a fresh conn id.
-            logger.LogWarning("Heartbeat: ping exceeded deadline — forcing reconnect");
+            logger.LogWarning(
+                "Heartbeat: DaemonPing exceeded {DeadlineMs:F0} ms deadline (cause=ping_deadline_exceeded) — forcing reconnect",
+                pingDeadline.TotalMilliseconds
+            );
             await SafeForceReconnectAsync();
         } catch (OperationCanceledException) {
             // Outer cancellation (process shutting down) — let the loop exit.
         } catch (Exception ex) {
-            logger.LogWarning(ex, "Heartbeat: ping threw — forcing reconnect");
+            sw.Stop();
+            logger.LogWarning(ex, "Heartbeat: DaemonPing threw after {RttMs:F0} ms (cause=ping_threw) — forcing reconnect", sw.Elapsed.TotalMilliseconds);
             await SafeForceReconnectAsync();
         }
     }

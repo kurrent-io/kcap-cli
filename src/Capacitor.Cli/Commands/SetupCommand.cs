@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
+using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
 using Spectre.Console;
 using Profile = Capacitor.Cli.Core.Config.Profile;
@@ -20,6 +21,7 @@ public static class SetupCommand {
         var skipCodexFlag    = args.Contains("--skip-codex-hooks");
         var skipCursorFlag   = args.Contains("--skip-cursor-hooks");
         var skipCopilotFlag  = args.Contains("--skip-copilot-hooks");
+        var skipGeminiFlag   = args.Contains("--skip-gemini-hooks");
         var skipKiroFlag     = args.Contains("--skip-kiro-hooks");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
@@ -150,14 +152,16 @@ public static class SetupCommand {
         } else {
             defaultVisibility = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
-                    .Title("How should your sessions be visible to others by default?")
+                    .Title("Which of your sessions should be readable by other users in the same Kurrent Capacitor account by default?")
                     .AddChoices("org_public", "private", "public")
                     .UseConverter(v => v switch {
                         "private"    => "All private — only you can see your sessions",
                         "org_public" => "Org repos public, others private (default)",
-                        "public"     => "All public — everyone can see all your sessions",
+                        "public"     => "All public — others can see all your sessions",
                         _            => v
                     }));
+
+            await Console.Out.WriteLineAsync($"  Default visibility: {defaultVisibility}");
         }
 
         await Console.Out.WriteLineAsync();
@@ -176,6 +180,9 @@ public static class SetupCommand {
             // wrapper; the PATH probe covers fresh installs that haven't run
             // yet (no ~/.copilot until first launch).
             Copilot: CopilotPaths.IsInstalled() || AgentDetector.IsInstalled("copilot"),
+            // Dir presence covers IDE-launched Gemini; the PATH probe covers a
+            // fresh install that hasn't created ~/.gemini yet.
+            Gemini:  GeminiPaths.IsInstalled()  || AgentDetector.IsInstalled("gemini"),
             // Same dual signal for Kiro: the ~/.kiro tree or the conversation DB
             // covers IDE-launched users; the PATH probe (kiro / kiro-cli) covers
             // fresh CLI installs.
@@ -192,6 +199,7 @@ public static class SetupCommand {
             SkipCodex:   skipCodexFlag,
             SkipCursor:  skipCursorFlag,
             SkipCopilot: skipCopilotFlag,
+            SkipGemini:  skipGeminiFlag,
             SkipKiro:    skipKiroFlag,
             NoPrompt:    noPrompt);
 
@@ -202,6 +210,7 @@ public static class SetupCommand {
             CodexHooksPath:       CodexPaths.UserHooksJson,
             CursorHooksPath:      CursorPaths.UserHooksJson(),
             CopilotHooksPath:     CopilotPaths.KcapHooksJson(),
+            GeminiSettingsPath:   GeminiPaths.SettingsJson(),
             AgentsSkillsDir:      AgentsPaths.UserSkillsDir,
             LegacyCodexSkillsDir: Path.Combine(CodexPaths.Home, "skills"),
             KiroHooksPath:        KiroPaths.KcapAgentJson());
@@ -211,6 +220,7 @@ public static class SetupCommand {
             InstallCodexHooks:      PluginCommand.InstallCodexHooks,
             InstallCursorHooks:     PluginCommand.InstallCursorHooks,
             InstallCopilotHooks:    PluginCommand.InstallCopilotHooks,
+            InstallGeminiHooks:     PluginCommand.InstallGeminiHooks,
             CapacitorOnPath:        () => AgentDetector.IsInstalled("kcap"),
             InstallAgentSkills:     AgentsSkillsInstaller.Install,
             CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny,
@@ -221,7 +231,7 @@ public static class SetupCommand {
 
         void WriteLine(string line) => AnsiConsole.MarkupLine(line);
 
-        var _ = await CodingAgentsStep.RunAsync(
+        var installResult = await CodingAgentsStep.RunAsync(
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
 
         // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
@@ -330,6 +340,13 @@ public static class SetupCommand {
         grid.AddRow("[bold]Config[/]", Markup.Escape(AppConfig.GetConfigPath()));
 
         AnsiConsole.Write(grid);
+
+        // AI-836: hooks only load at coding-agent session start. The common case is a user
+        // running `kcap setup` from inside an already-running session, which won't stream
+        // live until it restarts — so tell them, but only when something was actually
+        // installed (no point promising recording we never wired up).
+        var restartTip = LiveRecordingRestartTip(installResult);
+        if (restartTip is not null) AnsiConsole.MarkupLine($"\n{restartTip}");
 
         // Setup itself is user-scope and works fine outside a repo, but sessions recorded
         // from non-repo directories have no owner/repo/branch/PR enrichment (see
@@ -473,6 +490,23 @@ public static class SetupCommand {
         } catch {
             // Swallow — see method-doc.
         }
+    }
+
+    /// <summary>
+    /// AI-836 — the end-of-setup reminder that live recording only starts on a
+    /// <em>new</em> coding-agent session. Claude Code (and the other agents) load hooks
+    /// at session start, so a session that was already running when setup installed the
+    /// hooks keeps running without them and never streams live. Returns the Spectre-markup
+    /// note when at least one agent's hooks were installed, or <c>null</c> when nothing was
+    /// wired up (so we don't promise recording that can't happen).
+    /// </summary>
+    internal static string? LiveRecordingRestartTip(CodingAgentsStep.Result result) {
+        if (!result.AnyHooksInstalled) return null;
+
+        return
+            "[yellow]![/] Live recording begins on a [bold]new[/] coding-agent session — hooks only load at session start.\n"
+          + "  Restart your agent (or run [cyan]claude --continue[/]) to begin streaming; a session that was already\n"
+          + "  running when you ran setup isn't being recorded yet.";
     }
 
     static string? GetArg(string[] args, string name) {

@@ -197,7 +197,7 @@ public class CodingAgentsStepTests {
         );
 
         await Assert.That(result.CodexSkillsInstalled).IsTrue();
-        await Assert.That(calls.AgentSkillsArgs).IsEqualTo(("/fake/plugin/skills", "/fake/.agents/skills"));
+        await Assert.That(calls.AgentSkillsArgs).IsEqualTo((Path.Combine("/fake/plugin", "skills"), "/fake/.agents/skills"));
         await Assert.That(sink.Lines).Contains(l => l.Contains("Agent skills installed"));
     }
 
@@ -653,6 +653,7 @@ public class CodingAgentsStepTests {
         CodexHooksPath:       "/fake/.codex/hooks.json",
         CursorHooksPath:      "/fake/.cursor/hooks.json",
         CopilotHooksPath:     "/fake/.copilot/hooks/kcap.json",
+        GeminiSettingsPath:   "/fake/.gemini/settings.json",
         AgentsSkillsDir:      "/fake/.agents/skills",
         LegacyCodexSkillsDir: "/fake/.codex/skills",
         KiroHooksPath:        "/fake/.kiro/agents/kcap.json"
@@ -679,6 +680,10 @@ public class CodingAgentsStepTests {
         public bool    CopilotHooksCalled  { get; private set; }
         public string? CopilotHooksArg     { get; private set; }
         public bool    CopilotHooksReturns { get; set; } = true;
+
+        public bool    GeminiHooksCalled  { get; private set; }
+        public string? GeminiHooksArg     { get; private set; }
+        public bool    GeminiHooksReturns { get; set; } = true;
 
         public bool    KiroHooksCalled  { get; private set; }
         public string? KiroHooksArg     { get; private set; }
@@ -719,6 +724,12 @@ public class CodingAgentsStepTests {
                 CopilotHooksArg    = h;
 
                 return CopilotHooksReturns;
+            },
+            InstallGeminiHooks: h => {
+                GeminiHooksCalled = true;
+                GeminiHooksArg    = h;
+
+                return GeminiHooksReturns;
             },
             CapacitorOnPath: () => {
                 CapacitorOnPathCalled = true;

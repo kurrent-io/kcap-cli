@@ -88,4 +88,46 @@ public class ProcessHelpersTests {
 
         await Assert.That(pid).IsNotEqualTo(Environment.ProcessId);
     }
+
+    [Test]
+    public async Task GetCodingAgentPid_with_vendor_returns_a_live_non_self_process() {
+        // With no claude/codex ancestor in the test host, the vendor-aware overload
+        // must fall back to the legacy heuristic and still yield a live, non-self PID.
+        var pid = ProcessHelpers.GetCodingAgentPid("claude");
+
+        await Assert.That(pid).IsNotNull();
+        await Assert.That(ProcessHelpers.IsProcessAlive(pid!.Value)).IsTrue();
+        await Assert.That(pid).IsNotEqualTo(Environment.ProcessId);
+    }
+
+    [Test]
+    public async Task GetProcessInfo_returns_ppid_and_name_for_current_process() {
+        // Backs the ancestry walk: it must report a process's real parent PID and a
+        // non-empty executable name so the walk can match the coding agent by name.
+        // Runs on every platform now that Windows has a native implementation (AI-822):
+        // the Windows branch previously returned null, so the parent-PID watchdog had no
+        // way to resolve the durable coding-agent process and silently never armed.
+        var info = ProcessHelpers.GetProcessInfo(Environment.ProcessId);
+
+        await Assert.That(info).IsNotNull();
+        await Assert.That(info!.Value.ppid).IsEqualTo(ProcessHelpers.GetParentPid()!.Value);
+        await Assert.That(info.Value.comm).IsNotNull();
+        await Assert.That(info.Value.comm.Length).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task GetProcessInfo_reports_parent_chain_reaching_a_live_ancestor() {
+        // Walking ppid from this process must reach our real parent and report it alive.
+        if (OperatingSystem.IsWindows()) {
+            return;
+        }
+
+        var self = ProcessHelpers.GetProcessInfo(Environment.ProcessId);
+        await Assert.That(self).IsNotNull();
+
+        var parent = ProcessHelpers.GetProcessInfo(self!.Value.ppid);
+
+        await Assert.That(parent).IsNotNull();
+        await Assert.That(ProcessHelpers.IsProcessAlive(self.Value.ppid)).IsTrue();
+    }
 }

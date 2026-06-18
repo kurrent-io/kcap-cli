@@ -25,8 +25,9 @@ public static partial class DaemonRunner {
             ?.InformationalVersion ?? "unknown";
 
     public static async Task<int> RunAsync(string[] args) {
-        string? logFile = null;
-        var     config  = new DaemonConfig();
+        string?    logFile     = null;
+        LogLevel?  logLevelArg = null;
+        var        config      = new DaemonConfig();
 
         // Resolve server URL + active profile. The CLI does this in its own
         // Program.cs, but the daemon is a separate process so its statics start
@@ -41,6 +42,7 @@ public static partial class DaemonRunner {
         for (var i = 0; i < args.Length - 1; i++) {
             switch (args[i]) {
                 case "--log-file": logFile = args[++i]; break;
+                case "--log-level": logLevelArg = ParseLogLevel(args[++i]); break;
                 case "--max-agents" when int.TryParse(args[i + 1], out var n) && n >= 1:
                     config.MaxConcurrentAgents = n;
                     i++;
@@ -57,11 +59,20 @@ public static partial class DaemonRunner {
         var hostArgs = Array.Empty<string>();
         var builder  = Host.CreateApplicationBuilder(hostArgs);
 
-        // Configure logging: file when detached, console when foreground
+        // Configure logging: file when detached, console when foreground.
+        // Minimum level defaults to Information; raise verbosity for transport
+        // diagnostics (e.g. per-tick DaemonPing RTT, which logs at Debug) via
+        // --log-level or KCAP_DAEMON_LOG_LEVEL=debug. The --log-level arg wins
+        // over the env var when both are set.
+        var minLevel = logLevelArg
+                    ?? ParseLogLevel(Environment.GetEnvironmentVariable("KCAP_DAEMON_LOG_LEVEL"))
+                    ?? LogLevel.Information;
+
         builder.Logging.ClearProviders();
+        builder.Logging.SetMinimumLevel(minLevel);
 
         if (logFile is not null) {
-            builder.Logging.AddProvider(new RollingFileLoggerProvider(logFile));
+            builder.Logging.AddProvider(new RollingFileLoggerProvider(logFile, minLevel: minLevel));
         } else {
             builder.Logging.AddSimpleConsole(opts => {
                     opts.TimestampFormat = "yyyy-MM-dd HH:mm:ss.fff ";
@@ -172,6 +183,11 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<EvalContextCache>();
         builder.Services.AddSingleton<EvalRunner>();
 
+        // Local control socket: lets `kcap run-agent`/`attach`/`ls` drive daemon-hosted
+        // agents from the user's own terminal (AI local-attach Phase 1).
+        builder.Services.AddSingleton<LocalControlServer>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<LocalControlServer>());
+
         var host   = builder.Build();
         var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("kcap.Daemon");
 
@@ -275,6 +291,23 @@ public static partial class DaemonRunner {
         // this apart from a normal Ctrl+C exit.
         return nameInUse ? 3 : 0;
     }
+
+    /// <summary>
+    /// Parses a daemon log-level string (case-insensitive, e.g. "debug",
+    /// "trace", "warning") to a <see cref="LogLevel"/>. Returns null for a
+    /// null/blank/unrecognised value so callers can fall through to the next
+    /// source or the Information default rather than silently logging nothing.
+    /// </summary>
+    internal static LogLevel? ParseLogLevel(string? value) => value?.Trim().ToLowerInvariant() switch {
+        "trace" or "trce"              => LogLevel.Trace,
+        "debug" or "dbug"              => LogLevel.Debug,
+        "information" or "info"        => LogLevel.Information,
+        "warning" or "warn"            => LogLevel.Warning,
+        "error" or "fail"              => LogLevel.Error,
+        "critical" or "crit"           => LogLevel.Critical,
+        "none"                         => LogLevel.None,
+        _                              => null
+    };
 
     [LoggerMessage(Level = LogLevel.Information, Message = "kcap daemon '{Name}' starting, connecting to {ServerUrl}")]
     static partial void LogDaemonStarting(ILogger logger, string name, string serverUrl);

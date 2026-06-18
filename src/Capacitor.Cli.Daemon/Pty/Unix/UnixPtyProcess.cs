@@ -58,6 +58,13 @@ public sealed class UnixPtyProcess : IPtyProcess {
                 UnixPtyInterop.unsetenv("CLAUDECODE");
                 UnixPtyInterop.unsetenv("CLAUDE_CODE_ENTRYPOINT");
                 UnixPtyInterop.unsetenv("ANTHROPIC_API_KEY");
+                // Clear any hosted-agent identity/routing the daemon may have inherited (e.g.
+                // it was started from inside a kcap-tracked session) so the spawned agent gets
+                // ONLY what extraEnv sets: hosted launches re-add these below; private local
+                // launches deliberately leave them unset (no mis-tag, native permissions).
+                UnixPtyInterop.unsetenv("KCAP_AGENT_ID");
+                UnixPtyInterop.unsetenv("KCAP_RENDERED_AGENT");
+                UnixPtyInterop.unsetenv("KCAP_DAEMON_URL");
 
                 if (extraEnvKeys is not null) {
                     for (var i = 0; i < extraEnvKeys.Length; i++) {

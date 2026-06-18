@@ -104,6 +104,49 @@ public class PluginCommandClaudeTests {
     }
 
     [Test]
+    public async Task Install_claude_fresh_prints_restart_reminder() {
+        using var fakeHome  = new TempDir();
+        using var pluginDir = new TempDir();
+        var       stdout    = new StringWriter();
+
+        var env  = TestEnv(fakeHome.Path, pluginPath: pluginDir.Path, stdout: stdout);
+        var exit = await PluginCommand.HandleAsync(["plugin", "install"], env);
+
+        await Assert.That(exit).IsEqualTo(0);
+
+        var output = stdout.ToString();
+        await Assert.That(output).Contains("Plugin installed");
+        await Assert.That(output).Contains("new Claude Code session");
+        await Assert.That(output).Contains("claude --continue");
+    }
+
+    [Test]
+    public async Task Install_claude_refresh_omits_restart_reminder() {
+        using var fakeHome  = new TempDir();
+        using var pluginDir = new TempDir();
+        var       stdout    = new StringWriter();
+
+        // Seed a pre-marker install so --if-installed proceeds to refresh.
+        var claudeDir = Path.Combine(fakeHome.Path, ".claude");
+        Directory.CreateDirectory(claudeDir);
+        await File.WriteAllTextAsync(Path.Combine(claudeDir, "settings.json"), """
+            {
+              "extraKnownMarketplaces": { "kcap": { "source": { "source": "directory", "path": "/old/path" } } },
+              "enabledPlugins": { "kcap@kcap": true }
+            }
+            """);
+
+        var env  = TestEnv(fakeHome.Path, pluginPath: pluginDir.Path, stdout: stdout);
+        var exit = await PluginCommand.HandleAsync(["plugin", "install", "--if-installed"], env);
+
+        await Assert.That(exit).IsEqualTo(0);
+
+        var output = stdout.ToString();
+        await Assert.That(output).Contains("Plugin refreshed");
+        await Assert.That(output).DoesNotContain("claude --continue");
+    }
+
+    [Test]
     public async Task Remove_claude_deletes_marker() {
         using var fakeHome = new TempDir();
 

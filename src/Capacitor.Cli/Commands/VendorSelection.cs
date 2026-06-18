@@ -12,7 +12,7 @@ public static class VendorSelection {
         public bool HasError => Error is not null;
     }
 
-    static readonly string[] KnownVendorFlags = ["--claude", "--codex", "--cursor", "--copilot", "--kiro"];
+    static readonly string[] KnownVendorFlags = ["--claude", "--codex", "--cursor", "--copilot", "--gemini", "--kiro"];
 
     public static Result Parse(string[] args) {
         var vendors = new HashSet<string>(StringComparer.Ordinal);
@@ -23,6 +23,7 @@ public static class VendorSelection {
                 case "--codex":   vendors.Add("codex");   break;
                 case "--cursor":  vendors.Add("cursor");  break;
                 case "--copilot": vendors.Add("copilot"); break;
+                case "--gemini":  vendors.Add("gemini");  break;
                 case "--kiro":    vendors.Add("kiro");    break;
             }
         }
@@ -35,7 +36,7 @@ public static class VendorSelection {
             if (!a.StartsWith("--")) continue;
             if (Array.IndexOf(KnownVendorFlags, a) >= 0) continue;
 
-            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-") || a.StartsWith("--kiro-")) {
+            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-") || a.StartsWith("--gemini-") || a.StartsWith("--kiro-")) {
                 return new(vendors, $"Unknown source option: {a}.");
             }
         }
@@ -44,7 +45,7 @@ public static class VendorSelection {
         foreach (var a in args) {
             if (!a.StartsWith("--")) continue;
             if (Array.IndexOf(KnownVendorFlags, a) >= 0) continue;
-            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-") || a.StartsWith("--kiro-")) continue;
+            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-") || a.StartsWith("--gemini-") || a.StartsWith("--kiro-")) continue;
 
             string? hint = null;
             var bestDist = int.MaxValue;

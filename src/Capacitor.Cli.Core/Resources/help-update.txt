@@ -1,3 +1,14 @@
-kcap update — Check for and install updates
+kcap update — Upgrade the CLI and refresh agent plugins
 
-Usage: kcap update
+Usage: kcap update [--check]
+
+For npm-global installs, upgrades to the latest published version
+(npm install -g @kurrent/kcap@latest) and then refreshes your opted-in
+agent plugins (skills, Codex/Cursor/Copilot hooks, Claude plugin). This
+works even when your package manager blocks install scripts. Exits early
+if already up to date. For non-npm installs (e.g. Homebrew), prints the
+command to run instead.
+
+Options:
+  --check   Print a machine-readable {current, latest, newer} JSON line
+            and exit without upgrading.

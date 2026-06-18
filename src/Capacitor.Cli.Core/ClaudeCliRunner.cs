@@ -193,7 +193,7 @@ static class ClaudeCliRunner {
             psi.ArgumentList.Add(arg);
         }
 
-        using var process = Process.Start(psi);
+        using var process = CliProcess.TryStart(psi, log);
 
         if (process is null) {
             log("Failed to start claude process");

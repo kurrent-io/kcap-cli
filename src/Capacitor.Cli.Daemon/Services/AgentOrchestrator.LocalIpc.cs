@@ -1,0 +1,196 @@
+using Capacitor.Cli.Core.LocalIpc;
+
+namespace Capacitor.Cli.Daemon.Services;
+
+/// Local-socket entry points invoked by <see cref="LocalControlServer"/>.
+internal partial class AgentOrchestrator {
+    /// <summary>Reply to a <c>kcap ls</c> request with a tab-separated agent table.</summary>
+    public Task HandleLocalListAsync(Stream stream, CancellationToken ct) {
+        var lines = _agents.Values.Select(a => $"{a.Id}\t{a.Status}\t{a.RepoPath}");
+
+        return FrameCodec.WriteAsync(stream, new LocalFrame(FrameType.AgentList) { Text = string.Join('\n', lines) }, ct);
+    }
+
+    /// <summary>
+    /// Spawn a new agent from a local <c>run-agent</c> request, then attach the requesting
+    /// client. The agent runs <b>PrivateLocal</b> (no per-agent server calls) in either an
+    /// owned worktree (<c>--worktree</c>) or the user's borrowed cwd (default in-place).
+    /// </summary>
+    public async Task HandleLocalSpawnAsync(LocalFrame spawn, Stream stream, CancellationToken ct) {
+        var (vendor, work, cwd, args, cols, rows) = FrameCodec.Spawn(spawn);
+
+        if (!_launchers.TryGetValue(vendor, out var launcher)) {
+            await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Unknown vendor: {vendor}"), ct);
+            return;
+        }
+
+        if (!Directory.Exists(cwd)) {
+            await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Directory does not exist: {cwd}"), ct);
+            return;
+        }
+
+        var           agentId       = Guid.NewGuid().ToString("N");
+        AgentInstance agent;
+        WorktreeInfo? ownedWorktree = null; // tracked so a failure after creation cleans it up
+
+        try {
+            var worktree = work == WorkLocation.OwnedWorktree
+                ? ownedWorktree = await _worktreeManager.CreateAsync(cwd)
+                : WorktreeInfo.Borrowed(cwd);
+
+            var ctx = new LauncherContext(
+                agentId, cwd, worktree, Prompt: null, Model: "", Effort: null,
+                Tools: null, IsReview: false, Review: null, ReviewLaunch: null
+            ) {
+                Work = work
+            };
+
+            launcher.Prepare(ctx);
+            var built = launcher.BuildPassthrough(ctx, args);
+
+            // Phase 1 records as a plain local session. Keep KCAP_URL (records, under the
+            // user's default_visibility) and re-add ANTHROPIC_API_KEY so normal local auth
+            // survives UnixPtyProcess.Spawn's headless scrub (it applies extraEnv after
+            // unsetenv). Omit the hosted-agent vars: KCAP_AGENT_ID (the agent isn't a
+            // registered hosted agent yet, so no agent_host_id tag on events), and
+            // KCAP_RENDERED_AGENT / KCAP_DAEMON_URL (not headless → permissions prompt
+            // natively in the terminal). Phase 2 adds them when it registers like a UI agent.
+            var env = new Dictionary<string, string>();
+            if (!string.IsNullOrEmpty(_config.ServerUrl)) env["KCAP_URL"] = _config.ServerUrl;
+            var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+            if (!string.IsNullOrEmpty(apiKey)) env["ANTHROPIC_API_KEY"] = apiKey;
+
+            var proc = _ptyFactory.Spawn(launcher.CliPath, built.Args, worktree.Path, env, cols, rows);
+
+            agent = new AgentInstance(agentId, null, "", null, cwd, vendor, proc, worktree, new CancellationTokenSource()) {
+                IsPrivate     = true,
+                Work          = work,
+                McpConfigPath = built.McpConfigPath
+            };
+            _agents[agentId] = agent;
+        } catch (Exception ex) {
+            // Don't leak a daemon-created worktree if Prepare / passthrough-arg building /
+            // spawn fails after the worktree was created (mirrors the server launch path).
+            if (ownedWorktree is { } leaked) {
+                try { await WorktreeManager.RemoveAsync(leaked); } catch { /* best-effort */ }
+            }
+
+            await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Launch failed: {ex.Message}"), ct);
+            return;
+        }
+
+        _ = ReadAgentOutputAsync(agent);
+        await AttachClientLoopAsync(agent, stream, ct);
+    }
+
+    /// <summary>Attach an existing agent to a local client (used by <c>kcap attach</c>).</summary>
+    public Task HandleLocalAttachAsync(string agentId, Stream stream, CancellationToken ct) {
+        if (!_agents.TryGetValue(agentId, out var agent))
+            return FrameCodec.WriteAsync(stream, LocalFrame.Error($"no such agent {agentId}"), ct);
+
+        return AttachClientLoopAsync(agent, stream, ct);
+    }
+
+    /// <summary>
+    /// Registers a local sink, replays the agent's buffered output once, then pumps the
+    /// client's input (stdin/resize) until it detaches or disconnects. The agent keeps
+    /// running either way — the sink is just removed.
+    /// </summary>
+    internal async Task AttachClientLoopAsync(AgentInstance agent, Stream stream, CancellationToken ct) {
+        // One NetworkStream, two writers (the sink's Stdout frames + Attached/Exited here):
+        // serialise all writes through this lock. Reads (the input loop) are independent.
+        var writeLock = new SemaphoreSlim(1, 1);
+
+        async Task Send(LocalFrame f) {
+            await writeLock.WaitAsync(ct);
+            try { await FrameCodec.WriteAsync(stream, f, ct); } finally { writeLock.Release(); }
+        }
+
+        var sink = new LocalSocketSink(capacity: 4096, (chunk, _) => Send(LocalFrame.Stdout(chunk)));
+
+        // Snapshot the replay buffer AND register the sink atomically under SinksLock (paired
+        // with the read loop's locked append+enqueue) so no chunk is both replayed and sent
+        // live, and none is dropped between the two.
+        byte[] snapshot;
+        lock (agent.SinksLock) {
+            snapshot = agent.OutputBuffer.Snapshot();
+            agent.LocalSinks.Add(sink);
+        }
+
+        try {
+            // Bounded replay BEFORE any live chunk so the client paints a coherent screen.
+            await Send(FrameCodec.Attached(agent.Id, snapshot));
+            var pump = sink.RunAsync(ct);
+
+            // Break this read loop when the agent exits on its own (CleanupAgentAsync trips
+            // ExitedCts) — not only on client input — so a self-exiting agent (e.g. /exit)
+            // doesn't leave us blocked here and never flush the final output or send Exited.
+            using var loopCts = CancellationTokenSource.CreateLinkedTokenSource(ct, agent.ExitedCts.Token);
+
+            // ...and break it when the sink force-detaches (overflow / send failure). The sink
+            // stops accepting output and completes its channel, so its pump finishes with
+            // Detached set; without this the client keeps typing into a dead output path
+            // (blind). Cancelling ends the loop so the client disconnects and reattaches for a
+            // fresh replay — the intended force-detach behaviour.
+            var detachMonitor = pump.ContinueWith(
+                _ => { if (sink.Detached) { try { loopCts.Cancel(); } catch (ObjectDisposedException) { } } },
+                TaskScheduler.Default
+            );
+
+            try {
+                while (!loopCts.Token.IsCancellationRequested) {
+                    var f = await FrameCodec.ReadAsync(stream, loopCts.Token);
+                    if (f is null || f.Type == FrameType.Detach) break;
+
+                    switch (f.Type) {
+                        case FrameType.Stdin:  await agent.Process.WriteAsync(f.Bytes); break;
+                        case FrameType.Resize: ApplyResizeClamp(agent, sink, f.Cols, f.Rows); break;
+                    }
+                }
+            } catch (Exception ex) when (ex is EndOfStreamException or IOException or OperationCanceledException) {
+                /* client gone or session ended */
+            } finally {
+                sink.Complete();
+                await pump.ConfigureAwait(false);
+                await detachMonitor.ConfigureAwait(false); // ensure the cancel ran before loopCts disposes
+            }
+
+            if (sink.Detached && !agent.Process.HasExited) {
+                // We dropped this client because its output overflowed — tell it so the user
+                // reattaches (a fresh `kcap attach` replays the buffer from a clean frame).
+                try { await Send(LocalFrame.Error("terminal output overflowed — detached; reattach with `kcap attach`")); } catch { /* client already gone */ }
+            }
+
+            if (agent.Process.HasExited) {
+                try { await Send(LocalFrame.Exited(agent.Process.ExitCode ?? 0)); } catch { /* client already gone */ }
+            }
+        } finally {
+            lock (agent.SinksLock) {
+                agent.LocalSinks.Remove(sink);
+                agent.ClientDims.Remove(sink);
+                ClampPtyLocked(agent); // a departing (possibly smaller) client must not leave the rest clamped
+            }
+        }
+    }
+
+    void ApplyResizeClamp(AgentInstance agent, ITerminalSink sink, ushort cols, ushort rows) {
+        lock (agent.SinksLock) {
+            agent.ClientDims[sink] = new AgentInstance.Dim(cols, rows);
+            ClampPtyLocked(agent);
+        }
+    }
+
+    /// <summary>
+    /// Min-clamp the one PTY to the smallest cols × rows across the attached local clients
+    /// (tmux semantics), so no client's redraw is corrupted. Recomputed on attach/detach/
+    /// resize. Caller holds <see cref="AgentInstance.SinksLock"/>; no-op when no client has a
+    /// reported size.
+    /// </summary>
+    void ClampPtyLocked(AgentInstance agent) {
+        if (agent.ClientDims.Count == 0) return;
+
+        var c = agent.ClientDims.Values.Min(d => d.Cols);
+        var r = agent.ClientDims.Values.Min(d => d.Rows);
+        if (c > 0 && r > 0) agent.Process.Resize(c, r);
+    }
+}

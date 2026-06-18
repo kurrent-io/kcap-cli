@@ -9,7 +9,7 @@ Description:
   dispatcher; the event is taken from the payload.
 
   The command is registered via 'kcap setup' or
-  'kcap plugin install [--claude|--codex|--cursor|--copilot|--kiro]', which
+  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--kiro]', which
   writes the appropriate hook configuration for the detected vendor.
 
 Options:
@@ -19,6 +19,8 @@ Options:
   --copilot   Dispatch the event as a GitHub Copilot CLI hook. Copilot
               payloads carry no event-name field, so the installer embeds
               it in the registered command (--event <name>).
+  --gemini    Dispatch the event as a Gemini CLI hook. Self-routes on the
+              payload's hook_event_name (SessionStart/SessionEnd/Notification).
   --kiro      Dispatch the event as an AWS Kiro CLI hook. kcap subscribes
               only to agentSpawn (session start; fires every prompt, deduped
               server-side); session-end is synthesized by the watcher on

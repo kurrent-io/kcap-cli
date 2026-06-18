@@ -28,7 +28,7 @@ The CLI is compiled with NativeAOT — fast startup, no runtime dependency.
 > **npm 11+ blocks install scripts by default.** You'll see a warning like
 > `1 package has install scripts not yet covered by allowScripts`. The `kcap`
 > binary works without the script; it only refreshes already-installed agent
-> plugins (Claude / Codex / Cursor / Copilot / Kiro) on upgrade. The warning suggests
+> plugins (Claude / Codex / Cursor / Copilot / Gemini / Kiro) on upgrade. The warning suggests
 > `npm approve-scripts @kurrent/kcap`, but that command rejects global installs
 > (`EGLOBAL`) — a known npm UX bug. Instead, opt in one of two ways:
 >
@@ -44,7 +44,10 @@ The CLI is compiled with NativeAOT — fast startup, no runtime dependency.
 > allow-scripts[]=@kurrent/kcap
 > ```
 >
-> Without either, re-run `kcap plugin install [--codex|--cursor|--copilot|--kiro|--skills] --if-installed` manually after each upgrade.
+> Without either, upgrade with **`kcap update`** instead of `npm install -g` — it
+> runs the global npm upgrade and then refreshes your agent plugins itself, so it
+> works regardless of the install-script gate. (You can also re-run `kcap plugin
+> install [--codex|--cursor|--copilot|--gemini|--kiro|--skills] --if-installed` manually.)
 
 ### 2. Run setup
 
@@ -57,10 +60,12 @@ The setup wizard walks you through:
 1. **Server URL** — enter the URL your admin provided
 2. **Login** — authenticates via GitHub Device Flow (if the server requires auth)
 3. **Default visibility** — choose how your sessions are visible to others
-4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH`, Cursor by user-dir presence (`~/.cursor/`), GitHub Copilot CLI by `~/.copilot/` or `copilot` on `PATH`, and AWS Kiro CLI by `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`, then offers to install hooks/skills for each (user-wide)
+4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH`, Cursor by user-dir presence (`~/.cursor/`), GitHub Copilot CLI by `~/.copilot/` or `copilot` on `PATH`, Google Gemini CLI by `~/.gemini/` or `gemini` on `PATH`, and AWS Kiro CLI by `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`, then offers to install hooks/skills for each (user-wide)
 5. **Daemon** — configure the daemon name for remote agent execution
 
 When setup finishes, `kcap` sends a best-effort POST to the server's `/api/users/me/cli-setup` endpoint so the dashboard can mark your CLI as registered and surface the import-past-sessions hint. The call is capped at 5 seconds and failures are silent — they do not affect setup completion.
+
+> **Restart your coding agent for live recording to begin.** Hooks only load at session start, so a session that was already running when you ran setup keeps running without them and won't stream live. Start a new session (or `claude --continue`) to pick the hooks up — setup prints this reminder when it installs any hooks. A manual `kcap import` of the in-progress session only yields a frozen snapshot.
 
 Verify with `kcap whoami` and `kcap status`.
 
@@ -70,10 +75,10 @@ For non-interactive environments:
 kcap setup --server-url https://my-tenant.kcap.ai --default-visibility org_public --no-prompt
 ```
 
-In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, `--skip-cursor-hooks`, `--skip-copilot-hooks`, and/or `--skip-kiro-hooks`.
+In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, `--skip-cursor-hooks`, `--skip-copilot-hooks`, `--skip-gemini-hooks`, and/or `--skip-kiro-hooks`.
 
 > **Need hooks for an agent installed after setup, or scoped to a single repo?**
-> Run `kcap plugin install [--codex|--cursor|--copilot|--kiro]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, the next `codex` launch prompts to trust the new hooks — accept once to trust them all (run `/hooks` inside Codex if you'd rather trust each entry individually). After a `--project` install, also run `codex` once in the repo and accept the workspace trust prompt. Re-running after a kcap upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kcap` (npm 11+ blocks install scripts by default; add `allow-scripts[]=@kurrent/kcap` to `~/.npmrc` to opt in once).
+> Run `kcap plugin install [--codex|--cursor|--copilot|--gemini|--kiro]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, the next `codex` launch prompts to trust the new hooks — accept once to trust them all (run `/hooks` inside Codex if you'd rather trust each entry individually). After a `--project` install, also run `codex` once in the repo and accept the workspace trust prompt. Re-running after a kcap upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kcap`, and `kcap update` refreshes them too (npm 11+ blocks install scripts by default — `kcap update` works regardless, or add `allow-scripts[]=@kurrent/kcap` to `~/.npmrc` to opt the postinstall in once).
 
 > **Need at least one agent to capture sessions:** the setup wizard runs to completion without an agent CLI on `PATH` (it'll still configure your profile, auth, and daemon), but kcap only records work once Claude Code or Codex CLI is installed and the hooks are in place.
 
@@ -82,15 +87,16 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 ### 3. Import existing sessions (optional)
 
 ```bash
-kcap import                     # every detected agent (Claude, Codex, Cursor, Copilot, Kiro)
+kcap import                     # every detected agent (Claude, Codex, Cursor, Copilot, Gemini, Kiro)
 kcap import --org               # sessions for the org bound to your active profile
 kcap import --repo owner/repo   # sessions for one specific repo
 kcap import --cursor            # only Cursor
 kcap import --copilot           # only Copilot
+kcap import --gemini            # only Gemini
 kcap import --kiro              # only Kiro
 ```
 
-This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), and `~/.kiro/sessions/cli/` (Kiro) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, or `--kiro` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
+This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), `~/.gemini/tmp/<project>/chats/` (Gemini), and `~/.kiro/sessions/cli/` (Kiro) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, `--gemini`, or `--kiro` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
 
 You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org` uses the active profile name as the GitHub org login — it works out of the box when the profile was created by `kcap setup` (which names it after the picked tenant), and errors otherwise. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
@@ -114,7 +120,7 @@ Once set up, Capacitor runs silently in the background. Every Claude Code (and C
 - **Tool usage** — every tool call with timing and results
 - **Token consumption** — input/output/cache token counts per interaction
 - **Repository context** — git repo, branch, and PR linkage
-- **In-agent upgrade prompts** — in Claude Code sessions, when the server is running a newer kcap release than the local CLI, additional context is injected into the session so the agent can offer the user an upgrade via `npm install -g @kurrent/kcap`. The stderr `kcap` update hint continues to fire for direct command-line use.
+- **In-agent upgrade prompts** — in Claude Code sessions, when the server is running a newer kcap release than the local CLI, additional context is injected into the session so the agent can offer the user an upgrade via `kcap update`. The stderr `kcap` update hint continues to fire for direct command-line use.
 - **SessionStart context injection** — at every session start the server injects top evaluation-derived fact clusters for the current repo into Claude's `additionalContext`. The injected block is split into two sections: `## Known patterns` (repo/project facts relevant to any reader) and `## Guidance from past sessions` (agent-targeted action items derived from prior eval suggestions with `audience: "agent"`). Opt out by setting `disable_session_guidelines: true` in `~/.config/kcap/config.json` or via `kcap config set disable_session_guidelines true`.
 
 ## CLI commands
@@ -126,7 +132,7 @@ kcap setup                                   # interactive wizard
 kcap setup --server-url <url> --no-prompt    # CI / scripted
 ```
 
-The setup wizard detects every supported coding agent and offers to install hooks for each, then configures the daemon. Claude Code and Codex CLI are detected via `PATH`; Cursor is detected by user-dir presence (`~/.cursor/`), so IDE users without the `cursor` shell command are covered; GitHub Copilot CLI is detected via `~/.copilot/` or `copilot` on `PATH`; AWS Kiro CLI is detected via `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`. Re-run any time to update the configuration.
+The setup wizard detects every supported coding agent and offers to install hooks for each, then configures the daemon. Claude Code and Codex CLI are detected via `PATH`; Cursor is detected by user-dir presence (`~/.cursor/`), so IDE users without the `cursor` shell command are covered; GitHub Copilot CLI is detected via `~/.copilot/` or `copilot` on `PATH`; Google Gemini CLI via `~/.gemini/` or `gemini` on `PATH`; AWS Kiro CLI is detected via `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`. Re-run any time to update the configuration.
 
 In `--no-prompt` mode, hooks install for every detected agent by default. Opt out per agent:
 
@@ -259,7 +265,7 @@ The server is repo-aware — it resolves the current working directory to a repo
 
 ### Loading historical sessions
 
-Backfill older sessions from every detected coding agent in a single run. Each agent ships per-session `.jsonl` transcripts (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/<sanitized-workspace>/agent-transcripts/`, `~/.copilot/session-state/`, `~/.kiro/sessions/cli/`). They're discovered automatically and the command requires an explicit scope so personal/private repos aren't uploaded by accident:
+Backfill older sessions from every detected coding agent in a single run. All six agents ship per-session `.jsonl` transcripts (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/<sanitized-workspace>/agent-transcripts/`, `~/.copilot/session-state/`, `~/.gemini/tmp/<project>/chats/`, `~/.kiro/sessions/cli/`). They're discovered automatically and the command requires an explicit scope so personal/private repos aren't uploaded by accident:
 
 ```bash
 kcap import --all                            # every discovered session from every agent
@@ -280,6 +286,7 @@ kcap import --codex --org                    # only Codex rollouts
 kcap import --cursor --all                   # only Cursor — every discovered transcript
 kcap import --cursor --cwd /path/to/proj     # only Cursor sessions whose workspace folder matches
 kcap import --copilot --all                  # only Copilot — every discovered transcript
+kcap import --gemini --all                   # only Gemini — every discovered transcript
 kcap import --kiro --all                     # only Kiro — every session log under ~/.kiro/sessions/cli
 ```
 
@@ -369,7 +376,7 @@ All five auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionI
 
 The daemon starts Codex with `--sandbox workspace-write` and `--ask-for-approval on-request`. This lets Codex edit files in the agent's worktree but escalates sensitive operations (e.g. network calls, shell commands outside the worktree) through the daemon's permission bridge to the dashboard.
 
-> **Upgrading from an earlier version of kcap?** The npm postinstall hook refreshes all user-scope kcap installations on every `npm install -g @kurrent/kcap`, so you always pick up the current CLI version's skills (`~/.agents/skills/kcap-*`), Codex hook commands (`~/.codex/hooks.json`), and Claude plugin registration (`~/.claude/settings.json`). Each refresh is gated on a marker file written by your previous setup — fresh systems that never opted in are left untouched. Project-scope installs (`--project`) are not auto-refreshed; re-run `kcap plugin install [--codex] --project` after upgrading if you want the latest config for a specific repo.
+> **Upgrading from an earlier version of kcap?** Run `kcap update` (or `npm install -g @kurrent/kcap`) — the npm postinstall hook, and `kcap update` itself, refresh all user-scope kcap installations, so you always pick up the current CLI version's skills (`~/.agents/skills/kcap-*`), Codex hook commands (`~/.codex/hooks.json`), and Claude plugin registration (`~/.claude/settings.json`). Each refresh is gated on a marker file written by your previous setup — fresh systems that never opted in are left untouched. Project-scope installs (`--project`) are not auto-refreshed; re-run `kcap plugin install [--codex] --project` after upgrading if you want the latest config for a specific repo.
 >
 > npm 11+ blocks install scripts by default. Add `allow-scripts[]=@kurrent/kcap` to your `~/.npmrc` (or pass `--allow-scripts=@kurrent/kcap` on the install command line) to opt in to the auto-refresh; otherwise re-run the relevant `kcap plugin install ... --if-installed` commands manually after each upgrade. (`npm approve-scripts` does not work for global installs — that's a known npm UX bug.)
 
@@ -394,6 +401,17 @@ kcap plugin remove --copilot                # deletes ~/.copilot/hooks/kcap.json
 ```
 
 Live sessions stream from `~/.copilot/session-state/<session-id>/events.jsonl` (`$COPILOT_HOME` is honoured); historical sessions import via `kcap import --copilot`, which also forwards Copilot's auto-generated session names as titles. Sessions resumed with `copilot --continue` / `--resume` reattach to the same recorded session.
+
+#### Google Gemini CLI hooks
+
+Gemini CLI is detected via `~/.gemini/` (created on Gemini's first run) or the `gemini` binary on `PATH`. Gemini keeps its hooks in the shared `~/.gemini/settings.json`, so kcap **merges** its entries into the `hooks` block and preserves your other settings and any hand-authored hook entries. Gemini loads hook config at startup: restart any running `gemini` session after installing.
+
+```bash
+kcap plugin install --gemini                # merges kcap hooks into ~/.gemini/settings.json
+kcap plugin remove --gemini                 # removes only kcap's entries
+```
+
+Live sessions stream from the chat-recording JSONL Gemini names in each hook's `transcript_path` (`~/.gemini/tmp/<project>/chats/session-*.jsonl`); historical sessions import via `kcap import --gemini`. Sessions resumed with `gemini --resume` reattach to the same recorded session. (Historical import leaves working-directory / repo enrichment empty — Gemini doesn't record the cwd in a machine-readable header; live capture gets it from the hook payload.)
 
 #### AWS Kiro CLI hooks
 
@@ -434,6 +452,40 @@ You can also override these at runtime with environment variables (take preceden
 KCAP_CLAUDE_PATH=/opt/claude/bin/claude kcap daemon
 KCAP_CODEX_PATH=/opt/codex/bin/codex  kcap daemon
 ```
+
+#### Daemon log verbosity
+
+The daemon logs at `Information` by default. Raise the level for transport diagnostics — for example, per-tick `DaemonPing` round-trip times (logged at `Debug`) are useful for telling whether SignalR reconnects are caused by network/proxy latency. Set it either way:
+
+```bash
+kcap daemon start --log-level debug        # foreground or with -d; forwarded to the daemon
+KCAP_DAEMON_LOG_LEVEL=debug kcap daemon    # env var; read directly, works in any launch mode (service, container)
+```
+
+Accepted values: `trace`, `debug`, `information` (default), `warning`, `error`, `critical`, `none`. The `--log-level` flag wins over the env var when both are set. `Debug` is verbose — it also enables the SignalR client's framework logs — so use it for a diagnostic window rather than steady state.
+
+### Local agents (run-agent / attach / ls)
+
+Start a coding agent from your own terminal that the daemon hosts for you. Because the daemon owns the agent (not your terminal), you can **detach and the agent keeps running**, then **re-attach later** — like `tmux` for your coding agent.
+
+```bash
+kcap run-agent claude                       # start Claude in the current directory, attached
+kcap run-agent claude -- --model opus       # everything after `--` is passed to the agent CLI verbatim
+kcap run-agent codex --worktree -- -m gpt-5 # run in an isolated git worktree instead of in place
+kcap run-agent claude --detached            # start without attaching; prints the agent id
+```
+
+- **`--` boundary:** flags before `--` are kcap's; everything after `--` is forwarded to the `claude`/`codex` CLI unchanged. kcap flags: `--worktree`, `--name <daemon>`, `--detached`.
+- **Work location:** by default the agent runs **in place in your current directory** (it edits your real files). Pass `--worktree` to run in a throwaway git worktree instead.
+- **Detach** without stopping the agent with the prefix key **`Ctrl-Q` then `d`**. The agent keeps running in the daemon.
+- **Permissions** prompt natively in your terminal, exactly like running the agent directly.
+
+```bash
+kcap ls                 # list daemon-hosted agents (id, status, repo)
+kcap attach <agent-id>  # re-attach your terminal to a running agent
+```
+
+`run-agent` auto-starts the daemon if one isn't already running. It needs a configured server (like the rest of kcap) — it is not an offline command. This release is **local-only**: starting an agent locally does not yet expose it to teammates in the web UI (planned for a later release). Unix only for now.
 
 ### Repository paths
 
@@ -491,12 +543,12 @@ kcap config show    # show current configuration
 kcap config set <key> <value>
 ```
 
-**Default session visibility** controls how your sessions appear to other users. Set during `kcap setup` or change at any time:
+**Default session visibility** controls how your sessions appear to other users in the same Kurrent Capacitor account. Set during `kcap setup` or change at any time:
 
 ```bash
 kcap config set default_visibility private      # only you can see your sessions
 kcap config set default_visibility org_public   # org repos visible, others private (default)
-kcap config set default_visibility public       # all sessions visible to everyone
+kcap config set default_visibility public       # all sessions visible to others in your account
 ```
 
 **Repository exclusions** prevent specific repos from sending any data to the server — hooks are silently skipped, no session is recorded:
@@ -564,7 +616,7 @@ kcap uninstall --keep-config    # remove integrations, keep ~/.config/kcap
 
 `--project` additionally cleans up `<repo>/.claude/settings.local.json` and `<repo>/.codex/hooks.json` in the current git working tree (errors if you're not inside one). Cursor only has a user-scope `hooks.json`, so `--project` does not affect it. Project-scope hooks in other repos are not touched — re-run from each repo that has them.
 
-Use `--keep-config` to preserve profiles, tokens, and ignore lists when you plan to reinstall. Per-agent selective cleanup is not exposed here — use `kcap plugin remove [--codex|--cursor|--skills]` for finer-grained removal.
+Use `--keep-config` to preserve profiles, tokens, and ignore lists when you plan to reinstall. Per-agent selective cleanup is not exposed here — use `kcap plugin remove [--codex|--cursor|--copilot|--skills]` for finer-grained removal.
 
 ### Other commands
 
@@ -573,11 +625,16 @@ kcap status         # server health check
 kcap whoami         # show current authenticated user
 kcap login          # authenticate via OAuth (browser flow by default)
 kcap login --device # force device-code flow (use in SSH / headless envs)
-kcap update         # check for CLI updates
+kcap update         # upgrade the CLI and refresh agent plugins (npm-global installs)
 kcap logout         # delete stored tokens
 ```
 
-## Upgrading from v1
+> `kcap update` is the one-step upgrade for npm-global installs: it checks the
+> registry, runs `npm install -g @kurrent/kcap@latest`, then refreshes your
+> opted-in agent plugins — so it picks up new skills/hooks even when your package
+> manager blocks install scripts. It exits early if you're already up to date,
+> and tells you what to run instead for non-npm installs (e.g. Homebrew). Use
+> `kcap update --check` for a machine-readable `{current, latest, newer}` probe.
 
 The v1 config format stored `server_url` as a bare host name without a
 scheme. If `kcap` crashes with `An invalid request URI was provided`

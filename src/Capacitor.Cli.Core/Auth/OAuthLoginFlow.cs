@@ -94,18 +94,32 @@ public static class OAuthLoginFlow {
 
         var copied = Clipboard.TryCopy(device.UserCode);
 
-        await Console.Out.WriteLineAsync();
-        await Console.Out.WriteLineAsync($"  Code: {device.UserCode}{(copied ? "  (copied to clipboard)" : "")}");
-        await Console.Out.WriteLineAsync($"  Open: {device.VerificationUri}");
-        await Console.Out.WriteLineAsync();
+        bool browserOpened;
 
         try {
             Process.Start(new ProcessStartInfo(device.VerificationUri) { UseShellExecute = true });
+            browserOpened = true;
         } catch {
-            /* Browser open is best-effort */
+            // Browser open is best-effort — headless environments (devcontainers, SSH) have none.
+            browserOpened = false;
         }
 
-        Console.Write("Waiting for authorization...");
+        await Console.Out.WriteLineAsync();
+        await Console.Out.WriteLineAsync("To finish signing in to GitHub:");
+        await Console.Out.WriteLineAsync();
+        await Console.Out.WriteLineAsync(
+            browserOpened
+                ? $"  1. Your browser should have opened {device.VerificationUri}"
+                : $"  1. Open {device.VerificationUri} in a browser"
+        );
+
+        if (browserOpened) await Console.Out.WriteLineAsync("     (if it didn't open, go to that URL yourself)");
+
+        await Console.Out.WriteLineAsync($"  2. Enter the code: {device.UserCode}{(copied ? "  (copied to clipboard)" : "")}");
+        await Console.Out.WriteLineAsync("  3. Approve access when GitHub asks.");
+        await Console.Out.WriteLineAsync();
+
+        Console.Write("Waiting for you to authorize...");
 
         while (true) {
             await Task.Delay(TimeSpan.FromSeconds(interval));

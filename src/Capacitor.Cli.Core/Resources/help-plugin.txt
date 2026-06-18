@@ -1,4 +1,4 @@
-kcap plugin — Manage hooks and skills for Claude Code, Codex CLI, Cursor, Copilot CLI, Kiro CLI, and other agents
+kcap plugin — Manage hooks and skills for Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, and other agents
 
 Usage: kcap plugin <subcommand> [options]
 
@@ -17,6 +17,11 @@ Options:
                       ~/.copilot/hooks/kcap.json (honours $COPILOT_HOME). Copilot
                       merges every *.json in that directory, so user-authored
                       hook files are never touched.
+  --gemini            Target Gemini CLI: merge kcap's hooks into the SHARED
+                      ~/.gemini/settings.json (honours $GEMINI_HOME). User-authored
+                      hook entries and every other settings key are preserved; if
+                      the file exists but isn't valid JSON the install fails closed
+                      and leaves it untouched.
   --kiro              Target AWS Kiro CLI: clone your current default Kiro agent
                       (preserving its tools) to ~/.kiro/agents/kcap.json, add
                       kcap's agentSpawn hook, and make it your default so every
@@ -54,6 +59,12 @@ Notes:
   so restart any running copilot session after install. Copilot has no
   project-scope hooks dir, so --project has no effect with --copilot.
 
+  --gemini merges SessionStart/SessionEnd/Notification entries into the shared
+  ~/.gemini/settings.json (like --cursor's shared hooks.json — your other Gemini
+  settings and hooks are kept). Gemini loads hook config at startup, so restart
+  any running gemini session after install. Gemini has no project-scope settings
+  dir, so --project has no effect with --gemini.
+
   --kiro clones your current default Kiro agent into ~/.kiro/agents/kcap.json
   (preserving its tools — a minimal agent would lose tool access), injects the
   agentSpawn hook, and sets it as your default agent (chat.defaultAgent in
@@ -72,6 +83,7 @@ Examples:
   kcap plugin install --project --codex     # Codex hooks in <repo>/.codex/hooks.json, skills user-wide
   kcap plugin install --cursor              # Install Cursor hooks (~/.cursor/hooks.json)
   kcap plugin install --copilot             # Install Copilot hooks (~/.copilot/hooks/kcap.json)
+  kcap plugin install --gemini              # Install Gemini hooks (merge into ~/.gemini/settings.json)
   kcap plugin install --kiro                # Clone default Kiro agent + hooks, set as default
   kcap plugin install --skills --if-installed   # Refresh skills if previously installed (used by npm postinstall)
   kcap plugin install --codex --if-installed    # Refresh Codex hooks if previously installed (used by npm postinstall)
@@ -79,5 +91,6 @@ Examples:
   kcap plugin remove --codex                # Remove Codex hooks + agent skills + legacy ~/.codex/skills
   kcap plugin remove --cursor               # Remove Cursor hooks from ~/.cursor/hooks.json
   kcap plugin remove --copilot              # Delete ~/.copilot/hooks/kcap.json
+  kcap plugin remove --gemini               # Remove kcap hooks from ~/.gemini/settings.json
   kcap plugin remove --kiro                 # Restore previous default agent, delete kcap.json
   kcap plugin remove --skills               # Remove agent skills + legacy ~/.codex/skills
