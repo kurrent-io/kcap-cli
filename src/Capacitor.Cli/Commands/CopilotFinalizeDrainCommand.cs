@@ -27,11 +27,14 @@ namespace Capacitor.Cli.Commands;
 /// when <c>session.shutdown</c> never lands (e.g. Copilot crash).
 /// </remarks>
 static class CopilotFinalizeDrainCommand {
-    // Measured from spawn, which the hook does AFTER its pre-drain + session-end
-    // POST — so this only has to cover the gap between the hook returning and
-    // Copilot flushing session.shutdown (sub-second to ~2s observed). Generous on
-    // purpose; the process is idle while polling and exits as soon as it drains.
-    static readonly TimeSpan DefaultPollBudget   = TimeSpan.FromSeconds(10);
+    // The hook spawns this FIRST — before its capped pre-drain and the retrying
+    // session-end POST — so the budget must outlast the worst-case hook lifetime
+    // (PreHookDrainCap + Copilot's hook timeout, ~30s by default) and still be
+    // polling when Copilot flushes session.shutdown after the hook returns or is
+    // SIGKILLed. The process is idle while polling and exits the instant it sees
+    // shutdown (the common case resolves in ~1-2s), so this cap only bites in the
+    // crash fallback where session.shutdown never lands.
+    static readonly TimeSpan DefaultPollBudget   = TimeSpan.FromSeconds(45);
     static readonly TimeSpan DefaultPollInterval = TimeSpan.FromMilliseconds(300);
 
     /// <summary>
