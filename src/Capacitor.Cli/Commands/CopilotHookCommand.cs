@@ -23,8 +23,12 @@ namespace Capacitor.Cli.Commands;
 ///                  --resume — the server's deterministic lifecycle event ids
 ///                  make the re-POST idempotent and the watcher resumes from
 ///                  the server watermark.
-///   sessionEnd   → kill watcher + capped inline drain (mirrors Claude's
-///                  AI-813 pre-drain cap), then POST /hooks/session-end/copilot.
+///   sessionEnd   → spawn the detached copilot-finalize drainer FIRST (AI-897:
+///                  it must be created before — and outlive — the rest of the
+///                  hook to capture the session.shutdown tail Copilot writes
+///                  after the hook returns), then kill watcher + capped inline
+///                  drain (mirrors Claude's AI-813 pre-drain cap), then POST
+///                  /hooks/session-end/copilot.
 ///   agentStop    → no server POST. Fires at every turn end; used only to
 ///                  re-enliven a crashed watcher (mirrors Codex's Stop).
 ///   notification → best-effort forward to the Claude-shaped /hooks/notification
