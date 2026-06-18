@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Gemini;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -64,6 +65,23 @@ public class UninstallCommandTests {
             }
             """);
 
+        // Gemini shared settings.json: kcap hook + user hook + unrelated setting, plus marker.
+        var geminiDir = Path.Combine(fixture.Home, ".gemini");
+        Directory.CreateDirectory(geminiDir);
+        var geminiSettings = Path.Combine(geminiDir, "settings.json");
+        await File.WriteAllTextAsync(geminiSettings, """
+            {
+              "theme": "keep-me",
+              "hooks": {
+                "SessionStart": [
+                  { "hooks": [{ "type": "command", "command": "user-script" }] },
+                  { "hooks": [{ "type": "command", "command": "kcap hook --gemini" }] }
+                ]
+              }
+            }
+            """);
+        GeminiHooksInstaller.WriteMarker(geminiSettings);
+
         // Skills present in ~/.agents/skills with marker.
         var skillsDir = Path.Combine(fixture.Home, ".agents", "skills");
         Directory.CreateDirectory(skillsDir);
@@ -100,6 +118,14 @@ public class UninstallCommandTests {
         var sessionStart2 = cursorRoot["hooks"]!["sessionStart"]!.AsArray();
         await Assert.That(sessionStart2.Count).IsEqualTo(1);
         await Assert.That(sessionStart2[0]!["command"]!.GetValue<string>()).IsEqualTo("user-script");
+
+        // Gemini: kcap hook gone, user hook + unrelated setting preserved, marker removed.
+        var geminiRoot  = JsonNode.Parse(await File.ReadAllTextAsync(geminiSettings))!.AsObject();
+        await Assert.That(geminiRoot["theme"]!.GetValue<string>()).IsEqualTo("keep-me");
+        var geminiStart = geminiRoot["hooks"]!["SessionStart"]!.AsArray();
+        await Assert.That(geminiStart.Count).IsEqualTo(1);
+        await Assert.That(geminiStart[0]!["hooks"]![0]!["command"]!.GetValue<string>()).IsEqualTo("user-script");
+        await Assert.That(GeminiHooksInstaller.IsInstalled(geminiSettings)).IsFalse();
 
         // Skills: kcap-* folders removed, user-authored folder intact.
         foreach (var name in AgentsSkillsInstaller.SourceNames) {
