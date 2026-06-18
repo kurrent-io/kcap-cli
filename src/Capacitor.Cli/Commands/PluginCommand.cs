@@ -920,9 +920,17 @@ public static class PluginCommand {
 
             if (!InjectKiroHooksIntoAgent(agentJsonPath)) return false;
 
+            // Flip the default FIRST; only stamp the marker once it succeeds.
+            // Otherwise a failed settings flip (e.g. a malformed shared settings
+            // file, which SetDefaultAgent now fails closed on) would leave a marker
+            // that makes IsInstalled / --if-installed treat the broken install as
+            // done — so the next refresh would skip it and kcap would never become
+            // the default. With no marker, the next --if-installed refresh retries.
+            if (!KiroSettings.SetDefaultAgent(settingsPath, KiroAgentName)) return false;
+
             KiroHooksInstaller.WriteMarker(agentJsonPath, recordedDefault);
 
-            return KiroSettings.SetDefaultAgent(settingsPath, KiroAgentName);
+            return true;
         } catch {
             return false;
         }
