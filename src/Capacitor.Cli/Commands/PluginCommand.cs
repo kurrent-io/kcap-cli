@@ -901,7 +901,7 @@ public static class PluginCommand {
             // the global agents dir, preserving tools/prompt). Skipped if kcap exists.
             if (!File.Exists(agentJsonPath)) {
                 if (!AgentDetector.IsInstalled(KiroBinary)) return false;
-                if (RunKiroCli($"agent create {KiroAgentName} --from {recordedDefault}") != 0 || !File.Exists(agentJsonPath))
+                if (RunKiroCli("agent", "create", KiroAgentName, "--from", recordedDefault) != 0 || !File.Exists(agentJsonPath))
                     return false;
             }
 
@@ -940,14 +940,18 @@ public static class PluginCommand {
     static string KiroSettingsPathFor(string agentJsonPath) =>
         Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(agentJsonPath)!)!, "settings", "cli.json");
 
-    static int RunKiroCli(string arguments) {
+    static int RunKiroCli(params string[] arguments) {
         try {
-            var psi = new ProcessStartInfo(KiroBinary, arguments) {
+            // ArgumentList (not a concatenated string) so a default-agent name with
+            // whitespace/quotes survives as ONE argument — `ProcessStartInfo(file,
+            // string)` would split "My Agent" into two args and break the clone.
+            var psi = new ProcessStartInfo(KiroBinary) {
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
                 UseShellExecute        = false,
                 CreateNoWindow         = true,
             };
+            foreach (var arg in arguments) psi.ArgumentList.Add(arg);
             // `kiro-cli agent create --from` opens $EDITOR on the new agent file and
             // blocks until it's closed — fatal for an unattended install, and Kiro
             // has no --no-edit flag. Point the editor at a no-op so the clone is

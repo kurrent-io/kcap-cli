@@ -69,7 +69,14 @@ internal sealed class KiroImportSource : IImportSource {
             ct.ThrowIfCancellationRequested();
 
             // Filename stem is the dashed session UUID Kiro uses for both files.
-            var dashed   = Path.GetFileNameWithoutExtension(jsonl);
+            var dashed = Path.GetFileNameWithoutExtension(jsonl);
+
+            // Kiro session files are UUID-named, and the live hook path rejects
+            // non-GUID ids. Apply the same guard so a stray *.jsonl (backup,
+            // export, debug dump, partial rename) isn't discovered as a session
+            // and then probed against /api/sessions/{id}/... with a non-session id.
+            if (!Guid.TryParse(dashed, out _)) continue;
+
             var dashless = dashed.Replace("-", "");
 
             if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))

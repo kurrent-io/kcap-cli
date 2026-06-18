@@ -128,8 +128,13 @@ static class KiroHookCommand {
             return 0;
         }
 
+        // Fail-open: a non-zero exit surfaces as a FAILED agentSpawn hook inside
+        // kiro-cli, which is exactly what this vendor wrapper must avoid on a
+        // transient server/auth blip. PostHookAsync already logged the failure to
+        // stderr; swallow it and skip the watcher this firing. agentSpawn fires
+        // again on the next prompt and retries both the POST and the watcher.
         var exit = await PostHookAsync(baseUrl, "session-start/kiro", enriched);
-        if (exit != 0) return exit;
+        if (exit != 0) return 0;
 
         // The watcher tails Kiro's own append-only session log
         // ~/.kiro/sessions/cli/{id}.jsonl (the file is named with the dashed id).
