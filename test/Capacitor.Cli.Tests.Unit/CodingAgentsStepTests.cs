@@ -703,6 +703,7 @@ public class CodingAgentsStepTests {
         CodexHooksPath:       "/fake/.codex/hooks.json",
         CursorHooksPath:      "/fake/.cursor/hooks.json",
         CopilotHooksPath:     "/fake/.copilot/hooks/kcap.json",
+        GeminiSettingsPath:   "/fake/.gemini/settings.json",
         AgentsSkillsDir:      "/fake/.agents/skills",
         LegacyCodexSkillsDir: "/fake/.codex/skills",
         PiExtensionPath:      "/fake/.pi/agent/extensions/kcap.ts"
@@ -729,6 +730,10 @@ public class CodingAgentsStepTests {
         public bool    CopilotHooksCalled  { get; private set; }
         public string? CopilotHooksArg     { get; private set; }
         public bool    CopilotHooksReturns { get; set; } = true;
+
+        public bool    GeminiHooksCalled  { get; private set; }
+        public string? GeminiHooksArg     { get; private set; }
+        public bool    GeminiHooksReturns { get; set; } = true;
 
         public bool    PiExtensionCalled  { get; private set; }
         public string? PiExtensionArg     { get; private set; }
@@ -769,6 +774,12 @@ public class CodingAgentsStepTests {
                 CopilotHooksArg    = h;
 
                 return CopilotHooksReturns;
+            },
+            InstallGeminiHooks: h => {
+                GeminiHooksCalled = true;
+                GeminiHooksArg    = h;
+
+                return GeminiHooksReturns;
             },
             CapacitorOnPath: () => {
                 CapacitorOnPathCalled = true;

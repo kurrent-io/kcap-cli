@@ -12,8 +12,8 @@ Description:
   driven (no stdin payload) — see --pi below.
 
   The command is registered via 'kcap setup' or
-  'kcap plugin install [--claude|--codex|--cursor|--copilot|--pi]', which writes
-  the appropriate hook configuration (or, for Pi, the extension) for the vendor.
+  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--pi]', which
+  writes the appropriate hook configuration (or, for Pi, the extension) for the vendor.
 
 Options:
   --claude    Dispatch the event as a Claude Code hook.
@@ -22,6 +22,8 @@ Options:
   --copilot   Dispatch the event as a GitHub Copilot CLI hook. Copilot
               payloads carry no event-name field, so the installer embeds
               it in the registered command (--event <name>).
+  --gemini    Dispatch the event as a Gemini CLI hook. Self-routes on the
+              payload's hook_event_name (SessionStart/SessionEnd/Notification).
   --pi        Dispatch a Pi (badlogic/pi-mono) lifecycle event. Pi has no
               shell hooks; the shipped kcap.ts extension invokes this with
               arguments instead of a stdin payload:
