@@ -1,4 +1,4 @@
-kcap plugin — Manage hooks and skills for Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, and other agents
+kcap plugin — Manage hooks and skills for Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, Pi, and other agents
 
 Usage: kcap plugin <subcommand> [options]
 
@@ -27,6 +27,11 @@ Options:
                       kcap's agentSpawn hook, and make it your default so every
                       session is captured (honours $KIRO_HOME). Needs kiro-cli on
                       PATH. Session-end is synthesized on exit.
+  --pi                Target Pi (badlogic/pi-mono): install the live-ingest
+                      extension to ~/.pi/agent/extensions/kcap.ts. Pi has no
+                      shell hooks; the extension auto-loads on `pi` startup and
+                      streams each session. User-wide only — --project has no
+                      effect with --pi.
   --skills            Install only the agent-agnostic skills to ~/.agents/skills/.
                       Use this if you only have Cursor (or another agent that
                       reads ~/.agents/skills/) and don't want Codex hooks.
@@ -73,6 +78,13 @@ Notes:
   pick it up. remove restores your previous default and deletes kcap.json. Kiro
   has no project-scope hooks, so --project has no effect with --kiro.
 
+  --pi writes a single extension file (~/.pi/agent/extensions/kcap.ts) instead
+  of a hooks file — Pi exposes no shell hooks, only an in-process extension API.
+  The extension shells out to `kcap hook --pi` on session start/end, so kcap
+  must be on PATH. Pi loads extensions at startup, so restart any running `pi`
+  session after install. Pi has no project-scope extensions dir, so --project
+  has no effect with --pi.
+
   --if-installed is scoped to user-wide installs only — the npm postinstall hook
   does not refresh --project installs.
 
@@ -85,6 +97,7 @@ Examples:
   kcap plugin install --copilot             # Install Copilot hooks (~/.copilot/hooks/kcap.json)
   kcap plugin install --gemini              # Install Gemini hooks (merge into ~/.gemini/settings.json)
   kcap plugin install --kiro                # Clone default Kiro agent + hooks, set as default
+  kcap plugin install --pi                  # Install Pi extension (~/.pi/agent/extensions/kcap.ts)
   kcap plugin install --skills --if-installed   # Refresh skills if previously installed (used by npm postinstall)
   kcap plugin install --codex --if-installed    # Refresh Codex hooks if previously installed (used by npm postinstall)
   kcap plugin install --if-installed            # Refresh Claude plugin registration if previously installed

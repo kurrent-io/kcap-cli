@@ -12,7 +12,7 @@ public static class VendorSelection {
         public bool HasError => Error is not null;
     }
 
-    static readonly string[] KnownVendorFlags = ["--claude", "--codex", "--cursor", "--copilot", "--gemini", "--kiro"];
+    static readonly string[] KnownVendorFlags = ["--claude", "--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi"];
 
     public static Result Parse(string[] args) {
         var vendors = new HashSet<string>(StringComparer.Ordinal);
@@ -25,6 +25,7 @@ public static class VendorSelection {
                 case "--copilot": vendors.Add("copilot"); break;
                 case "--gemini":  vendors.Add("gemini");  break;
                 case "--kiro":    vendors.Add("kiro");    break;
+                case "--pi":      vendors.Add("pi");      break;
             }
         }
 
@@ -36,7 +37,7 @@ public static class VendorSelection {
             if (!a.StartsWith("--")) continue;
             if (Array.IndexOf(KnownVendorFlags, a) >= 0) continue;
 
-            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-") || a.StartsWith("--gemini-") || a.StartsWith("--kiro-")) {
+            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-") || a.StartsWith("--gemini-") || a.StartsWith("--kiro-") || a.StartsWith("--pi-")) {
                 return new(vendors, $"Unknown source option: {a}.");
             }
         }
@@ -45,7 +46,7 @@ public static class VendorSelection {
         foreach (var a in args) {
             if (!a.StartsWith("--")) continue;
             if (Array.IndexOf(KnownVendorFlags, a) >= 0) continue;
-            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-") || a.StartsWith("--gemini-") || a.StartsWith("--kiro-")) continue;
+            if (a.StartsWith("--cursor-") || a.StartsWith("--claude-") || a.StartsWith("--codex-") || a.StartsWith("--copilot-") || a.StartsWith("--gemini-") || a.StartsWith("--kiro-") || a.StartsWith("--pi-")) continue;
 
             string? hint = null;
             var bestDist = int.MaxValue;

@@ -646,6 +646,121 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("'kcap' is not on PATH"));
     }
 
+    [Test]
+    public async Task Pi_detected_and_accepted_installs_extension() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipPi: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.PiExtensionInstalled).IsTrue();
+        await Assert.That(calls.PiExtensionArg).IsEqualTo("/fake/.pi/agent/extensions/kcap.ts");
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Pi extension installed"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("restart any running pi session"));
+    }
+
+    [Test]
+    public async Task Pi_detected_and_declined_skips_installer() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipPi: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => false, writeLine: sink.Write);
+
+        await Assert.That(result.PiExtensionInstalled).IsFalse();
+        await Assert.That(calls.PiExtensionCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Pi extension not installed"));
+    }
+
+    [Test]
+    public async Task Pi_not_detected_emits_skip_line() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipPi: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: false);
+
+        await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.PiExtensionCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Pi not detected"));
+    }
+
+    [Test]
+    public async Task Pi_skipped_by_flag_emits_skip_line() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipPi: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.PiExtensionCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Pi extension skipped by flag"));
+    }
+
+    [Test]
+    public async Task Pi_no_prompt_installs_without_prompting() {
+        // --no-prompt: a detected, non-skipped Pi installs without asking.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipPi: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        var promptCalled = false;
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => { promptCalled = true; return false; }, writeLine: sink.Write);
+
+        await Assert.That(result.PiExtensionInstalled).IsTrue();
+        await Assert.That(calls.PiExtensionCalled).IsTrue();
+        await Assert.That(promptCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Pi_kcap_not_on_path_aborts_install_without_writing_extension() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CapacitorOnPathReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipPi: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.PiExtensionInstalled).IsFalse();
+        await Assert.That(calls.CapacitorOnPathCalled).IsTrue();
+        await Assert.That(calls.PiExtensionCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("'kcap' is not on PATH"));
+    }
+
+    [Test]
+    public async Task Pi_installer_failure_emits_warning() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { PiExtensionReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipPi: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.PiExtensionInstalled).IsFalse();
+        await Assert.That(calls.PiExtensionCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write the Pi extension"));
+    }
+
     static Paths TestPaths() => new(
         ClaudeSettingsPath:   "/fake/.claude/settings.json",
         ClaudeScopeLabel:     "user",
@@ -656,7 +771,8 @@ public class CodingAgentsStepTests {
         GeminiSettingsPath:   "/fake/.gemini/settings.json",
         AgentsSkillsDir:      "/fake/.agents/skills",
         LegacyCodexSkillsDir: "/fake/.codex/skills",
-        KiroHooksPath:        "/fake/.kiro/agents/kcap.json"
+        KiroHooksPath:        "/fake/.kiro/agents/kcap.json",
+        PiExtensionPath:      "/fake/.pi/agent/extensions/kcap.ts"
     );
 
     sealed class Sink {
@@ -688,6 +804,10 @@ public class CodingAgentsStepTests {
         public bool    KiroHooksCalled  { get; private set; }
         public string? KiroHooksArg     { get; private set; }
         public bool    KiroHooksReturns { get; set; } = true;
+
+        public bool    PiExtensionCalled  { get; private set; }
+        public string? PiExtensionArg     { get; private set; }
+        public bool    PiExtensionReturns { get; set; } = true;
 
         public bool CapacitorOnPathCalled  { get; private set; }
         public bool CapacitorOnPathReturns { get; set; } = true;
@@ -740,6 +860,12 @@ public class CodingAgentsStepTests {
                 KiroHooksArg    = h;
 
                 return KiroHooksReturns;
+            },
+            InstallPiExtension: p => {
+                PiExtensionCalled = true;
+                PiExtensionArg    = p;
+
+                return PiExtensionReturns;
             },
             InstallAgentSkills: (s, d) => {
                 AgentSkillsCalled = true;

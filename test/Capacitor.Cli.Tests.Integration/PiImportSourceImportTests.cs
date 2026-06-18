@@ -1,0 +1,144 @@
+using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+using WireMock.Server;
+
+namespace Capacitor.Cli.Tests.Integration;
+
+/// <summary>
+/// Routed-import wire-contract tests for <see cref="PiImportSource"/> (AI-886).
+/// Pi classifications carry <c>FilePath = ""</c>, so they run through the
+/// routed phase (<c>ImportSessionAsync</c>) rather than the chain worker. These
+/// drive the full discover → classify → import path against a stub server and
+/// assert the three POSTs the server expects: <c>/hooks/session-start/pi</c>,
+/// the transcript batch tagged <c>vendor=pi</c>, and <c>/hooks/session-end/pi</c>
+/// — the integration points most likely to drift from the lower-level helpers.
+/// </summary>
+public class PiImportSourceImportTests : IDisposable {
+    readonly WireMockServer _server  = WireMockServer.Start();
+    readonly string         _tempDir = Directory.CreateTempSubdirectory("kcap-pi-import-it").FullName;
+
+    const string DashedSid = "11111111-2222-3333-4444-555555555555";
+
+    public void Dispose() {
+        _server.Stop();
+        try { Directory.Delete(_tempDir, recursive: true); } catch { /* best effort */ }
+    }
+
+    string WriteSessionFile() {
+        var sessionsDir = Path.Combine(_tempDir, "sessions");
+        Directory.CreateDirectory(sessionsDir);
+        var path = Path.Combine(sessionsDir, DashedSid + ".jsonl");
+        File.WriteAllLines(path, new[] {
+            $$"""{"type":"session","version":3,"id":"{{DashedSid}}","timestamp":"2026-06-12T10:00:00.000Z","cwd":"/work/a"}""",
+            """{"type":"message","id":"a1","parentId":null,"timestamp":"2026-06-12T10:00:01.000Z","message":{"role":"user","content":"hello"}}""",
+            """{"type":"message","id":"a2","parentId":"a1","timestamp":"2026-06-12T10:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"hi there"}],"model":"gpt-5","usage":{"input":10,"output":3}}}"""
+        });
+        return sessionsDir;
+    }
+
+    [Test]
+    public async Task ImportSession_posts_lifecycle_and_transcript_with_pi_vendor() {
+        var sessionsDir = WriteSessionFile();
+
+        // Fresh server: the last-line probe 404s, so classification is New.
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+        _server.Given(Request.Create().WithPath("/hooks/session-start/pi").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        _server.Given(Request.Create().WithPath("/hooks/session-end/pi").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+
+        using var client = new HttpClient();
+
+        var source = new PiImportSource(
+            sessionsDir,
+            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null));
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        await Assert.That(discovered.Count).IsEqualTo(1);
+
+        var classified = await source.ClassifyAsync(
+            discovered,
+            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None);
+        await Assert.That(classified.Count).IsEqualTo(1);
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
+        await Assert.That(classified[0].Vendor).IsEqualTo("pi");
+
+        var outcome = await source.ImportSessionAsync(
+            classified[0],
+            new ImportContext(client, _server.Url!, ForcePrivate: false),
+            CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
+
+        // Lifecycle + transcript routes were all hit, in receipt order
+        // (ImportSessionAsync awaits each POST sequentially, and LogEntries
+        // preserves arrival order).
+        var posts = _server.LogEntries
+            .Where(e => e.RequestMessage.Method == "POST")
+            .Select(e => e.RequestMessage.Path)
+            .ToArray();
+
+        await Assert.That(posts).IsEquivalentTo(new[] {
+            "/hooks/session-start/pi",
+            "/hooks/transcript",
+            "/hooks/session-end/pi"
+        });
+
+        // The transcript batch is tagged vendor=pi so the server routes it to
+        // PiTranscriptNormalizer.
+        var transcriptBody = _server.LogEntries
+            .Single(e => e.RequestMessage.Path == "/hooks/transcript")
+            .RequestMessage.Body;
+        await Assert.That(transcriptBody!).Contains("\"vendor\":\"pi\"");
+
+        // The synthesized session-end marks itself as an import (reason pi-import).
+        var endBody = _server.LogEntries
+            .Single(e => e.RequestMessage.Path == "/hooks/session-end/pi")
+            .RequestMessage.Body;
+        await Assert.That(endBody!).Contains("pi-import");
+    }
+
+    [Test]
+    public async Task ImportSession_resumes_from_server_watermark_when_partial() {
+        var sessionsDir = WriteSessionFile();
+
+        // Server already has line 0 (the header) → classification is Partial,
+        // resume from line 1.
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":0}"""));
+        _server.Given(Request.Create().WithPath("/hooks/session-start/pi").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        _server.Given(Request.Create().WithPath("/hooks/session-end/pi").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+
+        using var client = new HttpClient();
+
+        var source = new PiImportSource(
+            sessionsDir,
+            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null));
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(
+            discovered,
+            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None);
+
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
+        await Assert.That(classified[0].ResumeFromLine).IsEqualTo(1);
+
+        var outcome = await source.ImportSessionAsync(
+            classified[0],
+            new ImportContext(client, _server.Url!, ForcePrivate: false),
+            CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Resumed);
+    }
+}

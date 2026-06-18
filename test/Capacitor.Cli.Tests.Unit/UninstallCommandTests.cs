@@ -138,6 +138,31 @@ public class UninstallCommandTests {
     }
 
     [Test]
+    public async Task User_level_uninstall_removes_pi_extension() {
+        // AI-886: Pi has no hook file — its live-ingest integration is the
+        // ~/.pi/agent/extensions/kcap.ts extension. uninstall must delete it
+        // (+ the version marker) or pi keeps auto-loading kcap.ts after the user
+        // removed kcap. A user-authored sibling extension must survive.
+        await using var fixture = await Fixture.CreateAsync();
+
+        var extDir = Path.Combine(fixture.Home, ".pi", "agent", "extensions");
+        Directory.CreateDirectory(extDir);
+        var kcapTs    = Path.Combine(extDir, "kcap.ts");
+        var markerPi  = Path.Combine(extDir, ".kcap-extension-version");
+        var userExt   = Path.Combine(extDir, "user-ext.ts");
+        await File.WriteAllTextAsync(kcapTs, "export default function(pi){}");
+        await File.WriteAllTextAsync(markerPi, CapacitorVersion.Current());
+        await File.WriteAllTextAsync(userExt, "export default function(pi){}");
+
+        var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes", "--keep-config"]);
+        await Assert.That(exit).IsEqualTo(0);
+
+        await Assert.That(File.Exists(kcapTs)).IsFalse();
+        await Assert.That(File.Exists(markerPi)).IsFalse();
+        await Assert.That(File.Exists(userExt)).IsTrue();
+    }
+
+    [Test]
     public async Task User_level_uninstall_removes_legacy_kapacitor_codex_hooks() {
         // Regression: a user who installed via the pre-rename `kapacitor` CLI
         // has hooks.json entries pointing at `kapacitor codex-hook`. Running

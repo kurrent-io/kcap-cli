@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Pi;
 using Capacitor.Cli.Core.Auth;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
@@ -352,7 +353,7 @@ static partial class WatchCommand {
     /// Used to reject unexpected --vendor input before interpolating into the URL
     /// path (defence-in-depth against path traversal even though the CLI runs locally).
     /// </summary>
-    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro" };
+    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi" };
 
     /// <summary>
     /// Total time budget for the parent-exit session-end POST. Covers /auth/config
@@ -690,6 +691,7 @@ static partial class WatchCommand {
             "codex"   => TryExtractCodexAssistantText(line),
             "copilot" => TryExtractCopilotAssistantText(line),
             "kiro"    => TryExtractKiroAssistantText(line),
+            "pi"      => TryExtractPiAssistantText(line),
             _         => TryExtractClaudeAssistantText(line)
         };
 
@@ -783,6 +785,24 @@ static partial class WatchCommand {
                 };
             }
 
+            if (vendor == "pi") {
+                // Pi conversational envelopes are type:"message" with
+                // message.role user/assistant (Pi has no top-level user/assistant
+                // type). Gate on CONTENT, not just role: an empty user/assistant
+                // envelope produces no canonical event (the server's NormalizeUser
+                // returns null for empty content, NormalizeAssistant for zero
+                // parts), so it must not count toward the title-event threshold
+                // either. Mirrors PiImportSource.IsImportRelevantLine.
+                if (root.Str("type") != "message") return false;
+                if (root.Obj("message") is not { } piMsg) return false;
+
+                return piMsg.Str("role") switch {
+                    "user"      => PiContent.HasUserContent(piMsg),
+                    "assistant" => PiContent.HasAssistantContent(piMsg),
+                    _           => false
+                };
+            }
+
             return root.Str("type") is "user" or "assistant";
         } catch {
             return false;
@@ -794,6 +814,7 @@ static partial class WatchCommand {
             "codex"   => TryExtractCodexUserText(line),
             "copilot" => TryExtractCopilotUserText(line),
             "kiro"    => TryExtractKiroUserText(line),
+            "pi"      => TryExtractPiUserText(line),
             _         => TryExtractClaudeUserText(line)
         };
 
@@ -866,6 +887,61 @@ static partial class WatchCommand {
         } catch {
             return null;
         }
+    }
+
+    // ── Pi extractors (AI-886) ─────────────────────────────────────────────
+    //
+    // Pi emits type:"message" with message.role user/assistant — NOT Claude's
+    // top-level type:"user"/"assistant" — so the watcher title path needs its
+    // own branch (mirrors the server PiTranscriptNormalizer mapping). Content is
+    // a string or an array of {type:"text",text} blocks.
+
+    static string? TryExtractPiUserText(string line) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Str("type") != "message") return null;
+            if (root.Obj("message") is not { } msg) return null;
+            if (msg.Str("role") != "user") return null;
+
+            if (msg.Str("content")?.Trim() is { Length: > 0 } strContent) return strContent;
+
+            if (msg.Arr("content") is { } content) {
+                foreach (var block in content.EnumerateArray()) {
+                    if (block.Str("type") == "text" && block.Str("text")?.Trim() is { Length: > 0 } text) {
+                        return text;
+                    }
+                }
+            }
+        } catch {
+            // Ignore parse errors
+        }
+
+        return null;
+    }
+
+    static string? TryExtractPiAssistantText(string line) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Str("type") != "message") return null;
+            if (root.Obj("message") is not { } msg) return null;
+            if (msg.Str("role") != "assistant") return null;
+
+            if (msg.Arr("content") is { } content) {
+                foreach (var block in content.EnumerateArray()) {
+                    if (block.Str("type") == "text" && block.Str("text")?.Trim() is { Length: > 0 } text) {
+                        return text;
+                    }
+                }
+            }
+        } catch {
+            // Ignore parse errors
+        }
+
+        return null;
     }
 
     static string? TryExtractClaudeUserText(string line) {

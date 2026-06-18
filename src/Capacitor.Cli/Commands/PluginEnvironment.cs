@@ -3,6 +3,7 @@ using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
+using Capacitor.Cli.Core.Pi;
 
 namespace Capacitor.Cli.Commands;
 
@@ -32,6 +33,7 @@ public sealed record PluginEnvironment(
     public string GeminiSettingsJson   => GeminiPaths.SettingsJson(HomeDirectory);
     public string KiroKcapAgentJson    => KiroPaths.KcapAgentJson(HomeDirectory);
     public string KiroSettingsJson     => KiroPaths.SettingsFile(HomeDirectory);
+    public string PiKcapExtension      => PiPaths.KcapExtension(HomeDirectory);
     public string AgentsSkillsDir     => Path.Combine(HomeDirectory, ".agents", "skills");
     public string LegacyCodexSkills   => Path.Combine(CodexHome, "skills");
 
