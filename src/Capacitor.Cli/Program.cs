@@ -545,6 +545,19 @@ switch (command) {
             watchSkipTitle, parentPid, watchVendor
         );
     }
+    // Internal: spawned detached by the Copilot sessionEnd hook to deliver the
+    // post-hook `session.shutdown` tail Copilot writes after the hook returns
+    // (AI-897). Not a user-facing command.
+    case "copilot-finalize" when args.Length < 3:
+        Console.Error.WriteLine("Usage: kcap copilot-finalize <sessionId> <transcriptPath>");
+
+        return 1;
+    case "copilot-finalize": {
+        var cfSessionId = args[1].Replace("-", "");
+        var cfPath      = args[2];
+
+        return await CopilotFinalizeDrainCommand.Run(baseUrl!, cfSessionId, cfPath);
+    }
     case "set-title" when args.Length < 2:
         Console.Error.WriteLine("Usage: kcap set-title <title>");
 

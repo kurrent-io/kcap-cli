@@ -23,8 +23,12 @@ namespace Capacitor.Cli.Commands;
 ///                  --resume — the server's deterministic lifecycle event ids
 ///                  make the re-POST idempotent and the watcher resumes from
 ///                  the server watermark.
-///   sessionEnd   → kill watcher + capped inline drain (mirrors Claude's
-///                  AI-813 pre-drain cap), then POST /hooks/session-end/copilot.
+///   sessionEnd   → spawn the detached copilot-finalize drainer FIRST (AI-897:
+///                  it must be created before — and outlive — the rest of the
+///                  hook to capture the session.shutdown tail Copilot writes
+///                  after the hook returns), then kill watcher + capped inline
+///                  drain (mirrors Claude's AI-813 pre-drain cap), then POST
+///                  /hooks/session-end/copilot.
 ///   agentStop    → no server POST. Fires at every turn end; used only to
 ///                  re-enliven a crashed watcher (mirrors Codex's Stop).
 ///   notification → best-effort forward to the Claude-shaped /hooks/notification
@@ -179,6 +183,20 @@ static class CopilotHookCommand {
             string?  cwd
         ) {
         var transcriptPath = TranscriptPathFor(dashedSessionId);
+
+        // AI-897: Copilot appends `session.shutdown` (per-model input/cache token
+        // aggregates) — and sometimes the final assistant turn — to events.jsonl
+        // only AFTER this hook returns, by which point the live watcher is dead
+        // (KillWatcher below) and the server's session-end StopAndDrain has run,
+        // so nothing else is reading the file. Spawn the detached finalizer FIRST,
+        // before the capped pre-drain and the retrying session-end POST: if a
+        // slow/unreachable server makes the POST burn the whole hook timeout,
+        // Copilot SIGKILLs the hook — and we must have already created the drainer
+        // by then. It is detached (setsid + closed std streams), so it survives
+        // the hook being killed and still delivers the post-hook tail via one
+        // idempotent inline-drain once `session.shutdown` lands (or it times out).
+        // Its poll budget outlasts the worst-case hook lifetime for this reason.
+        WatcherManager.SpawnCopilotFinalizeDrain(baseUrl, sessionId, transcriptPath);
 
         // Kill watcher + inline-drain BEFORE the POST so the server computes
         // stats over the full transcript — capped so a slow drain can't starve
