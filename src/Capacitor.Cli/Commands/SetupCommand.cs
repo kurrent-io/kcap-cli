@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
+using Capacitor.Cli.Core.Kiro;
 using Capacitor.Cli.Core.Pi;
 using Spectre.Console;
 using Profile = Capacitor.Cli.Core.Config.Profile;
@@ -22,6 +23,7 @@ public static class SetupCommand {
         var skipCursorFlag   = args.Contains("--skip-cursor-hooks");
         var skipCopilotFlag  = args.Contains("--skip-copilot-hooks");
         var skipGeminiFlag   = args.Contains("--skip-gemini-hooks");
+        var skipKiroFlag     = args.Contains("--skip-kiro-hooks");
         var skipPiFlag       = args.Contains("--skip-pi-hooks");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
@@ -183,6 +185,10 @@ public static class SetupCommand {
             // Dir presence covers IDE-launched Gemini; the PATH probe covers a
             // fresh install that hasn't created ~/.gemini yet.
             Gemini:  GeminiPaths.IsInstalled()  || AgentDetector.IsInstalled("gemini"),
+            // Same dual signal for Kiro: the ~/.kiro tree or the conversation DB
+            // covers IDE-launched users; the PATH probe (kiro / kiro-cli) covers
+            // fresh CLI installs.
+            Kiro:    KiroPaths.IsInstalled() || AgentDetector.IsInstalled("kiro") || AgentDetector.IsInstalled("kiro-cli"),
             // Pi keeps state under ~/.pi/agent; the PATH probe covers fresh
             // installs that haven't created it yet.
             Pi:      PiPaths.IsInstalled() || AgentDetector.IsInstalled("pi"));
@@ -199,8 +205,9 @@ public static class SetupCommand {
             SkipCursor:  skipCursorFlag,
             SkipCopilot: skipCopilotFlag,
             SkipGemini:  skipGeminiFlag,
-            NoPrompt:    noPrompt,
-            SkipPi:      skipPiFlag);
+            SkipKiro:    skipKiroFlag,
+            SkipPi:      skipPiFlag,
+            NoPrompt:    noPrompt);
 
         var stepPaths = new CodingAgentsStep.Paths(
             ClaudeSettingsPath:   claudeSettingsPath,
@@ -212,6 +219,7 @@ public static class SetupCommand {
             GeminiSettingsPath:   GeminiPaths.SettingsJson(),
             AgentsSkillsDir:      AgentsPaths.UserSkillsDir,
             LegacyCodexSkillsDir: Path.Combine(CodexPaths.Home, "skills"),
+            KiroHooksPath:        KiroPaths.KcapAgentJson(),
             PiExtensionPath:      PiPaths.KcapExtension());
 
         var stepInstallers = new CodingAgentsStep.Installers(
@@ -223,6 +231,7 @@ public static class SetupCommand {
             CapacitorOnPath:        () => AgentDetector.IsInstalled("kcap"),
             InstallAgentSkills:     AgentsSkillsInstaller.Install,
             CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny,
+            InstallKiroHooks:       PluginCommand.InstallKiroHooks,
             InstallPiExtension:     PiExtensionInstaller.Install);
 
         bool PromptYesNo(string text) =>

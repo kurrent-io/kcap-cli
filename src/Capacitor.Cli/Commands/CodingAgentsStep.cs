@@ -8,12 +8,13 @@ namespace Capacitor.Cli.Commands;
 /// can drive every branch without touching ~/.claude, ~/.codex, or AnsiConsole.
 /// </summary>
 internal static class CodingAgentsStep {
-    // SkipGemini/SkipPi (and Gemini/Pi, GeminiHooksInstalled/PiExtensionInstalled)
-    // default so existing call sites — and the broad CodingAgentsStep test suite —
-    // compile unchanged; both were added after the original four (Gemini AI-887, Pi AI-886).
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipPi = false);
+    // New-vendor fields are appended with defaults so existing (named-arg) call
+    // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini
+    // (AI-887), Kiro (AI-888), and Pi (AI-886) were all added after the original
+    // four vendors.
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false);
 
-    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Pi = false);
+    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false);
 
     internal record Paths(
             string  ClaudeSettingsPath,
@@ -25,6 +26,7 @@ internal static class CodingAgentsStep {
             string  GeminiSettingsPath,
             string  AgentsSkillsDir,
             string  LegacyCodexSkillsDir,
+            string  KiroHooksPath = "",
             string  PiExtensionPath = ""
         );
 
@@ -37,6 +39,7 @@ internal static class CodingAgentsStep {
             Func<bool>                                                CapacitorOnPath,
             Func<string /*srcDir*/, string /*dstDir*/, bool>          InstallAgentSkills,
             Func<string /*legacyDir*/, bool>                          CleanLegacyCodexSkills,
+            Func<string /*agentJsonPath*/, bool>?                     InstallKiroHooks = null,
             Func<string /*extensionPath*/, bool>?                     InstallPiExtension = null
         );
 
@@ -47,6 +50,7 @@ internal static class CodingAgentsStep {
             bool CursorHooksInstalled,
             bool CopilotHooksInstalled,
             bool GeminiHooksInstalled = false,
+            bool KiroHooksInstalled = false,
             bool PiExtensionInstalled = false
         ) {
         /// <summary>
@@ -57,7 +61,7 @@ internal static class CodingAgentsStep {
         /// as agents are added (consumers like SetupCommand's restart tip key off this).
         /// </summary>
         internal bool AnyHooksInstalled =>
-            ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled || GeminiHooksInstalled || PiExtensionInstalled;
+            ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled || GeminiHooksInstalled || KiroHooksInstalled || PiExtensionInstalled;
     }
 
     /// <summary>
@@ -79,10 +83,11 @@ internal static class CodingAgentsStep {
         var cursorHooksInstalled  = HandleCursorHooks(options, detected, paths, installers, prompt, writeLine);
         var copilotHooksInstalled = HandleCopilotHooks(options, detected, paths, installers, prompt, writeLine);
         var geminiHooksInstalled  = HandleGeminiHooks(options, detected, paths, installers, prompt, writeLine);
+        var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, prompt, writeLine);
         var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, prompt, writeLine);
 
-        if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: false, Pi: false }) {
-            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, or Pi to start capturing sessions.");
+        if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: false, Kiro: false, Pi: false }) {
+            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, or Pi to start capturing sessions.");
         }
 
         return Task.FromResult(
@@ -93,9 +98,63 @@ internal static class CodingAgentsStep {
                 cursorHooksInstalled,
                 copilotHooksInstalled,
                 geminiHooksInstalled,
+                kiroHooksInstalled,
                 piExtensionInstalled
             )
         );
+    }
+
+    static bool HandleKiroHooks(
+            Options            options,
+            DetectedAgents     detected,
+            Paths              paths,
+            Installers         installers,
+            Func<string, bool> prompt,
+            Action<string>     writeLine
+        ) {
+        if (!detected.Kiro) {
+            writeLine("  [dim]· Kiro CLI not detected — skipping[/]");
+
+            return false;
+        }
+
+        writeLine("  [green]✓[/] Kiro CLI detected");
+
+        if (options.SkipKiro) {
+            writeLine("  [dim]· Kiro CLI hooks skipped by flag[/]");
+
+            return false;
+        }
+
+        var shouldInstall = options.NoPrompt || prompt("Install Kiro CLI hooks?");
+
+        if (!shouldInstall) {
+            writeLine("  [dim]· Kiro hooks not installed (you can run kcap plugin install --kiro later)[/]");
+
+            return false;
+        }
+
+        // The agent JSON writes the bare "kcap hook --kiro" command and relies on
+        // Kiro finding kcap on PATH — same precheck as the Cursor/Copilot branches.
+        if (!installers.CapacitorOnPath()) {
+            writeLine("  [yellow]⚠[/] Kiro hooks not installed — 'kcap' is not on PATH.");
+            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+
+            return false;
+        }
+
+        var ok = installers.InstallKiroHooks?.Invoke(paths.KiroHooksPath) ?? false;
+
+        if (!ok) {
+            writeLine("  [yellow]⚠[/] Could not write Kiro agent hooks file.");
+
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] Kiro hooks installed ({Markup.Escape(paths.KiroHooksPath)})");
+        writeLine("  [dim]  Note: Kiro loads agent hooks at startup — restart any running kiro session to pick them up.[/]");
+
+        return true;
     }
 
     static bool HandleCopilotHooks(

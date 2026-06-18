@@ -12,7 +12,7 @@ Description:
   driven (no stdin payload) — see --pi below.
 
   The command is registered via 'kcap setup' or
-  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--pi]', which
+  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--kiro|--pi]', which
   writes the appropriate hook configuration (or, for Pi, the extension) for the vendor.
 
 Options:
@@ -24,6 +24,10 @@ Options:
               it in the registered command (--event <name>).
   --gemini    Dispatch the event as a Gemini CLI hook. Self-routes on the
               payload's hook_event_name (SessionStart/SessionEnd/Notification).
+  --kiro      Dispatch the event as an AWS Kiro CLI hook. kcap subscribes
+              only to agentSpawn (session start; fires every prompt, deduped
+              server-side); session-end is synthesized by the watcher on
+              kiro-cli exit. Always exits 0 with empty stdout.
   --pi        Dispatch a Pi (badlogic/pi-mono) lifecycle event. Pi has no
               shell hooks; the shipped kcap.ts extension invokes this with
               arguments instead of a stdin payload:

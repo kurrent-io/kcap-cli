@@ -1,15 +1,16 @@
 kcap import — Import local sessions from every detected coding agent
 
-Discovers Claude, Codex, Cursor, Copilot, Gemini, and Pi sessions on this machine
-and imports them in a single run. Each agent ships a per-session .jsonl transcript:
+Discovers Claude, Codex, Cursor, Copilot, Gemini, Kiro, and Pi sessions on this
+machine and imports them in a single run. Each agent ships a per-session .jsonl transcript:
   Claude  — ~/.claude/projects/<encoded-cwd>/<sid>.jsonl
   Codex   — ~/.codex/sessions/.../rollout-<sid>.jsonl
   Cursor  — ~/.cursor/projects/<sanitized-workspace>/agent-transcripts/<sid>/<sid>.jsonl
   Copilot — ~/.copilot/session-state/<sid>/events.jsonl (plus the pre-GA
             history-session-state/ root; dirs without events.jsonl are skipped)
   Gemini  — ~/.gemini/tmp/<project>/chats/session-<ISO>-<shortId>.jsonl
+  Kiro    — ~/.kiro/sessions/cli/<sid>.jsonl (+ <sid>.json metadata; honours KIRO_HOME)
   Pi      — ~/.pi/agent/sessions/.../<timestamp>_<sid>.jsonl (badlogic/pi-mono)
-kcap walks all six the same way.
+kcap walks all seven the same way.
 
 Usage: kcap import [vendor-filters] [scope] [options]
 
@@ -23,6 +24,7 @@ Vendor filters (additive — pass one or more to restrict the run):
   --cursor                Import Cursor agent-session transcripts
   --copilot               Import GitHub Copilot CLI session transcripts
   --gemini                Import Gemini CLI session transcripts
+  --kiro                  Import AWS Kiro CLI sessions (~/.kiro/sessions/cli)
   --pi                    Import Pi (badlogic/pi-mono) session transcripts
 
 Scope (one of, required for non-interactive use):

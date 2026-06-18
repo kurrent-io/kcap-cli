@@ -136,6 +136,30 @@ public class WatcherParentExitPostTests : IDisposable {
     }
 
     [Test]
+    public async Task ParentExit_PostsToVendorSpecificRoute_ForKiro() {
+        // Kiro has NO session-end hook, so this watcher-synthesized POST on
+        // kiro-cli exit is the ONLY way a Kiro session is marked ended — the
+        // vendor must be in the whitelist and route to /hooks/session-end/kiro.
+        _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"provider":"None"}"""));
+
+        _server.Given(Request.Create().WithPath("/hooks/session-end/kiro").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"generate_whats_done":false}"""));
+
+        await WatchCommand.PostSessionEndOnParentExitAsync(
+            baseUrl:        _server.Url!,
+            sessionId:      $"test-{Guid.NewGuid():N}",
+            transcriptPath: "/tmp/fake.jsonl",
+            cwd:            "/repo",
+            vendor:         "kiro",
+            repository:     null
+        );
+
+        var kiroHits = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/kiro").UsingPost());
+        await Assert.That(kiroHits.Count).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task ParentExit_PostsToVendorSpecificRoute_ForPi() {
         // Regression (PR #162 review): the Pi watcher starts with vendor "pi", so
         // the parent-exit fallback must accept it — otherwise a crashed/closed Pi

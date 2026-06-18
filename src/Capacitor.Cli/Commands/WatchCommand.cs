@@ -353,7 +353,7 @@ static partial class WatchCommand {
     /// Used to reject unexpected --vendor input before interpolating into the URL
     /// path (defence-in-depth against path traversal even though the CLI runs locally).
     /// </summary>
-    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "pi" };
+    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi" };
 
     /// <summary>
     /// Total time budget for the parent-exit session-end POST. Covers /auth/config
@@ -385,6 +385,13 @@ static partial class WatchCommand {
                 ["cwd"]             = cwd ?? "",
                 ["hook_event_name"] = "session_end",
                 ["reason"]          = "parent_exited",
+                // Stamp the exit time so the server can scope the SessionEnded id
+                // per run. Vendors with no session-end hook (Kiro) end ONLY via this
+                // path, so without a timestamp a resumed session's second exit would
+                // dedupe against the first and the session would stay Active.
+                // Computed once here and reused across POST retries, so it stays
+                // idempotent for a single exit.
+                ["ended_at"]        = DateTimeOffset.UtcNow.ToString("O"),
             };
 
             if (repository is not null) {
@@ -683,6 +690,7 @@ static partial class WatchCommand {
         vendor switch {
             "codex"   => TryExtractCodexAssistantText(line),
             "copilot" => TryExtractCopilotAssistantText(line),
+            "kiro"    => TryExtractKiroAssistantText(line),
             "pi"      => TryExtractPiAssistantText(line),
             _         => TryExtractClaudeAssistantText(line)
         };
@@ -746,6 +754,13 @@ static partial class WatchCommand {
                 return root.Str("type") is "user.message" or "assistant.message";
             }
 
+            if (vendor == "kiro") {
+                // Prompt / AssistantMessage are the conversational lines;
+                // ToolResults is plumbing and must not count toward the
+                // title-generation event threshold.
+                return root.Str("kind") is "Prompt" or "AssistantMessage";
+            }
+
             if (vendor == "codex") {
                 // Codex rolls everything into a top-level response_item envelope;
                 // a "message" payload (user or assistant) is the analog of Claude's
@@ -798,9 +813,40 @@ static partial class WatchCommand {
         vendor switch {
             "codex"   => TryExtractCodexUserText(line),
             "copilot" => TryExtractCopilotUserText(line),
+            "kiro"    => TryExtractKiroUserText(line),
             "pi"      => TryExtractPiUserText(line),
             _         => TryExtractClaudeUserText(line)
         };
+
+    // ── Kiro extractors (AI-888) ───────────────────────────────────────────
+    //
+    // Kiro CLI writes ~/.kiro/sessions/cli/{id}.jsonl as {"version","kind","data"}
+    // lines: kind "Prompt" (user) / "AssistantMessage" / "ToolResults", whose
+    // data.content[] holds {"kind":"text"|"toolUse"|"toolResult","data":…} blocks.
+    // For titles we want the first user prompt and the first assistant text.
+
+    static string? TryExtractKiroUserText(string line) => KiroLineText(line, "Prompt");
+
+    static string? TryExtractKiroAssistantText(string line) => KiroLineText(line, "AssistantMessage");
+
+    static string? KiroLineText(string line, string kind) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Str("kind") != kind) return null;
+            if (root.Obj("data")?.Arr("content") is not { } content) return null;
+
+            foreach (var block in content.EnumerateArray()) {
+                if (block.Str("kind") == "text" && block.Str("data")?.Trim() is { Length: > 0 } text)
+                    return text;
+            }
+        } catch {
+            // Ignore parse errors
+        }
+
+        return null;
+    }
 
     // ── Copilot extractors (AI-815) ────────────────────────────────────────
     //

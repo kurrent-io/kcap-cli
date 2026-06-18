@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
+using Capacitor.Cli.Core.Kiro;
 using Capacitor.Cli.Core.Pi;
 
 namespace Capacitor.Cli.Commands;
@@ -14,6 +16,7 @@ public static class PluginCommand {
     const string CodexHookCommand   = "kcap hook --codex";
     const string CursorHookCommand  = "kcap hook --cursor";
     const string CopilotHookCommand = "kcap hook --copilot";
+    const string KiroHookCommand    = "kcap hook --kiro";
 
     // PermissionRequest must wait for the dashboard's decision; the daemon-side
     // bridge call is intentionally infinite. 86400s = 24h keeps Codex from
@@ -37,7 +40,7 @@ public static class PluginCommand {
         };
     }
 
-    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--pi", "--skills"];
+    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--skills"];
 
     static bool HasConflictingTargets(string[] args) =>
         ExclusiveTargetFlags.Count(args.Contains) > 1;
@@ -45,7 +48,7 @@ public static class PluginCommand {
     static async Task<int> Install(string[] args, PluginEnvironment env) {
         if (HasConflictingTargets(args)) {
             await env.Stderr.WriteLineAsync(
-                "--cursor, --codex, --copilot, --gemini, --pi, and --skills are mutually exclusive."
+                "--cursor, --codex, --copilot, --gemini, --kiro, --pi, and --skills are mutually exclusive."
             );
 
             return 1;
@@ -56,6 +59,7 @@ public static class PluginCommand {
         if (args.Contains("--cursor")) return await InstallCursor(args, env);
         if (args.Contains("--copilot")) return await InstallCopilot(args, env);
         if (args.Contains("--gemini")) return await InstallGemini(args, env);
+        if (args.Contains("--kiro")) return await InstallKiro(args, env);
         if (args.Contains("--pi")) return await InstallPi(args, env);
 
         return await InstallClaude(args, env);
@@ -64,7 +68,7 @@ public static class PluginCommand {
     static async Task<int> Remove(string[] args, PluginEnvironment env) {
         if (HasConflictingTargets(args)) {
             await env.Stderr.WriteLineAsync(
-                "--cursor, --codex, --copilot, --gemini, --pi, and --skills are mutually exclusive."
+                "--cursor, --codex, --copilot, --gemini, --kiro, --pi, and --skills are mutually exclusive."
             );
 
             return 1;
@@ -75,6 +79,7 @@ public static class PluginCommand {
         if (args.Contains("--cursor")) return await RemoveCursor(args, env);
         if (args.Contains("--copilot")) return await RemoveCopilot(args, env);
         if (args.Contains("--gemini")) return await RemoveGemini(args, env);
+        if (args.Contains("--kiro")) return await RemoveKiro(args, env);
         if (args.Contains("--pi")) return await RemovePi(args, env);
 
         return await RemoveClaude(args, env);
@@ -861,6 +866,245 @@ public static class PluginCommand {
         return removed;
     }
 
+    const string KiroAgentName = "kcap";
+    const string KiroBinary    = "kiro-cli";
+
+    static async Task<int> InstallKiro(string[] args, PluginEnvironment env) {
+        var agentPath = GetArg(args, "--kiro-agent-path") ?? env.KiroKcapAgentJson;
+
+        var refreshOnly = args.Contains("--if-installed");
+
+        switch (refreshOnly) {
+            case true when !KiroHooksInstaller.IsInstalled(agentPath):
+            case true when KiroHooksInstaller.ReadMarker(agentPath) == CapacitorVersion.Current():
+                return 0;
+            // The agent runs the bare `kcap hook --kiro` command, so kcap must be on PATH.
+            case false when !AgentDetector.IsInstalled("kcap"):
+                await env.Stderr.WriteLineAsync(
+                    "Cannot install Kiro hooks: 'kcap' is not on PATH. "
+                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                );
+
+                return 1;
+        }
+
+        if (!InstallKiroHooks(agentPath)) {
+            if (refreshOnly) return 0;
+
+            await env.Stderr.WriteLineAsync(
+                $"Could not set up the Kiro '{KiroAgentName}' agent. Is '{KiroBinary}' on PATH? "
+              + "(it's needed to clone your current default agent so tool access is preserved.)"
+            );
+
+            return 1;
+        }
+
+        var clonedFrom = KiroHooksInstaller.ReadPreviousDefault(agentPath) ?? "your default agent";
+
+        await env.Stdout.WriteLineAsync(
+            refreshOnly
+                ? $"Kiro hooks refreshed ({agentPath})"
+                : $"Kiro hooks installed — '{KiroAgentName}' (cloned from '{clonedFrom}') is now your default "
+                + "Kiro agent, so every session is captured. Restart kiro-cli to pick it up; "
+                + "undo with: kcap plugin remove --kiro"
+        );
+
+        return 0;
+    }
+
+    static async Task<int> RemoveKiro(string[] args, PluginEnvironment env) {
+        var agentPath    = GetArg(args, "--kiro-agent-path")    ?? env.KiroKcapAgentJson;
+        var settingsPath = GetArg(args, "--kiro-settings-path") ?? KiroSettingsPathFor(agentPath);
+
+        try {
+            // Restore the default agent kcap replaced (recorded at install time).
+            // If kcap is currently the default and the restore write FAILS, abort
+            // before deleting kcap.json / the marker — otherwise chat.defaultAgent
+            // is left pointing at a deleted agent and the recorded previous default
+            // (marker line 2) is gone, so a retry can't recover. Leaving both in
+            // place keeps `kcap plugin remove --kiro` retryable.
+            var previousDefault = KiroHooksInstaller.ReadPreviousDefault(agentPath) ?? "kiro_default";
+            if (KiroSettings.ReadDefaultAgent(settingsPath) == KiroAgentName
+             && !KiroSettings.SetDefaultAgent(settingsPath, previousDefault)) {
+                await env.Stderr.WriteLineAsync(
+                    $"Could not restore your default Kiro agent to '{previousDefault}' in {settingsPath}. "
+                  + "Left kcap.json in place so you can retry — fix the settings file and re-run: "
+                  + "kcap plugin remove --kiro"
+                );
+
+                return 1;
+            }
+
+            var removed = RemoveKiroHooks(agentPath);
+
+            await env.Stdout.WriteLineAsync(
+                removed
+                    ? $"Kiro hooks removed; default agent restored to '{previousDefault}' ({agentPath})"
+                    : "Nothing to remove — Kiro agent hooks file not found."
+            );
+
+            return 0;
+        } catch (Exception ex) {
+            await env.Stderr.WriteLineAsync($"Could not remove Kiro hooks at {agentPath}: {ex.Message}");
+
+            return 1;
+        }
+    }
+
+    /// <summary>
+    /// Sets up transparent Kiro capture; true on success. Kiro hooks fire only
+    /// for the ACTIVE agent and there is no global hook, so capture requires
+    /// making kcap the default agent — and a minimal agent loses tool access, so
+    /// we clone the current default (preserving its tools/prompt) via
+    /// <c>kiro-cli agent create --from</c>, merge our hook in, and flip
+    /// <c>chat.defaultAgent</c> to kcap. The replaced default is recorded in the
+    /// marker for <c>plugin remove --kiro</c> to restore. Idempotent.
+    /// </summary>
+    public static bool InstallKiroHooks(string agentJsonPath) {
+        try {
+            var settingsPath    = KiroSettingsPathFor(agentJsonPath);
+            var currentDefault  = KiroSettings.ReadDefaultAgent(settingsPath) ?? "kiro_default";
+            var alreadyKcap     = currentDefault == KiroAgentName;
+
+            // The default we'll restore on remove: the real prior default on a
+            // fresh install; the one already recorded on a re-install (so we don't
+            // overwrite it with "kcap").
+            var recordedDefault = alreadyKcap
+                ? KiroHooksInstaller.ReadPreviousDefault(agentJsonPath) ?? "kiro_default"
+                : currentDefault;
+
+            // Clone the current default into the kcap agent (kiro-cli writes it to
+            // the global agents dir, preserving tools/prompt). Skipped if kcap exists.
+            if (!File.Exists(agentJsonPath)) {
+                if (!AgentDetector.IsInstalled(KiroBinary)) return false;
+                if (RunKiroCli("agent", "create", KiroAgentName, "--from", recordedDefault) != 0 || !File.Exists(agentJsonPath))
+                    return false;
+            }
+
+            if (!InjectKiroHooksIntoAgent(agentJsonPath)) return false;
+
+            // Flip the default FIRST; only stamp the marker once it succeeds.
+            // Otherwise a failed settings flip (e.g. a malformed shared settings
+            // file, which SetDefaultAgent now fails closed on) would leave a marker
+            // that makes IsInstalled / --if-installed treat the broken install as
+            // done — so the next refresh would skip it and kcap would never become
+            // the default. With no marker, the next --if-installed refresh retries.
+            if (!KiroSettings.SetDefaultAgent(settingsPath, KiroAgentName)) return false;
+
+            // The marker's line 2 is the ONLY record of the replaced default, so a
+            // silent failure here would let `remove --kiro` restore the wrong agent
+            // (and a later --if-installed refresh re-stamp a bogus previous default).
+            // Treat it as part of the atomic install: on failure roll the default
+            // back and report failure rather than a success we can't undo.
+            if (!KiroHooksInstaller.WriteMarker(agentJsonPath, recordedDefault)) {
+                // If the rollback ALSO fails (e.g. the shared settings file is locked
+                // or became malformed between writes) the prior default can't be
+                // recovered automatically — chat.defaultAgent may still be `kcap`
+                // with no marker. Surface a DISTINCT, actionable message naming the
+                // previous default + paths so the user can restore it by hand,
+                // rather than returning the same opaque false as "kiro-cli missing".
+                if (!KiroSettings.SetDefaultAgent(settingsPath, recordedDefault)) {
+                    Console.Error.WriteLine(
+                        $"[kcap] Kiro install could not be completed OR rolled back. "
+                      + $"chat.defaultAgent may still be '{KiroAgentName}' with no install marker. "
+                      + $"Your previous default agent was '{recordedDefault}' — restore it manually "
+                      + $"(set chat.defaultAgent in {settingsPath}) and delete {agentJsonPath}, "
+                      + $"then re-run `kcap plugin install --kiro`."
+                    );
+                }
+                return false;
+            }
+
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Merges kcap's hook(s) into an existing Kiro agent file's <c>hooks</c> block,
+    /// preserving the cloned agent's tools/prompt/etc. Each entry runs the bare
+    /// <c>kcap hook --kiro --event NAME</c>. Idempotent (overwrites kcap's events).
+    /// Does NOT touch the marker — the caller owns the previous-default record.
+    /// </summary>
+    public static bool InjectKiroHooksIntoAgent(string agentJsonPath) {
+        try {
+            if (!File.Exists(agentJsonPath)) return false;
+            if (JsonNode.Parse(File.ReadAllText(agentJsonPath)) is not JsonObject root) return false;
+
+            var hooks = root["hooks"] as JsonObject ?? new JsonObject();
+            foreach (var evt in KiroHooksParser.KiroHookEvents)
+                hooks[evt] = new JsonArray(new JsonObject { ["command"] = $"{KiroHookCommand} --event {evt}" });
+            root["hooks"] = hooks;
+
+            File.WriteAllText(agentJsonPath, root.ToJsonString(WriteOpts));
+            return true;
+        } catch { return false; }
+    }
+
+    /// <summary>Derives <c>~/.kiro/settings/cli.json</c> from <c>~/.kiro/agents/kcap.json</c>.</summary>
+    static string KiroSettingsPathFor(string agentJsonPath) =>
+        Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(agentJsonPath)!)!, "settings", "cli.json");
+
+    static int RunKiroCli(params string[] arguments) {
+        try {
+            // ArgumentList (not a concatenated string) so a default-agent name with
+            // whitespace/quotes survives as ONE argument — `ProcessStartInfo(file,
+            // string)` would split "My Agent" into two args and break the clone.
+            var psi = new ProcessStartInfo(KiroBinary) {
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true,
+                UseShellExecute        = false,
+                CreateNoWindow         = true,
+            };
+            foreach (var arg in arguments) psi.ArgumentList.Add(arg);
+            // `kiro-cli agent create --from` opens $EDITOR on the new agent file and
+            // blocks until it's closed — fatal for an unattended install, and Kiro
+            // has no --no-edit flag. Point the editor at a no-op so the clone is
+            // written and the command returns immediately: `true` exits 0 without
+            // touching the file. Override both EDITOR and VISUAL — Kiro falls back to
+            // its built-in vi when they're unset.
+            psi.Environment["EDITOR"] = "true";
+            psi.Environment["VISUAL"] = "true";
+
+            using var p = Process.Start(psi);
+            if (p is null) return -1;
+
+            // WaitForExit FIRST so the 60s bound actually applies. Reading a stream
+            // to end blocks until the child closes it, so draining before the wait
+            // would hang forever if the child stalls (e.g. an editor we failed to
+            // suppress). Output here is tiny, so the OS pipe buffer holds it until we
+            // drain after exit; on timeout we kill the whole tree (incl. any editor).
+            if (!p.WaitForExit(60_000)) {
+                try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                return -1;
+            }
+
+            _ = p.StandardOutput.ReadToEnd();
+            _ = p.StandardError.ReadToEnd();
+            return p.ExitCode;
+        } catch {
+            return -1;
+        }
+    }
+
+    /// <summary>
+    /// Deletes kcap's Kiro agent-hooks file (kcap owns it wholesale). Returns
+    /// true when the file existed; throws on I/O failure.
+    /// </summary>
+    public static bool RemoveKiroHooks(string agentJsonPath) {
+        var removed = false;
+
+        if (File.Exists(agentJsonPath)) {
+            File.Delete(agentJsonPath);
+            removed = true;
+        }
+
+        KiroHooksInstaller.DeleteMarker(agentJsonPath);
+
+        return removed;
+    }
+
     /// <summary>
     /// Removes every entry in <paramref name="hooksPath"/> whose command
     /// invokes <c>kcap hook --cursor</c>. Other entries are preserved.
@@ -1076,7 +1320,7 @@ public static class PluginCommand {
 
     static int PrintUsage() {
         Console.Error.WriteLine(
-            "Usage: kcap plugin <install|remove> [--project] [--codex|--cursor|--copilot|--gemini|--pi|--skills] [--if-installed]"
+            "Usage: kcap plugin <install|remove> [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--skills] [--if-installed]"
         );
 
         return 1;
