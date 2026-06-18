@@ -32,12 +32,25 @@ public static class KiroSettings {
     /// <summary>
     /// Sets <c>chat.defaultAgent</c> to <paramref name="agentName"/>, preserving
     /// every other key, creating the file/dir if needed. Returns false on I/O
-    /// failure (caller surfaces it).
+    /// failure OR when an existing settings file isn't a JSON object (caller
+    /// surfaces it) — see below.
     /// </summary>
     public static bool SetDefaultAgent(string settingsPath, string agentName) {
         try {
-            var root = (File.Exists(settingsPath) ? JsonNode.Parse(File.ReadAllText(settingsPath)) : null) as JsonObject
-                    ?? new JsonObject();
+            JsonObject root;
+            if (File.Exists(settingsPath)) {
+                // Shared settings file: fail closed if it isn't a JSON object so we
+                // never clobber unrelated keys (chat.defaultModel, etc.) by
+                // replacing the whole file with just chat.defaultAgent. Mirrors the
+                // Gemini installer. (Unparseable JSON throws and is caught below —
+                // also leaving the file untouched.)
+                if (JsonNode.Parse(File.ReadAllText(settingsPath)) is not JsonObject existing)
+                    return false;
+                root = existing;
+            } else {
+                root = new JsonObject();
+            }
+
             root[DefaultAgentKey] = agentName;
 
             var dir = Path.GetDirectoryName(settingsPath);

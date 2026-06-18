@@ -384,6 +384,13 @@ static partial class WatchCommand {
                 ["cwd"]             = cwd ?? "",
                 ["hook_event_name"] = "session_end",
                 ["reason"]          = "parent_exited",
+                // Stamp the exit time so the server can scope the SessionEnded id
+                // per run. Vendors with no session-end hook (Kiro) end ONLY via this
+                // path, so without a timestamp a resumed session's second exit would
+                // dedupe against the first and the session would stay Active.
+                // Computed once here and reused across POST retries, so it stays
+                // idempotent for a single exit.
+                ["ended_at"]        = DateTimeOffset.UtcNow.ToString("O"),
             };
 
             if (repository is not null) {

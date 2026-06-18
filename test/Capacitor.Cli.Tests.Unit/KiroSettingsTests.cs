@@ -56,6 +56,27 @@ public class KiroSettingsTests {
         await Assert.That(KiroSettings.ReadDefaultAgent(settingsPath)).IsEqualTo("kiro_default");
     }
 
+    [Test]
+    public async Task set_default_fails_closed_on_valid_json_that_is_not_an_object() {
+        using var tmp = new TempDir();
+        var settingsPath = Path.Combine(tmp.Path, "cli.json");
+        // Valid JSON, but an array — must NOT be clobbered into {chat.defaultAgent}.
+        await File.WriteAllTextAsync(settingsPath, "[1,2,3]");
+
+        await Assert.That(KiroSettings.SetDefaultAgent(settingsPath, "kcap")).IsFalse();
+        await Assert.That(await File.ReadAllTextAsync(settingsPath)).IsEqualTo("[1,2,3]");
+    }
+
+    [Test]
+    public async Task set_default_fails_closed_on_malformed_file() {
+        using var tmp = new TempDir();
+        var settingsPath = Path.Combine(tmp.Path, "cli.json");
+        await File.WriteAllTextAsync(settingsPath, "{ not json ");
+
+        await Assert.That(KiroSettings.SetDefaultAgent(settingsPath, "kcap")).IsFalse();
+        await Assert.That(await File.ReadAllTextAsync(settingsPath)).IsEqualTo("{ not json ");
+    }
+
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),

@@ -855,9 +855,22 @@ public static class PluginCommand {
 
         try {
             // Restore the default agent kcap replaced (recorded at install time).
+            // If kcap is currently the default and the restore write FAILS, abort
+            // before deleting kcap.json / the marker — otherwise chat.defaultAgent
+            // is left pointing at a deleted agent and the recorded previous default
+            // (marker line 2) is gone, so a retry can't recover. Leaving both in
+            // place keeps `kcap plugin remove --kiro` retryable.
             var previousDefault = KiroHooksInstaller.ReadPreviousDefault(agentPath) ?? "kiro_default";
-            if (KiroSettings.ReadDefaultAgent(settingsPath) == KiroAgentName)
-                KiroSettings.SetDefaultAgent(settingsPath, previousDefault);
+            if (KiroSettings.ReadDefaultAgent(settingsPath) == KiroAgentName
+             && !KiroSettings.SetDefaultAgent(settingsPath, previousDefault)) {
+                await env.Stderr.WriteLineAsync(
+                    $"Could not restore your default Kiro agent to '{previousDefault}' in {settingsPath}. "
+                  + "Left kcap.json in place so you can retry — fix the settings file and re-run: "
+                  + "kcap plugin remove --kiro"
+                );
+
+                return 1;
+            }
 
             var removed = RemoveKiroHooks(agentPath);
 
