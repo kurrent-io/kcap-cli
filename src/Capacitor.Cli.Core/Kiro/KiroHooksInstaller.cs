@@ -47,13 +47,36 @@ public static class KiroHooksInstaller {
         catch { return null; }
     }
 
-    public static void WriteMarker(string agentJsonPath) {
+    /// <summary>
+    /// Stamps the marker with the current version and, optionally, the default
+    /// agent that kcap replaced (line 2) so <c>plugin remove --kiro</c> can
+    /// restore it. <paramref name="previousDefault"/> is null when kcap was
+    /// already the default (nothing to restore).
+    /// </summary>
+    public static void WriteMarker(string agentJsonPath, string? previousDefault = null) {
         var dir = Path.GetDirectoryName(agentJsonPath);
         if (string.IsNullOrEmpty(dir)) return;
         try {
             Directory.CreateDirectory(dir);
-            File.WriteAllText(Path.Combine(dir, MarkerFileName), CapacitorVersion.Current());
+            var body = previousDefault is { Length: > 0 } p
+                ? $"{CapacitorVersion.Current()}\n{p}"
+                : CapacitorVersion.Current();
+            File.WriteAllText(Path.Combine(dir, MarkerFileName), body);
         } catch { /* best effort */ }
+    }
+
+    /// <summary>The default agent kcap replaced at install (marker line 2), or null.</summary>
+    public static string? ReadPreviousDefault(string agentJsonPath) {
+        var dir = Path.GetDirectoryName(agentJsonPath);
+        if (string.IsNullOrEmpty(dir)) return null;
+        var marker = Path.Combine(dir, MarkerFileName);
+        try {
+            if (!File.Exists(marker)) return null;
+            var lines = File.ReadAllLines(marker);
+            return lines.Length >= 2 && lines[1].Trim() is { Length: > 0 } p ? p : null;
+        } catch {
+            return null;
+        }
     }
 
     public static void DeleteMarker(string agentJsonPath) {

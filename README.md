@@ -397,11 +397,11 @@ Live sessions stream from `~/.copilot/session-state/<session-id>/events.jsonl` (
 
 #### AWS Kiro CLI hooks
 
-AWS Kiro CLI (the rebranded Amazon Q Developer CLI) is detected via `~/.kiro/` or the `kiro` / `kiro-cli` binary on `PATH`. kcap writes its own agent file — Kiro reads every `agents/*.json` at startup, so restart any running `kiro` session after installing.
+AWS Kiro CLI (the rebranded Amazon Q Developer CLI) is detected via `~/.kiro/` or the `kiro` / `kiro-cli` binary on `PATH`. Kiro hooks fire only for the **active** agent — there is no global hook — so to capture every session transparently, `install --kiro` **clones your current default agent** into `~/.kiro/agents/kcap.json` (preserving its tools; a minimal agent would lose tool access), adds kcap's `agentSpawn` hook, and makes it your default agent (`chat.defaultAgent` in `~/.kiro/settings/cli.json`). This needs `kiro-cli` on `PATH` to perform the clone. Restart any running `kiro` session after installing. `remove --kiro` restores your previous default agent and deletes `kcap.json`.
 
 ```bash
-kcap plugin install --kiro                  # writes ~/.kiro/agents/kcap.json
-kcap plugin remove --kiro                   # deletes ~/.kiro/agents/kcap.json
+kcap plugin install --kiro                  # clone default agent + add hook, set as default
+kcap plugin remove --kiro                   # restore previous default, delete kcap.json
 ```
 
 Kiro writes an append-only JSONL log per session at `~/.kiro/sessions/cli/{id}.jsonl` (plus a sibling `{id}.json` for cwd / model / title; honours `KIRO_HOME`), so the kcap watcher tails it like every other vendor. Lifecycle comes from Kiro's `agentSpawn` hook (fires every prompt → deduped server-side); since Kiro has **no session-end trigger**, the watcher synthesizes session-end on `kiro-cli` exit. Historical sessions import via `kcap import --kiro`. Kiro persists no token counts, so Kiro sessions show no token usage by design.

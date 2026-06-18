@@ -41,6 +41,15 @@ public static class KiroPaths {
     public static string AgentsDir(string? home = null) => Path.Combine(ConfigRoot(home), "agents");
 
     /// <summary>
+    /// Kiro CLI settings file (<c>~/.kiro/settings/cli.json</c>). Holds dotted
+    /// keys like <c>chat.defaultModel</c> and <c>chat.defaultAgent</c> — the
+    /// latter is what <c>kiro-cli agent set-default</c> writes, and what kcap
+    /// flips to its cloned agent so hooks fire for every session.
+    /// </summary>
+    public static string SettingsFile(string? home = null) =>
+        Path.Combine(ConfigRoot(home), "settings", "cli.json");
+
+    /// <summary>
     /// kcap's owned agent-hooks file. Mirrors the Copilot model: kcap owns its own
     /// file rather than merging into a user agent, so removal is a clean delete.
     /// Kiro reads every <c>agents/*.json</c>, so the lifecycle hooks here apply to

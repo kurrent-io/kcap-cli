@@ -29,6 +29,7 @@ public sealed record PluginEnvironment(
     public string CursorUserHooksJson => CursorPaths.UserHooksJson(HomeDirectory);
     public string CopilotKcapHooksJson => CopilotPaths.KcapHooksJson(HomeDirectory);
     public string KiroKcapAgentJson    => KiroPaths.KcapAgentJson(HomeDirectory);
+    public string KiroSettingsJson     => KiroPaths.SettingsFile(HomeDirectory);
     public string AgentsSkillsDir     => Path.Combine(HomeDirectory, ".agents", "skills");
     public string LegacyCodexSkills   => Path.Combine(CodexHome, "skills");
 

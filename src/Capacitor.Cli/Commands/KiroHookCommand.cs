@@ -19,10 +19,10 @@ namespace Capacitor.Cli.Commands;
 ///                the SAME session id, so the server's deterministic lifecycle
 ///                event id collapses them to one SessionStarted and the
 ///                idempotent EnsureWatcherRunning is a no-op once live. The
-///                watcher reads the SQLite conversation, materializes a flattened
-///                transcript, streams it (vendor=kiro), and — because Kiro has NO
-///                session-end hook — synthesizes /hooks/session-end/kiro when it
-///                observes the kiro-cli process exit.
+///                watcher tails Kiro's append-only JSONL session log
+///                (~/.kiro/sessions/cli/{id}.jsonl), streams it (vendor=kiro), and
+///                — because Kiro has NO session-end hook — synthesizes
+///                /hooks/session-end/kiro when it observes the kiro-cli process exit.
 ///   (any other) → no-op exit 0.
 ///
 /// Kiro treats non-empty hook stdout as re-injection (a stdout-writing hook loops
@@ -50,11 +50,18 @@ static class KiroHookCommand {
         // MUST exit 0 with empty stdout.
         if (eventName != "agentSpawn") return 0;
 
-        // Kiro's session id is the conversation UUID (dashed). Keep the dashed
-        // form for the server payload (matches the transcript's conversation_id)
-        // and the dashless form for local keys (watcher pid file / disable
-        // markers), mirroring every other vendor dispatcher.
-        var dashedSessionId = TryGetString(node, "session_id");
+        // Kiro's session id is the conversation UUID (dashed). Unlike every other
+        // vendor it is NOT in the hook's STDIN payload — Kiro's agentSpawn payload
+        // is only {hook_event_name, cwd, prompt}. Kiro instead exposes the id to
+        // hook processes via the KIRO_SESSION_ID env var, so read it from there
+        // (with a payload fallback in case a future schema adds the field). Keep the
+        // dashed form for the server payload (matches the transcript's
+        // conversation_id) and the dashless form for local keys (watcher pid file /
+        // disable markers), mirroring every other vendor dispatcher.
+        var dashedSessionId = Environment.GetEnvironmentVariable("KIRO_SESSION_ID");
+        if (string.IsNullOrEmpty(dashedSessionId)) {
+            dashedSessionId = TryGetString(node, "session_id");
+        }
         if (string.IsNullOrEmpty(dashedSessionId)) return 0;
         if (!Guid.TryParse(dashedSessionId, out _)) return 0;
 

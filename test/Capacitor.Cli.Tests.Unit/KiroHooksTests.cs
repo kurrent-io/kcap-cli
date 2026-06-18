@@ -5,51 +5,91 @@ using Capacitor.Cli.Core.Kiro;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Covers the Kiro agent-hooks writer (<see cref="PluginCommand.InstallKiroHooks"/> /
-/// <see cref="PluginCommand.RemoveKiroHooks"/>), the installer marker helpers,
-/// and the parser. Like Copilot, kcap owns its own agent file
-/// (<c>~/.kiro/agents/kcap.json</c>) wholesale — install is a write, remove is a
-/// delete.
+/// Covers the testable pieces of the Kiro installer. Transparent capture clones
+/// the user's default agent (preserving tools — a minimal agent loses tool
+/// access) via <c>kiro-cli agent create --from</c>, then injects kcap's hook and
+/// flips <c>chat.defaultAgent</c>. The clone + set-default round-trip needs
+/// kiro-cli on PATH (integration); here we cover the parts that don't: hook
+/// injection into an already-cloned file, the marker's previous-default record,
+/// removal, and detection/parsing.
 /// </summary>
 public class KiroHooksTests {
     [Test]
-    public async Task fresh_install_writes_agentspawn_hook_with_embedded_event_and_timeout() {
+    public async Task inject_adds_agentspawn_hook_and_preserves_cloned_agent_fields() {
         using var tmp = new TempDir();
         var agentPath = Path.Combine(tmp.Path, "agents", "kcap.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(agentPath)!);
 
-        var ok = PluginCommand.InstallKiroHooks(agentPath);
+        // A cloned default agent: real tools/prompt + an empty hooks block.
+        await File.WriteAllTextAsync(agentPath,
+            """{"name":"kcap","prompt":"sys","tools":["fs_read","execute_bash"],"allowedTools":["fs_read"],"hooks":{}}""");
+
+        var ok = PluginCommand.InjectKiroHooksIntoAgent(agentPath);
         await Assert.That(ok).IsTrue();
 
-        var root  = JsonNode.Parse(await File.ReadAllTextAsync(agentPath))!.AsObject();
-        var hooks = root["hooks"]!.AsObject();
+        var root = JsonNode.Parse(await File.ReadAllTextAsync(agentPath))!.AsObject();
 
         foreach (var evt in KiroHooksParser.KiroHookEvents) {
-            var entries = hooks[evt]!.AsArray();
-            await Assert.That(entries.Count).IsEqualTo(1);
-
-            var entry = entries[0]!.AsObject();
+            var entry = root["hooks"]!.AsObject()[evt]!.AsArray()[0]!.AsObject();
             await Assert.That(entry["command"]!.GetValue<string>()).IsEqualTo($"kcap hook --kiro --event {evt}");
-            await Assert.That(entry["timeout_ms"]!.GetValue<int>()).IsEqualTo(5000);
         }
 
         // agentSpawn is the only subscribed event — see KiroHooksParser.
         await Assert.That(KiroHooksParser.KiroHookEvents).Contains("agentSpawn");
         await Assert.That(KiroHooksParser.KiroHookEvents.Contains("stop")).IsFalse();
+
+        // The cloned tools/prompt MUST survive — that's the whole reason we clone
+        // instead of writing a minimal agent (which would lose tool access).
+        await Assert.That(root["tools"]!.AsArray().Count).IsEqualTo(2);
+        await Assert.That(root["prompt"]!.GetValue<string>()).IsEqualTo("sys");
     }
 
     [Test]
-    public async Task install_writes_marker_and_remove_deletes_file_and_marker() {
+    public async Task inject_is_idempotent() {
         using var tmp = new TempDir();
         var agentPath = Path.Combine(tmp.Path, "agents", "kcap.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(agentPath)!);
+        await File.WriteAllTextAsync(agentPath, """{"name":"kcap","hooks":{}}""");
 
-        PluginCommand.InstallKiroHooks(agentPath);
+        await Assert.That(PluginCommand.InjectKiroHooksIntoAgent(agentPath)).IsTrue();
+        await Assert.That(PluginCommand.InjectKiroHooksIntoAgent(agentPath)).IsTrue();
 
+        var root = JsonNode.Parse(await File.ReadAllTextAsync(agentPath))!.AsObject();
+        // No duplicate entries piled up on re-run.
+        await Assert.That(root["hooks"]!.AsObject()["agentSpawn"]!.AsArray().Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task inject_missing_file_returns_false() {
+        using var tmp = new TempDir();
+        await Assert.That(PluginCommand.InjectKiroHooksIntoAgent(Path.Combine(tmp.Path, "nope.json"))).IsFalse();
+    }
+
+    [Test]
+    public async Task marker_records_and_restores_previous_default() {
+        using var tmp = new TempDir();
+        var agentPath = Path.Combine(tmp.Path, "agents", "kcap.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(agentPath)!);
+
+        KiroHooksInstaller.WriteMarker(agentPath, "kiro_default");
         await Assert.That(KiroHooksInstaller.IsInstalled(agentPath)).IsTrue();
         await Assert.That(KiroHooksInstaller.ReadMarker(agentPath)).IsNotNull();
+        await Assert.That(KiroHooksInstaller.ReadPreviousDefault(agentPath)).IsEqualTo("kiro_default");
 
-        var removed = PluginCommand.RemoveKiroHooks(agentPath);
+        // A version-only marker (kcap was already the default) records no previous.
+        KiroHooksInstaller.WriteMarker(agentPath);
+        await Assert.That(KiroHooksInstaller.ReadPreviousDefault(agentPath)).IsNull();
+    }
 
-        await Assert.That(removed).IsTrue();
+    [Test]
+    public async Task remove_deletes_agent_file_and_marker() {
+        using var tmp = new TempDir();
+        var agentPath = Path.Combine(tmp.Path, "agents", "kcap.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(agentPath)!);
+        await File.WriteAllTextAsync(agentPath, "{}");
+        KiroHooksInstaller.WriteMarker(agentPath, "kiro_default");
+
+        await Assert.That(PluginCommand.RemoveKiroHooks(agentPath)).IsTrue();
         await Assert.That(File.Exists(agentPath)).IsFalse();
         await Assert.That(KiroHooksInstaller.IsInstalled(agentPath)).IsFalse();
         await Assert.That(KiroHooksInstaller.ReadMarker(agentPath)).IsNull();
@@ -70,9 +110,8 @@ public class KiroHooksTests {
         var agentPath = Path.Combine(agentsDir, "kcap.json");
 
         Directory.CreateDirectory(agentsDir);
-        await File.WriteAllTextAsync(agentPath, """
-            {"name":"kcap","hooks":{"agentSpawn":[{"command":"kcap hook --kiro --event agentSpawn"}]}}
-        """);
+        await File.WriteAllTextAsync(agentPath,
+            """{"name":"kcap","hooks":{"agentSpawn":[{"command":"kcap hook --kiro --event agentSpawn"}]}}""");
 
         await Assert.That(KiroHooksInstaller.IsInstalled(agentPath)).IsTrue();
     }
@@ -89,12 +128,8 @@ public class KiroHooksTests {
 
     [Test]
     public async Task has_capacitor_hooks_for_requires_every_event() {
-        using var tmp = new TempDir();
-        var agentPath = Path.Combine(tmp.Path, "agents", "kcap.json");
-
-        PluginCommand.InstallKiroHooks(agentPath);
-
-        var root = JsonNode.Parse(await File.ReadAllTextAsync(agentPath))!.AsObject();
+        var root = JsonNode.Parse(
+            """{"name":"kcap","hooks":{"agentSpawn":[{"command":"kcap hook --kiro --event agentSpawn"}]}}""")!.AsObject();
 
         await Assert.That(KiroHooksParser.HasCapacitorHooksFor(root, KiroHooksParser.KiroHookEvents)).IsTrue();
         await Assert.That(KiroHooksParser.HasCapacitorHooksFor(root, ["agentSpawn", "someFutureEvent"])).IsFalse();
