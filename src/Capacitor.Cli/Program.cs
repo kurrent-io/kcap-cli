@@ -38,7 +38,7 @@ var command = args[0];
 // nested headless invocation.
 if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
  && command == "hook"
- && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot"))) {
+ && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot") || args.Contains("--gemini"))) {
     return 0;
 }
 
@@ -465,6 +465,7 @@ switch (command) {
             new CodexImportSource(),
             new CursorImportSource(),
             new CopilotImportSource(),
+            new GeminiImportSource(),
         };
         IReadOnlyList<IImportSource> sources = explicitVendorSelection
             ? allSources.Where(s => vsel.Vendors.Contains(s.Vendor)).ToList()
@@ -604,8 +605,11 @@ switch (command) {
         if (args.Contains("--copilot")) {
             return await CopilotHookCommand.Handle(baseUrl!, Console.In, args);
         }
+        if (args.Contains("--gemini")) {
+            return await GeminiHookCommand.Handle(baseUrl!, Console.In);
+        }
         Console.Error.WriteLine("kcap hook requires a vendor flag (for example --claude)");
-        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor, --copilot");
+        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor, --copilot, --gemini");
         return 1;
     }
     case "cursor":

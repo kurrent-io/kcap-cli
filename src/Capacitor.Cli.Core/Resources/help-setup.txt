@@ -17,6 +17,8 @@ Options:
                               user-dir is detected (~/.cursor/).
   --skip-copilot-hooks        Don't install Copilot CLI hooks even if Copilot
                               is detected (~/.copilot/ or copilot on PATH).
+  --skip-gemini-hooks         Don't install Gemini CLI hooks even if Gemini
+                              is detected (~/.gemini/ or gemini on PATH).
   --use-provider-api-key <v>  In --no-prompt mode, set whether kcap keeps
                               ANTHROPIC_API_KEY / OPENAI_API_KEY in headless
                               agent spawns. Accepts true/1/yes/on or
@@ -28,10 +30,11 @@ Options:
 The setup wizard detects every supported coding agent: Claude Code and Codex CLI
 via PATH; Cursor via user-dir presence (~/.cursor/) so IDE-only users without
 the cursor shell command are covered; Copilot CLI via ~/.copilot/ or the
-copilot binary on PATH. One yes/no prompt is shown per detected agent. Hooks
-are installed user-wide. For project-scope or post-setup re-installs, use:
+copilot binary on PATH; Gemini CLI via ~/.gemini/ or the gemini binary on PATH.
+One yes/no prompt is shown per detected agent. Hooks are installed user-wide.
+For project-scope or post-setup re-installs, use:
 
-  kcap plugin install [--codex] [--cursor] [--copilot] [--project]
+  kcap plugin install [--codex] [--cursor] [--copilot] [--gemini] [--project]
 
 Legacy:
   --plugin-scope <user|project|skip>
