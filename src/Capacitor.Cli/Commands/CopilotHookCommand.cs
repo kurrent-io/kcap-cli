@@ -219,7 +219,22 @@ static class CopilotHookCommand {
             forwarded["agent_host_id"] = agentHostId;
         }
 
-        return await PostHookAsync(baseUrl, "session-end/copilot", forwarded.ToJsonString());
+        var exit = await PostHookAsync(baseUrl, "session-end/copilot", forwarded.ToJsonString());
+
+        // AI-897: Copilot appends `session.shutdown` (per-model input/cache token
+        // aggregates) — and sometimes the final assistant turn — to events.jsonl
+        // only AFTER this hook returns. By now the live watcher is dead
+        // (KillWatcher above) and the server's session-end StopAndDrain has run,
+        // so nothing is left reading the file. Spawn a detached drainer that
+        // outlives the hook, waits for `session.shutdown` to land (or times out),
+        // then delivers the tail via one idempotent inline-drain. Spawned AFTER
+        // the POST so its poll budget isn't consumed by the pre-drain + POST work,
+        // yet still created before Copilot writes the shutdown line. Best-effort:
+        // run it regardless of the POST result (tail delivery is independent of
+        // the lifecycle POST and idempotent).
+        WatcherManager.SpawnCopilotFinalizeDrain(baseUrl, sessionId, transcriptPath);
+
+        return exit;
     }
 
     static async Task<int> HandleAgentStop(string baseUrl, JsonNode node, string dashedSessionId, string sessionId, string? cwd) {

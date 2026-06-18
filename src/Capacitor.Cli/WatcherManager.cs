@@ -253,6 +253,55 @@ static class WatcherManager {
         }
     }
 
+    /// <summary>
+    /// Spawns a detached, short-lived <c>kcap copilot-finalize</c> process that
+    /// delivers the Copilot <c>session.shutdown</c> tail (and any final assistant
+    /// turn) which Copilot writes to events.jsonl only AFTER the sessionEnd hook
+    /// returns (AI-897). The hook has already killed the live watcher and POSTed
+    /// session-end by this point, so nothing else is reading the file. Fire-and-
+    /// forget and idempotent (server watermark + deterministic ids); mirrors
+    /// <see cref="SpawnWhatsDoneGenerator"/>.
+    /// </summary>
+    public static void SpawnCopilotFinalizeDrain(string baseUrl, string sessionId, string transcriptPath) {
+        try {
+            var kcapPath = Environment.ProcessPath ?? "kcap";
+
+            var psi = new ProcessStartInfo(kcapPath) {
+                RedirectStandardOutput = true,
+                RedirectStandardInput  = true,
+                RedirectStandardError  = true,
+                UseShellExecute        = false,
+                CreateNoWindow         = true,
+                Environment            = { ["KCAP_URL"] = baseUrl }
+            };
+            psi.ArgumentList.Add("copilot-finalize");
+            psi.ArgumentList.Add(sessionId);
+            psi.ArgumentList.Add(transcriptPath);
+
+            // Don't let this detached child inherit the agent's std handles on
+            // Windows (AI-820) — same pipe-leak hazard as the spawns above.
+            ProcessHelpers.PreventInheritedStdHandles();
+
+            var process = Process.Start(psi);
+
+            if (process is null) {
+                Console.Error.WriteLine($"Failed to spawn copilot finalize drain for {sessionId}");
+
+                return;
+            }
+
+            // Close redirected streams from the parent side so the child doesn't
+            // hold pipe FDs open (the child redirects its own output to a log file).
+            process.StandardInput.Close();
+            process.StandardOutput.Close();
+            process.StandardError.Close();
+
+            Console.Error.WriteLine($"Spawned copilot finalize drain for {sessionId} (PID {process.Id})");
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"Failed to spawn copilot finalize drain for {sessionId}: {ex.Message}");
+        }
+    }
+
     public static async Task InlineDrainAsync(
             string  baseUrl,
             string  sessionId,
@@ -303,7 +352,11 @@ static class WatcherManager {
                 }
 
                 if (!string.IsNullOrWhiteSpace(line)) {
-                    newLines.Add(line);
+                    // Redact like WatchCommand.DrainNewLines — the live watcher
+                    // path already redacts, and this inline-drain can carry real
+                    // assistant/tool content (e.g. the Copilot final turn the
+                    // finalize drain delivers, AI-897).
+                    newLines.Add(SecretRedactor.RedactLine(line));
                     newLineNumbers.Add(lineIndex);
                 }
 
