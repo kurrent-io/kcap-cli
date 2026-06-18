@@ -257,9 +257,11 @@ static class WatcherManager {
     /// Spawns a detached, short-lived <c>kcap copilot-finalize</c> process that
     /// delivers the Copilot <c>session.shutdown</c> tail (and any final assistant
     /// turn) which Copilot writes to events.jsonl only AFTER the sessionEnd hook
-    /// returns (AI-897). The hook has already killed the live watcher and POSTed
-    /// session-end by this point, so nothing else is reading the file. Fire-and-
-    /// forget and idempotent (server watermark + deterministic ids); mirrors
+    /// returns (AI-897). The hook calls this as its FIRST action — before killing
+    /// the live watcher and POSTing session-end — so the drainer is guaranteed to
+    /// exist even if the POST hangs and Copilot SIGKILLs the hook; being detached
+    /// it survives that kill and is the only thing left to read the file. Fire-
+    /// and-forget and idempotent (server watermark + deterministic ids); mirrors
     /// <see cref="SpawnWhatsDoneGenerator"/>.
     /// </summary>
     public static void SpawnCopilotFinalizeDrain(string baseUrl, string sessionId, string transcriptPath) {

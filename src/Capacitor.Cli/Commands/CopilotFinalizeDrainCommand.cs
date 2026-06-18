@@ -12,19 +12,23 @@ namespace Capacitor.Cli.Commands;
 /// aggregate the server consumes as <c>CopilotUsageBackfilled</c> — and
 /// occasionally the final assistant turn, to <c>events.jsonl</c> only AFTER the
 /// <c>sessionEnd</c> hook returns (verbatim live tail: <c>hook.start</c>,
-/// <c>hook.end</c>, <c>session.shutdown</c>). The hook's own inline-drain runs
-/// before that line exists and then kills the live watcher, so nothing is left
-/// to deliver it — input/cache totals stay 0 for live sessions. (Batch
+/// <c>hook.end</c>, <c>session.shutdown</c>). The hook's pre-drain (watcher kill
+/// + inline-drain) runs before that line exists, so nothing is left to deliver
+/// it — input/cache totals stay 0 for live sessions. (Batch
 /// <c>kcap import --copilot</c> is unaffected; it reads the complete file.)
 ///
-/// <see cref="WatcherManager.SpawnCopilotFinalizeDrain"/> launches this command
-/// detached AFTER the session-end POST, so it outlives the hook. It polls until
-/// <c>session.shutdown</c> is the terminal transcript line (or a short budget
-/// elapses), then performs one inline-drain. It is fully decoupled from the
-/// hook's return and the server's StopAndDrain, so it cannot deadlock or stall
-/// them; the server watermark + deterministic-id dedup make the late delivery
-/// idempotent. The timeout fallback also rescues a dropped final assistant turn
-/// when <c>session.shutdown</c> never lands (e.g. Copilot crash).
+/// The <c>sessionEnd</c> hook launches this command (via
+/// <see cref="WatcherManager.SpawnCopilotFinalizeDrain"/>) detached as its FIRST
+/// action — before the capped pre-drain and the retrying session-end POST — so
+/// the drainer is guaranteed to exist even if a slow/unreachable server makes
+/// the POST burn the hook timeout and Copilot SIGKILLs the hook; being detached
+/// it survives that kill. It polls until <c>session.shutdown</c> is the terminal
+/// transcript line (or its budget elapses), then performs one inline-drain.
+/// Fully decoupled from the hook's return and the server's StopAndDrain, so it
+/// cannot deadlock or stall them; the server watermark + deterministic-id dedup
+/// make the late delivery idempotent. The timeout fallback also rescues a
+/// dropped final assistant turn when <c>session.shutdown</c> never lands
+/// (e.g. Copilot crash).
 /// </remarks>
 static class CopilotFinalizeDrainCommand {
     // The hook spawns this FIRST — before its capped pre-drain and the retrying
