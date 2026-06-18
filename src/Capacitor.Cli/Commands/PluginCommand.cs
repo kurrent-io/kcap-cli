@@ -991,7 +991,15 @@ public static class PluginCommand {
             // the default. With no marker, the next --if-installed refresh retries.
             if (!KiroSettings.SetDefaultAgent(settingsPath, KiroAgentName)) return false;
 
-            KiroHooksInstaller.WriteMarker(agentJsonPath, recordedDefault);
+            // The marker's line 2 is the ONLY record of the replaced default, so a
+            // silent failure here would let `remove --kiro` restore the wrong agent
+            // (and a later --if-installed refresh re-stamp a bogus previous default).
+            // Treat it as part of the atomic install: on failure roll the default
+            // back and report failure rather than a success we can't undo.
+            if (!KiroHooksInstaller.WriteMarker(agentJsonPath, recordedDefault)) {
+                KiroSettings.SetDefaultAgent(settingsPath, recordedDefault);
+                return false;
+            }
 
             return true;
         } catch {

@@ -51,18 +51,23 @@ public static class KiroHooksInstaller {
     /// Stamps the marker with the current version and, optionally, the default
     /// agent that kcap replaced (line 2) so <c>plugin remove --kiro</c> can
     /// restore it. <paramref name="previousDefault"/> is null when kcap was
-    /// already the default (nothing to restore).
+    /// already the default (nothing to restore). Returns false on I/O failure —
+    /// line 2 is the ONLY record of the previous default, so the caller must treat
+    /// a failed write as a failed install (not best-effort).
     /// </summary>
-    public static void WriteMarker(string agentJsonPath, string? previousDefault = null) {
+    public static bool WriteMarker(string agentJsonPath, string? previousDefault = null) {
         var dir = Path.GetDirectoryName(agentJsonPath);
-        if (string.IsNullOrEmpty(dir)) return;
+        if (string.IsNullOrEmpty(dir)) return false;
         try {
             Directory.CreateDirectory(dir);
             var body = previousDefault is { Length: > 0 } p
                 ? $"{CapacitorVersion.Current()}\n{p}"
                 : CapacitorVersion.Current();
             File.WriteAllText(Path.Combine(dir, MarkerFileName), body);
-        } catch { /* best effort */ }
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     /// <summary>The default agent kcap replaced at install (marker line 2), or null.</summary>
