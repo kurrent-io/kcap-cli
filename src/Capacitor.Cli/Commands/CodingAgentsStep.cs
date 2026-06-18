@@ -8,12 +8,12 @@ namespace Capacitor.Cli.Commands;
 /// can drive every branch without touching ~/.claude, ~/.codex, or AnsiConsole.
 /// </summary>
 internal static class CodingAgentsStep {
-    // SkipGemini / Gemini / GeminiHooksInstalled default so existing call sites
-    // (and the broad CodingAgentsStep test suite) compile unchanged — Gemini was
-    // added (AI-887) after the other four vendors.
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false);
+    // SkipGemini/SkipPi (and Gemini/Pi, GeminiHooksInstalled/PiExtensionInstalled)
+    // default so existing call sites — and the broad CodingAgentsStep test suite —
+    // compile unchanged; both were added after the original four (Gemini AI-887, Pi AI-886).
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipPi = false);
 
-    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false);
+    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Pi = false);
 
     internal record Paths(
             string  ClaudeSettingsPath,
@@ -24,7 +24,8 @@ internal static class CodingAgentsStep {
             string  CopilotHooksPath,
             string  GeminiSettingsPath,
             string  AgentsSkillsDir,
-            string  LegacyCodexSkillsDir
+            string  LegacyCodexSkillsDir,
+            string  PiExtensionPath = ""
         );
 
     internal record Installers(
@@ -35,7 +36,8 @@ internal static class CodingAgentsStep {
             Func<string /*settingsPath*/, bool>                       InstallGeminiHooks,
             Func<bool>                                                CapacitorOnPath,
             Func<string /*srcDir*/, string /*dstDir*/, bool>          InstallAgentSkills,
-            Func<string /*legacyDir*/, bool>                          CleanLegacyCodexSkills
+            Func<string /*legacyDir*/, bool>                          CleanLegacyCodexSkills,
+            Func<string /*extensionPath*/, bool>?                     InstallPiExtension = null
         );
 
     internal record Result(
@@ -44,7 +46,8 @@ internal static class CodingAgentsStep {
             bool CodexSkillsInstalled,
             bool CursorHooksInstalled,
             bool CopilotHooksInstalled,
-            bool GeminiHooksInstalled = false
+            bool GeminiHooksInstalled = false,
+            bool PiExtensionInstalled = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -54,7 +57,7 @@ internal static class CodingAgentsStep {
         /// as agents are added (consumers like SetupCommand's restart tip key off this).
         /// </summary>
         internal bool AnyHooksInstalled =>
-            ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled || GeminiHooksInstalled;
+            ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled || GeminiHooksInstalled || PiExtensionInstalled;
     }
 
     /// <summary>
@@ -76,9 +79,10 @@ internal static class CodingAgentsStep {
         var cursorHooksInstalled  = HandleCursorHooks(options, detected, paths, installers, prompt, writeLine);
         var copilotHooksInstalled = HandleCopilotHooks(options, detected, paths, installers, prompt, writeLine);
         var geminiHooksInstalled  = HandleGeminiHooks(options, detected, paths, installers, prompt, writeLine);
+        var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, prompt, writeLine);
 
-        if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: false }) {
-            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, Copilot CLI, or Gemini CLI to start capturing sessions.");
+        if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: false, Pi: false }) {
+            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, or Pi to start capturing sessions.");
         }
 
         return Task.FromResult(
@@ -88,7 +92,8 @@ internal static class CodingAgentsStep {
                 codexSkillsInstalled,
                 cursorHooksInstalled,
                 copilotHooksInstalled,
-                geminiHooksInstalled
+                geminiHooksInstalled,
+                piExtensionInstalled
             )
         );
     }
@@ -195,6 +200,62 @@ internal static class CodingAgentsStep {
 
         writeLine($"  [green]✓[/] Gemini hooks installed ({Markup.Escape(paths.GeminiSettingsPath)})");
         writeLine("  [dim]  Note: Gemini loads hook config at startup — restart any running gemini session to pick them up.[/]");
+
+        return true;
+    }
+
+    static bool HandlePiExtension(
+            Options            options,
+            DetectedAgents     detected,
+            Paths              paths,
+            Installers         installers,
+            Func<string, bool> prompt,
+            Action<string>     writeLine
+        ) {
+        if (!detected.Pi) {
+            writeLine("  [dim]· Pi not detected — skipping[/]");
+
+            return false;
+        }
+
+        writeLine("  [green]✓[/] Pi detected");
+
+        if (options.SkipPi) {
+            writeLine("  [dim]· Pi extension skipped by flag[/]");
+
+            return false;
+        }
+
+        if (installers.InstallPiExtension is null) return false;
+
+        var shouldInstall = options.NoPrompt || prompt("Install the Pi extension (live session capture)?");
+
+        if (!shouldInstall) {
+            writeLine("  [dim]· Pi extension not installed (you can run kcap plugin install --pi later)[/]");
+
+            return false;
+        }
+
+        // Pi has no shell hooks — the extension (kcap.ts) shells out to the bare
+        // "kcap hook --pi" command, so pi must find kcap on PATH (same precheck
+        // as the Cursor/Copilot branches).
+        if (!installers.CapacitorOnPath()) {
+            writeLine("  [yellow]⚠[/] Pi extension not installed — 'kcap' is not on PATH.");
+            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+
+            return false;
+        }
+
+        var ok = installers.InstallPiExtension(paths.PiExtensionPath);
+
+        if (!ok) {
+            writeLine("  [yellow]⚠[/] Could not write the Pi extension file.");
+
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] Pi extension installed ({Markup.Escape(paths.PiExtensionPath)})");
+        writeLine("  [dim]  Note: Pi loads extensions at startup — restart any running pi session to pick it up.[/]");
 
         return true;
     }

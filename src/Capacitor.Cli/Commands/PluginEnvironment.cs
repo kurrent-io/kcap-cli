@@ -2,6 +2,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
+using Capacitor.Cli.Core.Pi;
 
 namespace Capacitor.Cli.Commands;
 
@@ -29,6 +30,7 @@ public sealed record PluginEnvironment(
     public string CursorUserHooksJson => CursorPaths.UserHooksJson(HomeDirectory);
     public string CopilotKcapHooksJson => CopilotPaths.KcapHooksJson(HomeDirectory);
     public string GeminiSettingsJson   => GeminiPaths.SettingsJson(HomeDirectory);
+    public string PiKcapExtension      => PiPaths.KcapExtension(HomeDirectory);
     public string AgentsSkillsDir     => Path.Combine(HomeDirectory, ".agents", "skills");
     public string LegacyCodexSkills   => Path.Combine(CodexHome, "skills");
 

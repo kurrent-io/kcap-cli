@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
+using Capacitor.Cli.Core.Pi;
 using Spectre.Console;
 using Profile = Capacitor.Cli.Core.Config.Profile;
 
@@ -21,6 +22,7 @@ public static class SetupCommand {
         var skipCursorFlag   = args.Contains("--skip-cursor-hooks");
         var skipCopilotFlag  = args.Contains("--skip-copilot-hooks");
         var skipGeminiFlag   = args.Contains("--skip-gemini-hooks");
+        var skipPiFlag       = args.Contains("--skip-pi-hooks");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
@@ -180,7 +182,10 @@ public static class SetupCommand {
             Copilot: CopilotPaths.IsInstalled() || AgentDetector.IsInstalled("copilot"),
             // Dir presence covers IDE-launched Gemini; the PATH probe covers a
             // fresh install that hasn't created ~/.gemini yet.
-            Gemini:  GeminiPaths.IsInstalled()  || AgentDetector.IsInstalled("gemini"));
+            Gemini:  GeminiPaths.IsInstalled()  || AgentDetector.IsInstalled("gemini"),
+            // Pi keeps state under ~/.pi/agent; the PATH probe covers fresh
+            // installs that haven't created it yet.
+            Pi:      PiPaths.IsInstalled() || AgentDetector.IsInstalled("pi"));
 
         // gitRoot is guaranteed non-null here when legacyProjectScope is true (the early
         // guard at the top of HandleAsync returns 1 otherwise).
@@ -194,7 +199,8 @@ public static class SetupCommand {
             SkipCursor:  skipCursorFlag,
             SkipCopilot: skipCopilotFlag,
             SkipGemini:  skipGeminiFlag,
-            NoPrompt:    noPrompt);
+            NoPrompt:    noPrompt,
+            SkipPi:      skipPiFlag);
 
         var stepPaths = new CodingAgentsStep.Paths(
             ClaudeSettingsPath:   claudeSettingsPath,
@@ -205,7 +211,8 @@ public static class SetupCommand {
             CopilotHooksPath:     CopilotPaths.KcapHooksJson(),
             GeminiSettingsPath:   GeminiPaths.SettingsJson(),
             AgentsSkillsDir:      AgentsPaths.UserSkillsDir,
-            LegacyCodexSkillsDir: Path.Combine(CodexPaths.Home, "skills"));
+            LegacyCodexSkillsDir: Path.Combine(CodexPaths.Home, "skills"),
+            PiExtensionPath:      PiPaths.KcapExtension());
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -215,7 +222,8 @@ public static class SetupCommand {
             InstallGeminiHooks:     PluginCommand.InstallGeminiHooks,
             CapacitorOnPath:        () => AgentDetector.IsInstalled("kcap"),
             InstallAgentSkills:     AgentsSkillsInstaller.Install,
-            CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny);
+            CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny,
+            InstallPiExtension:     PiExtensionInstaller.Install);
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
@@ -494,9 +502,20 @@ public static class SetupCommand {
     internal static string? LiveRecordingRestartTip(CodingAgentsStep.Result result) {
         if (!result.AnyHooksInstalled) return null;
 
+        // The "how to restart" hint is agent-specific: Claude can resume with
+        // --continue; Pi loads the kcap extension at process start; Codex/Cursor/
+        // Copilot just need a fresh session. Build it from what was actually
+        // installed instead of always naming Claude — the old text read as a
+        // Claude instruction even on a Pi/Cursor/Copilot-only setup.
+        var how = result.ClaudeInstalled
+            ? "Restart your agent (or run [cyan]claude --continue[/])"
+            : result.PiExtensionInstalled
+                ? "Restart [cyan]pi[/] so the kcap extension loads"
+                : "Restart your agent";
+
         return
             "[yellow]![/] Live recording begins on a [bold]new[/] coding-agent session — hooks only load at session start.\n"
-          + "  Restart your agent (or run [cyan]claude --continue[/]) to begin streaming; a session that was already\n"
+          + $"  {how} to begin streaming; a session that was already\n"
           + "  running when you ran setup isn't being recorded yet.";
     }
 

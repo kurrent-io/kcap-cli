@@ -168,6 +168,25 @@ public class SetupCommandTests {
     }
 
     [Test]
+    public async Task LiveRecordingRestartTip_pi_only_tells_user_to_restart_pi() {
+        // A Pi-only install must not print a Claude-specific hint — it should
+        // tell the user to restart pi so the kcap extension loads.
+        var result = new CodingAgentsStep.Result(
+            ClaudeInstalled:       false,
+            CodexHooksInstalled:   false,
+            CodexSkillsInstalled:  false,
+            CursorHooksInstalled:  false,
+            CopilotHooksInstalled: false,
+            PiExtensionInstalled:  true);
+
+        var tip = SetupCommand.LiveRecordingRestartTip(result);
+
+        await Assert.That(tip).IsNotNull();
+        await Assert.That(tip!).Contains("pi");
+        await Assert.That(tip!).DoesNotContain("claude --continue");
+    }
+
+    [Test]
     public async Task LiveRecordingRestartTip_is_null_when_no_hooks_installed() {
         // No hooks wired up (e.g. every agent declined or none detected) — don't
         // promise live recording that won't happen.

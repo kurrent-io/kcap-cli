@@ -1,6 +1,6 @@
 # @kurrent/kcap
 
-CLI companion for [Kurrent Capacitor](https://github.com/kurrent-io/kcap-cli) — records and visualizes Claude Code sessions.
+CLI companion for [Kurrent Capacitor](https://github.com/kurrent-io/kcap-cli) — records and visualizes coding-agent sessions across Claude Code, Codex CLI, Cursor, GitHub Copilot CLI, and Pi.
 
 ## Install
 
@@ -14,7 +14,7 @@ npm install -g @kurrent/kcap
 kcap setup
 ```
 
-This walks you through: server URL, authentication, Claude Code plugin installation, and verification.
+This walks you through: server URL, authentication, coding-agent integration (the Claude Code / Codex / Cursor / Copilot hooks and the Pi live-ingest extension, for whichever it detects), and verification.
 
 ## Commands
 

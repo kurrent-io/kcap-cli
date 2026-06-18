@@ -24,7 +24,7 @@ Options:
 
 Notes:
   Per-agent selective cleanup is not exposed here — uninstall always touches
-  all known agents. Use `kcap plugin remove [--codex|--cursor|--copilot|--gemini|--skills]`
+  all known agents. Use `kcap plugin remove [--codex|--cursor|--copilot|--gemini|--pi|--skills]`
   for finer-grained removal.
 
   Project-scope hooks installed in a directory other than the cwd's git root

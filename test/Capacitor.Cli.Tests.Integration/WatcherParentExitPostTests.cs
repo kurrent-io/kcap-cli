@@ -134,4 +134,28 @@ public class WatcherParentExitPostTests : IDisposable {
         await Assert.That(codexHits.Count).IsEqualTo(1);
         await Assert.That(claudeHits.Count).IsEqualTo(0);
     }
+
+    [Test]
+    public async Task ParentExit_PostsToVendorSpecificRoute_ForPi() {
+        // Regression (PR #162 review): the Pi watcher starts with vendor "pi", so
+        // the parent-exit fallback must accept it — otherwise a crashed/closed Pi
+        // session stays active until a manual import.
+        _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"provider":"None"}"""));
+
+        _server.Given(Request.Create().WithPath("/hooks/session-end/pi").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"generate_whats_done":false}"""));
+
+        await WatchCommand.PostSessionEndOnParentExitAsync(
+            baseUrl:        _server.Url!,
+            sessionId:      $"test-{Guid.NewGuid():N}",
+            transcriptPath: "/tmp/fake.jsonl",
+            cwd:            "/repo",
+            vendor:         "pi",
+            repository:     null
+        );
+
+        var piHits = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/pi").UsingPost());
+        await Assert.That(piHits.Count).IsEqualTo(1);
+    }
 }
