@@ -997,7 +997,21 @@ public static class PluginCommand {
             // Treat it as part of the atomic install: on failure roll the default
             // back and report failure rather than a success we can't undo.
             if (!KiroHooksInstaller.WriteMarker(agentJsonPath, recordedDefault)) {
-                KiroSettings.SetDefaultAgent(settingsPath, recordedDefault);
+                // If the rollback ALSO fails (e.g. the shared settings file is locked
+                // or became malformed between writes) the prior default can't be
+                // recovered automatically — chat.defaultAgent may still be `kcap`
+                // with no marker. Surface a DISTINCT, actionable message naming the
+                // previous default + paths so the user can restore it by hand,
+                // rather than returning the same opaque false as "kiro-cli missing".
+                if (!KiroSettings.SetDefaultAgent(settingsPath, recordedDefault)) {
+                    Console.Error.WriteLine(
+                        $"[kcap] Kiro install could not be completed OR rolled back. "
+                      + $"chat.defaultAgent may still be '{KiroAgentName}' with no install marker. "
+                      + $"Your previous default agent was '{recordedDefault}' — restore it manually "
+                      + $"(set chat.defaultAgent in {settingsPath}) and delete {agentJsonPath}, "
+                      + $"then re-run `kcap plugin install --kiro`."
+                    );
+                }
                 return false;
             }
 
