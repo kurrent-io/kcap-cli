@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Gemini;
+using Capacitor.Cli.Core.Kiro;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -160,6 +161,36 @@ public class UninstallCommandTests {
         await Assert.That(File.Exists(kcapTs)).IsFalse();
         await Assert.That(File.Exists(markerPi)).IsFalse();
         await Assert.That(File.Exists(userExt)).IsTrue();
+    }
+
+    [Test]
+    public async Task User_level_uninstall_removes_kiro_agent() {
+        // Kiro has no shell hooks — its integration is the kcap-owned agent file
+        // ~/.kiro/agents/kcap.json (+ version marker), and install flips
+        // chat.defaultAgent to it. uninstall must delete the agent file + marker
+        // (otherwise `kiro` keeps loading kcap's hooks). A user-authored sibling
+        // agent must survive. No ~/.kiro/settings/cli.json is seeded, so the
+        // default-agent restore is correctly skipped (no kiro-cli needed).
+        await using var fixture = await Fixture.CreateAsync();
+
+        var agentsDir = Path.Combine(fixture.Home, ".kiro", "agents");
+        Directory.CreateDirectory(agentsDir);
+        var kcapAgent = Path.Combine(agentsDir, "kcap.json");
+        var marker    = Path.Combine(agentsDir, KiroHooksInstaller.MarkerFileName);
+        var userAgent = Path.Combine(agentsDir, "my-agent.json");
+        await File.WriteAllTextAsync(kcapAgent, """
+            {"name":"kcap","hooks":{"agentSpawn":[{"command":"kcap hook --kiro --event agentSpawn"}]}}
+            """);
+        await File.WriteAllTextAsync(marker, CapacitorVersion.Current());
+        await File.WriteAllTextAsync(userAgent, """{"name":"my-agent"}""");
+
+        var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes", "--keep-config"]);
+        await Assert.That(exit).IsEqualTo(0);
+
+        await Assert.That(File.Exists(kcapAgent)).IsFalse();
+        await Assert.That(File.Exists(marker)).IsFalse();
+        await Assert.That(File.Exists(userAgent)).IsTrue();
+        await Assert.That(KiroHooksInstaller.IsInstalled(kcapAgent)).IsFalse();
     }
 
     [Test]

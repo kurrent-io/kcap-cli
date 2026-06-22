@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Gemini;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -116,6 +117,44 @@ public class GeminiHooksTests {
 
         await Assert.That(PluginCommand.InstallGeminiHooks(settingsPath)).IsFalse();
         await Assert.That(await File.ReadAllTextAsync(settingsPath)).IsEqualTo(original);
+    }
+
+    // status parity (PR #169): `kcap status` renders the Gemini ✓/✗ marker via
+    // GeminiHooksInstaller.IsInstalled, so both detection branches need direct
+    // coverage — the marker file, and the settings-hooks fallback when no marker
+    // is present. Mirrors the Cursor/Pi installer-detection tests.
+    [Test]
+    public async Task IsInstalled_true_via_marker_file() {
+        using var tmp = new TempDir();
+        var settingsPath = Path.Combine(tmp.Path, "settings.json");
+
+        GeminiHooksInstaller.WriteMarker(settingsPath);   // marker only — no settings.json written
+
+        await Assert.That(GeminiHooksInstaller.IsInstalled(settingsPath)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsInstalled_true_via_settings_hooks_when_marker_absent() {
+        using var tmp = new TempDir();
+        var settingsPath = Path.Combine(tmp.Path, "settings.json");
+
+        PluginCommand.InstallGeminiHooks(settingsPath);    // merges kcap hooks into settings.json
+        GeminiHooksInstaller.DeleteMarker(settingsPath);   // force the settings-scan fallback
+
+        await Assert.That(GeminiHooksInstaller.IsInstalled(settingsPath)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsInstalled_false_when_no_marker_and_no_kcap_hooks() {
+        using var tmp = new TempDir();
+        var settingsPath = Path.Combine(tmp.Path, "settings.json");
+
+        // Real settings.json with a user hook but no kcap entry, and no marker.
+        await File.WriteAllTextAsync(settingsPath, """
+            {"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo hi"}]}]}}
+            """);
+
+        await Assert.That(GeminiHooksInstaller.IsInstalled(settingsPath)).IsFalse();
     }
 
     sealed class TempDir : IDisposable {

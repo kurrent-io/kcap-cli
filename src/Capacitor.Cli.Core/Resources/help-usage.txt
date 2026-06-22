@@ -42,7 +42,7 @@ Session:
   validate-plan [id]               Validate plan completion for a session
   eval [--model N] [--chain] [id]  Run LLM-as-judge evaluation over a session
   generate-whats-done [--codex] <id>  Generate what's-done summary (--codex uses `codex exec`)
-  import [vendor-filters] [options]   Import local sessions (Claude, Codex, Cursor, Copilot, Gemini, Pi)
+  import [vendor-filters] [options]   Import local sessions (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi)
   set-title <title>                Set session title
   disable                          Stop recording and delete session data
   hide                             Hide session (owner-only visibility)
@@ -54,8 +54,8 @@ MCP servers (stdio):
   mcp sessions                       Search/inspect past sessions from agents
 
 Plugin:
-  plugin install [--project] [--codex|--cursor|--copilot|--gemini|--pi|--skills]   Register hooks/skills (Claude default; flag picks the vendor)
-  plugin remove  [--project] [--codex|--cursor|--copilot|--gemini|--pi|--skills]   Remove hooks/skills (Claude default; flag picks the vendor)
+  plugin install [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--skills]   Register hooks/skills (Claude default; flag picks the vendor)
+  plugin remove  [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--skills]   Remove hooks/skills (Claude default; flag picks the vendor)
 
 Maintenance:
   update                           Check for and install updates
@@ -64,12 +64,13 @@ Maintenance:
   --version                        Show version
   --help                           Show this help
 
-Hooks (internal — invoked by Claude Code / Codex / Cursor / Copilot / Gemini / Pi):
+Hooks (internal — invoked by Claude Code / Codex / Cursor / Copilot / Gemini / Kiro / Pi):
   hook --claude                    Dispatch a Claude Code hook event (reads payload from stdin)
   hook --codex                     Dispatch a Codex CLI hook event
   hook --cursor                    Dispatch a Cursor IDE hook event
   hook --copilot --event <name>    Dispatch a GitHub Copilot CLI hook event
   hook --gemini                    Dispatch a Gemini CLI hook event
+  hook --kiro --event <name>       Dispatch an AWS Kiro CLI hook event
   hook --pi --event <name> --file <f>  Dispatch a Pi lifecycle event (arg-driven; no stdin)
 
 Environment:

@@ -4,7 +4,9 @@ Usage: kcap uninstall [options]
 
 Stops any running daemons and watcher processes, strips kcap entries from
 user-level Claude Code, Codex CLI, Cursor, and Gemini (~/.gemini/settings.json)
-hook files, deletes kcap's Copilot hooks file (~/.copilot/hooks/kcap.json),
+hook files, deletes kcap's Copilot hooks file (~/.copilot/hooks/kcap.json), the
+kcap Kiro agent (~/.kiro/agents/kcap.json, restoring the default agent it
+replaced), and the Pi live-ingest extension (~/.pi/agent/extensions/kcap.ts),
 removes agent skills (and any legacy ~/.codex/skills/kcap-* folders), and
 deletes the kcap config directory.
 
@@ -24,7 +26,7 @@ Options:
 
 Notes:
   Per-agent selective cleanup is not exposed here — uninstall always touches
-  all known agents. Use `kcap plugin remove [--codex|--cursor|--copilot|--gemini|--pi|--skills]`
+  all known agents. Use `kcap plugin remove [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--skills]`
   for finer-grained removal.
 
   Project-scope hooks installed in a directory other than the cwd's git root
