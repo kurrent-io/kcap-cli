@@ -455,6 +455,27 @@ static partial class WatchCommand {
             return;
         }
 
+        // Gemini fires no subagent-stop hook and the child watchers spawned in ScanGeminiSubagents
+        // carry no parent-pid watchdog, so when the parent process dies WITHOUT the session-end
+        // hook this is the only place that finalizes live subagents. Mirror the hook path: kill
+        // each child watcher, drain its tail, POST subagent-stop — capped so a slow drain can't
+        // block the watchdog's self-termination, and run BEFORE the session-end POST so
+        // SubagentCompleted lands ahead of SessionEnded. No-op when none were spawned (AI-900).
+        if (vendor == "gemini") {
+            try {
+                var finalized = await TimeBudget.RunCappedAsync(
+                    () => GeminiSubagentTeardown.DrainAsync(baseUrl, sessionId, transcriptPath),
+                    GeminiSubagentTeardown.DrainCap);
+
+                if (!finalized) {
+                    Log("Parent-exit Gemini subagent teardown cap elapsed; "
+                      + "unfinalized subagents recover via: kcap import --gemini");
+                }
+            } catch (Exception ex) {
+                Log($"Parent-exit Gemini subagent teardown failed: {ex.Message}");
+            }
+        }
+
         using var budgetCts = new CancellationTokenSource(ParentExitPostBudget);
 
         try {
