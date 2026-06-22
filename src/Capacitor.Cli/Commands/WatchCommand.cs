@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Pi;
 using Capacitor.Cli.Core.Auth;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -268,6 +269,11 @@ static partial class WatchCommand {
         state.LinesProcessed = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, cts.Token);
         Log($"Connected via SignalR, resuming from line {state.LinesProcessed}");
 
+        // Gemini fires no subagent hooks, so the parent watcher discovers nested subagent
+        // transcripts itself and spawns a child watcher per subagent (AI-900). Tracks the
+        // files already registered + spawned so each is handled exactly once across ticks.
+        var seenSubagents = new HashSet<string>(StringComparer.Ordinal);
+
         try {
             while (!cts.Token.IsCancellationRequested) {
                 // Skip work while disconnected — SignalR auto-reconnect handles recovery.
@@ -289,6 +295,12 @@ static partial class WatchCommand {
                 }
 
                 await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, cts.Token);
+
+                // Live Gemini subagent discovery: only the parent (agentId == null) watcher
+                // scans; child subagent watchers (agentId != null) just stream their file.
+                if (agentId is null && vendor == "gemini") {
+                    await ScanGeminiSubagents(baseUrl, sessionId, transcriptPath, seenSubagents, cts.Token);
+                }
 
                 try {
                     await Task.Delay(TimeSpan.FromSeconds(1), cts.Token);
@@ -346,6 +358,73 @@ static partial class WatchCommand {
         await logWriter.DisposeAsync();
 
         return 0;
+    }
+
+    /// <summary>
+    /// Gemini fires no subagent hooks, so the parent watcher discovers nested subagent
+    /// transcripts itself (<c>chats/&lt;parentSessionId&gt;/&lt;subId&gt;.jsonl</c>). On first
+    /// sight of a file it registers the subagent (<c>subagent-start</c>, fail-closed) then
+    /// spawns a detached child watcher that streams it with the subagent's canonical agentId
+    /// (→ <c>AgentSubsession-*</c>). Idempotent across ticks via <paramref name="seen"/>;
+    /// deterministic server-side lifecycle ids make re-registration safe. AI-900.
+    /// </summary>
+    static async Task ScanGeminiSubagents(
+            string          baseUrl,
+            string          sessionId,
+            string          transcriptPath,
+            HashSet<string> seen,
+            CancellationToken ct
+        ) {
+        IReadOnlyList<string> subFiles;
+        try {
+            subFiles = GeminiSubagentDiscovery.EnumerateSubagentFiles(transcriptPath);
+        } catch {
+            return; // discovery is best-effort — never break the main drain loop
+        }
+
+        if (subFiles.Count == 0) return;
+
+        IReadOnlyDictionary<string, string>? types = null;
+
+        foreach (var subFile in subFiles) {
+            if (ct.IsCancellationRequested) return;
+            if (!seen.Add(subFile)) continue; // already registered + spawned
+
+            var subId = Path.GetFileNameWithoutExtension(subFile);
+            if (!Guid.TryParse(subId, out _)) continue; // not a <subId>.jsonl
+
+            var agentId   = GeminiSubagentDiscovery.CanonicalAgentId(subId);
+            types       ??= GeminiSubagentDiscovery.ResolveAgentTypes(transcriptPath);
+            var agentType = types.GetValueOrDefault(subId) ?? "subagent";
+
+            // Fail-closed: register the subagent (→ SubagentStarted) before its child watcher
+            // streams content. On POST failure, drop from `seen` so the next tick retries.
+            if (!await PostSubagentStartAsync(baseUrl, sessionId, agentId, agentType, subFile, ct)) {
+                seen.Remove(subFile);
+                continue;
+            }
+
+            await WatcherManager.EnsureWatcherRunning(
+                baseUrl, key: $"{sessionId}-{agentId}", transcriptPath: subFile,
+                agentId: agentId, sessionIdOverride: sessionId, vendor: "gemini");
+
+            Log($"Gemini subagent {agentId} ({agentType}) registered + child watcher spawned");
+        }
+    }
+
+    static async Task<bool> PostSubagentStartAsync(
+        string baseUrl, string sessionId, string agentId, string agentType, string subFile, CancellationToken ct
+    ) {
+        try {
+            using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, ct);
+            var       payload = GeminiSubagentDiscovery.BuildStartPayload(sessionId, agentId, agentType, subFile);
+            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/subagent-start", content, ct: ct);
+
+            return resp.IsSuccessStatusCode;
+        } catch {
+            return false;
+        }
     }
 
     /// <summary>

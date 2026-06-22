@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Gemini;
 
 namespace Capacitor.Cli.Commands;
 
@@ -147,6 +148,11 @@ static class GeminiHookCommand {
                     async () => {
                         await WatcherManager.KillWatcher(sessionId);
                         await WatcherManager.InlineDrainAsync(baseUrl, sessionId, transcriptPath, agentId: null, vendor: "gemini");
+                        // Gemini fires no subagent-stop hook, so the parent owns subagent
+                        // teardown: kill each live child watcher, drain its tail, and finalize
+                        // it (subagent-stop). Restart-safe — driven off the on-disk files,
+                        // not an in-memory set. Shares the same drain cap (AI-900).
+                        await DrainGeminiSubagentsAsync(baseUrl, sessionId, transcriptPath);
                     },
                     PreHookDrainCap
                 );
@@ -227,6 +233,43 @@ static class GeminiHookCommand {
             agentId: null, sessionIdOverride: null, cwd: cwd,
             skipTitle: skipTitle, vendor: "gemini"
         );
+    }
+
+    /// <summary>
+    /// Tears down any live Gemini subagent child watchers at session-end: for each nested
+    /// subagent transcript, kill its child watcher (no-op if not running), drain its tail
+    /// (resumes from the server watermark), and POST subagent-stop. Enumerates the on-disk
+    /// files rather than an in-memory set, so it recovers subagents even after a parent
+    /// watcher restart/crash. Best-effort per subagent (re-import recovers). AI-900.
+    /// </summary>
+    static async Task DrainGeminiSubagentsAsync(string baseUrl, string sessionId, string transcriptPath) {
+        var subFiles = GeminiSubagentDiscovery.EnumerateSubagentFiles(transcriptPath);
+        if (subFiles.Count == 0) return;
+
+        var types = GeminiSubagentDiscovery.ResolveAgentTypes(transcriptPath);
+
+        foreach (var subFile in subFiles) {
+            var subId = Path.GetFileNameWithoutExtension(subFile);
+            if (!Guid.TryParse(subId, out _)) continue;
+
+            var agentId   = GeminiSubagentDiscovery.CanonicalAgentId(subId);
+            var agentType = types.GetValueOrDefault(subId) ?? "subagent";
+
+            await WatcherManager.KillWatcher($"{sessionId}-{agentId}");
+            await WatcherManager.InlineDrainAsync(baseUrl, sessionId, subFile, agentId, vendor: "gemini");
+            await PostSubagentStopAsync(baseUrl, sessionId, agentId, agentType, subFile);
+        }
+    }
+
+    static async Task PostSubagentStopAsync(string baseUrl, string sessionId, string agentId, string agentType, string subFile) {
+        try {
+            using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync();
+            var       payload = GeminiSubagentDiscovery.BuildStopPayload(sessionId, agentId, agentType, subFile);
+            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            await client.PostWithRetryAsync($"{baseUrl}/hooks/subagent-stop", content);
+        } catch {
+            // Best effort — re-import (kcap import --gemini) recovers the subagent.
+        }
     }
 
     static async Task<int> PostHookAsync(string baseUrl, string endpoint, string body) {
