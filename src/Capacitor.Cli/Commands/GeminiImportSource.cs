@@ -226,6 +226,11 @@ internal sealed class GeminiImportSource : IImportSource {
             return ImportOutcome.Failed;
         }
 
+        // Import nested subagents (chats/<parentSessionId>/<subId>.jsonl) under the parent,
+        // BEFORE session-end so their SubagentStarted/Completed land in the parent stream
+        // ahead of SessionEnded. Subagent failures don't fail the (already-imported) parent.
+        await ImportSubagentsAsync(ctx.HttpClient, ctx.BaseUrl, classification.SessionId, transcriptPath, ct);
+
         var endOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-end/gemini",
             BuildSessionEndPayload(classification.SessionId, classification.Meta.LastTimestamp),
@@ -267,6 +272,112 @@ internal sealed class GeminiImportSource : IImportSource {
         } catch {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Imports any nested subagent transcripts (chats/&lt;parentSessionId&gt;/&lt;subId&gt;.jsonl)
+    /// recorded alongside the parent. Each is sent under the parent session id with the
+    /// subagent's canonical (dashless) id so the server routes it to AgentSubsession-*.
+    /// subagent-start is fail-closed (skip a subagent's content if start fails) so a subagent
+    /// stream never exists without the SubagentStarted that lets chat/trace nest it. Re-runs
+    /// are idempotent (deterministic server-side ids). AI-900.
+    /// </summary>
+    async Task ImportSubagentsAsync(
+        HttpClient client, string baseUrl, string parentSessionIdDashless, string transcriptPath, CancellationToken ct
+    ) {
+        var (dashedParent, _) = ReadHeader(transcriptPath);
+        if (dashedParent is null) return;
+
+        var chatsDir = Path.GetDirectoryName(transcriptPath);
+        if (chatsDir is null) return;
+
+        var subagentDir = GeminiPaths.SubagentDir(chatsDir, dashedParent);
+        if (!Directory.Exists(subagentDir)) return;
+
+        var typeMap = BuildSubagentTypeMap(transcriptPath);
+
+        foreach (var subFile in Directory.EnumerateFiles(subagentDir, "*.jsonl")) {
+            ct.ThrowIfCancellationRequested();
+
+            var subId = Path.GetFileNameWithoutExtension(subFile);
+            if (!Guid.TryParse(subId, out _)) continue; // only well-formed <subId>.jsonl
+
+            var agentId   = ImportCommand.NormalizeGuid(subId);             // dashless — matches server routing + correlation
+            var agentType = typeMap.GetValueOrDefault(subId) ?? "subagent"; // agent_name from the parent invoke_agent call
+
+            // Fail-closed: don't stream content unless the subagent registered first.
+            var startOk = await PostSyntheticHookAsync(
+                client, baseUrl, "subagent-start",
+                BuildSubagentStartPayload(parentSessionIdDashless, agentId, agentType, subFile), ct);
+            if (!startOk) continue;
+
+            try {
+                await SessionImporter.SendTranscriptBatches(
+                    httpClient: client, baseUrl: baseUrl,
+                    sessionId:  parentSessionIdDashless, filePath: subFile,
+                    agentId:    agentId, startLine: 0, vendor: Vendor);
+            } catch {
+                continue; // leave subagent-stop unsent; a re-import retries (idempotent)
+            }
+
+            await PostSyntheticHookAsync(
+                client, baseUrl, "subagent-stop",
+                BuildSubagentStopPayload(parentSessionIdDashless, agentId, agentType, subFile), ct);
+        }
+    }
+
+    static JsonObject BuildSubagentStartPayload(string parentSessionId, string agentId, string agentType, string subagentTranscriptPath) =>
+        new() {
+            ["hook_event_name"] = "subagent_start",
+            ["session_id"]      = parentSessionId,
+            ["agent_id"]        = agentId,
+            ["agent_type"]      = agentType,
+            ["transcript_path"] = subagentTranscriptPath,
+            ["cwd"]             = "", // Gemini import carries no cwd (same as the parent session)
+        };
+
+    static JsonObject BuildSubagentStopPayload(string parentSessionId, string agentId, string agentType, string subagentTranscriptPath) =>
+        new() {
+            ["hook_event_name"]        = "subagent_stop",
+            ["session_id"]             = parentSessionId,
+            ["agent_id"]               = agentId,
+            ["agent_type"]             = agentType,
+            ["transcript_path"]        = subagentTranscriptPath,
+            ["cwd"]                    = "",
+            ["stop_hook_active"]       = false,
+            ["agent_transcript_path"]  = subagentTranscriptPath,
+            ["last_assistant_message"] = "",
+        };
+
+    /// <summary>
+    /// Maps each subagent id (DASHED, as it appears in the nested filename) to the
+    /// <c>agent_name</c> from the parent's <c>invoke_agent</c> tool call, so the subagent
+    /// renders with a meaningful type. The parent invoke_agent toolCall persists
+    /// <c>agentId == subId</c>, and <c>args.agent_name</c> is its only on-disk type signal.
+    /// Best-effort — unmatched ids fall back to "subagent". AI-900.
+    /// </summary>
+    static Dictionary<string, string> BuildSubagentTypeMap(string transcriptPath) {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        try {
+            foreach (var line in File.ReadLines(transcriptPath)) {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+
+                using var doc  = JsonDocument.Parse(line);
+                var       root = doc.RootElement;
+
+                if (root.Str("type") != "gemini" || root.Arr("toolCalls") is not { } tcs) continue;
+
+                foreach (var tc in tcs.EnumerateArray()) {
+                    if (tc.Str("name") != "invoke_agent" || tc.Str("agentId") is not { } aid) continue;
+
+                    if (tc.Obj("args") is { } args && args.Str("agent_name") is { Length: > 0 } name)
+                        map[aid] = name;
+                }
+            }
+        } catch { /* best effort — type just falls back to "subagent" */ }
+
+        return map;
     }
 
     static DateTimeOffset? TryGetLastWriteUtc(string path) {

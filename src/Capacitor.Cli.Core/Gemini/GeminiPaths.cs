@@ -42,4 +42,15 @@ public static class GeminiPaths {
     /// <summary>Chat-recording directory for a project tmp dir: <c>&lt;tmp&gt;/&lt;project&gt;/chats</c>.</summary>
     public static string ChatsDir(string projectTmpDir)
         => Path.Combine(projectTmpDir, "chats");
+
+    /// <summary>
+    /// Nested subagent-recording directory for a parent session:
+    /// <c>&lt;chats&gt;/&lt;parentSessionId&gt;/</c>. Gemini records each subagent's transcript
+    /// here as <c>&lt;subId&gt;.jsonl</c> (subId = a fresh dashed UUID — the executor's agent
+    /// id; nested subagents at any depth stay flat under the top-level session).
+    /// <paramref name="parentSessionId"/> is the DASHED form from the parent transcript's
+    /// header, matching the on-disk directory name. AI-900.
+    /// </summary>
+    public static string SubagentDir(string chatsDir, string parentSessionId)
+        => Path.Combine(chatsDir, parentSessionId);
 }
