@@ -100,24 +100,27 @@ public class StatusCommandHooksTests {
     }
 
     [Test]
-    public async Task HooksStatusLine_includes_all_five_agents() {
-        // Regression for AI-886: status must surface Pi (and Cursor/Copilot)
-        // alongside Claude/Codex so a Pi install can be verified from `kcap status`.
+    public async Task HooksStatusLine_includes_all_six_agents() {
+        // Regression for AI-886: status must surface Pi (and Cursor/Copilot/Gemini)
+        // alongside Claude/Codex so a Pi or Gemini install can be verified from
+        // `kcap status`. Gemini was previously absent from the line entirely.
         var line = StatusCommand.BuildHooksStatusLine(
-            claude: true, codex: false, cursor: false, copilot: false, pi: true);
+            claude: true, codex: false, cursor: false, copilot: false, gemini: true, pi: true);
 
         await Assert.That(line).Contains("Claude ✓");
         await Assert.That(line).Contains("Codex ✗");
         await Assert.That(line).Contains("Cursor ✗");
         await Assert.That(line).Contains("Copilot ✗");
+        await Assert.That(line).Contains("Gemini ✓");
         await Assert.That(line).Contains("Pi ✓");
     }
 
     [Test]
-    public async Task HooksStatusLine_marks_pi_not_installed() {
+    public async Task HooksStatusLine_marks_gemini_and_pi_not_installed() {
         var line = StatusCommand.BuildHooksStatusLine(
-            claude: false, codex: false, cursor: false, copilot: false, pi: false);
+            claude: false, codex: false, cursor: false, copilot: false, gemini: false, pi: false);
 
+        await Assert.That(line).Contains("Gemini ✗");
         await Assert.That(line).Contains("Pi ✗");
     }
 
