@@ -143,7 +143,7 @@ static class McpSessionsServer {
     /// <see cref="HttpClient"/> for the lifetime of the agent session, so a cached token
     /// that was valid at startup may have expired by the time a tool call is made. On 401
     /// we ask <see cref="TokenStore.GetValidTokensAsync"/> for a fresh token (which triggers
-    /// the refresh flow for Auth0 / GitHubApp), update the client's <c>Authorization</c>
+    /// the refresh flow for WorkOS / GitHubApp), update the client's <c>Authorization</c>
     /// header, and retry the same request once. If refresh fails (genuinely not logged in
     /// or refresh-token expired), the original 401 is returned and the caller surfaces the
     /// friendly "Not logged in" message.

@@ -26,7 +26,7 @@ public static class CursorHookCommand {
     ///      <see cref="HandleCore"/>, transcript backfill).
     ///   2. A hard <see cref="Task.WhenAny"/> ceiling around the whole pipeline
     ///      because some paths inside <c>TokenStore</c> (refresh against
-    ///      <c>/auth/refresh</c> or Auth0's token endpoint) don't honour a
+    ///      <c>/auth/refresh</c> or WorkOS's token endpoint) don't honour a
     ///      <see cref="CancellationToken"/> and would otherwise sit on the
     ///      default 100 s <see cref="HttpClient"/> timeout. If the hard
     ///      ceiling fires we abandon the inner task — the process exits 0

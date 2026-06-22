@@ -19,10 +19,7 @@ public record StoredTokens {
     public required string GitHubUsername { get; init; }
 
     [JsonPropertyName("provider")]
-    public string Provider { get; init; } = "Auth0";
-
-    [JsonPropertyName("auth0_domain")]
-    public string? Auth0Domain { get; init; }
+    public string Provider { get; init; } = "GitHubApp";
 
     [JsonPropertyName("client_id")]
     public string? ClientId { get; init; }
@@ -134,17 +131,83 @@ public static class TokenStore {
             return tokens;
         }
 
-        // Auth0: use refresh token
-        if (tokens is { Provider: "Auth0", RefreshToken: not null, Auth0Domain: not null, ClientId: not null }) {
-            return await RefreshAuth0Async(tokens);
+        var profile = await ResolveActiveProfileAsync();
+
+        // Both providers rotate/re-issue on refresh, so serialize across processes
+        // (hooks, watcher, daemon, MCP share one token store) with a profile-scoped
+        // file lock — otherwise a peer refreshing with the same rotated-out WorkOS
+        // refresh token would invalidate the session.
+        if (tokens is { Provider: "workos", RefreshToken: not null, ClientId: not null }) {
+            return await RefreshWithCrossProcessLockAsync(profile, tokens, RefreshWorkOSAsync);
         }
 
         // GitHub: refresh via server's /auth/refresh endpoint
         if (tokens.Provider is "GitHubApp") {
-            return await RefreshGitHubAsync(tokens);
+            return await RefreshWithCrossProcessLockAsync(profile, tokens, RefreshGitHubAsync);
         }
 
         return null;
+    }
+
+    // Profile-scoped cross-process lock. Acquire it, re-read the token under it (a peer
+    // may have just rotated it), refresh only if still expired, persist, release. If the
+    // lock can't be acquired within the deadline, fall back to whatever a peer persisted.
+    static async Task<StoredTokens?> RefreshWithCrossProcessLockAsync(
+            string                                  profile,
+            StoredTokens                            current,
+            Func<StoredTokens, Task<StoredTokens?>> refresh
+        ) {
+        Directory.CreateDirectory(TokenDir);
+        var lockPath = Path.Combine(TokenDir, $"{profile}.lock");
+
+        FileStream? lockStream = null;
+        var         deadline   = DateTime.UtcNow.AddSeconds(15);
+
+        while (lockStream is null) {
+            try {
+                lockStream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            } catch (IOException) {
+                if (DateTime.UtcNow >= deadline) {
+                    var latest = await LoadAsync(profile);
+
+                    return latest is { IsExpired: false } ? latest : null;
+                }
+
+                await Task.Delay(100);
+            }
+        }
+
+        try {
+            var latest = await LoadAsync(profile) ?? current;
+
+            return latest.IsExpired ? await refresh(latest) : latest;
+        } finally {
+            lockStream.Dispose();
+            try { File.Delete(lockPath); } catch { /* best-effort */ }
+        }
+    }
+
+    // WorkOS access tokens are JWTs carrying their own `exp`. Read it without signature
+    // validation (the server validates against JWKS); fall back to a short lifetime.
+    public static DateTimeOffset JwtExpiry(string accessToken) {
+        try {
+            var parts = accessToken.Split('.');
+
+            if (parts.Length >= 2) {
+                var payload = parts[1].Replace('-', '+').Replace('_', '/');
+                payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
+
+                using var doc = JsonDocument.Parse(Convert.FromBase64String(payload));
+
+                if (doc.RootElement.TryGetProperty("exp", out var exp) && exp.TryGetInt64(out var seconds)) {
+                    return DateTimeOffset.FromUnixTimeSeconds(seconds);
+                }
+            }
+        } catch {
+            // Malformed token — fall through to the conservative default.
+        }
+
+        return DateTimeOffset.UtcNow.AddMinutes(5);
     }
 
     static async Task<StoredTokens?> RefreshGitHubAsync(StoredTokens tokens) {
@@ -183,11 +246,11 @@ public static class TokenStore {
         }
     }
 
-    static async Task<StoredTokens?> RefreshAuth0Async(StoredTokens tokens) {
+    static async Task<StoredTokens?> RefreshWorkOSAsync(StoredTokens tokens) {
         using var http = new HttpClient();
 
         var response = await http.PostAsync(
-            $"https://{tokens.Auth0Domain}/oauth/token",
+            "https://api.workos.com/user_management/authenticate",
             new FormUrlEncodedContent(
                 new Dictionary<string, string> {
                     ["grant_type"]    = "refresh_token",
@@ -201,11 +264,11 @@ public static class TokenStore {
             return null;
         }
 
-        var json = (await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.Auth0TokenResponse))!;
+        var json = (await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.WorkOSAuthResponse))!;
 
         var refreshed = tokens with {
             AccessToken = json.AccessToken,
-            ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(json.ExpiresIn),
+            ExpiresAt = JwtExpiry(json.AccessToken),
             RefreshToken = json.RefreshToken ?? tokens.RefreshToken
         };
 
