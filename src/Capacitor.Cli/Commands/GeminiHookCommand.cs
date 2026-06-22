@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Gemini;
 
 namespace Capacitor.Cli.Commands;
 
@@ -147,6 +148,12 @@ static class GeminiHookCommand {
                     async () => {
                         await WatcherManager.KillWatcher(sessionId);
                         await WatcherManager.InlineDrainAsync(baseUrl, sessionId, transcriptPath, agentId: null, vendor: "gemini");
+                        // Gemini fires no subagent-stop hook, so the parent owns subagent
+                        // teardown: kill each live child watcher, drain its tail, and finalize
+                        // it (subagent-stop). Restart-safe — driven off the on-disk files,
+                        // not an in-memory set. Shared with the watcher's parent-exit fallback
+                        // so a crash that bypasses this hook still finalizes subagents (AI-900).
+                        await GeminiSubagentTeardown.DrainAsync(baseUrl, sessionId, transcriptPath);
                     },
                     PreHookDrainCap
                 );
