@@ -384,7 +384,7 @@ internal sealed class PiImportSource : IImportSource {
             switch (root.Str("type")) {
                 case "session":        return true;
                 case "compaction":     return true;
-                case "branch_summary": return root.Str("summary") is { Length: > 0 };
+                case "branch_summary": return !string.IsNullOrWhiteSpace(root.Str("summary"));
                 case "message":
                     if (root.Obj("message") is not { } msg) return false;
                     return msg.Str("role") switch {
