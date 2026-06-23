@@ -19,6 +19,7 @@ const REFRESHES = [
   ["plugin", "install", "--cursor",  "--if-installed"],
   ["plugin", "install", "--copilot", "--if-installed"],
   ["plugin", "install", "--pi",      "--if-installed"], // Pi extension (~/.pi/agent/extensions/kcap.ts)
+  ["plugin", "install", "--opencode", "--if-installed"], // OpenCode plugin (~/.config/opencode/plugins/kcap.ts)
   ["plugin", "install",              "--if-installed"], // Claude
 ];
 

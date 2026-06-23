@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
+using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
 
 namespace Capacitor.Cli.Commands;
@@ -40,7 +41,7 @@ public static class PluginCommand {
         };
     }
 
-    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--skills"];
+    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--opencode", "--skills"];
 
     static bool HasConflictingTargets(string[] args) =>
         ExclusiveTargetFlags.Count(args.Contains) > 1;
@@ -48,7 +49,7 @@ public static class PluginCommand {
     static async Task<int> Install(string[] args, PluginEnvironment env) {
         if (HasConflictingTargets(args)) {
             await env.Stderr.WriteLineAsync(
-                "--cursor, --codex, --copilot, --gemini, --kiro, --pi, and --skills are mutually exclusive."
+                "--cursor, --codex, --copilot, --gemini, --kiro, --pi, --opencode, and --skills are mutually exclusive."
             );
 
             return 1;
@@ -61,6 +62,7 @@ public static class PluginCommand {
         if (args.Contains("--gemini")) return await InstallGemini(args, env);
         if (args.Contains("--kiro")) return await InstallKiro(args, env);
         if (args.Contains("--pi")) return await InstallPi(args, env);
+        if (args.Contains("--opencode")) return await InstallOpenCode(args, env);
 
         return await InstallClaude(args, env);
     }
@@ -68,7 +70,7 @@ public static class PluginCommand {
     static async Task<int> Remove(string[] args, PluginEnvironment env) {
         if (HasConflictingTargets(args)) {
             await env.Stderr.WriteLineAsync(
-                "--cursor, --codex, --copilot, --gemini, --kiro, --pi, and --skills are mutually exclusive."
+                "--cursor, --codex, --copilot, --gemini, --kiro, --pi, --opencode, and --skills are mutually exclusive."
             );
 
             return 1;
@@ -81,6 +83,7 @@ public static class PluginCommand {
         if (args.Contains("--gemini")) return await RemoveGemini(args, env);
         if (args.Contains("--kiro")) return await RemoveKiro(args, env);
         if (args.Contains("--pi")) return await RemovePi(args, env);
+        if (args.Contains("--opencode")) return await RemoveOpenCode(args, env);
 
         return await RemoveClaude(args, env);
     }
@@ -750,6 +753,66 @@ public static class PluginCommand {
             return 0;
         } catch (Exception ex) {
             await env.Stderr.WriteLineAsync($"Could not remove the Pi extension at {extensionPath}: {ex.Message}");
+
+            return 1;
+        }
+    }
+
+    // ── OpenCode (SST): a TypeScript plugin, not a hooks.json (AI-919) ───────
+
+    static async Task<int> InstallOpenCode(string[] args, PluginEnvironment env) {
+        var pluginPath = GetArg(args, "--opencode-plugin-path") ?? env.OpenCodeKcapPlugin;
+
+        var refreshOnly = args.Contains("--if-installed");
+
+        switch (refreshOnly) {
+            case true when !OpenCodeExtensionInstaller.IsInstalled(pluginPath):
+            case true when OpenCodeExtensionInstaller.ReadMarker(pluginPath) == CapacitorVersion.Current():
+                return 0;
+            // The plugin shells out to the bare `kcap hook --opencode` command, so
+            // OpenCode (and therefore kcap) must find kcap on PATH. Skipped on the
+            // postinstall (--if-installed) refresh path, like the other vendors.
+            case false when !AgentDetector.IsInstalled("kcap"):
+                await env.Stderr.WriteLineAsync(
+                    "Cannot install the OpenCode plugin: 'kcap' is not on PATH. "
+                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                );
+
+                return 1;
+        }
+
+        if (!OpenCodeExtensionInstaller.Install(pluginPath)) {
+            if (refreshOnly) return 0;
+
+            await env.Stderr.WriteLineAsync("Could not write the OpenCode plugin file.");
+
+            return 1;
+        }
+
+        await env.Stdout.WriteLineAsync(
+            refreshOnly
+                ? $"OpenCode plugin refreshed ({pluginPath})"
+                : $"OpenCode plugin installed ({pluginPath})"
+        );
+
+        return 0;
+    }
+
+    static async Task<int> RemoveOpenCode(string[] args, PluginEnvironment env) {
+        var pluginPath = GetArg(args, "--opencode-plugin-path") ?? env.OpenCodeKcapPlugin;
+
+        try {
+            var removed = OpenCodeExtensionInstaller.Remove(pluginPath);
+
+            await env.Stdout.WriteLineAsync(
+                removed
+                    ? $"OpenCode plugin removed ({pluginPath})"
+                    : "Nothing to remove — OpenCode plugin file not found."
+            );
+
+            return 0;
+        } catch (Exception ex) {
+            await env.Stderr.WriteLineAsync($"Could not remove the OpenCode plugin at {pluginPath}: {ex.Message}");
 
             return 1;
         }
