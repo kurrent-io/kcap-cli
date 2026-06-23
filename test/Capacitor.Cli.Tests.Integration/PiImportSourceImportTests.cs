@@ -33,7 +33,6 @@ public class PiImportSourceImportTests : IDisposable {
         File.WriteAllLines(path, new[] {
             $$"""{"type":"session","version":3,"id":"{{DashedSid}}","timestamp":"2026-06-12T10:00:00.000Z","cwd":"/work/a"}""",
             """{"type":"message","id":"a1","parentId":null,"timestamp":"2026-06-12T10:00:01.000Z","message":{"role":"user","content":"hello"}}""",
-            """{"type":"branch_summary","id":"b1","parentId":"a1","timestamp":"2026-06-12T10:00:01.500Z","fromId":"a1","summary":"branch summary kept for import"}""",
             """{"type":"message","id":"a2","parentId":"a1","timestamp":"2026-06-12T10:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"hi there"}],"model":"gpt-5","usage":{"input":10,"output":3}}}"""
         });
         return sessionsDir;
