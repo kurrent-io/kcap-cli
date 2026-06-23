@@ -140,6 +140,9 @@ public class PiImportSourceTests {
     [Arguments("""{"type":"message","id":"a","message":{"role":"bashExecution","command":"ls"}}""", true)]
     [Arguments("""{"type":"model_change","id":"a","modelId":"gpt-5"}""", false)]
     [Arguments("""{"type":"compaction","id":"a","summary":"x"}""", true)]  // AI-892: compaction → ContextCompacted
+    [Arguments("""{"type":"branch_summary","id":"a","summary":"branch","fromId":"b"}""", true)] // AI-892: branch_summary → AssistantTextGenerated
+    [Arguments("""{"type":"branch_summary","id":"a","summary":""}""", false)]
+    [Arguments("""{"type":"branch_summary","id":"a","summary":"   "}""", false)]
     [Arguments("""{"type":"label","id":"a","label":"x"}""", false)]
     [Arguments("""{"type":"session_info","id":"a","name":"x"}""", false)]
     [Arguments("""{"type":"message","id":"a","message":{"role":"toolResult","content":[]}}""", false)]

@@ -38,6 +38,18 @@ public class PiImportSourceImportTests : IDisposable {
         return sessionsDir;
     }
 
+    string WriteSessionFileEndingWithBranchSummary() {
+        var sessionsDir = Path.Combine(_tempDir, "sessions-tail");
+        Directory.CreateDirectory(sessionsDir);
+        var path = Path.Combine(sessionsDir, DashedSid + ".jsonl");
+        File.WriteAllLines(path, new[] {
+            $$"""{"type":"session","version":3,"id":"{{DashedSid}}","timestamp":"2026-06-12T10:00:00.000Z","cwd":"/work/a"}""",
+            """{"type":"message","id":"a1","parentId":null,"timestamp":"2026-06-12T10:00:01.000Z","message":{"role":"user","content":"hello"}}""",
+            """{"type":"branch_summary","id":"b1","parentId":"a1","timestamp":"2026-06-12T10:00:01.500Z","fromId":"a1","summary":"branch summary kept for import"}"""
+        });
+        return sessionsDir;
+    }
+
     [Test]
     public async Task ImportSession_posts_lifecycle_and_transcript_with_pi_vendor() {
         var sessionsDir = WriteSessionFile();
@@ -140,5 +152,32 @@ public class PiImportSourceImportTests : IDisposable {
             CancellationToken.None);
 
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Resumed);
+    }
+
+    [Test]
+    public async Task Classify_treats_trailing_branch_summary_as_import_relevant_when_resuming() {
+        var sessionsDir = WriteSessionFileEndingWithBranchSummary();
+
+        // Server already has the user turn on line 1. The only remaining relevant
+        // line is a Pi branch_summary, so classification must resume from line 2
+        // rather than deciding the transcript is already loaded.
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":1}"""));
+
+        using var client = new HttpClient();
+
+        var source = new PiImportSource(
+            sessionsDir,
+            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null));
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(
+            discovered,
+            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None);
+
+        await Assert.That(classified.Count).IsEqualTo(1);
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
+        await Assert.That(classified[0].ResumeFromLine).IsEqualTo(2);
     }
 }
