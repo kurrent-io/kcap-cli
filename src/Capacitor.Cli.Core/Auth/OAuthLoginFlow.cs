@@ -499,7 +499,31 @@ public static class OAuthLoginFlow {
             /* Browser open is best-effort — user can still copy the URL */
         }
 
-        var context       = await listener.GetContextAsync();
+        // Bounded wait + ignore non-callback requests (favicon etc.) — mirrors RunGitHubBrowserFlowAsync.
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+
+        HttpListenerContext context;
+
+        while (true) {
+            var getContext = listener.GetContextAsync();
+
+            try {
+                context = await getContext.WaitAsync(cts.Token);
+            } catch (OperationCanceledException) {
+                listener.Stop();
+                _ = getContext.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                Console.Error.WriteLine("Timed out waiting for authorization. Re-run `kcap login` to try again.");
+
+                return 1;
+            }
+
+            if (context.Request.Url?.AbsolutePath == "/callback") break;
+
+            // Ignore favicon and other browser-issued requests that aren't our callback.
+            context.Response.StatusCode = 404;
+            context.Response.Close();
+        }
+
         var code          = context.Request.QueryString["code"];
         var returnedState = context.Request.QueryString["state"];
 

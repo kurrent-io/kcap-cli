@@ -157,6 +157,9 @@ public static class TokenStore {
             StoredTokens                            current,
             Func<StoredTokens, Task<StoredTokens?>> refresh
         ) {
+        // Validate before building the lock path — a profile name with path separators
+        // must not let the lock file escape TokenDir (matches ProfileTokenPath's guard).
+        ValidateProfileName(profile);
         Directory.CreateDirectory(TokenDir);
         var lockPath = Path.Combine(TokenDir, $"{profile}.lock");
 
@@ -247,33 +250,43 @@ public static class TokenStore {
     }
 
     static async Task<StoredTokens?> RefreshWorkOSAsync(StoredTokens tokens) {
-        using var http = new HttpClient();
+        // Mirror RefreshGitHubAsync: network/parse failures return null (caller surfaces
+        // "run kcap login") rather than throwing out of GetValidTokensAsync and crashing.
+        try {
+            using var http = new HttpClient();
 
-        var response = await http.PostAsync(
-            "https://api.workos.com/user_management/authenticate",
-            new FormUrlEncodedContent(
-                new Dictionary<string, string> {
-                    ["grant_type"]    = "refresh_token",
-                    ["client_id"]     = tokens.ClientId!,
-                    ["refresh_token"] = tokens.RefreshToken!
-                }
-            )
-        );
+            using var response = await http.PostAsync(
+                "https://api.workos.com/user_management/authenticate",
+                new FormUrlEncodedContent(
+                    new Dictionary<string, string> {
+                        ["grant_type"]    = "refresh_token",
+                        ["client_id"]     = tokens.ClientId!,
+                        ["refresh_token"] = tokens.RefreshToken!
+                    }
+                )
+            );
 
-        if (!response.IsSuccessStatusCode) {
+            if (!response.IsSuccessStatusCode) {
+                return null;
+            }
+
+            var json = await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.WorkOSAuthResponse);
+
+            if (json is null) {
+                return null;
+            }
+
+            var refreshed = tokens with {
+                AccessToken = json.AccessToken,
+                ExpiresAt = JwtExpiry(json.AccessToken),
+                RefreshToken = json.RefreshToken ?? tokens.RefreshToken
+            };
+
+            await SaveAsync(refreshed);
+
+            return refreshed;
+        } catch {
             return null;
         }
-
-        var json = (await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.WorkOSAuthResponse))!;
-
-        var refreshed = tokens with {
-            AccessToken = json.AccessToken,
-            ExpiresAt = JwtExpiry(json.AccessToken),
-            RefreshToken = json.RefreshToken ?? tokens.RefreshToken
-        };
-
-        await SaveAsync(refreshed);
-
-        return refreshed;
     }
 }
