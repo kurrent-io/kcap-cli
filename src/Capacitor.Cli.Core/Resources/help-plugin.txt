@@ -1,4 +1,4 @@
-kcap plugin — Manage hooks and skills for Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, Pi, and other agents
+kcap plugin — Manage hooks and skills for Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, Pi, OpenCode, and other agents
 
 Usage: kcap plugin <subcommand> [options]
 
@@ -32,6 +32,11 @@ Options:
                       shell hooks; the extension auto-loads on `pi` startup and
                       streams each session. User-wide only — --project has no
                       effect with --pi.
+  --opencode          Target SST OpenCode: install the live-ingest plugin to
+                      ~/.config/opencode/plugins/kcap.ts. OpenCode has no shell
+                      hooks; the plugin auto-loads on `opencode` startup and
+                      streams each session. User-wide only — --project has no
+                      effect with --opencode.
   --skills            Install only the agent-agnostic skills to ~/.agents/skills/.
                       Use this if you only have Cursor (or another agent that
                       reads ~/.agents/skills/) and don't want Codex hooks.
@@ -85,6 +90,14 @@ Notes:
   session after install. Pi has no project-scope extensions dir, so --project
   has no effect with --pi.
 
+  --opencode writes a single plugin file (~/.config/opencode/plugins/kcap.ts)
+  instead of a hooks file — OpenCode exposes no shell hooks, only an in-process
+  plugin API. The plugin shells out to `kcap hook --opencode` on session start
+  and writes the {info,parts} transcript the watcher tails, so kcap must be on
+  PATH. OpenCode loads plugins at startup, so restart any running `opencode`
+  session after install. OpenCode has no project-scope plugins dir, so --project
+  has no effect with --opencode.
+
   --if-installed is scoped to user-wide installs only — the npm postinstall hook
   does not refresh --project installs.
 
@@ -98,6 +111,7 @@ Examples:
   kcap plugin install --gemini              # Install Gemini hooks (merge into ~/.gemini/settings.json)
   kcap plugin install --kiro                # Clone default Kiro agent + hooks, set as default
   kcap plugin install --pi                  # Install Pi extension (~/.pi/agent/extensions/kcap.ts)
+  kcap plugin install --opencode            # Install OpenCode plugin (~/.config/opencode/plugins/kcap.ts)
   kcap plugin install --skills --if-installed   # Refresh skills if previously installed (used by npm postinstall)
   kcap plugin install --codex --if-installed    # Refresh Codex hooks if previously installed (used by npm postinstall)
   kcap plugin install --if-installed            # Refresh Claude plugin registration if previously installed
@@ -106,4 +120,5 @@ Examples:
   kcap plugin remove --copilot              # Delete ~/.copilot/hooks/kcap.json
   kcap plugin remove --gemini               # Remove kcap hooks from ~/.gemini/settings.json
   kcap plugin remove --kiro                 # Restore previous default agent, delete kcap.json
+  kcap plugin remove --opencode             # Delete ~/.config/opencode/plugins/kcap.ts
   kcap plugin remove --skills               # Remove agent skills + legacy ~/.codex/skills
