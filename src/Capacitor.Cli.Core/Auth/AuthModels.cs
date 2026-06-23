@@ -7,14 +7,14 @@ public record AuthDiscoveryResponse {
     [JsonPropertyName("provider")]
     public string Provider { get; init; } = "";
 
-    [JsonPropertyName("auth0_domain")]
-    public string? Auth0Domain { get; init; }
+    [JsonPropertyName("authkit_domain")]
+    public string? AuthKitDomain { get; init; }
+
+    [JsonPropertyName("organization_id")]
+    public string? OrganizationId { get; init; }
 
     [JsonPropertyName("client_id")]
     public string? ClientId { get; init; }
-
-    [JsonPropertyName("audience")]
-    public string? Audience { get; init; }
 
     [JsonPropertyName("github_client_id")]
     public string? GithubClientId { get; init; }
@@ -90,25 +90,33 @@ public record GitHubTokenResponse {
     public string? Error { get; init; }
 }
 
-// Auth0: POST /oauth/token
-public record Auth0TokenResponse {
+// WorkOS: POST /user_management/authenticate (PKCE — no client secret)
+public record WorkOSAuthResponse {
+    [JsonPropertyName("user")]
+    public WorkOSUserInfo? User { get; init; }
+
+    [JsonPropertyName("organization_id")]
+    public string? OrganizationId { get; init; }
+
     [JsonPropertyName("access_token")]
     public string AccessToken { get; init; } = "";
 
     [JsonPropertyName("refresh_token")]
     public string? RefreshToken { get; init; }
-
-    [JsonPropertyName("expires_in")]
-    public int ExpiresIn { get; init; }
-
-    [JsonPropertyName("id_token")]
-    public string? IdToken { get; init; }
 }
 
-// Auth0 ID token JWT payload (decoded from id_token)
-public record Auth0IdTokenClaims {
-    [JsonPropertyName("nickname")]
-    public string? Nickname { get; init; }
+public record WorkOSUserInfo {
+    [JsonPropertyName("id")]
+    public string Id { get; init; } = "";
+
+    [JsonPropertyName("email")]
+    public string? Email { get; init; }
+
+    [JsonPropertyName("first_name")]
+    public string? FirstName { get; init; }
+
+    [JsonPropertyName("last_name")]
+    public string? LastName { get; init; }
 }
 
 // POST /auth/refresh request

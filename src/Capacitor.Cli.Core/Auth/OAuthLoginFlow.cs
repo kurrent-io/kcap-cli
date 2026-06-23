@@ -11,7 +11,7 @@ namespace Capacitor.Cli.Core.Auth;
 
 public static class AuthProvider {
     public const string GitHubApp = "GitHubApp";
-    public const string Auth0     = "Auth0";
+    public const string WorkOS    = "workos";
     public const string None      = "None";
 }
 
@@ -43,7 +43,7 @@ public static class OAuthLoginFlow {
         return config.Provider switch {
             AuthProvider.None      => HandleNoneLogin(),
             AuthProvider.GitHubApp => await HandleGitHubLogin(serverUrl, config, forceDevice),
-            AuthProvider.Auth0     => await HandleAuth0Login(config),
+            AuthProvider.WorkOS    => await HandleWorkOSLogin(config),
             _                      => HandleUnknownProvider(config.Provider)
         };
     }
@@ -296,7 +296,7 @@ public static class OAuthLoginFlow {
     }
 
     public static async Task<int> ExchangeAndSaveAsync(string serverUrl, string githubAccessToken, string provider) {
-        if (provider is not AuthProvider.GitHubApp and not AuthProvider.Auth0) {
+        if (provider is not AuthProvider.GitHubApp) {
             Console.Error.WriteLine($"Error: unknown auth provider '{provider}'");
 
             return 1;
@@ -350,7 +350,7 @@ public static class OAuthLoginFlow {
             string     provider,
             string     profile
         ) {
-        if (provider is not AuthProvider.GitHubApp and not AuthProvider.Auth0) {
+        if (provider is not AuthProvider.GitHubApp) {
             Console.Error.WriteLine($"Error: unknown auth provider '{provider}'");
 
             return 1;
@@ -460,30 +460,36 @@ public static class OAuthLoginFlow {
         return await RunDeviceFlowAsync(clientId);
     }
 
-    static async Task<int> HandleAuth0Login(AuthDiscoveryResponse config) {
-        return await LoginAsync(config.Auth0Domain!, config.ClientId!, config.Audience ?? "");
-    }
+    static Task<int> HandleWorkOSLogin(AuthDiscoveryResponse config) =>
+        LoginWorkOSAsync(config.AuthKitDomain, config.ClientId!, config.OrganizationId);
+
+    const string WorkOSApiBase = "https://api.workos.com";
 
     /// <summary>
-    /// Auth0 PKCE login flow (preserved for Auth0 strategy).
+    /// WorkOS AuthKit authorization-code-with-PKCE login on a 127.0.0.1 loopback listener
+    /// (WorkOS documents the HTTP loopback exception as 127.0.0.1, not localhost). Authorize
+    /// on the AuthKit domain (hosted UI; falls back to api.workos.com), org-scoped when known;
+    /// the token exchange always hits api.workos.com. Public client — no client secret.
     /// </summary>
-    static async Task<int> LoginAsync(string auth0Domain, string clientId, string audience) {
+    static async Task<int> LoginWorkOSAsync(string? authKitDomain, string clientId, string? organizationId) {
+        var authorizeBase = string.IsNullOrEmpty(authKitDomain) ? WorkOSApiBase : $"https://{authKitDomain}";
+
         var verifier    = GenerateCodeVerifier();
         var challenge   = GenerateCodeChallenge(verifier);
         var state       = GenerateCodeVerifier();
         var port        = GetAvailablePort();
-        var redirectUri = $"http://localhost:{port}/callback";
+        var redirectUri = $"http://127.0.0.1:{port}/callback";
 
         using var listener = new HttpListener();
-        listener.Prefixes.Add($"http://localhost:{port}/");
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
         listener.Start();
 
-        var authUrl = $"https://{auth0Domain}/authorize?"                           +
-            $"response_type=code&client_id={Uri.EscapeDataString(clientId)}"        +
-            $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"                    +
-            $"&scope={Uri.EscapeDataString("openid profile email offline_access")}" +
-            $"&audience={Uri.EscapeDataString(audience)}"                           +
-            $"&state={Uri.EscapeDataString(state)}"                                 +
+        var authUrl = $"{authorizeBase}/user_management/authorize?"          +
+            $"response_type=code&client_id={Uri.EscapeDataString(clientId)}" +
+            $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"             +
+            $"&provider=authkit"                                             +
+            (string.IsNullOrEmpty(organizationId) ? "" : $"&organization_id={Uri.EscapeDataString(organizationId)}") +
+            $"&state={Uri.EscapeDataString(state)}"                          +
             $"&code_challenge={challenge}&code_challenge_method=S256";
 
         await Console.Out.WriteLineAsync("Opening browser for authentication...");
@@ -495,7 +501,31 @@ public static class OAuthLoginFlow {
             /* Browser open is best-effort — user can still copy the URL */
         }
 
-        var context       = await listener.GetContextAsync();
+        // Bounded wait + ignore non-callback requests (favicon etc.) — mirrors RunGitHubBrowserFlowAsync.
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+
+        HttpListenerContext context;
+
+        while (true) {
+            var getContext = listener.GetContextAsync();
+
+            try {
+                context = await getContext.WaitAsync(cts.Token);
+            } catch (OperationCanceledException) {
+                listener.Stop();
+                _ = getContext.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                Console.Error.WriteLine("Timed out waiting for authorization. Re-run `kcap login` to try again.");
+
+                return 1;
+            }
+
+            if (context.Request.Url?.AbsolutePath == "/callback") break;
+
+            // Ignore favicon and other browser-issued requests that aren't our callback.
+            context.Response.StatusCode = 404;
+            context.Response.Close();
+        }
+
         var code          = context.Request.QueryString["code"];
         var returnedState = context.Request.QueryString["state"];
 
@@ -530,13 +560,12 @@ public static class OAuthLoginFlow {
         using var http = new HttpClient();
 
         var tokenResponse = await http.PostAsync(
-            $"https://{auth0Domain}/oauth/token",
+            $"{WorkOSApiBase}/user_management/authenticate",
             new FormUrlEncodedContent(
                 new Dictionary<string, string> {
                     ["grant_type"]    = "authorization_code",
                     ["client_id"]     = clientId,
                     ["code"]          = code,
-                    ["redirect_uri"]  = redirectUri,
                     ["code_verifier"] = verifier
                 }
             )
@@ -548,25 +577,28 @@ public static class OAuthLoginFlow {
             return 1;
         }
 
-        var json = (await tokenResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.Auth0TokenResponse))!;
+        var json = (await tokenResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.WorkOSAuthResponse))!;
 
-        var username = "unknown";
+        // Org gate: a multi-org user must not be "logged in" to the wrong org — every API
+        // call would then fail the server's org check. Reject before saving tokens.
+        if (!string.IsNullOrEmpty(organizationId) && !string.Equals(json.OrganizationId, organizationId, StringComparison.Ordinal)) {
+            Console.Error.WriteLine($"Error: signed in to the wrong WorkOS organization (expected {organizationId}). Re-run `kcap login` and pick the correct organization.");
 
-        if (json.IdToken is not null) {
-            var payload = json.IdToken.Split('.')[1];
-            payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
-            var claims = JsonSerializer.Deserialize(Convert.FromBase64String(payload), CapacitorJsonContext.Default.Auth0IdTokenClaims);
-            username = claims?.Nickname ?? "unknown";
+            return 1;
         }
+
+        var parts = new List<string>();
+        if (!string.IsNullOrEmpty(json.User?.FirstName)) parts.Add(json.User!.FirstName!);
+        if (!string.IsNullOrEmpty(json.User?.LastName)) parts.Add(json.User!.LastName!);
+        var username = parts.Count > 0 ? string.Join(' ', parts) : json.User?.Email ?? "unknown";
 
         await TokenStore.SaveAsync(
             new() {
                 AccessToken    = json.AccessToken,
                 RefreshToken   = json.RefreshToken,
-                ExpiresAt      = DateTimeOffset.UtcNow.AddSeconds(json.ExpiresIn),
+                ExpiresAt      = TokenStore.JwtExpiry(json.AccessToken),
                 GitHubUsername = username,
-                Provider       = AuthProvider.Auth0,
-                Auth0Domain    = auth0Domain,
+                Provider       = AuthProvider.WorkOS,
                 ClientId       = clientId
             }
         );
