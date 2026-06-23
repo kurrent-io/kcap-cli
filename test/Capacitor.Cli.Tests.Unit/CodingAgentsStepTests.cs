@@ -761,6 +761,104 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write the Pi extension"));
     }
 
+    // ── OpenCode (SST): a plugin file, like Pi (AI-919) ──────────────────────
+
+    [Test]
+    public async Task OpenCode_detected_and_accepted_installs_plugin() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipOpenCode: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, OpenCode: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.OpenCodeExtensionInstalled).IsTrue();
+        await Assert.That(calls.OpenCodeExtensionArg).IsEqualTo("/fake/.config/opencode/plugins/kcap.ts");
+        await Assert.That(sink.Lines).Contains(l => l.Contains("OpenCode plugin installed"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("restart any running opencode session"));
+    }
+
+    [Test]
+    public async Task OpenCode_detected_and_declined_skips_installer() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipOpenCode: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, OpenCode: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => false, writeLine: sink.Write);
+
+        await Assert.That(result.OpenCodeExtensionInstalled).IsFalse();
+        await Assert.That(calls.OpenCodeExtensionCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("OpenCode plugin not installed"));
+    }
+
+    [Test]
+    public async Task OpenCode_not_detected_emits_skip_line() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipOpenCode: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, OpenCode: false);
+
+        await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.OpenCodeExtensionCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("OpenCode not detected"));
+    }
+
+    [Test]
+    public async Task OpenCode_skipped_by_flag_emits_skip_line() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipOpenCode: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, OpenCode: true);
+
+        await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.OpenCodeExtensionCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("OpenCode plugin skipped by flag"));
+    }
+
+    [Test]
+    public async Task OpenCode_kcap_not_on_path_aborts_install_without_writing_plugin() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CapacitorOnPathReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipOpenCode: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, OpenCode: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.OpenCodeExtensionInstalled).IsFalse();
+        await Assert.That(calls.CapacitorOnPathCalled).IsTrue();
+        await Assert.That(calls.OpenCodeExtensionCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("'kcap' is not on PATH"));
+    }
+
+    [Test]
+    public async Task OpenCode_installer_failure_emits_warning() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { OpenCodeExtensionReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipOpenCode: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, OpenCode: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.OpenCodeExtensionInstalled).IsFalse();
+        await Assert.That(calls.OpenCodeExtensionCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write the OpenCode plugin"));
+    }
+
     static Paths TestPaths() => new(
         ClaudeSettingsPath:   "/fake/.claude/settings.json",
         ClaudeScopeLabel:     "user",
@@ -772,7 +870,8 @@ public class CodingAgentsStepTests {
         AgentsSkillsDir:      "/fake/.agents/skills",
         LegacyCodexSkillsDir: "/fake/.codex/skills",
         KiroHooksPath:        "/fake/.kiro/agents/kcap.json",
-        PiExtensionPath:      "/fake/.pi/agent/extensions/kcap.ts"
+        PiExtensionPath:      "/fake/.pi/agent/extensions/kcap.ts",
+        OpenCodeExtensionPath: "/fake/.config/opencode/plugins/kcap.ts"
     );
 
     sealed class Sink {
@@ -808,6 +907,10 @@ public class CodingAgentsStepTests {
         public bool    PiExtensionCalled  { get; private set; }
         public string? PiExtensionArg     { get; private set; }
         public bool    PiExtensionReturns { get; set; } = true;
+
+        public bool    OpenCodeExtensionCalled  { get; private set; }
+        public string? OpenCodeExtensionArg     { get; private set; }
+        public bool    OpenCodeExtensionReturns { get; set; } = true;
 
         public bool CapacitorOnPathCalled  { get; private set; }
         public bool CapacitorOnPathReturns { get; set; } = true;
@@ -866,6 +969,12 @@ public class CodingAgentsStepTests {
                 PiExtensionArg    = p;
 
                 return PiExtensionReturns;
+            },
+            InstallOpenCodeExtension: p => {
+                OpenCodeExtensionCalled = true;
+                OpenCodeExtensionArg    = p;
+
+                return OpenCodeExtensionReturns;
             },
             InstallAgentSkills: (s, d) => {
                 AgentSkillsCalled = true;
