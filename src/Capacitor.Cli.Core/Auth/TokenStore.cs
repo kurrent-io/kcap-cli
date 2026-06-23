@@ -185,8 +185,11 @@ public static class TokenStore {
 
             return latest.IsExpired ? await refresh(latest) : latest;
         } finally {
+            // Close the stream to release the OS lock, but DON'T delete the file: on Unix a
+            // waiter can acquire the old inode between dispose and delete, then the unlink lets
+            // another process create a fresh lock file — splitting the lock and allowing two
+            // concurrent refreshes. The (tiny, one-per-profile) lock file stays in place.
             lockStream.Dispose();
-            try { File.Delete(lockPath); } catch { /* best-effort */ }
         }
     }
 

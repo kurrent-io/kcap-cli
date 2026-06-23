@@ -461,32 +461,34 @@ public static class OAuthLoginFlow {
     }
 
     static Task<int> HandleWorkOSLogin(AuthDiscoveryResponse config) =>
-        LoginWorkOSAsync(config.AuthKitDomain, config.ClientId!);
+        LoginWorkOSAsync(config.AuthKitDomain, config.ClientId!, config.OrganizationId);
 
     const string WorkOSApiBase = "https://api.workos.com";
 
     /// <summary>
-    /// WorkOS AuthKit authorization-code-with-PKCE login on a localhost loopback listener.
-    /// Authorize on the AuthKit domain (hosted UI; falls back to api.workos.com); the token
-    /// exchange always hits api.workos.com. Public client — no client secret.
+    /// WorkOS AuthKit authorization-code-with-PKCE login on a 127.0.0.1 loopback listener
+    /// (WorkOS documents the HTTP loopback exception as 127.0.0.1, not localhost). Authorize
+    /// on the AuthKit domain (hosted UI; falls back to api.workos.com), org-scoped when known;
+    /// the token exchange always hits api.workos.com. Public client — no client secret.
     /// </summary>
-    static async Task<int> LoginWorkOSAsync(string? authKitDomain, string clientId) {
+    static async Task<int> LoginWorkOSAsync(string? authKitDomain, string clientId, string? organizationId) {
         var authorizeBase = string.IsNullOrEmpty(authKitDomain) ? WorkOSApiBase : $"https://{authKitDomain}";
 
         var verifier    = GenerateCodeVerifier();
         var challenge   = GenerateCodeChallenge(verifier);
         var state       = GenerateCodeVerifier();
         var port        = GetAvailablePort();
-        var redirectUri = $"http://localhost:{port}/callback";
+        var redirectUri = $"http://127.0.0.1:{port}/callback";
 
         using var listener = new HttpListener();
-        listener.Prefixes.Add($"http://localhost:{port}/");
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
         listener.Start();
 
         var authUrl = $"{authorizeBase}/user_management/authorize?"          +
             $"response_type=code&client_id={Uri.EscapeDataString(clientId)}" +
             $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"             +
             $"&provider=authkit"                                             +
+            (string.IsNullOrEmpty(organizationId) ? "" : $"&organization_id={Uri.EscapeDataString(organizationId)}") +
             $"&state={Uri.EscapeDataString(state)}"                          +
             $"&code_challenge={challenge}&code_challenge_method=S256";
 
@@ -576,6 +578,14 @@ public static class OAuthLoginFlow {
         }
 
         var json = (await tokenResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.WorkOSAuthResponse))!;
+
+        // Org gate: a multi-org user must not be "logged in" to the wrong org — every API
+        // call would then fail the server's org check. Reject before saving tokens.
+        if (!string.IsNullOrEmpty(organizationId) && !string.Equals(json.OrganizationId, organizationId, StringComparison.Ordinal)) {
+            Console.Error.WriteLine($"Error: signed in to the wrong WorkOS organization (expected {organizationId}). Re-run `kcap login` and pick the correct organization.");
+
+            return 1;
+        }
 
         var parts = new List<string>();
         if (!string.IsNullOrEmpty(json.User?.FirstName)) parts.Add(json.User!.FirstName!);

@@ -10,6 +10,9 @@ public record AuthDiscoveryResponse {
     [JsonPropertyName("authkit_domain")]
     public string? AuthKitDomain { get; init; }
 
+    [JsonPropertyName("organization_id")]
+    public string? OrganizationId { get; init; }
+
     [JsonPropertyName("client_id")]
     public string? ClientId { get; init; }
 
