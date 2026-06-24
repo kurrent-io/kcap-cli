@@ -474,6 +474,72 @@ public static class OAuthLoginFlow {
     static async Task<int> LoginWorkOSAsync(string? authKitDomain, string clientId, string? organizationId) {
         var authorizeBase = string.IsNullOrEmpty(authKitDomain) ? WorkOSApiBase : $"https://{authKitDomain}";
 
+        var loop = await RunWorkOSLoopbackAsync(authorizeBase, clientId, organizationId);
+        if (loop.Code is null) {
+            Console.Error.WriteLine(loop.Error switch {
+                "state_mismatch" => "Error: state mismatch — possible CSRF. Aborting.",
+                "timeout"        => "Timed out waiting for authorization. Re-run `kcap login` to try again.",
+                _                => "Error: No authorization code received."
+            });
+
+            return 1;
+        }
+
+        using var http = new HttpClient();
+
+        var json = await AuthenticateWorkOSCodeAsync(http, WorkOSApiBase, clientId, loop.Code, loop.Verifier);
+        if (json is null) {
+            Console.Error.WriteLine("Error: WorkOS token exchange failed.");
+
+            return 1;
+        }
+
+        // Org gate: a multi-org user must not be "logged in" to the wrong org — every API
+        // call would then fail the server's org check. Reject before saving tokens.
+        if (!string.IsNullOrEmpty(organizationId) && !string.Equals(json.OrganizationId, organizationId, StringComparison.Ordinal)) {
+            Console.Error.WriteLine($"Error: signed in to the wrong WorkOS organization (expected {organizationId}). Re-run `kcap login` and pick the correct organization.");
+
+            return 1;
+        }
+
+        var username = WorkOSDisplayName(json.User);
+
+        await TokenStore.SaveAsync(
+            new() {
+                AccessToken    = json.AccessToken,
+                RefreshToken   = json.RefreshToken,
+                ExpiresAt      = TokenStore.JwtExpiry(json.AccessToken),
+                GitHubUsername = username,
+                Provider       = AuthProvider.WorkOS,
+                ClientId       = clientId
+            }
+        );
+
+        await Console.Out.WriteLineAsync($"Logged in as {username}");
+
+        return 0;
+    }
+
+    /// <summary>Human display name from a WorkOS user (first+last, else email, else "unknown").</summary>
+    internal static string WorkOSDisplayName(WorkOSUserInfo? user) {
+        var parts = new List<string>();
+        if (!string.IsNullOrEmpty(user?.FirstName)) parts.Add(user!.FirstName!);
+        if (!string.IsNullOrEmpty(user?.LastName))  parts.Add(user!.LastName!);
+
+        return parts.Count > 0 ? string.Join(' ', parts) : user?.Email ?? "unknown";
+    }
+
+    public sealed record WorkOSLoopbackResult(string? Code, string Verifier, string RedirectUri, string? Error);
+
+    /// <summary>
+    /// WorkOS AuthKit authorization-code-with-PKCE on a 127.0.0.1 loopback listener. Authorizes on
+    /// <paramref name="authorizeBase"/>, org-scoped only when <paramref name="organizationId"/> is set
+    /// (pass null for org-less discovery). Returns the authorization code + PKCE verifier, or an
+    /// <c>Error</c> ("timeout" / "state_mismatch" / "missing_code"). Public client — the separate token
+    /// exchange carries no secret.
+    /// </summary>
+    public static async Task<WorkOSLoopbackResult> RunWorkOSLoopbackAsync(
+            string authorizeBase, string clientId, string? organizationId, TimeSpan? timeout = null) {
         var verifier    = GenerateCodeVerifier();
         var challenge   = GenerateCodeChallenge(verifier);
         var state       = GenerateCodeVerifier();
@@ -502,7 +568,7 @@ public static class OAuthLoginFlow {
         }
 
         // Bounded wait + ignore non-callback requests (favicon etc.) — mirrors RunGitHubBrowserFlowAsync.
-        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromMinutes(5));
 
         HttpListenerContext context;
 
@@ -514,9 +580,8 @@ public static class OAuthLoginFlow {
             } catch (OperationCanceledException) {
                 listener.Stop();
                 _ = getContext.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-                Console.Error.WriteLine("Timed out waiting for authorization. Re-run `kcap login` to try again.");
 
-                return 1;
+                return new(null, verifier, redirectUri, "timeout");
             }
 
             if (context.Request.Url?.AbsolutePath == "/callback") break;
@@ -530,7 +595,6 @@ public static class OAuthLoginFlow {
         var returnedState = context.Request.QueryString["state"];
 
         if (returnedState != state) {
-            Console.Error.WriteLine("Error: state mismatch — possible CSRF. Aborting.");
             const string errHtml = "<html><body><h2>Authentication failed</h2><p>State mismatch — possible CSRF. Return to the terminal.</p></body></html>";
             var          errBuf  = Encoding.UTF8.GetBytes(errHtml);
             context.Response.ContentType     = "text/html";
@@ -539,7 +603,7 @@ public static class OAuthLoginFlow {
             context.Response.Close();
             listener.Stop();
 
-            return 1;
+            return new(null, verifier, redirectUri, "state_mismatch");
         }
 
         const string html = "<html><body><h2>Authentication successful!</h2><p>You can close this window.</p></body></html>";
@@ -551,61 +615,47 @@ public static class OAuthLoginFlow {
         context.Response.Close();
         listener.Stop();
 
-        if (string.IsNullOrEmpty(code)) {
-            Console.Error.WriteLine("Error: No authorization code received.");
+        return string.IsNullOrEmpty(code)
+            ? new(null, verifier, redirectUri, "missing_code")
+            : new(code, verifier, redirectUri, null);
+    }
 
-            return 1;
-        }
+    /// <summary>Public-client WorkOS code→token exchange at <c>{apiBase}/user_management/authenticate</c>.</summary>
+    public static async Task<WorkOSAuthResponse?> AuthenticateWorkOSCodeAsync(
+            HttpClient http, string apiBase, string clientId, string code, string codeVerifier) {
+        var resp = await http.PostAsync(
+            $"{apiBase.TrimEnd('/')}/user_management/authenticate",
+            new FormUrlEncodedContent(new Dictionary<string, string> {
+                ["grant_type"]    = "authorization_code",
+                ["client_id"]     = clientId,
+                ["code"]          = code,
+                ["code_verifier"] = codeVerifier
+            }));
 
-        using var http = new HttpClient();
+        if (!resp.IsSuccessStatusCode) return null;
 
-        var tokenResponse = await http.PostAsync(
-            $"{WorkOSApiBase}/user_management/authenticate",
-            new FormUrlEncodedContent(
-                new Dictionary<string, string> {
-                    ["grant_type"]    = "authorization_code",
-                    ["client_id"]     = clientId,
-                    ["code"]          = code,
-                    ["code_verifier"] = verifier
-                }
-            )
-        );
+        return await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.WorkOSAuthResponse);
+    }
 
-        if (!tokenResponse.IsSuccessStatusCode) {
-            Console.Error.WriteLine($"Error: {await tokenResponse.Content.ReadAsStringAsync()}");
+    /// <summary>
+    /// Public-client WorkOS org-switch: exchanges a refresh token for an org-scoped token. The spike
+    /// confirmed the resulting refresh token stays bound to the org, so subsequent refreshes need no
+    /// organization_id. No client secret.
+    /// </summary>
+    public static async Task<WorkOSAuthResponse?> SwitchWorkOSOrgAsync(
+            HttpClient http, string apiBase, string clientId, string refreshToken, string organizationId) {
+        var resp = await http.PostAsync(
+            $"{apiBase.TrimEnd('/')}/user_management/authenticate",
+            new FormUrlEncodedContent(new Dictionary<string, string> {
+                ["grant_type"]      = "refresh_token",
+                ["client_id"]       = clientId,
+                ["refresh_token"]   = refreshToken,
+                ["organization_id"] = organizationId
+            }));
 
-            return 1;
-        }
+        if (!resp.IsSuccessStatusCode) return null;
 
-        var json = (await tokenResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.WorkOSAuthResponse))!;
-
-        // Org gate: a multi-org user must not be "logged in" to the wrong org — every API
-        // call would then fail the server's org check. Reject before saving tokens.
-        if (!string.IsNullOrEmpty(organizationId) && !string.Equals(json.OrganizationId, organizationId, StringComparison.Ordinal)) {
-            Console.Error.WriteLine($"Error: signed in to the wrong WorkOS organization (expected {organizationId}). Re-run `kcap login` and pick the correct organization.");
-
-            return 1;
-        }
-
-        var parts = new List<string>();
-        if (!string.IsNullOrEmpty(json.User?.FirstName)) parts.Add(json.User!.FirstName!);
-        if (!string.IsNullOrEmpty(json.User?.LastName)) parts.Add(json.User!.LastName!);
-        var username = parts.Count > 0 ? string.Join(' ', parts) : json.User?.Email ?? "unknown";
-
-        await TokenStore.SaveAsync(
-            new() {
-                AccessToken    = json.AccessToken,
-                RefreshToken   = json.RefreshToken,
-                ExpiresAt      = TokenStore.JwtExpiry(json.AccessToken),
-                GitHubUsername = username,
-                Provider       = AuthProvider.WorkOS,
-                ClientId       = clientId
-            }
-        );
-
-        await Console.Out.WriteLineAsync($"Logged in as {username}");
-
-        return 0;
+        return await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.WorkOSAuthResponse);
     }
 
     internal readonly record struct CallbackResult(string? Code, string? Error);

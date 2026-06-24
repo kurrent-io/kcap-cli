@@ -1,8 +1,38 @@
 using Capacitor.Cli.Core.Auth;
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+using WireMock.Server;
 
 namespace Capacitor.Cli.Tests.Unit;
 
 public class OAuthFlowTests {
+    [Test]
+    public async Task SwitchWorkOSOrg_posts_refresh_grant_with_org_and_returns_token() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """{"user":{"id":"user_x"},"organization_id":"org_a","access_token":"acc","refresh_token":"rt2"}"""));
+        using var http = new HttpClient();
+
+        var auth = await OAuthLoginFlow.SwitchWorkOSOrgAsync(http, server.Urls[0], "client_d", "rt1", "org_a");
+
+        await Assert.That(auth!.OrganizationId).IsEqualTo("org_a");
+        await Assert.That(auth.RefreshToken).IsEqualTo("rt2");
+        await Assert.That(auth.AccessToken).IsEqualTo("acc");
+    }
+
+    [Test]
+    public async Task SwitchWorkOSOrg_returns_null_on_error() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(401));
+        using var http = new HttpClient();
+
+        var auth = await OAuthLoginFlow.SwitchWorkOSOrgAsync(http, server.Urls[0], "client_d", "rt1", "org_a");
+
+        await Assert.That(auth).IsNull();
+    }
+
     [Test]
     public async Task GitHub_authorize_url_includes_all_required_params() {
         var url = OAuthLoginFlow.BuildGitHubAuthorizeUrl(
