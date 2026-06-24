@@ -59,6 +59,7 @@ public static class OpenCodeExtensionInstaller {
           const started = new Set<string>()
           const children = new Set<string>()
           const written = new Map<string, Set<string>>()
+          const unknownCounts = new Map<string, number>() // consecutive failed classifications per sid
 
           async function runKcap(args: string[]) {
             try {
@@ -85,11 +86,18 @@ public static class OpenCodeExtensionInstaller {
             if (info?.parentID) { children.add(sid); return "child" }
             try {
               const s: any = await client.session.get({ path: { id: sid } })
+              unknownCounts.delete(sid)
               const parentId = s?.parentID ?? s?.data?.parentID
               if (parentId) { children.add(sid); return "child" }
               return "top"
             } catch {
-              return "unknown"
+              // session.get failed — ambiguous, so DEFER (don't misfile a child as top-level).
+              // But after a few consecutive failures fall back to top-level, so a persistent
+              // endpoint-specific session.get failure doesn't permanently drop a real top-level
+              // session (the rare wrong-guess duplicate is better than never capturing it).
+              const n = (unknownCounts.get(sid) ?? 0) + 1
+              unknownCounts.set(sid, n)
+              return n >= 3 ? "top" : "unknown"
             }
           }
 
@@ -146,19 +154,44 @@ public static class OpenCodeExtensionInstaller {
             }
           }
 
-          // On the parent's idle, stream any child sessions (subagents) into the nested dir
-          // the watcher scans. The task tool blocks the parent until the child completes, so by
-          // parent-idle the child transcript is whole; the full transcript is written (the
-          // dedup key re-appends a tool that later turns terminal, and the server's terminal
-          // gate + keep-first ingest the final snapshot).
+          // Child ids whose spawning `task` tool part on the PARENT is terminal
+          // (completed/error) — a DURABLE "subagent finished" signal, rather than assuming the
+          // parent only idles once the task returned. The task part records the child id in
+          // state.metadata.sessionId. We flush a child ONLY once its task is terminal, so a
+          // still-streaming child's partial text/reasoning is never appended first (the server
+          // keeps-first by prt_ id, so a partial text part would freeze — the dedup discriminator
+          // only re-sends tool parts, not growing text).
+          async function completedChildIds(parent: string) {
+            const done = new Set<string>()
+            try {
+              const res: any = await client.session.messages({ path: { id: parent } })
+              const msgs: any[] = Array.isArray(res) ? res : (res?.data ?? [])
+              for (const m of msgs) {
+                for (const p of (m?.parts ?? [])) {
+                  if (p?.type !== "tool" || p?.tool !== "task") continue
+                  const st = p?.state?.status
+                  const cid = p?.state?.metadata?.sessionId
+                  if (cid && (st === "completed" || st === "error")) done.add(cid)
+                }
+              }
+            } catch {}
+            return done
+          }
+
+          // On the parent's idle, stream COMPLETED child sessions (subagents) into the nested dir
+          // the watcher scans. Every child id is recorded so its own session events skip the
+          // top-level path; a child whose task isn't terminal yet is simply deferred to a later
+          // parent idle (no partial transcript is written).
           async function flushSubagents(parent: string) {
             try {
+              const done = await completedChildIds(parent)
               const res: any = await client.session.children({ path: { id: parent } })
               const kids: any[] = Array.isArray(res) ? res : (res?.data ?? [])
               for (const k of kids) {
                 const cid = k?.id
                 if (!cid) continue
                 children.add(cid)
+                if (!done.has(cid)) continue // task not terminal yet — defer to a later idle
                 await flushTo(cid, childFile(parent, cid))
               }
             } catch {

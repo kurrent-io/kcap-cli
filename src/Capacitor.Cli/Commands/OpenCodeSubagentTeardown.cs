@@ -20,7 +20,6 @@ namespace Capacitor.Cli.Commands;
 /// one step — never skips the rest).
 /// </summary>
 static class OpenCodeSubagentTeardown {
-    /// <summary>Time budget on the shutdown path so a slow drain can't block termination.</summary>
     /// <summary>
     /// Shared budget for the best-effort kill+drain cleanup ACROSS all children, so a slow
     /// first child can't consume it and starve later children. <c>subagent-stop</c> is ALWAYS
@@ -30,17 +29,28 @@ static class OpenCodeSubagentTeardown {
     /// </summary>
     internal static readonly TimeSpan CleanupBudget = TimeSpan.FromSeconds(6);
 
+    /// <summary>
+    /// Hard ceiling for the WHOLE teardown (all children) so a polluted or huge nested dir can't
+    /// make the parent-exit session-end path scale linearly without bound. Past it, remaining
+    /// children are left unfinalized so the watchdog can terminate.
+    /// </summary>
+    internal static readonly TimeSpan OverallBudget = TimeSpan.FromSeconds(20);
+
     internal static async Task DrainAsync(string baseUrl, string sessionId, string parentTranscriptPath) {
         var subFiles = OpenCodeSubagentDiscovery.EnumerateSubagentFiles(parentTranscriptPath);
         if (subFiles.Count == 0) return;
 
         // Deadline-aware across ALL children (each step is also individually capped — KillWatcher
-        // alone waits up to 5s for graceful exit). Once the shared cleanup budget elapses, the
-        // remaining children skip kill+drain but STILL get subagent-stop, so one slow child can't
-        // deny later children their SubagentCompleted.
-        var cleanupDeadline = DateTimeOffset.UtcNow + CleanupBudget;
+        // alone waits up to 5s for graceful exit). The cleanup deadline drops kill+drain for later
+        // children (they STILL get subagent-stop); the overall deadline is a hard ceiling on the
+        // whole teardown so an arbitrary file count can't delay session-end.
+        var start           = DateTimeOffset.UtcNow;
+        var cleanupDeadline = start + CleanupBudget;
+        var overallDeadline = start + OverallBudget;
 
         foreach (var subFile in subFiles) {
+            if (DateTimeOffset.UtcNow >= overallDeadline) break;
+
             var childId   = Path.GetFileNameWithoutExtension(subFile);
             var agentId   = OpenCodeSubagentDiscovery.CanonicalAgentId(childId);
             var agentType = OpenCodeSubagentDiscovery.ResolveAgentType(subFile);
