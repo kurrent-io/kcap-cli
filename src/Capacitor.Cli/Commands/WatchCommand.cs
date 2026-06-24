@@ -552,15 +552,12 @@ static partial class WatchCommand {
         // shape as the Gemini teardown; runs BEFORE the session-end POST so SubagentCompleted
         // lands ahead of SessionEnded. No-op when none were spawned (AI-919 phase 2).
         if (vendor == "opencode") {
+            // DrainAsync is self-bounding (per-step caps + a shared cleanup deadline) and ALWAYS
+            // attempts subagent-stop for every child, so it needs no outer time cap here —
+            // wrapping it in one risked cutting later children's SubagentCompleted (and OpenCode
+            // has no historical import to recover a missed stop).
             try {
-                var finalized = await TimeBudget.RunCappedAsync(
-                    () => OpenCodeSubagentTeardown.DrainAsync(baseUrl, sessionId, transcriptPath),
-                    OpenCodeSubagentTeardown.DrainCap);
-
-                if (!finalized) {
-                    Log("Parent-exit OpenCode subagent teardown cap elapsed; "
-                      + "some subagents may lack SubagentCompleted until a re-run");
-                }
+                await OpenCodeSubagentTeardown.DrainAsync(baseUrl, sessionId, transcriptPath);
             } catch (Exception ex) {
                 Log($"Parent-exit OpenCode subagent teardown failed: {ex.Message}");
             }

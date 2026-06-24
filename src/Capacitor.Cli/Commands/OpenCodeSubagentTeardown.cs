@@ -21,27 +21,39 @@ namespace Capacitor.Cli.Commands;
 /// </summary>
 static class OpenCodeSubagentTeardown {
     /// <summary>Time budget on the shutdown path so a slow drain can't block termination.</summary>
-    internal static readonly TimeSpan DrainCap = TimeSpan.FromSeconds(8);
+    /// <summary>
+    /// Shared budget for the best-effort kill+drain cleanup ACROSS all children, so a slow
+    /// first child can't consume it and starve later children. <c>subagent-stop</c> is ALWAYS
+    /// attempted per child regardless of this budget (the critical <c>SubagentCompleted</c>;
+    /// OpenCode has no historical import, so a missed stop is unrecoverable). Self-bounding —
+    /// the caller awaits <see cref="DrainAsync"/> directly without an outer time cap.
+    /// </summary>
+    internal static readonly TimeSpan CleanupBudget = TimeSpan.FromSeconds(6);
 
     internal static async Task DrainAsync(string baseUrl, string sessionId, string parentTranscriptPath) {
         var subFiles = OpenCodeSubagentDiscovery.EnumerateSubagentFiles(parentTranscriptPath);
         if (subFiles.Count == 0) return;
+
+        // Deadline-aware across ALL children (each step is also individually capped — KillWatcher
+        // alone waits up to 5s for graceful exit). Once the shared cleanup budget elapses, the
+        // remaining children skip kill+drain but STILL get subagent-stop, so one slow child can't
+        // deny later children their SubagentCompleted.
+        var cleanupDeadline = DateTimeOffset.UtcNow + CleanupBudget;
 
         foreach (var subFile in subFiles) {
             var childId   = Path.GetFileNameWithoutExtension(subFile);
             var agentId   = OpenCodeSubagentDiscovery.CanonicalAgentId(childId);
             var agentType = OpenCodeSubagentDiscovery.ResolveAgentType(subFile);
 
-            // Each step is independently CAPPED so a slow first child can't consume the
-            // budget and starve later children of their SubagentCompleted:
-            //  - KillWatcher waits up to 5s for graceful exit (WatcherManager) — cap it hard;
-            //  - InlineDrain overlaps harmlessly with any still-live watcher (the server
-            //    dedupes by deterministic event id);
-            //  - subagent-stop ALWAYS runs (the critical SubagentCompleted; the server
-            //    also stop-and-drains the watcher).
-            await CappedAsync(() => WatcherManager.KillWatcher($"{sessionId}-{agentId}"),                               TimeSpan.FromSeconds(1.5));
-            await CappedAsync(() => WatcherManager.InlineDrainAsync(baseUrl, sessionId, subFile, agentId, vendor: "opencode"), TimeSpan.FromSeconds(2.5));
-            await CappedAsync(() => PostStopAsync(baseUrl, sessionId, agentId, agentType, subFile),                     TimeSpan.FromSeconds(2.5));
+            if (DateTimeOffset.UtcNow < cleanupDeadline) {
+                // InlineDrain overlaps harmlessly with any still-live watcher (server dedupes by
+                // deterministic event id); both capped so neither blocks process termination.
+                await CappedAsync(() => WatcherManager.KillWatcher($"{sessionId}-{agentId}"),                               TimeSpan.FromSeconds(1.5));
+                await CappedAsync(() => WatcherManager.InlineDrainAsync(baseUrl, sessionId, subFile, agentId, vendor: "opencode"), TimeSpan.FromSeconds(2.5));
+            }
+
+            // The critical SubagentCompleted — ALWAYS attempted, individually capped.
+            await CappedAsync(() => PostStopAsync(baseUrl, sessionId, agentId, agentType, subFile), TimeSpan.FromSeconds(2.5));
         }
     }
 

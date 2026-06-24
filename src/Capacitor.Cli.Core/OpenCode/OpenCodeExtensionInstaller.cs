@@ -73,34 +73,39 @@ public static class OpenCodeExtensionInstaller {
             }
           }
 
-          // A child session (subagent) must NEVER be ingested as a top-level session.
-          // session.created MAY carry info.parentID, but session.idle does not, and a
-          // child's idle can fire before its parent is discovered — so resolve parentID
-          // authoritatively via the SDK when it isn't already known. Fail-open to
-          // top-level (a transient lookup failure must not drop a real session).
-          async function isChild(sid: string, info?: any) {
-            if (children.has(sid)) return true
-            let parentId = info?.parentID
-            if (parentId === undefined || parentId === null) {
-              try {
-                const s: any = await client.session.get({ path: { id: sid } })
-                parentId = s?.parentID ?? s?.data?.parentID ?? null
-              } catch { parentId = null }
+          // Classify a session: "child" (a subagent — never ingest as top-level), "top"
+          // (no parent), or "unknown" (a transient session.get failure left it ambiguous).
+          // NEVER start a top-level session on "unknown" — that is exactly the case that would
+          // misfile a child as BOTH a top-level session AND a subagent. Only a SUCCESSFUL
+          // session.get with no parent proves top-level; otherwise defer to the next idle
+          // (session.created carries parentID only for some children, and session.idle never
+          // does, so the SDK is the authority).
+          async function classify(sid: string, info?: any): Promise<"child" | "top" | "unknown"> {
+            if (children.has(sid)) return "child"
+            if (info?.parentID) { children.add(sid); return "child" }
+            try {
+              const s: any = await client.session.get({ path: { id: sid } })
+              const parentId = s?.parentID ?? s?.data?.parentID
+              if (parentId) { children.add(sid); return "child" }
+              return "top"
+            } catch {
+              return "unknown"
             }
-            if (parentId) { children.add(sid); return true }
-            return false
           }
 
-          // The server keys events by the part's stable prt_ id and keeps the FIRST
-          // append, so a message must only be written once its content is final. A user
-          // message is always final; an assistant message is final once it carries a
-          // finish/completed marker. Gates subagent flushing so a still-streaming child
-          // can't lock in partial content (the task tool blocks the parent until the
-          // child completes, so by parent-idle this passes).
-          function isFinal(m: any) {
-            const info = m?.info
-            if (info?.role !== "assistant") return true
-            return info.finish != null || info.time?.completed != null
+          // Per-message dedup key. parts.length catches new parts streaming in; the
+          // terminal-tool count catches a tool part transitioning to completed/error WITHOUT
+          // the part count changing — the server skips non-terminal tool snapshots and keeps
+          // the FIRST append per prt_ id, so the completed snapshot MUST be re-appended under a
+          // new key to be ingested. (Text/reasoning are final by session.idle = turn end.)
+          function dedupeKey(m: any) {
+            const parts: any[] = m?.parts ?? []
+            let terminalTools = 0
+            for (const p of parts) {
+              const st = p?.state?.status
+              if (p?.type === "tool" && (st === "completed" || st === "error")) terminalTools++
+            }
+            return (m?.info?.id ?? "") + ":" + parts.length + ":" + terminalTools
           }
 
           async function start(sid: string, info?: any) {
@@ -117,7 +122,7 @@ public static class OpenCodeExtensionInstaller {
           // Fetch a session's full messages and append any not-yet-written {info,parts}
           // lines to targetFile. Re-emits when a message's part count grows (the assistant
           // streams parts in over a turn); deterministic prt_ ids dedupe server-side.
-          async function flushTo(sid: string, targetFile: string, finalOnly = false) {
+          async function flushTo(sid: string, targetFile: string) {
             try {
               const res: any = await client.session.messages({ path: { id: sid } })
               const msgs: any[] = Array.isArray(res) ? res : (res?.data ?? [])
@@ -127,10 +132,7 @@ public static class OpenCodeExtensionInstaller {
               for (const m of msgs) {
                 const id = m?.info?.id
                 if (!id) continue
-                // Subagents: skip a still-streaming message so its partial content isn't
-                // the first (permanent) append for its part ids.
-                if (finalOnly && !isFinal(m)) continue
-                const key = id + ":" + (m?.parts?.length ?? 0)
+                const key = dedupeKey(m)
                 if (seen.has(key)) continue
                 seen.add(key)
                 lines.push(JSON.stringify({ info: m.info, parts: m.parts ?? [] }))
@@ -145,8 +147,10 @@ public static class OpenCodeExtensionInstaller {
           }
 
           // On the parent's idle, stream any child sessions (subagents) into the nested dir
-          // the watcher scans. The task tool blocks the parent until the child completes, so
-          // by parent-idle the child transcript is whole.
+          // the watcher scans. The task tool blocks the parent until the child completes, so by
+          // parent-idle the child transcript is whole; the full transcript is written (the
+          // dedup key re-appends a tool that later turns terminal, and the server's terminal
+          // gate + keep-first ingest the final snapshot).
           async function flushSubagents(parent: string) {
             try {
               const res: any = await client.session.children({ path: { id: parent } })
@@ -155,7 +159,7 @@ public static class OpenCodeExtensionInstaller {
                 const cid = k?.id
                 if (!cid) continue
                 children.add(cid)
-                await flushTo(cid, childFile(parent, cid), true)
+                await flushTo(cid, childFile(parent, cid))
               }
             } catch {
               // never disrupt the OpenCode session
@@ -168,15 +172,17 @@ public static class OpenCodeExtensionInstaller {
                 const type = event?.type
                 const sid = event?.properties?.sessionID
                 if (!sid) return
+                if (children.has(sid)) return  // known subagent — its parent streams it
                 if (type === "session.created") {
-                  // Skip child sessions (subagents) on the top-level path — the parent's
-                  // flushSubagents streams them. isChild resolves parentID via the SDK when
-                  // the event doesn't carry it, so this can't misfile a child as top-level.
-                  if (await isChild(sid, event.properties?.info)) return
-                  await start(sid, event.properties?.info)
+                  // START a top-level session only on a CONFIRMED classification — never on
+                  // "unknown" (a session.get hiccup), which would misfile a child as both a
+                  // top-level session and a subagent. "unknown" defers to the next idle.
+                  if (await classify(sid, event.properties?.info) === "top") await start(sid, event.properties?.info)
                 } else if (type === "session.idle") {
-                  if (await isChild(sid)) return
-                  if (!started.has(sid)) await start(sid)
+                  if (!started.has(sid)) {
+                    if (await classify(sid) !== "top") return  // child → skip; unknown → retry next idle
+                    await start(sid)
+                  }
                   await flushTo(sid, file(sid))
                   await flushSubagents(sid)
                 }
