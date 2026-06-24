@@ -8,12 +8,12 @@ Description:
   `hook_event_name`) and forwards it to the kcap server; the vendor flag
   selects the per-agent dispatcher and the event is taken from the payload.
 
-  Pi is the exception: it has no shell hooks, so its dispatch is argument-
-  driven (no stdin payload) — see --pi below.
+  Pi and OpenCode are the exceptions: they have no shell hooks, so their
+  dispatch is argument-driven (no stdin payload) — see --pi / --opencode below.
 
   The command is registered via 'kcap setup' or
-  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--kiro|--pi]', which
-  writes the appropriate hook configuration (or, for Pi, the extension) for the vendor.
+  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode]', which
+  writes the appropriate hook configuration (or, for Pi/OpenCode, the plugin) for the vendor.
 
 Options:
   --claude    Dispatch the event as a Claude Code hook.
@@ -35,6 +35,14 @@ Options:
                   --file <session-file> [--cwd <cwd>] [--reason <reason>]
               The session id, cwd, and start time are read from the Pi
               session JSONL header.
+  --opencode  Dispatch an SST OpenCode lifecycle event. OpenCode has no shell
+              hooks; the shipped kcap.ts plugin invokes this with arguments
+              instead of a stdin payload:
+                kcap hook --opencode --event session-start \
+                  --session <id> --file <transcript-file> [--cwd <cwd>]
+              The plugin writes {info,parts} JSONL to the transcript file; the
+              watcher tails it (vendor=opencode) and synthesizes session-end on
+              opencode exit.
 
 Exit codes:
   0   Normal exit (including budget expiry, malformed payload, and

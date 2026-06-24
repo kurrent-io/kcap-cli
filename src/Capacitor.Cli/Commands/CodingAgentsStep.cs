@@ -12,9 +12,9 @@ internal static class CodingAgentsStep {
     // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini
     // (AI-887), Kiro (AI-888), and Pi (AI-886) were all added after the original
     // four vendors.
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false);
 
-    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false);
+    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false);
 
     internal record Paths(
             string  ClaudeSettingsPath,
@@ -27,7 +27,8 @@ internal static class CodingAgentsStep {
             string  AgentsSkillsDir,
             string  LegacyCodexSkillsDir,
             string  KiroHooksPath = "",
-            string  PiExtensionPath = ""
+            string  PiExtensionPath = "",
+            string  OpenCodeExtensionPath = ""
         );
 
     internal record Installers(
@@ -40,7 +41,8 @@ internal static class CodingAgentsStep {
             Func<string /*srcDir*/, string /*dstDir*/, bool>          InstallAgentSkills,
             Func<string /*legacyDir*/, bool>                          CleanLegacyCodexSkills,
             Func<string /*agentJsonPath*/, bool>?                     InstallKiroHooks = null,
-            Func<string /*extensionPath*/, bool>?                     InstallPiExtension = null
+            Func<string /*extensionPath*/, bool>?                     InstallPiExtension = null,
+            Func<string /*pluginPath*/, bool>?                        InstallOpenCodeExtension = null
         );
 
     internal record Result(
@@ -51,7 +53,8 @@ internal static class CodingAgentsStep {
             bool CopilotHooksInstalled,
             bool GeminiHooksInstalled = false,
             bool KiroHooksInstalled = false,
-            bool PiExtensionInstalled = false
+            bool PiExtensionInstalled = false,
+            bool OpenCodeExtensionInstalled = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -61,7 +64,7 @@ internal static class CodingAgentsStep {
         /// as agents are added (consumers like SetupCommand's restart tip key off this).
         /// </summary>
         internal bool AnyHooksInstalled =>
-            ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled || GeminiHooksInstalled || KiroHooksInstalled || PiExtensionInstalled;
+            ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled || GeminiHooksInstalled || KiroHooksInstalled || PiExtensionInstalled || OpenCodeExtensionInstalled;
     }
 
     /// <summary>
@@ -85,9 +88,10 @@ internal static class CodingAgentsStep {
         var geminiHooksInstalled  = HandleGeminiHooks(options, detected, paths, installers, prompt, writeLine);
         var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, prompt, writeLine);
         var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, prompt, writeLine);
+        var openCodeExtensionInstalled = HandleOpenCodeExtension(options, detected, paths, installers, prompt, writeLine);
 
-        if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: false, Kiro: false, Pi: false }) {
-            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, or Pi to start capturing sessions.");
+        if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: false, Kiro: false, Pi: false, OpenCode: false }) {
+            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, Pi, or OpenCode to start capturing sessions.");
         }
 
         return Task.FromResult(
@@ -99,7 +103,8 @@ internal static class CodingAgentsStep {
                 copilotHooksInstalled,
                 geminiHooksInstalled,
                 kiroHooksInstalled,
-                piExtensionInstalled
+                piExtensionInstalled,
+                openCodeExtensionInstalled
             )
         );
     }
@@ -315,6 +320,62 @@ internal static class CodingAgentsStep {
 
         writeLine($"  [green]✓[/] Pi extension installed ({Markup.Escape(paths.PiExtensionPath)})");
         writeLine("  [dim]  Note: Pi loads extensions at startup — restart any running pi session to pick it up.[/]");
+
+        return true;
+    }
+
+    static bool HandleOpenCodeExtension(
+            Options            options,
+            DetectedAgents     detected,
+            Paths              paths,
+            Installers         installers,
+            Func<string, bool> prompt,
+            Action<string>     writeLine
+        ) {
+        if (!detected.OpenCode) {
+            writeLine("  [dim]· OpenCode not detected — skipping[/]");
+
+            return false;
+        }
+
+        writeLine("  [green]✓[/] OpenCode detected");
+
+        if (options.SkipOpenCode) {
+            writeLine("  [dim]· OpenCode plugin skipped by flag[/]");
+
+            return false;
+        }
+
+        if (installers.InstallOpenCodeExtension is null) return false;
+
+        var shouldInstall = options.NoPrompt || prompt("Install the OpenCode plugin (live session capture)?");
+
+        if (!shouldInstall) {
+            writeLine("  [dim]· OpenCode plugin not installed (you can run kcap plugin install --opencode later)[/]");
+
+            return false;
+        }
+
+        // OpenCode has no shell hooks — the plugin (kcap.ts) shells out to the bare
+        // "kcap hook --opencode" command, so OpenCode must find kcap on PATH (same
+        // precheck as the Pi/Cursor/Copilot branches).
+        if (!installers.CapacitorOnPath()) {
+            writeLine("  [yellow]⚠[/] OpenCode plugin not installed — 'kcap' is not on PATH.");
+            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+
+            return false;
+        }
+
+        var ok = installers.InstallOpenCodeExtension(paths.OpenCodeExtensionPath);
+
+        if (!ok) {
+            writeLine("  [yellow]⚠[/] Could not write the OpenCode plugin file.");
+
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] OpenCode plugin installed ({Markup.Escape(paths.OpenCodeExtensionPath)})");
+        writeLine("  [dim]  Note: OpenCode loads plugins at startup — restart any running opencode session to pick it up.[/]");
 
         return true;
     }

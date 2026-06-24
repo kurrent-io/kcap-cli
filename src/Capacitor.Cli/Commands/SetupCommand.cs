@@ -7,6 +7,7 @@ using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
+using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
 using Spectre.Console;
 using Profile = Capacitor.Cli.Core.Config.Profile;
@@ -25,6 +26,7 @@ public static class SetupCommand {
         var skipGeminiFlag   = args.Contains("--skip-gemini-hooks");
         var skipKiroFlag     = args.Contains("--skip-kiro-hooks");
         var skipPiFlag       = args.Contains("--skip-pi-hooks");
+        var skipOpenCodeFlag = args.Contains("--skip-opencode-hooks");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
@@ -191,7 +193,10 @@ public static class SetupCommand {
             Kiro:    KiroPaths.IsInstalled() || AgentDetector.IsInstalled("kiro") || AgentDetector.IsInstalled("kiro-cli"),
             // Pi keeps state under ~/.pi/agent; the PATH probe covers fresh
             // installs that haven't created it yet.
-            Pi:      PiPaths.IsInstalled() || AgentDetector.IsInstalled("pi"));
+            Pi:      PiPaths.IsInstalled() || AgentDetector.IsInstalled("pi"),
+            // OpenCode keeps config under ~/.config/opencode + data under
+            // ~/.local/share/opencode; the PATH probe covers fresh installs.
+            OpenCode: OpenCodePaths.IsInstalled() || AgentDetector.IsInstalled("opencode"));
 
         // gitRoot is guaranteed non-null here when legacyProjectScope is true (the early
         // guard at the top of HandleAsync returns 1 otherwise).
@@ -207,6 +212,7 @@ public static class SetupCommand {
             SkipGemini:  skipGeminiFlag,
             SkipKiro:    skipKiroFlag,
             SkipPi:      skipPiFlag,
+            SkipOpenCode: skipOpenCodeFlag,
             NoPrompt:    noPrompt);
 
         var stepPaths = new CodingAgentsStep.Paths(
@@ -220,7 +226,8 @@ public static class SetupCommand {
             AgentsSkillsDir:      AgentsPaths.UserSkillsDir,
             LegacyCodexSkillsDir: Path.Combine(CodexPaths.Home, "skills"),
             KiroHooksPath:        KiroPaths.KcapAgentJson(),
-            PiExtensionPath:      PiPaths.KcapExtension());
+            PiExtensionPath:      PiPaths.KcapExtension(),
+            OpenCodeExtensionPath: OpenCodePaths.KcapPlugin());
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -232,7 +239,8 @@ public static class SetupCommand {
             InstallAgentSkills:     AgentsSkillsInstaller.Install,
             CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny,
             InstallKiroHooks:       PluginCommand.InstallKiroHooks,
-            InstallPiExtension:     PiExtensionInstaller.Install);
+            InstallPiExtension:     PiExtensionInstaller.Install,
+            InstallOpenCodeExtension: OpenCodeExtensionInstaller.Install);
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });

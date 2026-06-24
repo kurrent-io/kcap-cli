@@ -54,8 +54,8 @@ MCP servers (stdio):
   mcp sessions                       Search/inspect past sessions from agents
 
 Plugin:
-  plugin install [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--skills]   Register hooks/skills (Claude default; flag picks the vendor)
-  plugin remove  [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--skills]   Remove hooks/skills (Claude default; flag picks the vendor)
+  plugin install [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--skills]   Register hooks/skills (Claude default; flag picks the vendor)
+  plugin remove  [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--skills]   Remove hooks/skills (Claude default; flag picks the vendor)
 
 Maintenance:
   update                           Check for and install updates
@@ -64,7 +64,7 @@ Maintenance:
   --version                        Show version
   --help                           Show this help
 
-Hooks (internal — invoked by Claude Code / Codex / Cursor / Copilot / Gemini / Kiro / Pi):
+Hooks (internal — invoked by Claude Code / Codex / Cursor / Copilot / Gemini / Kiro / Pi / OpenCode):
   hook --claude                    Dispatch a Claude Code hook event (reads payload from stdin)
   hook --codex                     Dispatch a Codex CLI hook event
   hook --cursor                    Dispatch a Cursor IDE hook event
@@ -72,6 +72,7 @@ Hooks (internal — invoked by Claude Code / Codex / Cursor / Copilot / Gemini /
   hook --gemini                    Dispatch a Gemini CLI hook event
   hook --kiro --event <name>       Dispatch an AWS Kiro CLI hook event
   hook --pi --event <name> --file <f>  Dispatch a Pi lifecycle event (arg-driven; no stdin)
+  hook --opencode --event <name> --session <id> --file <f>  Dispatch an SST OpenCode lifecycle event (arg-driven; no stdin)
 
 Environment:
   KCAP_URL              Server URL (overrides config file)

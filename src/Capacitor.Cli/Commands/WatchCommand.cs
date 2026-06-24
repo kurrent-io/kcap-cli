@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Gemini;
+using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
 using Capacitor.Cli.Core.Auth;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -296,10 +297,14 @@ static partial class WatchCommand {
 
                 await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, cts.Token);
 
-                // Live Gemini subagent discovery: only the parent (agentId == null) watcher
-                // scans; child subagent watchers (agentId != null) just stream their file.
+                // Live subagent discovery: only the parent (agentId == null) watcher scans;
+                // child subagent watchers (agentId != null) just stream their file. Gemini
+                // scans its native nested chat files; OpenCode scans the nested dir the
+                // kcap plugin writes child {info,parts} into (AI-919 phase 2).
                 if (agentId is null && vendor == "gemini") {
                     await ScanGeminiSubagents(baseUrl, sessionId, transcriptPath, seenSubagents, cts.Token);
+                } else if (agentId is null && vendor == "opencode") {
+                    await ScanOpenCodeSubagents(baseUrl, sessionId, transcriptPath, seenSubagents, cts.Token);
                 }
 
                 try {
@@ -428,11 +433,76 @@ static partial class WatchCommand {
     }
 
     /// <summary>
+    /// OpenCode fires no subagent hooks; its subagents live in its SQLite db, so the kcap
+    /// plugin fetches each child session via the SDK and writes its <c>{info,parts}</c> JSONL
+    /// into <c>&lt;cacheDir&gt;/&lt;parentSid&gt;/&lt;childSid&gt;.jsonl</c>. The parent watcher discovers
+    /// those files (mirroring <see cref="ScanGeminiSubagents"/>): on first sight it registers
+    /// the subagent (<c>subagent-start</c>, fail-closed) then spawns a detached child watcher
+    /// that streams it with the canonical agentId (= childSid) → <c>AgentSubsession-*</c>, which
+    /// lines up with the agentId the server surfaced from the parent's <c>task</c> tool call.
+    /// Idempotent across ticks via <paramref name="seen"/>; deterministic server-side lifecycle
+    /// ids make re-registration safe. AI-919 phase 2.
+    /// </summary>
+    static async Task ScanOpenCodeSubagents(
+            string            baseUrl,
+            string            sessionId,
+            string            transcriptPath,
+            HashSet<string>   seen,
+            CancellationToken ct
+        ) {
+        IReadOnlyList<string> subFiles;
+        try {
+            subFiles = OpenCodeSubagentDiscovery.EnumerateSubagentFiles(transcriptPath);
+        } catch {
+            return; // discovery is best-effort — never break the main drain loop
+        }
+
+        if (subFiles.Count == 0) return;
+
+        foreach (var subFile in subFiles) {
+            if (ct.IsCancellationRequested) return;
+            if (!seen.Add(subFile)) continue; // already registered + spawned
+
+            var childId   = Path.GetFileNameWithoutExtension(subFile);
+            var agentId   = OpenCodeSubagentDiscovery.CanonicalAgentId(childId);
+            var agentType = OpenCodeSubagentDiscovery.ResolveAgentType(subFile);
+
+            // Fail-closed: register the subagent (→ SubagentStarted) before its child watcher
+            // streams content. On POST failure, drop from `seen` so the next tick retries.
+            if (!await PostOpenCodeSubagentStartAsync(baseUrl, sessionId, agentId, agentType, subFile, ct)) {
+                seen.Remove(subFile);
+                continue;
+            }
+
+            await WatcherManager.EnsureWatcherRunning(
+                baseUrl, key: $"{sessionId}-{agentId}", transcriptPath: subFile,
+                agentId: agentId, sessionIdOverride: sessionId, vendor: "opencode");
+
+            Log($"OpenCode subagent {agentId} ({agentType}) registered + child watcher spawned");
+        }
+    }
+
+    static async Task<bool> PostOpenCodeSubagentStartAsync(
+        string baseUrl, string sessionId, string agentId, string agentType, string subFile, CancellationToken ct
+    ) {
+        try {
+            using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, ct);
+            var       payload = OpenCodeSubagentDiscovery.BuildStartPayload(sessionId, agentId, agentType, subFile);
+            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/subagent-start", content, ct: ct);
+
+            return resp.IsSuccessStatusCode;
+        } catch {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Whitelist of vendor values accepted by the server's session-end route.
     /// Used to reject unexpected --vendor input before interpolating into the URL
     /// path (defence-in-depth against path traversal even though the CLI runs locally).
     /// </summary>
-    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi" };
+    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode" };
 
     /// <summary>
     /// Total time budget for the parent-exit session-end POST. Covers /auth/config
@@ -473,6 +543,29 @@ static partial class WatchCommand {
                 }
             } catch (Exception ex) {
                 Log($"Parent-exit Gemini subagent teardown failed: {ex.Message}");
+            }
+        }
+
+        // OpenCode likewise fires no subagent-stop hook (the plugin-written child files are
+        // discovered + streamed by ScanOpenCodeSubagents, with no parent-pid watchdog on the
+        // child watchers), so the parent exit is the only place that finalizes them. Same
+        // shape as the Gemini teardown; runs BEFORE the session-end POST so SubagentCompleted
+        // lands ahead of SessionEnded. No-op when none were spawned (AI-919 phase 2).
+        if (vendor == "opencode") {
+            // DrainAsync is self-bounding (per-step caps + a shared cleanup deadline + a hard
+            // overall ceiling), so it needs no outer time cap here — wrapping it in one risked
+            // cutting later children's SubagentCompleted. It attempts subagent-stop for every child
+            // WITHIN the overall budget; under a pathological/huge child count it stops at the
+            // ceiling and returns how many were left unfinalized (logged below — OpenCode has no
+            // historical import to recover a missed stop).
+            try {
+                var unfinalized = await OpenCodeSubagentTeardown.DrainAsync(baseUrl, sessionId, transcriptPath);
+                if (unfinalized > 0) {
+                    Log($"Parent-exit OpenCode subagent teardown hit the {OpenCodeSubagentTeardown.OverallBudget.TotalSeconds:0}s ceiling; "
+                      + $"{unfinalized} subagent(s) left without SubagentCompleted");
+                }
+            } catch (Exception ex) {
+                Log($"Parent-exit OpenCode subagent teardown failed: {ex.Message}");
             }
         }
 
@@ -788,11 +881,12 @@ static partial class WatchCommand {
 
     internal static string? TryExtractAssistantText(string line, string vendor = "claude") =>
         vendor switch {
-            "codex"   => TryExtractCodexAssistantText(line),
-            "copilot" => TryExtractCopilotAssistantText(line),
-            "kiro"    => TryExtractKiroAssistantText(line),
-            "pi"      => TryExtractPiAssistantText(line),
-            _         => TryExtractClaudeAssistantText(line)
+            "codex"    => TryExtractCodexAssistantText(line),
+            "copilot"  => TryExtractCopilotAssistantText(line),
+            "kiro"     => TryExtractKiroAssistantText(line),
+            "pi"       => TryExtractPiAssistantText(line),
+            "opencode" => TryExtractOpenCodeText(line, "assistant"),
+            _          => TryExtractClaudeAssistantText(line)
         };
 
     static string? TryExtractClaudeAssistantText(string line) {
@@ -903,6 +997,16 @@ static partial class WatchCommand {
                 };
             }
 
+            if (vendor == "opencode") {
+                // OpenCode envelopes are {info,parts} with info.role user/assistant.
+                // Gate on text content: a turn with no non-hidden text (e.g. tool-only)
+                // yields no titleable text, so it must not count toward the title-event
+                // threshold. Mirrors the Pi content gate.
+                if (root.Obj("info")?.Str("role") is not ("user" or "assistant")) return false;
+
+                return OpenCodeTextParts(root.Arr("parts")) is not null;
+            }
+
             return root.Str("type") is "user" or "assistant";
         } catch {
             return false;
@@ -911,12 +1015,45 @@ static partial class WatchCommand {
 
     internal static string? TryExtractUserText(string line, string vendor = "claude") =>
         vendor switch {
-            "codex"   => TryExtractCodexUserText(line),
-            "copilot" => TryExtractCopilotUserText(line),
-            "kiro"    => TryExtractKiroUserText(line),
-            "pi"      => TryExtractPiUserText(line),
-            _         => TryExtractClaudeUserText(line)
+            "codex"    => TryExtractCodexUserText(line),
+            "copilot"  => TryExtractCopilotUserText(line),
+            "kiro"     => TryExtractKiroUserText(line),
+            "pi"       => TryExtractPiUserText(line),
+            "opencode" => TryExtractOpenCodeText(line, "user"),
+            _          => TryExtractClaudeUserText(line)
         };
+
+    // ── OpenCode extractors (AI-919) ───────────────────────────────────────────
+    //
+    // OpenCode transcript lines are {info,parts} with info.role user/assistant. Title
+    // text is the joined non-hidden text parts — mirrors the server's
+    // OpenCodeTranscriptNormalizer.ExtractText so the watcher's titles match ingest.
+    static string? TryExtractOpenCodeText(string line, string role) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Obj("info")?.Str("role") != role) return null;
+
+            return OpenCodeTextParts(root.Arr("parts"));
+        } catch {
+            return null;
+        }
+    }
+
+    static string? OpenCodeTextParts(JsonElement? parts) {
+        if (parts is not { } arr) return null;
+
+        var pieces = new List<string>();
+        foreach (var part in arr.EnumerateArray()) {
+            if (part.Str("type") != "text") continue;
+            if (part.TryGetProperty("synthetic", out var syn) && syn.ValueKind == JsonValueKind.True) continue;
+            if (part.TryGetProperty("ignored",   out var ign) && ign.ValueKind == JsonValueKind.True) continue;
+            if (part.Str("text")?.Trim() is { Length: > 0 } t) pieces.Add(t);
+        }
+
+        return pieces.Count > 0 ? string.Join("\n", pieces) : null;
+    }
 
     // ── Kiro extractors (AI-888) ───────────────────────────────────────────
     //

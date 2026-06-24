@@ -2,6 +2,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
+using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Commands;
@@ -53,6 +54,7 @@ public static class UninstallCommand {
         await Console.Out.WriteLineAsync($"  • Remove kcap entries from {GeminiPaths.SettingsJson()}");
         await Console.Out.WriteLineAsync($"  • Remove {KiroPaths.KcapAgentJson()} and restore the previous default Kiro agent");
         await Console.Out.WriteLineAsync($"  • Remove {Capacitor.Cli.Core.Pi.PiPaths.KcapExtension()}");
+        await Console.Out.WriteLineAsync($"  • Remove {OpenCodePaths.KcapPlugin()}");
         await Console.Out.WriteLineAsync($"  • Remove agent skills under {AgentsPaths.UserSkillsDir}");
 
         if (projectRoot is not null) {
@@ -120,6 +122,7 @@ public static class UninstallCommand {
         if (await PluginCommand.HandleAsync(["plugin", "remove", "--gemini"]) != 0) hadFailures = true;  // shared ~/.gemini/settings.json
         if (await PluginCommand.HandleAsync(["plugin", "remove", "--kiro"]) != 0) hadFailures = true;     // ~/.kiro/agents/kcap.json + restore previous default agent
         if (await PluginCommand.HandleAsync(["plugin", "remove", "--pi"]) != 0) hadFailures = true;       // Pi extension (~/.pi/agent/extensions/kcap.ts)
+        if (await PluginCommand.HandleAsync(["plugin", "remove", "--opencode"]) != 0) hadFailures = true; // OpenCode plugin (~/.config/opencode/plugins/kcap.ts)
 
         // Skills are removed by --codex above, but call --skills explicitly in
         // case the user only ever installed Cursor / agent-agnostic skills and
