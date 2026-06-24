@@ -47,12 +47,17 @@ public static class OpenCodeExtensionInstaller {
 
         import { appendFileSync, mkdirSync } from "node:fs"
         import { homedir } from "node:os"
-        import { join } from "node:path"
+        import { join, dirname } from "node:path"
 
         export const KcapPlugin = async ({ client, $, directory }: any) => {
           const dir = join(homedir(), ".cache", "kcap", "opencode")
           const file = (sid: string) => join(dir, sid + ".jsonl")
+          // Subagents run as child sessions; their {info,parts} go in a nested dir beside
+          // the parent file (<dir>/<parent>/<child>.jsonl) that the kcap watcher scans and
+          // streams with the child's agent_id → AgentSubsession-* (AI-919 phase 2).
+          const childFile = (parent: string, child: string) => join(dir, parent, child + ".jsonl")
           const started = new Set<string>()
+          const children = new Set<string>()
           const written = new Map<string, Set<string>>()
 
           async function runKcap(args: string[]) {
@@ -79,26 +84,45 @@ public static class OpenCodeExtensionInstaller {
             await runKcap(args)
           }
 
-          async function flush(sid: string) {
+          // Fetch a session's full messages and append any not-yet-written {info,parts}
+          // lines to targetFile. Re-emits when a message's part count grows (the assistant
+          // streams parts in over a turn); deterministic prt_ ids dedupe server-side.
+          async function flushTo(sid: string, targetFile: string) {
             try {
               const res: any = await client.session.messages({ path: { id: sid } })
               const msgs: any[] = Array.isArray(res) ? res : (res?.data ?? [])
-              const seen = written.get(sid) ?? new Set<string>()
-              written.set(sid, seen)
+              const seen = written.get(targetFile) ?? new Set<string>()
+              written.set(targetFile, seen)
               const lines: string[] = []
               for (const m of msgs) {
                 const id = m?.info?.id
                 if (!id) continue
-                // Re-emit when the part count grows (the assistant streams parts in
-                // over a turn); deterministic prt_ ids dedupe server-side.
                 const key = id + ":" + (m?.parts?.length ?? 0)
                 if (seen.has(key)) continue
                 seen.add(key)
                 lines.push(JSON.stringify({ info: m.info, parts: m.parts ?? [] }))
               }
               if (lines.length > 0) {
-                try { mkdirSync(dir, { recursive: true }) } catch {}
-                appendFileSync(file(sid), lines.join("\n") + "\n")
+                try { mkdirSync(dirname(targetFile), { recursive: true }) } catch {}
+                appendFileSync(targetFile, lines.join("\n") + "\n")
+              }
+            } catch {
+              // never disrupt the OpenCode session
+            }
+          }
+
+          // On the parent's idle, stream any child sessions (subagents) into the nested dir
+          // the watcher scans. The task tool blocks the parent until the child completes, so
+          // by parent-idle the child transcript is whole.
+          async function flushSubagents(parent: string) {
+            try {
+              const res: any = await client.session.children({ path: { id: parent } })
+              const kids: any[] = Array.isArray(res) ? res : (res?.data ?? [])
+              for (const k of kids) {
+                const cid = k?.id
+                if (!cid) continue
+                children.add(cid)
+                await flushTo(cid, childFile(parent, cid))
               }
             } catch {
               // never disrupt the OpenCode session
@@ -112,10 +136,15 @@ public static class OpenCodeExtensionInstaller {
                 const sid = event?.properties?.sessionID
                 if (!sid) return
                 if (type === "session.created") {
+                  // A child session (subagent) carries parentID — never ingest it as a
+                  // top-level session; the parent's flushSubagents streams it instead.
+                  if (event.properties?.info?.parentID) { children.add(sid); return }
                   await start(sid, event.properties?.info)
                 } else if (type === "session.idle") {
+                  if (children.has(sid)) return
                   if (!started.has(sid)) await start(sid)
-                  await flush(sid)
+                  await flushTo(sid, file(sid))
+                  await flushSubagents(sid)
                 }
               } catch {
                 // never disrupt the OpenCode session

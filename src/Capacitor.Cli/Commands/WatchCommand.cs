@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Gemini;
+using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
 using Capacitor.Cli.Core.Auth;
 using Microsoft.AspNetCore.SignalR.Client;
@@ -296,10 +297,14 @@ static partial class WatchCommand {
 
                 await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, cts.Token);
 
-                // Live Gemini subagent discovery: only the parent (agentId == null) watcher
-                // scans; child subagent watchers (agentId != null) just stream their file.
+                // Live subagent discovery: only the parent (agentId == null) watcher scans;
+                // child subagent watchers (agentId != null) just stream their file. Gemini
+                // scans its native nested chat files; OpenCode scans the nested dir the
+                // kcap plugin writes child {info,parts} into (AI-919 phase 2).
                 if (agentId is null && vendor == "gemini") {
                     await ScanGeminiSubagents(baseUrl, sessionId, transcriptPath, seenSubagents, cts.Token);
+                } else if (agentId is null && vendor == "opencode") {
+                    await ScanOpenCodeSubagents(baseUrl, sessionId, transcriptPath, seenSubagents, cts.Token);
                 }
 
                 try {
@@ -428,11 +433,76 @@ static partial class WatchCommand {
     }
 
     /// <summary>
+    /// OpenCode fires no subagent hooks; its subagents live in its SQLite db, so the kcap
+    /// plugin fetches each child session via the SDK and writes its <c>{info,parts}</c> JSONL
+    /// into <c>&lt;cacheDir&gt;/&lt;parentSid&gt;/&lt;childSid&gt;.jsonl</c>. The parent watcher discovers
+    /// those files (mirroring <see cref="ScanGeminiSubagents"/>): on first sight it registers
+    /// the subagent (<c>subagent-start</c>, fail-closed) then spawns a detached child watcher
+    /// that streams it with the canonical agentId (= childSid) → <c>AgentSubsession-*</c>, which
+    /// lines up with the agentId the server surfaced from the parent's <c>task</c> tool call.
+    /// Idempotent across ticks via <paramref name="seen"/>; deterministic server-side lifecycle
+    /// ids make re-registration safe. AI-919 phase 2.
+    /// </summary>
+    static async Task ScanOpenCodeSubagents(
+            string            baseUrl,
+            string            sessionId,
+            string            transcriptPath,
+            HashSet<string>   seen,
+            CancellationToken ct
+        ) {
+        IReadOnlyList<string> subFiles;
+        try {
+            subFiles = OpenCodeSubagentDiscovery.EnumerateSubagentFiles(transcriptPath);
+        } catch {
+            return; // discovery is best-effort — never break the main drain loop
+        }
+
+        if (subFiles.Count == 0) return;
+
+        foreach (var subFile in subFiles) {
+            if (ct.IsCancellationRequested) return;
+            if (!seen.Add(subFile)) continue; // already registered + spawned
+
+            var childId   = Path.GetFileNameWithoutExtension(subFile);
+            var agentId   = OpenCodeSubagentDiscovery.CanonicalAgentId(childId);
+            var agentType = OpenCodeSubagentDiscovery.ResolveAgentType(subFile);
+
+            // Fail-closed: register the subagent (→ SubagentStarted) before its child watcher
+            // streams content. On POST failure, drop from `seen` so the next tick retries.
+            if (!await PostOpenCodeSubagentStartAsync(baseUrl, sessionId, agentId, agentType, subFile, ct)) {
+                seen.Remove(subFile);
+                continue;
+            }
+
+            await WatcherManager.EnsureWatcherRunning(
+                baseUrl, key: $"{sessionId}-{agentId}", transcriptPath: subFile,
+                agentId: agentId, sessionIdOverride: sessionId, vendor: "opencode");
+
+            Log($"OpenCode subagent {agentId} ({agentType}) registered + child watcher spawned");
+        }
+    }
+
+    static async Task<bool> PostOpenCodeSubagentStartAsync(
+        string baseUrl, string sessionId, string agentId, string agentType, string subFile, CancellationToken ct
+    ) {
+        try {
+            using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, ct);
+            var       payload = OpenCodeSubagentDiscovery.BuildStartPayload(sessionId, agentId, agentType, subFile);
+            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/subagent-start", content, ct: ct);
+
+            return resp.IsSuccessStatusCode;
+        } catch {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Whitelist of vendor values accepted by the server's session-end route.
     /// Used to reject unexpected --vendor input before interpolating into the URL
     /// path (defence-in-depth against path traversal even though the CLI runs locally).
     /// </summary>
-    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi" };
+    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode" };
 
     /// <summary>
     /// Total time budget for the parent-exit session-end POST. Covers /auth/config
@@ -473,6 +543,26 @@ static partial class WatchCommand {
                 }
             } catch (Exception ex) {
                 Log($"Parent-exit Gemini subagent teardown failed: {ex.Message}");
+            }
+        }
+
+        // OpenCode likewise fires no subagent-stop hook (the plugin-written child files are
+        // discovered + streamed by ScanOpenCodeSubagents, with no parent-pid watchdog on the
+        // child watchers), so the parent exit is the only place that finalizes them. Same
+        // shape as the Gemini teardown; runs BEFORE the session-end POST so SubagentCompleted
+        // lands ahead of SessionEnded. No-op when none were spawned (AI-919 phase 2).
+        if (vendor == "opencode") {
+            try {
+                var finalized = await TimeBudget.RunCappedAsync(
+                    () => OpenCodeSubagentTeardown.DrainAsync(baseUrl, sessionId, transcriptPath),
+                    OpenCodeSubagentTeardown.DrainCap);
+
+                if (!finalized) {
+                    Log("Parent-exit OpenCode subagent teardown cap elapsed; "
+                      + "some subagents may lack SubagentCompleted until a re-run");
+                }
+            } catch (Exception ex) {
+                Log($"Parent-exit OpenCode subagent teardown failed: {ex.Message}");
             }
         }
 
