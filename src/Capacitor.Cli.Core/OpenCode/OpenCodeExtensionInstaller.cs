@@ -60,6 +60,7 @@ public static class OpenCodeExtensionInstaller {
           const children = new Set<string>()           // known subagent (child) session ids — skip top-level
           const written = new Map<string, Set<string>>()
           const flushedChildren = new Set<string>()     // child ids whose COMPLETE transcript has been written
+          const childFirstSeen = new Map<string, number>() // child id → first idle seen structurally-at-rest (ms; last-resort flush)
 
           async function runKcap(args: string[]) {
             try {
@@ -184,12 +185,10 @@ public static class OpenCodeExtensionInstaller {
             return done
           }
 
-          // True once a child session is COMPLETE: every tool part is terminal AND the last
-          // assistant message carries a finish/completed marker. This is the child's OWN signal —
-          // a child's transcript is never written until it's complete, so a still-streaming child's
-          // partial text/reasoning is never the first (and, by the server's keep-first, permanent)
-          // append for its prt_ ids. A bare idle count is NOT a completeness signal.
-          function childComplete(msgs: any[]): boolean {
+          // "Structurally at rest" = every tool part terminal AND the latest message is an assistant
+          // message (no turn in flight). A necessary precondition for completeness, and the only
+          // state in which the last-resort time bound may flush (so it never writes mid-stream).
+          function structurallyAtRest(msgs: any[]): boolean {
             if (msgs.length === 0) return false
             for (const m of msgs) {
               for (const p of (m?.parts ?? [])) {
@@ -199,19 +198,35 @@ public static class OpenCodeExtensionInstaller {
                 }
               }
             }
-            for (let i = msgs.length - 1; i >= 0; i--) {
-              const info = msgs[i]?.info
-              if (info?.role !== "assistant") continue
-              return info.finish != null || info.time?.completed != null
-            }
-            return false // no assistant message yet
+            return msgs[msgs.length - 1]?.info?.role === "assistant"
           }
 
+          // True once a child session is COMPLETE: structurally at rest AND its final assistant turn
+          // carries an end-of-turn marker — info.finish / info.time.completed, OR a structural
+          // `step-finish` part (OpenCode emits one to close a completed step even when the info
+          // markers are absent). A child's transcript is never written until complete, so a
+          // still-streaming child's partial text/reasoning is never the first (and, by the server's
+          // keep-first, permanent) append for its prt_ ids. A bare idle count is NOT a signal.
+          function childComplete(msgs: any[]): boolean {
+            if (!structurallyAtRest(msgs)) return false
+            const last = msgs[msgs.length - 1]
+            if (last?.info?.finish != null || last?.info?.time?.completed != null) return true
+            return (last?.parts ?? []).some((p: any) => p?.type === "step-finish")
+          }
+
+          // Last-resort flush window: a child that is structurally at rest but carries NO end-of-turn
+          // marker AND has no terminal parent-`task` is flushed once it has stayed that way this long
+          // — so a completed child can NEVER be deferred forever, while a mid-stream child (a
+          // non-terminal tool, or a non-assistant last message) is still never written. ~Impossible
+          // for real OpenCode (completed turns carry step-finish); a guarantee if the markers change.
+          const LAST_RESORT_MS = 120000
+
           // On the parent's idle, stream COMPLETE child sessions (subagents) into the nested dir the
-          // watcher scans. A child is flushed once it's proven complete — by its OWN transcript
-          // (childComplete) or by the parent's terminal `task` part (completedChildIds). Until then
-          // it's deferred (recorded in `children` so its own events skip the top-level path, but no
-          // partial transcript is written). Once flushed it isn't re-fetched.
+          // watcher scans. A child is flushed once proven complete — by its OWN transcript
+          // (childComplete) or the parent's terminal `task` part (completedChildIds) — or, as a last
+          // resort, once it has been structurally at rest past LAST_RESORT_MS. Until then it's
+          // deferred (recorded in `children` so its own events skip top-level; no partial write).
+          // Once flushed it isn't re-fetched, so the per-idle re-fetch of a pending child is bounded.
           async function flushSubagents(parent: string, parentMsgs: any[]) {
             try {
               const done = completedChildIds(parentMsgs)
@@ -224,10 +239,22 @@ public static class OpenCodeExtensionInstaller {
                 if (flushedChildren.has(cid)) continue // already written — no re-fetch
 
                 const cmsgs = await fetchMessages(cid)
-                if (cmsgs.length === 0) continue                      // fetch failed/empty — retry next idle (no state change)
-                if (!done.has(cid) && !childComplete(cmsgs)) continue  // not complete yet — defer (no partial write)
+                if (cmsgs.length === 0) continue // fetch failed/empty — retry next idle (no state change)
 
-                if (writeMessages(childFile(parent, cid), cmsgs)) flushedChildren.add(cid) // mark flushed only on a successful write
+                let ready = done.has(cid) || childComplete(cmsgs)
+                if (!ready && structurallyAtRest(cmsgs)) {
+                  // Structurally done but missing every end-of-turn marker — flush only after a real
+                  // elapsed window (structurallyAtRest already excludes mid-stream children).
+                  const first = childFirstSeen.get(cid) ?? Date.now()
+                  if (!childFirstSeen.has(cid)) childFirstSeen.set(cid, first)
+                  ready = (Date.now() - first) >= LAST_RESORT_MS
+                }
+                if (!ready) continue // not complete yet — defer (no partial write)
+
+                if (writeMessages(childFile(parent, cid), cmsgs)) {
+                  flushedChildren.add(cid) // mark flushed only on a successful write
+                  childFirstSeen.delete(cid)
+                }
               }
             } catch {
               // never disrupt the OpenCode session
