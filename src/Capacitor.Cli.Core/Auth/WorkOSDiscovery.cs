@@ -12,6 +12,29 @@ namespace Capacitor.Cli.Core.Auth;
 public static class WorkOSDiscovery {
     const string WorkOSApiBase = "https://api.workos.com";
 
+    /// <summary>
+    /// <see cref="RunAsync"/> wired to the real WorkOS effects: an org-less loopback login on the
+    /// shared AuthKit app + a refresh-token org-switch (both public-client, no secret). The two call
+    /// sites (`kcap login --discover` and `kcap setup`) use this; tests call <see cref="RunAsync"/>
+    /// directly with fakes.
+    /// </summary>
+    public static Task<int> RunWithLiveAuthAsync(
+            string proxyUrl, ProxyConfigResponse proxyConfig, IAuthProxyClient proxy, ITenantPicker picker) {
+        var clientId = proxyConfig.WorkOSClientId ?? "";
+
+        return RunAsync(proxyUrl, proxyConfig, proxy, picker,
+            orglessLogin: async authorizeBase => {
+                var loop = await OAuthLoginFlow.RunWorkOSLoopbackAsync(authorizeBase, clientId, organizationId: null);
+                if (loop.Code is null) return null;
+                using var http = new HttpClient();
+                return await OAuthLoginFlow.AuthenticateWorkOSCodeAsync(http, WorkOSApiBase, clientId, loop.Code, loop.Verifier);
+            },
+            orgSwitch: async (refreshToken, organizationId) => {
+                using var http = new HttpClient();
+                return await OAuthLoginFlow.SwitchWorkOSOrgAsync(http, WorkOSApiBase, clientId, refreshToken, organizationId);
+            });
+    }
+
     public static async Task<int> RunAsync(
             string                                          proxyUrl,
             ProxyConfigResponse                             proxyConfig,

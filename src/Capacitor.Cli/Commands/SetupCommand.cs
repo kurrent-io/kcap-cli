@@ -72,6 +72,7 @@ public static class SetupCommand {
         string serverUrl;
         string? preAuthToken = null;
         string  provider;
+        bool    loginComplete = false; // WorkOS discovery authenticates inline; skip the Step-2 login.
 
         if (serverUrlArg is not null) {
             var normalized = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Checking server…",
@@ -102,9 +103,9 @@ public static class SetupCommand {
             await Console.Error.WriteLineAsync("  --server-url is required with --no-prompt");
             return 1;
         } else {
-            var discovered = await RunDiscoveryAsync(forceDevice);
+            var discovered = await RunDiscoveryAsync(args, forceDevice);
             if (discovered is null) return 1;
-            (serverUrl, preAuthToken, provider) = discovered.Value;
+            (serverUrl, preAuthToken, provider, loginComplete) = discovered.Value;
         }
 
         await Console.Out.WriteLineAsync();
@@ -112,7 +113,12 @@ public static class SetupCommand {
         // Step 2: Login
         AnsiConsole.Write(new Rule("[yellow]Step 2/5 — Login[/]").LeftJustified());
 
-        if (provider == AuthProvider.None) {
+        if (loginComplete) {
+            // WorkOS discovery already authenticated + saved the active (picked) profile.
+            var cfgAfter = await AppConfig.LoadProfileConfig();
+            var tokens   = await TokenStore.LoadAsync(cfgAfter.ActiveProfile);
+            AnsiConsole.MarkupLine($"  [green]✓[/] Logged in as [cyan]{Markup.Escape(tokens?.GitHubUsername ?? "?")}[/]");
+        } else if (provider == AuthProvider.None) {
             await Console.Out.WriteLineAsync("  Auth provider is None — no login required.");
         } else if (preAuthToken is not null) {
             var exchangeResult = await OAuthLoginFlow.ExchangeAndSaveAsync(serverUrl, preAuthToken, provider);
@@ -382,7 +388,8 @@ public static class SetupCommand {
         return 0;
     }
 
-    static async Task<(string ServerUrl, string PreAuthToken, string Provider)?> RunDiscoveryAsync(bool forceDevice) {
+    static async Task<(string ServerUrl, string? PreAuthToken, string Provider, bool LoginComplete)?> RunDiscoveryAsync(
+            string[] args, bool forceDevice) {
         AnsiConsole.MarkupLine($"  Proxy: [dim]{Markup.Escape(AuthProxyEndpoint.Url)}[/]");
 
         using var http  = new HttpClient();
@@ -390,7 +397,29 @@ public static class SetupCommand {
 
         var proxyConfig = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Contacting auth service…",
             async _ => await proxyClient.GetConfigAsync(AuthProxyEndpoint.Url));
-        if (proxyConfig is null || string.IsNullOrEmpty(proxyConfig.GitHubClientId)) {
+        if (proxyConfig is null) {
+            AnsiConsole.MarkupLine("  [red]✗[/] Cannot reach the Kurrent auth service. Retry later, or pass --server-url <url>.");
+            return null;
+        }
+
+        var provider = DiscoveryProviderPrompt.Resolve(args);
+
+        if (provider == AuthProvider.WorkOS) {
+            var exit = await WorkOSDiscovery.RunWithLiveAuthAsync(
+                AuthProxyEndpoint.Url, proxyConfig, proxyClient, new SpectreTenantPicker());
+            if (exit != 0) return null;
+
+            // WorkOSDiscovery saved + activated the picked profile; continue setup against it.
+            var cfg    = await AppConfig.LoadProfileConfig();
+            var active = cfg.Profiles.GetValueOrDefault(cfg.ActiveProfile);
+            if (active?.ServerUrl is null) {
+                AnsiConsole.MarkupLine("  [red]✗[/] WorkOS sign-in did not set an active profile.");
+                return null;
+            }
+            return (active.ServerUrl, null, AuthProvider.WorkOS, true);
+        }
+
+        if (string.IsNullOrEmpty(proxyConfig.GitHubClientId)) {
             AnsiConsole.MarkupLine("  [red]✗[/] Cannot reach the Kurrent auth service. Retry later, or pass --server-url <url>.");
             return null;
         }
@@ -413,7 +442,7 @@ public static class SetupCommand {
 
         AnsiConsole.MarkupLine($"  [green]✓[/] Discovered {outcome.Tenants.Length} tenant(s). Active: [cyan]{Markup.Escape(outcome.Picked!.OrgLogin)}[/]");
 
-        return (AppConfig.NormalizeUrl(outcome.Picked.Origin), ghToken, AuthProvider.GitHubApp);
+        return (AppConfig.NormalizeUrl(outcome.Picked.Origin), ghToken, AuthProvider.GitHubApp, false);
     }
 
     internal static string? ResolvePluginPath(string? overrideDir = null) {

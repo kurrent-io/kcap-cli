@@ -51,6 +51,18 @@ public static class OAuthLoginFlow {
     internal static GitHubFlow ChooseGitHubFlow(bool forceDevice, bool isHeadless, bool hasExchangeUrl)
         => forceDevice || isHeadless || !hasExchangeUrl ? GitHubFlow.Device : GitHubFlow.Browser;
 
+    /// <summary>
+    /// Picks the discovery provider before any auth runs: explicit <c>--github</c>/<c>--workos</c>
+    /// flags win; otherwise a non-interactive caller defaults to WorkOS, and an interactive caller
+    /// gets <c>null</c> (meaning "prompt the user").
+    /// </summary>
+    internal static string? ChooseDiscoveryProvider(string[] args, bool isInteractive) {
+        if (args.Contains("--github")) return AuthProvider.GitHubApp;
+        if (args.Contains("--workos")) return AuthProvider.WorkOS;
+
+        return isInteractive ? null : AuthProvider.WorkOS;
+    }
+
     static int HandleNoneLogin() {
         Console.Out.WriteLine("Server has no authentication configured — login not required.");
 

@@ -112,6 +112,14 @@ public class OAuthFlowTests {
     }
 
     [Test]
+    public async Task ChooseDiscoveryProvider_honors_flags_and_default() {
+        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider(["--github"], isInteractive: true)).IsEqualTo(AuthProvider.GitHubApp);
+        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider(["--workos"], isInteractive: true)).IsEqualTo(AuthProvider.WorkOS);
+        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider([], isInteractive: false)).IsEqualTo(AuthProvider.WorkOS);
+        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider([], isInteractive: true)).IsNull();
+    }
+
+    [Test]
     public async Task ChooseGitHubFlow_returns_device_when_forced() {
         var choice = OAuthLoginFlow.ChooseGitHubFlow(forceDevice: true, isHeadless: false, hasExchangeUrl: true);
         await Assert.That(choice).IsEqualTo(GitHubFlow.Device);
