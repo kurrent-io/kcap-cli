@@ -161,4 +161,42 @@ public class AuthProxyClientTests {
 
         await Assert.That(result.Error).IsEqualTo(DiscoveryError.ProxyUnreachable);
     }
+
+    [Test]
+    public async Task DiscoverWorkOSTenantsAsync_parses_provider_aware_rows() {
+        using var server = WireMockServer.Start();
+
+        server.Given(Request.Create().WithPath("/discover-tenants-workos").UsingPost())
+            .RespondWith(
+                Response.Create()
+                    .WithStatusCode(200)
+                    .WithBody("""[{"provider":"WorkOS","organization_id":"org_a","slug":"eventuous","display_name":"Eventuous","origin":"https://eventuous.kcap.ai"}]""")
+                    .WithHeader("Content-Type", "application/json")
+            );
+
+        using var http   = new HttpClient();
+        var       client = new AuthProxyClient(http);
+
+        var result = await client.DiscoverWorkOSTenantsAsync(server.Urls[0], "wos.tok.en");
+
+        await Assert.That(result.Error).IsEqualTo(DiscoveryError.None);
+        await Assert.That(result.Tenants[0].OrganizationId).IsEqualTo("org_a");
+        await Assert.That(result.Tenants[0].Slug).IsEqualTo("eventuous");
+        await Assert.That(result.Tenants[0].Origin).IsEqualTo("https://eventuous.kcap.ai");
+    }
+
+    [Test]
+    public async Task DiscoverWorkOSTenantsAsync_maps_401_to_TokenRejected() {
+        using var server = WireMockServer.Start();
+
+        server.Given(Request.Create().WithPath("/discover-tenants-workos").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(401));
+
+        using var http   = new HttpClient();
+        var       client = new AuthProxyClient(http);
+
+        var result = await client.DiscoverWorkOSTenantsAsync(server.Urls[0], "bad");
+
+        await Assert.That(result.Error).IsEqualTo(DiscoveryError.TokenRejected);
+    }
 }
