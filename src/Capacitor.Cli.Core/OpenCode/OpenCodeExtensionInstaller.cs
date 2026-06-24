@@ -57,9 +57,11 @@ public static class OpenCodeExtensionInstaller {
           // streams with the child's agent_id → AgentSubsession-* (AI-919 phase 2).
           const childFile = (parent: string, child: string) => join(dir, parent, child + ".jsonl")
           const started = new Set<string>()
-          const children = new Set<string>()
+          const children = new Set<string>()           // known subagent (child) session ids — skip top-level
           const written = new Map<string, Set<string>>()
-          const unknownCounts = new Map<string, number>() // consecutive failed classifications per sid
+          const flushedChildren = new Set<string>()     // child ids whose transcript has been written
+          const pendingChildren = new Map<string, number>()  // child seen but not yet flushed → parent-idle count
+          const unknownFirstSeen = new Map<string, number>() // first time classify() couldn't resolve a session (ms)
 
           async function runKcap(args: string[]) {
             try {
@@ -86,18 +88,18 @@ public static class OpenCodeExtensionInstaller {
             if (info?.parentID) { children.add(sid); return "child" }
             try {
               const s: any = await client.session.get({ path: { id: sid } })
-              unknownCounts.delete(sid)
+              unknownFirstSeen.delete(sid)
               const parentId = s?.parentID ?? s?.data?.parentID
               if (parentId) { children.add(sid); return "child" }
               return "top"
             } catch {
               // session.get failed — ambiguous, so DEFER (don't misfile a child as top-level).
-              // But after a few consecutive failures fall back to top-level, so a persistent
-              // endpoint-specific session.get failure doesn't permanently drop a real top-level
-              // session (the rare wrong-guess duplicate is better than never capturing it).
-              const n = (unknownCounts.get(sid) ?? 0) + 1
-              unknownCounts.set(sid, n)
-              return n >= 3 ? "top" : "unknown"
+              // Fall back to top-level only after a real elapsed window of persistent failure (not
+              // a few fast idles), so a transient blip on a real child doesn't misfile it; a
+              // persistent endpoint-specific failure still won't permanently drop a top-level session.
+              const first = unknownFirstSeen.get(sid) ?? Date.now()
+              if (!unknownFirstSeen.has(sid)) unknownFirstSeen.set(sid, first)
+              return (Date.now() - first) >= 60000 ? "top" : "unknown"
             }
           }
 
@@ -127,72 +129,99 @@ public static class OpenCodeExtensionInstaller {
             await runKcap(args)
           }
 
-          // Fetch a session's full messages and append any not-yet-written {info,parts}
-          // lines to targetFile. Re-emits when a message's part count grows (the assistant
-          // streams parts in over a turn); deterministic prt_ ids dedupe server-side.
-          async function flushTo(sid: string, targetFile: string) {
+          async function fetchMessages(sid: string): Promise<any[]> {
             try {
               const res: any = await client.session.messages({ path: { id: sid } })
-              const msgs: any[] = Array.isArray(res) ? res : (res?.data ?? [])
-              const seen = written.get(targetFile) ?? new Set<string>()
-              written.set(targetFile, seen)
-              const lines: string[] = []
-              for (const m of msgs) {
-                const id = m?.info?.id
-                if (!id) continue
-                const key = dedupeKey(m)
-                if (seen.has(key)) continue
-                seen.add(key)
-                lines.push(JSON.stringify({ info: m.info, parts: m.parts ?? [] }))
-              }
-              if (lines.length > 0) {
-                try { mkdirSync(dirname(targetFile), { recursive: true }) } catch {}
-                appendFileSync(targetFile, lines.join("\n") + "\n")
-              }
+              return Array.isArray(res) ? res : (res?.data ?? [])
             } catch {
-              // never disrupt the OpenCode session
+              return []
             }
           }
 
-          // Child ids whose spawning `task` tool part on the PARENT is terminal
-          // (completed/error) — a DURABLE "subagent finished" signal, rather than assuming the
-          // parent only idles once the task returned. The task part records the child id in
-          // state.metadata.sessionId. We flush a child ONLY once its task is terminal, so a
-          // still-streaming child's partial text/reasoning is never appended first (the server
-          // keeps-first by prt_ id, so a partial text part would freeze — the dedup discriminator
-          // only re-sends tool parts, not growing text).
-          async function completedChildIds(parent: string) {
-            const done = new Set<string>()
-            try {
-              const res: any = await client.session.messages({ path: { id: parent } })
-              const msgs: any[] = Array.isArray(res) ? res : (res?.data ?? [])
-              for (const m of msgs) {
-                for (const p of (m?.parts ?? [])) {
-                  if (p?.type !== "tool" || p?.tool !== "task") continue
-                  const st = p?.state?.status
-                  const cid = p?.state?.metadata?.sessionId
-                  if (cid && (st === "completed" || st === "error")) done.add(cid)
-                }
+          // Append any not-yet-written {info,parts} lines to targetFile. Re-emits when a message's
+          // dedup key changes (new parts, or a tool turning terminal); deterministic prt_ ids
+          // dedupe server-side.
+          function writeMessages(targetFile: string, msgs: any[]) {
+            const seen = written.get(targetFile) ?? new Set<string>()
+            written.set(targetFile, seen)
+            const lines: string[] = []
+            for (const m of msgs) {
+              if (!m?.info?.id) continue
+              const key = dedupeKey(m)
+              if (seen.has(key)) continue
+              seen.add(key)
+              lines.push(JSON.stringify({ info: m.info, parts: m.parts ?? [] }))
+            }
+            if (lines.length > 0) {
+              try {
+                mkdirSync(dirname(targetFile), { recursive: true })
+                appendFileSync(targetFile, lines.join("\n") + "\n")
+              } catch {
+                // never disrupt the OpenCode session
               }
-            } catch {}
+            }
+          }
+
+          async function flushTo(sid: string, targetFile: string) {
+            writeMessages(targetFile, await fetchMessages(sid))
+          }
+
+          // The spawned child session id carried on a `task` tool part — alias-tolerant so a small
+          // upstream metadata-key rename can't silently drop the child (it would otherwise hit the
+          // fallback below, never permanent loss, but prefer the durable signal).
+          function taskChildId(part: any): string | undefined {
+            const md = part?.state?.metadata
+            return md?.sessionId ?? md?.sessionID ?? md?.session_id
+          }
+
+          // Child ids whose spawning `task` tool part on the PARENT is terminal (completed/error)
+          // — a DURABLE "subagent finished" signal, not the assumed "parent only idles once the
+          // task returned". Scans the parent messages ALREADY fetched this idle (no 2nd fetch).
+          function completedChildIds(parentMsgs: any[]): Set<string> {
+            const done = new Set<string>()
+            for (const m of parentMsgs) {
+              for (const p of (m?.parts ?? [])) {
+                if (p?.type !== "tool" || p?.tool !== "task") continue
+                const st = p?.state?.status
+                const cid = taskChildId(p)
+                if (cid && (st === "completed" || st === "error")) done.add(cid)
+              }
+            }
             return done
           }
 
-          // On the parent's idle, stream COMPLETED child sessions (subagents) into the nested dir
-          // the watcher scans. Every child id is recorded so its own session events skip the
-          // top-level path; a child whose task isn't terminal yet is simply deferred to a later
-          // parent idle (no partial transcript is written).
-          async function flushSubagents(parent: string) {
+          // Parent idles a child may stay pending (no terminal `task` match) before we flush it
+          // anyway — a bounded fallback so a missing/renamed task metadata shape, or a child
+          // spawned by a non-`task` path, can never permanently lose the transcript (by then the
+          // task tool has long returned, so the child is complete; the partial-text window the
+          // durable gate guards against doesn't apply after several parent idles).
+          const PENDING_IDLE_FALLBACK = 3
+
+          // On the parent's idle, stream child sessions (subagents) into the nested dir the watcher
+          // scans. Flush once the child's `task` is terminal (preferred), or after
+          // PENDING_IDLE_FALLBACK idles even without one (fallback). Every child id is recorded so
+          // its own session events skip the top-level path.
+          async function flushSubagents(parent: string, parentMsgs: any[]) {
             try {
-              const done = await completedChildIds(parent)
+              const done = completedChildIds(parentMsgs)
               const res: any = await client.session.children({ path: { id: parent } })
               const kids: any[] = Array.isArray(res) ? res : (res?.data ?? [])
               for (const k of kids) {
                 const cid = k?.id
                 if (!cid) continue
                 children.add(cid)
-                if (!done.has(cid)) continue // task not terminal yet — defer to a later idle
-                await flushTo(cid, childFile(parent, cid))
+
+                let flush = flushedChildren.has(cid) || done.has(cid)
+                if (!flush) {
+                  const n = (pendingChildren.get(cid) ?? 0) + 1
+                  pendingChildren.set(cid, n)
+                  flush = n >= PENDING_IDLE_FALLBACK
+                }
+                if (flush) {
+                  flushedChildren.add(cid)
+                  pendingChildren.delete(cid)
+                  await flushTo(cid, childFile(parent, cid))
+                }
               }
             } catch {
               // never disrupt the OpenCode session
@@ -216,8 +245,11 @@ public static class OpenCodeExtensionInstaller {
                     if (await classify(sid) !== "top") return  // child → skip; unknown → retry next idle
                     await start(sid)
                   }
-                  await flushTo(sid, file(sid))
-                  await flushSubagents(sid)
+                  // Fetch the parent transcript ONCE and reuse it for both the write and the
+                  // subagent completion-scan (avoids two full fetches per idle / snapshot skew).
+                  const msgs = await fetchMessages(sid)
+                  writeMessages(file(sid), msgs)
+                  await flushSubagents(sid, msgs)
                 }
               } catch {
                 // never disrupt the OpenCode session

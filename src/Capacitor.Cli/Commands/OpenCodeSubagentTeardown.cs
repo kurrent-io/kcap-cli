@@ -36,18 +36,22 @@ static class OpenCodeSubagentTeardown {
     /// </summary>
     internal static readonly TimeSpan OverallBudget = TimeSpan.FromSeconds(20);
 
-    internal static async Task DrainAsync(string baseUrl, string sessionId, string parentTranscriptPath) {
+    /// <summary>Returns the number of discovered children left UNFINALIZED because the overall
+    /// budget elapsed (0 in the normal case) so the caller can log it.</summary>
+    internal static async Task<int> DrainAsync(string baseUrl, string sessionId, string parentTranscriptPath) {
         var subFiles = OpenCodeSubagentDiscovery.EnumerateSubagentFiles(parentTranscriptPath);
-        if (subFiles.Count == 0) return;
+        if (subFiles.Count == 0) return 0;
 
         // Deadline-aware across ALL children (each step is also individually capped — KillWatcher
         // alone waits up to 5s for graceful exit). The cleanup deadline drops kill+drain for later
         // children (they STILL get subagent-stop); the overall deadline is a hard ceiling on the
-        // whole teardown so an arbitrary file count can't delay session-end.
+        // whole teardown so an arbitrary file count can't delay session-end — past it, remaining
+        // children are left unfinalized (counted + returned for the caller to log).
         var start           = DateTimeOffset.UtcNow;
         var cleanupDeadline = start + CleanupBudget;
         var overallDeadline = start + OverallBudget;
 
+        var stopped = 0;
         foreach (var subFile in subFiles) {
             if (DateTimeOffset.UtcNow >= overallDeadline) break;
 
@@ -62,9 +66,12 @@ static class OpenCodeSubagentTeardown {
                 await CappedAsync(() => WatcherManager.InlineDrainAsync(baseUrl, sessionId, subFile, agentId, vendor: "opencode"), TimeSpan.FromSeconds(2.5));
             }
 
-            // The critical SubagentCompleted — ALWAYS attempted, individually capped.
+            // The critical SubagentCompleted — attempted for every child within the overall budget.
             await CappedAsync(() => PostStopAsync(baseUrl, sessionId, agentId, agentType, subFile), TimeSpan.FromSeconds(2.5));
+            stopped++;
         }
+
+        return subFiles.Count - stopped;
     }
 
     static async Task PostStopAsync(string baseUrl, string sessionId, string agentId, string agentType, string subFile) {
