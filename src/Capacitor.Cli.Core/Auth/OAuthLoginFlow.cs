@@ -60,7 +60,10 @@ public static class OAuthLoginFlow {
         if (args.Contains("--github")) return AuthProvider.GitHubApp;
         if (args.Contains("--workos")) return AuthProvider.WorkOS;
 
-        return isInteractive ? null : AuthProvider.WorkOS;
+        // No flag: prompt when interactive. Headless can't run the WorkOS browser + 127.0.0.1
+        // loopback (it would hang until timeout), so fall back to GitHub, whose device flow works
+        // without a local browser. A headless WorkOS user must pass --workos explicitly.
+        return isInteractive ? null : AuthProvider.GitHubApp;
     }
 
     /// <summary>

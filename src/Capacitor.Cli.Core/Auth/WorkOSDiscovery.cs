@@ -84,9 +84,15 @@ public static class WorkOSDiscovery {
             return 1;
         }
 
+        if (string.IsNullOrEmpty(picked.OrganizationId)) {
+            await Console.Error.WriteLineAsync($"Tenant {picked.Label} is missing an organization id; cannot complete sign-in.");
+
+            return 1;
+        }
+
         // Org-switch once into the chosen org. The resulting refresh token stays org-bound
         // (spike-confirmed), so later refreshes need no organization_id.
-        var switched = await orgSwitch(auth.RefreshToken!, picked.OrganizationId ?? "");
+        var switched = await orgSwitch(auth.RefreshToken!, picked.OrganizationId);
         if (switched is null) {
             await Console.Error.WriteLineAsync($"Could not switch to organization {picked.Label}.");
 

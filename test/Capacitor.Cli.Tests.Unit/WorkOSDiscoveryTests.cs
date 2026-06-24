@@ -64,6 +64,26 @@ public class WorkOSDiscoveryTests {
     }
 
     [Test]
+    public async Task RunAsync_errors_when_picked_tenant_has_no_org_id() {
+        var proxy = Substitute.For<IAuthProxyClient>();
+        DiscoveredTenant[] tenants = [
+            new() { Provider = "WorkOS", Slug = "eventuous", DisplayName = "Eventuous", Origin = "https://eventuous.kcap.ai" } // no OrganizationId
+        ];
+        proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
+             .Returns(Task.FromResult(new DiscoveryResult(tenants, DiscoveryError.None)));
+
+        var switchCalled = false;
+        var exit = await WorkOSDiscovery.RunAsync(
+            "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
+            proxy, Substitute.For<ITenantPicker>(),
+            _      => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
+            (_, _) => { switchCalled = true; return Task.FromResult<WorkOSAuthResponse?>(null); });
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(switchCalled).IsFalse(); // fail before the org-switch, not during it
+    }
+
+    [Test]
     public async Task RunAsync_errors_when_no_tenants() {
         var proxy = Substitute.For<IAuthProxyClient>();
         proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
