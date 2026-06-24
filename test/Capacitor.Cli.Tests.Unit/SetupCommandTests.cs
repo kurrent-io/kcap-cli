@@ -210,6 +210,7 @@ public class SetupCommandTests {
         await Assert.That(SetupCommand.ResolveTenantArg("https://x.example")).IsEqualTo("https://x.example");
         await Assert.That(SetupCommand.ResolveTenantArg("self.hosted.example")).IsEqualTo("self.hosted.example");
         await Assert.That(SetupCommand.ResolveTenantArg("localhost:5108")).IsEqualTo("localhost:5108");
+        await Assert.That(SetupCommand.ResolveTenantArg("localhost")).IsEqualTo("localhost"); // bare loopback, not a slug
     }
 
     sealed class TempDir : IDisposable {

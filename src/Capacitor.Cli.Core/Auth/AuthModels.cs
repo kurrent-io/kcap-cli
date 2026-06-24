@@ -153,7 +153,10 @@ public sealed record DiscoveredTenant {
     [JsonPropertyName("display_name")]    public string? DisplayName    { get; init; }
 
     // Profile key + picker label, provider-aware. WorkOS rows have no OrgLogin.
-    [JsonIgnore] public string ProfileName => Provider == AuthProvider.WorkOS ? (Slug ?? OrganizationId ?? "tenant") : OrgLogin;
+    // Compare provider case-insensitively: the proxy's /discover-tenants-workos emits "WorkOS"
+    // while AuthProvider.WorkOS is "workos" (the tenant /auth/config casing).
+    [JsonIgnore] public bool   IsWorkOS    => string.Equals(Provider, AuthProvider.WorkOS, StringComparison.OrdinalIgnoreCase);
+    [JsonIgnore] public string ProfileName => IsWorkOS ? (Slug ?? OrganizationId ?? "tenant") : OrgLogin;
     [JsonIgnore] public string Label       => !string.IsNullOrEmpty(DisplayName) ? DisplayName : OrgLogin;
 }
 

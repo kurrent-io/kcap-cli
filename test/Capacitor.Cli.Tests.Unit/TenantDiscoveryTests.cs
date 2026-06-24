@@ -183,7 +183,7 @@ public class TenantDiscoveryTests {
         };
         DiscoveredTenant[] discovered = [
             new() {
-                Provider = "workos", OrganizationId = "org_a", Slug = "eventuous",
+                Provider = "WorkOS", OrganizationId = "org_a", Slug = "eventuous",
                 DisplayName = "Eventuous", Origin = "https://eventuous.kcap.ai"
             }
         ];

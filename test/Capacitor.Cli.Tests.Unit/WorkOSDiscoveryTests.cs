@@ -23,8 +23,8 @@ public class WorkOSDiscoveryTests {
 
         var proxy = Substitute.For<IAuthProxyClient>();
         DiscoveredTenant[] tenants = [
-            new() { Provider = "workos", OrganizationId = "org_a", Slug = "eventuous", DisplayName = "Eventuous", Origin = "https://eventuous.kcap.ai" },
-            new() { Provider = "workos", OrganizationId = "org_b", Slug = "contoso",   DisplayName = "Contoso",   Origin = "https://contoso.kcap.ai" }
+            new() { Provider = "WorkOS", OrganizationId = "org_a", Slug = "eventuous", DisplayName = "Eventuous", Origin = "https://eventuous.kcap.ai" },
+            new() { Provider = "WorkOS", OrganizationId = "org_b", Slug = "contoso",   DisplayName = "Contoso",   Origin = "https://contoso.kcap.ai" }
         ];
         proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
              .Returns(Task.FromResult(new DiscoveryResult(tenants, DiscoveryError.None)));

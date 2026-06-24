@@ -584,6 +584,7 @@ public static class SetupCommand {
     /// </summary>
     internal static string ResolveTenantArg(string arg) =>
         arg.Contains("://") || arg.Contains('.') || arg.Contains(':')
+        || arg.Equals("localhost", StringComparison.OrdinalIgnoreCase) // bare loopback host, not a kcap.ai slug
             ? arg
             : $"https://{arg}.kcap.ai";
 
