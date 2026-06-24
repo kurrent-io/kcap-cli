@@ -52,13 +52,15 @@ The CLI is compiled with NativeAOT — fast startup, no runtime dependency.
 ### 2. Run setup
 
 ```bash
-kcap setup
+kcap setup                      # discovers your tenant — no URL needed
+kcap setup <tenant>             # shorthand for a known tenant slug → https://<tenant>.kcap.ai
+kcap setup --server-url <url>   # explicit server (self-hosted, or a full URL)
 ```
 
 The setup wizard walks you through:
 
-1. **Server URL** — enter the URL your admin provided
-2. **Login** — authenticates via GitHub Device Flow (if the server requires auth)
+1. **Server** — with no `--server-url`/`<tenant>`, kcap **discovers** your tenant: pick how to sign in (**Continue** for email/SSO, or **Continue with GitHub**), authenticate once, then choose from the tenants you belong to. A bare `<tenant>` slug expands to `https://<tenant>.kcap.ai`; a full URL is used as-is.
+2. **Login** — authenticates via your tenant's provider (WorkOS or GitHub App); discovery completes the sign-in inline
 3. **Default visibility** — choose how your sessions are visible to others
 4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH`, Cursor by user-dir presence (`~/.cursor/`), GitHub Copilot CLI by `~/.copilot/` or `copilot` on `PATH`, Google Gemini CLI by `~/.gemini/` or `gemini` on `PATH`, AWS Kiro CLI by `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`, Pi by `~/.pi/` or `pi` on `PATH`, and SST OpenCode by `~/.config/opencode/` (or `~/.local/share/opencode/`) or `opencode` on `PATH`, then offers to install hooks/skills (or, for Pi/OpenCode, the live-ingest plugin) for each (user-wide)
 5. **Daemon** — configure the daemon name for remote agent execution
@@ -133,9 +135,12 @@ Once set up, Capacitor runs silently in the background. Every Claude Code (and C
 ### Initial setup
 
 ```bash
-kcap setup                                   # interactive wizard
+kcap setup                                   # interactive wizard (discovers your tenant)
+kcap setup <tenant>                          # shorthand: https://<tenant>.kcap.ai
 kcap setup --server-url <url> --no-prompt    # CI / scripted
 ```
+
+With no server argument, setup (and `kcap login`) runs **tenant discovery**: you choose how to sign in — **Continue** (WorkOS email/SSO) or **Continue with GitHub** — then pick from the tenants you belong to. `--github`/`--workos` skip the provider prompt; `--discover` forces discovery even when a server is configured.
 
 The setup wizard detects every supported coding agent and offers to install hooks for each, then configures the daemon. Claude Code and Codex CLI are detected via `PATH`; Cursor is detected by user-dir presence (`~/.cursor/`), so IDE users without the `cursor` shell command are covered; GitHub Copilot CLI is detected via `~/.copilot/` or `copilot` on `PATH`; Google Gemini CLI via `~/.gemini/` or `gemini` on `PATH`; AWS Kiro CLI via `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`; Pi via `~/.pi/agent/` or `pi` on `PATH` (and, because Pi has no shell hooks, the wizard installs a Pi extension rather than hook config). Re-run any time to update the configuration.
 
