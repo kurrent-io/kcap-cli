@@ -135,11 +135,21 @@ public sealed record ProxyConfigResponse {
     [JsonPropertyName("github_code_exchange_url")] public string? GitHubCodeExchangeUrl { get; init; }
 }
 
-// Auth proxy: POST /discover-tenants response item
+// Auth proxy: POST /discover-tenants (GitHub) and /discover-tenants-workos (WorkOS) response item.
 public sealed record DiscoveredTenant {
     [JsonPropertyName("org_id")]    public long   OrgId    { get; init; }
     [JsonPropertyName("org_login")] public string OrgLogin { get; init; } = "";
     [JsonPropertyName("origin")]    public string Origin   { get; init; } = "";
+
+    // Provider-aware fields (additive; GitHub rows leave them defaulted).
+    [JsonPropertyName("provider")]        public string  Provider       { get; init; } = AuthProvider.GitHubApp;
+    [JsonPropertyName("organization_id")] public string? OrganizationId { get; init; }
+    [JsonPropertyName("slug")]            public string? Slug           { get; init; }
+    [JsonPropertyName("display_name")]    public string? DisplayName    { get; init; }
+
+    // Profile key + picker label, provider-aware. WorkOS rows have no OrgLogin.
+    [JsonIgnore] public string ProfileName => Provider == AuthProvider.WorkOS ? (Slug ?? OrganizationId ?? "tenant") : OrgLogin;
+    [JsonIgnore] public string Label       => !string.IsNullOrEmpty(DisplayName) ? DisplayName : OrgLogin;
 }
 
 public enum DiscoveryError {

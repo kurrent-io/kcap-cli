@@ -53,7 +53,7 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
                     ?? new Config_Profile();
 
         foreach (var t in discovered) {
-            var name = t.OrgLogin;
+            var name = t.ProfileName;
             profiles[name] = (profiles.GetValueOrDefault(name) ?? template) with {
                 ServerUrl = AppConfig.NormalizeUrl(t.Origin)
             };
@@ -61,7 +61,7 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
 
         return existing with {
             Profiles      = profiles,
-            ActiveProfile = active.OrgLogin
+            ActiveProfile = active.ProfileName
         };
     }
 }

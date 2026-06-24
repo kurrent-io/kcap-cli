@@ -174,4 +174,23 @@ public class TenantDiscoveryTests {
         await Assert.That(merged.Profiles["acme"].ServerUrl).IsEqualTo("https://new.example");
         await Assert.That(merged.Profiles["acme"].DefaultVisibility).IsEqualTo("private");
     }
+
+    [Test]
+    public async Task MergeProfiles_uses_slug_for_workos_tenants() {
+        var existing = new ProfileConfig {
+            ActiveProfile = "default",
+            Profiles = new Dictionary<string, Profile> { ["default"] = new() { DefaultVisibility = "private" } }
+        };
+        DiscoveredTenant[] discovered = [
+            new() {
+                Provider = "workos", OrganizationId = "org_a", Slug = "eventuous",
+                DisplayName = "Eventuous", Origin = "https://eventuous.kcap.ai"
+            }
+        ];
+
+        var merged = TenantDiscovery.MergeProfiles(existing, discovered, discovered[0]);
+
+        await Assert.That(merged.ActiveProfile).IsEqualTo("eventuous");
+        await Assert.That(merged.Profiles["eventuous"].ServerUrl).IsEqualTo("https://eventuous.kcap.ai");
+    }
 }
