@@ -60,7 +60,9 @@ public static class OpenCodeExtensionInstaller {
           const children = new Set<string>()           // known subagent (child) session ids — skip top-level
           const written = new Map<string, Set<string>>()
           const flushedChildren = new Set<string>()     // child ids whose COMPLETE transcript has been written
-          const childFirstSeen = new Map<string, number>() // child id → first idle seen structurally-at-rest (ms; last-resort flush)
+          // child id → { content key, ms it has been UNCHANGED }: gates the last-resort flush on a
+          // STABLE transcript, so a still-streaming markerless child is never flushed mid-stream.
+          const childFirstSeen = new Map<string, { key: string; since: number }>()
 
           async function runKcap(args: string[]) {
             try {
@@ -214,11 +216,35 @@ public static class OpenCodeExtensionInstaller {
             return (last?.parts ?? []).some((p: any) => p?.type === "step-finish")
           }
 
+          // A cheap fingerprint of a child's transcript that changes whenever ANY content is appended
+          // or a tool turns terminal — last message id, total part count, terminal-tool count, and the
+          // final message's text length. The last-resort flush requires this to stay UNCHANGED across
+          // the whole window, so a child still streaming text (growing text length) keeps resetting
+          // the window and is never flushed mid-stream — even with every end-of-turn marker absent.
+          function stabilityKey(msgs: any[]): string {
+            const last = msgs[msgs.length - 1]
+            let parts = 0, termTools = 0
+            for (const m of msgs) {
+              const ps = m?.parts ?? []
+              parts += ps.length
+              for (const p of ps) {
+                if (p?.type === "tool") {
+                  const st = p?.state?.status
+                  if (st === "completed" || st === "error") termTools++
+                }
+              }
+            }
+            let textLen = 0
+            for (const p of (last?.parts ?? [])) textLen += (typeof p?.text === "string" ? p.text.length : 0)
+            return (last?.info?.id ?? "") + "|" + parts + "|" + termTools + "|" + textLen
+          }
+
           // Last-resort flush window: a child that is structurally at rest but carries NO end-of-turn
-          // marker AND has no terminal parent-`task` is flushed once it has stayed that way this long
-          // — so a completed child can NEVER be deferred forever, while a mid-stream child (a
-          // non-terminal tool, or a non-assistant last message) is still never written. ~Impossible
-          // for real OpenCode (completed turns carry step-finish); a guarantee if the markers change.
+          // marker AND has no terminal parent-`task` is flushed once its transcript has stayed
+          // UNCHANGED (stabilityKey) this long — so a completed child can NEVER be deferred forever,
+          // while a child still streaming (a non-terminal tool, a non-assistant last message, OR
+          // growing text that keeps resetting the key) is still never written. ~Impossible for real
+          // OpenCode (completed turns carry step-finish); a guarantee if the markers ever change.
           const LAST_RESORT_MS = 120000
 
           // On the parent's idle, stream COMPLETE child sessions (subagents) into the nested dir the
@@ -232,6 +258,13 @@ public static class OpenCodeExtensionInstaller {
               const done = completedChildIds(parentMsgs)
               const res: any = await client.session.children({ path: { id: parent } })
               const kids: any[] = Array.isArray(res) ? res : (res?.data ?? [])
+
+              // Bound childFirstSeen: drop last-resort timers for children no longer returned by the
+              // scan. A transient drop only RESETS a timer on reappearance (longer defer) — never an
+              // early flush — so this is safe and keeps the map from growing across a long session.
+              const currentIds = new Set<string>(kids.map((k: any) => k?.id).filter(Boolean))
+              for (const id of childFirstSeen.keys()) if (!currentIds.has(id)) childFirstSeen.delete(id)
+
               for (const k of kids) {
                 const cid = k?.id
                 if (!cid) continue
@@ -243,11 +276,14 @@ public static class OpenCodeExtensionInstaller {
 
                 let ready = done.has(cid) || childComplete(cmsgs)
                 if (!ready && structurallyAtRest(cmsgs)) {
-                  // Structurally done but missing every end-of-turn marker — flush only after a real
-                  // elapsed window (structurallyAtRest already excludes mid-stream children).
-                  const first = childFirstSeen.get(cid) ?? Date.now()
-                  if (!childFirstSeen.has(cid)) childFirstSeen.set(cid, first)
-                  ready = (Date.now() - first) >= LAST_RESORT_MS
+                  // Structurally done but missing every end-of-turn marker. Flush only once the
+                  // transcript has been UNCHANGED for the whole window: a changed key (new part, a
+                  // tool turning terminal, or growing text) resets the timer, so a child still
+                  // streaming markerless text is never flushed mid-stream.
+                  const k = stabilityKey(cmsgs)
+                  const prev = childFirstSeen.get(cid)
+                  if (!prev || prev.key !== k) childFirstSeen.set(cid, { key: k, since: Date.now() })
+                  else ready = (Date.now() - prev.since) >= LAST_RESORT_MS
                 }
                 if (!ready) continue // not complete yet — defer (no partial write)
 
