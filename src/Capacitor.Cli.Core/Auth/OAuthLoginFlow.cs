@@ -63,6 +63,13 @@ public static class OAuthLoginFlow {
         return isInteractive ? null : AuthProvider.WorkOS;
     }
 
+    /// <summary>
+    /// `kcap login` runs tenant discovery when there's no configured server (nothing to log into yet)
+    /// or the user explicitly asked with <c>--discover</c>; otherwise it logs into the configured server.
+    /// </summary>
+    internal static bool ShouldDiscoverLogin(string? baseUrl, string[] args)
+        => args.Contains("--discover") || baseUrl is null;
+
     static int HandleNoneLogin() {
         Console.Out.WriteLine("Server has no authentication configured — login not required.");
 

@@ -120,6 +120,14 @@ public class OAuthFlowTests {
     }
 
     [Test]
+    public async Task ShouldDiscoverLogin_true_when_no_server_or_discover_flag() {
+        await Assert.That(OAuthLoginFlow.ShouldDiscoverLogin(null, [])).IsTrue();
+        await Assert.That(OAuthLoginFlow.ShouldDiscoverLogin(null, ["--device"])).IsTrue();
+        await Assert.That(OAuthLoginFlow.ShouldDiscoverLogin("https://x.example", ["--discover"])).IsTrue();
+        await Assert.That(OAuthLoginFlow.ShouldDiscoverLogin("https://x.example", [])).IsFalse();
+    }
+
+    [Test]
     public async Task ChooseGitHubFlow_returns_device_when_forced() {
         var choice = OAuthLoginFlow.ChooseGitHubFlow(forceDevice: true, isHeadless: false, hasExchangeUrl: true);
         await Assert.That(choice).IsEqualTo(GitHubFlow.Device);
