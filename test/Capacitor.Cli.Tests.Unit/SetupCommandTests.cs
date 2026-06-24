@@ -200,6 +200,18 @@ public class SetupCommandTests {
         await Assert.That(SetupCommand.LiveRecordingRestartTip(result)).IsNull();
     }
 
+    [Test]
+    public async Task ResolveTenantArg_expands_bare_label_to_kcap_subdomain() {
+        await Assert.That(SetupCommand.ResolveTenantArg("eventuous")).IsEqualTo("https://eventuous.kcap.ai");
+    }
+
+    [Test]
+    public async Task ResolveTenantArg_leaves_urls_fqdns_and_hosts_untouched() {
+        await Assert.That(SetupCommand.ResolveTenantArg("https://x.example")).IsEqualTo("https://x.example");
+        await Assert.That(SetupCommand.ResolveTenantArg("self.hosted.example")).IsEqualTo("self.hosted.example");
+        await Assert.That(SetupCommand.ResolveTenantArg("localhost:5108")).IsEqualTo("localhost:5108");
+    }
+
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),

@@ -17,6 +17,11 @@ namespace Capacitor.Cli.Commands;
 public static class SetupCommand {
     public static async Task<int> HandleAsync(string[] args) {
         var serverUrlArg     = GetArg(args, "--server-url");
+
+        // `kcap setup <tenant>`: a leading positional arg (bare slug or full URL) is treated as the
+        // server, equivalent to --server-url. A bare single label expands to {slug}.kcap.ai.
+        if (serverUrlArg is null && args.Length > 1 && !args[1].StartsWith('-'))
+            serverUrlArg = ResolveTenantArg(args[1]);
         var noPrompt         = args.Contains("--no-prompt");
         var forceDevice      = args.Contains("--device");
         var skipClaudeFlag   = args.Contains("--skip-claude-hooks");
@@ -570,6 +575,17 @@ public static class SetupCommand {
 
         return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
     }
+
+    /// <summary>
+    /// Resolves a `kcap setup &lt;tenant&gt;` positional: a bare single label (no scheme/dot/port)
+    /// expands to <c>https://{slug}.kcap.ai</c>; anything that already looks like a URL, FQDN, or
+    /// host:port is returned unchanged for the normal --server-url path. Self-hosted servers should
+    /// pass a full URL.
+    /// </summary>
+    internal static string ResolveTenantArg(string arg) =>
+        arg.Contains("://") || arg.Contains('.') || arg.Contains(':')
+            ? arg
+            : $"https://{arg}.kcap.ai";
 
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
