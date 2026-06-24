@@ -184,17 +184,13 @@ switch (command) {
     case "login": {
         var forceDevice = args.Contains("--device");
 
-        if (args.Contains("--discover")) {
+        // No configured server (or explicit --discover) → run tenant discovery (pick provider,
+        // then your tenants). Otherwise log into the configured server.
+        if (OAuthLoginFlow.ShouldDiscoverLogin(baseUrl, args)) {
             return await HandleDiscoverLoginAsync(forceDevice);
         }
 
-        if (baseUrl is null) {
-            Console.Error.WriteLine("No server configured. Run `kcap setup`, set KCAP_URL, or use `kcap login --discover`.");
-
-            return 1;
-        }
-
-        return await OAuthLoginFlow.LoginWithDiscoveryAsync(baseUrl, forceDevice);
+        return await OAuthLoginFlow.LoginWithDiscoveryAsync(baseUrl!, forceDevice);
     }
     case "logout": {
         await TokenStore.DeleteAsync();
@@ -661,7 +657,20 @@ async Task<int> HandleDiscoverLoginAsync(bool forceDevice) {
 
     var proxyConfig = await proxyClient.GetConfigAsync(AuthProxyEndpoint.Url);
 
-    if (proxyConfig is null || string.IsNullOrEmpty(proxyConfig.GitHubClientId)) {
+    if (proxyConfig is null) {
+        await Console.Error.WriteLineAsync("Cannot reach the Kurrent auth service.");
+
+        return 1;
+    }
+
+    var provider = DiscoveryProviderPrompt.Resolve(args);
+
+    if (provider == AuthProvider.WorkOS) {
+        return await WorkOSDiscovery.RunWithLiveAuthAsync(
+            AuthProxyEndpoint.Url, proxyConfig, proxyClient, new SpectreTenantPicker());
+    }
+
+    if (string.IsNullOrEmpty(proxyConfig.GitHubClientId)) {
         await Console.Error.WriteLineAsync("Cannot reach the Kurrent auth service.");
 
         return 1;

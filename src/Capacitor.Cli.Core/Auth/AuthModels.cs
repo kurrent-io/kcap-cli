@@ -133,13 +133,31 @@ public sealed record ProxyConfigResponse {
     // to device flow because the CLI can't talk to GitHub's token endpoint directly
     // for a GitHub App without client_secret.
     [JsonPropertyName("github_code_exchange_url")] public string? GitHubCodeExchangeUrl { get; init; }
+
+    // WorkOS discovery: the shared AuthKit Application's public client id + (optional) custom
+    // AuthKit UI domain. Present (and client id non-empty) when the proxy serves WorkOS discovery.
+    [JsonPropertyName("workos_client_id")]      public string? WorkOSClientId      { get; init; }
+    [JsonPropertyName("workos_authkit_domain")] public string? WorkOSAuthKitDomain { get; init; }
 }
 
-// Auth proxy: POST /discover-tenants response item
+// Auth proxy: POST /discover-tenants (GitHub) and /discover-tenants-workos (WorkOS) response item.
 public sealed record DiscoveredTenant {
     [JsonPropertyName("org_id")]    public long   OrgId    { get; init; }
     [JsonPropertyName("org_login")] public string OrgLogin { get; init; } = "";
     [JsonPropertyName("origin")]    public string Origin   { get; init; } = "";
+
+    // Provider-aware fields (additive; GitHub rows leave them defaulted).
+    [JsonPropertyName("provider")]        public string  Provider       { get; init; } = AuthProvider.GitHubApp;
+    [JsonPropertyName("organization_id")] public string? OrganizationId { get; init; }
+    [JsonPropertyName("slug")]            public string? Slug           { get; init; }
+    [JsonPropertyName("display_name")]    public string? DisplayName    { get; init; }
+
+    // Profile key + picker label, provider-aware. WorkOS rows have no OrgLogin.
+    // Compare provider case-insensitively: the proxy's /discover-tenants-workos emits "WorkOS"
+    // while AuthProvider.WorkOS is "workos" (the tenant /auth/config casing).
+    [JsonIgnore] public bool   IsWorkOS    => string.Equals(Provider, AuthProvider.WorkOS, StringComparison.OrdinalIgnoreCase);
+    [JsonIgnore] public string ProfileName => IsWorkOS ? (Slug ?? OrganizationId ?? "tenant") : OrgLogin;
+    [JsonIgnore] public string Label       => !string.IsNullOrEmpty(DisplayName) ? DisplayName : OrgLogin;
 }
 
 public enum DiscoveryError {
