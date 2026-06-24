@@ -133,6 +133,11 @@ public sealed record ProxyConfigResponse {
     // to device flow because the CLI can't talk to GitHub's token endpoint directly
     // for a GitHub App without client_secret.
     [JsonPropertyName("github_code_exchange_url")] public string? GitHubCodeExchangeUrl { get; init; }
+
+    // WorkOS discovery: the shared AuthKit Application's public client id + (optional) custom
+    // AuthKit UI domain. Present (and client id non-empty) when the proxy serves WorkOS discovery.
+    [JsonPropertyName("workos_client_id")]      public string? WorkOSClientId      { get; init; }
+    [JsonPropertyName("workos_authkit_domain")] public string? WorkOSAuthKitDomain { get; init; }
 }
 
 // Auth proxy: POST /discover-tenants (GitHub) and /discover-tenants-workos (WorkOS) response item.
