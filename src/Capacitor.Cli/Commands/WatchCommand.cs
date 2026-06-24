@@ -878,11 +878,12 @@ static partial class WatchCommand {
 
     internal static string? TryExtractAssistantText(string line, string vendor = "claude") =>
         vendor switch {
-            "codex"   => TryExtractCodexAssistantText(line),
-            "copilot" => TryExtractCopilotAssistantText(line),
-            "kiro"    => TryExtractKiroAssistantText(line),
-            "pi"      => TryExtractPiAssistantText(line),
-            _         => TryExtractClaudeAssistantText(line)
+            "codex"    => TryExtractCodexAssistantText(line),
+            "copilot"  => TryExtractCopilotAssistantText(line),
+            "kiro"     => TryExtractKiroAssistantText(line),
+            "pi"       => TryExtractPiAssistantText(line),
+            "opencode" => TryExtractOpenCodeText(line, "assistant"),
+            _          => TryExtractClaudeAssistantText(line)
         };
 
     static string? TryExtractClaudeAssistantText(string line) {
@@ -993,6 +994,16 @@ static partial class WatchCommand {
                 };
             }
 
+            if (vendor == "opencode") {
+                // OpenCode envelopes are {info,parts} with info.role user/assistant.
+                // Gate on text content: a turn with no non-hidden text (e.g. tool-only)
+                // yields no titleable text, so it must not count toward the title-event
+                // threshold. Mirrors the Pi content gate.
+                if (root.Obj("info")?.Str("role") is not ("user" or "assistant")) return false;
+
+                return OpenCodeTextParts(root.Arr("parts")) is not null;
+            }
+
             return root.Str("type") is "user" or "assistant";
         } catch {
             return false;
@@ -1001,12 +1012,45 @@ static partial class WatchCommand {
 
     internal static string? TryExtractUserText(string line, string vendor = "claude") =>
         vendor switch {
-            "codex"   => TryExtractCodexUserText(line),
-            "copilot" => TryExtractCopilotUserText(line),
-            "kiro"    => TryExtractKiroUserText(line),
-            "pi"      => TryExtractPiUserText(line),
-            _         => TryExtractClaudeUserText(line)
+            "codex"    => TryExtractCodexUserText(line),
+            "copilot"  => TryExtractCopilotUserText(line),
+            "kiro"     => TryExtractKiroUserText(line),
+            "pi"       => TryExtractPiUserText(line),
+            "opencode" => TryExtractOpenCodeText(line, "user"),
+            _          => TryExtractClaudeUserText(line)
         };
+
+    // ── OpenCode extractors (AI-919) ───────────────────────────────────────────
+    //
+    // OpenCode transcript lines are {info,parts} with info.role user/assistant. Title
+    // text is the joined non-hidden text parts — mirrors the server's
+    // OpenCodeTranscriptNormalizer.ExtractText so the watcher's titles match ingest.
+    static string? TryExtractOpenCodeText(string line, string role) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Obj("info")?.Str("role") != role) return null;
+
+            return OpenCodeTextParts(root.Arr("parts"));
+        } catch {
+            return null;
+        }
+    }
+
+    static string? OpenCodeTextParts(JsonElement? parts) {
+        if (parts is not { } arr) return null;
+
+        var pieces = new List<string>();
+        foreach (var part in arr.EnumerateArray()) {
+            if (part.Str("type") != "text") continue;
+            if (part.TryGetProperty("synthetic", out var syn) && syn.ValueKind == JsonValueKind.True) continue;
+            if (part.TryGetProperty("ignored",   out var ign) && ign.ValueKind == JsonValueKind.True) continue;
+            if (part.Str("text")?.Trim() is { Length: > 0 } t) pieces.Add(t);
+        }
+
+        return pieces.Count > 0 ? string.Join("\n", pieces) : null;
+    }
 
     // ── Kiro extractors (AI-888) ───────────────────────────────────────────
     //

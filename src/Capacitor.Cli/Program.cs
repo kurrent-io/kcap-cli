@@ -510,7 +510,7 @@ switch (command) {
             currentRepo:             currentRepo);
     }
     case "watch" when args.Length < 3:
-        Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex|copilot|kiro|pi]");
+        Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex|copilot|gemini|kiro|pi|opencode]");
 
         return 1;
     case "watch": {

@@ -73,6 +73,36 @@ public static class OpenCodeExtensionInstaller {
             }
           }
 
+          // A child session (subagent) must NEVER be ingested as a top-level session.
+          // session.created MAY carry info.parentID, but session.idle does not, and a
+          // child's idle can fire before its parent is discovered — so resolve parentID
+          // authoritatively via the SDK when it isn't already known. Fail-open to
+          // top-level (a transient lookup failure must not drop a real session).
+          async function isChild(sid: string, info?: any) {
+            if (children.has(sid)) return true
+            let parentId = info?.parentID
+            if (parentId === undefined || parentId === null) {
+              try {
+                const s: any = await client.session.get({ path: { id: sid } })
+                parentId = s?.parentID ?? s?.data?.parentID ?? null
+              } catch { parentId = null }
+            }
+            if (parentId) { children.add(sid); return true }
+            return false
+          }
+
+          // The server keys events by the part's stable prt_ id and keeps the FIRST
+          // append, so a message must only be written once its content is final. A user
+          // message is always final; an assistant message is final once it carries a
+          // finish/completed marker. Gates subagent flushing so a still-streaming child
+          // can't lock in partial content (the task tool blocks the parent until the
+          // child completes, so by parent-idle this passes).
+          function isFinal(m: any) {
+            const info = m?.info
+            if (info?.role !== "assistant") return true
+            return info.finish != null || info.time?.completed != null
+          }
+
           async function start(sid: string, info?: any) {
             if (started.has(sid)) return
             started.add(sid)
@@ -87,7 +117,7 @@ public static class OpenCodeExtensionInstaller {
           // Fetch a session's full messages and append any not-yet-written {info,parts}
           // lines to targetFile. Re-emits when a message's part count grows (the assistant
           // streams parts in over a turn); deterministic prt_ ids dedupe server-side.
-          async function flushTo(sid: string, targetFile: string) {
+          async function flushTo(sid: string, targetFile: string, finalOnly = false) {
             try {
               const res: any = await client.session.messages({ path: { id: sid } })
               const msgs: any[] = Array.isArray(res) ? res : (res?.data ?? [])
@@ -97,6 +127,9 @@ public static class OpenCodeExtensionInstaller {
               for (const m of msgs) {
                 const id = m?.info?.id
                 if (!id) continue
+                // Subagents: skip a still-streaming message so its partial content isn't
+                // the first (permanent) append for its part ids.
+                if (finalOnly && !isFinal(m)) continue
                 const key = id + ":" + (m?.parts?.length ?? 0)
                 if (seen.has(key)) continue
                 seen.add(key)
@@ -122,7 +155,7 @@ public static class OpenCodeExtensionInstaller {
                 const cid = k?.id
                 if (!cid) continue
                 children.add(cid)
-                await flushTo(cid, childFile(parent, cid))
+                await flushTo(cid, childFile(parent, cid), true)
               }
             } catch {
               // never disrupt the OpenCode session
@@ -136,12 +169,13 @@ public static class OpenCodeExtensionInstaller {
                 const sid = event?.properties?.sessionID
                 if (!sid) return
                 if (type === "session.created") {
-                  // A child session (subagent) carries parentID — never ingest it as a
-                  // top-level session; the parent's flushSubagents streams it instead.
-                  if (event.properties?.info?.parentID) { children.add(sid); return }
+                  // Skip child sessions (subagents) on the top-level path — the parent's
+                  // flushSubagents streams them. isChild resolves parentID via the SDK when
+                  // the event doesn't carry it, so this can't misfile a child as top-level.
+                  if (await isChild(sid, event.properties?.info)) return
                   await start(sid, event.properties?.info)
                 } else if (type === "session.idle") {
-                  if (children.has(sid)) return
+                  if (await isChild(sid)) return
                   if (!started.has(sid)) await start(sid)
                   await flushTo(sid, file(sid))
                   await flushSubagents(sid)

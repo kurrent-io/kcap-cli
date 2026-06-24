@@ -32,11 +32,16 @@ static class OpenCodeSubagentTeardown {
             var agentId   = OpenCodeSubagentDiscovery.CanonicalAgentId(childId);
             var agentType = OpenCodeSubagentDiscovery.ResolveAgentType(subFile);
 
-            // Each step best-effort + independent so subagent-stop (→ SubagentCompleted) is
-            // always attempted even if the kill or drain hiccups.
-            await SafeAsync(() => WatcherManager.KillWatcher($"{sessionId}-{agentId}"));
-            await SafeAsync(() => WatcherManager.InlineDrainAsync(baseUrl, sessionId, subFile, agentId, vendor: "opencode"));
-            await SafeAsync(() => PostStopAsync(baseUrl, sessionId, agentId, agentType, subFile));
+            // Each step is independently CAPPED so a slow first child can't consume the
+            // budget and starve later children of their SubagentCompleted:
+            //  - KillWatcher waits up to 5s for graceful exit (WatcherManager) — cap it hard;
+            //  - InlineDrain overlaps harmlessly with any still-live watcher (the server
+            //    dedupes by deterministic event id);
+            //  - subagent-stop ALWAYS runs (the critical SubagentCompleted; the server
+            //    also stop-and-drains the watcher).
+            await CappedAsync(() => WatcherManager.KillWatcher($"{sessionId}-{agentId}"),                               TimeSpan.FromSeconds(1.5));
+            await CappedAsync(() => WatcherManager.InlineDrainAsync(baseUrl, sessionId, subFile, agentId, vendor: "opencode"), TimeSpan.FromSeconds(2.5));
+            await CappedAsync(() => PostStopAsync(baseUrl, sessionId, agentId, agentType, subFile),                     TimeSpan.FromSeconds(2.5));
         }
     }
 
@@ -47,7 +52,21 @@ static class OpenCodeSubagentTeardown {
         await client.PostWithRetryAsync($"{baseUrl}/hooks/subagent-stop", content);
     }
 
-    static async Task SafeAsync(Func<Task> op) {
-        try { await op(); } catch { /* best effort — kcap import recovers anything missed */ }
+    /// <summary>
+    /// Runs a best-effort teardown step bounded by <paramref name="cap"/>; swallows errors
+    /// and timeouts so one subagent (or one slow step) never blocks the rest of the shutdown
+    /// path. On timeout the step is detached and its fault observed (no unobserved-exception).
+    /// </summary>
+    static async Task CappedAsync(Func<Task> op, TimeSpan cap) {
+        Task task;
+        try { task = op(); } catch { return; }
+
+        if (await Task.WhenAny(task, Task.Delay(cap)) != task) {
+            _ = task.ContinueWith(t => _ = t.Exception, CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            return;
+        }
+
+        try { await task; } catch { /* best effort — kcap import recovers anything missed */ }
     }
 }
