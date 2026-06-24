@@ -59,9 +59,7 @@ public static class OpenCodeExtensionInstaller {
           const started = new Set<string>()
           const children = new Set<string>()           // known subagent (child) session ids — skip top-level
           const written = new Map<string, Set<string>>()
-          const flushedChildren = new Set<string>()     // child ids whose transcript has been written
-          const pendingChildren = new Map<string, number>()  // child seen but not yet flushed → parent-idle count
-          const unknownFirstSeen = new Map<string, number>() // first time classify() couldn't resolve a session (ms)
+          const flushedChildren = new Set<string>()     // child ids whose COMPLETE transcript has been written
 
           async function runKcap(args: string[]) {
             try {
@@ -88,18 +86,16 @@ public static class OpenCodeExtensionInstaller {
             if (info?.parentID) { children.add(sid); return "child" }
             try {
               const s: any = await client.session.get({ path: { id: sid } })
-              unknownFirstSeen.delete(sid)
               const parentId = s?.parentID ?? s?.data?.parentID
               if (parentId) { children.add(sid); return "child" }
               return "top"
             } catch {
-              // session.get failed — ambiguous, so DEFER (don't misfile a child as top-level).
-              // Fall back to top-level only after a real elapsed window of persistent failure (not
-              // a few fast idles), so a transient blip on a real child doesn't misfile it; a
-              // persistent endpoint-specific failure still won't permanently drop a top-level session.
-              const first = unknownFirstSeen.get(sid) ?? Date.now()
-              if (!unknownFirstSeen.has(sid)) unknownFirstSeen.set(sid, first)
-              return (Date.now() - first) >= 60000 ? "top" : "unknown"
+              // session.get failed — FAIL CLOSED: stay "unknown" and DEFER. Never promote an
+              // ambiguous id to top-level: a misfiled child gets double-ingested (a top-level file
+              // AND a nested subagent file) and can't be cleanly un-ingested, whereas a real
+              // top-level session just waits for session.get to recover (and if the SDK is
+              // unreachable, fetching its transcript would fail too — nothing is lost by waiting).
+              return "unknown"
             }
           }
 
@@ -138,32 +134,30 @@ public static class OpenCodeExtensionInstaller {
             }
           }
 
-          // Append any not-yet-written {info,parts} lines to targetFile. Re-emits when a message's
-          // dedup key changes (new parts, or a tool turning terminal); deterministic prt_ ids
-          // dedupe server-side.
-          function writeMessages(targetFile: string, msgs: any[]) {
+          // Append any not-yet-written {info,parts} lines to targetFile. A key is marked seen ONLY
+          // after the append SUCCEEDS, so a transient disk/permission/full-volume error doesn't
+          // permanently suppress those snapshots — a later flush retries them. Returns false iff the
+          // append threw. Re-emits when a message's dedup key changes (new parts, or a tool turning
+          // terminal); prt_ ids dedupe server-side.
+          function writeMessages(targetFile: string, msgs: any[]): boolean {
             const seen = written.get(targetFile) ?? new Set<string>()
             written.set(targetFile, seen)
-            const lines: string[] = []
+            const pending: { key: string; line: string }[] = []
             for (const m of msgs) {
               if (!m?.info?.id) continue
               const key = dedupeKey(m)
               if (seen.has(key)) continue
-              seen.add(key)
-              lines.push(JSON.stringify({ info: m.info, parts: m.parts ?? [] }))
+              pending.push({ key, line: JSON.stringify({ info: m.info, parts: m.parts ?? [] }) })
             }
-            if (lines.length > 0) {
-              try {
-                mkdirSync(dirname(targetFile), { recursive: true })
-                appendFileSync(targetFile, lines.join("\n") + "\n")
-              } catch {
-                // never disrupt the OpenCode session
-              }
+            if (pending.length === 0) return true
+            try {
+              mkdirSync(dirname(targetFile), { recursive: true })
+              appendFileSync(targetFile, pending.map((p) => p.line).join("\n") + "\n")
+            } catch {
+              return false // append failed — leave keys unseen so a later flush retries
             }
-          }
-
-          async function flushTo(sid: string, targetFile: string) {
-            writeMessages(targetFile, await fetchMessages(sid))
+            for (const p of pending) seen.add(p.key)
+            return true
           }
 
           // The spawned child session id carried on a `task` tool part — alias-tolerant so a small
@@ -190,17 +184,34 @@ public static class OpenCodeExtensionInstaller {
             return done
           }
 
-          // Parent idles a child may stay pending (no terminal `task` match) before we flush it
-          // anyway — a bounded fallback so a missing/renamed task metadata shape, or a child
-          // spawned by a non-`task` path, can never permanently lose the transcript (by then the
-          // task tool has long returned, so the child is complete; the partial-text window the
-          // durable gate guards against doesn't apply after several parent idles).
-          const PENDING_IDLE_FALLBACK = 3
+          // True once a child session is COMPLETE: every tool part is terminal AND the last
+          // assistant message carries a finish/completed marker. This is the child's OWN signal —
+          // a child's transcript is never written until it's complete, so a still-streaming child's
+          // partial text/reasoning is never the first (and, by the server's keep-first, permanent)
+          // append for its prt_ ids. A bare idle count is NOT a completeness signal.
+          function childComplete(msgs: any[]): boolean {
+            if (msgs.length === 0) return false
+            for (const m of msgs) {
+              for (const p of (m?.parts ?? [])) {
+                if (p?.type === "tool") {
+                  const st = p?.state?.status
+                  if (st !== "completed" && st !== "error") return false
+                }
+              }
+            }
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              const info = msgs[i]?.info
+              if (info?.role !== "assistant") continue
+              return info.finish != null || info.time?.completed != null
+            }
+            return false // no assistant message yet
+          }
 
-          // On the parent's idle, stream child sessions (subagents) into the nested dir the watcher
-          // scans. Flush once the child's `task` is terminal (preferred), or after
-          // PENDING_IDLE_FALLBACK idles even without one (fallback). Every child id is recorded so
-          // its own session events skip the top-level path.
+          // On the parent's idle, stream COMPLETE child sessions (subagents) into the nested dir the
+          // watcher scans. A child is flushed once it's proven complete — by its OWN transcript
+          // (childComplete) or by the parent's terminal `task` part (completedChildIds). Until then
+          // it's deferred (recorded in `children` so its own events skip the top-level path, but no
+          // partial transcript is written). Once flushed it isn't re-fetched.
           async function flushSubagents(parent: string, parentMsgs: any[]) {
             try {
               const done = completedChildIds(parentMsgs)
@@ -210,18 +221,13 @@ public static class OpenCodeExtensionInstaller {
                 const cid = k?.id
                 if (!cid) continue
                 children.add(cid)
+                if (flushedChildren.has(cid)) continue // already written — no re-fetch
 
-                let flush = flushedChildren.has(cid) || done.has(cid)
-                if (!flush) {
-                  const n = (pendingChildren.get(cid) ?? 0) + 1
-                  pendingChildren.set(cid, n)
-                  flush = n >= PENDING_IDLE_FALLBACK
-                }
-                if (flush) {
-                  flushedChildren.add(cid)
-                  pendingChildren.delete(cid)
-                  await flushTo(cid, childFile(parent, cid))
-                }
+                const cmsgs = await fetchMessages(cid)
+                if (cmsgs.length === 0) continue                      // fetch failed/empty — retry next idle (no state change)
+                if (!done.has(cid) && !childComplete(cmsgs)) continue  // not complete yet — defer (no partial write)
+
+                if (writeMessages(childFile(parent, cid), cmsgs)) flushedChildren.add(cid) // mark flushed only on a successful write
               }
             } catch {
               // never disrupt the OpenCode session
