@@ -230,6 +230,22 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     [Test]
+    public async Task Private_agents_are_excluded_from_live_agent_ids() {
+        var server = new CaptureServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        orch.RegisterAgentForTest(new AgentInstance("pub-1", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false, Status = "Running" });
+        orch.RegisterAgentForTest(new AgentInstance("priv-1", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true, Status = "Running" });
+
+        var ids = server.GetLiveAgentIds!();
+
+        await Assert.That(ids).Contains("pub-1");
+        await Assert.That(ids).DoesNotContain("priv-1");
+    }
+
+    [Test]
     public async Task Local_socket_list_round_trips_registered_agents_over_a_real_socket() {
         if (OperatingSystem.IsWindows()) return; // Unix-domain socket path
 

@@ -193,7 +193,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         _server.GetLiveAgentIds = () => [
             .. _agents
-                .Where(kvp => kvp.Value.Status is "Starting" or "Running")
+                .Where(kvp => (kvp.Value.Status is "Starting" or "Running") && !kvp.Value.IsPrivate)
                 .Select(kvp => kvp.Key)
         ];
 
