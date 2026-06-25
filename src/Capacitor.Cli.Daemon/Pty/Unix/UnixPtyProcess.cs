@@ -65,6 +65,13 @@ public sealed class UnixPtyProcess : IPtyProcess {
                 UnixPtyInterop.unsetenv("KCAP_AGENT_ID");
                 UnixPtyInterop.unsetenv("KCAP_RENDERED_AGENT");
                 UnixPtyInterop.unsetenv("KCAP_DAEMON_URL");
+                // Never leak daemon supervision state into hosted agents — otherwise a
+                // `kcap daemon start` run from inside an agent could inherit a supervised
+                // classification and later take the exit-for-relaunch path with no supervisor.
+                UnixPtyInterop.unsetenv("KCAP_DAEMON_SUPERVISED");
+                UnixPtyInterop.unsetenv("XPC_SERVICE_NAME");
+                UnixPtyInterop.unsetenv("INVOCATION_ID");
+                UnixPtyInterop.unsetenv("SYSTEMD_EXEC_PID");
 
                 if (extraEnvKeys is not null) {
                     for (var i = 0; i < extraEnvKeys.Length; i++) {
