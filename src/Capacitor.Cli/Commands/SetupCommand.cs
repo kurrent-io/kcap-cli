@@ -407,7 +407,7 @@ public static class SetupCommand {
             return null;
         }
 
-        var provider = DiscoveryProviderPrompt.Resolve(args);
+        var provider = OAuthLoginFlow.ChooseDiscoveryProvider(args, isInteractive: !HeadlessEnvironment.IsHeadless());
 
         if (provider == AuthProvider.WorkOS) {
             var exit = await WorkOSDiscovery.RunWithLiveAuthAsync(
