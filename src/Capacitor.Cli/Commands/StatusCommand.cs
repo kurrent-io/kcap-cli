@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
+using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
 
 namespace Capacitor.Cli.Commands;
@@ -55,13 +56,14 @@ public static class StatusCommand {
         await Console.Out.WriteAsync("  Hooks:   ");
 
         var line = BuildHooksStatusLine(
-            claude:  IsClaudePluginInstalled(ClaudePaths.UserSettings),
-            codex:   IsCodexHooksInstalled(CodexPaths.UserHooksJson),
-            cursor:  CursorHooksInstaller.IsInstalled(CursorPaths.UserHooksJson()),
-            copilot: CopilotHooksInstaller.IsInstalled(CopilotPaths.KcapHooksJson()),
-            gemini:  GeminiHooksInstaller.IsInstalled(GeminiPaths.SettingsJson()),
-            kiro:    KiroHooksInstaller.IsInstalled(KiroPaths.KcapAgentJson()),
-            pi:      PiExtensionInstaller.IsInstalled(PiPaths.KcapExtension()));
+            claude:   IsClaudePluginInstalled(ClaudePaths.UserSettings),
+            codex:    IsCodexHooksInstalled(CodexPaths.UserHooksJson),
+            cursor:   CursorHooksInstaller.IsInstalled(CursorPaths.UserHooksJson()),
+            copilot:  CopilotHooksInstaller.IsInstalled(CopilotPaths.KcapHooksJson()),
+            gemini:   GeminiHooksInstaller.IsInstalled(GeminiPaths.SettingsJson()),
+            kiro:     KiroHooksInstaller.IsInstalled(KiroPaths.KcapAgentJson()),
+            pi:       PiExtensionInstaller.IsInstalled(PiPaths.KcapExtension()),
+            opencode: OpenCodeExtensionInstaller.IsInstalled(OpenCodePaths.KcapPlugin()));
 
         await Console.Out.WriteLineAsync(line);
 
@@ -146,20 +148,21 @@ public static class StatusCommand {
 
     /// <summary>
     /// Renders the Hooks status line for every supported agent. Gemini merges its
-    /// hooks into the shared <c>~/.gemini/settings.json</c> and Pi tracks an
-    /// "extension" rather than a hooks file (it has no shell hooks), but both share
-    /// the line for at-a-glance parity. Pure — the I/O detection happens in the
-    /// caller so this stays unit-testable.
+    /// hooks into the shared <c>~/.gemini/settings.json</c>, while Pi and OpenCode
+    /// track a live-ingest "extension"/plugin file rather than a hooks file (neither
+    /// has shell hooks), but all share the line for at-a-glance parity. Pure — the
+    /// I/O detection happens in the caller so this stays unit-testable.
     /// </summary>
-    internal static string BuildHooksStatusLine(bool claude, bool codex, bool cursor, bool copilot, bool gemini, bool kiro, bool pi) =>
+    internal static string BuildHooksStatusLine(bool claude, bool codex, bool cursor, bool copilot, bool gemini, bool kiro, bool pi, bool opencode) =>
         string.Join("  ", new[] {
-            claude  ? "Claude ✓"  : "Claude ✗",
-            codex   ? "Codex ✓"   : "Codex ✗",
-            cursor  ? "Cursor ✓"  : "Cursor ✗",
-            copilot ? "Copilot ✓" : "Copilot ✗",
-            gemini  ? "Gemini ✓"  : "Gemini ✗",
-            kiro    ? "Kiro ✓"    : "Kiro ✗",
-            pi      ? "Pi ✓"      : "Pi ✗"
+            claude   ? "Claude ✓"   : "Claude ✗",
+            codex    ? "Codex ✓"    : "Codex ✗",
+            cursor   ? "Cursor ✓"   : "Cursor ✗",
+            copilot  ? "Copilot ✓"  : "Copilot ✗",
+            gemini   ? "Gemini ✓"   : "Gemini ✗",
+            kiro     ? "Kiro ✓"     : "Kiro ✗",
+            pi       ? "Pi ✓"       : "Pi ✗",
+            opencode ? "OpenCode ✓" : "OpenCode ✗"
         });
 
     /// <summary>
