@@ -192,5 +192,22 @@ function runUpdate(binaryPath) {
   console.log("Refreshing hooks and skills…");
   require("./refresh").runRefreshes(fs.realpathSync(__filename));
   console.log("kcap updated.");
+
+  // macOS/Linux: a running daemon self-detects the new binary and restarts when idle.
+  // Just inform the user (best-effort; never fail the update for this). On Windows the
+  // doomed install was already aborted by the preflight above, so this only runs on Unix.
+  if (process.platform !== "win32") {
+    try {
+      const status = execFileSync(binaryPath, ["daemon", "status"], { encoding: "utf8" });
+      if (/running \(PID/i.test(status)) {
+        console.log("A kcap daemon is running; it will restart automatically when idle to");
+        console.log("pick up the new version. Check with `kcap daemon status`, or apply now");
+        console.log("with `kcap daemon restart --force`.");
+      }
+    } catch {
+      // best-effort notice only
+    }
+  }
+
   process.exit(0);
 }
