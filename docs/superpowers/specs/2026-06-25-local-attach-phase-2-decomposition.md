@@ -55,9 +55,14 @@ All file:line references are in this repo unless noted.
 
 ## The slices
 
-### Slice 1 — Continue-from-web core (register-on-spawn + first-web-subscribe replay) · 🟦 (+ possibly tiny 🟨 signal)
+### Slice 1 — Continue-from-web core (register-on-spawn + first-web-subscribe replay) · 🟦 (this repo only — verified)
 
-**Covers issue items 1, 2, 3, 4, 7.** Build this first.
+**Covers issue items 1, 2, 3, 4, 7.** Build this first. Streaming decision: **eager** (chosen),
+permissions: **bridge mode** (chosen). Server behavior verified against `../kcap-server`: a
+daemon-originated `AgentRegistered` is owner-scoped in-memory via the daemon's authenticated
+connection and defaults to owner-only ("private"), and the live UI list is in-memory — so the
+owner-immediate, owner-only continue-from-web works with **no server change**. See the Slice 1
+spec for the trace. (Persistent owner attribution in SQLite is a separate gap → Slice 3.)
 
 Flip a locally-launched agent from `PrivateLocal`/deny-all to **registered exactly like a
 UI-launched agent**, so the owner sees and drives it from their own web UI immediately:
@@ -74,31 +79,18 @@ UI-launched agent**, so the owner sees and drives it from their own web UI immed
 - Set `KCAP_AGENT_ID` in the spawn env so the recorded session links to the hosted agent the
   normal way (no "tag-and-link a pre-registered agent").
 
-**Two design decisions this slice must resolve in its own brainstorm:**
+**Two design decisions — both resolved** (detail in the Slice 1 spec):
 
-1. **Eager vs. lazy SignalR streaming (this is what makes item 4 real or a no-op):**
-   - *Eager* — attach the SignalR sink at spawn like a hosted agent. The server accumulates
-     its own buffer from the start, so the first web subscribe replays via the server's
-     existing mechanism and **item 4 collapses to a verification test**. Simplest, maximal
-     contract reuse. Cost: a local agent streams to the cloud even while only a local
-     terminal is attached.
-   - *Lazy* — attach the SignalR sink only when the server signals the first web subscriber.
-     Saves cloud bandwidth/exposure while nobody is watching, but **item 4 is real code**: a
-     one-time bounded `OutputBuffer.Snapshot()` replay to seed the server/web client on first
-     subscribe (the reconnect path still skips replay — `ServerConnection.cs:946-957`), and it
-     needs a server→daemon "first-subscriber" signal (possibly a small 🟨 addition).
-   - Combining items 1 and 4 into this slice (per the decision to do them together) means the
-     slice owns the full first-view experience either way; the eager/lazy choice only decides
-     how much code item 4 is.
-2. **Permission routing (item 7):** keep `KCAP_RENDERED_AGENT` and `KCAP_DAEMON_URL`
-   **omitted**, so permission prompts render **natively in the terminal** (the parent spec's
-   recommendation; env is fixed at spawn, so this holds for the agent's whole life — even after
-   a later share, prompts stay native and are answered in-band via the mirrored PTY). Confirm
-   we do not want web-routed permissions for Phase 2.
+1. **Streaming: eager** (chosen). Attach the SignalR sink at spawn like a hosted agent — falls
+   out of the `!IsPrivate` gate; the server buffers from byte one and the first web subscribe
+   replays via its existing mechanism, so **item 4 is a verification test**. No server contract.
+2. **Permissions: bridge mode** (chosen). Set `KCAP_RENDERED_AGENT` + `KCAP_DAEMON_URL` exactly
+   like hosted, so a registered local agent gets the same web permission dialog; the PTY prompt
+   still mirrors and stays answerable by keystroke from local or web.
 
-**Touch points:** `AgentOrchestrator.LocalIpc.cs` (spawn path: `IsPrivate`, env, register
-call), the `IsPrivate` gate sites in `AgentOrchestrator.cs`, the SignalR sink attach, and —
-if lazy — a first-subscriber hook around `ServerConnection`'s terminal subscribe.
+**Touch points:** `AgentOrchestrator.LocalIpc.cs` (spawn path: `IsPrivate`, hosted env, the
+shared `RegisterAgentAsync` call) and the `IsPrivate` gate sites in `AgentOrchestrator.cs`
+(streaming activates automatically); the `--private` opt-out adds a Spawn-frame flag.
 
 **Strict-privacy regression risk:** the Phase 1 privacy test asserts a strict mock
 `ServerConnection` is **never** called for a private agent. A registered local agent is no
@@ -118,16 +110,21 @@ the only one that needs a genuinely new 🟨 contract.
 
 *Depends on: Slice 1. Independent of Slices 3 and 4.*
 
-### Slice 3 — Sharing / pairing · ⬜ this repo (verify only) · 🟨 web-UI
+### Slice 3 — Sharing / pairing · ⬜ this repo (verify only) · **small 🟨 server change** + 🟨 web-UI
 
 **Covers issue item 5.** Once Slice 1 registers the agent owner-only, sharing to teammates is
 the **existing web-UI "share"** on the existing hosted-agent mechanism (write control,
-mirroring hosted-agent permissions). There is **no kcap-specific share logic** and **nothing
-to build in this repo** — the work here is to *verify* the existing share path behaves
-correctly on a registered local agent (notably: a shared in-place agent gives teammates write
-control over a process in the owner's checkout under the owner's creds — a conscious,
-owner-initiated trade-off, with `--worktree` available for isolation; see the parent spec's
-Security section). The `kcap share` CLI convenience is already tracked separately as **AI-861**.
+mirroring hosted-agent permissions) — **no kcap-specific share logic**. But this slice carries a
+**small server-repo change**: a daemon-originated `AgentRegistered` never persists
+owner/visibility to SQLite (`CapacitorHub.cs:906` `WriteVisibility` is gated on a UI-launch
+`pending`), so persistent ownership/grants must be written on a `pending`-less registration
+before sharing can attach grants and before agent-run *history* is owner-attributed. (Slice 1's
+*live* owner-only view does not need this; see the Slice 1 spec's verified server trace.) The
+kcap-cli work is to *verify* the share path on a registered local agent (notably: a shared
+in-place agent gives teammates write control over a process in the owner's checkout under the
+owner's creds — a conscious, owner-initiated trade-off, with `--worktree` available for
+isolation; see the parent spec's Security section). The `kcap share` CLI convenience is already
+tracked separately as **AI-861**.
 
 *Depends on: Slice 1.*
 
@@ -156,8 +153,8 @@ Slice 4 (Windows — independent, anytime)
 
 1. **Slice 1 — continue-from-web core.** The keystone: nothing else is meaningful without a
    registered agent, and it is almost entirely *reuse* of the hosted-agent contract — high
-   value, low risk, this repo only (modulo the lazy-streaming server signal). Resolve the
-   eager/lazy and permission-routing decisions in its own brainstorm.
+   value, low risk, **this repo only (verified — no server change)**. Decisions settled: eager
+   streaming + bridge-mode permissions; see the Slice 1 spec (AI-972).
 2. **Slice 3 — sharing.** Near-zero work in this repo (verify the existing web-UI share on a
    registered local agent); completes the "pairing" half of the issue title cheaply.
 3. **Slice 2 — resize aggregation.** Deferred because it needs a new server contract;

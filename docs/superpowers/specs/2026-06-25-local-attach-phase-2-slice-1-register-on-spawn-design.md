@@ -80,8 +80,9 @@ Everything else — status changes, heartbeat, end-session, reconnect re-registe
 output streaming — already keys off `!IsPrivate` (`AgentOrchestrator.cs` gate sites
 :511/:524/:530/:588/:594/:620/:927/:928/:995/:1061), so it activates automatically.
 
-`prompt`/`model`/`effort` are empty for a local agent — the web UI renders it as a
-terminal-only hosted agent (no task metadata). Acceptable for Slice 1.
+`prompt`/`model`/`effort` are empty for a local agent — the web UI shows it by its **agent id**
+(the random string), which is the normal display for an agent with no task metadata. Fine for
+Slice 1, confirmed.
 
 ### b) Daemon — re-send dims on local clamp change
 
@@ -117,17 +118,39 @@ per-agent call) currently asserts a local agent makes no server calls. Re-scope 
 and that its spawn env sets `KCAP_AGENT_ID` + `KCAP_RENDERED_AGENT` + `KCAP_DAEMON_URL` while
 still carrying `ANTHROPIC_API_KEY`.
 
-## Key external assumption (verify early — the one real cross-repo risk)
+## Server behavior — verified, no server change required for Slice 1
 
-`AgentRegisteredAsync(agentId, …)` is, for hosted agents, the daemon **confirming** a record
-the **server already created** (the UI mints the id, the server pushes `LaunchAgent`, then the
-daemon registers). A locally-launched agent registers an id the server has **never seen**.
+Concern was that `AgentRegistered` is, for hosted agents, the daemon **confirming** a record the
+**server already created** (UI mints the id → server pushes `LaunchAgent` → daemon registers),
+whereas a local agent registers an id the server has **never seen**. Traced through
+`../kcap-server/src/Capacitor.Server`:
 
-**Slice 1 assumes the server creates-or-attaches on `AgentRegistered` for a daemon-originated
-id.** If the server only attaches to a pre-existing record, Slice 1 needs a small server-side
-change to accept daemon-originated registrations. **Verify this first** with a manual smoke
-test (register a local agent → does it appear and drive in the owner's web UI?). This is the
-only step that could pull Slice 1 out of "this repo only."
+- **Owner attribution works for a daemon-originated id.** `CapacitorHub.AgentRegistered`
+  (`CapacitorHub.cs:837-918`) sets `effectiveOwner = daemonRegistry.GetOwnerByConnectionId(...)`
+  — the daemon's **authenticated** SignalR owner (set at `DaemonConnect`) — and stamps it into
+  the **in-memory** `agentRegistry.Register(...)` entry (`:885`). `pending` is null for a
+  daemon-originated id, so the SQLite `WriteVisibility` at `:906` is skipped, leaving
+  in-memory `visibility = null`.
+- **The live web-UI agent list is in-memory, not the SQLite read model.**
+  `AgentStoreDataService.GetAgentInstancesAsync(currentUserId, …)` iterates
+  `agentRegistry.GetAll()` (`AgentStoreDataService.cs:47-51`) and filters with
+  `VisibilityService.IsVisible(owner, mode, defaultVisibility: "private", …)` (`:66-76`) — a
+  **null visibility defaults to owner-only ("private")**. So the agent shows to its owner and
+  **not** to anyone else: exactly owner-immediate, owner-only.
+- **First-web-subscribe replay** is served from the server's own in-memory buffer
+  (`SubscribeToTerminalAsync`, `AgentStoreDataService.cs:101-125`), confirming item 4 needs no
+  daemon code given eager streaming.
+
+**Conclusion:** Slice 1's continue-from-web + owner-only goal works with **no server change** —
+the in-memory registry is owner-scoped via the daemon's authenticated connection and defaults
+to private. Still smoke-test it manually (below) to confirm end-to-end.
+
+**Deferred (not Slice 1):** the persistence gap — `agent_runs.owner_user_id`/`visibility`
+stay NULL for a daemon-originated id because `WriteVisibility` (`CapacitorHub.cs:906`) is gated
+on `pending`. This doesn't affect the live experience but does affect persistent agent-run
+history and the **sharing** path (Slice 3 / AI-974), which is where a small server change —
+persist owner + default-private on a `pending`-less `AgentRegistered` — should land. Tracked
+as a note on AI-974, not built here.
 
 ## Lifecycle & edge cases
 
@@ -158,9 +181,10 @@ only step that could pull Slice 1 out of "this repo only."
   files into the user's checkout/global config and never deletes the cwd or its branch on exit.
 - **Integration:** trivial PTY program over the socket — registered path streams to a mock
   server sink and replays to a late local attacher; `--private` path streams to neither server.
-- **Manual:** real `claude` — (1) registered local agent appears + is drivable in the owner's
-  web UI (this also verifies the external assumption above); (2) a permission prompt is
-  answerable from the web; (3) `--private` records as a plain local session, prompts natively.
+- **Manual:** real `claude` — (1) registered local agent appears (by agent id) + is drivable in
+  the owner's web UI and **not** visible to a different user (end-to-end confirmation of the
+  verified owner-only finding); (2) a permission prompt is answerable from the web; (3)
+  `--private` records as a plain local session, prompts natively.
 - Per `CLAUDE.md`: `dotnet publish -c Release` and grep for IL3050/IL2026 after changes (the
   Spawn codec edit is hand-rolled binary — AOT-safe — but verify).
 
