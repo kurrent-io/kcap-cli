@@ -27,7 +27,7 @@ internal static class RunAgentCommand {
         var sock = LocalSocketPaths.Socket(name);
         var work = parsed.Worktree ? WorkLocation.OwnedWorktree : WorkLocation.BorrowedCwd;
         var (cols, rows) = TermSize();
-        var spawn = FrameCodec.Spawn(parsed.Vendor, work, Environment.CurrentDirectory, parsed.Passthrough, cols, rows);
+        var spawn = FrameCodec.Spawn(parsed.Vendor, work, parsed.Private, Environment.CurrentDirectory, parsed.Passthrough, cols, rows);
 
         return parsed.Detached
             ? await SpawnDetachedAsync(sock, spawn)

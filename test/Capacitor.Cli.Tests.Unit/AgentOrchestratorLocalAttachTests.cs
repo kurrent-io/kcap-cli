@@ -130,7 +130,7 @@ public partial class AgentOrchestratorVendorTests {
             readBuf.Position = 0;
             using var client = new DuplexTestStream(readBuf, new MemoryStream());
 
-            var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, dir.FullName, ["--model", "opus"], 80, 24);
+            var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: true, dir.FullName, ["--model", "opus"], 80, 24);
             await orch.HandleLocalSpawnAsync(spawn, client, default);
 
             // Let the fire-and-forget read loop + cleanup finish, then assert no server call landed.

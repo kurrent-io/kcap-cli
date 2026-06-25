@@ -17,7 +17,7 @@ internal partial class AgentOrchestrator {
     /// owned worktree (<c>--worktree</c>) or the user's borrowed cwd (default in-place).
     /// </summary>
     public async Task HandleLocalSpawnAsync(LocalFrame spawn, Stream stream, CancellationToken ct) {
-        var (vendor, work, cwd, args, cols, rows) = FrameCodec.Spawn(spawn);
+        var (vendor, work, _, cwd, args, cols, rows) = FrameCodec.Spawn(spawn);
 
         if (!_launchers.TryGetValue(vendor, out var launcher)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Unknown vendor: {vendor}"), ct);

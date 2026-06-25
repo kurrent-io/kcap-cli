@@ -28,17 +28,36 @@ public class FrameCodecTests {
     }
 
     [Test]
-    public async Task Spawn_round_trips_vendor_cwd_args_and_worklocation() {
-        var built = FrameCodec.Spawn("codex", WorkLocation.OwnedWorktree, "/repo", ["--model", "opus", "fix it"], 100, 30);
-        var r = await RoundTrip(built);
-        await Assert.That(r.Type).IsEqualTo(FrameType.Spawn);
-        var (vendor, work, cwd, args, cols, rows) = FrameCodec.Spawn(r);
-        await Assert.That(vendor).IsEqualTo("codex");
-        await Assert.That(work).IsEqualTo(WorkLocation.OwnedWorktree);
-        await Assert.That(cwd).IsEqualTo("/repo");
-        await Assert.That(args).IsEquivalentTo(new[] { "--model", "opus", "fix it" });
-        await Assert.That(cols).IsEqualTo((ushort)100);
-        await Assert.That(rows).IsEqualTo((ushort)30);
+    public async Task Spawn_round_trips_vendor_cwd_args_worklocation_and_private() {
+        foreach (var priv in new[] { false, true }) {
+            var built = FrameCodec.Spawn("codex", WorkLocation.OwnedWorktree, priv, "/repo", ["--model", "opus", "fix it"], 100, 30);
+            var r = await RoundTrip(built);
+            await Assert.That(r.Type).IsEqualTo(FrameType.Spawn);
+            var (vendor, work, isPrivate, cwd, args, cols, rows) = FrameCodec.Spawn(r);
+            await Assert.That(vendor).IsEqualTo("codex");
+            await Assert.That(work).IsEqualTo(WorkLocation.OwnedWorktree);
+            await Assert.That(isPrivate).IsEqualTo(priv);
+            await Assert.That(cwd).IsEqualTo("/repo");
+            await Assert.That(args).IsEquivalentTo(new[] { "--model", "opus", "fix it" });
+            await Assert.That(cols).IsEqualTo((ushort)100);
+            await Assert.That(rows).IsEqualTo((ushort)30);
+        }
+    }
+
+    [Test]
+    public async Task Spawn_without_trailing_flag_defaults_to_private() {
+        // An older CLI's Spawn frame carries no trailing private byte; ParseSpawn must default to private.
+        using var ms = new MemoryStream();
+        ms.WriteByte((byte)WorkLocation.BorrowedCwd);
+        ms.Write([0, 80]); ms.Write([0, 24]);            // cols=80, rows=24 (BE)
+        ms.Write([0, 0, 0, 6]); ms.Write("claude"u8);    // vendorLen=6, "claude"
+        ms.Write([0, 0, 0, 0]);                          // cwdLen=0
+        ms.Write([0, 0, 0, 0]);                          // argCount=0  (no trailing private byte)
+        var frame = new LocalFrame(FrameType.Spawn) { Bytes = ms.ToArray() };
+
+        var (vendor, _, isPrivate, _, _, _, _) = FrameCodec.Spawn(frame);
+        await Assert.That(vendor).IsEqualTo("claude");
+        await Assert.That(isPrivate).IsTrue();
     }
 
     [Test]
