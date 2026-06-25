@@ -66,8 +66,9 @@ Changes for the **registered** path (default; skipped when `--private`):
    - Keep `ANTHROPIC_API_KEY` re-add (`:60-61`) — local auth survives the headless scrub.
 2. **Instance (`:65-69`)** — `IsPrivate = false` for the registered path (true for `--private`).
    Add **current-dims fields** to `AgentInstance` (e.g. `CurrentCols`/`CurrentRows`), initialized
-   to the spawn `cols`/`rows` (hosted initializes them to `HostedPtyCols/Rows`). These become the
-   single source of truth for every dims send (registration, clamp, reconnect).
+   to the spawn `cols`/`rows` (hosted initializes them to `HostedPtyCols/Rows`). These are the
+   single source of truth for every dims send (registration + reconnect), updated by **every**
+   resize path — local clamp *and* web resize (see section b).
 3. **Registration sequence** — after `_agents[agentId] = agent` and before/around starting the
    read loop, run the same calls `HandleLaunchAgent` makes at `AgentOrchestrator.cs:380-399`:
    - `await _server.AgentRegisteredAsync(agentId, prompt: null, model: "", effort: null, repoPath: cwd)`
@@ -91,14 +92,24 @@ equal the constant).
 (the random string), which is the normal display for an agent with no task metadata. Fine for
 Slice 1, confirmed.
 
-### b) Daemon — re-send dims on local clamp change
+### b) Daemon — keep `CurrentCols/Rows` current on **every** resize path
 
-`ClampPtyLocked` (`AgentOrchestrator.LocalIpc.cs:189-195`) resizes the PTY to the local
-min-clamp. When the clamp changes, **update `agent.CurrentCols/CurrentRows`** (so a later
-reconnect resends the right value) and, for a **registered** agent, also call
-`_server.SendTerminalDimensionsAsync(agentId, agent.CurrentCols, agent.CurrentRows)`
-(best-effort) so web viewers re-lock. No server send for `--private`. (Web *input* resize
-aggregation stays Slice 2.)
+`CurrentCols/Rows` is the source of truth resends rely on, so **every** path that resizes the PTY
+must update it — there are two in Slice 1:
+
+1. **Local clamp** — `ClampPtyLocked` (`AgentOrchestrator.LocalIpc.cs:189-195`) resizes to the
+   local min-clamp. When it changes, update `agent.CurrentCols/CurrentRows` and, for a
+   **registered** agent, call `_server.SendTerminalDimensionsAsync(agentId, agent.CurrentCols,
+   agent.CurrentRows)` (best-effort) so web viewers re-lock. No server send for `--private`.
+2. **Web resize** — `HandleResizeTerminal` (`AgentOrchestrator.cs:900-906`) resizes the PTY
+   directly from a web client's agent-level `ResizeTerminalCommand` and today touches **no**
+   stored field. It must also update `agent.CurrentCols/CurrentRows`, otherwise a web resize
+   followed by a daemon reconnect would resend the **stale** pre-resize dims. Re-sending dims to
+   the server here is redundant (the web client initiated the resize, so the server already knows)
+   — storing is the required part.
+
+(Min-clamping web *against* local clients — so the two don't fight, last-writer-wins today — is
+Slice 2.)
 
 ### c) Wire `--private` through the Spawn frame
 
@@ -194,17 +205,21 @@ as a note on AI-974, not built here.
   agent; the closest-to-hosted configuration.
 - **Web user resizes** — handled by the existing agent-level `HandleResizeTerminal`
   (`OnResizeTerminal`); min-clamping it against local clients is Slice 2.
-- **Permission UX (bridge mode) — authoritative surface is the web UI.** With
-  `KCAP_RENDERED_AGENT=1`, the hook routes the decision to the daemon bridge → server → web
-  permission dialog (`PermissionRequestCommand.cs:37,68`), exactly like hosted. The PTY prompt is
-  mirrored to all clients, and a web client answering via `SendInput`/"Send to Claude" is the
-  guaranteed path. **Unverified:** whether a *local terminal keypress* can also resolve the
-  prompt while the bridge hook is blocking (the rendered-agent hook is expected to return the
-  decision; the user has only confirmed the web `SendInput` path on hosted agents). **Validation
-  item** for the implementation plan — if local keypress does **not** work, the documented
-  behavior for a registered agent is "approve via the web UI," and a local driver who wants
-  native terminal approval uses **`--private`** (no bridge). This is a deliberate consequence of
-  the bridge-mode choice, not a defect; it does not block Slice 1.
+- **Permission UX (bridge mode) — authoritative surface is the web permission dialog.** With
+  `KCAP_RENDERED_AGENT=1`, the hook posts the request to the daemon bridge
+  (`PermissionRequestCommand.cs:68`), which awaits `RequestPermissionAsync`
+  (`LocalPermissionBridge.cs:212`); the **guaranteed** resolution is the web **permission dialog
+  → `RespondToPermission`** (`../kcap-server CapacitorHub.cs:1484`), which flows back via
+  `PermissionResolved` and unblocks the hook's HTTP response — exactly like hosted. **Unverified
+  (validation item):** whether the prompt can *also* be resolved by ordinary PTY input — a
+  *local terminal keypress*, or a web client's `SendUserInput`/"Send to Claude"
+  (`CapacitorHub.cs:1430`, ordinary input, **not** the permission-response channel) — while the
+  bridge hook is blocking. The user has anecdotally seen "Send to Claude" '1' unblock a hosted
+  agent, but that is not the designed path, so treat it as unverified, not guaranteed. If
+  ordinary-input resolution does **not** work, the documented behavior for a registered agent is
+  "approve via the web permission dialog," and a local driver who wants native terminal approval
+  uses **`--private`** (no bridge). A deliberate consequence of the bridge-mode choice, not a
+  defect; does not block Slice 1.
 
 ## Testing
 
@@ -218,9 +233,11 @@ as a note on AI-974, not built here.
 - **Registration (new):** default local agent → `AgentRegisteredAsync` + `AgentRunStarted` +
   initial dims fire; appears in `LiveAgentIds`; spawn env sets `KCAP_AGENT_ID` +
   `KCAP_RENDERED_AGENT` + `KCAP_DAEMON_URL` and keeps `ANTHROPIC_API_KEY`.
-- **Dims (new):** a clamp change updates `CurrentCols/Rows` and re-sends dims; a simulated
-  reconnect (`ReRegisterAgentsAsync`) resends the agent's **stored** dims, not `HostedPtyCols/Rows`
-  — assert a registered local agent with non-default dims re-sends those exact values.
+- **Dims (new):** a clamp change updates `CurrentCols/Rows` and re-sends dims; a **web resize**
+  (`HandleResizeTerminal`) updates `CurrentCols/Rows`; a simulated reconnect
+  (`ReRegisterAgentsAsync`) resends the agent's **stored** dims, not `HostedPtyCols/Rows`. Assert
+  both: (a) a registered local agent with non-default dims re-sends those exact values on
+  reconnect, and (b) a **web-resize-then-reconnect** resends the post-web-resize dims, not stale ones.
 - **In-place safety (unchanged, still asserted):** a borrowed-cwd registered agent writes no
   files into the user's checkout/global config and never deletes the cwd or its branch on exit.
 - **Integration:** trivial PTY program over the socket — registered path streams to a mock
