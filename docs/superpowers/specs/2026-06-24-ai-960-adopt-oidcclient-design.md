@@ -58,9 +58,11 @@ provider-specific bits custom.
   clients need access to"), so WorkOS's extra `organization_id`/`user` fields
   remain readable via `TokenResponse.Json` (a `JsonElement`, AOT-safe).
 - **Injectable seams**: `IBrowser` (loopback), `OidcClientOptions.Browser`,
-  `BackchannelHandler`/`HttpClientFactory` (point token endpoint at WireMock),
   `PrepareLoginAsync`/`ProcessResponseAsync`, and `AuthorizeResponse(raw)`
-  (callback parser) are all public.
+  (callback parser) are all public. Note: `BackchannelHandler`/`HttpClientFactory`
+  only swap the HTTP *transport* — they do **not** redirect the absolute token
+  URL. The endpoint base is set via `ProviderInformation`, which is therefore
+  the test seam (point it at WireMock); see the WorkOS section.
 - **Manual endpoints**: set `OidcClientOptions.ProviderInformation` with
   `IssuerName` (required, non-empty), `AuthorizeEndpoint` (required),
   `TokenEndpoint` (required); `KeySet` may be null when
@@ -155,7 +157,7 @@ AOT-safe:
 
 ```csharp
 if (loginResult.IsError || loginResult.TokenResponse?.Json is not { } json) return null;
-return json.Deserialize(CapacitorJsonContext.Default.WorkOSAuthResponse);
+return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.WorkOSAuthResponse);
 ```
 
 (`TokenResponse.Raw` is the equivalent string fallback.) The existing org-gate
@@ -182,9 +184,13 @@ seam**; production passes `null` → `new LoopbackBrowser()`):
 4. **Guard the browser result first:** if `result.ResultType !=
    BrowserResultType.Success`, `result.Response` may be null/unset — map
    `Timeout`/`UserCancel`/error to the existing "Timed out waiting for
-   authorization…" / failure messages and `return null` (so the
-   `AcquireGitHubTokenAsync` caller still falls back / reports). Only on
-   `Success` proceed.
+   authorization…" / failure messages and `return null`. Per the current
+   `AcquireGitHubTokenAsync` contract (`return token ?? null` with "don't
+   silently fall back"), a null here is a **hard login failure** — it does
+   **not** trigger device-flow fallback. Only a loopback **bind** exception
+   (`HttpListenerException`/`PlatformNotSupportedException`, thrown out of
+   `LoopbackBrowser.InvokeAsync`) triggers fallback. Preserve that split. Only
+   on `Success` proceed.
 5. `var resp = new AuthorizeResponse(result.Response);` — check `resp.IsError`,
    `resp.State == state.State` (CSRF), get `resp.Code`.
 6. Keep the existing JSON proxy exchange to `codeExchangeUrl`
@@ -268,7 +274,9 @@ Add (GitHub browser):
 - State mismatch: fake `IBrowser` returns a mismatched `state`; assert `null`
   and that the proxy was **not** called.
 - Non-success browser result: fake `IBrowser` returns `Timeout`; assert `null`
-  (and no throw / no proxy call) so the caller's fallback path runs.
+  (and no throw / no proxy call) — a reported hard login failure, **not** a
+  device-flow fallback (fallback is bind-exception-only; a separate test can
+  assert a throwing `IBrowser` still propagates to the caller's `catch`).
 
 Add (discovery):
 - `WorkOSDiscoveryTests`: update the `orglessLogin` fake to the no-arg delegate
