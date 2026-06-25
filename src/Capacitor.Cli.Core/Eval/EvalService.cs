@@ -127,6 +127,38 @@ public static class EvalService {
         }.ToJsonString();
 
     /// <summary>
+    /// Resolves the path to the <c>kcap</c> executable used to launch the
+    /// session-scoped MCP judge subprocess (<c>kcap mcp judge</c>).
+    ///
+    /// <para>
+    /// The CLI host (<c>kcap eval</c>) is already the <c>kcap</c> binary, so
+    /// its <see cref="Environment.ProcessPath"/> is correct. The daemon host,
+    /// however, is a separate <c>kcap-daemon</c> binary that has no
+    /// <c>mcp judge</c> subcommand — invoking <c>kcap-daemon mcp judge</c>
+    /// just tries (and fails, "already running") to start a second daemon, so
+    /// the judge's MCP server never comes up and every tool call is dead. The
+    /// two binaries ship side-by-side in the same directory, so when the host
+    /// is <c>kcap-daemon</c> we remap to the sibling <c>kcap</c> (preserving any
+    /// executable extension, e.g. <c>.exe</c>), falling back to the original
+    /// path if the sibling isn't found.
+    /// </para>
+    /// </summary>
+    internal static string ResolveJudgeCommandPath(string? processPath, Func<string, bool> fileExists) {
+        if (string.IsNullOrEmpty(processPath)) return "kcap";
+
+        var dir = Path.GetDirectoryName(processPath);
+        if (dir is not null && Path.GetFileNameWithoutExtension(processPath) == "kcap-daemon") {
+            var sibling = Path.Combine(dir, "kcap" + Path.GetExtension(processPath));
+            if (fileExists(sibling)) return sibling;
+        }
+
+        return processPath;
+    }
+
+    static string ResolveJudgeCommandPath() =>
+        ResolveJudgeCommandPath(Environment.ProcessPath, File.Exists);
+
+    /// <summary>
     /// Resolves a caller-supplied model alias to the variant we actually
     /// want to dispatch to for a judge call. Today: force the 1M-context
     /// Sonnet variant for any plain <c>sonnet</c> request, because the
@@ -436,7 +468,7 @@ public static class EvalService {
             var prompt = BuildToolsQuestionPrompt(
                 ctx.ToolsPromptTemplate, ctx.SessionId, ctx.EvalRunId, question, patterns);
 
-            var commandPath = Environment.ProcessPath ?? "kcap";
+            var commandPath = ResolveJudgeCommandPath();
             var mcpConfig   = BuildJudgeMcpConfig(commandPath, ctx.SessionId, baseUrl);
 
             result = await ClaudeCliRunner.RunAsync(
@@ -1078,7 +1110,7 @@ public static class EvalService {
         // past Sonnet's 200K-token window on real sessions), launch a
         // per-session MCP judge server and let the judge pull recap /
         // errors / transcript slices on demand.
-        var commandPath = Environment.ProcessPath ?? "kcap";
+        var commandPath = ResolveJudgeCommandPath();
         var mcpConfig   = BuildJudgeMcpConfig(commandPath, sessionId, baseUrl);
 
         try {

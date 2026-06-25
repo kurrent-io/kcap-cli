@@ -124,12 +124,13 @@ public class ClaudeCliRunnerTests {
 
     // DEV-1484 contract: when a caller opts into MCP mode, they must name the
     // tools they want exposed. `--strict-mcp-config` already limits which MCP
-    // *servers* load to just the caller's inline config (AI-803), but without
-    // an allowlist the runner would drop the text-only `--tools ""` lockdown
-    // and expose every tool that inline config's servers offer. Requiring a
-    // non-empty allowlist keeps the callable-tool surface explicit. Guard at
-    // the entry point so the misuse surfaces as an ArgumentException instead
-    // of a silent broadening.
+    // *servers* load to just the caller's inline config (AI-803), and the
+    // built-in lockdown (`--tools ""` / `--disallowedTools LSP`) stays on, so
+    // an MCP config with no allowlist would load a server whose tools are never
+    // permitted — the judge can't call anything, which is a silent
+    // misconfiguration rather than a useful run. Requiring a non-empty
+    // allowlist keeps the callable-tool surface explicit. Guard at the entry
+    // point so the misuse surfaces as an ArgumentException.
     [Test]
     public async Task RunAsync_WithMcpConfigAndNullAllowedTools_Throws() =>
         await AssertAllowedToolsGuard(allowedTools: null);
@@ -192,10 +193,17 @@ public class ClaudeCliRunnerTests {
         await Assert.That(FlagValue(args, "--mcp-config")).IsEqualTo(mcpConfig);
         await Assert.That(FlagValue(args, "--allowedTools"))
             .IsEqualTo("mcp__kcap-judge__get_session_summary,mcp__kcap-judge__search_session");
-        // The text-only lockdown flags must NOT leak into MCP mode — the
-        // allowlist is the tool restriction there, not `--tools ""`.
-        await Assert.That(args).DoesNotContain("--tools");
-        await Assert.That(args).DoesNotContain("LSP");
+        // The built-in tool lockdown applies in MCP mode too. `--allowedTools`
+        // alone does NOT stop claude exposing built-in tools like `Agent`
+        // (subagents) to the model — a tools-judge will reach for `Agent`
+        // instead of the MCP tools, spawning subagents that blow the
+        // per-question budget and return no verdict. `--tools ""` disables the
+        // built-in set; `--disallowedTools LSP` blocks the LSP probe that is
+        // attached regardless of `--tools`. The allowlisted MCP tools are
+        // layered on top via `--mcp-config` + `--allowedTools` and are NOT part
+        // of the built-in set, so the lockdown does not remove them.
+        await Assert.That(FlagValue(args, "--tools")).IsEqualTo("");
+        await Assert.That(FlagValue(args, "--disallowedTools")).IsEqualTo("LSP");
     }
 
     [Test]

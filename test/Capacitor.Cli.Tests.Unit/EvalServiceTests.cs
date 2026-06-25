@@ -828,4 +828,55 @@ public class EvalServiceTests {
             Environment.SetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET", previous);
         }
     }
+
+    // ── Judge command-path resolution ──────────────────────────────────────
+    //
+    // The session-scoped MCP judge subprocess is spawned from the path returned
+    // here. In the daemon the host process is `kcap-daemon`, which has no
+    // `mcp judge` subcommand — invoking it just tries (and fails) to start a
+    // second daemon, so the judge's MCP server never comes up. The fix remaps
+    // `kcap-daemon` to its sibling `kcap` binary (they ship in the same dir),
+    // while leaving the `kcap eval` CLI host (ProcessPath already `kcap`)
+    // untouched.
+
+    [Test]
+    public async Task ResolveJudgeCommandPath_remaps_daemon_to_sibling_kcap() {
+        var resolved = EvalService.ResolveJudgeCommandPath(
+            "/opt/kcap/bin/kcap-daemon",
+            fileExists: p => p == "/opt/kcap/bin/kcap");
+        await Assert.That(resolved).IsEqualTo("/opt/kcap/bin/kcap");
+    }
+
+    [Test]
+    public async Task ResolveJudgeCommandPath_keeps_daemon_path_when_sibling_missing() {
+        var resolved = EvalService.ResolveJudgeCommandPath(
+            "/opt/kcap/bin/kcap-daemon",
+            fileExists: _ => false);
+        await Assert.That(resolved).IsEqualTo("/opt/kcap/bin/kcap-daemon");
+    }
+
+    [Test]
+    public async Task ResolveJudgeCommandPath_leaves_cli_kcap_path_untouched() {
+        var resolved = EvalService.ResolveJudgeCommandPath(
+            "/usr/local/bin/kcap",
+            fileExists: _ => true);
+        await Assert.That(resolved).IsEqualTo("/usr/local/bin/kcap");
+    }
+
+    [Test]
+    public async Task ResolveJudgeCommandPath_falls_back_to_bare_kcap_when_path_null() {
+        var resolved = EvalService.ResolveJudgeCommandPath(null, fileExists: _ => false);
+        await Assert.That(resolved).IsEqualTo("kcap");
+    }
+
+    [Test]
+    public async Task ResolveJudgeCommandPath_preserves_executable_extension_on_sibling() {
+        // Windows host: kcap-daemon.exe → kcap.exe (extension carried over).
+        // Uses a synthetic extension so the assertion is independent of the
+        // test platform's path separator.
+        var resolved = EvalService.ResolveJudgeCommandPath(
+            "/opt/kcap/bin/kcap-daemon.exe",
+            fileExists: p => p == "/opt/kcap/bin/kcap.exe");
+        await Assert.That(resolved).IsEqualTo("/opt/kcap/bin/kcap.exe");
+    }
 }
