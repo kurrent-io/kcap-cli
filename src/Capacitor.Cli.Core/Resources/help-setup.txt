@@ -7,6 +7,9 @@ Options:
   --daemon-name <name>        Daemon name (skip prompt)
   --default-visibility <vis>  Default visibility: private, org_public, public
   --no-prompt                 Non-interactive mode (requires --server-url)
+  --github                    Sign in with GitHub instead of org SSO during
+                              the login step (default is org SSO when a
+                              browser is available)
   --device                    Force GitHub Device Flow during the login step
                               (use in SSH / headless envs)
   --skip-claude-hooks         Don't install the Claude Code plugin even if

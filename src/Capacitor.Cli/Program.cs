@@ -663,7 +663,7 @@ async Task<int> HandleDiscoverLoginAsync(bool forceDevice) {
         return 1;
     }
 
-    var provider = DiscoveryProviderPrompt.Resolve(args);
+    var provider = OAuthLoginFlow.ChooseDiscoveryProvider(args, isInteractive: !HeadlessEnvironment.IsHeadless());
 
     if (provider == AuthProvider.WorkOS) {
         return await WorkOSDiscovery.RunWithLiveAuthAsync(
