@@ -230,6 +230,62 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     [Test]
+    public async Task Private_agent_ignores_server_origin_resize_and_stop() {
+        var server = new CaptureServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = new AgentInstance("priv-2", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            IsPrivate = true, Status = "Running", CurrentCols = 80, CurrentRows = 24
+        };
+        orch.RegisterAgentForTest(agent);
+
+        orch.HandleResizeTerminalForTest(new ResizeTerminalCommand("priv-2", 51, 200));
+        await Assert.That(agent.CurrentCols).IsEqualTo((ushort)80); // server-origin resize ignored
+
+        await orch.HandleStopAgentForTest("priv-2");
+        await Assert.That(agent.Status).IsEqualTo("Running");       // server-origin stop ignored
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Registered_spawn_env_includes_daemon_bridge_url_and_preserves_api_key() {
+        var dir     = Directory.CreateTempSubdirectory("kcap-reg-env-");
+        var prevKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-test-key");
+
+        try {
+            var server    = new TripwireServerConnection();
+            var pty       = new EnvCapturingPtyFactory();
+            var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+
+            await using var orch = BuildOrchestrator(server, pty, launchers);
+            await orch.PermissionBridgeForTest.StartAsync(default); // binds 127.0.0.1 + sets BaseUrl
+
+            try {
+                var readBuf = new MemoryStream();
+                await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+                readBuf.Position = 0;
+                using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+                var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, dir.FullName, [], 80, 24);
+                await orch.HandleLocalSpawnAsync(spawn, client, default);
+
+                var deadline = DateTime.UtcNow.AddSeconds(5);
+                while (orch.ActiveAgentCountForTest > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
+
+                await Assert.That(pty.LastEnv!["KCAP_DAEMON_URL"]).IsEqualTo(orch.PermissionBridgeForTest.BaseUrl);
+                await Assert.That(pty.LastEnv!["ANTHROPIC_API_KEY"]).IsEqualTo("sk-test-key");
+            } finally {
+                await orch.PermissionBridgeForTest.StopAsync(default);
+            }
+        } finally {
+            Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", prevKey);
+            Directory.Delete(dir.FullName, true);
+        }
+    }
+
+    [Test]
     public async Task Private_agents_are_excluded_from_live_agent_ids() {
         var server = new CaptureServerConnection();
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());

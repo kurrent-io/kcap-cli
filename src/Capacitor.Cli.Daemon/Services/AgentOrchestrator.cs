@@ -644,6 +644,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
+        // Defence-in-depth: a --private agent is invisible to the server (unregistered, not in
+        // LiveAgentIds), so never act on a server-origin command for one even if its id leaks.
+        if (agent.IsPrivate) return;
+
         try {
             LogStopping(agentId);
 
@@ -765,6 +769,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
+        if (agent.IsPrivate) return; // server-origin input ignored for private agents
+
         var message = text;
 
         if (attachmentIds is { Length: > 0 }) {
@@ -785,6 +791,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (!_agents.TryGetValue(agentId, out var agent)) {
             return;
         }
+
+        if (agent.IsPrivate) return; // server-origin key ignored for private agents
 
         var bytes = SpecialKeyMap.ToBytes(key);
 
@@ -915,7 +923,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     Task HandleResizeTerminal(ResizeTerminalCommand cmd) {
-        if (_agents.TryGetValue(cmd.AgentId, out var agent)) {
+        // Ignore server-origin resize for private agents (defence-in-depth; see HandleStopAgent).
+        if (_agents.TryGetValue(cmd.AgentId, out var agent) && !agent.IsPrivate) {
             agent.Process.Resize((ushort)cmd.Cols, (ushort)cmd.Rows);
             // Keep the stored dims current so a later reconnect resends the real size, not stale ones.
             agent.CurrentCols = (ushort)cmd.Cols;
@@ -1235,6 +1244,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal Task RegisterAgentForTestAsync(AgentInstance agent) => RegisterAgentAsync(agent);
     internal Task ReRegisterAgentsForTestAsync() => ReRegisterAgentsAsync();
     internal void HandleResizeTerminalForTest(ResizeTerminalCommand cmd) => _ = HandleResizeTerminal(cmd);
+    internal LocalPermissionBridge PermissionBridgeForTest => _permissionBridge;
 }
 
 /// <summary>

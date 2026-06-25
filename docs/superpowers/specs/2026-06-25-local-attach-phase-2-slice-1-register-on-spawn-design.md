@@ -155,6 +155,12 @@ is shipped to the server in `DaemonConnect` (`ServerConnection.cs:312`). So a `-
 (Pre-existing since Phase 1, where all local agents are private — Slice 1 is where the privacy
 contract is formalized, so it lands here.)
 
+Privacy is a two-way boundary. As well as the outbound deny-all + the `LiveAgentIds` filter,
+the **inbound** server→daemon control handlers (`HandleStopAgent`, `HandleSendInput`,
+`HandleSendSpecialKey`, `HandleResizeTerminal`) must **ignore commands for a private agent**
+(defence-in-depth: the server shouldn't know a private agent's id, but a leaked/guessed id must
+not let it stop, drive, or resize one). Add an `IsPrivate` guard to each.
+
 The Phase 1 strict-mock privacy test (a mock `ServerConnection` that fails on **any** per-agent
 call) currently asserts a local agent makes no server calls. Re-scope it to the **`--private`**
 path, and extend it to assert a `--private` agent's id **never appears in `DaemonConnect`'s

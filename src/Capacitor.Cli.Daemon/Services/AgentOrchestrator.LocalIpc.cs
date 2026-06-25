@@ -182,6 +182,9 @@ internal partial class AgentOrchestrator {
                 agent.ClientDims.Remove(sink);
                 ClampPtyLocked(agent); // a departing (possibly smaller) client must not leave the rest clamped
             }
+
+            // A detach can grow the PTY (the smaller client left) — re-announce so web viewers re-lock.
+            if (!agent.IsPrivate) _ = SafeSendDimsAsync(agent);
         }
     }
 
