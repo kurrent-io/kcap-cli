@@ -41,12 +41,12 @@ Phase 1 unregistered behavior.
 | `KCAP_AGENT_ID` | **Set** in spawn env. | Recorded session links to the hosted agent (`agent_host_id` tag) the normal way. |
 | Streaming | **Eager.** With `IsPrivate = false`, the read loop's existing per-chunk `SendTerminalOutputAsync` fires from the first chunk — no code to add, it falls out of the gate. (Initial dimensions are sent once by the registration sequence in section a, not the read loop.) | Server accumulates its own buffer from byte one; the first web subscriber replays via the server's existing `SubscribeToTerminal`. **No new server contract.** |
 | First-web-subscribe replay (item 4) | **No daemon code** — satisfied by the server's existing replay because we stream eagerly from spawn. Covered by a verification test. | The reconnect-replay-skip (`AgentOrchestrator.cs:946-954`) is about daemon *rebind*, not first subscribe; eager streaming closes the gap the parent spec worried about. |
-| Permissions | **Bridge mode, exactly like hosted:** set `KCAP_RENDERED_AGENT=1` **and** `KCAP_DAEMON_URL = _permissionBridge.BaseUrl`. | User decision: match hosted's web permission dialog. The bridge already runs as a daemon hosted service; the PTY prompt still mirrors and remains answerable by keystroke (`SendInput` → PTY) from local or web. |
+| Permissions | **Bridge mode, exactly like hosted:** set `KCAP_RENDERED_AGENT=1` **and** `KCAP_DAEMON_URL = _permissionBridge.BaseUrl`. The **web UI is the authoritative approval surface** for a registered agent; `--private` is the native-terminal-approval path. | User decision: match hosted's web permission dialog. With `KCAP_RENDERED_AGENT=1` the hook routes the decision to the bridge (`PermissionRequestCommand.cs:37,68`), **not** native terminal approval — so a local-terminal keypress resolving the prompt is **unverified** (see Permission UX below), not a guaranteed property. |
 | Work location | Default **borrowed cwd** (in-place); `--worktree` opts into an owned worktree. **Unchanged from Phase 1.** | Local agents work in the user's checkout by default. |
 | Cleanup safety | **Top invariant, unchanged:** never `Directory.Delete` / `git worktree remove` / `git branch -D` a borrowed cwd; `Prepare()` skips repo-mutating steps for a borrowed cwd. | Deleting the user's working dir on exit would be catastrophic. |
 | Auth | Keep the user's `ANTHROPIC_API_KEY` (local-interactive auth), unlike hosted's daemon-managed auth. **Unchanged from Phase 1.** Orthogonal to the recorded-event provider-key scrub policy (`ProviderApiKeyPolicy` / `KCAP_USE_PROVIDER_API_KEY`). | A local agent uses the user's own login. |
 | Opt-out | Keep **`--private`** (`kcap run-agent --private`): the Phase 1 unregistered path — `IsPrivate = true`, deny-all, no `KCAP_AGENT_ID` / `KCAP_RENDERED_AGENT` / `KCAP_DAEMON_URL`, native-terminal permissions, no cloud streaming. | Cheap (path already exists); preserves a purely-local mode and keeps the deny-all guarantee testable. |
-| Dims to server | Send the **actual local PTY dims** at registration, and re-send on local clamp change (registered agents only), so web read-only viewers lock to the real size. | Hosted sends fixed `HostedPtyCols/Rows`; a local agent's size is client-driven and can change. Full local+web aggregation is Slice 2. |
+| Dims to server | Store the agent's **current PTY dims on `AgentInstance`** and send them at registration, on local clamp change, **and on reconnect re-register**. | Hosted sends fixed `HostedPtyCols/Rows`; a local agent's size is client-driven and can change. The current reconnect path resends the `HostedPtyCols/Rows` constant (`AgentOrchestrator.cs:941`) — wrong for a local agent, and reconnects are a known recurring condition (tunnel/WebSocket drops), so reconnect must resend the stored per-agent dims (hosted's stored value = `HostedPtyCols/Rows`, so no behavior change for hosted). Full local+web aggregation is Slice 2. |
 
 ## Implementation
 
@@ -65,20 +65,27 @@ Changes for the **registered** path (default; skipped when `--private`):
      `KCAP_DAEMON_URL = _permissionBridge.BaseUrl` (mirror `AgentOrchestrator.cs:348-363`).
    - Keep `ANTHROPIC_API_KEY` re-add (`:60-61`) — local auth survives the headless scrub.
 2. **Instance (`:65-69`)** — `IsPrivate = false` for the registered path (true for `--private`).
+   Add **current-dims fields** to `AgentInstance` (e.g. `CurrentCols`/`CurrentRows`), initialized
+   to the spawn `cols`/`rows` (hosted initializes them to `HostedPtyCols/Rows`). These become the
+   single source of truth for every dims send (registration, clamp, reconnect).
 3. **Registration sequence** — after `_agents[agentId] = agent` and before/around starting the
    read loop, run the same calls `HandleLaunchAgent` makes at `AgentOrchestrator.cs:380-399`:
    - `await _server.AgentRegisteredAsync(agentId, prompt: null, model: "", effort: null, repoPath: cwd)`
-   - `await _server.SendTerminalDimensionsAsync(agentId, cols, rows)` (best-effort; **use the
-     spawn `cols`/`rows`, not `HostedPtyCols/Rows`**)
+   - `await _server.SendTerminalDimensionsAsync(agentId, agent.CurrentCols, agent.CurrentRows)`
+     (best-effort; **the stored per-agent dims, not the `HostedPtyCols/Rows` constant**)
    - `_ = _server.AppendAgentRunEventAsync(agentId, new AgentRunStarted(null, "", null, cwd, worktree.Path, vendor))`
    - the repo-path persist/announce that follows at `AgentOrchestrator.cs:399+`.
-   - **Extract a shared helper** (e.g. `RegisterAgentAsync(agent, ushort cols, ushort rows)`)
-     used by both `HandleLaunchAgent` and `HandleLocalSpawnAsync`, so the two paths can't
-     drift. (Hosted passes `HostedPtyCols/Rows`; local passes the client dims.)
+   - **Extract a shared helper** (e.g. `RegisterAgentAsync(agent)`) used by both
+     `HandleLaunchAgent` and `HandleLocalSpawnAsync`, reading `agent.CurrentCols/Rows`, so the two
+     paths can't drift.
 
-Everything else — status changes, heartbeat, end-session, reconnect re-register, terminal
-output streaming — already keys off `!IsPrivate` (`AgentOrchestrator.cs` gate sites
-:511/:524/:530/:588/:594/:620/:927/:928/:995/:1061), so it activates automatically.
+Status changes, heartbeat, end-session, and terminal output streaming already key off
+`!IsPrivate` (`AgentOrchestrator.cs` gate sites :511/:524/:530/:588/:594/:620/:995/:1061), so
+they activate automatically. **Reconnect re-register is the exception:** `ReRegisterAgentsAsync`
+already filters `!IsPrivate` (`:928`) but resends the `HostedPtyCols/Rows` **constant** (`:941`)
+— change it to resend `agent.CurrentCols/CurrentRows` so a registered local agent re-locks web
+viewers to its real size after a reconnect (no behavior change for hosted, whose stored dims
+equal the constant).
 
 `prompt`/`model`/`effort` are empty for a local agent — the web UI shows it by its **agent id**
 (the random string), which is the normal display for an agent with no task metadata. Fine for
@@ -87,21 +94,39 @@ Slice 1, confirmed.
 ### b) Daemon — re-send dims on local clamp change
 
 `ClampPtyLocked` (`AgentOrchestrator.LocalIpc.cs:189-195`) resizes the PTY to the local
-min-clamp. For a **registered** agent, after a clamp change also call
-`_server.SendTerminalDimensionsAsync(agentId, clampedCols, clampedRows)` (best-effort) so web
-viewers re-lock. No-op for `--private`. (Web *input* resize aggregation stays Slice 2.)
+min-clamp. When the clamp changes, **update `agent.CurrentCols/CurrentRows`** (so a later
+reconnect resends the right value) and, for a **registered** agent, also call
+`_server.SendTerminalDimensionsAsync(agentId, agent.CurrentCols, agent.CurrentRows)`
+(best-effort) so web viewers re-lock. No server send for `--private`. (Web *input* resize
+aggregation stays Slice 2.)
 
 ### c) Wire `--private` through the Spawn frame
 
 The Spawn frame (`Core/LocalIpc/FrameCodec.cs:66-99`) currently encodes
-`work(1) | cols(2) | rows(2) | vendor(lp) | cwd(lp) | argCount(4) | args…`. Add a **`private`
-flag byte** immediately after `work`:
+`work(1) | cols(2) | rows(2) | vendor(lp) | cwd(lp) | argCount(4) | args…`.
 
-- `Spawn(...)` encoder (`:66-74`): write the byte after `ms.WriteByte((byte)work)`.
-- `ParseSpawn` (`:82-99`): bump the leading `Require(p, o, 5)` to `6`, read the flag byte.
+**Wire-compat constraint (corrected):** the CLI and daemon ship in one binary, but the daemon is
+**persistent** — `run-agent` reuses an already-running daemon (`RunAgentCommand.cs:127` only
+checks it can connect to the socket; there's no version handshake). So an upgraded CLI can talk
+to an **older running daemon** (and vice-versa). Inserting a byte mid-payload would make the
+other side **misparse** every following field. Instead, **append the `private` flag as a
+trailing byte after the args**, which both sides can evolve safely because `ParseSpawn`
+(`:82-99`) returns after reading `argCount` args **without** requiring the payload be fully
+consumed (it already tolerates trailing bytes):
+
+- `Spawn(...)` encoder (`:66-74`): the new CLI **always** writes the trailing flag byte after the
+  arg loop.
+- `ParseSpawn` (`:82-99`): after the arg loop, read the trailing byte **if present**; **absent →
+  default `private = true`** (an old CLI sent no byte → preserve its Phase-1 unregistered
+  behavior — the conservative default).
 - The `Spawn(LocalFrame)` tuple (`:77-78`) gains a `bool isPrivate` field; update the
   destructuring at `HandleLocalSpawnAsync:20`.
-- CLI/daemon ship together, so no wire-compat shim is needed; a codec round-trip test covers it.
+- **Graceful degradation, no corruption:** new CLI → old daemon = old daemon ignores the trailing
+  byte and does Phase-1 (the agent isn't registered/web-visible — degraded but not broken); old
+  CLI → new daemon = no byte → treated as `--private`. The registered default only lights up when
+  both sides are new. A codec round-trip test (incl. the missing-byte default) covers it.
+- *(Optional future hardening, out of scope: a version field in the local IPC so `run-agent` can
+  warn when the running daemon is too old to honor registration, rather than silently degrading.)*
 
 ### d) CLI — `--private` flag
 
@@ -109,14 +134,23 @@ flag byte** immediately after `work`:
 `--`. Add `--private` (consumed by kcap, never forwarded), pass it into the `Spawn` frame
 builder. `attach` is unaffected (privacy is fixed at spawn). Help text (`help-*.txt`) + README.
 
-### e) Privacy test re-scope
+### e) Privacy: close the `LiveAgentIds` leak, then re-scope the test
 
-The Phase 1 strict-mock privacy test (a mock `ServerConnection` that fails on **any**
-per-agent call) currently asserts a local agent makes no server calls. Re-scope it to the
-**`--private`** path. Add a complementary test that a **default (registered)** local agent
-*does* make the expected registration calls (`AgentRegisteredAsync`, `AgentRunStarted`, dims),
-and that its spawn env sets `KCAP_AGENT_ID` + `KCAP_RENDERED_AGENT` + `KCAP_DAEMON_URL` while
-still carrying `ANTHROPIC_API_KEY`.
+A `--private` agent must be invisible to the server, but today there's an **asymmetry**:
+`ReRegisterAgentsAsync` correctly filters `!IsPrivate` (`AgentOrchestrator.cs:928`), yet
+`GetLiveAgentIds` (`:187-191`) returns **all** Starting/Running ids with no filter, and that list
+is shipped to the server in `DaemonConnect` (`ServerConnection.cs:312`). So a `--private` agent's
+**id leaks** on every (re)connect. **Fix:** add `&& !kvp.Value.IsPrivate` to `GetLiveAgentIds`.
+(Pre-existing since Phase 1, where all local agents are private — Slice 1 is where the privacy
+contract is formalized, so it lands here.)
+
+The Phase 1 strict-mock privacy test (a mock `ServerConnection` that fails on **any** per-agent
+call) currently asserts a local agent makes no server calls. Re-scope it to the **`--private`**
+path, and extend it to assert a `--private` agent's id **never appears in `DaemonConnect`'s
+`LiveAgentIds`** (incl. across a simulated reconnect). Add a complementary test that a **default
+(registered)** local agent *does* make the expected registration calls (`AgentRegisteredAsync`,
+`AgentRunStarted`, dims), appears in `LiveAgentIds`, and that its spawn env sets `KCAP_AGENT_ID` +
+`KCAP_RENDERED_AGENT` + `KCAP_DAEMON_URL` while still carrying `ANTHROPIC_API_KEY`.
 
 ## Server behavior — verified, no server change required for Slice 1
 
@@ -160,11 +194,17 @@ as a note on AI-974, not built here.
   agent; the closest-to-hosted configuration.
 - **Web user resizes** — handled by the existing agent-level `HandleResizeTerminal`
   (`OnResizeTerminal`); min-clamping it against local clients is Slice 2.
-- **Bridge-mode local answering (validation risk)** — for hosted agents there's no local
-  terminal; here there is. Whether a *local* terminal keypress can resolve a permission while
-  the bridge hook is blocking is uncertain (the prompt mirrors, but interactivity is unverified).
-  **Manual-test item**, not a code change — answering via `SendInput`/"Send to Claude" is the
-  guaranteed path either way.
+- **Permission UX (bridge mode) — authoritative surface is the web UI.** With
+  `KCAP_RENDERED_AGENT=1`, the hook routes the decision to the daemon bridge → server → web
+  permission dialog (`PermissionRequestCommand.cs:37,68`), exactly like hosted. The PTY prompt is
+  mirrored to all clients, and a web client answering via `SendInput`/"Send to Claude" is the
+  guaranteed path. **Unverified:** whether a *local terminal keypress* can also resolve the
+  prompt while the bridge hook is blocking (the rendered-agent hook is expected to return the
+  decision; the user has only confirmed the web `SendInput` path on hosted agents). **Validation
+  item** for the implementation plan — if local keypress does **not** work, the documented
+  behavior for a registered agent is "approve via the web UI," and a local driver who wants
+  native terminal approval uses **`--private`** (no bridge). This is a deliberate consequence of
+  the bridge-mode choice, not a defect; it does not block Slice 1.
 
 ## Testing
 
@@ -173,10 +213,14 @@ as a note on AI-974, not built here.
 - **Privacy (strict mock), re-scoped:** `--private` agent → **no** per-agent server call across
   its full lifecycle (launch → run → heartbeat → exit/finalize → cleanup, incl. simulated
   reconnect); spawn env omits `KCAP_AGENT_ID` / `KCAP_RENDERED_AGENT` / `KCAP_DAEMON_URL`,
-  keeps `KCAP_URL` + `ANTHROPIC_API_KEY`.
+  keeps `KCAP_URL` + `ANTHROPIC_API_KEY`; and its id is **absent from `DaemonConnect`'s
+  `LiveAgentIds`** (initial connect and a simulated reconnect).
 - **Registration (new):** default local agent → `AgentRegisteredAsync` + `AgentRunStarted` +
-  initial dims fire; spawn env sets `KCAP_AGENT_ID` + `KCAP_RENDERED_AGENT` + `KCAP_DAEMON_URL`
-  and keeps `ANTHROPIC_API_KEY`; a clamp change re-sends dims.
+  initial dims fire; appears in `LiveAgentIds`; spawn env sets `KCAP_AGENT_ID` +
+  `KCAP_RENDERED_AGENT` + `KCAP_DAEMON_URL` and keeps `ANTHROPIC_API_KEY`.
+- **Dims (new):** a clamp change updates `CurrentCols/Rows` and re-sends dims; a simulated
+  reconnect (`ReRegisterAgentsAsync`) resends the agent's **stored** dims, not `HostedPtyCols/Rows`
+  — assert a registered local agent with non-default dims re-sends those exact values.
 - **In-place safety (unchanged, still asserted):** a borrowed-cwd registered agent writes no
   files into the user's checkout/global config and never deletes the cwd or its branch on exit.
 - **Integration:** trivial PTY program over the socket — registered path streams to a mock
