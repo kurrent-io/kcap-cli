@@ -499,17 +499,18 @@ kcap run-agent codex --worktree -- -m gpt-5 # run in an isolated git worktree in
 kcap run-agent claude --detached            # start without attaching; prints the agent id
 ```
 
-- **`--` boundary:** flags before `--` are kcap's; everything after `--` is forwarded to the `claude`/`codex` CLI unchanged. kcap flags: `--worktree`, `--name <daemon>`, `--detached`.
+- **`--` boundary:** flags before `--` are kcap's; everything after `--` is forwarded to the `claude`/`codex` CLI unchanged. kcap flags: `--worktree`, `--private`, `--name <daemon>`, `--detached`.
+- **Visibility:** by default the agent is **registered with the server**, so it appears in your own web UI immediately and you can drive it from the browser — start in the terminal, continue from anywhere. It is **visible only to you** until you share it. Pass `--private` to keep it purely local: unregistered, not streamed to the server, and not shown in the web UI.
 - **Work location:** by default the agent runs **in place in your current directory** (it edits your real files). Pass `--worktree` to run in a throwaway git worktree instead.
 - **Detach** without stopping the agent with the prefix key **`Ctrl-Q` then `d`**. The agent keeps running in the daemon.
-- **Permissions** prompt natively in your terminal, exactly like running the agent directly.
+- **Permissions:** for a registered agent, permission prompts appear in the web UI (the same dialog as hosted agents); with `--private`, prompts are answered natively in your terminal.
 
 ```bash
 kcap ls                 # list daemon-hosted agents (id, status, repo)
 kcap attach <agent-id>  # re-attach your terminal to a running agent
 ```
 
-`run-agent` auto-starts the daemon if one isn't already running. It needs a configured server (like the rest of kcap) — it is not an offline command. This release is **local-only**: starting an agent locally does not yet expose it to teammates in the web UI (planned for a later release). Unix only for now.
+`run-agent` auto-starts the daemon if one isn't already running. It needs a configured server (like the rest of kcap) — it is not an offline command. A locally-started agent now appears in **your own** web UI (owner-only until you share it from the web UI); use `--private` to opt out of registration entirely. Unix only for now.
 
 ### Repository paths
 
