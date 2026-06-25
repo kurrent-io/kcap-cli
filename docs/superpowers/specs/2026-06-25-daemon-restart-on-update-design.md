@@ -25,8 +25,15 @@ Instead it is queued and applied the moment the daemon goes idle.
   it in place and the on-disk poll never sees a change.
 - A queued restart is **observable** (`kcap daemon status`) and **manually
   controllable** (`kcap daemon restart`).
-- Zero coupling required from the update flow: detection is daemon-side, so brew
-  and manual installs are covered too. The update flow only *informs* the user.
+- Zero coupling required from the update flow on the success path: detection is
+  daemon-side. **Caveat — detection assumes same-path, in-place binary
+  replacement** (the npm global-install path: `npm install -g …@latest`
+  overwrites the file at the stable `node_modules/@kurrent/kcap-<platform>/…`
+  path that `Environment.ProcessPath` points to). Versioned-directory or
+  symlink-swap installs (e.g. Homebrew, which writes a new Cellar dir and
+  repoints a symlink) leave the polled path — and the unit's baked `ExecStart`
+  — pointing at the *old* binary, so they are **not** auto-detected; `kcap daemon
+  restart` is the path for those. See *Install-shape assumption*.
 
 ## Non-goals
 
@@ -50,16 +57,23 @@ Windows behavior:
 
 - **No self-detection / no auto-restart.** The `RestartCoordinator` poll is a
   no-op trigger on Windows (the file can't change under a running daemon).
-- **Documented manual flow:** stop the daemon (or `kcap daemon service stop`),
-  run `kcap update`, then start it again — only then is the binary replaceable.
-  The update-flow notice prints this Windows-specific instruction when a daemon
-  is detected running.
+- **Preflight abort, not a success-path notice.** This is the critical ordering
+  point: `kcap.js`'s `runUpdate()` runs `npm install` *first* and only prints
+  notices afterward — but on Windows the install itself **fails** on the locked
+  `kcap-daemon.exe`, so any post-install notice is unreachable. Therefore on
+  Windows the launcher must, **before** `npm install`, probe for a running daemon
+  (a machine-readable probe on the still-old, not-yet-replaced binary — e.g.
+  `kcap daemon status`/a dedicated `--running` check) and, if one is found,
+  **abort with instructions** rather than attempt the doomed install:
+  > A kcap daemon is running and locks the binary, so the update can't replace
+  > it. Stop it first (`kcap daemon service stop` or `kcap daemon stop`), then
+  > re-run `kcap update`.
 - `kcap daemon restart` still *functions* on Windows (it's just IPC + lifecycle),
   but it only adopts a newer version if the binary was actually replaced — i.e.
   the daemon was stopped during the update. It does not work around the lock.
 - The Windows Scheduled Task supervisor is therefore not part of the supervised
   restart path. *Possible future enhancement:* have the npm launcher orchestrate
-  stop → update → start on Windows.
+  stop → update → start on Windows automatically.
 
 ## Design overview
 
@@ -83,7 +97,9 @@ RestartCoordinator  (decision + queue + idle-gate; unit-tested)
 1. **If no restart pending** — cheap-stat the running binary
    (`Environment.ProcessPath`: size + last-write-time) and compare against the
    baseline captured at startup. A change marks a restart pending, records the
-   target version, writes the `<name>.restart-pending` marker, and logs it.
+   daemon's **running** version (the on-disk target is unknown without execing
+   the new binary — see *Observability*), writes the `<name>.restart-pending`
+   marker, and logs it.
    Transient stat failures (binary momentarily missing/being swapped mid
    `npm install`) are tolerated — the tick is skipped, not treated as a change.
 2. **If a restart is pending and `!IsBusy`** — invoke the selected strategy.
@@ -96,7 +112,7 @@ event-driven wakeup is required.
 
 | Context | Detection | Restart action |
 |---|---|---|
-| **Supervised** (launchd/systemd) | Supervisor-injected env that proves *this process* was launched by the supervisor: `INVOCATION_ID` (systemd) or `XPC_SERVICE_NAME` matching our label (launchd); **or** our explicit `KCAP_DAEMON_SUPERVISED=1` marker | Request shutdown and **exit with a dedicated non-zero code** (`ExitCodes.RestartRequested`); the unit's failure-restart policy relaunches the new binary |
+| **Supervised** (launchd/systemd) | Our explicit `KCAP_DAEMON_SUPERVISED=1` marker *(authoritative)*; **else** a false-positive-safe pre-marker probe (systemd: `kcap-daemon-` in `/proc/self/cgroup` **and** `SYSTEMD_EXEC_PID == ProcessId`; launchd: `XPC_SERVICE_NAME` equals our computed label `io.kurrent.kcap.daemon.<sanitized-name>`) | Request shutdown and **exit with a dedicated non-zero code** (`ExitCodes.RestartRequested`); the unit's failure-restart policy relaunches the new binary |
 | **Detached** (`start -d`; `--log-file` present, not supervised) | else-branch | **Self-respawn**: spawn a fresh detached `kcap-daemon` (same argv, `--await-lock`), then `StopApplication()` and exit **0** |
 | **Foreground** (interactive; no `--log-file`, not supervised) | no log-file & not supervised | Don't auto-act — set pending + log "restart pending; exit and restart to apply" |
 
@@ -115,18 +131,30 @@ Mechanically this mirrors the existing `nameInUse` flag in `DaemonRunner.RunAsyn
 the coordinator sets a `restartRequested` flag and calls `StopApplication()`;
 `RunAsync` returns `restartRequested ? ExitCodes.RestartRequested : (nameInUse ? 3 : 0)`.
 
-**Detection robustness — why not "a unit exists for my id".** That fallback is
-unsound: a user can have an *installed-but-stopped* service and separately run a
-detached daemon under the same name; "unit exists" would misclassify the detached
-daemon as supervised and exit it with no relaunch. Instead we key on
-supervisor-injected env vars that are present only on the process the supervisor
-**actually launched** (`INVOCATION_ID`/`XPC_SERVICE_NAME`) — a hand-started
-detached daemon has neither, even if a unit is installed. These cover pre-upgrade
-installs (no `KCAP_DAEMON_SUPERVISED` marker) without the false positive, and
-need no cross-layer "does a unit exist" probe. If genuinely uncertain, default to
-**detached / self-respawn**: a spurious extra exit-and-relaunch under a supervisor
-is self-correcting (the loser hits the flock and exits with code 2), whereas a
-wrong "just exit" would silently kill a real detached daemon — the worse failure.
+**Detection robustness.** Two rejected approaches and why the chosen probe is
+false-positive-safe:
+
+- *"A unit exists for my id"* is unsound — an *installed-but-stopped* service plus
+  a separately hand-started detached daemon under the same name would misclassify
+  the detached daemon as supervised and exit it with no relaunch.
+- *`INVOCATION_ID` alone* is also unsound — per systemd.exec(5) it is set for the
+  whole unit runtime cycle and is **inherited by child processes**, so a daemon
+  hand-started from *another* systemd-managed process would inherit it and be
+  misclassified. The variable that proves *direct* launch is `SYSTEMD_EXEC_PID`,
+  which equals the PID systemd `exec`'d.
+
+So the chosen signals are: the explicit `KCAP_DAEMON_SUPERVISED=1` marker
+(authoritative; set on all new installs), else — for pre-marker installs — a
+combination that can't be inherited: on systemd, our unit's cgroup
+(`kcap-daemon-…` in `/proc/self/cgroup`) **and** `SYSTEMD_EXEC_PID == ProcessId`;
+on launchd, `XPC_SERVICE_NAME` *exactly equal to our computed label* (an inherited
+value from a different job carries that job's label, not ours). The dangerous
+direction is a **false positive** (think supervised when actually detached →
+exit, no relaunch, daemon gone), so detection is deliberately conservative and
+**uncertainty defaults to detached / self-respawn** — a spurious extra
+exit-and-relaunch under a supervisor is self-correcting (the loser hits the flock
+and exits with code 2), whereas a wrong "just exit" silently kills a real detached
+daemon.
 
 ### Busy definition
 
@@ -204,6 +232,28 @@ on-disk binary `--version` *once* and compare to suppress same-version churn.
 This requires adding a `--version` handler to `kcap-daemon`, which has none today
 (`Program.cs` forwards all args straight to `DaemonRunner.RunAsync`).
 
+## Install-shape assumption
+
+Both detection (polling `Environment.ProcessPath`) and supervised relaunch (the
+unit's baked `ExecStart=<resolved DaemonBinaryPath>`, e.g. `SystemdUnit.cs:28`,
+set from the path `DaemonCommands.ServiceInstall` resolved at install time) assume
+the **same path is overwritten in place** when a new version lands.
+
+- **Covered:** the npm global install — `npm install -g @kurrent/kcap@latest`
+  replaces files at the stable `node_modules/@kurrent/kcap-<platform>/…` path that
+  both `Environment.ProcessPath` and the baked `ExecStart` point to. This is the
+  project's primary distribution and the target of this feature.
+- **Not auto-covered:** versioned-directory / symlink-swap installs (Homebrew
+  writes `…/Cellar/kcap/<version>/…` and repoints a symlink). The new binary lives
+  at a *new* path; the polled path and the baked `ExecStart` still resolve to the
+  old version. Self-detection won't fire and a supervised relaunch would re-exec
+  the old binary. `kcap daemon restart` (manual) is the path for these.
+
+*Possible future strategy (out of scope):* install to a stable launcher/symlink
+path and have both the unit's `ExecStart` and the self-respawn target use it, so a
+symlink repoint is observable and relaunch follows the new version. Until then,
+the spec's claim is scoped to same-path in-place replacement.
+
 ## Manual command
 
 ```
@@ -255,33 +305,32 @@ kcap daemon restart [--name N] [--when-idle] [--force]
 
 ## Update-flow UX (informational only)
 
-Self-detection does the functional work; the update flow merely informs. The
-launcher *does* know the new version here (it just installed `@latest` and ran
-the `--check` probe), so unlike the daemon's status line it can name it. After
-`npm install` + refresh, if any daemon is running:
+Self-detection does the functional work; on **macOS / Linux** the update flow
+merely informs. The launcher *does* know the new version here (it just installed
+`@latest` and ran the `--check` probe), so unlike the daemon's status line it can
+name it. After a successful `npm install` + refresh, if any daemon is running,
+print one line:
 
-- **macOS / Linux** — print:
-  > kcap daemon '<name>' is running and will restart automatically when idle to
-  > pick up v0.4.12 (`kcap daemon status` to check, `kcap daemon restart --force`
-  > to apply now).
-- **Windows** — print the manual flow instead (the running daemon's exe is
-  locked, so the update can't replace it and auto-restart won't apply):
-  > kcap daemon '<name>' is running on the old binary. Stop it (`kcap daemon
-  > service stop` or `kcap daemon stop`), re-run `kcap update`, then start it
-  > again to pick up v0.4.12.
+> kcap daemon '<name>' is running and will restart automatically when idle to
+> pick up v0.4.12 (`kcap daemon status` to check, `kcap daemon restart --force`
+> to apply now).
 
-There is no functional coupling to the daemon on the success path — purely a
-heads-up.
+This is a post-install heads-up with no functional coupling to the daemon.
+
+**Windows is different** — there the daemon check is a *preflight abort before*
+`npm install` (the install would otherwise fail on the locked binary), not a
+post-install notice. See *Platform scope*.
 
 ## Service install change
 
 Inject `KCAP_DAEMON_SUPERVISED=1` into the unit environment at
 `kcap daemon service install` (via the `ServiceSpec.Environment` dictionary, set
-where `ServiceInstall` builds the env). This is the explicit, belt-and-suspenders
+where `ServiceInstall` builds the env). This is the explicit, authoritative
 signal. Services installed before this feature lack it but are still detected
-correctly at runtime via the supervisor-injected env (`INVOCATION_ID` /
-`XPC_SERVICE_NAME`) — no reinstall required, and no reliance on the unsound
-"a unit exists for my id" probe.
+correctly at runtime via the false-positive-safe pre-marker probe (systemd
+cgroup + `SYSTEMD_EXEC_PID == ProcessId`; launchd exact label match) — no reinstall
+required, and no reliance on the unsound "a unit exists for my id" probe or on the
+inheritable `INVOCATION_ID` alone.
 
 ## Components & files
 
@@ -291,10 +340,12 @@ correctly at runtime via the supervisor-injected env (`INVOCATION_ID` /
   decision/queue/idle-gate logic, marker writer.
 - `src/Capacitor.Cli.Daemon/Services/IRestartStrategy.cs` +
   `SupervisedExitStrategy` + `DetachedRespawnStrategy`.
-- Supervision detection — a small daemon-local helper that reads
-  `KCAP_DAEMON_SUPERVISED` / `INVOCATION_ID` / `XPC_SERVICE_NAME` from the
-  environment. Pure env reads; no dependency on the CLI's `IServiceManager` and
-  no cross-layer "unit exists" probe.
+- Supervision detection — a small daemon-local helper: `KCAP_DAEMON_SUPERVISED`
+  env (authoritative), else systemd (`/proc/self/cgroup` contains `kcap-daemon-`
+  **and** `SYSTEMD_EXEC_PID == ProcessId`) or launchd (`XPC_SERVICE_NAME` equals
+  the computed label `io.kurrent.kcap.daemon.<sanitized-name>`). No dependency on
+  the CLI's `IServiceManager`; no "unit exists" probe; `INVOCATION_ID` is *not*
+  used alone (inheritable).
 
 **Modified:**
 
@@ -324,8 +375,13 @@ correctly at runtime via the supervisor-injected env (`INVOCATION_ID` /
   `status` reads/prints the pending marker; usage text.
 - `src/Capacitor.Cli/Commands/DaemonCommands.cs` (`ServiceInstall`) — inject
   `KCAP_DAEMON_SUPERVISED=1`.
-- Update flow notice: `npm/kcap/bin/kcap.js` / `refresh.js` (or the native
-  post-update path) — one-line "daemon will restart when idle" hint.
+- `npm/kcap/bin/kcap.js` — **Windows preflight** in `runUpdate()` *before*
+  `npm install`: probe for a running daemon and abort with stop-first
+  instructions (the install would otherwise fail on the locked exe). On
+  macOS/Linux, a post-install one-line "daemon will restart when idle" notice.
+- A machine-readable "is any daemon running" probe the launcher can call on the
+  not-yet-replaced binary (a `daemon status`-style flag / exit code), so the
+  Windows preflight doesn't parse human output.
 - `src/Capacitor.Cli.Core/Resources/help-*.txt` — daemon help text.
 - `README.md` — daemon quick-start + per-command `daemon` section (CLAUDE.md
   mandate; same PR).
@@ -337,12 +393,15 @@ correctly at runtime via the supervisor-injected env (`INVOCATION_ID` /
 - `RestartCoordinator` gate logic with an injected `IsBusy` and a fake update
   signal: pending+idle → strategy fires; pending+busy → no fire; busy→idle
   transition fires.
-- Startup strategy selection from injected env: supervised via
-  `KCAP_DAEMON_SUPERVISED`, supervised via `INVOCATION_ID`, supervised via
-  `XPC_SERVICE_NAME`, detached (none set, `--log-file` present), foreground (none
-  set, no `--log-file`). **Regression for the review finding:** unit installed
-  but daemon hand-started (none of the env signals set) → classified **detached**,
-  not supervised.
+- Startup strategy selection via an injected detection seam: supervised via
+  `KCAP_DAEMON_SUPERVISED`; supervised via systemd pre-marker probe (cgroup match
+  **and** `SYSTEMD_EXEC_PID == ProcessId`); supervised via launchd exact label
+  match; detached (none, `--log-file` present); foreground (none, no `--log-file`).
+  **Regressions for the review findings:** (a) unit installed but daemon
+  hand-started, none of the signals set → **detached**, not supervised; (b)
+  `INVOCATION_ID` present but `SYSTEMD_EXEC_PID != ProcessId` (inherited) →
+  **detached**; (c) `XPC_SERVICE_NAME` set to a *different* job's label →
+  **detached**.
 - Binary-change detection via an injected stat seam (size/mtime change → pending;
   transient failure → skip).
 - `--force` overrides the gate; an active eval run (`EvalRunId` in the set) blocks
@@ -357,6 +416,10 @@ correctly at runtime via the supervisor-injected env (`INVOCATION_ID` /
 - `--await-lock` acquires the flock after a holder releases it.
 - `kcap daemon restart` round-trips over the control socket (queue + force).
 - Marker file is written on queue and read/printed by `status`.
+- The daemon-running probe the Windows preflight relies on returns the right
+  exit code with a daemon up vs. down (the preflight ordering itself — abort
+  before `npm install` — is launcher logic verified by inspection / a Node-side
+  test of `runUpdate`).
 
 **AOT:** `dotnet publish -c Release` then grep for `IL3050`/`IL2026`. The
 process-spawn and stat paths are reflection-free and should stay clean.
@@ -366,10 +429,17 @@ process-spawn and stat paths are reflection-free and should stay clean.
 - **Supervised daemon exits 0 and stays stopped** (the units only relaunch on
   failure) → supervised strategy exits with the dedicated non-zero
   `ExitCodes.RestartRequested`, which the existing policies honor; no unit changes.
-- **Mis-detected supervision kills a detached daemon** → detection keys on
-  supervisor-injected env present only on the launched process (not "a unit
-  exists"); uncertainty defaults to detached/self-respawn, which is
-  self-correcting rather than fatal.
+- **Mis-detected supervision kills a detached daemon** → detection requires a
+  non-inheritable signal (marker, or cgroup + `SYSTEMD_EXEC_PID == ProcessId`, or
+  exact launchd label) — never `INVOCATION_ID` / "a unit exists" alone;
+  uncertainty defaults to detached/self-respawn, which is self-correcting rather
+  than fatal.
+- **Windows install fails on the locked binary instead of warning** → the daemon
+  check is a *preflight abort before* `npm install`, not a post-install notice
+  (which would be unreachable once the install errors).
+- **Non-npm install shapes (brew/symlink) silently keep the old binary** →
+  detection + relaunch are scoped to same-path in-place replacement; the claim is
+  narrowed and `kcap daemon restart` is the documented path for those installs.
 - **Respawn race on the flock** → `--await-lock` retry on the successor + the
   existing PID-match-guarded `DaemonLock.Dispose` handle the window.
 - **Overlapping eval runs clear the busy flag early** → tracked as a set keyed by
