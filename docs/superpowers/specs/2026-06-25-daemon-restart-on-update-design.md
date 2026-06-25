@@ -32,8 +32,10 @@ Instead it is queued and applied the moment the daemon goes idle.
   path that `Environment.ProcessPath` points to). Versioned-directory or
   symlink-swap installs (e.g. Homebrew, which writes a new Cellar dir and
   repoints a symlink) leave the polled path — and the unit's baked `ExecStart`
-  — pointing at the *old* binary, so they are **not** auto-detected; `kcap daemon
-  restart` is the path for those. See *Install-shape assumption*.
+  — pointing at the *old* binary, so they are **not** auto-detected, and `kcap
+  daemon restart` does not fix them either (it re-runs the old path). The path for
+  those is stop/start with the updated CLI, or a service reinstall. See
+  *Install-shape assumption*.
 
 ## Non-goals
 
@@ -74,6 +76,14 @@ Windows behavior:
 - The Windows Scheduled Task supervisor is therefore not part of the supervised
   restart path. *Possible future enhancement:* have the npm launcher orchestrate
   stop → update → start on Windows automatically.
+- **First-upgrade limitation (residual):** the preflight lives in `kcap.js`, so it
+  only protects upgrades *from* a version that already ships it. The very first
+  upgrade from a pre-feature version runs the old launcher, which still attempts
+  `npm install` and hits the locked-exe failure (the new postinstall runs only
+  *after* files are written — too late to help). This is inherent to any
+  launcher-side change and is non-destructive (the install fails, the old daemon
+  keeps running); the user retries after stopping the daemon. Documented, not
+  fixed.
 
 ## Design overview
 
@@ -112,7 +122,7 @@ event-driven wakeup is required.
 
 | Context | Detection | Restart action |
 |---|---|---|
-| **Supervised** (launchd/systemd) | Our explicit `KCAP_DAEMON_SUPERVISED=1` marker *(authoritative)*; **else** a false-positive-safe pre-marker probe (systemd: `kcap-daemon-` in `/proc/self/cgroup` **and** `SYSTEMD_EXEC_PID == ProcessId`; launchd: `XPC_SERVICE_NAME` equals our computed label `io.kurrent.kcap.daemon.<sanitized-name>`) | Request shutdown and **exit with a dedicated non-zero code** (`ExitCodes.RestartRequested`); the unit's failure-restart policy relaunches the new binary |
+| **Supervised** (launchd/systemd) | Our **name-specific** marker `KCAP_DAEMON_SUPERVISED=<service-id>` whose value equals the daemon's own sanitized `--name` *(authoritative)*; **else** a false-positive-safe pre-marker probe (systemd: `kcap-daemon-` in `/proc/self/cgroup` **and** `SYSTEMD_EXEC_PID == ProcessId`; launchd: `XPC_SERVICE_NAME` equals our computed label `io.kurrent.kcap.daemon.<sanitized-name>`) | Request shutdown and **exit with a dedicated non-zero code** (`ExitCodes.RestartRequested`); the unit's failure-restart policy relaunches the new binary |
 | **Detached** (`start -d`; `--log-file` present, not supervised) | else-branch | **Self-respawn**: spawn a fresh detached `kcap-daemon` (same argv, `--await-lock`), then `StopApplication()` and exit **0** |
 | **Foreground** (interactive; no `--log-file`, not supervised) | no log-file & not supervised | Don't auto-act — set pending + log "restart pending; exit and restart to apply" |
 
@@ -143,18 +153,37 @@ false-positive-safe:
   misclassified. The variable that proves *direct* launch is `SYSTEMD_EXEC_PID`,
   which equals the PID systemd `exec`'d.
 
-So the chosen signals are: the explicit `KCAP_DAEMON_SUPERVISED=1` marker
-(authoritative; set on all new installs), else — for pre-marker installs — a
-combination that can't be inherited: on systemd, our unit's cgroup
-(`kcap-daemon-…` in `/proc/self/cgroup`) **and** `SYSTEMD_EXEC_PID == ProcessId`;
-on launchd, `XPC_SERVICE_NAME` *exactly equal to our computed label* (an inherited
-value from a different job carries that job's label, not ours). The dangerous
-direction is a **false positive** (think supervised when actually detached →
-exit, no relaunch, daemon gone), so detection is deliberately conservative and
-**uncertainty defaults to detached / self-respawn** — a spurious extra
-exit-and-relaunch under a supervisor is self-correcting (the loser hits the flock
-and exits with code 2), whereas a wrong "just exit" silently kills a real detached
-daemon.
+So the chosen signals are: the **name-specific** marker
+`KCAP_DAEMON_SUPERVISED=<service-id>` (authoritative; set on all new installs),
+else — for pre-marker installs — a combination that can't be inherited: on
+systemd, our unit's cgroup (`kcap-daemon-…` in `/proc/self/cgroup`) **and**
+`SYSTEMD_EXEC_PID == ProcessId`; on launchd, `XPC_SERVICE_NAME` *exactly equal to
+our computed label*. The dangerous direction is a **false positive** (think
+supervised when actually detached → exit, no relaunch, daemon gone), so detection
+is deliberately conservative and **uncertainty defaults to detached / self-respawn**.
+
+**Env-inheritance vector.** Env vars are inherited, and the daemon's PTY children
+(hosted agents) inherit the daemon's environment — `UnixPtyProcess.Spawn` unsets a
+few vars (`CLAUDECODE`, `ANTHROPIC_API_KEY`, `KCAP_AGENT_ID`, …) but not the
+supervision vars. So a `kcap daemon start` run from inside a supervised daemon's
+agent could inherit a supervision marker. Two facts make this safe once the marker
+is name-specific:
+
+1. **Same-name nesting is impossible** — a second daemon under the same name
+   can't run; it fails to acquire the per-name flock and exits code 2. So an
+   inherited signal only matters for a *different*-name daemon.
+2. **All three signals are name-bound** — the launchd label and the
+   `SYSTEMD_EXEC_PID==ProcessId` check are name/PID-specific by construction
+   (a different-name daemon computes a different label; a child has a different
+   PID). Making the marker name-specific (`=<service-id>`, matched against the
+   daemon's own sanitized name) brings it in line: a different-name daemon that
+   inherits `KCAP_DAEMON_SUPERVISED=laptop` but runs as `--name ci` sees a
+   mismatch and is correctly classified detached.
+
+As defense-in-depth and hygiene, the daemon also **scrubs**
+`KCAP_DAEMON_SUPERVISED` and `XPC_SERVICE_NAME` (and `INVOCATION_ID` /
+`SYSTEMD_EXEC_PID`) from the env of every PTY child it spawns, so supervision
+state never leaks into hosted agents or anything they launch.
 
 ### Busy definition
 
@@ -247,12 +276,25 @@ the **same path is overwritten in place** when a new version lands.
   writes `…/Cellar/kcap/<version>/…` and repoints a symlink). The new binary lives
   at a *new* path; the polled path and the baked `ExecStart` still resolve to the
   old version. Self-detection won't fire and a supervised relaunch would re-exec
-  the old binary. `kcap daemon restart` (manual) is the path for these.
+  the old binary.
 
-*Possible future strategy (out of scope):* install to a stable launcher/symlink
-path and have both the unit's `ExecStart` and the self-respawn target use it, so a
-symlink repoint is observable and relaunch follows the new version. Until then,
-the spec's claim is scoped to same-path in-place replacement.
+  **`kcap daemon restart` is *not* a workaround here.** The detached strategy
+  respawns from the old daemon's `Environment.ProcessPath`, and the supervised
+  path relaunches from the unit's baked `ExecStart` — both the *old* resolved
+  path. The correct manual path for a path-changing install is:
+  - **Detached** — `kcap daemon stop`, then `kcap daemon start -d` using the
+    **updated** CLI (it resolves the new sibling `kcap-daemon` path).
+  - **Supervised** — re-run `kcap daemon service install` (re-bakes `ExecStart`
+    with the newly resolved path), or stop/start.
+
+*Possible future strategies (out of scope):* (a) install to a stable
+launcher/symlink path and have both the unit's `ExecStart` and the self-respawn
+target use it, so a symlink repoint is observable and relaunch follows the new
+version; (b) have `kcap daemon restart` carry the **caller-resolved** new daemon
+path (the updated CLI resolves its sibling `kcap-daemon`) so the *detached*
+respawn execs the new binary — this still wouldn't fix supervised relaunch, which
+needs the unit re-baked. Until then, auto-restart is scoped to same-path in-place
+replacement.
 
 ## Manual command
 
@@ -323,14 +365,16 @@ post-install notice. See *Platform scope*.
 
 ## Service install change
 
-Inject `KCAP_DAEMON_SUPERVISED=1` into the unit environment at
+Inject `KCAP_DAEMON_SUPERVISED=<service-id>` into the unit environment at
 `kcap daemon service install` (via the `ServiceSpec.Environment` dictionary, set
-where `ServiceInstall` builds the env). This is the explicit, authoritative
-signal. Services installed before this feature lack it but are still detected
-correctly at runtime via the false-positive-safe pre-marker probe (systemd
-cgroup + `SYSTEMD_EXEC_PID == ProcessId`; launchd exact label match) — no reinstall
-required, and no reliance on the unsound "a unit exists for my id" probe or on the
-inheritable `INVOCATION_ID` alone.
+where `ServiceInstall` builds the env). The value is the sanitized service id, and
+the daemon honors it only when it equals its own sanitized `--name` — so an
+inherited marker from a *different*-name daemon doesn't classify this one (see
+*Env-inheritance vector*). Services installed before this feature lack the marker
+but are still detected correctly at runtime via the false-positive-safe pre-marker
+probe (systemd cgroup + `SYSTEMD_EXEC_PID == ProcessId`; launchd exact label match)
+— no reinstall required, no reliance on the unsound "a unit exists" probe or on
+the inheritable `INVOCATION_ID` alone.
 
 ## Components & files
 
@@ -340,12 +384,13 @@ inheritable `INVOCATION_ID` alone.
   decision/queue/idle-gate logic, marker writer.
 - `src/Capacitor.Cli.Daemon/Services/IRestartStrategy.cs` +
   `SupervisedExitStrategy` + `DetachedRespawnStrategy`.
-- Supervision detection — a small daemon-local helper: `KCAP_DAEMON_SUPERVISED`
-  env (authoritative), else systemd (`/proc/self/cgroup` contains `kcap-daemon-`
-  **and** `SYSTEMD_EXEC_PID == ProcessId`) or launchd (`XPC_SERVICE_NAME` equals
-  the computed label `io.kurrent.kcap.daemon.<sanitized-name>`). No dependency on
-  the CLI's `IServiceManager`; no "unit exists" probe; `INVOCATION_ID` is *not*
-  used alone (inheritable).
+- Supervision detection — a small daemon-local helper:
+  `KCAP_DAEMON_SUPERVISED == own sanitized name` (authoritative, name-specific),
+  else systemd (`/proc/self/cgroup` contains `kcap-daemon-` **and**
+  `SYSTEMD_EXEC_PID == ProcessId`) or launchd (`XPC_SERVICE_NAME` equals the
+  computed label `io.kurrent.kcap.daemon.<sanitized-name>`). No dependency on the
+  CLI's `IServiceManager`; no "unit exists" probe; `INVOCATION_ID` is *not* used
+  alone (inheritable).
 
 **Modified:**
 
@@ -371,10 +416,15 @@ inheritable `INVOCATION_ID` alone.
   existing `nameInUse` exit-code branch).
 - `src/Capacitor.Cli.Daemon/DaemonLock.cs` — `--await-lock` bounded retry on
   acquire.
+- `src/Capacitor.Cli.Daemon/Pty/Unix/UnixPtyProcess.cs` and the Windows ConPty
+  spawn — add `KCAP_DAEMON_SUPERVISED` / `XPC_SERVICE_NAME` / `INVOCATION_ID` /
+  `SYSTEMD_EXEC_PID` to the env vars scrubbed from spawned PTY children (alongside
+  the existing `CLAUDECODE`/`KCAP_AGENT_ID`/… unsets), so supervision state never
+  leaks into hosted agents.
 - `src/Capacitor.Cli/Commands/DaemonCommands.cs` — new `restart` subcommand;
   `status` reads/prints the pending marker; usage text.
 - `src/Capacitor.Cli/Commands/DaemonCommands.cs` (`ServiceInstall`) — inject
-  `KCAP_DAEMON_SUPERVISED=1`.
+  `KCAP_DAEMON_SUPERVISED=<service-id>` (name-specific).
 - `npm/kcap/bin/kcap.js` — **Windows preflight** in `runUpdate()` *before*
   `npm install`: probe for a running daemon and abort with stop-first
   instructions (the install would otherwise fail on the locked exe). On
@@ -394,14 +444,17 @@ inheritable `INVOCATION_ID` alone.
   signal: pending+idle → strategy fires; pending+busy → no fire; busy→idle
   transition fires.
 - Startup strategy selection via an injected detection seam: supervised via
-  `KCAP_DAEMON_SUPERVISED`; supervised via systemd pre-marker probe (cgroup match
-  **and** `SYSTEMD_EXEC_PID == ProcessId`); supervised via launchd exact label
-  match; detached (none, `--log-file` present); foreground (none, no `--log-file`).
-  **Regressions for the review findings:** (a) unit installed but daemon
-  hand-started, none of the signals set → **detached**, not supervised; (b)
-  `INVOCATION_ID` present but `SYSTEMD_EXEC_PID != ProcessId` (inherited) →
-  **detached**; (c) `XPC_SERVICE_NAME` set to a *different* job's label →
-  **detached**.
+  `KCAP_DAEMON_SUPERVISED == own name`; supervised via systemd pre-marker probe
+  (cgroup match **and** `SYSTEMD_EXEC_PID == ProcessId`); supervised via launchd
+  exact label match; detached (none, `--log-file` present); foreground (none, no
+  `--log-file`). **Regressions for the review findings:** (a) unit installed but
+  daemon hand-started, none of the signals set → **detached**; (b) `INVOCATION_ID`
+  present but `SYSTEMD_EXEC_PID != ProcessId` (inherited) → **detached**; (c)
+  `XPC_SERVICE_NAME` set to a *different* job's label → **detached**; (d) marker
+  value `laptop` inherited but daemon runs as `--name ci` → **detached** (marker
+  is name-specific).
+- The PTY-spawn env scrub removes `KCAP_DAEMON_SUPERVISED` / `XPC_SERVICE_NAME` /
+  `INVOCATION_ID` / `SYSTEMD_EXEC_PID` from a spawned child's environment.
 - Binary-change detection via an injected stat seam (size/mtime change → pending;
   transient failure → skip).
 - `--force` overrides the gate; an active eval run (`EvalRunId` in the set) blocks
@@ -429,17 +482,25 @@ process-spawn and stat paths are reflection-free and should stay clean.
 - **Supervised daemon exits 0 and stays stopped** (the units only relaunch on
   failure) → supervised strategy exits with the dedicated non-zero
   `ExitCodes.RestartRequested`, which the existing policies honor; no unit changes.
-- **Mis-detected supervision kills a detached daemon** → detection requires a
-  non-inheritable signal (marker, or cgroup + `SYSTEMD_EXEC_PID == ProcessId`, or
-  exact launchd label) — never `INVOCATION_ID` / "a unit exists" alone;
-  uncertainty defaults to detached/self-respawn, which is self-correcting rather
-  than fatal.
+- **Mis-detected supervision kills a detached daemon** → all signals are
+  name-bound (name-specific marker, cgroup + `SYSTEMD_EXEC_PID == ProcessId`,
+  exact launchd label) — never `INVOCATION_ID` / "a unit exists" / a bare `=1`
+  marker alone; same-name nesting is blocked by the flock; uncertainty defaults to
+  detached/self-respawn.
+- **Inherited supervision env from a daemon-spawned agent** → marker is
+  name-specific *and* supervision vars are scrubbed from every PTY child, so a
+  `kcap daemon start` run from inside an agent can't inherit a matching signal.
+- **`daemon restart` re-runs the old binary on path-changing installs** → both
+  respawn (`Environment.ProcessPath`) and supervised relaunch (baked `ExecStart`)
+  key off the old path; documented path is stop/start with the updated CLI or a
+  service reinstall (not `restart`).
 - **Windows install fails on the locked binary instead of warning** → the daemon
   check is a *preflight abort before* `npm install`, not a post-install notice
   (which would be unreachable once the install errors).
 - **Non-npm install shapes (brew/symlink) silently keep the old binary** →
   detection + relaunch are scoped to same-path in-place replacement; the claim is
-  narrowed and `kcap daemon restart` is the documented path for those installs.
+  narrowed and the documented path for those installs is stop/start with the
+  updated CLI (detached) or a service reinstall (supervised) — not `restart`.
 - **Respawn race on the flock** → `--await-lock` retry on the successor + the
   existing PID-match-guarded `DaemonLock.Dispose` handle the window.
 - **Overlapping eval runs clear the busy flag early** → tracked as a set keyed by
