@@ -140,7 +140,7 @@ kcap setup <tenant>                          # shorthand: https://<tenant>.kcap.
 kcap setup --server-url <url> --no-prompt    # CI / scripted
 ```
 
-With no server argument, setup (and `kcap login`) runs **tenant discovery**: it signs you in with your organization's single sign-on, then lets you pick from the tenants you belong to. Pass `--github` to sign in with GitHub instead; `--discover` forces discovery even when a server is configured.
+With no server argument, setup (and `kcap login`) runs **tenant discovery**: it signs you in with your organization's single sign-on, then lets you pick from the tenants you belong to. Pass `--github` to sign in with GitHub instead; `--discover` forces discovery even when a server is configured. In SSH / headless environments (no browser), discovery falls back to GitHub Device Flow, since SSO needs a local browser.
 
 The setup wizard detects every supported coding agent and offers to install hooks for each, then configures the daemon. Claude Code and Codex CLI are detected via `PATH`; Cursor is detected by user-dir presence (`~/.cursor/`), so IDE users without the `cursor` shell command are covered; GitHub Copilot CLI is detected via `~/.copilot/` or `copilot` on `PATH`; Google Gemini CLI via `~/.gemini/` or `gemini` on `PATH`; AWS Kiro CLI via `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`; Pi via `~/.pi/agent/` or `pi` on `PATH` (and, because Pi has no shell hooks, the wizard installs a Pi extension rather than hook config). Re-run any time to update the configuration.
 
