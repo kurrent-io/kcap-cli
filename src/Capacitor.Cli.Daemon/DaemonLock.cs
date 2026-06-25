@@ -81,6 +81,21 @@ internal sealed class DaemonLock : IDisposable {
         return new DaemonLock(stream, lockPath, pidPath, instanceId);
     }
 
+    /// <summary>
+    /// Like <see cref="TryAcquire(string)"/> but retries until <paramref name="awaitTimeout"/>
+    /// elapses — used by a self-respawned successor (<c>--await-lock</c>) to wait out the
+    /// outgoing daemon's flock instead of exiting with code 2 on the first contended attempt.
+    /// </summary>
+    public static DaemonLock? TryAcquire(string daemonName, TimeSpan awaitTimeout) {
+        var deadline = DateTime.UtcNow + awaitTimeout;
+
+        while (true) {
+            if (TryAcquire(daemonName) is { } locked) return locked;
+            if (DateTime.UtcNow >= deadline) return null;
+            Thread.Sleep(100);
+        }
+    }
+
     static void WritePidFile(string pidPath) {
         // The second line is a cross-process-stable start token (AI-839): on
         // Linux Process.StartTime differs between the daemon that writes it and

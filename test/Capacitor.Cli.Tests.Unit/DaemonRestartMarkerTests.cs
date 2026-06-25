@@ -2,6 +2,7 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit;
 
+[NotInParallel(nameof(DaemonLockPaths) + ".OverrideDirectoryForTesting")]
 public class DaemonRestartMarkerTests {
     [Test]
     public async Task Write_then_read_round_trips() {
