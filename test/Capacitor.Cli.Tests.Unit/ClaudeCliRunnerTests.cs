@@ -227,6 +227,54 @@ public class ClaudeCliRunnerTests {
         await Assert.That(args).DoesNotContain("--allowedTools");
     }
 
+    // The headless text-only tasks (title generation, what's-done summaries)
+    // carry their full instructions in the user prompt, so the default Claude
+    // Code system prompt is pure overhead — measured at ~8.2K prompt tokens per
+    // title call vs ~2.4K with a minimal replacement. `--system-prompt` REPLACES
+    // (not appends to) the default, so a tiny task-specific prompt strips that
+    // overhead on the subscription path with no extra config.
+    [Test]
+    public async Task BuildClaudeArgs_WithSystemPrompt_ReplacesDefaultSystemPrompt() {
+        const string sp = "You label coding-session transcripts. Output only the requested text.";
+
+        var args = ClaudeCliRunner.BuildClaudeArgs(
+            prompt:         "irrelevant",
+            promptViaStdin: false,
+            model:          "haiku",
+            maxTurns:       1,
+            jsonSchema:     null,
+            mcpConfigJson:  null,
+            allowedTools:   null,
+            maxBudgetUsd:   null,
+            systemPrompt:   sp
+        );
+
+        await Assert.That(FlagValue(args, "--system-prompt")).IsEqualTo(sp);
+    }
+
+    // A null/empty system prompt must leave the flag off entirely so callers
+    // that don't opt in keep the CLI's default behaviour — passing
+    // `--system-prompt ""` would wipe the system prompt to empty, not skip it.
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments("   ")]
+    public async Task BuildClaudeArgs_WithoutSystemPrompt_OmitsFlag(string? systemPrompt) {
+        var args = ClaudeCliRunner.BuildClaudeArgs(
+            prompt:         "irrelevant",
+            promptViaStdin: false,
+            model:          "haiku",
+            maxTurns:       1,
+            jsonSchema:     null,
+            mcpConfigJson:  null,
+            allowedTools:   null,
+            maxBudgetUsd:   null,
+            systemPrompt:   systemPrompt
+        );
+
+        await Assert.That(args).DoesNotContain("--system-prompt");
+    }
+
     /// <summary>Returns the argument immediately following <paramref name="flag"/>, or null.</summary>
     static string? FlagValue(List<string> args, string flag) {
         var i = args.IndexOf(flag);
