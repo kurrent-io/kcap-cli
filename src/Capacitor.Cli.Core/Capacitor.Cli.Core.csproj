@@ -27,4 +27,8 @@
         <InternalsVisibleTo Include="Capacitor.Server.Tests.Read" />
         <InternalsVisibleTo Include="Capacitor.Server.Tests.UI" />
     </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="Duende.IdentityModel.OidcClient" />
+        <PackageReference Include="Duende.IdentityModel" />
+    </ItemGroup>
 </Project>
