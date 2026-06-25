@@ -88,6 +88,17 @@ static class ClaudeCliRunner {
     /// intended "hit the ceiling" behaviour for DEV-1486's tools-enabled
     /// questions.
     /// </para>
+    ///
+    /// <para>
+    /// <paramref name="systemPrompt"/> REPLACES (not appends to) the default
+    /// Claude Code system prompt via <c>--system-prompt</c>. Text-only callers
+    /// (title generation, what's-done summaries) carry their full instructions
+    /// in the user prompt, so passing a tiny task-specific prompt here strips
+    /// the harness system-prompt overhead — measured at ~8.2K prompt tokens per
+    /// title call vs ~2.4K with a minimal replacement — on the subscription
+    /// path with no extra configuration. Null/blank leaves the flag off so the
+    /// CLI keeps its default behaviour (e.g. the eval judges).
+    /// </para>
     /// </summary>
     public static async Task<ClaudeCliResult?> RunAsync(
             string            prompt,
@@ -100,6 +111,7 @@ static class ClaudeCliRunner {
             string?           mcpConfigJson  = null,
             string[]?         allowedTools   = null,
             double?           maxBudgetUsd   = null,
+            string?           systemPrompt   = null,
             CancellationToken ct             = default
         ) {
         // MCP mode without an allowlist would hand the model every tool the
@@ -139,7 +151,7 @@ static class ClaudeCliRunner {
         }
 
         try {
-            return await RunCoreAsync(prompt, timeout, log, workingDir, model, maxTurns, promptViaStdin, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, ct);
+            return await RunCoreAsync(prompt, timeout, log, workingDir, model, maxTurns, promptViaStdin, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, ct);
         } finally {
             if (createdWorkingDir) {
                 try {
@@ -164,6 +176,7 @@ static class ClaudeCliRunner {
             string?           mcpConfigJson,
             string[]?         allowedTools,
             double?           maxBudgetUsd,
+            string?           systemPrompt,
             CancellationToken ct
         ) {
         var psi = new ProcessStartInfo {
@@ -189,7 +202,7 @@ static class ClaudeCliRunner {
             psi.Environment.Remove("ANTHROPIC_API_KEY");
         }
 
-        foreach (var arg in BuildClaudeArgs(prompt, promptViaStdin, model, maxTurns, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd)) {
+        foreach (var arg in BuildClaudeArgs(prompt, promptViaStdin, model, maxTurns, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt)) {
             psi.ArgumentList.Add(arg);
         }
 
@@ -326,7 +339,8 @@ static class ClaudeCliRunner {
             string?   jsonSchema,
             string?   mcpConfigJson,
             string[]? allowedTools,
-            double?   maxBudgetUsd
+            double?   maxBudgetUsd,
+            string?   systemPrompt = null
         ) {
         var args = new List<string> { "-p" };
 
@@ -342,6 +356,18 @@ static class ClaudeCliRunner {
         args.Add(maxTurns.ToString());
         args.Add("--model");
         args.Add(model);
+
+        if (!string.IsNullOrWhiteSpace(systemPrompt)) {
+            // Replaces (not appends to) the default Claude Code system prompt.
+            // Text-only callers (title, what's-done) carry full instructions in
+            // the user prompt, so a minimal replacement strips the harness
+            // system-prompt overhead (~8.2K → ~2.4K prompt tokens/call, measured)
+            // on the subscription path with no extra config. Blank => omit, so
+            // the CLI keeps its default (we never pass `--system-prompt ""`,
+            // which would wipe the prompt to empty rather than skip the flag).
+            args.Add("--system-prompt");
+            args.Add(systemPrompt);
+        }
 
         if (maxBudgetUsd is { } budget) {
             args.Add("--max-budget-usd");
