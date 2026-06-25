@@ -47,7 +47,8 @@ public static class FrameCodec {
         FrameType.Resize                    => Dims(f.Cols, f.Rows),
         FrameType.Detach or FrameType.List  => [],
         FrameType.Exited                    => BeInt(f.ExitCode),
-        FrameType.Error or FrameType.Attach or FrameType.AgentList => Encoding.UTF8.GetBytes(f.Text),
+        FrameType.Error or FrameType.Attach or FrameType.AgentList
+            or FrameType.Restart or FrameType.RestartAck => Encoding.UTF8.GetBytes(f.Text),
         FrameType.Attached or FrameType.Spawn => f.Bytes, // pre-encoded by Attached(...)/Spawn(...)
         _ => throw new InvalidDataException($"unencodable frame {f.Type}"),
     };
@@ -57,7 +58,8 @@ public static class FrameCodec {
         FrameType.Resize  => new(t) { Cols = Be16(p, 0), Rows = Be16(p, 2) },
         FrameType.Detach or FrameType.List => new(t),
         FrameType.Exited  => new(t) { ExitCode = BinaryPrimitives.ReadInt32BigEndian(p) },
-        FrameType.Error or FrameType.Attach or FrameType.AgentList => new(t) { Text = Encoding.UTF8.GetString(p) },
+        FrameType.Error or FrameType.Attach or FrameType.AgentList
+            or FrameType.Restart or FrameType.RestartAck => new(t) { Text = Encoding.UTF8.GetString(p) },
         FrameType.Attached or FrameType.Spawn => new(t) { Bytes = p },
         _ => throw new InvalidDataException($"undecodable frame {t}"),
     };

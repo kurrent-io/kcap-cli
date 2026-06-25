@@ -195,7 +195,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _ = RunDaemonHeartbeatLoopAsync(_shutdownCts.Token);
     }
 
-    int ActiveCount => _agents.Count(a => a.Value.Status is "Starting" or "Running");
+    internal int ActiveCount => _agents.Count(a => a.Value.Status is "Starting" or "Running");
 
     async Task HandleLaunchAgent(LaunchAgentCommand cmd) {
         var agentId       = cmd.AgentId;

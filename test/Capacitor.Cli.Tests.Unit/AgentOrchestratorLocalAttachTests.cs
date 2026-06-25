@@ -14,6 +14,11 @@ namespace Capacitor.Cli.Tests.Unit;
 /// Local-attach (Phase 1) behaviours on AgentOrchestrator. Partial of
 /// AgentOrchestratorVendorTests to reuse its BuildOrchestrator + test doubles.
 public partial class AgentOrchestratorVendorTests {
+    sealed class NoopRestartStrategy : IRestartStrategy { public RestartOutcome Restart() => RestartOutcome.NoOp; }
+
+    static RestartCoordinator TestCoordinator() =>
+        RestartCoordinator.ForTest("test", "test", new NoopRestartStrategy());
+
     static DaemonConfig LauncherCfg() => new() { Name = "t", ServerUrl = "http://127.0.0.1:1" };
 
     static LauncherContext CtxFor(string path)
@@ -168,7 +173,7 @@ public partial class AgentOrchestratorVendorTests {
             });
 
             var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = LocalSocketPaths.Socket("test");

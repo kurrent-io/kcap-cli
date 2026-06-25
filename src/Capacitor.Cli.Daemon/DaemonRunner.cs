@@ -29,6 +29,11 @@ public static partial class DaemonRunner {
         LogLevel?  logLevelArg = null;
         var        config      = new DaemonConfig();
 
+        // Captured for self-respawn (detached restart-after-update) and to detect
+        // the successor's --await-lock handoff flag.
+        config.OriginalArgs = args;
+        var awaitLock = args.Contains("--await-lock");
+
         // Resolve server URL + active profile. The CLI does this in its own
         // Program.cs, but the daemon is a separate process so its statics start
         // empty. Skips repo discovery (the daemon isn't bound to a working dir);
@@ -136,7 +141,9 @@ public static partial class DaemonRunner {
         // a fresh instance id that we'll also send over DaemonConnect so
         // the server can refuse a second daemon claiming the same
         // (owner, name) slot (AI-630).
-        var daemonLock = DaemonLock.TryAcquire(config.Name);
+        var daemonLock = awaitLock
+            ? DaemonLock.TryAcquire(config.Name, TimeSpan.FromSeconds(5))
+            : DaemonLock.TryAcquire(config.Name);
 
         if (daemonLock is null) {
             await Console.Error.WriteLineAsync(
@@ -183,6 +190,28 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<EvalContextCache>();
         builder.Services.AddSingleton<EvalRunner>();
 
+        // Restart-after-update: a coordinator polls the on-disk binary and, when idle,
+        // applies a queued restart via the strategy chosen by supervision detection.
+        // Strategies are concrete singletons (AOT-safe; same pattern as the services
+        // above) and only the selected one is ever constructed.
+        builder.Services.AddSingleton<RestartState>();
+        builder.Services.AddSingleton<SupervisedExitStrategy>();
+        builder.Services.AddSingleton<DetachedRespawnStrategy>();
+        builder.Services.AddSingleton<ForegroundNoopStrategy>();
+        builder.Services.AddSingleton<IRestartStrategy>(sp => {
+            var cfg        = sp.GetRequiredService<DaemonConfig>();
+            var hasLogFile = cfg.OriginalArgs.Contains("--log-file");
+            var mode       = SupervisionDetector.DetectCurrent(DaemonLockPaths.Sanitize(cfg.Name), hasLogFile);
+
+            return mode switch {
+                SupervisionMode.Supervised => sp.GetRequiredService<SupervisedExitStrategy>(),
+                SupervisionMode.Detached   => sp.GetRequiredService<DetachedRespawnStrategy>(),
+                _                          => sp.GetRequiredService<ForegroundNoopStrategy>(),
+            };
+        });
+        builder.Services.AddSingleton<RestartCoordinator>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<RestartCoordinator>());
+
         // Local control socket: lets `kcap run-agent`/`attach`/`ls` drive daemon-hosted
         // agents from the user's own terminal (AI local-attach Phase 1).
         builder.Services.AddSingleton<LocalControlServer>();
@@ -190,6 +219,9 @@ public static partial class DaemonRunner {
 
         var host   = builder.Build();
         var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("kcap.Daemon");
+
+        // Set by the supervised restart strategy so we exit non-zero for a supervisor relaunch.
+        var restartState = host.Services.GetRequiredService<RestartState>();
 
         // AI-652: probe each registered launcher's CLI binary so the
         // DaemonConnect payload only advertises vendors this daemon can
@@ -284,6 +316,10 @@ public static partial class DaemonRunner {
             await host.StopAsync();
             LogCleanupCompleted(logger);
         }
+
+        // Restart-after-update (supervised): exit non-zero so the unit's
+        // failure-restart policy relaunches the now-updated binary.
+        if (restartState.SupervisedRestart) return ExitCodes.RestartRequested;
 
         // AI-630: if the daemon was shut down because the server told us
         // our (owner, name) slot is contested mid-run (heartbeat-triggered
