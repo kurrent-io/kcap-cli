@@ -155,6 +155,37 @@ public static class EvalService {
         _                   => model
     };
 
+    // ── Embedded-trace size gate (size-gated hybrid) ───────────────────────
+    //
+    // The text-only judge path embeds the whole compacted trace as
+    // {TRACE_JSON}. That's cheap and high-fidelity for normal sessions, but
+    // very long sessions produce traces that overflow even the judge model's
+    // 1M-token context (observed: ~1.28M tokens → HTTP 400 "Prompt is too
+    // long", num_turns:1, no verdict). Above this budget PrepareAsync routes
+    // EVERY question for the session through the tools path
+    // (BuildToolsQuestionPrompt + the MCP judge surface) so the judge fetches
+    // only what it needs on demand instead of receiving the trace up front.
+    //
+    // The budget is a token estimate: the trace is JSON, so ~4 chars/token is
+    // a conservative approximation (the real ratio is usually higher, which
+    // keeps us on the safe side of the window). Overridable via
+    // KCAP_EVAL_TRACE_TOKEN_BUDGET for tuning without shipping a release.
+    const int DefaultTraceTokenBudget = 200_000;
+
+    internal static int TraceTokenBudget() =>
+        int.TryParse(Environment.GetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET"), out var v) && v > 0
+            ? v
+            : DefaultTraceTokenBudget;
+
+    /// <summary>
+    /// True when the embedded compacted trace is large enough that putting it
+    /// in front of the judge model risks overflowing the context window, in
+    /// which case the whole session is routed through the tools path. The
+    /// estimate is <paramref name="traceJsonLength"/> chars / 4 tokens.
+    /// </summary>
+    internal static bool ShouldForceTools(int traceJsonLength, int tokenBudget) =>
+        traceJsonLength / 4 >= tokenBudget;
+
     /// <summary>
     /// Output of <see cref="PrepareAsync"/> — the shared state threaded
     /// through every <see cref="RunQuestionAsync"/> and finally consumed by
@@ -169,7 +200,8 @@ public static class EvalService {
         string                                       PromptTemplate,
         string                                       ToolsPromptTemplate,
         IReadOnlyList<EvalQuestionDto>               Questions,
-        string                                       Model
+        string                                       Model,
+        bool                                         ForceTools
     );
 
     /// <summary>
@@ -315,6 +347,18 @@ public static class EvalService {
             context.Compaction.BytesSaved
         );
 
+        // Size-gated hybrid: if the compacted trace would overflow the judge
+        // model's context window when embedded, route every question for this
+        // session through the tools path (no embedded trace) instead of the
+        // text-only path. See ShouldForceTools / DefaultTraceTokenBudget.
+        var tokenBudget = TraceTokenBudget();
+        var forceTools  = ShouldForceTools(traceJson.Length, tokenBudget);
+        if (forceTools) {
+            observer.OnInfo(
+                $"trace ~{traceJson.Length / 4:N0} est. tokens exceeds budget ({tokenBudget:N0}) — "
+                + "routing all questions through the tools path (no embedded trace)");
+        }
+
         // Retained judge facts are no longer injected into per-question or
         // retrospective prompts — telling the judge "we already know about X"
         // suppresses re-reporting, which silently stops the cluster
@@ -335,7 +379,8 @@ public static class EvalService {
             PromptTemplate:      promptTemplate,
             ToolsPromptTemplate: toolsPromptTemplate,
             Questions:           questions,
-            Model:               model
+            Model:               model,
+            ForceTools:          forceTools
         );
     }
 
@@ -368,13 +413,15 @@ public static class EvalService {
         var              diagnostics = new List<string>();
         ClaudeCliResult? result;
 
-        if (question.NeedsTools) {
+        if (question.NeedsTools || ctx.ForceTools) {
             // DEV-1486 tools-enabled path. Session-scoped MCP tool surface
             // (same as retrospective) on a per-question budget: 15 turns,
             // 10-min timeout, $1.00 cap (raised from 10/$0.50 in DEV-1576
             // after real runs hit error_max_turns mid-tool-use). Prompt
             // omits the compacted trace — the judge fetches session details
-            // on demand.
+            // on demand. ctx.ForceTools additionally routes EVERY question
+            // here (not just the NeedsTools four) when the session's trace is
+            // too large to embed — see PrepareAsync's size gate.
             var prompt = BuildToolsQuestionPrompt(
                 ctx.ToolsPromptTemplate, ctx.SessionId, ctx.EvalRunId, question, patterns);
 
@@ -434,12 +481,14 @@ public static class EvalService {
             return null;
         }
 
-        // DEV-1486: record tool-call count for tools-enabled questions.
+        // DEV-1486: record tool-call count for tools-routed questions.
         // Derived as num_turns - 1 (the final StructuredOutput turn doesn't
         // count as investigation). Clamped at 0 for the defensive case
         // where the CLI reports 0 turns. Null for text-only questions so
         // the server can distinguish "didn't measure" from "measured zero".
-        if (question.NeedsTools) {
+        // Mirrors the branch condition above so size-gate-forced questions
+        // record their tool usage too.
+        if (question.NeedsTools || ctx.ForceTools) {
             verdict = verdict with { ToolsUsed = Math.Max(0, result.NumTurns - 1) };
         }
 

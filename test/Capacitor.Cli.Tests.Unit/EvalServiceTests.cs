@@ -757,4 +757,38 @@ public class EvalServiceTests {
         var snapshot = EvalService.BuildFactsUsedSnapshot(new Dictionary<string, List<JudgeFact>>());
         await Assert.That(snapshot.Count).IsEqualTo(0);
     }
+
+    // ── Size gate (size-gated hybrid) ──────────────────────────────────────
+    //
+    // When the compacted trace would overflow the judge model's context if
+    // embedded, PrepareAsync flips the whole session onto the tools path. The
+    // estimate is chars/4 tokens; the boundary triggers at >= budget.
+
+    [Test]
+    public async Task ShouldForceTools_false_when_trace_under_budget() {
+        // 100K chars ≈ 25K est. tokens, well under a 200K budget.
+        await Assert.That(EvalService.ShouldForceTools(100_000, 200_000)).IsFalse();
+    }
+
+    [Test]
+    public async Task ShouldForceTools_true_when_trace_at_or_over_budget() {
+        // 800K chars ≈ 200K est. tokens == budget → force.
+        await Assert.That(EvalService.ShouldForceTools(800_000, 200_000)).IsTrue();
+        // ~5M chars ≈ 1.25M est. tokens — the overflow case from the bug report.
+        await Assert.That(EvalService.ShouldForceTools(5_000_000, 200_000)).IsTrue();
+    }
+
+    [Test]
+    public async Task ShouldForceTools_uses_four_chars_per_token_estimate() {
+        // Exactly at the boundary: budget*4 chars → est tokens == budget → force.
+        await Assert.That(EvalService.ShouldForceTools(40_000, 10_000)).IsTrue();
+        // One token's worth of chars below the boundary → don't force.
+        await Assert.That(EvalService.ShouldForceTools(40_000 - 4, 10_000)).IsFalse();
+    }
+
+    [Test]
+    public async Task TraceTokenBudget_defaults_when_env_unset() {
+        // No KCAP_EVAL_TRACE_TOKEN_BUDGET override in the test process → default.
+        await Assert.That(EvalService.TraceTokenBudget()).IsEqualTo(200_000);
+    }
 }
