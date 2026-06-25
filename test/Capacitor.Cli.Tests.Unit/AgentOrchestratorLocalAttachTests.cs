@@ -196,6 +196,40 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     [Test]
+    public async Task Reconnect_resends_stored_dims_not_the_hosted_constant() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        orch.RegisterAgentForTest(new AgentInstance("reg-1", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            IsPrivate = false, Status = "Running", CurrentCols = 73, CurrentRows = 19
+        });
+
+        await orch.ReRegisterAgentsForTestAsync();
+
+        await Assert.That(server.LastDims).IsEqualTo((73, 19));
+    }
+
+    [Test]
+    public async Task Web_resize_updates_stored_dims_then_reconnect_resends_them() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = new AgentInstance("reg-2", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            IsPrivate = false, Status = "Running", CurrentCols = 80, CurrentRows = 24
+        };
+        orch.RegisterAgentForTest(agent);
+
+        orch.HandleResizeTerminalForTest(new ResizeTerminalCommand("reg-2", 51, 200));
+        await Assert.That(agent.CurrentCols).IsEqualTo((ushort)51);
+        await Assert.That(agent.CurrentRows).IsEqualTo((ushort)200);
+
+        await orch.ReRegisterAgentsForTestAsync();
+        await Assert.That(server.LastDims).IsEqualTo((51, 200));
+    }
+
+    [Test]
     public async Task Local_socket_list_round_trips_registered_agents_over_a_real_socket() {
         if (OperatingSystem.IsWindows()) return; // Unix-domain socket path
 
@@ -280,7 +314,9 @@ public partial class AgentOrchestratorVendorTests {
         NullLogger<ServerConnection>.Instance
     ) {
         public ConcurrentBag<string> Calls { get; } = [];
+        public (int Cols, int Rows)? LastDims { get; private set; }
 
+        public override Task SendTerminalDimensionsAsync(string agentId, int cols, int rows) { LastDims = (cols, rows); Calls.Add(nameof(SendTerminalDimensionsAsync)); return Task.CompletedTask; }
         public override Task LaunchFailedAsync(string agentId, string reason) { Calls.Add(nameof(LaunchFailedAsync)); return Task.CompletedTask; }
         public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath) { Calls.Add(nameof(AgentRegisteredAsync)); return Task.CompletedTask; }
         public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) { Calls.Add(nameof(AgentStatusChangedAsync)); return Task.CompletedTask; }

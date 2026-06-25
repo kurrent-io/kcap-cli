@@ -190,6 +190,15 @@ internal partial class AgentOrchestrator {
             agent.ClientDims[sink] = new AgentInstance.Dim(cols, rows);
             ClampPtyLocked(agent);
         }
+
+        // Announce the new clamped size so registered agents' web viewers re-lock. Outside the
+        // lock (best-effort, fire-and-forget); no-op for --private.
+        if (!agent.IsPrivate) _ = SafeSendDimsAsync(agent);
+    }
+
+    async Task SafeSendDimsAsync(AgentInstance agent) {
+        try { await _server.SendTerminalDimensionsAsync(agent.Id, agent.CurrentCols, agent.CurrentRows); }
+        catch (Exception ex) { LogTerminalDimsSendFailed(ex, agent.Id); }
     }
 
     /// <summary>
@@ -203,6 +212,10 @@ internal partial class AgentOrchestrator {
 
         var c = agent.ClientDims.Values.Min(d => d.Cols);
         var r = agent.ClientDims.Values.Min(d => d.Rows);
-        if (c > 0 && r > 0) agent.Process.Resize(c, r);
+        if (c > 0 && r > 0) {
+            agent.Process.Resize(c, r);
+            agent.CurrentCols = c;
+            agent.CurrentRows = r;
+        }
     }
 }

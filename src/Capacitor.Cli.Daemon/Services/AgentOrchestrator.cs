@@ -917,6 +917,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     Task HandleResizeTerminal(ResizeTerminalCommand cmd) {
         if (_agents.TryGetValue(cmd.AgentId, out var agent)) {
             agent.Process.Resize((ushort)cmd.Cols, (ushort)cmd.Rows);
+            // Keep the stored dims current so a later reconnect resends the real size, not stale ones.
+            agent.CurrentCols = (ushort)cmd.Cols;
+            agent.CurrentRows = (ushort)cmd.Rows;
         }
 
         return Task.CompletedTask;
@@ -955,7 +958,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // catch keeps a dims-send failure from escaping to the retry handler
                     // (which would re-register the agent) or withholding readiness.
                     try {
-                        await _server.SendTerminalDimensionsAsync(agent.Id, HostedPtyCols, HostedPtyRows);
+                        await _server.SendTerminalDimensionsAsync(agent.Id, agent.CurrentCols, agent.CurrentRows);
                     } catch (Exception ex) {
                         LogTerminalDimsSendFailed(ex, agent.Id);
                     }
@@ -1230,6 +1233,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal Task HandleStopAgentForTest(string agentId) => HandleStopAgent(agentId);
 
     internal Task RegisterAgentForTestAsync(AgentInstance agent) => RegisterAgentAsync(agent);
+    internal Task ReRegisterAgentsForTestAsync() => ReRegisterAgentsAsync();
+    internal void HandleResizeTerminalForTest(ResizeTerminalCommand cmd) => _ = HandleResizeTerminal(cmd);
 }
 
 /// <summary>
