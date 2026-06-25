@@ -148,6 +148,23 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     [Test]
+    public async Task RegisterAgentAsync_registers_public_agent_and_skips_private() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var pub = new AgentInstance("pub-1", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false };
+        await orch.RegisterAgentForTestAsync(pub);
+        await Assert.That(server.Calls).Contains(nameof(ServerConnection.AgentRegisteredAsync));
+
+        server.Calls.Clear();
+        var priv = new AgentInstance("priv-1", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true };
+        await orch.RegisterAgentForTestAsync(priv);
+        await Assert.That(server.Calls.Count).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task Local_socket_list_round_trips_registered_agents_over_a_real_socket() {
         if (OperatingSystem.IsWindows()) return; // Unix-domain socket path
 
