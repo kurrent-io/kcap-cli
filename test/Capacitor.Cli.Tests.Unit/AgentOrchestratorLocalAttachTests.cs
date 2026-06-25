@@ -14,7 +14,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// Local-attach (Phase 1) behaviours on AgentOrchestrator. Partial of
 /// AgentOrchestratorVendorTests to reuse its BuildOrchestrator + test doubles.
 public partial class AgentOrchestratorVendorTests {
-    sealed class NoopRestartStrategy : IRestartStrategy { public void Restart() { } }
+    sealed class NoopRestartStrategy : IRestartStrategy { public RestartOutcome Restart() => RestartOutcome.NoOp; }
 
     static RestartCoordinator TestCoordinator() =>
         RestartCoordinator.ForTest("test", "test", new NoopRestartStrategy());

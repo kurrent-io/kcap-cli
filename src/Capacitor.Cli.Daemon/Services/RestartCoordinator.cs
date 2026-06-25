@@ -5,6 +5,18 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Services;
 
+/// <summary>Outcome of a restart request, used to ack the control-socket caller honestly.</summary>
+internal enum RestartRequestResult {
+    /// <summary>The restart is firing now (daemon shutting down / respawning).</summary>
+    Restarting,
+    /// <summary>Accepted but deferred — the daemon is busy; it will restart when idle.</summary>
+    Queued,
+    /// <summary>A restart was attempted but failed to start; it will be retried.</summary>
+    Failed,
+    /// <summary>Foreground daemon — no auto-restart; the user must restart it manually.</summary>
+    ManualRequired,
+}
+
 /// <summary>
 /// Polls the running binary; a size/mtime change queues a restart-after-update that
 /// fires the chosen <see cref="IRestartStrategy"/> the moment the daemon is idle
@@ -22,10 +34,14 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     internal Func<bool>        IsBusy     = static () => false;
     internal IRestartStrategy  Strategy;
 
-    BinaryStat? _baseline;
-    bool        _pending;
-    bool        _force;
-    bool        _fired;
+    // _gate guards all mutable state below. RequestRestart runs on the control-socket
+    // handler thread while the poll loop runs on the timer thread, so the flags must be
+    // synchronized — plain fields would risk stale reads / lost updates.
+    readonly Lock _gate = new();
+    BinaryStat?   _baseline;
+    bool          _pending;
+    bool          _force;
+    bool          _fired;
 
     static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(15);
 
@@ -49,7 +65,9 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     internal static RestartCoordinator ForTest(string name, string version, IRestartStrategy strategy) =>
         new(name, version, strategy, NullLogger.Instance);
 
-    internal void PrimeBaseline() => _baseline = StatBinary();
+    internal void PrimeBaseline() {
+        lock (_gate) _baseline = StatBinary();
+    }
 
     static BinaryStat? StatProcessBinary() {
         // Windows can't replace a running binary in place, so self-detection is a no-op
@@ -68,34 +86,67 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         }
     }
 
-    /// <summary>Explicit restart request from the control socket. <paramref name="force"/> bypasses the idle gate.</summary>
-    internal void RequestRestart(bool force) {
-        _pending = true;
-        _force  |= force;
-        if (!force) {
-            DaemonRestartMarker.Write(_name, new DaemonRestartMarker(_version, "requested", DateTimeOffset.UtcNow));
-            LogQueued(_logger, "requested");
-        }
-    }
+    /// <summary>
+    /// Explicit restart request from the control socket. <paramref name="force"/> bypasses
+    /// the idle gate. Evaluates immediately (rather than waiting for the next poll tick) so
+    /// a manual restart of an already-idle daemon is prompt, and returns the result so the
+    /// caller can ack honestly.
+    /// </summary>
+    internal RestartRequestResult RequestRestart(bool force) {
+        lock (_gate) {
+            _pending = true;
+            if (force) _force = true;
 
-    /// <summary>One poll iteration (extracted for unit testing).</summary>
-    internal void Tick() {
-        if (_fired) return;
-
-        if (!_pending) {
-            var current = StatBinary();
-            if (RestartDecision.BinaryChanged(_baseline, current)) {
-                _pending  = true;
-                _baseline = current;
-                DaemonRestartMarker.Write(_name, new DaemonRestartMarker(_version, "self-detected", DateTimeOffset.UtcNow));
-                LogQueued(_logger, "self-detected");
+            if (!force) {
+                DaemonRestartMarker.Write(_name, new DaemonRestartMarker(_version, "requested", DateTimeOffset.UtcNow));
+                LogQueued(_logger, "requested");
             }
         }
 
-        if (RestartDecision.ShouldFire(_pending, IsBusy(), _force)) {
-            _fired = true;
-            Strategy.Restart();
+        return Evaluate();
+    }
+
+    /// <summary>One poll iteration (timer-driven; also the unit-test entry point).</summary>
+    internal void Tick() => Evaluate();
+
+    /// <summary>
+    /// Detect a binary change (if not already pending), then fire the strategy if the gate
+    /// allows. The fire decision claims <c>_fired</c> under the lock for single-fire safety,
+    /// but the (potentially blocking) strategy runs outside the lock. A <see cref="RestartOutcome.Retry"/>
+    /// un-claims so a failed respawn is retried on the next tick/request.
+    /// </summary>
+    RestartRequestResult Evaluate() {
+        bool fire;
+
+        lock (_gate) {
+            if (_fired) return RestartRequestResult.Restarting; // already in progress
+
+            if (!_pending) {
+                var current = StatBinary();
+                if (RestartDecision.BinaryChanged(_baseline, current)) {
+                    _pending  = true;
+                    _baseline = current;
+                    DaemonRestartMarker.Write(_name, new DaemonRestartMarker(_version, "self-detected", DateTimeOffset.UtcNow));
+                    LogQueued(_logger, "self-detected");
+                }
+            }
+
+            fire = RestartDecision.ShouldFire(_pending, IsBusy(), _force);
+            if (fire) _fired = true; // claim before releasing the lock (single-fire)
         }
+
+        if (!fire) return RestartRequestResult.Queued;
+
+        var outcome = Strategy.Restart();
+
+        if (outcome == RestartOutcome.Retry) {
+            lock (_gate) _fired = false; // un-claim so a later tick/request retries
+            return RestartRequestResult.Failed;
+        }
+
+        return outcome == RestartOutcome.NoOp
+            ? RestartRequestResult.ManualRequired
+            : RestartRequestResult.Restarting;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct) {

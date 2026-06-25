@@ -17,9 +17,9 @@ internal sealed partial class DetachedRespawnStrategy(
     public static string[] BuildChildArgs(IReadOnlyList<string> originalArgs) =>
         originalArgs.Contains("--await-lock") ? [.. originalArgs] : [.. originalArgs, "--await-lock"];
 
-    public void Restart() {
+    public RestartOutcome Restart() {
         var exe = Environment.ProcessPath;
-        if (exe is null) { LogNoProcessPath(logger); return; }
+        if (exe is null) { LogNoProcessPath(logger); return RestartOutcome.Retry; }
 
         var psi = new ProcessStartInfo {
             FileName               = exe,
@@ -39,11 +39,14 @@ internal sealed partial class DetachedRespawnStrategy(
             LogRespawned(logger, child.Id);
         } catch (Exception ex) {
             // Spawn failed — do NOT shut down (that would leave no daemon at all).
+            // Report Retry so the coordinator keeps the request pending and tries again.
             LogRespawnFailed(logger, ex);
-            return;
+            return RestartOutcome.Retry;
         }
 
         lifetime.StopApplication();
+
+        return RestartOutcome.Initiated;
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Restart-after-update: Environment.ProcessPath is null; cannot self-respawn")]

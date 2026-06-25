@@ -7,10 +7,12 @@ namespace Capacitor.Cli.Daemon.Services;
 internal sealed partial class SupervisedExitStrategy(
         RestartState state, IHostApplicationLifetime lifetime, ILogger<SupervisedExitStrategy> logger
     ) : IRestartStrategy {
-    public void Restart() {
+    public RestartOutcome Restart() {
         LogSupervisedRestart(logger);
         state.SupervisedRestart = true;
         lifetime.StopApplication();
+
+        return RestartOutcome.Initiated;
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Restart-after-update: exiting non-zero for supervisor relaunch")]

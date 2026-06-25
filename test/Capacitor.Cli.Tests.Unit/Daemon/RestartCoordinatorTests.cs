@@ -20,8 +20,9 @@ public class RestartCoordinatorTests {
     }
 
     sealed class SpyStrategy : IRestartStrategy {
-        public int Calls;
-        public void Restart() => Calls++;
+        public int            Calls;
+        public RestartOutcome Outcome = RestartOutcome.Initiated;
+        public RestartOutcome Restart() { Calls++; return Outcome; }
     }
 
     static RestartCoordinator NewCoordinator(SpyStrategy spy, Func<bool> isBusy, Func<BinaryStat?> stat) {
@@ -80,6 +81,55 @@ public class RestartCoordinatorTests {
         var c    = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(size, 1));
         size = 200;
         c.Tick();
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Failed_restart_is_retried_on_next_tick() {
+        var spy  = new SpyStrategy { Outcome = RestartOutcome.Retry };
+        var size = 100L;
+        var c    = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(size, 1));
+        size = 200;
+        c.Tick();                                   // fires, strategy returns Retry → un-claimed
+        await Assert.That(spy.Calls).IsEqualTo(1);
+        c.Tick();                                   // still pending → retries
+        await Assert.That(spy.Calls).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Noop_outcome_is_terminal() {
+        var spy  = new SpyStrategy { Outcome = RestartOutcome.NoOp };
+        var size = 100L;
+        var c    = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(size, 1));
+        size = 200;
+        c.Tick();
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);  // NoOp is terminal — no retry, no spam
+    }
+
+    [Test]
+    public async Task Request_restart_fires_immediately_when_idle() {
+        var spy = new SpyStrategy();
+        var c   = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(100, 1));
+
+        var result = c.RequestRestart(force: false);   // no Tick needed — evaluates now
+
+        await Assert.That(spy.Calls).IsEqualTo(1);
+        await Assert.That(result).IsEqualTo(RestartRequestResult.Restarting);
+    }
+
+    [Test]
+    public async Task Request_restart_when_busy_queues_then_fires_when_idle() {
+        var spy  = new SpyStrategy();
+        var busy = true;
+        var c    = NewCoordinator(spy, isBusy: () => busy, stat: () => new BinaryStat(100, 1));
+
+        var result = c.RequestRestart(force: false);
+        await Assert.That(result).IsEqualTo(RestartRequestResult.Queued);
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        busy = false;
         c.Tick();
         await Assert.That(spy.Calls).IsEqualTo(1);
     }

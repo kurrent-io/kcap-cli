@@ -54,7 +54,7 @@ internal sealed partial class LocalControlServer(
     async Task HandleRestartAsync(string mode, Stream stream, CancellationToken ct) {
         var force = mode is "force";
 
-        // "now" requires idle; "when-idle"/"force" always accept.
+        // Bare "now" refuses while busy (don't silently queue); "when-idle"/"force" accept.
         if (mode is "now" && restart.IsBusy()) {
             await FrameCodec.WriteAsync(stream,
                 LocalFrame.Error("daemon busy — agents running or eval in progress; use --when-idle or --force"), ct);
@@ -62,9 +62,16 @@ internal sealed partial class LocalControlServer(
             return;
         }
 
-        restart.RequestRestart(force);
-        var status = (force || mode is "now") ? "restarting" : "queued";
-        await FrameCodec.WriteAsync(stream, LocalFrame.RestartAck(status), ct);
+        // RequestRestart evaluates immediately and reports what actually happened, so the
+        // ack reflects reality (queued vs restarting vs failed vs manual-restart-required).
+        var reply = restart.RequestRestart(force) switch {
+            RestartRequestResult.Restarting     => LocalFrame.RestartAck("restarting"),
+            RestartRequestResult.Queued         => LocalFrame.RestartAck("queued"),
+            RestartRequestResult.Failed         => LocalFrame.Error("restart failed to start; the daemon will retry"),
+            RestartRequestResult.ManualRequired => LocalFrame.Error("foreground daemon — exit and restart it manually"),
+            _                                   => LocalFrame.Error("unknown restart result"),
+        };
+        await FrameCodec.WriteAsync(stream, reply, ct);
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Local control socket listening at {Path}")]
