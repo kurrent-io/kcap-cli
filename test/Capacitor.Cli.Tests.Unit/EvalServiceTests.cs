@@ -839,28 +839,34 @@ public class EvalServiceTests {
     // while leaving the `kcap eval` CLI host (ProcessPath already `kcap`)
     // untouched.
 
+    // Paths are built with Path.Combine so the separator matches the host
+    // (the resolver itself uses Path.Combine) — hardcoding "/" makes the
+    // sibling comparison fail on Windows, where Combine joins with "\".
+
     [Test]
     public async Task ResolveJudgeCommandPath_remaps_daemon_to_sibling_kcap() {
-        var resolved = EvalService.ResolveJudgeCommandPath(
-            "/opt/kcap/bin/kcap-daemon",
-            fileExists: p => p == "/opt/kcap/bin/kcap");
-        await Assert.That(resolved).IsEqualTo("/opt/kcap/bin/kcap");
+        var dir     = Path.Combine("opt", "kcap", "bin");
+        var daemon  = Path.Combine(dir, "kcap-daemon");
+        var sibling = Path.Combine(dir, "kcap");
+
+        var resolved = EvalService.ResolveJudgeCommandPath(daemon, fileExists: p => p == sibling);
+        await Assert.That(resolved).IsEqualTo(sibling);
     }
 
     [Test]
     public async Task ResolveJudgeCommandPath_keeps_daemon_path_when_sibling_missing() {
-        var resolved = EvalService.ResolveJudgeCommandPath(
-            "/opt/kcap/bin/kcap-daemon",
-            fileExists: _ => false);
-        await Assert.That(resolved).IsEqualTo("/opt/kcap/bin/kcap-daemon");
+        var daemon = Path.Combine("opt", "kcap", "bin", "kcap-daemon");
+
+        var resolved = EvalService.ResolveJudgeCommandPath(daemon, fileExists: _ => false);
+        await Assert.That(resolved).IsEqualTo(daemon);
     }
 
     [Test]
     public async Task ResolveJudgeCommandPath_leaves_cli_kcap_path_untouched() {
-        var resolved = EvalService.ResolveJudgeCommandPath(
-            "/usr/local/bin/kcap",
-            fileExists: _ => true);
-        await Assert.That(resolved).IsEqualTo("/usr/local/bin/kcap");
+        var cli = Path.Combine("usr", "local", "bin", "kcap");
+
+        var resolved = EvalService.ResolveJudgeCommandPath(cli, fileExists: _ => true);
+        await Assert.That(resolved).IsEqualTo(cli);
     }
 
     [Test]
@@ -872,11 +878,11 @@ public class EvalServiceTests {
     [Test]
     public async Task ResolveJudgeCommandPath_preserves_executable_extension_on_sibling() {
         // Windows host: kcap-daemon.exe → kcap.exe (extension carried over).
-        // Uses a synthetic extension so the assertion is independent of the
-        // test platform's path separator.
-        var resolved = EvalService.ResolveJudgeCommandPath(
-            "/opt/kcap/bin/kcap-daemon.exe",
-            fileExists: p => p == "/opt/kcap/bin/kcap.exe");
-        await Assert.That(resolved).IsEqualTo("/opt/kcap/bin/kcap.exe");
+        var dir     = Path.Combine("opt", "kcap", "bin");
+        var daemon  = Path.Combine(dir, "kcap-daemon.exe");
+        var sibling = Path.Combine(dir, "kcap.exe");
+
+        var resolved = EvalService.ResolveJudgeCommandPath(daemon, fileExists: p => p == sibling);
+        await Assert.That(resolved).IsEqualTo(sibling);
     }
 }
