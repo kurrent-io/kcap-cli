@@ -148,6 +148,25 @@ function runUpdate(binaryPath) {
     // Couldn't determine — fall through and let npm decide (it's idempotent).
   }
 
+  // Windows preflight: a running kcap-daemon.exe locks the binary, so `npm install`
+  // would FAIL to overwrite it. Detect a running daemon and abort with instructions
+  // BEFORE attempting the (doomed) install. macOS/Linux can replace the file in place,
+  // so this guard is Windows-only.
+  if (process.platform === "win32") {
+    try {
+      const status = execFileSync(binaryPath, ["daemon", "status"], { encoding: "utf8" });
+      if (/running \(PID/i.test(status)) {
+        console.error("A kcap daemon is running and locks the binary, so the update can't");
+        console.error("replace it. Stop it first, then re-run `kcap update`:");
+        console.error("  kcap daemon service stop   (if installed as a service)");
+        console.error("  kcap daemon stop           (otherwise)");
+        process.exit(1);
+      }
+    } catch {
+      // status probe failed (no daemon / old binary) — fall through to the normal install.
+    }
+  }
+
   // Fail clearly instead of half-installing under a root-owned prefix.
   try {
     fs.accessSync(globalRoot, fs.constants.W_OK);
