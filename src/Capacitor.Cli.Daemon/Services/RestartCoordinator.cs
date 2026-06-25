@@ -52,6 +52,12 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     internal void PrimeBaseline() => _baseline = StatBinary();
 
     static BinaryStat? StatProcessBinary() {
+        // Windows can't replace a running binary in place, so self-detection is a no-op
+        // there: returning null means BinaryChanged() never sees a change. Explicit
+        // restart requests still work (they set _pending directly). Keeping the OS check
+        // here — rather than in Tick() — leaves the gate logic OS-agnostic and testable.
+        if (OperatingSystem.IsWindows()) return null;
+
         try {
             var p = Environment.ProcessPath;
             if (p is null) return null;
@@ -76,7 +82,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     internal void Tick() {
         if (_fired) return;
 
-        if (!_pending && !OperatingSystem.IsWindows()) {
+        if (!_pending) {
             var current = StatBinary();
             if (RestartDecision.BinaryChanged(_baseline, current)) {
                 _pending  = true;
