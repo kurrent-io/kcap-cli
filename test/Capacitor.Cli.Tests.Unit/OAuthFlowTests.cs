@@ -93,81 +93,38 @@ public class OAuthFlowTests {
     }
 
     [Test]
-    public async Task GitHub_authorize_url_includes_all_required_params() {
-        var url = OAuthLoginFlow.BuildGitHubAuthorizeUrl(
-            clientId:     "Iv1.abc",
-            redirectUri:  "http://127.0.0.1:54321/callback",
-            state:        "state-xyz",
-            codeChallenge:"challenge-123");
+    public async Task GitHubBrowser_exchanges_code_and_returns_access_token() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/code-exchange").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"access_token":"gho_abc"}"""));
 
-        await Assert.That(url).StartsWith("https://github.com/login/oauth/authorize?");
-        await Assert.That(url).Contains("client_id=Iv1.abc");
-        await Assert.That(url).Contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A54321%2Fcallback");
-        await Assert.That(url).Contains("state=state-xyz");
-        await Assert.That(url).Contains("scope=read%3Auser%20read%3Aorg");
-        await Assert.That(url).Contains("code_challenge=challenge-123");
-        await Assert.That(url).Contains("code_challenge_method=S256");
-        await Assert.That(url).Contains("response_type=code");
+        var token = await OAuthLoginFlow.RunGitHubBrowserFlowAsync(
+            "Iv1.abc", $"{server.Urls[0]}/code-exchange", FakeBrowser.WithCode("the_code"));
+
+        await Assert.That(token).IsEqualTo("gho_abc");
     }
 
     [Test]
-    public async Task Callback_parser_returns_code_when_state_matches() {
-        var result = OAuthLoginFlow.ParseCallback(
-            queryString:  "?code=abc&state=expected",
-            expectedState:"expected");
+    public async Task GitHubBrowser_returns_null_on_state_mismatch_without_calling_proxy() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/code-exchange").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"access_token":"nope"}"""));
 
-        await Assert.That(result.Code).IsEqualTo("abc");
-        await Assert.That(result.Error).IsNull();
+        var token = await OAuthLoginFlow.RunGitHubBrowserFlowAsync(
+            "Iv1.abc", $"{server.Urls[0]}/code-exchange",
+            FakeBrowser.WithRawQuery("?code=the_code&state=attacker"));
+
+        await Assert.That(token).IsNull();
+        // The proxy must never be hit when the CSRF state doesn't match.
+        await Assert.That(server.LogEntries.Any(e => e.RequestMessage.Path == "/code-exchange")).IsFalse();
     }
 
     [Test]
-    public async Task Callback_parser_rejects_state_mismatch() {
-        var result = OAuthLoginFlow.ParseCallback(
-            queryString:  "?code=abc&state=attacker",
-            expectedState:"expected");
+    public async Task GitHubBrowser_returns_null_on_non_success_browser_result() {
+        var token = await OAuthLoginFlow.RunGitHubBrowserFlowAsync(
+            "Iv1.abc", "http://unused.test/code-exchange", FakeBrowser.NonSuccess(BrowserResultType.Timeout));
 
-        await Assert.That(result.Code).IsNull();
-        await Assert.That(result.Error).IsEqualTo("state_mismatch");
-    }
-
-    [Test]
-    public async Task Callback_parser_surfaces_provider_error() {
-        var result = OAuthLoginFlow.ParseCallback(
-            queryString:  "?error=access_denied&state=expected",
-            expectedState:"expected");
-
-        await Assert.That(result.Code).IsNull();
-        await Assert.That(result.Error).IsEqualTo("access_denied");
-    }
-
-    [Test]
-    public async Task Callback_parser_reports_missing_state_when_state_param_absent() {
-        var result = OAuthLoginFlow.ParseCallback(
-            queryString:  "?error=access_denied",
-            expectedState:"expected");
-
-        await Assert.That(result.Code).IsNull();
-        await Assert.That(result.Error).IsEqualTo("missing_state");
-    }
-
-    [Test]
-    public async Task Callback_parser_reports_state_mismatch_when_state_differs() {
-        var result = OAuthLoginFlow.ParseCallback(
-            queryString:  "?error=access_denied&state=attacker",
-            expectedState:"expected");
-
-        await Assert.That(result.Code).IsNull();
-        await Assert.That(result.Error).IsEqualTo("state_mismatch");
-    }
-
-    [Test]
-    public async Task Callback_parser_rejects_missing_code() {
-        var result = OAuthLoginFlow.ParseCallback(
-            queryString:  "?state=expected",
-            expectedState:"expected");
-
-        await Assert.That(result.Code).IsNull();
-        await Assert.That(result.Error).IsEqualTo("missing_code");
+        await Assert.That(token).IsNull();
     }
 
     [Test]

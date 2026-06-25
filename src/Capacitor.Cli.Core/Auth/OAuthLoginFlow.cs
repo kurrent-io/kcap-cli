@@ -1,8 +1,6 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Duende.IdentityModel.Client;
 using Duende.IdentityModel.OidcClient;
@@ -186,68 +184,61 @@ public static class OAuthLoginFlow {
     }
 
     /// <summary>
-    /// Runs GitHub authorization-code-with-PKCE flow against a localhost loopback
-    /// listener. Opens the system browser to GitHub's authorize page; on callback,
-    /// verifies CSRF state and POSTs the code+verifier to <paramref name="codeExchangeUrl"/>
-    /// on the Capacitor server. The server adds its GitHub App client_secret and forwards
-    /// to GitHub's token endpoint (which GitHub Apps require, even with PKCE).
-    /// Returns the token on success, or <c>null</c> on user cancel, state mismatch,
-    /// or upstream error. Throws if the loopback port can't be bound — the caller
-    /// uses that signal to fall back to device flow.
+    /// GitHub authorization-code-with-PKCE via OidcClient's front-channel (authorize URL + PKCE +
+    /// state) over a 127.0.0.1 loopback, then the proxy-mediated JSON code-exchange to the Capacitor
+    /// server (GitHub Apps need client_secret on the token POST, which the server adds). Returns the
+    /// GitHub access token, or <c>null</c> on cancel/timeout/state-mismatch/error — a null is a hard
+    /// failure (the caller does NOT fall back to device flow on null, only on a loopback bind exception
+    /// thrown out of <see cref="LoopbackBrowser"/>). <paramref name="browser"/> is the test seam.
     /// </summary>
-    public static async Task<string?> RunGitHubBrowserFlowAsync(string clientId, string codeExchangeUrl, TimeSpan? timeout = null) {
-        var verifier  = GenerateCodeVerifier();
-        var challenge = GenerateCodeChallenge(verifier);
-        var state     = GenerateCodeVerifier(); // reuse the random source — same entropy is fine
+    public static async Task<string?> RunGitHubBrowserFlowAsync(
+            string clientId, string codeExchangeUrl, IBrowser? browser = null, TimeSpan? timeout = null) {
+        browser ??= new LoopbackBrowser();
+        var redirectUri = $"http://127.0.0.1:{GetAvailablePort()}/callback";
 
-        var port        = GetAvailablePort();
-        var redirectUri = $"http://127.0.0.1:{port}/callback";
+        var options = new OidcClientOptions {
+            Authority   = "https://github.com",
+            ClientId    = clientId,
+            Scope       = "read:user read:org",
+            RedirectUri = redirectUri,
+            LoadProfile = false,
+            DisablePushedAuthorization = true,
+            Browser     = browser,
+            ProviderInformation = new ProviderInformation {
+                IssuerName        = "https://github.com",
+                AuthorizeEndpoint = "https://github.com/login/oauth/authorize",
+                TokenEndpoint     = "https://github.com/login/oauth/access_token", // required non-empty; never called
+            },
+        };
+        options.Policy.Discovery.RequireKeySet = false;
 
-        using var listener = new HttpListener();
-        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
-        listener.Start();
+        var oidc  = new OidcClient(options);
+        var state = await oidc.PrepareLoginAsync();
 
-        var authUrl = BuildGitHubAuthorizeUrl(clientId, redirectUri, state, challenge);
+        var result = await browser.InvokeAsync(
+            new BrowserOptions(state.StartUrl, redirectUri) { Timeout = timeout ?? TimeSpan.FromMinutes(5) });
 
-        await Console.Out.WriteLineAsync("Opening browser for GitHub authentication...");
-        await Console.Out.WriteLineAsync($"  If the browser doesn't open, visit: {authUrl}");
+        if (result.ResultType != BrowserResultType.Success) {
+            Console.Error.WriteLine(result.ResultType == BrowserResultType.Timeout
+                ? "Timed out waiting for authorization. Re-run `kcap login` to try again."
+                : $"Authorization failed: {result.Error ?? result.ResultType.ToString()}");
 
-        try {
-            Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
-        } catch {
-            /* Browser open is best-effort — user can still copy the URL */
+            return null;
         }
 
-        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromMinutes(5));
+        var resp = new AuthorizeResponse(result.Response);
+        if (resp.IsError) {
+            Console.Error.WriteLine($"Authorization failed: {resp.Error}");
 
-        HttpListenerContext context;
-
-        while (true) {
-            var getContext = listener.GetContextAsync();
-
-            try {
-                context = await getContext.WaitAsync(cts.Token);
-            } catch (OperationCanceledException) {
-                listener.Stop();
-                _ = getContext.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-                Console.Error.WriteLine("Timed out waiting for authorization. Re-run `kcap login` to try again.");
-
-                return null;
-            }
-
-            if (context.Request.Url?.AbsolutePath == "/callback") break;
-
-            // Ignore favicon and other browser-issued requests that aren't our callback.
-            context.Response.StatusCode = 404;
-            context.Response.Close();
+            return null;
         }
+        if (!string.Equals(resp.State, state.State, StringComparison.Ordinal)) {
+            Console.Error.WriteLine("Error: state mismatch — possible CSRF. Aborting.");
 
-        var callback = ParseCallback(context.Request.Url?.Query ?? "", state);
-        await RespondCallbackAsync(context, callback);
-        listener.Stop();
-
-        if (callback.Code is null) {
-            Console.Error.WriteLine($"Authorization failed: {callback.Error}");
+            return null;
+        }
+        if (string.IsNullOrEmpty(resp.Code)) {
+            Console.Error.WriteLine("Authorization failed: no authorization code received.");
 
             return null;
         }
@@ -255,20 +246,13 @@ public static class OAuthLoginFlow {
         using var http = new HttpClient();
         http.DefaultRequestHeaders.Accept.Add(new("application/json"));
 
-        var exchangeRequest = new GitHubCodeExchangeRequest {
-            Code         = callback.Code,
-            CodeVerifier = verifier,
-            RedirectUri  = redirectUri
-        };
-
         HttpResponseMessage tokenResponse;
 
         try {
             tokenResponse = await http.PostAsJsonAsync(
                 codeExchangeUrl,
-                exchangeRequest,
-                CapacitorJsonContext.Default.GitHubCodeExchangeRequest,
-                cancellationToken: cts.Token
+                new GitHubCodeExchangeRequest { Code = resp.Code, CodeVerifier = state.CodeVerifier, RedirectUri = redirectUri },
+                CapacitorJsonContext.Default.GitHubCodeExchangeRequest
             );
         } catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or UriFormatException or InvalidOperationException) {
             Console.Error.WriteLine($"Could not reach the code-exchange endpoint at {codeExchangeUrl}: {ex.Message}");
@@ -285,9 +269,9 @@ public static class OAuthLoginFlow {
         GitHubTokenResponse? tokenResult;
 
         try {
-            tokenResult = await tokenResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.GitHubTokenResponse, cancellationToken: cts.Token);
+            tokenResult = await tokenResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.GitHubTokenResponse);
         } catch (JsonException ex) {
-            var raw = await tokenResponse.Content.ReadAsStringAsync(cts.Token);
+            var raw = await tokenResponse.Content.ReadAsStringAsync();
             Console.Error.WriteLine($"Code-exchange response was not valid JSON ({ex.Message}): {raw}");
 
             return null;
@@ -302,22 +286,6 @@ public static class OAuthLoginFlow {
         await Console.Out.WriteLineAsync("Authorization complete.");
 
         return tokenResult.AccessToken;
-    }
-
-    static async Task RespondCallbackAsync(HttpListenerContext ctx, CallbackResult callback) {
-        var (status, message) = callback.Code is not null
-            ? ("Authentication successful!", "You can close this window and return to the terminal.")
-            : ($"Authentication failed: {callback.Error}", "Return to the terminal for details.");
-
-        var html = $"<html><body style='font-family:system-ui;max-width:480px;margin:80px auto;text-align:center'>"
-          + $"<h2>{WebUtility.HtmlEncode(status)}</h2>"
-          + $"<p>{WebUtility.HtmlEncode(message)}</p></body></html>";
-
-        var buffer = Encoding.UTF8.GetBytes(html);
-        ctx.Response.ContentType     = "text/html";
-        ctx.Response.ContentLength64 = buffer.Length;
-        await ctx.Response.OutputStream.WriteAsync(buffer);
-        ctx.Response.Close();
     }
 
     public static async Task<int> ExchangeAndSaveAsync(string serverUrl, string githubAccessToken, string provider) {
@@ -607,68 +575,12 @@ public static class OAuthLoginFlow {
         return await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.WorkOSAuthResponse);
     }
 
-    internal readonly record struct CallbackResult(string? Code, string? Error);
-
     // The server-supplied code-exchange URL must be a fully-qualified http(s) URI before
     // we trust it. An empty string, whitespace, relative path, or javascript:/file: URL
     // is treated as "no browser flow available" and the dispatcher falls back to device flow.
     internal static bool IsValidExchangeUrl(string? url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var parsed)
      && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps);
-
-    internal static string BuildGitHubAuthorizeUrl(
-            string clientId,
-            string redirectUri,
-            string state,
-            string codeChallenge
-        ) =>
-        "https://github.com/login/oauth/authorize?"              +
-        $"client_id={Uri.EscapeDataString(clientId)}"            +
-        $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"     +
-        $"&state={Uri.EscapeDataString(state)}"                  +
-        $"&scope={Uri.EscapeDataString("read:user read:org")}"   +
-        $"&code_challenge={Uri.EscapeDataString(codeChallenge)}" +
-        "&code_challenge_method=S256"                            +
-        "&response_type=code";
-
-    internal static CallbackResult ParseCallback(string queryString, string expectedState) {
-        var     qs    = queryString.TrimStart('?');
-        var     parts = qs.Split('&', StringSplitOptions.RemoveEmptyEntries);
-        string? code  = null, state = null, error = null;
-
-        foreach (var part in parts) {
-            var eq = part.IndexOf('=');
-
-            if (eq < 0) continue;
-
-            var key = part[..eq];
-            var val = Uri.UnescapeDataString(part[(eq + 1)..]);
-
-            switch (key) {
-                case "code":  code  = val; break;
-                case "state": state = val; break;
-                case "error": error = val; break;
-            }
-        }
-
-        if (state is null) return new(null, "missing_state");
-        if (state != expectedState) return new(null, "state_mismatch");
-        if (error is not null) return new(null, error);
-
-        return string.IsNullOrEmpty(code) ? new(null, "missing_code") : new(code, null);
-    }
-
-    static string GenerateCodeVerifier() {
-        var bytes = RandomNumberGenerator.GetBytes(32);
-
-        return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-    }
-
-    static string GenerateCodeChallenge(string verifier) {
-        var hash = SHA256.HashData(Encoding.ASCII.GetBytes(verifier));
-
-        return Convert.ToBase64String(hash).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-    }
 
     internal static int GetAvailablePort() {
         var tcpListener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
