@@ -23,12 +23,7 @@ public static class WorkOSDiscovery {
         var clientId = proxyConfig.WorkOSClientId ?? "";
 
         return RunAsync(proxyUrl, proxyConfig, proxy, picker,
-            orglessLogin: async authorizeBase => {
-                var loop = await OAuthLoginFlow.RunWorkOSLoopbackAsync(authorizeBase, clientId, organizationId: null);
-                if (loop.Code is null) return null;
-                using var http = new HttpClient();
-                return await OAuthLoginFlow.AuthenticateWorkOSCodeAsync(http, WorkOSApiBase, clientId, loop.Code, loop.Verifier);
-            },
+            orglessLogin: () => OAuthLoginFlow.AuthenticateWorkOSAsync(clientId, organizationId: null, new LoopbackBrowser()),
             orgSwitch: async (refreshToken, organizationId) => {
                 using var http = new HttpClient();
                 return await OAuthLoginFlow.SwitchWorkOSOrgAsync(http, WorkOSApiBase, clientId, refreshToken, organizationId);
@@ -40,7 +35,7 @@ public static class WorkOSDiscovery {
             ProxyConfigResponse                             proxyConfig,
             IAuthProxyClient                                proxy,
             ITenantPicker                                   picker,
-            Func<string, Task<WorkOSAuthResponse?>>         orglessLogin,   // arg: authorizeBase
+            Func<Task<WorkOSAuthResponse?>>                 orglessLogin,
             Func<string, string, Task<WorkOSAuthResponse?>> orgSwitch) {    // args: refreshToken, organizationId
         if (string.IsNullOrEmpty(proxyConfig.WorkOSClientId)) {
             await Console.Error.WriteLineAsync("This server isn't configured for WorkOS sign-in.");
@@ -48,11 +43,7 @@ public static class WorkOSDiscovery {
             return 1;
         }
 
-        var authorizeBase = string.IsNullOrEmpty(proxyConfig.WorkOSAuthKitDomain)
-            ? WorkOSApiBase
-            : $"https://{proxyConfig.WorkOSAuthKitDomain}";
-
-        var auth = await orglessLogin(authorizeBase);
+        var auth = await orglessLogin();
         if (auth is null || string.IsNullOrEmpty(auth.RefreshToken)) {
             await Console.Error.WriteLineAsync("WorkOS sign-in failed.");
 

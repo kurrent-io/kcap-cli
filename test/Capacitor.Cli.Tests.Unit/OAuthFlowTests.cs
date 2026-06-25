@@ -1,4 +1,6 @@
 using Capacitor.Cli.Core.Auth;
+using Duende.IdentityModel.OidcClient;
+using Duende.IdentityModel.OidcClient.Browser;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -6,6 +8,63 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Unit;
 
 public class OAuthFlowTests {
+    [Test]
+    public async Task WorkOS_authorize_url_targets_api_domain_with_authkit_and_org() {
+        var options = OAuthLoginFlow.BuildWorkOSOptions("client_d", "https://api.workos.com", "http://127.0.0.1:5555/callback");
+        var oidc    = new OidcClient(options);
+
+        var state = await oidc.PrepareLoginAsync(OAuthLoginFlow.WorkOSFrontChannel("org_a"));
+
+        await Assert.That(state.StartUrl).StartsWith("https://api.workos.com/user_management/authorize");
+        await Assert.That(state.StartUrl).Contains("provider=authkit");
+        await Assert.That(state.StartUrl).Contains("organization_id=org_a");
+        await Assert.That(state.StartUrl).Contains("code_challenge_method=S256");
+        await Assert.That(options.LoadProfile).IsFalse();
+    }
+
+    [Test]
+    public async Task WorkOS_authorize_url_omits_org_when_null() {
+        var options = OAuthLoginFlow.BuildWorkOSOptions("client_d", "https://api.workos.com", "http://127.0.0.1:5555/callback");
+        var oidc    = new OidcClient(options);
+
+        var state = await oidc.PrepareLoginAsync(OAuthLoginFlow.WorkOSFrontChannel(null));
+
+        await Assert.That(state.StartUrl).DoesNotContain("organization_id");
+    }
+
+    [Test]
+    public async Task AuthenticateWorkOS_maps_token_response_including_org_and_user() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """{"user":{"id":"user_x","first_name":"Ada"},"organization_id":"org_a","access_token":"acc","refresh_token":"rt"}"""));
+
+        var result = await OAuthLoginFlow.AuthenticateWorkOSAsync(
+            "client_d", "org_a", FakeBrowser.WithCode("the_code"), apiBase: server.Urls[0]);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.AccessToken).IsEqualTo("acc");
+        await Assert.That(result.RefreshToken).IsEqualTo("rt");
+        await Assert.That(result.OrganizationId).IsEqualTo("org_a");
+        await Assert.That(result.User!.FirstName).IsEqualTo("Ada");
+    }
+
+    [Test]
+    public async Task AuthenticateWorkOS_handles_orgless_response_without_throwing() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """{"access_token":"acc","refresh_token":"rt"}"""));   // no organization_id, no user
+
+        var result = await OAuthLoginFlow.AuthenticateWorkOSAsync(
+            "client_d", organizationId: null, FakeBrowser.WithCode("the_code"), apiBase: server.Urls[0]);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.OrganizationId).IsNull();
+        await Assert.That(result.User).IsNull();
+        await Assert.That(result.RefreshToken).IsEqualTo("rt");
+    }
+
     [Test]
     public async Task SwitchWorkOSOrg_posts_refresh_grant_with_org_and_returns_token() {
         using var server = WireMockServer.Start();
