@@ -65,9 +65,25 @@ public record AgentInstance(
     /// </summary>
     public bool IsPrivate { get; init; }
 
+    /// <summary>
+    /// True for agents started from a local terminal (`kcap run-agent`), whether registered or
+    /// `--private`. Such an agent has a live local terminal as its primary surface, so the read
+    /// loop streams to the server <b>non-blocking</b> (drop+count on a full backlog) rather than
+    /// back-pressuring the PTY on a remote tunnel stall — the local terminal must not freeze when
+    /// the cloud hiccups. Hosted agents (server is the only consumer) keep lossless back-pressure.
+    /// </summary>
+    public bool IsLocalSpawned { get; init; }
+
     /// <summary>Owned worktree (daemon-created — safe to remove on cleanup) vs borrowed cwd
     /// (the user's own checkout — never removed).</summary>
     public WorkLocation Work { get; init; } = WorkLocation.OwnedWorktree;
+
+    /// <summary>Current PTY dimensions — the single source of truth for every dims send
+    /// (registration, reconnect). Updated by every resize path (local clamp + web resize).
+    /// Hosted agents initialise these to the fixed HostedPtyCols/Rows; ushort read/write is
+    /// atomic, and stale-by-one-resize is harmless for best-effort dims.</summary>
+    public ushort CurrentCols { get; set; }
+    public ushort CurrentRows { get; set; }
 }
 
 /// <summary>Ring buffer that keeps the last 2 MB of terminal output.</summary>
@@ -186,7 +202,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         _server.GetLiveAgentIds = () => [
             .. _agents
-                .Where(kvp => kvp.Value.Status is "Starting" or "Running")
+                .Where(kvp => (kvp.Value.Status is "Starting" or "Running") && !kvp.Value.IsPrivate)
                 .Select(kvp => kvp.Key)
         ];
 
@@ -373,39 +389,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var cts = new CancellationTokenSource();
 
             var agent = new AgentInstance(agentId, prompt, model, effort, repoPath, cmd.Vendor, process, worktree, cts) {
-                McpConfigPath = mcpConfigPath
+                McpConfigPath = mcpConfigPath,
+                CurrentCols   = HostedPtyCols,
+                CurrentRows   = HostedPtyRows
             };
             _agents[agentId] = agent;
 
-            // Notify server
-            await _server.AgentRegisteredAsync(agentId, prompt, model, effort, repoPath);
-
-            // Report the fixed PTY size so read-only viewers lock their xterm to it
-            // (see HostedPtyCols/Rows). Best-effort: a failed send must not fail the
-            // launch (late delivery is harmless — the viewer reflows when dims
-            // arrive), but observe the fault here with agent context rather than
-            // leaving it to the global unobserved-task handler.
-            try {
-                await _server.SendTerminalDimensionsAsync(agentId, HostedPtyCols, HostedPtyRows);
-            } catch (Exception ex) {
-                LogTerminalDimsSendFailed(ex, agentId);
-            }
-
-            _ = _server.AppendAgentRunEventAsync(
-                agentId,
-                new AgentRunStarted(prompt, model, effort, repoPath, worktree.Path, vendor)
-            );
-
-            // Persist repo path and notify server so launch dialog updates
-            _ = Task.Run(async () => {
-                    try {
-                        await RepoPathStore.AddAsync(repoPath);
-                        await _server.UpdateRepoPathsAsync();
-                    } catch (Exception ex) {
-                        LogRepoPathPersistFailed(ex, agentId);
-                    }
-                }
-            );
+            await RegisterAgentAsync(agent);
 
             // Start reading output
             _ = ReadAgentOutputAsync(agent);
@@ -523,11 +513,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 if (!agent.IsPrivate) {
                     var base64 = Convert.ToBase64String(data);
-                    // Await the enqueue: TerminalOutputSender back-pressures here when its
-                    // queue is full (slow/down transport) so a chunk is never dropped to
-                    // keep up — losing one byte garbles the whole redraw-TUI mirror (AI-844).
-                    // sendCts releases this await on agent stop or daemon shutdown (AI-846).
-                    await _server.SendTerminalOutputAsync(agent.Id, base64, sendCts.Token);
+
+                    if (agent.IsLocalSpawned) {
+                        // Local-first: a registered local agent has a live local terminal as its
+                        // primary surface, so NEVER block the PTY read loop on a remote tunnel
+                        // stall. Enqueue non-blocking; a full backlog (sustained outage) drops +
+                        // counts the chunk and the web mirror re-syncs from the server's own buffer
+                        // on reconnect. Keeps the local terminal responsive when the cloud hiccups.
+                        _server.TrySendTerminalOutput(agent.Id, base64);
+                    } else {
+                        // Hosted: the server is the only consumer, so back-pressure here when the
+                        // queue is full (slow/down transport) — a chunk is never dropped, since
+                        // losing one byte garbles the whole redraw-TUI mirror (AI-844). sendCts
+                        // releases this await on agent stop or daemon shutdown (AI-846).
+                        await _server.SendTerminalOutputAsync(agent.Id, base64, sendCts.Token);
+                    }
                 }
             }
         } catch (OperationCanceledException) {
@@ -663,6 +663,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
+        // Defence-in-depth: a --private agent is invisible to the server (unregistered, not in
+        // LiveAgentIds), so never act on a server-origin command for one even if its id leaks.
+        if (agent.IsPrivate) return;
+
         try {
             LogStopping(agentId);
 
@@ -784,6 +788,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
+        if (agent.IsPrivate) return; // server-origin input ignored for private agents
+
         var message = text;
 
         if (attachmentIds is { Length: > 0 }) {
@@ -804,6 +810,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (!_agents.TryGetValue(agentId, out var agent)) {
             return;
         }
+
+        if (agent.IsPrivate) return; // server-origin key ignored for private agents
 
         var bytes = SpecialKeyMap.ToBytes(key);
 
@@ -897,9 +905,49 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     Task<string[]> HandleFindRepoForRemote(FindRepoForRemoteRequest req)
         => _repoMatcher.FindAsync(req.Owner, req.Repo, req.CandidatePaths ?? [], _shutdownCts.Token);
 
+    /// <summary>
+    /// Registers an agent with the server exactly as a UI-launched agent: AgentRegistered +
+    /// terminal dims + AgentRunStarted, then persists/announces the repo path. No-ops for a
+    /// PrivateLocal agent. Shared by the hosted launch and the registered local launch so the
+    /// two cannot drift. Dims come from <see cref="AgentInstance.CurrentCols"/>/<c>CurrentRows</c>
+    /// (hosted = HostedPtyCols/Rows; local = the client's terminal size).
+    /// </summary>
+    async Task RegisterAgentAsync(AgentInstance agent) {
+        if (agent.IsPrivate) return;
+
+        await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath);
+
+        // Report the PTY size so read-only viewers lock their xterm to it. Best-effort.
+        try {
+            await _server.SendTerminalDimensionsAsync(agent.Id, agent.CurrentCols, agent.CurrentRows);
+        } catch (Exception ex) {
+            LogTerminalDimsSendFailed(ex, agent.Id);
+        }
+
+        _ = _server.AppendAgentRunEventAsync(
+            agent.Id,
+            new AgentRunStarted(agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.Worktree.Path, agent.Vendor)
+        );
+
+        // Persist repo path and notify server so the launch dialog updates.
+        _ = Task.Run(async () => {
+                try {
+                    await RepoPathStore.AddAsync(agent.RepoPath);
+                    await _server.UpdateRepoPathsAsync();
+                } catch (Exception ex) {
+                    LogRepoPathPersistFailed(ex, agent.Id);
+                }
+            }
+        );
+    }
+
     Task HandleResizeTerminal(ResizeTerminalCommand cmd) {
-        if (_agents.TryGetValue(cmd.AgentId, out var agent)) {
+        // Ignore server-origin resize for private agents (defence-in-depth; see HandleStopAgent).
+        if (_agents.TryGetValue(cmd.AgentId, out var agent) && !agent.IsPrivate) {
             agent.Process.Resize((ushort)cmd.Cols, (ushort)cmd.Rows);
+            // Keep the stored dims current so a later reconnect resends the real size, not stale ones.
+            agent.CurrentCols = (ushort)cmd.Cols;
+            agent.CurrentRows = (ushort)cmd.Rows;
         }
 
         return Task.CompletedTask;
@@ -938,7 +986,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // catch keeps a dims-send failure from escaping to the retry handler
                     // (which would re-register the agent) or withholding readiness.
                     try {
-                        await _server.SendTerminalDimensionsAsync(agent.Id, HostedPtyCols, HostedPtyRows);
+                        await _server.SendTerminalDimensionsAsync(agent.Id, agent.CurrentCols, agent.CurrentRows);
                     } catch (Exception ex) {
                         LogTerminalDimsSendFailed(ex, agent.Id);
                     }
@@ -1176,6 +1224,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to end session for agent {AgentId} (server may not record SessionEnded)")]
     partial void LogEndSessionFailed(Exception ex, string agentId);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to register local agent {AgentId} with the server (continuing; terminal stays usable)")]
+    partial void LogLocalRegisterFailed(Exception ex, string agentId);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "EndAgentSession for agent {AgentId} did not complete within {Seconds}s; proceeding with cleanup while the retry continues in the background (server reconciles on daemon disconnect)")]
     partial void LogEndSessionTimedOut(string agentId, double seconds);
 
@@ -1208,6 +1259,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Test-only entry point to the private stop handler (mirrors <see cref="HandleLaunchAgentForTest"/>).</summary>
     internal Task HandleStopAgentForTest(string agentId) => HandleStopAgent(agentId);
+
+    internal Task RegisterAgentForTestAsync(AgentInstance agent) => RegisterAgentAsync(agent);
+    internal Task ReRegisterAgentsForTestAsync() => ReRegisterAgentsAsync();
+    internal void HandleResizeTerminalForTest(ResizeTerminalCommand cmd) => _ = HandleResizeTerminal(cmd);
+    internal LocalPermissionBridge PermissionBridgeForTest => _permissionBridge;
 }
 
 /// <summary>

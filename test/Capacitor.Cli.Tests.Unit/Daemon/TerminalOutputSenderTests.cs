@@ -56,6 +56,24 @@ public class TerminalOutputSenderTests {
     }
 
     [Test]
+    public async Task TryEnqueue_is_nonblocking_and_drops_when_full() {
+        // Local-first path: a registered local agent's PTY read loop must never block on a stalled
+        // server transport. With no pump draining, the bounded(2) channel fills after two writes;
+        // TryEnqueue must return immediately (never block) and drop+count the overflow.
+        var sender = new TerminalOutputSender(
+            (_, _, _) => Task.CompletedTask,
+            isConnected: () => false,
+            NullLogger.Instance,
+            capacity: 2
+        );
+
+        await Assert.That(sender.TryEnqueue("agent-1", "x")).IsTrue();
+        await Assert.That(sender.TryEnqueue("agent-1", "y")).IsTrue();
+        await Assert.That(sender.TryEnqueue("agent-1", "z")).IsFalse(); // full → dropped, not blocked
+        await Assert.That(sender.DroppedChunks).IsEqualTo(1L);
+    }
+
+    [Test]
     public async Task Failed_send_while_transport_down_is_held_and_retried_so_order_is_preserved_and_nothing_is_lost() {
         var delivered = new ConcurrentQueue<string>();
         var failsLeft = 5; // first chunk fails 5x (transport "down") before it lands

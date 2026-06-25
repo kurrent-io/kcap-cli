@@ -119,7 +119,7 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     [Test]
-    public async Task PrivateLocal_spawn_makes_no_server_calls_and_omits_hosted_agent_env() {
+    public async Task Private_spawn_makes_no_server_calls_and_omits_hosted_agent_env() {
         var dir = Directory.CreateTempSubdirectory("kcap-priv-");
 
         try {
@@ -135,7 +135,7 @@ public partial class AgentOrchestratorVendorTests {
             readBuf.Position = 0;
             using var client = new DuplexTestStream(readBuf, new MemoryStream());
 
-            var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, dir.FullName, ["--model", "opus"], 80, 24);
+            var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: true, dir.FullName, ["--model", "opus"], 80, 24);
             await orch.HandleLocalSpawnAsync(spawn, client, default);
 
             // Let the fire-and-forget read loop + cleanup finish, then assert no server call landed.
@@ -150,6 +150,160 @@ public partial class AgentOrchestratorVendorTests {
         } finally {
             Directory.Delete(dir.FullName, true);
         }
+    }
+
+    [Test]
+    public async Task RegisterAgentAsync_registers_public_agent_and_skips_private() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var pub = new AgentInstance("pub-1", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false };
+        await orch.RegisterAgentForTestAsync(pub);
+        await Assert.That(server.Calls).Contains(nameof(ServerConnection.AgentRegisteredAsync));
+
+        server.Calls.Clear();
+        var priv = new AgentInstance("priv-1", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true };
+        await orch.RegisterAgentForTestAsync(priv);
+        await Assert.That(server.Calls.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Registered_spawn_calls_server_and_sets_hosted_env() {
+        var dir = Directory.CreateTempSubdirectory("kcap-reg-");
+
+        try {
+            var server    = new TripwireServerConnection();
+            var pty       = new EnvCapturingPtyFactory();
+            var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+
+            await using var orch = BuildOrchestrator(server, pty, launchers);
+
+            var readBuf = new MemoryStream();
+            await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+            readBuf.Position = 0;
+            using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+            var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, dir.FullName, ["--model", "opus"], 80, 24);
+            await orch.HandleLocalSpawnAsync(spawn, client, default);
+
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (orch.ActiveAgentCountForTest > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
+
+            await Assert.That(server.Calls).Contains(nameof(ServerConnection.AgentRegisteredAsync));
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_URL")).IsTrue();
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_AGENT_ID")).IsTrue();
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_RENDERED_AGENT")).IsTrue();
+        } finally {
+            Directory.Delete(dir.FullName, true);
+        }
+    }
+
+    [Test]
+    public async Task Reconnect_resends_stored_dims_not_the_hosted_constant() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        orch.RegisterAgentForTest(new AgentInstance("reg-1", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            IsPrivate = false, Status = "Running", CurrentCols = 73, CurrentRows = 19
+        });
+
+        await orch.ReRegisterAgentsForTestAsync();
+
+        await Assert.That(server.LastDims).IsEqualTo((73, 19));
+    }
+
+    [Test]
+    public async Task Web_resize_updates_stored_dims_then_reconnect_resends_them() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = new AgentInstance("reg-2", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            IsPrivate = false, Status = "Running", CurrentCols = 80, CurrentRows = 24
+        };
+        orch.RegisterAgentForTest(agent);
+
+        orch.HandleResizeTerminalForTest(new ResizeTerminalCommand("reg-2", 51, 200));
+        await Assert.That(agent.CurrentCols).IsEqualTo((ushort)51);
+        await Assert.That(agent.CurrentRows).IsEqualTo((ushort)200);
+
+        await orch.ReRegisterAgentsForTestAsync();
+        await Assert.That(server.LastDims).IsEqualTo((51, 200));
+    }
+
+    [Test]
+    public async Task Private_agent_ignores_server_origin_resize_and_stop() {
+        var server = new CaptureServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = new AgentInstance("priv-2", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            IsPrivate = true, Status = "Running", CurrentCols = 80, CurrentRows = 24
+        };
+        orch.RegisterAgentForTest(agent);
+
+        orch.HandleResizeTerminalForTest(new ResizeTerminalCommand("priv-2", 51, 200));
+        await Assert.That(agent.CurrentCols).IsEqualTo((ushort)80); // server-origin resize ignored
+
+        await orch.HandleStopAgentForTest("priv-2");
+        await Assert.That(agent.Status).IsEqualTo("Running");       // server-origin stop ignored
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Registered_spawn_env_includes_daemon_bridge_url_and_preserves_api_key() {
+        var dir     = Directory.CreateTempSubdirectory("kcap-reg-env-");
+        var prevKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-test-key");
+
+        try {
+            var server    = new TripwireServerConnection();
+            var pty       = new EnvCapturingPtyFactory();
+            var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+
+            await using var orch = BuildOrchestrator(server, pty, launchers);
+            await orch.PermissionBridgeForTest.StartAsync(default); // binds 127.0.0.1 + sets BaseUrl
+
+            try {
+                var readBuf = new MemoryStream();
+                await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+                readBuf.Position = 0;
+                using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+                var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, dir.FullName, [], 80, 24);
+                await orch.HandleLocalSpawnAsync(spawn, client, default);
+
+                var deadline = DateTime.UtcNow.AddSeconds(5);
+                while (orch.ActiveAgentCountForTest > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
+
+                await Assert.That(pty.LastEnv!["KCAP_DAEMON_URL"]).IsEqualTo(orch.PermissionBridgeForTest.BaseUrl);
+                await Assert.That(pty.LastEnv!["ANTHROPIC_API_KEY"]).IsEqualTo("sk-test-key");
+            } finally {
+                await orch.PermissionBridgeForTest.StopAsync(default);
+            }
+        } finally {
+            Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", prevKey);
+            Directory.Delete(dir.FullName, true);
+        }
+    }
+
+    [Test]
+    public async Task Private_agents_are_excluded_from_live_agent_ids() {
+        var server = new CaptureServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        orch.RegisterAgentForTest(new AgentInstance("pub-1", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false, Status = "Running" });
+        orch.RegisterAgentForTest(new AgentInstance("priv-1", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true, Status = "Running" });
+
+        var ids = server.GetLiveAgentIds!();
+
+        await Assert.That(ids).Contains("pub-1");
+        await Assert.That(ids).DoesNotContain("priv-1");
     }
 
     [Test]
@@ -237,7 +391,9 @@ public partial class AgentOrchestratorVendorTests {
         NullLogger<ServerConnection>.Instance
     ) {
         public ConcurrentBag<string> Calls { get; } = [];
+        public (int Cols, int Rows)? LastDims { get; private set; }
 
+        public override Task SendTerminalDimensionsAsync(string agentId, int cols, int rows) { LastDims = (cols, rows); Calls.Add(nameof(SendTerminalDimensionsAsync)); return Task.CompletedTask; }
         public override Task LaunchFailedAsync(string agentId, string reason) { Calls.Add(nameof(LaunchFailedAsync)); return Task.CompletedTask; }
         public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath) { Calls.Add(nameof(AgentRegisteredAsync)); return Task.CompletedTask; }
         public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) { Calls.Add(nameof(AgentStatusChangedAsync)); return Task.CompletedTask; }

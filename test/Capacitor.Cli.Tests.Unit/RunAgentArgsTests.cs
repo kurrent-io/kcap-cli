@@ -41,6 +41,17 @@ public class RunAgentArgsTests {
     }
 
     [Test]
+    public async Task Private_flag_is_parsed_and_defaults_false() {
+        var on  = RunAgentArgs.Parse(["claude", "--private", "--", "fix"]);
+        await Assert.That(on.Private).IsTrue();
+        await Assert.That(on.Passthrough).IsEquivalentTo(new[] { "fix" });
+        await Assert.That(on.Error).IsNull();
+
+        var off = RunAgentArgs.Parse(["claude"]);
+        await Assert.That(off.Private).IsFalse();
+    }
+
+    [Test]
     public async Task Empty_passthrough_after_dash_is_allowed() {
         var a = RunAgentArgs.Parse(["claude", "--"]);
         await Assert.That(a.Error).IsNull();
