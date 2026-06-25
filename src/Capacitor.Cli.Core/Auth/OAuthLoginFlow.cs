@@ -53,18 +53,15 @@ public static class OAuthLoginFlow {
         => forceDevice || isHeadless || !hasExchangeUrl ? GitHubFlow.Device : GitHubFlow.Browser;
 
     /// <summary>
-    /// Picks the discovery provider before any auth runs: explicit <c>--github</c>/<c>--workos</c>
-    /// flags win; otherwise a non-interactive caller defaults to WorkOS, and an interactive caller
-    /// gets <c>null</c> (meaning "prompt the user").
+    /// Picks the discovery provider before any auth runs: <c>--github</c> selects the GitHub App
+    /// path; otherwise login defaults to the org SSO path (WorkOS). Headless callers can't run the
+    /// WorkOS 127.0.0.1 browser loopback, so a no-flag headless caller falls back to GitHub (whose
+    /// device flow works without a local browser).
     /// </summary>
-    internal static string? ChooseDiscoveryProvider(string[] args, bool isInteractive) {
+    internal static string ChooseDiscoveryProvider(string[] args, bool isInteractive) {
         if (args.Contains("--github")) return AuthProvider.GitHubApp;
-        if (args.Contains("--workos")) return AuthProvider.WorkOS;
 
-        // No flag: prompt when interactive. Headless can't run the WorkOS browser + 127.0.0.1
-        // loopback (it would hang until timeout), so fall back to GitHub, whose device flow works
-        // without a local browser. A headless WorkOS user must pass --workos explicitly.
-        return isInteractive ? null : AuthProvider.GitHubApp;
+        return isInteractive ? AuthProvider.WorkOS : AuthProvider.GitHubApp;
     }
 
     /// <summary>

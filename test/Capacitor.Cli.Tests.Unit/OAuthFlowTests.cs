@@ -151,9 +151,8 @@ public class OAuthFlowTests {
     [Test]
     public async Task ChooseDiscoveryProvider_honors_flags_and_default() {
         await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider(["--github"], isInteractive: true)).IsEqualTo(AuthProvider.GitHubApp);
-        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider(["--workos"], isInteractive: true)).IsEqualTo(AuthProvider.WorkOS);
-        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider([], isInteractive: false)).IsEqualTo(AuthProvider.GitHubApp); // headless → GitHub device flow, not the WorkOS browser loopback
-        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider([], isInteractive: true)).IsNull();
+        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider([], isInteractive: true)).IsEqualTo(AuthProvider.WorkOS);   // default = org SSO, no prompt
+        await Assert.That(OAuthLoginFlow.ChooseDiscoveryProvider([], isInteractive: false)).IsEqualTo(AuthProvider.GitHubApp); // headless → GitHub device flow
     }
 
     [Test]
