@@ -10,7 +10,8 @@ namespace Capacitor.Cli.Daemon.Services;
 /// — anything that can open it can spawn processes and stream a terminal, so it sits at
 /// the same trust boundary as the daemon PID/lock files.
 internal sealed partial class LocalControlServer(
-        DaemonConfig config, AgentOrchestrator orchestrator, ILogger<LocalControlServer> logger
+        DaemonConfig config, AgentOrchestrator orchestrator, RestartCoordinator restart,
+        ILogger<LocalControlServer> logger
     ) : BackgroundService {
     protected override async Task ExecuteAsync(CancellationToken ct) {
         var path = LocalSocketPaths.Socket(config.Name);
@@ -42,11 +43,28 @@ internal sealed partial class LocalControlServer(
                 case FrameType.Spawn:  await orchestrator.HandleLocalSpawnAsync(first, stream, ct); break;
                 case FrameType.Attach: await orchestrator.HandleLocalAttachAsync(first.Text, stream, ct); break;
                 case FrameType.List:   await orchestrator.HandleLocalListAsync(stream, ct); break;
-                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/List, got {first.Type}"), ct); break;
+                case FrameType.Restart: await HandleRestartAsync(first.Text, stream, ct); break;
+                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/List/Restart, got {first.Type}"), ct); break;
             }
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             LogConnectionError(ex);
         }
+    }
+
+    async Task HandleRestartAsync(string mode, Stream stream, CancellationToken ct) {
+        var force = mode is "force";
+
+        // "now" requires idle; "when-idle"/"force" always accept.
+        if (mode is "now" && restart.IsBusy()) {
+            await FrameCodec.WriteAsync(stream,
+                LocalFrame.Error("daemon busy — agents running or eval in progress; use --when-idle or --force"), ct);
+
+            return;
+        }
+
+        restart.RequestRestart(force);
+        var status = (force || mode is "now") ? "restarting" : "queued";
+        await FrameCodec.WriteAsync(stream, LocalFrame.RestartAck(status), ct);
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Local control socket listening at {Path}")]
