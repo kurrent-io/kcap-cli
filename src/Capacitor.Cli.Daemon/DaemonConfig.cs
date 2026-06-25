@@ -52,6 +52,9 @@ public class DaemonConfig {
     /// </summary>
     public string CapacitorPath { get; set; } = "kcap";
 
+    /// <summary>The argv the daemon was launched with, captured for self-respawn (detached restart).</summary>
+    public IReadOnlyList<string> OriginalArgs { get; set; } = [];
+
     public List<string> Validate() {
         var errors = new List<string>();
 
