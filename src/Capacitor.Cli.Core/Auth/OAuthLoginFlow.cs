@@ -743,7 +743,7 @@ public static class OAuthLoginFlow {
         return Convert.ToBase64String(hash).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 
-    static int GetAvailablePort() {
+    internal static int GetAvailablePort() {
         var tcpListener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
         tcpListener.Start();
         var port = ((IPEndPoint)tcpListener.LocalEndpoint).Port;
