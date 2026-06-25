@@ -17,7 +17,7 @@ internal partial class AgentOrchestrator {
     /// owned worktree (<c>--worktree</c>) or the user's borrowed cwd (default in-place).
     /// </summary>
     public async Task HandleLocalSpawnAsync(LocalFrame spawn, Stream stream, CancellationToken ct) {
-        var (vendor, work, _, cwd, args, cols, rows) = FrameCodec.Spawn(spawn);
+        var (vendor, work, isPrivate, cwd, args, cols, rows) = FrameCodec.Spawn(spawn);
 
         if (!_launchers.TryGetValue(vendor, out var launcher)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Unknown vendor: {vendor}"), ct);
@@ -48,24 +48,31 @@ internal partial class AgentOrchestrator {
             launcher.Prepare(ctx);
             var built = launcher.BuildPassthrough(ctx, args);
 
-            // Phase 1 records as a plain local session. Keep KCAP_URL (records, under the
-            // user's default_visibility) and re-add ANTHROPIC_API_KEY so normal local auth
-            // survives UnixPtyProcess.Spawn's headless scrub (it applies extraEnv after
-            // unsetenv). Omit the hosted-agent vars: KCAP_AGENT_ID (the agent isn't a
-            // registered hosted agent yet, so no agent_host_id tag on events), and
-            // KCAP_RENDERED_AGENT / KCAP_DAEMON_URL (not headless → permissions prompt
-            // natively in the terminal). Phase 2 adds them when it registers like a UI agent.
+            // Records to the account either way. Keep KCAP_URL and re-add ANTHROPIC_API_KEY so
+            // normal local auth survives UnixPtyProcess.Spawn's headless scrub (it applies
+            // extraEnv after unsetenv).
             var env = new Dictionary<string, string>();
             if (!string.IsNullOrEmpty(_config.ServerUrl)) env["KCAP_URL"] = _config.ServerUrl;
             var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
             if (!string.IsNullOrEmpty(apiKey)) env["ANTHROPIC_API_KEY"] = apiKey;
 
+            if (!isPrivate) {
+                // Register like a UI-launched agent: hosted env so it's visible/drivable from the
+                // owner's web UI, the session links via KCAP_AGENT_ID, and permissions route
+                // through the daemon bridge (Slice 1, AI-972). --private omits all of this.
+                env["KCAP_RENDERED_AGENT"] = "1";
+                env["KCAP_AGENT_ID"]       = agentId;
+                if (_permissionBridge.BaseUrl is { } bridgeUrl) env["KCAP_DAEMON_URL"] = bridgeUrl;
+            }
+
             var proc = _ptyFactory.Spawn(launcher.CliPath, built.Args, worktree.Path, env, cols, rows);
 
             agent = new AgentInstance(agentId, null, "", null, cwd, vendor, proc, worktree, new CancellationTokenSource()) {
-                IsPrivate     = true,
+                IsPrivate     = isPrivate,
                 Work          = work,
-                McpConfigPath = built.McpConfigPath
+                McpConfigPath = built.McpConfigPath,
+                CurrentCols   = cols,
+                CurrentRows   = rows
             };
             _agents[agentId] = agent;
         } catch (Exception ex) {
@@ -78,6 +85,11 @@ internal partial class AgentOrchestrator {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Launch failed: {ex.Message}"), ct);
             return;
         }
+
+        // Register like a UI launch (no-op for --private). Best-effort: a registration hiccup
+        // must not break the local terminal session.
+        try { await RegisterAgentAsync(agent); }
+        catch (Exception ex) { LogLocalRegisterFailed(ex, agentId); }
 
         _ = ReadAgentOutputAsync(agent);
         await AttachClientLoopAsync(agent, stream, ct);

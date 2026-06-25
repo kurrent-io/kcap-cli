@@ -114,7 +114,7 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     [Test]
-    public async Task PrivateLocal_spawn_makes_no_server_calls_and_omits_hosted_agent_env() {
+    public async Task Private_spawn_makes_no_server_calls_and_omits_hosted_agent_env() {
         var dir = Directory.CreateTempSubdirectory("kcap-priv-");
 
         try {
@@ -162,6 +162,37 @@ public partial class AgentOrchestratorVendorTests {
             new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true };
         await orch.RegisterAgentForTestAsync(priv);
         await Assert.That(server.Calls.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Registered_spawn_calls_server_and_sets_hosted_env() {
+        var dir = Directory.CreateTempSubdirectory("kcap-reg-");
+
+        try {
+            var server    = new TripwireServerConnection();
+            var pty       = new EnvCapturingPtyFactory();
+            var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+
+            await using var orch = BuildOrchestrator(server, pty, launchers);
+
+            var readBuf = new MemoryStream();
+            await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+            readBuf.Position = 0;
+            using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+            var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, dir.FullName, ["--model", "opus"], 80, 24);
+            await orch.HandleLocalSpawnAsync(spawn, client, default);
+
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (orch.ActiveAgentCountForTest > 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
+
+            await Assert.That(server.Calls).Contains(nameof(ServerConnection.AgentRegisteredAsync));
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_URL")).IsTrue();
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_AGENT_ID")).IsTrue();
+            await Assert.That(pty.LastEnv!.ContainsKey("KCAP_RENDERED_AGENT")).IsTrue();
+        } finally {
+            Directory.Delete(dir.FullName, true);
+        }
     }
 
     [Test]
