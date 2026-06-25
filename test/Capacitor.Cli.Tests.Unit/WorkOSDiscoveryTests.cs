@@ -37,7 +37,7 @@ public class WorkOSDiscoveryTests {
 
         var exit = await WorkOSDiscovery.RunAsync(
             "https://auth.kcap.ai", proxyConfig, proxy, picker,
-            orglessLogin: _      => Task.FromResult<WorkOSAuthResponse?>(orgless),
+            orglessLogin: ()     => Task.FromResult<WorkOSAuthResponse?>(orgless),
             orgSwitch:    (_, _) => Task.FromResult<WorkOSAuthResponse?>(switched));
 
         await Assert.That(exit).IsEqualTo(0);
@@ -57,7 +57,7 @@ public class WorkOSDiscoveryTests {
         var exit = await WorkOSDiscovery.RunAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "" },
             Substitute.For<IAuthProxyClient>(), Substitute.For<ITenantPicker>(),
-            _      => Task.FromResult<WorkOSAuthResponse?>(null),
+            ()     => Task.FromResult<WorkOSAuthResponse?>(null),
             (_, _) => Task.FromResult<WorkOSAuthResponse?>(null));
 
         await Assert.That(exit).IsEqualTo(1);
@@ -76,7 +76,7 @@ public class WorkOSDiscoveryTests {
         var exit = await WorkOSDiscovery.RunAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
             proxy, Substitute.For<ITenantPicker>(),
-            _      => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
+            ()     => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
             (_, _) => { switchCalled = true; return Task.FromResult<WorkOSAuthResponse?>(null); });
 
         await Assert.That(exit).IsEqualTo(1);
@@ -92,7 +92,7 @@ public class WorkOSDiscoveryTests {
         var exit = await WorkOSDiscovery.RunAsync(
             "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
             proxy, Substitute.For<ITenantPicker>(),
-            _      => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
+            ()     => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
             (_, _) => Task.FromResult<WorkOSAuthResponse?>(null));
 
         await Assert.That(exit).IsEqualTo(1);

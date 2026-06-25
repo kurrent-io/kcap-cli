@@ -1,4 +1,6 @@
 using Capacitor.Cli.Core.Auth;
+using Duende.IdentityModel.OidcClient;
+using Duende.IdentityModel.OidcClient.Browser;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -6,6 +8,84 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Unit;
 
 public class OAuthFlowTests {
+    [Test]
+    public async Task WorkOS_authorize_url_targets_api_domain_with_authkit_and_org() {
+        var options = OAuthLoginFlow.BuildWorkOSOptions("client_d", "https://api.workos.com", "http://127.0.0.1:5555/callback");
+        var oidc    = new OidcClient(options);
+
+        var state = await oidc.PrepareLoginAsync(OAuthLoginFlow.WorkOSFrontChannel("org_a"));
+
+        await Assert.That(state.StartUrl).StartsWith("https://api.workos.com/user_management/authorize");
+        await Assert.That(state.StartUrl).Contains("provider=authkit");
+        await Assert.That(state.StartUrl).Contains("organization_id=org_a");
+        await Assert.That(state.StartUrl).Contains("code_challenge_method=S256");
+        await Assert.That(options.LoadProfile).IsFalse();
+    }
+
+    [Test]
+    public async Task WorkOS_authorize_url_omits_org_when_null() {
+        var options = OAuthLoginFlow.BuildWorkOSOptions("client_d", "https://api.workos.com", "http://127.0.0.1:5555/callback");
+        var oidc    = new OidcClient(options);
+
+        var state = await oidc.PrepareLoginAsync(OAuthLoginFlow.WorkOSFrontChannel(null));
+
+        await Assert.That(state.StartUrl).DoesNotContain("organization_id");
+    }
+
+    [Test]
+    public async Task AuthenticateWorkOS_maps_token_response_including_org_and_user() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """{"user":{"id":"user_x","first_name":"Ada"},"organization_id":"org_a","access_token":"acc","refresh_token":"rt"}"""));
+
+        var result = await OAuthLoginFlow.AuthenticateWorkOSAsync(
+            "client_d", "org_a", FakeBrowser.WithCode("the_code"), apiBase: server.Urls[0]);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.AccessToken).IsEqualTo("acc");
+        await Assert.That(result.RefreshToken).IsEqualTo("rt");
+        await Assert.That(result.OrganizationId).IsEqualTo("org_a");
+        await Assert.That(result.User!.FirstName).IsEqualTo("Ada");
+    }
+
+    [Test]
+    public async Task AuthenticateWorkOS_handles_orgless_response_without_throwing() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """{"access_token":"acc","refresh_token":"rt"}"""));   // no organization_id, no user
+
+        var result = await OAuthLoginFlow.AuthenticateWorkOSAsync(
+            "client_d", organizationId: null, FakeBrowser.WithCode("the_code"), apiBase: server.Urls[0]);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.OrganizationId).IsNull();
+        await Assert.That(result.User).IsNull();
+        await Assert.That(result.RefreshToken).IsEqualTo("rt");
+    }
+
+    [Test]
+    public async Task AuthenticateWorkOS_returns_null_on_token_endpoint_error() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(400).WithBody("""{"error":"invalid_grant"}"""));
+
+        var result = await OAuthLoginFlow.AuthenticateWorkOSAsync(
+            "client_d", "org_a", FakeBrowser.WithCode("the_code"), apiBase: server.Urls[0]);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task WorkOSSignInError_preserves_actionable_detail() {
+        await Assert.That(OAuthLoginFlow.WorkOSSignInError("Timeout", null)).Contains("Timed out");
+        await Assert.That(OAuthLoginFlow.WorkOSSignInError("Invalid state.", null))
+            .IsEqualTo("WorkOS sign-in failed: Invalid state.");
+        await Assert.That(OAuthLoginFlow.WorkOSSignInError("invalid_grant", "bad code"))
+            .IsEqualTo("WorkOS sign-in failed: invalid_grant — bad code");
+    }
+
     [Test]
     public async Task SwitchWorkOSOrg_posts_refresh_grant_with_org_and_returns_token() {
         using var server = WireMockServer.Start();
@@ -34,81 +114,38 @@ public class OAuthFlowTests {
     }
 
     [Test]
-    public async Task GitHub_authorize_url_includes_all_required_params() {
-        var url = OAuthLoginFlow.BuildGitHubAuthorizeUrl(
-            clientId:     "Iv1.abc",
-            redirectUri:  "http://127.0.0.1:54321/callback",
-            state:        "state-xyz",
-            codeChallenge:"challenge-123");
+    public async Task GitHubBrowser_exchanges_code_and_returns_access_token() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/code-exchange").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"access_token":"gho_abc"}"""));
 
-        await Assert.That(url).StartsWith("https://github.com/login/oauth/authorize?");
-        await Assert.That(url).Contains("client_id=Iv1.abc");
-        await Assert.That(url).Contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A54321%2Fcallback");
-        await Assert.That(url).Contains("state=state-xyz");
-        await Assert.That(url).Contains("scope=read%3Auser%20read%3Aorg");
-        await Assert.That(url).Contains("code_challenge=challenge-123");
-        await Assert.That(url).Contains("code_challenge_method=S256");
-        await Assert.That(url).Contains("response_type=code");
+        var token = await OAuthLoginFlow.RunGitHubBrowserFlowAsync(
+            "Iv1.abc", $"{server.Urls[0]}/code-exchange", FakeBrowser.WithCode("the_code"));
+
+        await Assert.That(token).IsEqualTo("gho_abc");
     }
 
     [Test]
-    public async Task Callback_parser_returns_code_when_state_matches() {
-        var result = OAuthLoginFlow.ParseCallback(
-            queryString:  "?code=abc&state=expected",
-            expectedState:"expected");
+    public async Task GitHubBrowser_returns_null_on_state_mismatch_without_calling_proxy() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/code-exchange").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"access_token":"nope"}"""));
 
-        await Assert.That(result.Code).IsEqualTo("abc");
-        await Assert.That(result.Error).IsNull();
+        var token = await OAuthLoginFlow.RunGitHubBrowserFlowAsync(
+            "Iv1.abc", $"{server.Urls[0]}/code-exchange",
+            FakeBrowser.WithRawQuery("?code=the_code&state=attacker"));
+
+        await Assert.That(token).IsNull();
+        // The proxy must never be hit when the CSRF state doesn't match.
+        await Assert.That(server.LogEntries.Any(e => e.RequestMessage.Path == "/code-exchange")).IsFalse();
     }
 
     [Test]
-    public async Task Callback_parser_rejects_state_mismatch() {
-        var result = OAuthLoginFlow.ParseCallback(
-            queryString:  "?code=abc&state=attacker",
-            expectedState:"expected");
+    public async Task GitHubBrowser_returns_null_on_non_success_browser_result() {
+        var token = await OAuthLoginFlow.RunGitHubBrowserFlowAsync(
+            "Iv1.abc", "http://unused.test/code-exchange", FakeBrowser.NonSuccess(BrowserResultType.Timeout));
 
-        await Assert.That(result.Code).IsNull();
-        await Assert.That(result.Error).IsEqualTo("state_mismatch");
-    }
-
-    [Test]
-    public async Task Callback_parser_surfaces_provider_error() {
-        var result = OAuthLoginFlow.ParseCallback(
-            queryString:  "?error=access_denied&state=expected",
-            expectedState:"expected");
-
-        await Assert.That(result.Code).IsNull();
-        await Assert.That(result.Error).IsEqualTo("access_denied");
-    }
-
-    [Test]
-    public async Task Callback_parser_reports_missing_state_when_state_param_absent() {
-        var result = OAuthLoginFlow.ParseCallback(
-            queryString:  "?error=access_denied",
-            expectedState:"expected");
-
-        await Assert.That(result.Code).IsNull();
-        await Assert.That(result.Error).IsEqualTo("missing_state");
-    }
-
-    [Test]
-    public async Task Callback_parser_reports_state_mismatch_when_state_differs() {
-        var result = OAuthLoginFlow.ParseCallback(
-            queryString:  "?error=access_denied&state=attacker",
-            expectedState:"expected");
-
-        await Assert.That(result.Code).IsNull();
-        await Assert.That(result.Error).IsEqualTo("state_mismatch");
-    }
-
-    [Test]
-    public async Task Callback_parser_rejects_missing_code() {
-        var result = OAuthLoginFlow.ParseCallback(
-            queryString:  "?state=expected",
-            expectedState:"expected");
-
-        await Assert.That(result.Code).IsNull();
-        await Assert.That(result.Error).IsEqualTo("missing_code");
+        await Assert.That(token).IsNull();
     }
 
     [Test]

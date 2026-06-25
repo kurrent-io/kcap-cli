@@ -1,9 +1,10 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
+using Duende.IdentityModel.Client;
+using Duende.IdentityModel.OidcClient;
+using Duende.IdentityModel.OidcClient.Browser;
 
 // ReSharper disable MethodHasAsyncOverload
 
@@ -183,87 +184,77 @@ public static class OAuthLoginFlow {
     }
 
     /// <summary>
-    /// Runs GitHub authorization-code-with-PKCE flow against a localhost loopback
-    /// listener. Opens the system browser to GitHub's authorize page; on callback,
-    /// verifies CSRF state and POSTs the code+verifier to <paramref name="codeExchangeUrl"/>
-    /// on the Capacitor server. The server adds its GitHub App client_secret and forwards
-    /// to GitHub's token endpoint (which GitHub Apps require, even with PKCE).
-    /// Returns the token on success, or <c>null</c> on user cancel, state mismatch,
-    /// or upstream error. Throws if the loopback port can't be bound — the caller
-    /// uses that signal to fall back to device flow.
+    /// GitHub authorization-code-with-PKCE via OidcClient's front-channel (authorize URL + PKCE +
+    /// state) over a 127.0.0.1 loopback, then the proxy-mediated JSON code-exchange to the Capacitor
+    /// server (GitHub Apps need client_secret on the token POST, which the server adds). Returns the
+    /// GitHub access token, or <c>null</c> on cancel/timeout/state-mismatch/error — a null is a hard
+    /// failure (the caller does NOT fall back to device flow on null, only on a loopback bind exception
+    /// thrown out of <see cref="LoopbackBrowser"/>). <paramref name="browser"/> is the test seam.
     /// </summary>
-    public static async Task<string?> RunGitHubBrowserFlowAsync(string clientId, string codeExchangeUrl, TimeSpan? timeout = null) {
-        var verifier  = GenerateCodeVerifier();
-        var challenge = GenerateCodeChallenge(verifier);
-        var state     = GenerateCodeVerifier(); // reuse the random source — same entropy is fine
+    public static async Task<string?> RunGitHubBrowserFlowAsync(
+            string clientId, string codeExchangeUrl, IBrowser? browser = null, TimeSpan? timeout = null) {
+        browser ??= new LoopbackBrowser();
+        var redirectUri = $"http://127.0.0.1:{GetAvailablePort()}/callback";
 
-        var port        = GetAvailablePort();
-        var redirectUri = $"http://127.0.0.1:{port}/callback";
+        var options = new OidcClientOptions {
+            Authority   = "https://github.com",
+            ClientId    = clientId,
+            Scope       = "read:user read:org",
+            RedirectUri = redirectUri,
+            LoadProfile = false,
+            DisablePushedAuthorization = true,
+            Browser     = browser,
+            ProviderInformation = new ProviderInformation {
+                IssuerName        = "https://github.com",
+                AuthorizeEndpoint = "https://github.com/login/oauth/authorize",
+                TokenEndpoint     = "https://github.com/login/oauth/access_token", // required non-empty; never called
+            },
+        };
+        options.Policy.Discovery.RequireKeySet = false;
 
-        using var listener = new HttpListener();
-        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
-        listener.Start();
+        var oidc  = new OidcClient(options);
+        var state = await oidc.PrepareLoginAsync();
 
-        var authUrl = BuildGitHubAuthorizeUrl(clientId, redirectUri, state, challenge);
+        var result = await browser.InvokeAsync(
+            new BrowserOptions(state.StartUrl, redirectUri) { Timeout = timeout ?? TimeSpan.FromMinutes(5) });
 
-        await Console.Out.WriteLineAsync("Opening browser for GitHub authentication...");
-        await Console.Out.WriteLineAsync($"  If the browser doesn't open, visit: {authUrl}");
-
-        try {
-            Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
-        } catch {
-            /* Browser open is best-effort — user can still copy the URL */
-        }
-
-        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromMinutes(5));
-
-        HttpListenerContext context;
-
-        while (true) {
-            var getContext = listener.GetContextAsync();
-
-            try {
-                context = await getContext.WaitAsync(cts.Token);
-            } catch (OperationCanceledException) {
-                listener.Stop();
-                _ = getContext.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-                Console.Error.WriteLine("Timed out waiting for authorization. Re-run `kcap login` to try again.");
-
-                return null;
-            }
-
-            if (context.Request.Url?.AbsolutePath == "/callback") break;
-
-            // Ignore favicon and other browser-issued requests that aren't our callback.
-            context.Response.StatusCode = 404;
-            context.Response.Close();
-        }
-
-        var callback = ParseCallback(context.Request.Url?.Query ?? "", state);
-        await RespondCallbackAsync(context, callback);
-        listener.Stop();
-
-        if (callback.Code is null) {
-            Console.Error.WriteLine($"Authorization failed: {callback.Error}");
+        if (result.ResultType != BrowserResultType.Success) {
+            Console.Error.WriteLine(result.ResultType == BrowserResultType.Timeout
+                ? "Timed out waiting for authorization. Re-run `kcap login` to try again."
+                : $"Authorization failed: {result.Error ?? result.ResultType.ToString()}");
 
             return null;
         }
 
+        var resp = new AuthorizeResponse(result.Response);
+        if (resp.IsError) {
+            Console.Error.WriteLine($"Authorization failed: {resp.Error}");
+
+            return null;
+        }
+        if (!string.Equals(resp.State, state.State, StringComparison.Ordinal)) {
+            Console.Error.WriteLine("Error: state mismatch — possible CSRF. Aborting.");
+
+            return null;
+        }
+        if (string.IsNullOrEmpty(resp.Code)) {
+            Console.Error.WriteLine("Authorization failed: no authorization code received.");
+
+            return null;
+        }
+
+        // Bound the proxy exchange to the login timeout — a stalled endpoint must not hang the CLI.
+        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromMinutes(5));
+
         using var http = new HttpClient();
         http.DefaultRequestHeaders.Accept.Add(new("application/json"));
-
-        var exchangeRequest = new GitHubCodeExchangeRequest {
-            Code         = callback.Code,
-            CodeVerifier = verifier,
-            RedirectUri  = redirectUri
-        };
 
         HttpResponseMessage tokenResponse;
 
         try {
             tokenResponse = await http.PostAsJsonAsync(
                 codeExchangeUrl,
-                exchangeRequest,
+                new GitHubCodeExchangeRequest { Code = resp.Code, CodeVerifier = state.CodeVerifier, RedirectUri = redirectUri },
                 CapacitorJsonContext.Default.GitHubCodeExchangeRequest,
                 cancellationToken: cts.Token
             );
@@ -274,7 +265,7 @@ public static class OAuthLoginFlow {
         }
 
         if (!tokenResponse.IsSuccessStatusCode) {
-            Console.Error.WriteLine($"Error exchanging code: {await tokenResponse.Content.ReadAsStringAsync()}");
+            Console.Error.WriteLine($"Error exchanging code: {await tokenResponse.Content.ReadAsStringAsync(cts.Token)}");
 
             return null;
         }
@@ -299,22 +290,6 @@ public static class OAuthLoginFlow {
         await Console.Out.WriteLineAsync("Authorization complete.");
 
         return tokenResult.AccessToken;
-    }
-
-    static async Task RespondCallbackAsync(HttpListenerContext ctx, CallbackResult callback) {
-        var (status, message) = callback.Code is not null
-            ? ("Authentication successful!", "You can close this window and return to the terminal.")
-            : ($"Authentication failed: {callback.Error}", "Return to the terminal for details.");
-
-        var html = $"<html><body style='font-family:system-ui;max-width:480px;margin:80px auto;text-align:center'>"
-          + $"<h2>{WebUtility.HtmlEncode(status)}</h2>"
-          + $"<p>{WebUtility.HtmlEncode(message)}</p></body></html>";
-
-        var buffer = Encoding.UTF8.GetBytes(html);
-        ctx.Response.ContentType     = "text/html";
-        ctx.Response.ContentLength64 = buffer.Length;
-        await ctx.Response.OutputStream.WriteAsync(buffer);
-        ctx.Response.Close();
     }
 
     public static async Task<int> ExchangeAndSaveAsync(string serverUrl, string githubAccessToken, string provider) {
@@ -483,38 +458,87 @@ public static class OAuthLoginFlow {
     }
 
     static Task<int> HandleWorkOSLogin(AuthDiscoveryResponse config) =>
-        LoginWorkOSAsync(config.AuthKitDomain, config.ClientId!, config.OrganizationId);
+        LoginWorkOSAsync(config.ClientId!, config.OrganizationId);
 
     const string WorkOSApiBase = "https://api.workos.com";
 
     /// <summary>
-    /// WorkOS AuthKit authorization-code-with-PKCE login on a 127.0.0.1 loopback listener
-    /// (WorkOS documents the HTTP loopback exception as 127.0.0.1, not localhost). Authorize
-    /// on the AuthKit domain (hosted UI; falls back to api.workos.com), org-scoped when known;
-    /// the token exchange always hits api.workos.com. Public client — no client secret.
+    /// Builds OidcClient options for the WorkOS AuthKit authorization-code-with-PKCE flow.
+    /// Authorize + token both on the API domain (AI-958 — never the AuthKit UI domain). WorkOS is a
+    /// public client (no secret) with non-standard endpoints, no discovery, and no id_token, so
+    /// discovery/keyset/userinfo are disabled and the response is mapped by hand.
     /// </summary>
-    static async Task<int> LoginWorkOSAsync(string? authKitDomain, string clientId, string? organizationId) {
-        var authorizeBase = string.IsNullOrEmpty(authKitDomain) ? WorkOSApiBase : $"https://{authKitDomain}";
+    internal static OidcClientOptions BuildWorkOSOptions(string clientId, string apiBase, string redirectUri) {
+        var options = new OidcClientOptions {
+            Authority   = apiBase,            // anonymous-principal issuer; discovery stays off (ProviderInformation set)
+            ClientId    = clientId,
+            Scope       = "",                 // preserve current no-scope behavior
+            RedirectUri = redirectUri,
+            LoadProfile = false,              // WorkOS has no userinfo endpoint
+            DisablePushedAuthorization = true,
+            ProviderInformation = new ProviderInformation {
+                IssuerName        = apiBase,
+                AuthorizeEndpoint = $"{apiBase}/user_management/authorize",     // AI-958: always the API domain
+                TokenEndpoint     = $"{apiBase}/user_management/authenticate",
+            },
+        };
+        options.Policy.Discovery.RequireKeySet = false;
 
-        var loop = await RunWorkOSLoopbackAsync(authorizeBase, clientId, organizationId);
-        if (loop.Code is null) {
-            Console.Error.WriteLine(loop.Error switch {
-                "state_mismatch" => "Error: state mismatch — possible CSRF. Aborting.",
-                "timeout"        => "Timed out waiting for authorization. Re-run `kcap login` to try again.",
-                _                => "Error: No authorization code received."
-            });
+        return options;
+    }
 
-            return 1;
+    /// <summary>WorkOS front-channel extras: <c>provider=authkit</c> (+ <c>organization_id</c> when org-scoped).</summary>
+    internal static Parameters WorkOSFrontChannel(string? organizationId) {
+        var p = new Parameters { { "provider", "authkit" } };
+        if (!string.IsNullOrEmpty(organizationId)) p.Add("organization_id", organizationId);
+
+        return p;
+    }
+
+    /// <summary>
+    /// WorkOS AuthKit authorization-code-with-PKCE login via OidcClient. Org-scoped when
+    /// <paramref name="organizationId"/> is set. Maps the raw token response (which carries WorkOS's
+    /// non-standard organization_id/user and no id_token) into <see cref="WorkOSAuthResponse"/> via the
+    /// source-gen context — omitted/nullable fields don't throw. <paramref name="apiBase"/> is the test seam.
+    /// </summary>
+    public static async Task<WorkOSAuthResponse?> AuthenticateWorkOSAsync(
+            string clientId, string? organizationId, IBrowser browser, string apiBase = WorkOSApiBase) {
+        var redirectUri = $"http://127.0.0.1:{GetAvailablePort()}/callback";
+        var options     = BuildWorkOSOptions(clientId, apiBase, redirectUri);
+        options.Browser = browser;
+
+        var oidc   = new OidcClient(options);
+        var result = await oidc.LoginAsync(new LoginRequest { FrontChannelExtraParameters = WorkOSFrontChannel(organizationId) });
+
+        // Surface the actual reason (timeout / state mismatch / token-endpoint / upstream OIDC error)
+        // rather than collapsing every failure to a single opaque "sign-in failed".
+        if (result.IsError) {
+            Console.Error.WriteLine(WorkOSSignInError(result.Error, result.ErrorDescription));
+
+            return null;
         }
 
-        using var http = new HttpClient();
+        if (result.TokenResponse?.Json is not { } json) {
+            Console.Error.WriteLine("WorkOS sign-in failed: empty token response.");
 
-        var json = await AuthenticateWorkOSCodeAsync(http, WorkOSApiBase, clientId, loop.Code, loop.Verifier);
-        if (json is null) {
-            Console.Error.WriteLine("Error: WorkOS token exchange failed.");
-
-            return 1;
+            return null;
         }
+
+        return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.WorkOSAuthResponse);
+    }
+
+    /// <summary>Maps an OidcClient WorkOS failure to a user-facing message, preserving the actionable detail.</summary>
+    internal static string WorkOSSignInError(string? error, string? description) => error switch {
+        "Timeout"    => "Timed out waiting for authorization. Re-run `kcap login` to try again.",
+        "UserCancel" => "WorkOS sign-in was cancelled.",
+        _            => $"WorkOS sign-in failed: {error ?? "unknown error"}"
+                      + (string.IsNullOrEmpty(description) ? "" : $" — {description}")
+    };
+
+    static async Task<int> LoginWorkOSAsync(string clientId, string? organizationId) {
+        // AuthenticateWorkOSAsync already reported the specific failure reason to stderr.
+        var json = await AuthenticateWorkOSAsync(clientId, organizationId, new LoopbackBrowser());
+        if (json is null) return 1;
 
         // Org gate: a multi-org user must not be "logged in" to the wrong org — every API
         // call would then fail the server's org check. Reject before saving tokens.
@@ -551,114 +575,6 @@ public static class OAuthLoginFlow {
         return parts.Count > 0 ? string.Join(' ', parts) : user?.Email ?? "unknown";
     }
 
-    public sealed record WorkOSLoopbackResult(string? Code, string Verifier, string RedirectUri, string? Error);
-
-    /// <summary>
-    /// WorkOS AuthKit authorization-code-with-PKCE on a 127.0.0.1 loopback listener. Authorizes on
-    /// <paramref name="authorizeBase"/>, org-scoped only when <paramref name="organizationId"/> is set
-    /// (pass null for org-less discovery). Returns the authorization code + PKCE verifier, or an
-    /// <c>Error</c> ("timeout" / "state_mismatch" / "missing_code"). Public client — the separate token
-    /// exchange carries no secret.
-    /// </summary>
-    public static async Task<WorkOSLoopbackResult> RunWorkOSLoopbackAsync(
-            string authorizeBase, string clientId, string? organizationId, TimeSpan? timeout = null) {
-        var verifier    = GenerateCodeVerifier();
-        var challenge   = GenerateCodeChallenge(verifier);
-        var state       = GenerateCodeVerifier();
-        var port        = GetAvailablePort();
-        var redirectUri = $"http://127.0.0.1:{port}/callback";
-
-        using var listener = new HttpListener();
-        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
-        listener.Start();
-
-        var authUrl = $"{authorizeBase}/user_management/authorize?"          +
-            $"response_type=code&client_id={Uri.EscapeDataString(clientId)}" +
-            $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"             +
-            $"&provider=authkit"                                             +
-            (string.IsNullOrEmpty(organizationId) ? "" : $"&organization_id={Uri.EscapeDataString(organizationId)}") +
-            $"&state={Uri.EscapeDataString(state)}"                          +
-            $"&code_challenge={challenge}&code_challenge_method=S256";
-
-        await Console.Out.WriteLineAsync("Opening browser for authentication...");
-        await Console.Out.WriteLineAsync($"  If the browser doesn't open, visit: {authUrl}");
-
-        try {
-            Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
-        } catch {
-            /* Browser open is best-effort — user can still copy the URL */
-        }
-
-        // Bounded wait + ignore non-callback requests (favicon etc.) — mirrors RunGitHubBrowserFlowAsync.
-        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromMinutes(5));
-
-        HttpListenerContext context;
-
-        while (true) {
-            var getContext = listener.GetContextAsync();
-
-            try {
-                context = await getContext.WaitAsync(cts.Token);
-            } catch (OperationCanceledException) {
-                listener.Stop();
-                _ = getContext.ContinueWith(t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-
-                return new(null, verifier, redirectUri, "timeout");
-            }
-
-            if (context.Request.Url?.AbsolutePath == "/callback") break;
-
-            // Ignore favicon and other browser-issued requests that aren't our callback.
-            context.Response.StatusCode = 404;
-            context.Response.Close();
-        }
-
-        var code          = context.Request.QueryString["code"];
-        var returnedState = context.Request.QueryString["state"];
-
-        if (returnedState != state) {
-            const string errHtml = "<html><body><h2>Authentication failed</h2><p>State mismatch — possible CSRF. Return to the terminal.</p></body></html>";
-            var          errBuf  = Encoding.UTF8.GetBytes(errHtml);
-            context.Response.ContentType     = "text/html";
-            context.Response.ContentLength64 = errBuf.Length;
-            await context.Response.OutputStream.WriteAsync(errBuf);
-            context.Response.Close();
-            listener.Stop();
-
-            return new(null, verifier, redirectUri, "state_mismatch");
-        }
-
-        const string html = "<html><body><h2>Authentication successful!</h2><p>You can close this window.</p></body></html>";
-
-        var buffer = Encoding.UTF8.GetBytes(html);
-        context.Response.ContentType     = "text/html";
-        context.Response.ContentLength64 = buffer.Length;
-        await context.Response.OutputStream.WriteAsync(buffer);
-        context.Response.Close();
-        listener.Stop();
-
-        return string.IsNullOrEmpty(code)
-            ? new(null, verifier, redirectUri, "missing_code")
-            : new(code, verifier, redirectUri, null);
-    }
-
-    /// <summary>Public-client WorkOS code→token exchange at <c>{apiBase}/user_management/authenticate</c>.</summary>
-    public static async Task<WorkOSAuthResponse?> AuthenticateWorkOSCodeAsync(
-            HttpClient http, string apiBase, string clientId, string code, string codeVerifier) {
-        var resp = await http.PostAsync(
-            $"{apiBase.TrimEnd('/')}/user_management/authenticate",
-            new FormUrlEncodedContent(new Dictionary<string, string> {
-                ["grant_type"]    = "authorization_code",
-                ["client_id"]     = clientId,
-                ["code"]          = code,
-                ["code_verifier"] = codeVerifier
-            }));
-
-        if (!resp.IsSuccessStatusCode) return null;
-
-        return await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.WorkOSAuthResponse);
-    }
-
     /// <summary>
     /// Public-client WorkOS org-switch: exchanges a refresh token for an org-scoped token. The spike
     /// confirmed the resulting refresh token stays bound to the org, so subsequent refreshes need no
@@ -680,8 +596,6 @@ public static class OAuthLoginFlow {
         return await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.WorkOSAuthResponse);
     }
 
-    internal readonly record struct CallbackResult(string? Code, string? Error);
-
     // The server-supplied code-exchange URL must be a fully-qualified http(s) URI before
     // we trust it. An empty string, whitespace, relative path, or javascript:/file: URL
     // is treated as "no browser flow available" and the dispatcher falls back to device flow.
@@ -689,61 +603,7 @@ public static class OAuthLoginFlow {
         Uri.TryCreate(url, UriKind.Absolute, out var parsed)
      && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps);
 
-    internal static string BuildGitHubAuthorizeUrl(
-            string clientId,
-            string redirectUri,
-            string state,
-            string codeChallenge
-        ) =>
-        "https://github.com/login/oauth/authorize?"              +
-        $"client_id={Uri.EscapeDataString(clientId)}"            +
-        $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"     +
-        $"&state={Uri.EscapeDataString(state)}"                  +
-        $"&scope={Uri.EscapeDataString("read:user read:org")}"   +
-        $"&code_challenge={Uri.EscapeDataString(codeChallenge)}" +
-        "&code_challenge_method=S256"                            +
-        "&response_type=code";
-
-    internal static CallbackResult ParseCallback(string queryString, string expectedState) {
-        var     qs    = queryString.TrimStart('?');
-        var     parts = qs.Split('&', StringSplitOptions.RemoveEmptyEntries);
-        string? code  = null, state = null, error = null;
-
-        foreach (var part in parts) {
-            var eq = part.IndexOf('=');
-
-            if (eq < 0) continue;
-
-            var key = part[..eq];
-            var val = Uri.UnescapeDataString(part[(eq + 1)..]);
-
-            switch (key) {
-                case "code":  code  = val; break;
-                case "state": state = val; break;
-                case "error": error = val; break;
-            }
-        }
-
-        if (state is null) return new(null, "missing_state");
-        if (state != expectedState) return new(null, "state_mismatch");
-        if (error is not null) return new(null, error);
-
-        return string.IsNullOrEmpty(code) ? new(null, "missing_code") : new(code, null);
-    }
-
-    static string GenerateCodeVerifier() {
-        var bytes = RandomNumberGenerator.GetBytes(32);
-
-        return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-    }
-
-    static string GenerateCodeChallenge(string verifier) {
-        var hash = SHA256.HashData(Encoding.ASCII.GetBytes(verifier));
-
-        return Convert.ToBase64String(hash).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-    }
-
-    static int GetAvailablePort() {
+    internal static int GetAvailablePort() {
         var tcpListener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
         tcpListener.Start();
         var port = ((IPEndPoint)tcpListener.LocalEndpoint).Port;
