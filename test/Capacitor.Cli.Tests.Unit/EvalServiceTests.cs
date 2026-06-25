@@ -786,9 +786,46 @@ public class EvalServiceTests {
         await Assert.That(EvalService.ShouldForceTools(40_000 - 4, 10_000)).IsFalse();
     }
 
+    // TraceTokenBudget reads the process environment directly, so these tests
+    // save → set → assert → restore the var and run NotInParallel with each
+    // other to avoid clobbering a value the host/CI may already have set.
+
     [Test]
+    [NotInParallel(nameof(EvalServiceTests))]
     public async Task TraceTokenBudget_defaults_when_env_unset() {
-        // No KCAP_EVAL_TRACE_TOKEN_BUDGET override in the test process → default.
-        await Assert.That(EvalService.TraceTokenBudget()).IsEqualTo(200_000);
+        var previous = Environment.GetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET");
+        Environment.SetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET", null);
+        try {
+            await Assert.That(EvalService.TraceTokenBudget()).IsEqualTo(200_000);
+        } finally {
+            Environment.SetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET", previous);
+        }
+    }
+
+    [Test]
+    [NotInParallel(nameof(EvalServiceTests))]
+    public async Task TraceTokenBudget_honours_valid_env_override() {
+        var previous = Environment.GetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET");
+        Environment.SetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET", "50000");
+        try {
+            await Assert.That(EvalService.TraceTokenBudget()).IsEqualTo(50_000);
+        } finally {
+            Environment.SetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET", previous);
+        }
+    }
+
+    [Test]
+    [NotInParallel(nameof(EvalServiceTests))]
+    public async Task TraceTokenBudget_falls_back_to_default_on_invalid_or_nonpositive_env() {
+        var previous = Environment.GetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET");
+        try {
+            Environment.SetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET", "not-a-number");
+            await Assert.That(EvalService.TraceTokenBudget()).IsEqualTo(200_000);
+
+            Environment.SetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET", "0");
+            await Assert.That(EvalService.TraceTokenBudget()).IsEqualTo(200_000);
+        } finally {
+            Environment.SetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET", previous);
+        }
     }
 }

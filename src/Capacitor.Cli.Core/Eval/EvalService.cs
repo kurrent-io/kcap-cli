@@ -351,6 +351,17 @@ public static class EvalService {
         // model's context window when embedded, route every question for this
         // session through the tools path (no embedded trace) instead of the
         // text-only path. See ShouldForceTools / DefaultTraceTokenBudget.
+        //
+        // Known limitation (AI-966 review): the judge MCP tools for
+        // summary/search/transcript/tool-result are single-session — only
+        // recap/errors follow the continuation chain (and the server endpoints
+        // they back have no chain support). So a chained eval (`--chain`) whose
+        // trace is large enough to force tools judges the nine formerly
+        // embedded-trace questions against the head session only, not the whole
+        // chain. Accepted here because the alternative for an oversized chained
+        // trace is the embed path's hard 400 (no verdict at all). Full
+        // chain-aware tools require server-side chain support on
+        // eval-summary/search/transcript — tracked in AI-968.
         var tokenBudget = TraceTokenBudget();
         var forceTools  = ShouldForceTools(traceJson.Length, tokenBudget);
         if (forceTools) {
