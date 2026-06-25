@@ -116,7 +116,7 @@ as today — no regression.
 ### 2. WorkOS — full OidcClient `LoginAsync`
 
 Rewrite `LoginWorkOSAsync` and add a reusable
-`AuthenticateWorkOSAsync(clientId, organizationId, IBrowser, HttpMessageHandler?)`
+`AuthenticateWorkOSAsync(clientId, organizationId, IBrowser browser, string apiBase = "https://api.workos.com")`
 → `WorkOSAuthResponse?` helper that builds:
 
 ```csharp
@@ -124,27 +124,42 @@ var options = new OidcClientOptions {
     ClientId    = clientId,
     Scope       = "",                          // preserve current no-scope behavior
     RedirectUri = $"http://127.0.0.1:{port}/callback",
-    Browser     = loopback,
+    Browser     = browser,
     LoadProfile = false,                       // no userinfo endpoint
     DisablePushedAuthorization = true,         // WorkOS has no PAR
     ProviderInformation = new ProviderInformation {
-        IssuerName        = "https://api.workos.com",
-        AuthorizeEndpoint = "https://api.workos.com/user_management/authorize",   // AI-958
-        TokenEndpoint     = "https://api.workos.com/user_management/authenticate",
+        IssuerName        = apiBase,
+        AuthorizeEndpoint = $"{apiBase}/user_management/authorize",      // AI-958: always API domain
+        TokenEndpoint     = $"{apiBase}/user_management/authenticate",
     },
 };
 options.Policy.Discovery.RequireKeySet = false;
-if (backchannelHandler is not null) options.BackchannelHandler = backchannelHandler; // tests
 ```
+
+`apiBase` is the **test seam** (matching the existing `SwitchWorkOSOrgAsync`
+pattern of injecting `server.Urls[0]`); production passes the default
+`https://api.workos.com`. A `BackchannelHandler` alone is *not* enough — the
+hardcoded absolute `api.workos.com` token URL would never reach a WireMock
+server — so the base URL itself must be injectable. The shared
+`LoopbackBrowser` is the production `browser`; tests pass a fake `IBrowser`.
 
 Front-channel extra params via `LoginRequest.FrontChannelExtraParameters`:
 `provider=authkit` (+ `organization_id` when non-null).
 
-Map `LoginResult` → existing `WorkOSAuthResponse`:
-- `AccessToken` / `RefreshToken` from `LoginResult`.
-- `OrganizationId` and `User` read from `LoginResult.TokenResponse.Json`
-  (`GetProperty("organization_id")`, `GetProperty("user")`), so the existing
-  org-gate and `WorkOSDisplayName` logic is unchanged.
+Map `LoginResult` → existing `WorkOSAuthResponse`: WorkOS's extra fields
+(`organization_id`, `user`) are nullable and may be **omitted** (org-less
+discovery), so `JsonElement.GetProperty` is unsafe — it throws on a missing
+property. Instead, deserialize the **whole** raw token response through the
+existing source-gen context, which maps every nullable field natively and is
+AOT-safe:
+
+```csharp
+if (loginResult.IsError || loginResult.TokenResponse?.Json is not { } json) return null;
+return json.Deserialize(CapacitorJsonContext.Default.WorkOSAuthResponse);
+```
+
+(`TokenResponse.Raw` is the equivalent string fallback.) The existing org-gate
+and `WorkOSDisplayName` logic then consume the `WorkOSAuthResponse` unchanged.
 
 `HandleWorkOSLogin` keeps the org-gate, token save, and "Logged in as …"
 output. **Deletes** `RunWorkOSLoopbackAsync`, `AuthenticateWorkOSCodeAsync`,
@@ -152,19 +167,27 @@ and the WorkOS `WorkOSLoopbackResult` record.
 
 ### 3. GitHub browser — OidcClient front-channel, custom proxy exchange
 
-`RunGitHubBrowserFlowAsync` becomes:
+`RunGitHubBrowserFlowAsync(clientId, codeExchangeUrl, IBrowser? browser = null,
+TimeSpan? timeout = null)` becomes (the `IBrowser` parameter is the **test
+seam**; production passes `null` → `new LoopbackBrowser()`):
 1. Build `OidcClientOptions` with `AuthorizeEndpoint =
    https://github.com/login/oauth/authorize`, `Scope = "read:user read:org"`,
    `TokenEndpoint = https://github.com/login/oauth/access_token` (set but never
    called — `ProviderInformation` requires it non-empty), `IssuerName =
-   "https://github.com"`, the shared `LoopbackBrowser`.
+   "https://github.com"`, the injected/shared `LoopbackBrowser`.
 2. `var state = await oidc.PrepareLoginAsync();` → `StartUrl`, `State`,
    `CodeVerifier`, `RedirectUri`.
 3. `var result = await browser.InvokeAsync(new BrowserOptions(state.StartUrl,
    state.RedirectUri){ Timeout = ... });`
-4. `var resp = new AuthorizeResponse(result.Response);` — check `resp.IsError`,
+4. **Guard the browser result first:** if `result.ResultType !=
+   BrowserResultType.Success`, `result.Response` may be null/unset — map
+   `Timeout`/`UserCancel`/error to the existing "Timed out waiting for
+   authorization…" / failure messages and `return null` (so the
+   `AcquireGitHubTokenAsync` caller still falls back / reports). Only on
+   `Success` proceed.
+5. `var resp = new AuthorizeResponse(result.Response);` — check `resp.IsError`,
    `resp.State == state.State` (CSRF), get `resp.Code`.
-5. Keep the existing JSON proxy exchange to `codeExchangeUrl`
+6. Keep the existing JSON proxy exchange to `codeExchangeUrl`
    (`GitHubCodeExchangeRequest{Code, CodeVerifier = state.CodeVerifier,
    RedirectUri = state.RedirectUri}` → `GitHubTokenResponse`), unchanged.
 
@@ -218,17 +241,36 @@ all `Callback_parser_*` tests.
 Keep: `SwitchWorkOSOrg_*`, `IsValidExchangeUrl_*`, `ChooseGitHubFlow_*`,
 `ChooseDiscoveryProvider_*`, `ShouldDiscoverLogin_*`.
 
-Add:
-- WorkOS options builder test: asserts `AuthorizeEndpoint`/`TokenEndpoint` are
-  `api.workos.com`, `provider=authkit` present, `organization_id` present only
-  when supplied, `LoadProfile == false`. (Authorize URL is verified by driving
-  `PrepareLoginAsync` and inspecting `AuthorizeState.StartUrl`.)
-- WorkOS end-to-end mapping test: a fake `IBrowser` returns a canned
-  `?code=...&state=<state>` callback; a WireMock token endpoint returns
+All new flow tests use a **fake `IBrowser`** (returns a canned callback or a
+non-success result) plus a **WireMock server whose URL is injected** as the
+endpoint base — `apiBase` for WorkOS, `codeExchangeUrl` for GitHub — matching
+the existing `SwitchWorkOSOrg` test pattern. No reliance on
+`BackchannelHandler` rewriting an absolute URL.
+
+Add (WorkOS):
+- Authorize-URL builder test: drive `PrepareLoginAsync`, inspect
+  `AuthorizeState.StartUrl` — assert it targets `{apiBase}/user_management/
+  authorize`, carries `provider=authkit`, includes `organization_id` only when
+  supplied, and `LoadProfile == false`.
+- End-to-end mapping, **org-scoped**: fake `IBrowser` returns
+  `?code=...&state=<state>`; WireMock `/user_management/authenticate` returns
   `{access_token, refresh_token, organization_id, user}` (no `id_token`);
-  assert the new helper yields a `WorkOSAuthResponse` with the right
-  `OrganizationId`/`RefreshToken`/`User`. Wire WireMock via
-  `OidcClientOptions.BackchannelHandler`.
+  assert `WorkOSAuthResponse` has the right `OrganizationId`/`RefreshToken`/`User`.
+- End-to-end mapping, **org-less** (regression for the `GetProperty` bug):
+  WireMock response **omits** `organization_id` and `user`; assert the helper
+  returns a `WorkOSAuthResponse` with `OrganizationId == null` / `User == null`
+  and does **not** throw.
+
+Add (GitHub browser):
+- Success: fake `IBrowser` returns `?code=...&state=<state>`; WireMock
+  `codeExchangeUrl` returns `{access_token}`; assert the access token is
+  returned and the proxy got `code`/`code_verifier`/`redirect_uri`.
+- State mismatch: fake `IBrowser` returns a mismatched `state`; assert `null`
+  and that the proxy was **not** called.
+- Non-success browser result: fake `IBrowser` returns `Timeout`; assert `null`
+  (and no throw / no proxy call) so the caller's fallback path runs.
+
+Add (discovery):
 - `WorkOSDiscoveryTests`: update the `orglessLogin` fake to the no-arg delegate
   signature.
 
