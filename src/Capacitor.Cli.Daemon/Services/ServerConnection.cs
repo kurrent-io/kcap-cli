@@ -565,6 +565,15 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public virtual Task SendTerminalOutputAsync(string agentId, string base64Data, CancellationToken ct = default) =>
         _terminalSender.EnqueueAsync(agentId, base64Data, ct).AsTask();
 
+    /// <summary>
+    /// Non-blocking terminal-output enqueue for local-first agents (see
+    /// <see cref="TerminalOutputSender.TryEnqueue"/>): never back-pressures the caller, so a
+    /// registered local agent's PTY read loop and live terminal stay responsive through a tunnel
+    /// stall. Returns false if the chunk was dropped (backlog full).
+    /// </summary>
+    public virtual bool TrySendTerminalOutput(string agentId, string base64Data) =>
+        _terminalSender.TryEnqueue(agentId, base64Data);
+
     // ── Eval progress events (DEV-1440) ────────────────────────────────────
 
     public Task EvalStartedAsync(string evalRunId, string sessionId, string judgeModel, int totalQuestions)

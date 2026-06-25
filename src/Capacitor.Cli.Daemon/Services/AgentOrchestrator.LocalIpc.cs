@@ -68,11 +68,12 @@ internal partial class AgentOrchestrator {
             var proc = _ptyFactory.Spawn(launcher.CliPath, built.Args, worktree.Path, env, cols, rows);
 
             agent = new AgentInstance(agentId, null, "", null, cwd, vendor, proc, worktree, new CancellationTokenSource()) {
-                IsPrivate     = isPrivate,
-                Work          = work,
-                McpConfigPath = built.McpConfigPath,
-                CurrentCols   = cols,
-                CurrentRows   = rows
+                IsPrivate      = isPrivate,
+                IsLocalSpawned = true,
+                Work           = work,
+                McpConfigPath  = built.McpConfigPath,
+                CurrentCols    = cols,
+                CurrentRows    = rows
             };
             _agents[agentId] = agent;
         } catch (Exception ex) {

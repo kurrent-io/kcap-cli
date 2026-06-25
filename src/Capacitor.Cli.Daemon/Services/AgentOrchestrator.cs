@@ -65,6 +65,15 @@ public record AgentInstance(
     /// </summary>
     public bool IsPrivate { get; init; }
 
+    /// <summary>
+    /// True for agents started from a local terminal (`kcap run-agent`), whether registered or
+    /// `--private`. Such an agent has a live local terminal as its primary surface, so the read
+    /// loop streams to the server <b>non-blocking</b> (drop+count on a full backlog) rather than
+    /// back-pressuring the PTY on a remote tunnel stall — the local terminal must not freeze when
+    /// the cloud hiccups. Hosted agents (server is the only consumer) keep lossless back-pressure.
+    /// </summary>
+    public bool IsLocalSpawned { get; init; }
+
     /// <summary>Owned worktree (daemon-created — safe to remove on cleanup) vs borrowed cwd
     /// (the user's own checkout — never removed).</summary>
     public WorkLocation Work { get; init; } = WorkLocation.OwnedWorktree;
@@ -504,11 +513,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 if (!agent.IsPrivate) {
                     var base64 = Convert.ToBase64String(data);
-                    // Await the enqueue: TerminalOutputSender back-pressures here when its
-                    // queue is full (slow/down transport) so a chunk is never dropped to
-                    // keep up — losing one byte garbles the whole redraw-TUI mirror (AI-844).
-                    // sendCts releases this await on agent stop or daemon shutdown (AI-846).
-                    await _server.SendTerminalOutputAsync(agent.Id, base64, sendCts.Token);
+
+                    if (agent.IsLocalSpawned) {
+                        // Local-first: a registered local agent has a live local terminal as its
+                        // primary surface, so NEVER block the PTY read loop on a remote tunnel
+                        // stall. Enqueue non-blocking; a full backlog (sustained outage) drops +
+                        // counts the chunk and the web mirror re-syncs from the server's own buffer
+                        // on reconnect. Keeps the local terminal responsive when the cloud hiccups.
+                        _server.TrySendTerminalOutput(agent.Id, base64);
+                    } else {
+                        // Hosted: the server is the only consumer, so back-pressure here when the
+                        // queue is full (slow/down transport) — a chunk is never dropped, since
+                        // losing one byte garbles the whole redraw-TUI mirror (AI-844). sendCts
+                        // releases this await on agent stop or daemon shutdown (AI-846).
+                        await _server.SendTerminalOutputAsync(agent.Id, base64, sendCts.Token);
+                    }
                 }
             }
         } catch (OperationCanceledException) {
