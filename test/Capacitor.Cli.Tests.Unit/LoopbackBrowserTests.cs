@@ -3,6 +3,11 @@ using Duende.IdentityModel.OidcClient.Browser;
 
 namespace Capacitor.Cli.Tests.Unit;
 
+// These tests bind real loopback HttpListeners on OS-assigned ports. Run fully exclusively
+// (no other test running) so the rest of the parallel suite can't grab the freed ephemeral
+// port in the alloc->bind window — the managed HttpListener on macOS/Linux throws
+// "Address already in use". (Production is single-use interactive, so the race is irrelevant there.)
+[NotInParallel]
 public class LoopbackBrowserTests {
     [Test]
     public async Task Returns_success_with_raw_query_on_callback() {

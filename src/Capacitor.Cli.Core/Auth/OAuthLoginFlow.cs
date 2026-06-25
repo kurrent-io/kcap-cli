@@ -243,6 +243,9 @@ public static class OAuthLoginFlow {
             return null;
         }
 
+        // Bound the proxy exchange to the login timeout — a stalled endpoint must not hang the CLI.
+        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromMinutes(5));
+
         using var http = new HttpClient();
         http.DefaultRequestHeaders.Accept.Add(new("application/json"));
 
@@ -252,7 +255,8 @@ public static class OAuthLoginFlow {
             tokenResponse = await http.PostAsJsonAsync(
                 codeExchangeUrl,
                 new GitHubCodeExchangeRequest { Code = resp.Code, CodeVerifier = state.CodeVerifier, RedirectUri = redirectUri },
-                CapacitorJsonContext.Default.GitHubCodeExchangeRequest
+                CapacitorJsonContext.Default.GitHubCodeExchangeRequest,
+                cancellationToken: cts.Token
             );
         } catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or UriFormatException or InvalidOperationException) {
             Console.Error.WriteLine($"Could not reach the code-exchange endpoint at {codeExchangeUrl}: {ex.Message}");
@@ -261,7 +265,7 @@ public static class OAuthLoginFlow {
         }
 
         if (!tokenResponse.IsSuccessStatusCode) {
-            Console.Error.WriteLine($"Error exchanging code: {await tokenResponse.Content.ReadAsStringAsync()}");
+            Console.Error.WriteLine($"Error exchanging code: {await tokenResponse.Content.ReadAsStringAsync(cts.Token)}");
 
             return null;
         }
@@ -269,9 +273,9 @@ public static class OAuthLoginFlow {
         GitHubTokenResponse? tokenResult;
 
         try {
-            tokenResult = await tokenResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.GitHubTokenResponse);
+            tokenResult = await tokenResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.GitHubTokenResponse, cancellationToken: cts.Token);
         } catch (JsonException ex) {
-            var raw = await tokenResponse.Content.ReadAsStringAsync();
+            var raw = await tokenResponse.Content.ReadAsStringAsync(cts.Token);
             Console.Error.WriteLine($"Code-exchange response was not valid JSON ({ex.Message}): {raw}");
 
             return null;
@@ -506,18 +510,35 @@ public static class OAuthLoginFlow {
         var oidc   = new OidcClient(options);
         var result = await oidc.LoginAsync(new LoginRequest { FrontChannelExtraParameters = WorkOSFrontChannel(organizationId) });
 
-        if (result.IsError || result.TokenResponse?.Json is not { } json) return null;
+        // Surface the actual reason (timeout / state mismatch / token-endpoint / upstream OIDC error)
+        // rather than collapsing every failure to a single opaque "sign-in failed".
+        if (result.IsError) {
+            Console.Error.WriteLine(WorkOSSignInError(result.Error, result.ErrorDescription));
+
+            return null;
+        }
+
+        if (result.TokenResponse?.Json is not { } json) {
+            Console.Error.WriteLine("WorkOS sign-in failed: empty token response.");
+
+            return null;
+        }
 
         return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.WorkOSAuthResponse);
     }
 
-    static async Task<int> LoginWorkOSAsync(string clientId, string? organizationId) {
-        var json = await AuthenticateWorkOSAsync(clientId, organizationId, new LoopbackBrowser());
-        if (json is null) {
-            Console.Error.WriteLine("Error: WorkOS sign-in failed.");
+    /// <summary>Maps an OidcClient WorkOS failure to a user-facing message, preserving the actionable detail.</summary>
+    internal static string WorkOSSignInError(string? error, string? description) => error switch {
+        "Timeout"    => "Timed out waiting for authorization. Re-run `kcap login` to try again.",
+        "UserCancel" => "WorkOS sign-in was cancelled.",
+        _            => $"WorkOS sign-in failed: {error ?? "unknown error"}"
+                      + (string.IsNullOrEmpty(description) ? "" : $" — {description}")
+    };
 
-            return 1;
-        }
+    static async Task<int> LoginWorkOSAsync(string clientId, string? organizationId) {
+        // AuthenticateWorkOSAsync already reported the specific failure reason to stderr.
+        var json = await AuthenticateWorkOSAsync(clientId, organizationId, new LoopbackBrowser());
+        if (json is null) return 1;
 
         // Org gate: a multi-org user must not be "logged in" to the wrong org — every API
         // call would then fail the server's org check. Reject before saving tokens.

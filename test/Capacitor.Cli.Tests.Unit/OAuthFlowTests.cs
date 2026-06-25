@@ -66,6 +66,27 @@ public class OAuthFlowTests {
     }
 
     [Test]
+    public async Task AuthenticateWorkOS_returns_null_on_token_endpoint_error() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(400).WithBody("""{"error":"invalid_grant"}"""));
+
+        var result = await OAuthLoginFlow.AuthenticateWorkOSAsync(
+            "client_d", "org_a", FakeBrowser.WithCode("the_code"), apiBase: server.Urls[0]);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task WorkOSSignInError_preserves_actionable_detail() {
+        await Assert.That(OAuthLoginFlow.WorkOSSignInError("Timeout", null)).Contains("Timed out");
+        await Assert.That(OAuthLoginFlow.WorkOSSignInError("Invalid state.", null))
+            .IsEqualTo("WorkOS sign-in failed: Invalid state.");
+        await Assert.That(OAuthLoginFlow.WorkOSSignInError("invalid_grant", "bad code"))
+            .IsEqualTo("WorkOS sign-in failed: invalid_grant — bad code");
+    }
+
+    [Test]
     public async Task SwitchWorkOSOrg_posts_refresh_grant_with_org_and_returns_token() {
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
