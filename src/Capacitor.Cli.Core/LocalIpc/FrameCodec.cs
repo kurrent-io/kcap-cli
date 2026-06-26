@@ -47,7 +47,8 @@ public static class FrameCodec {
         FrameType.Resize                    => Dims(f.Cols, f.Rows),
         FrameType.Detach or FrameType.List  => [],
         FrameType.Exited                    => BeInt(f.ExitCode),
-        FrameType.Error or FrameType.Attach or FrameType.AgentList => Encoding.UTF8.GetBytes(f.Text),
+        FrameType.Error or FrameType.Attach or FrameType.AgentList
+            or FrameType.Restart or FrameType.RestartAck => Encoding.UTF8.GetBytes(f.Text),
         FrameType.Attached or FrameType.Spawn => f.Bytes, // pre-encoded by Attached(...)/Spawn(...)
         _ => throw new InvalidDataException($"unencodable frame {f.Type}"),
     };
@@ -57,29 +58,31 @@ public static class FrameCodec {
         FrameType.Resize  => new(t) { Cols = Be16(p, 0), Rows = Be16(p, 2) },
         FrameType.Detach or FrameType.List => new(t),
         FrameType.Exited  => new(t) { ExitCode = BinaryPrimitives.ReadInt32BigEndian(p) },
-        FrameType.Error or FrameType.Attach or FrameType.AgentList => new(t) { Text = Encoding.UTF8.GetString(p) },
+        FrameType.Error or FrameType.Attach or FrameType.AgentList
+            or FrameType.Restart or FrameType.RestartAck => new(t) { Text = Encoding.UTF8.GetString(p) },
         FrameType.Attached or FrameType.Spawn => new(t) { Bytes = p },
         _ => throw new InvalidDataException($"undecodable frame {t}"),
     };
 
     // --- Spawn structured payload ---
-    public static LocalFrame Spawn(string vendor, WorkLocation work, string cwd, IReadOnlyList<string> args, ushort cols, ushort rows) {
+    public static LocalFrame Spawn(string vendor, WorkLocation work, bool isPrivate, string cwd, IReadOnlyList<string> args, ushort cols, ushort rows) {
         using var ms = new MemoryStream();
         ms.WriteByte((byte)work);
         WriteBe16(ms, cols); WriteBe16(ms, rows);
         WriteLp(ms, vendor); WriteLp(ms, cwd);
         WriteBe32(ms, args.Count);
         foreach (var a in args) WriteLp(ms, a);
+        ms.WriteByte((byte)(isPrivate ? 1 : 0)); // APPENDED after args: older parsers ignore trailing bytes
         return new(FrameType.Spawn) { Bytes = ms.ToArray(), Text = vendor, Work = work, Cols = cols, Rows = rows };
     }
     public static string SpawnCwd(LocalFrame f) => ParseSpawn(f.Bytes).cwd;
     public static string[] SpawnArgs(LocalFrame f) => ParseSpawn(f.Bytes).args;
-    public static (string vendor, WorkLocation work, string cwd, string[] args, ushort cols, ushort rows) Spawn(LocalFrame f)
+    public static (string vendor, WorkLocation work, bool isPrivate, string cwd, string[] args, ushort cols, ushort rows) Spawn(LocalFrame f)
         => ParseSpawn(f.Bytes);
 
     const int MaxSpawnArgs = 4096; // sane cap; the wire arg-count is untrusted (local 0600 socket, same-user)
 
-    static (string vendor, WorkLocation work, string cwd, string[] args, ushort cols, ushort rows) ParseSpawn(byte[] p) {
+    static (string vendor, WorkLocation work, bool isPrivate, string cwd, string[] args, ushort cols, ushort rows) ParseSpawn(byte[] p) {
         var o = 0;
         Require(p, o, 5); // work(1) + cols(2) + rows(2)
         var work = (WorkLocation)p[o++];
@@ -95,7 +98,10 @@ public static class FrameCodec {
 
         var args = new string[n];
         for (var i = 0; i < n; i++) args[i] = ReadLp(p, ref o);
-        return (vendor, work, cwd, args, cols, rows);
+        // Trailing private flag (appended for wire-compat): absent (older CLI) => private=true,
+        // the conservative default that preserves Phase-1 unregistered behaviour.
+        var isPrivate = o >= p.Length || p[o] != 0;
+        return (vendor, work, isPrivate, cwd, args, cols, rows);
     }
 
     /// <summary>Throws <see cref="InvalidDataException"/> unless <paramref name="count"/> bytes

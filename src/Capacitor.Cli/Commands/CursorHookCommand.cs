@@ -126,6 +126,13 @@ public static class CursorHookCommand {
                 }, budgetTotal, ct);
             }
 
+            // Ordering guard: if a transient drain failure left this session's backlog in place,
+            // spool the fresh event so an earlier queued event (e.g. sessionStart) is not overtaken.
+            if (sessionId is not null && mapping.SpoolOnFailure && spool.HasBacklog(sessionId)) {
+                spool.Append(sessionId, mapping.RouteSegment, normalized);
+                return 0;
+            }
+
             if (BudgetExpired()) {
                 // Drain consumed the budget; preserve the fresh event so the
                 // next invocation can still deliver it. Without this the new

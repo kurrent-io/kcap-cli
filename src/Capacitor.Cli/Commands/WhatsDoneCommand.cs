@@ -75,7 +75,7 @@ static class WhatsDoneCommand {
 
         var result = vendor == "codex"
             ? await CodexCliRunner.RunAsync(prompt, TimeSpan.FromSeconds(90), log)
-            : await ClaudeCliRunner.RunAsync(prompt, TimeSpan.FromSeconds(90), log);
+            : await ClaudeCliRunner.RunAsync(prompt, TimeSpan.FromSeconds(90), log, systemPrompt: TitleGenerator.HeadlessSummarizerSystemPrompt);
 
         if (result is null) {
             log($"{vendor} returned empty or failed");

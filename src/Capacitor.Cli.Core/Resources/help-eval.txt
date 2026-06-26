@@ -3,10 +3,13 @@ Usage: kcap eval <sessionId> [options]
 
 Runs an LLM-as-judge evaluation over a stored session. 13 questions across 4
 categories (safety, plan adherence, quality, efficiency) are asked of Claude
-in sequence, each in its own headless invocation with no tools. The server's
-eval-context endpoint supplies the compacted session trace; results are
-aggregated into per-category + overall scores and persisted back to the
-session's stream as a SessionEvalCompleted event.
+in sequence, each in its own headless invocation. Most judges read the
+compacted session trace embedded in the prompt (supplied by the server's
+eval-context endpoint); some questions — and any session whose trace is too
+large to embed — instead investigate the session on demand via a read-only,
+session-scoped MCP tool surface (summary, search, transcript, errors, recap,
+tool results). Results are aggregated into per-category + overall scores and
+persisted back to the session's stream as a SessionEvalCompleted event.
 
 Options:
   --model <name>      Judge model (default: sonnet). haiku/sonnet/opus.
@@ -25,8 +28,12 @@ Options:
 Notes:
   - Judges run sequentially; expect ~1-3 minutes total depending on model and
     session size. Parallelization is tracked in DEV-1435.
-  - Each judge has no tools — Read, Bash, Grep, WebFetch, etc. are all blocked.
-    The full compacted trace is embedded in the prompt.
+  - Judges have no filesystem/network tools — Read, Bash, Grep, WebFetch, etc.
+    are blocked. They either reason from the compacted trace embedded in the
+    prompt, or — for tool-tagged questions and oversized sessions — pull session
+    details on demand through a read-only MCP tool surface scoped to the session.
+    Set KCAP_EVAL_TRACE_TOKEN_BUDGET to tune the embed-vs-tools threshold
+    (default ~200K estimated tokens).
   - If the session ID is omitted, the currently-recorded session is used —
     resolved from KCAP_SESSION_ID (Claude) or CODEX_THREAD_ID
     (Codex 0.81+).

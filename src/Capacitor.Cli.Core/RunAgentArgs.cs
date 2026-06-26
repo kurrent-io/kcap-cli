@@ -7,6 +7,7 @@ public sealed class RunAgentArgs {
     public bool     Worktree    { get; private set; }
     public string?  DaemonName  { get; private set; }
     public bool     Detached    { get; private set; }
+    public bool     Private     { get; private set; }
     public string[] Passthrough { get; private set; } = [];
     public string?  Error       { get; private set; }
 
@@ -14,7 +15,7 @@ public sealed class RunAgentArgs {
         var r = new RunAgentArgs();
 
         if (args.Length == 0) {
-            r.Error = "usage: kcap run-agent <vendor> [--worktree] [--name <id>] [--detached] [-- <agent args>]";
+            r.Error = "usage: kcap run-agent <vendor> [--worktree] [--private] [--name <id>] [--detached] [-- <agent args>]";
 
             return r;
         }
@@ -35,6 +36,7 @@ public sealed class RunAgentArgs {
             switch (kcap[i]) {
                 case "--worktree": r.Worktree = true; break;
                 case "--detached": r.Detached = true; break;
+                case "--private":  r.Private  = true; break;
                 case "--name":
                     if (i + 1 >= kcap.Length) { r.Error = "--name requires a value"; return r; }
 

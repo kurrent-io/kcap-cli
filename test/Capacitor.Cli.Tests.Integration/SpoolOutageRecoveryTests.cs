@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -68,7 +69,7 @@ public class SpoolOutageRecoveryTests : IDisposable {
     Task<int> Invoke(HttpClient client, string payload, long? processStart = null) {
         var spool = MakeSpool();
         var ps    = processStart ?? Stopwatch.GetTimestamp();
-        return ClaudeHookCommand.HandleCore(client, spool, ps, _server.Url!, new StringReader(payload));
+        return ClaudeHookCommand.HandleCore(client, AuthStatus.Ok, spool, ps, _server.Url!, new StringReader(payload));
     }
 
     IEnumerable<string> SpoolFiles =>

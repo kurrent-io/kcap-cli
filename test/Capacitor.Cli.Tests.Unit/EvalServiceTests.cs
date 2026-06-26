@@ -757,4 +757,132 @@ public class EvalServiceTests {
         var snapshot = EvalService.BuildFactsUsedSnapshot(new Dictionary<string, List<JudgeFact>>());
         await Assert.That(snapshot.Count).IsEqualTo(0);
     }
+
+    // ── Size gate (size-gated hybrid) ──────────────────────────────────────
+    //
+    // When the compacted trace would overflow the judge model's context if
+    // embedded, PrepareAsync flips the whole session onto the tools path. The
+    // estimate is chars/4 tokens; the boundary triggers at >= budget.
+
+    [Test]
+    public async Task ShouldForceTools_false_when_trace_under_budget() {
+        // 100K chars ≈ 25K est. tokens, well under a 200K budget.
+        await Assert.That(EvalService.ShouldForceTools(100_000, 200_000)).IsFalse();
+    }
+
+    [Test]
+    public async Task ShouldForceTools_true_when_trace_at_or_over_budget() {
+        // 800K chars ≈ 200K est. tokens == budget → force.
+        await Assert.That(EvalService.ShouldForceTools(800_000, 200_000)).IsTrue();
+        // ~5M chars ≈ 1.25M est. tokens — the overflow case from the bug report.
+        await Assert.That(EvalService.ShouldForceTools(5_000_000, 200_000)).IsTrue();
+    }
+
+    [Test]
+    public async Task ShouldForceTools_uses_four_chars_per_token_estimate() {
+        // Exactly at the boundary: budget*4 chars → est tokens == budget → force.
+        await Assert.That(EvalService.ShouldForceTools(40_000, 10_000)).IsTrue();
+        // One token's worth of chars below the boundary → don't force.
+        await Assert.That(EvalService.ShouldForceTools(40_000 - 4, 10_000)).IsFalse();
+    }
+
+    // TraceTokenBudget reads the process environment directly, so these tests
+    // save → set → assert → restore the var and run NotInParallel with each
+    // other to avoid clobbering a value the host/CI may already have set.
+
+    [Test]
+    [NotInParallel(nameof(EvalServiceTests))]
+    public async Task TraceTokenBudget_defaults_when_env_unset() {
+        var previous = Environment.GetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET");
+        Environment.SetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET", null);
+        try {
+            await Assert.That(EvalService.TraceTokenBudget()).IsEqualTo(200_000);
+        } finally {
+            Environment.SetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET", previous);
+        }
+    }
+
+    [Test]
+    [NotInParallel(nameof(EvalServiceTests))]
+    public async Task TraceTokenBudget_honours_valid_env_override() {
+        var previous = Environment.GetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET");
+        Environment.SetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET", "50000");
+        try {
+            await Assert.That(EvalService.TraceTokenBudget()).IsEqualTo(50_000);
+        } finally {
+            Environment.SetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET", previous);
+        }
+    }
+
+    [Test]
+    [NotInParallel(nameof(EvalServiceTests))]
+    public async Task TraceTokenBudget_falls_back_to_default_on_invalid_or_nonpositive_env() {
+        var previous = Environment.GetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET");
+        try {
+            Environment.SetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET", "not-a-number");
+            await Assert.That(EvalService.TraceTokenBudget()).IsEqualTo(200_000);
+
+            Environment.SetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET", "0");
+            await Assert.That(EvalService.TraceTokenBudget()).IsEqualTo(200_000);
+        } finally {
+            Environment.SetEnvironmentVariable("KCAP_EVAL_TRACE_TOKEN_BUDGET", previous);
+        }
+    }
+
+    // ── Judge command-path resolution ──────────────────────────────────────
+    //
+    // The session-scoped MCP judge subprocess is spawned from the path returned
+    // here. In the daemon the host process is `kcap-daemon`, which has no
+    // `mcp judge` subcommand — invoking it just tries (and fails) to start a
+    // second daemon, so the judge's MCP server never comes up. The fix remaps
+    // `kcap-daemon` to its sibling `kcap` binary (they ship in the same dir),
+    // while leaving the `kcap eval` CLI host (ProcessPath already `kcap`)
+    // untouched.
+
+    // Paths are built with Path.Combine so the separator matches the host
+    // (the resolver itself uses Path.Combine) — hardcoding "/" makes the
+    // sibling comparison fail on Windows, where Combine joins with "\".
+
+    [Test]
+    public async Task ResolveJudgeCommandPath_remaps_daemon_to_sibling_kcap() {
+        var dir     = Path.Combine("opt", "kcap", "bin");
+        var daemon  = Path.Combine(dir, "kcap-daemon");
+        var sibling = Path.Combine(dir, "kcap");
+
+        var resolved = EvalService.ResolveJudgeCommandPath(daemon, fileExists: p => p == sibling);
+        await Assert.That(resolved).IsEqualTo(sibling);
+    }
+
+    [Test]
+    public async Task ResolveJudgeCommandPath_keeps_daemon_path_when_sibling_missing() {
+        var daemon = Path.Combine("opt", "kcap", "bin", "kcap-daemon");
+
+        var resolved = EvalService.ResolveJudgeCommandPath(daemon, fileExists: _ => false);
+        await Assert.That(resolved).IsEqualTo(daemon);
+    }
+
+    [Test]
+    public async Task ResolveJudgeCommandPath_leaves_cli_kcap_path_untouched() {
+        var cli = Path.Combine("usr", "local", "bin", "kcap");
+
+        var resolved = EvalService.ResolveJudgeCommandPath(cli, fileExists: _ => true);
+        await Assert.That(resolved).IsEqualTo(cli);
+    }
+
+    [Test]
+    public async Task ResolveJudgeCommandPath_falls_back_to_bare_kcap_when_path_null() {
+        var resolved = EvalService.ResolveJudgeCommandPath(null, fileExists: _ => false);
+        await Assert.That(resolved).IsEqualTo("kcap");
+    }
+
+    [Test]
+    public async Task ResolveJudgeCommandPath_preserves_executable_extension_on_sibling() {
+        // Windows host: kcap-daemon.exe → kcap.exe (extension carried over).
+        var dir     = Path.Combine("opt", "kcap", "bin");
+        var daemon  = Path.Combine(dir, "kcap-daemon.exe");
+        var sibling = Path.Combine(dir, "kcap.exe");
+
+        var resolved = EvalService.ResolveJudgeCommandPath(daemon, fileExists: p => p == sibling);
+        await Assert.That(resolved).IsEqualTo(sibling);
+    }
 }

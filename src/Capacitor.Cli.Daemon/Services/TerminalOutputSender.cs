@@ -87,6 +87,23 @@ internal sealed partial class TerminalOutputSender {
         }
     }
 
+    /// <summary>
+    /// Non-blocking enqueue for <em>local-first</em> agents: a registered local agent has a live
+    /// local terminal as its primary surface, so its PTY read loop must never block on a remote
+    /// tunnel stall. Returns <c>true</c> if queued; on a full backlog (sustained outage) the chunk
+    /// is dropped + counted + logged and <c>false</c> is returned (the web mirror re-syncs from the
+    /// server's own buffer on reconnect). This is the deliberate local-responsiveness vs.
+    /// web-mirror-losslessness trade-off — unlike <see cref="EnqueueAsync"/>, which back-pressures.
+    /// </summary>
+    public bool TryEnqueue(string agentId, string base64Data) {
+        if (_channel.Writer.TryWrite((agentId, base64Data))) return true;
+
+        var total = Interlocked.Increment(ref _dropped);
+        LogOverflowDropped(agentId, total);
+
+        return false;
+    }
+
     /// <summary>Signals no more chunks will be queued so <see cref="RunAsync"/> can drain and exit.</summary>
     public void Complete() => _channel.Writer.TryComplete();
 
@@ -151,4 +168,7 @@ internal sealed partial class TerminalOutputSender {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Terminal output send for agent {AgentId} still failing while connected after {Attempts} attempts — dropping chunk (total dropped this session: {TotalDropped})")]
     partial void LogSendDropped(Exception ex, string agentId, int attempts, long totalDropped);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Terminal output backlog full for local agent {AgentId}; dropping a chunk to keep the local terminal responsive (total dropped this session: {TotalDropped})")]
+    partial void LogOverflowDropped(string agentId, long totalDropped);
 }

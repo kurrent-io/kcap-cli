@@ -100,12 +100,13 @@ public class StatusCommandHooksTests {
     }
 
     [Test]
-    public async Task HooksStatusLine_includes_all_seven_agents() {
+    public async Task HooksStatusLine_includes_all_eight_agents() {
         // status must surface every supported agent so an install of any one can be
         // verified from `kcap status`. Gemini and Kiro were each previously absent
-        // from the line entirely (added in PR #169).
+        // from the line entirely (added in PR #169); OpenCode was likewise missing
+        // until the AI-919 status surface was wired up.
         var line = StatusCommand.BuildHooksStatusLine(
-            claude: true, codex: false, cursor: false, copilot: false, gemini: true, kiro: true, pi: true);
+            claude: true, codex: false, cursor: false, copilot: false, gemini: true, kiro: true, pi: true, opencode: true);
 
         await Assert.That(line).Contains("Claude ✓");
         await Assert.That(line).Contains("Codex ✗");
@@ -114,16 +115,18 @@ public class StatusCommandHooksTests {
         await Assert.That(line).Contains("Gemini ✓");
         await Assert.That(line).Contains("Kiro ✓");
         await Assert.That(line).Contains("Pi ✓");
+        await Assert.That(line).Contains("OpenCode ✓");
     }
 
     [Test]
-    public async Task HooksStatusLine_marks_gemini_kiro_and_pi_not_installed() {
+    public async Task HooksStatusLine_marks_gemini_kiro_pi_and_opencode_not_installed() {
         var line = StatusCommand.BuildHooksStatusLine(
-            claude: false, codex: false, cursor: false, copilot: false, gemini: false, kiro: false, pi: false);
+            claude: false, codex: false, cursor: false, copilot: false, gemini: false, kiro: false, pi: false, opencode: false);
 
         await Assert.That(line).Contains("Gemini ✗");
         await Assert.That(line).Contains("Kiro ✗");
         await Assert.That(line).Contains("Pi ✗");
+        await Assert.That(line).Contains("OpenCode ✗");
     }
 
     sealed class TempDir : IDisposable {

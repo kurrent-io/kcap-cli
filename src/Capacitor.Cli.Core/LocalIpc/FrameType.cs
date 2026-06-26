@@ -10,10 +10,12 @@ public enum FrameType : byte {
     Resize  = 4,
     Detach  = 5,
     List    = 6,   // request the daemon's agent list (for `kcap ls`)
+    Restart = 7,   // request restart-after-update (Text = "when-idle"|"now"|"force")
     // daemon → client
     Attached  = 64,
     Stdout    = 65,
     Exited    = 66,
     Error     = 67,
     AgentList = 68, // UTF-8 table payload: one `id\tstatus\tcwd` line per agent
+    RestartAck = 69, // acknowledgement for Restart (Text = short status)
 }

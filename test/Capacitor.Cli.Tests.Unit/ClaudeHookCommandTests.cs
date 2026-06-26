@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -106,8 +107,8 @@ public class ClaudeHookCommandTests {
     public async Task session_end_spooled_when_client_creation_exceeds_budget() {
         using var fx = new Fixture();
         // Slow factory: never completes within the cap (30s) so the budget elapses first.
-        Func<Task<HttpClient>> slowFactory = () =>
-            Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => new HttpClient(), TaskScheduler.Default);
+        Func<Task<(HttpClient, AuthStatus)>> slowFactory = () =>
+            Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => (new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
 
         // processStart ~13.4s in the past → session-end remaining = 15 - 13.4 - 1.5 ≈ 0.1s cap.
         var processStart = System.Diagnostics.Stopwatch.GetTimestamp()
@@ -130,22 +131,22 @@ public class ClaudeHookCommandTests {
 
     [Test]
     public async Task create_client_within_budget_returns_null_when_factory_slower_than_cap() {
-        Func<Task<HttpClient>> slow = () =>
-            Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => new HttpClient(), TaskScheduler.Default);
+        Func<Task<(HttpClient, AuthStatus)>> slow = () =>
+            Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => (new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
         var sw     = System.Diagnostics.Stopwatch.StartNew();
-        var client = await ClaudeHookCommand.CreateClientWithinBudgetAsync(slow, TimeSpan.FromMilliseconds(50));
+        var result = await ClaudeHookCommand.CreateClientWithinBudgetAsync(slow, TimeSpan.FromMilliseconds(50));
         sw.Stop();
-        await Assert.That(client).IsNull();
+        await Assert.That(result).IsNull();
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
     }
 
     [Test]
     public async Task create_client_within_budget_returns_client_when_factory_fast() {
         var made   = new HttpClient();
-        var client = await ClaudeHookCommand.CreateClientWithinBudgetAsync(() => Task.FromResult(made), TimeSpan.FromSeconds(2));
-        await Assert.That(client).IsNotNull();
-        await Assert.That(ReferenceEquals(client, made)).IsTrue();
-        client!.Dispose();
+        var result = await ClaudeHookCommand.CreateClientWithinBudgetAsync(() => Task.FromResult((made, AuthStatus.Ok)), TimeSpan.FromSeconds(2));
+        await Assert.That(result).IsNotNull();
+        await Assert.That(ReferenceEquals(result!.Value.Client, made)).IsTrue();
+        result.Value.Client.Dispose();
     }
 
     [Test]
@@ -188,7 +189,7 @@ public class ClaudeHookCommandTests {
         }
 
         public Task<int> HandleAsync(string stdin, long processStart = 0) =>
-            ClaudeHookCommand.HandleCore(Client, Spool, processStart == 0 ? System.Diagnostics.Stopwatch.GetTimestamp() : processStart,
+            ClaudeHookCommand.HandleCore(Client, AuthStatus.Ok, Spool, processStart == 0 ? System.Diagnostics.Stopwatch.GetTimestamp() : processStart,
                 "http://localhost", new StringReader(stdin));
 
         public IEnumerable<string> SpoolFiles =>

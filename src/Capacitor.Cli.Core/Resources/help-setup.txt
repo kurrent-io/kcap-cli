@@ -16,6 +16,15 @@ Options:
                               the claude CLI is detected on PATH.
   --skip-codex-hooks          Don't install Codex CLI hooks/skills even if
                               the codex CLI is detected on PATH.
+  --skip-codex-network-access Don't enable Codex sandbox network access. By
+                              default, after installing Codex hooks the wizard
+                              also allows Codex's workspace-write sandbox to
+                              reach your Capacitor server(s) so kcap skills
+                              (recap, errors, …) work — Codex blocks sandbox
+                              network by default. Writes a network_proxy
+                              allowlist to ~/.codex/config.toml limited to your
+                              server(s) (**.kcap.ai for SaaS). Use this flag to
+                              leave ~/.codex/config.toml untouched.
   --skip-cursor-hooks         Don't install Cursor hooks even if the Cursor
                               user-dir is detected (~/.cursor/).
   --skip-copilot-hooks        Don't install Copilot CLI hooks even if Copilot

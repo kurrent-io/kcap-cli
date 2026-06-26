@@ -62,7 +62,7 @@ The setup wizard walks you through:
 1. **Server** — with no `--server-url`/`<tenant>`, kcap **discovers** your tenant: it signs you in with your organization's single sign-on (pass `--github` to use GitHub instead), then lets you choose from the tenants you belong to. A bare `<tenant>` slug expands to `https://<tenant>.kcap.ai`; a full URL is used as-is.
 2. **Login** — authenticates via your tenant's configured sign-in method; discovery completes the sign-in inline
 3. **Default visibility** — choose how your sessions are visible to others
-4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH`, Cursor by user-dir presence (`~/.cursor/`), GitHub Copilot CLI by `~/.copilot/` or `copilot` on `PATH`, Google Gemini CLI by `~/.gemini/` or `gemini` on `PATH`, AWS Kiro CLI by `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`, Pi by `~/.pi/` or `pi` on `PATH`, and SST OpenCode by `~/.config/opencode/` (or `~/.local/share/opencode/`) or `opencode` on `PATH`, then offers to install hooks/skills (or, for Pi/OpenCode, the live-ingest plugin) for each (user-wide)
+4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH`, Cursor by user-dir presence (`~/.cursor/`), GitHub Copilot CLI by `~/.copilot/` or `copilot` on `PATH`, Google Gemini CLI by `~/.gemini/` or `gemini` on `PATH`, AWS Kiro CLI by `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`, Pi by `~/.pi/` or `pi` on `PATH`, and SST OpenCode by `~/.config/opencode/` (or `~/.local/share/opencode/`) or `opencode` on `PATH`, then offers to install hooks/skills (or, for Pi/OpenCode, the live-ingest plugin) for each (user-wide). For Codex it also offers to enable **sandbox network access** for kcap (see below) — Codex blocks sandbox network by default, so the kcap skills can't reach the server without it.
 5. **Daemon** — configure the daemon name for remote agent execution
 
 When setup finishes, `kcap` sends a best-effort POST to the server's `/api/users/me/cli-setup` endpoint so the dashboard can mark your CLI as registered and surface the import-past-sessions hint. The call is capped at 5 seconds and failures are silent — they do not affect setup completion.
@@ -77,7 +77,7 @@ For non-interactive environments:
 kcap setup --server-url https://my-tenant.kcap.ai --default-visibility org_public --no-prompt
 ```
 
-In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, `--skip-cursor-hooks`, `--skip-copilot-hooks`, `--skip-gemini-hooks`, `--skip-kiro-hooks`, `--skip-pi-hooks`, and/or `--skip-opencode-hooks`.
+In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, `--skip-cursor-hooks`, `--skip-copilot-hooks`, `--skip-gemini-hooks`, `--skip-kiro-hooks`, `--skip-pi-hooks`, and/or `--skip-opencode-hooks`. When Codex hooks are installed, the wizard also enables Codex sandbox network access for your server(s) by default; pass `--skip-codex-network-access` to leave `~/.codex/config.toml` untouched.
 
 > **Need hooks for an agent installed after setup, or scoped to a single repo?**
 > Run `kcap plugin install [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, the next `codex` launch prompts to trust the new hooks — accept once to trust them all (run `/hooks` inside Codex if you'd rather trust each entry individually). After a `--project` install, also run `codex` once in the repo and accept the workspace trust prompt. Re-running after a kcap upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kcap`, and `kcap update` refreshes them too (npm 11+ blocks install scripts by default — `kcap update` works regardless, or add `allow-scripts[]=@kurrent/kcap` to `~/.npmrc` to opt the postinstall in once).
@@ -142,7 +142,7 @@ kcap setup --server-url <url> --no-prompt    # CI / scripted
 
 With no server argument, setup (and `kcap login`) runs **tenant discovery**: it signs you in with your organization's single sign-on, then lets you pick from the tenants you belong to. Pass `--github` to sign in with GitHub instead; `--discover` forces discovery even when a server is configured. In SSH / headless environments (no browser), discovery falls back to GitHub Device Flow, since SSO needs a local browser.
 
-The setup wizard detects every supported coding agent and offers to install hooks for each, then configures the daemon. Claude Code and Codex CLI are detected via `PATH`; Cursor is detected by user-dir presence (`~/.cursor/`), so IDE users without the `cursor` shell command are covered; GitHub Copilot CLI is detected via `~/.copilot/` or `copilot` on `PATH`; Google Gemini CLI via `~/.gemini/` or `gemini` on `PATH`; AWS Kiro CLI via `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`; Pi via `~/.pi/agent/` or `pi` on `PATH` (and, because Pi has no shell hooks, the wizard installs a Pi extension rather than hook config). Re-run any time to update the configuration.
+The setup wizard detects every supported coding agent and offers to install hooks for each, then configures the daemon. Claude Code and Codex CLI are detected via `PATH`; Cursor is detected by user-dir presence (`~/.cursor/`), so IDE users without the `cursor` shell command are covered; GitHub Copilot CLI is detected via `~/.copilot/` or `copilot` on `PATH`; Google Gemini CLI via `~/.gemini/` or `gemini` on `PATH`; AWS Kiro CLI via `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`; Pi via `~/.pi/agent/` or `pi` on `PATH`; and SST OpenCode via `~/.config/opencode/` (or `~/.local/share/opencode/`) or `opencode` on `PATH` (Pi and OpenCode have no shell hooks, so for those the wizard installs a live-ingest plugin rather than hook config). Re-run any time to update the configuration.
 
 In `--no-prompt` mode, hooks install for every detected agent by default. Opt out per agent:
 
@@ -231,7 +231,7 @@ Useful for post-session review: identify recurring mistakes, discover patterns t
 
 ### Session evaluation (LLM-as-judge)
 
-Score a recorded session against safety, plan adherence, quality, and efficiency criteria. Each of 13 questions (e.g. *"Did the agent run destructive commands?"*, *"Did it write tests when appropriate?"*, *"Were there repeated failed attempts at the same operation?"*) is answered by a separate headless Claude judge with **no tools** — the full compacted session trace is embedded in the prompt, so the judge reasons from evidence rather than hitting any external service.
+Score a recorded session against safety, plan adherence, quality, and efficiency criteria. Each of 13 questions (e.g. *"Did the agent run destructive commands?"*, *"Did it write tests when appropriate?"*, *"Were there repeated failed attempts at the same operation?"*) is answered by a separate headless Claude judge with **no filesystem or network tools**. Most judges reason from the compacted session trace embedded in the prompt; some questions — and any session whose trace is too large to embed — instead investigate the session on demand through a read-only, session-scoped MCP tool surface (summary, search, transcript, errors, recap, tool results). The embed-vs-tools threshold is tunable via `KCAP_EVAL_TRACE_TOKEN_BUDGET` (default ~200K estimated tokens).
 
 ```bash
 kcap eval <sessionId>                      # default: sonnet judge
@@ -331,11 +331,16 @@ kcap daemon status                  # list all running daemons
 kcap daemon status --name laptop    # show status of a specific daemon
 kcap daemon stop --name laptop      # stop just that one
 kcap daemon stop --yes              # stop all running daemons unattended (otherwise prompts on multi)
+kcap daemon restart --name laptop              # restart now if idle; refuses while agents/evals run
+kcap daemon restart --name laptop --when-idle  # queue the restart for the next idle moment
+kcap daemon restart --name laptop --force      # restart now even if busy (tears down running agents)
 kcap daemon doctor                  # diagnose lock-file state for every daemon name
 kcap daemon doctor --clean          # also remove stale lock/pid files (held entries are never touched)
 ```
 
 `KCAP_DAEMON_NAME` overrides the active profile's daemon name (superseded by an explicit `--name` flag).
+
+**Updating:** after `kcap update`, a running daemon on macOS/Linux detects the new binary and restarts itself once it's **idle** (no running hosted agents and no in-flight eval) — service-managed daemons exit so the supervisor relaunches the new binary; background (`-d`) daemons re-spawn themselves. `kcap daemon status` shows a pending restart; `kcap daemon restart --force` applies it now. On **Windows**, stop the daemon (`kcap daemon stop` / `kcap daemon service stop`) before `kcap update` — a running daemon locks its binary, so the update can't replace it (the launcher detects this and aborts with instructions).
 
 #### Run it as a service (auto-restart)
 
@@ -384,6 +389,19 @@ Installing with `--codex` (or `--skills`) writes five skills under `~/.agents/sk
 | `kcap-validate-plan` | `kcap validate-plan` | Verify plan items were completed |
 
 All five auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionId>` explicitly to operate on a different session.
+
+> **Codex sandbox network access (AI-794).** The skills shell out to `kcap …`, which talks to the Capacitor server — but Codex runs the agent's shell tool in a `workspace-write` sandbox that **blocks network by default**, so the skills fail (or demand escalation) until network access is allowed. Both `kcap setup` (one yes/no prompt after the Codex hooks step) and `kcap plugin install --codex` enable it for you. They write a constrained allowlist to `~/.codex/config.toml` rather than opening the network wholesale:
+>
+> ```toml
+> [sandbox_workspace_write]
+> network_access = true          # required — the proxy only enforces; it doesn't grant
+>
+> [features.network_proxy]
+> enabled = true
+> domains = { "**.kcap.ai" = "allow" }
+> ```
+>
+> The `**.kcap.ai` wildcard covers every SaaS tenant — current and future — plus `auth.kcap.ai`, so switching profiles and adding tenants just work with no per-tenant edits. **Self-hosted** servers are added as exact-host entries, derived from every configured profile's `server_url` and refreshed on each `kcap setup`. Existing config is respected: if you already run a `network_proxy` policy, kcap's hosts are merged into your `domains` (yours preserved); if you've already opened the network (`network_access = true` with no proxy), nothing changes. Opt out with `--skip-codex-network-access` on either command (and the npm-postinstall `--if-installed` refresh never touches `config.toml`). A localhost dev server additionally needs `allow_local_binding = true`, which kcap does not set. Uninstall leaves these keys in place — they're your security posture, not kcap state.
 
 The daemon starts Codex with `--sandbox workspace-write` and `--ask-for-approval on-request`. This lets Codex edit files in the agent's worktree but escalates sensitive operations (e.g. network calls, shell commands outside the worktree) through the daemon's permission bridge to the dashboard.
 
@@ -499,17 +517,18 @@ kcap run-agent codex --worktree -- -m gpt-5 # run in an isolated git worktree in
 kcap run-agent claude --detached            # start without attaching; prints the agent id
 ```
 
-- **`--` boundary:** flags before `--` are kcap's; everything after `--` is forwarded to the `claude`/`codex` CLI unchanged. kcap flags: `--worktree`, `--name <daemon>`, `--detached`.
+- **`--` boundary:** flags before `--` are kcap's; everything after `--` is forwarded to the `claude`/`codex` CLI unchanged. kcap flags: `--worktree`, `--private`, `--name <daemon>`, `--detached`.
+- **Visibility:** by default the agent is **registered with the server**, so it appears in your own web UI immediately and you can drive it from the browser — start in the terminal, continue from anywhere. It is **visible only to you** until you share it. Pass `--private` to keep it purely local: unregistered, not streamed to the server, and not shown in the web UI.
 - **Work location:** by default the agent runs **in place in your current directory** (it edits your real files). Pass `--worktree` to run in a throwaway git worktree instead.
 - **Detach** without stopping the agent with the prefix key **`Ctrl-Q` then `d`**. The agent keeps running in the daemon.
-- **Permissions** prompt natively in your terminal, exactly like running the agent directly.
+- **Permissions:** for a registered agent, permission prompts appear in the web UI (the same dialog as hosted agents); with `--private`, prompts are answered natively in your terminal.
 
 ```bash
 kcap ls                 # list daemon-hosted agents (id, status, repo)
 kcap attach <agent-id>  # re-attach your terminal to a running agent
 ```
 
-`run-agent` auto-starts the daemon if one isn't already running. It needs a configured server (like the rest of kcap) — it is not an offline command. This release is **local-only**: starting an agent locally does not yet expose it to teammates in the web UI (planned for a later release). Unix only for now.
+`run-agent` auto-starts the daemon if one isn't already running. It needs a configured server (like the rest of kcap) — it is not an offline command. A locally-started agent now appears in **your own** web UI (owner-only until you share it from the web UI); use `--private` to opt out of registration entirely. Unix only for now.
 
 ### Repository paths
 

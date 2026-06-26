@@ -80,6 +80,13 @@ public sealed class ConPtyProcess : IPtyProcess {
         env.Remove("CLAUDECODE");
         env.Remove("CLAUDE_CODE_ENTRYPOINT");
         env.Remove("ANTHROPIC_API_KEY");
+        // Parity with UnixPtyProcess: never leak daemon supervision state into spawned
+        // children. Auto-restart is out of scope on Windows, but keep the two PTY paths
+        // in lockstep so the scrub doesn't drift.
+        env.Remove("KCAP_DAEMON_SUPERVISED");
+        env.Remove("XPC_SERVICE_NAME");
+        env.Remove("INVOCATION_ID");
+        env.Remove("SYSTEMD_EXEC_PID");
 
         if (extraEnv is not null) {
             foreach (var (key, value) in extraEnv) {

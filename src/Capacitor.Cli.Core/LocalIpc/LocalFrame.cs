@@ -18,4 +18,6 @@ public sealed record LocalFrame(FrameType Type) {
     public static LocalFrame Detach()                   => new(FrameType.Detach);
     public static LocalFrame Exited(int code)           => new(FrameType.Exited) { ExitCode = code };
     public static LocalFrame Error(string m)            => new(FrameType.Error)  { Text = m };
+    public static LocalFrame Restart(string mode)       => new(FrameType.Restart)    { Text = mode };
+    public static LocalFrame RestartAck(string status)  => new(FrameType.RestartAck) { Text = status };
 }

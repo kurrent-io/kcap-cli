@@ -67,11 +67,15 @@ static class ClaudeCliRunner {
     /// pulls session details via <c>kcap mcp judge</c> instead of
     /// having the full trace embedded in its prompt). When
     /// <paramref name="mcpConfigJson"/> is supplied, the runner loads the
-    /// caller-supplied MCP config via <c>--mcp-config</c> and restricts the
-    /// model to exactly <paramref name="allowedTools"/> via
-    /// <c>--allowedTools</c>, dropping only the text-only tool lockdown
-    /// (empty <c>--tools</c> / <c>--disallowedTools LSP</c>).
-    /// <c>--strict-mcp-config</c> and <c>--disable-slash-commands</c> stay
+    /// caller-supplied MCP config via <c>--mcp-config</c> and permits exactly
+    /// <paramref name="allowedTools"/> via <c>--allowedTools</c> — layered on
+    /// top of the same built-in tool lockdown the text-only path uses (empty
+    /// <c>--tools</c> / <c>--disallowedTools LSP</c>), which stays on in BOTH
+    /// modes. The lockdown is required even with an allowlist because
+    /// <c>--allowedTools</c> alone does not stop claude exposing built-in tools
+    /// like <c>Agent</c> (subagents) to the model; the MCP tools are not part
+    /// of the built-in set, so <c>--tools ""</c> leaves them callable.
+    /// <c>--strict-mcp-config</c> and <c>--disable-slash-commands</c> also stay
     /// on in both modes — strict-mcp-config is what keeps the user's global
     /// or plugin MCP servers (e.g. <c>kcap-sessions</c> from the kcap Claude
     /// Code plugin) from leaking in and getting permission-blocked under
@@ -88,6 +92,17 @@ static class ClaudeCliRunner {
     /// intended "hit the ceiling" behaviour for DEV-1486's tools-enabled
     /// questions.
     /// </para>
+    ///
+    /// <para>
+    /// <paramref name="systemPrompt"/> REPLACES (not appends to) the default
+    /// Claude Code system prompt via <c>--system-prompt</c>. Text-only callers
+    /// (title generation, what's-done summaries) carry their full instructions
+    /// in the user prompt, so passing a tiny task-specific prompt here strips
+    /// the harness system-prompt overhead — measured at ~8.2K prompt tokens per
+    /// title call vs ~2.4K with a minimal replacement — on the subscription
+    /// path with no extra configuration. Null/blank leaves the flag off so the
+    /// CLI keeps its default behaviour (e.g. the eval judges).
+    /// </para>
     /// </summary>
     public static async Task<ClaudeCliResult?> RunAsync(
             string            prompt,
@@ -100,6 +115,7 @@ static class ClaudeCliRunner {
             string?           mcpConfigJson  = null,
             string[]?         allowedTools   = null,
             double?           maxBudgetUsd   = null,
+            string?           systemPrompt   = null,
             CancellationToken ct             = default
         ) {
         // MCP mode without an allowlist would hand the model every tool the
@@ -139,7 +155,7 @@ static class ClaudeCliRunner {
         }
 
         try {
-            return await RunCoreAsync(prompt, timeout, log, workingDir, model, maxTurns, promptViaStdin, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, ct);
+            return await RunCoreAsync(prompt, timeout, log, workingDir, model, maxTurns, promptViaStdin, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt, ct);
         } finally {
             if (createdWorkingDir) {
                 try {
@@ -164,6 +180,7 @@ static class ClaudeCliRunner {
             string?           mcpConfigJson,
             string[]?         allowedTools,
             double?           maxBudgetUsd,
+            string?           systemPrompt,
             CancellationToken ct
         ) {
         var psi = new ProcessStartInfo {
@@ -189,7 +206,7 @@ static class ClaudeCliRunner {
             psi.Environment.Remove("ANTHROPIC_API_KEY");
         }
 
-        foreach (var arg in BuildClaudeArgs(prompt, promptViaStdin, model, maxTurns, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd)) {
+        foreach (var arg in BuildClaudeArgs(prompt, promptViaStdin, model, maxTurns, jsonSchema, mcpConfigJson, allowedTools, maxBudgetUsd, systemPrompt)) {
             psi.ArgumentList.Add(arg);
         }
 
@@ -326,7 +343,8 @@ static class ClaudeCliRunner {
             string?   jsonSchema,
             string?   mcpConfigJson,
             string[]? allowedTools,
-            double?   maxBudgetUsd
+            double?   maxBudgetUsd,
+            string?   systemPrompt = null
         ) {
         var args = new List<string> { "-p" };
 
@@ -342,6 +360,18 @@ static class ClaudeCliRunner {
         args.Add(maxTurns.ToString());
         args.Add("--model");
         args.Add(model);
+
+        if (!string.IsNullOrWhiteSpace(systemPrompt)) {
+            // Replaces (not appends to) the default Claude Code system prompt.
+            // Text-only callers (title, what's-done) carry full instructions in
+            // the user prompt, so a minimal replacement strips the harness
+            // system-prompt overhead (~8.2K → ~2.4K prompt tokens/call, measured)
+            // on the subscription path with no extra config. Blank => omit, so
+            // the CLI keeps its default (we never pass `--system-prompt ""`,
+            // which would wipe the prompt to empty rather than skip the flag).
+            args.Add("--system-prompt");
+            args.Add(systemPrompt);
+        }
 
         if (maxBudgetUsd is { } budget) {
             args.Add("--max-budget-usd");
@@ -361,28 +391,33 @@ static class ClaudeCliRunner {
         //     investigate" (AI-803).
         args.Add("--strict-mcp-config");
 
-        if (mcpConfigJson is null) {
-            // Text-only mode (title generation, per-question judges): block
-            // all tools and the LSP probe on top of loading zero MCP servers.
-            //
-            // `--tools ""` is not enough for headless single-turn judge runs:
-            //   - The built-in `LSP` tool is attached regardless of `--tools`,
-            //     and Claude eagerly probes any file paths it sees in the
-            //     compacted trace, blowing past `--max-turns 1` with
-            //     `stop_reason=tool_use`. `--disallowedTools LSP` blocks it.
-            // Without these, real eval traces (which mention file paths)
-            // fail every question with `error_max_turns`.
-            args.Add("--tools");
-            args.Add("");
-            args.Add("--disallowedTools");
-            args.Add("LSP");
-        } else {
+        // Lock down the built-in tool surface in BOTH modes:
+        //   - `--tools ""` disables every built-in tool (Read/Bash/Agent/…).
+        //   - `--disallowedTools LSP` blocks the LSP probe, which is attached
+        //     regardless of `--tools` and otherwise eagerly probes file paths
+        //     it sees in the prompt, blowing past `--max-turns` with
+        //     `stop_reason=tool_use`. Without these, real eval prompts (which
+        //     mention file paths) fail with `error_max_turns`.
+        //
+        // The lockdown applies to MCP mode too: relying on `--allowedTools`
+        // alone to bound the tool surface is NOT enough — claude still exposes
+        // built-in tools (notably `Agent`, i.e. subagents) to the model even
+        // when they aren't allowlisted. A tools-enabled judge then reaches for
+        // `Agent` instead of the MCP tools, fanning out subagents that don't
+        // inherit the `--mcp-config`, burn the per-question budget
+        // (`error_max_budget_usd`), and return no verdict. The MCP tools the
+        // caller allowlists below are layered on top and are NOT part of the
+        // built-in set, so `--tools ""` leaves them callable.
+        args.Add("--tools");
+        args.Add("");
+        args.Add("--disallowedTools");
+        args.Add("LSP");
+
+        if (mcpConfigJson is not null) {
             // Tool-using mode (DEV-1484 retrospective + DEV-1486 per-question):
-            // load the caller-supplied MCP config and restrict the model to
-            // exactly the MCP tools the caller named. The `--tools ""` /
-            // `--disallowedTools LSP` lockdown from the text-only branch is
-            // dropped — the explicit `--allowedTools` allowlist is the only
-            // tool surface the model sees.
+            // load the caller-supplied session-scoped MCP server and permit
+            // exactly the MCP tools the caller named, on top of the built-in
+            // lockdown above.
             args.Add("--mcp-config");
             args.Add(mcpConfigJson);
             if (allowedTools is { Length: > 0 }) {

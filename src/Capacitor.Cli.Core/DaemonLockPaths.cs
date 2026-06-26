@@ -75,16 +75,21 @@ public static partial class DaemonLockPaths {
     public static string StartLockPath(string daemonName) =>
         Path.Combine(Directory, $"{Sanitize(daemonName)}.start");
 
+    /// <summary>Path to the daemon's "restart pending" marker (queued restart-after-update state).</summary>
+    public static string RestartPendingPath(string daemonName) =>
+        Path.Combine(Directory, $"{Sanitize(daemonName)}.restart-pending");
+
     /// <summary>Ensures the parent directory exists. Safe to call repeatedly.</summary>
     public static void EnsureDirectory() => System.IO.Directory.CreateDirectory(Directory);
 
     /// <summary>
     /// Returns the daemon names visible on disk — the union of names
-    /// derived from <c>*.lock</c> and <c>*.pid</c> files. Used by
-    /// <c>daemon doctor</c> to classify held vs stale entries; covers
-    /// orphan PID files that have no matching lock (e.g. a pre-AI-630
-    /// daemon whose migration ran for the PID file but not the start
-    /// lock, or a stop that removed the lock but left the PID behind).
+    /// derived from <c>*.lock</c>, <c>*.pid</c>, and <c>*.restart-pending</c>
+    /// files. Used by <c>daemon doctor</c> to classify held vs stale entries;
+    /// covers orphan PID files that have no matching lock (e.g. a pre-AI-630
+    /// daemon whose migration ran for the PID file but not the start lock, or
+    /// a stop that removed the lock but left the PID behind) and marker-only
+    /// leftovers (a crash between queueing a restart and applying it).
     /// </summary>
     public static IReadOnlyList<string> EnumerateNames() {
         if (!System.IO.Directory.Exists(Directory)) return [];
@@ -93,9 +98,11 @@ public static partial class DaemonLockPaths {
             .Select(Path.GetFileNameWithoutExtension);
         var fromPids  = System.IO.Directory.EnumerateFiles(Directory, "*.pid")
             .Select(Path.GetFileNameWithoutExtension);
+        var fromMarkers = System.IO.Directory.EnumerateFiles(Directory, "*.restart-pending")
+            .Select(Path.GetFileNameWithoutExtension);
 
         return [
-            .. fromLocks.Concat(fromPids)
+            .. fromLocks.Concat(fromPids).Concat(fromMarkers)
                 .Where(n => !string.IsNullOrEmpty(n))
                 .Select(n => n!)
                 .Distinct()

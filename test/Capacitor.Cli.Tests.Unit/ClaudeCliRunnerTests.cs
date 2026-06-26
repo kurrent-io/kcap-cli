@@ -124,12 +124,13 @@ public class ClaudeCliRunnerTests {
 
     // DEV-1484 contract: when a caller opts into MCP mode, they must name the
     // tools they want exposed. `--strict-mcp-config` already limits which MCP
-    // *servers* load to just the caller's inline config (AI-803), but without
-    // an allowlist the runner would drop the text-only `--tools ""` lockdown
-    // and expose every tool that inline config's servers offer. Requiring a
-    // non-empty allowlist keeps the callable-tool surface explicit. Guard at
-    // the entry point so the misuse surfaces as an ArgumentException instead
-    // of a silent broadening.
+    // *servers* load to just the caller's inline config (AI-803), and the
+    // built-in lockdown (`--tools ""` / `--disallowedTools LSP`) stays on, so
+    // an MCP config with no allowlist would load a server whose tools are never
+    // permitted — the judge can't call anything, which is a silent
+    // misconfiguration rather than a useful run. Requiring a non-empty
+    // allowlist keeps the callable-tool surface explicit. Guard at the entry
+    // point so the misuse surfaces as an ArgumentException.
     [Test]
     public async Task RunAsync_WithMcpConfigAndNullAllowedTools_Throws() =>
         await AssertAllowedToolsGuard(allowedTools: null);
@@ -192,10 +193,17 @@ public class ClaudeCliRunnerTests {
         await Assert.That(FlagValue(args, "--mcp-config")).IsEqualTo(mcpConfig);
         await Assert.That(FlagValue(args, "--allowedTools"))
             .IsEqualTo("mcp__kcap-judge__get_session_summary,mcp__kcap-judge__search_session");
-        // The text-only lockdown flags must NOT leak into MCP mode — the
-        // allowlist is the tool restriction there, not `--tools ""`.
-        await Assert.That(args).DoesNotContain("--tools");
-        await Assert.That(args).DoesNotContain("LSP");
+        // The built-in tool lockdown applies in MCP mode too. `--allowedTools`
+        // alone does NOT stop claude exposing built-in tools like `Agent`
+        // (subagents) to the model — a tools-judge will reach for `Agent`
+        // instead of the MCP tools, spawning subagents that blow the
+        // per-question budget and return no verdict. `--tools ""` disables the
+        // built-in set; `--disallowedTools LSP` blocks the LSP probe that is
+        // attached regardless of `--tools`. The allowlisted MCP tools are
+        // layered on top via `--mcp-config` + `--allowedTools` and are NOT part
+        // of the built-in set, so the lockdown does not remove them.
+        await Assert.That(FlagValue(args, "--tools")).IsEqualTo("");
+        await Assert.That(FlagValue(args, "--disallowedTools")).IsEqualTo("LSP");
     }
 
     [Test]
@@ -217,6 +225,54 @@ public class ClaudeCliRunnerTests {
         // No MCP config means no caller-supplied servers.
         await Assert.That(args).DoesNotContain("--mcp-config");
         await Assert.That(args).DoesNotContain("--allowedTools");
+    }
+
+    // The headless text-only tasks (title generation, what's-done summaries)
+    // carry their full instructions in the user prompt, so the default Claude
+    // Code system prompt is pure overhead — measured at ~8.2K prompt tokens per
+    // title call vs ~2.4K with a minimal replacement. `--system-prompt` REPLACES
+    // (not appends to) the default, so a tiny task-specific prompt strips that
+    // overhead on the subscription path with no extra config.
+    [Test]
+    public async Task BuildClaudeArgs_WithSystemPrompt_ReplacesDefaultSystemPrompt() {
+        const string sp = "You label coding-session transcripts. Output only the requested text.";
+
+        var args = ClaudeCliRunner.BuildClaudeArgs(
+            prompt:         "irrelevant",
+            promptViaStdin: false,
+            model:          "haiku",
+            maxTurns:       1,
+            jsonSchema:     null,
+            mcpConfigJson:  null,
+            allowedTools:   null,
+            maxBudgetUsd:   null,
+            systemPrompt:   sp
+        );
+
+        await Assert.That(FlagValue(args, "--system-prompt")).IsEqualTo(sp);
+    }
+
+    // A null/empty system prompt must leave the flag off entirely so callers
+    // that don't opt in keep the CLI's default behaviour — passing
+    // `--system-prompt ""` would wipe the system prompt to empty, not skip it.
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments("   ")]
+    public async Task BuildClaudeArgs_WithoutSystemPrompt_OmitsFlag(string? systemPrompt) {
+        var args = ClaudeCliRunner.BuildClaudeArgs(
+            prompt:         "irrelevant",
+            promptViaStdin: false,
+            model:          "haiku",
+            maxTurns:       1,
+            jsonSchema:     null,
+            mcpConfigJson:  null,
+            allowedTools:   null,
+            maxBudgetUsd:   null,
+            systemPrompt:   systemPrompt
+        );
+
+        await Assert.That(args).DoesNotContain("--system-prompt");
     }
 
     /// <summary>Returns the argument immediately following <paramref name="flag"/>, or null.</summary>

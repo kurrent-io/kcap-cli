@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Net.Sockets;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Commands;
@@ -21,6 +23,7 @@ public static class DaemonCommands {
         return subcommand switch {
             "start"   => await StartAsync(remaining),
             "stop"    => await StopAsync(remaining),
+            "restart" => await RestartAsync(remaining),
             "status"  => await Status(remaining),
             "logs"    => await Logs(),
             "doctor"  => await DoctorAsync(remaining),
@@ -329,6 +332,79 @@ public static class DaemonCommands {
         return 0;
     }
 
+    // ── restart ───────────────────────────────────────────────────────────────
+
+    /// <summary>"force" &gt; "when-idle" &gt; "now" (bare). Force always wins.</summary>
+    internal static string ParseRestartMode(string[] args) {
+        if (args.Contains("--force"))     return "force";
+        if (args.Contains("--when-idle")) return "when-idle";
+
+        return "now";
+    }
+
+    static async Task<int> RestartAsync(string[] args) {
+        string? name;
+
+        try {
+            name = ExtractFlagValue(args, "--name");
+        } catch (ArgumentException ex) {
+            await Console.Error.WriteLineAsync(ex.Message);
+
+            return 1;
+        }
+
+        var mode = ParseRestartMode(args);
+
+        var targets = name is not null ? [name] : EnumerateRunningNames();
+
+        if (targets.Count == 0) {
+            await Console.Out.WriteLineAsync("No daemons are running.");
+
+            return 0;
+        }
+
+        var failed = 0;
+
+        foreach (var n in targets) {
+            if (await RestartOne(n, mode) != 0) failed++;
+        }
+
+        return failed == 0 ? 0 : 1;
+    }
+
+    static async Task<int> RestartOne(string name, string mode) {
+        var socketPath = LocalSocketPaths.Socket(name);
+
+        using var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+
+        try {
+            await sock.ConnectAsync(new UnixDomainSocketEndPoint(socketPath));
+        } catch (Exception ex) when (ex is SocketException or IOException) {
+            await Console.Error.WriteLineAsync($"Daemon '{name}': not reachable ({ex.Message}).");
+
+            return 1;
+        }
+
+        await using var stream = new NetworkStream(sock, ownsSocket: false);
+        await FrameCodec.WriteAsync(stream, LocalFrame.Restart(mode), default);
+        var reply = await FrameCodec.ReadAsync(stream, default);
+
+        switch (reply?.Type) {
+            case FrameType.RestartAck:
+                await Console.Out.WriteLineAsync($"Daemon '{name}': restart {reply.Text}.");
+
+                return 0;
+            case FrameType.Error:
+                await Console.Error.WriteLineAsync($"Daemon '{name}': {reply.Text}");
+
+                return 1;
+            default:
+                await Console.Error.WriteLineAsync($"Daemon '{name}': unexpected reply.");
+
+                return 1;
+        }
+    }
+
     // ── status ──────────────────────────────────────────────────────────────
 
     static async Task<int> Status(string[] args) {
@@ -360,6 +436,9 @@ public static class DaemonCommands {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': not running");
             } else if (IsOurDaemon(entry.Pid, entry.StartToken)) {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': running (PID {entry.Pid})");
+
+                if (DaemonRestartMarker.TryRead(name) is { } marker)
+                    await Console.Out.WriteLineAsync($"  {marker.Describe()}");
             } else {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': not running (stale PID file)");
 
@@ -465,6 +544,10 @@ public static class DaemonCommands {
                         try { File.Delete(pidPath); } catch {
                             /* best-effort */
                         }
+
+                        try { File.Delete(DaemonLockPaths.RestartPendingPath(name)); } catch {
+                            /* best-effort */
+                        }
                     }
 
                     break;
@@ -480,6 +563,10 @@ public static class DaemonCommands {
                         }
 
                         try { File.Delete(pidPath); } catch {
+                            /* best-effort */
+                        }
+
+                        try { File.Delete(DaemonLockPaths.RestartPendingPath(name)); } catch {
                             /* best-effort */
                         }
                     }
@@ -681,7 +768,9 @@ public static class DaemonCommands {
         if (daemonPath is null) { await Console.Error.WriteLineAsync(DaemonNotFoundMessage()); return 1; }
 
         var profileName = ExtractFlagValue(args, "--profile") ?? AppConfig.ResolvedProfile?.ProfileName;
-        var env         = ServiceEnvironment.Capture(profileName);
+        var env = new Dictionary<string, string>(ServiceEnvironment.Capture(profileName)) {
+            ["KCAP_DAEMON_SUPERVISED"] = id,   // name-specific; daemon honors it only when == its sanitized --name
+        };
 
         var extra = new List<string>();
         if (ExtractFlagValue(args, "--max-agents") is { } mx) { extra.Add("--max-agents"); extra.Add(mx); }
@@ -760,10 +849,11 @@ public static class DaemonCommands {
         $"kcap-daemon binary not found next to {AppContext.BaseDirectory}. Reinstall the kcap package.";
 
     static int PrintUsage() {
-        Console.Error.WriteLine("Usage: kcap daemon <start|stop|status|logs|doctor|service>");
+        Console.Error.WriteLine("Usage: kcap daemon <start|stop|restart|status|logs|doctor|service>");
         Console.Error.WriteLine();
         Console.Error.WriteLine("  start [-d] [--name <n>]    Start the daemon (foreground, or -d for background)");
         Console.Error.WriteLine("  stop [--name <n>] [--yes]  Stop a running daemon (prompts on multi unless --yes)");
+        Console.Error.WriteLine("  restart [--name <n>] [--when-idle] [--force]  Restart daemon (now if idle; --when-idle queues; --force overrides)");
         Console.Error.WriteLine("  status [--name <n>]        Show daemon status (lists all when --name omitted)");
         Console.Error.WriteLine("  logs                       Show recent daemon log output");
         Console.Error.WriteLine("  doctor [--clean]           Diagnose lock-file state, optionally clean stale entries");

@@ -144,6 +144,12 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
         return true;
     }
 
+    /// <summary>True if this session still has undelivered spool entries (live .jsonl or .draining temp).</summary>
+    public bool HasBacklog(string sessionId) =>
+        SafeSessionId.IsMatch(sessionId) && Directory.Exists(spoolDir)
+        && (File.Exists(Path.Combine(spoolDir, $"{sessionId}.jsonl"))
+            || Directory.EnumerateFiles(spoolDir, $"{sessionId}.*.draining").Any());
+
     public void ReapOlderThan(TimeSpan age) {
         try {
             if (!Directory.Exists(spoolDir)) return;

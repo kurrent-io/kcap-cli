@@ -216,9 +216,28 @@ public static class TokenStore {
         return DateTimeOffset.UtcNow.AddMinutes(5);
     }
 
+    // Short retry budget for the refresh HTTP call. A bare single-shot POST turned any
+    // transient blip (DNS stutter, connection reset, brief server slowness) into a hard
+    // "token expired — run kcap login", even though the refresh credential was still valid.
+    // PostWithRetryAsync retries only transport failures, never non-success responses — so a
+    // genuinely-expired refresh token still returns fast (400/401 → null, no pointless retries).
+    // Kept short so a hook never blocks for the default 30s budget when the server is down.
+    static readonly TimeSpan RefreshRetryBudget = TimeSpan.FromSeconds(5);
+
     static async Task<StoredTokens?> RefreshGitHubAsync(StoredTokens tokens) {
-        var       baseUrl = AppConfig.ResolvedServerUrl ?? Environment.GetEnvironmentVariable("KCAP_URL") ?? "http://localhost:5108";
-        using var http    = new HttpClient();
+        var baseUrl = AppConfig.ResolvedServerUrl ?? Environment.GetEnvironmentVariable("KCAP_URL") ?? "http://localhost:5108";
+        var url     = $"{baseUrl}/auth/refresh";
+
+        // PostWithRetryAsync runs EnsureAbsolute, which Environment.Exit(2)s on a scheme-less URL.
+        // Refresh is reached from daemon/background callers via GetValidTokensAsync and must fail
+        // gracefully (return null), never terminate the process — so validate here instead of
+        // letting the retry helper exit. The hook *entry* paths still EnsureAbsolute-and-exit by
+        // design; this guard only covers the refresh call.
+        if (!HttpClientExtensions.IsAcceptableUrl(url)) {
+            return null;
+        }
+
+        using var http = new HttpClient();
 
         var requestBody = JsonSerializer.Serialize(
             new() { AccessToken = tokens.AccessToken },
@@ -227,7 +246,7 @@ public static class TokenStore {
         var payload = new StringContent(requestBody, System.Text.Encoding.UTF8, "application/json");
 
         try {
-            var response = await http.PostAsync($"{baseUrl}/auth/refresh", payload);
+            var response = await http.PostWithRetryAsync(url, payload, RefreshRetryBudget);
 
             if (!response.IsSuccessStatusCode) {
                 return null;
@@ -258,7 +277,13 @@ public static class TokenStore {
         try {
             using var http = new HttpClient();
 
-            using var response = await http.PostAsync(
+            // Retries only transport failures. WorkOS rotates the refresh token on each
+            // successful use, so a retry after the server already rotated (response lost in
+            // transit) would re-send the now-consumed token. That reuse window already exists
+            // without retry — the next refresh call re-reads the same unrotated token from disk
+            // and re-sends it — so the short retry doesn't add a new failure mode; it just rides
+            // out the common case where the request never reached WorkOS.
+            using var response = await http.PostWithRetryAsync(
                 "https://api.workos.com/user_management/authenticate",
                 new FormUrlEncodedContent(
                     new Dictionary<string, string> {
@@ -266,7 +291,8 @@ public static class TokenStore {
                         ["client_id"]     = tokens.ClientId!,
                         ["refresh_token"] = tokens.RefreshToken!
                     }
-                )
+                ),
+                RefreshRetryBudget
             );
 
             if (!response.IsSuccessStatusCode) {

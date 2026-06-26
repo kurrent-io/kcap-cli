@@ -31,41 +31,54 @@ public static class ClaudeHookCommand {
     }
 
     static Task<int> HandleWithDeps(HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask)
-        => HandleWithDeps(spool, processStart, baseUrl, stdin, updateCheckTask, () => HttpClientExtensions.CreateAuthenticatedClientAsync());
+        => HandleWithDeps(spool, processStart, baseUrl, stdin, updateCheckTask,
+            () => HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl));
 
     internal static async Task<int> HandleWithDeps(
             HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask,
-            Func<Task<HttpClient>> clientFactory) {
+            Func<Task<(HttpClient Client, AuthStatus Status)>> clientFactory) {
         string body;
         try { body = await stdin.ReadToEndAsync(); } catch { return 0; }
 
-        // Minimal parse (no auth/git) so we can spool even if client creation hangs.
-        string? command = null, sessionId = null;
+        // Minimal parse (no auth/git) so we can spool AND start the watcher even if client creation hangs.
+        string? command = null, sessionId = null, transcriptPath = null, cwd = null, source = null;
         try {
             var node = JsonNode.Parse(body);
             var ev   = node?["hook_event_name"]?.GetValue<string>();
-            command  = ev is null ? null : ToKebab(ev);
-            sessionId = node?["session_id"]?.GetValue<string>()?.Replace("-", "");
+            command        = ev is null ? null : ToKebab(ev);
+            sessionId      = node?["session_id"]?.GetValue<string>()?.Replace("-", "");
+            transcriptPath = node?["transcript_path"]?.GetValue<string>();
+            cwd            = node?["cwd"]?.GetValue<string>();
+            source         = node?["source"]?.GetValue<string>();
         } catch { }
 
-        var clientCap = HookBudget.Remaining(processStart, command ?? "stop"); // already minus safety margin
-        var client    = await CreateClientWithinBudgetAsync(clientFactory, clientCap);
+        var clientCap = HookBudget.Remaining(processStart, command ?? "stop");
+        var created   = await CreateClientWithinBudgetAsync(clientFactory, clientCap);
 
-        if (client is null) {
-            // Auth/client creation exceeded the hook budget (hung /auth/config or refresh during an outage).
-            // Spool lifecycle events so they survive; otherwise the session is stranded "Active".
+        if (created is null) {
+            // Auth/client creation exceeded the hook budget (hung /auth/config or refresh during an
+            // outage). The watcher and the spool need no client — start capture and persist the
+            // lifecycle event so neither the transcript nor the session record is lost.
+            if (command == "session-start" && sessionId is not null && transcriptPath is not null) {
+                var isResumeOrCompact = source is not null &&
+                    (source.Equals("resume", StringComparison.OrdinalIgnoreCase) ||
+                     source.Equals("compact", StringComparison.OrdinalIgnoreCase));
+                try {
+                    await WatcherManager.EnsureWatcherRunning(baseUrl, sessionId, transcriptPath,
+                        agentId: null, cwd: cwd, skipTitle: isResumeOrCompact);
+                } catch { }
+            }
             if (command is "session-start" or "session-end" && sessionId is not null) {
-                spool.Append(sessionId, command, body);
+                spool.Append(sessionId, command, NormalizeForSpool(body, command));
                 await Console.Error.WriteLineAsync($"[kcap] {command} spooled (auth/client creation exceeded hook budget); will retry on the next kcap hook ({sessionId})");
             }
             return 0;
         }
 
+        var (client, authStatus) = created.Value;
         try {
-            return await HandleCore(client, spool, processStart, baseUrl, new StringReader(body), updateCheckTask);
+            return await HandleCore(client, authStatus, spool, processStart, baseUrl, new StringReader(body), updateCheckTask);
         } catch (Exception ex) {
-            // Fail-open (broad catch retained per plan: a hook must never crash the agent),
-            // but breadcrumb so real bugs are visible in logs.
             await Console.Error.WriteLineAsync($"[kcap] claude hook failed (fail-open): {ex.Message}");
             return 0;
         } finally {
@@ -73,18 +86,33 @@ public static class ClaudeHookCommand {
         }
     }
 
-    // Returns the client if created within `cap`; null if the cap elapsed first
-    // (the abandoned creation task is reaped on process exit). Factory injectable for tests.
-    internal static async Task<HttpClient?> CreateClientWithinBudgetAsync(Func<Task<HttpClient>> factory, TimeSpan cap) {
+    // Returns (client,status) if created within `cap`; null if the cap elapsed first
+    // (abandoned creation task reaped on process exit).
+    internal static async Task<(HttpClient Client, AuthStatus Status)?> CreateClientWithinBudgetAsync(
+            Func<Task<(HttpClient Client, AuthStatus Status)>> factory, TimeSpan cap) {
         if (cap <= TimeSpan.Zero) return null;
         var task = factory();
         var winner = await Task.WhenAny(task, Task.Delay(cap));
         if (winner != task) {
-            _ = task.ContinueWith(static t => { _ = t.Exception; t.Result.Dispose(); },
+            _ = task.ContinueWith(static t => { _ = t.Exception; t.Result.Client.Dispose(); },
                 CancellationToken.None, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
             return null;
         }
         try { return await task; } catch { return null; }
+    }
+
+    // Minimal normalization for an auth-timeout-spooled body: dashless ids (match the server's
+    // expected form) and, for session-end, an ended_at stamp so a late replay keeps idempotency.
+    static string NormalizeForSpool(string body, string command) {
+        try {
+            var node = JsonNode.Parse(body);
+            if (node is null) return body;
+            NormalizeGuidField(node, "session_id");
+            NormalizeGuidField(node, "agent_id");
+            if (command == "session-end" && node["ended_at"] is null)
+                node["ended_at"] = DateTimeOffset.UtcNow.ToString("O");
+            return node.ToJsonString();
+        } catch { return body; }
     }
 
     internal static async Task<int> WithHardCap(Task<int> inner, TimeSpan budget) {
@@ -92,7 +120,7 @@ public static class ClaudeHookCommand {
         return winner == inner ? await inner : 0;
     }
 
-    internal static async Task<int> HandleCore(HttpClient client, HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask = null) {
+    internal static async Task<int> HandleCore(HttpClient client, AuthStatus authStatus, HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask = null) {
         var body = await stdin.ReadToEndAsync();
 
         var eventName = ExtractEventName(body);
@@ -201,6 +229,21 @@ public static class ClaudeHookCommand {
             } catch {
                 // Best effort
             }
+        }
+
+        // Auth lapsed: do not POST (server would 401) and do not drain (a 401 would Drop the
+        // spool backlog). Exit cleanly (0) so Claude shows no per-turn error banner; nudge once on
+        // session-start via a systemMessage (shown to the user, not injected into the model context).
+        if (authStatus is AuthStatus.Expired or AuthStatus.NotAuthenticated) {
+            if (command == "session-start") {
+                var notice = new JsonObject {
+                    ["systemMessage"] = authStatus == AuthStatus.Expired
+                        ? "[kcap] Authentication expired — session recording is paused. Run 'kcap login' to resume."
+                        : "[kcap] Not authenticated — session recording is off. Run 'kcap login' to start recording."
+                };
+                Console.WriteLine(notice.ToJsonString());
+            }
+            return 0;
         }
 
         // Drain stranded lifecycle events before handling the fresh one. Current session
