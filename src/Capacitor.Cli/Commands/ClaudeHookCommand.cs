@@ -290,15 +290,18 @@ public static class ClaudeHookCommand {
         // hook budget, spools on transient failure, and checks generate_whats_done on success.
         // Other commands continue through the shared PostWithRetryAsync path below.
         if (command == "session-end") {
-            // Stamp ended_at so a spooled replay records the true end time.
+            // Parse once: stamp ended_at and extract sessionId in a single pass.
+            string? sessionId = null;
             try {
-                var n = JsonNode.Parse(body)!;
-                n["ended_at"] = DateTimeOffset.UtcNow.ToString("O");
-                body = n.ToJsonString();
+                var node = JsonNode.Parse(body);
+                sessionId = node?["session_id"]?.GetValue<string>();
+                if (node is not null) {
+                    node["ended_at"] = DateTimeOffset.UtcNow.ToString("O");
+                    body             = node.ToJsonString();
+                }
             } catch { }
 
             var remaining  = HookBudget.Remaining(processStart, "session-end");
-            var sessionId  = JsonNode.Parse(body)?["session_id"]?.GetValue<string>();
             HttpResponseMessage? resp = null;
             try {
                 if (remaining > TimeSpan.Zero) {
@@ -310,9 +313,13 @@ public static class ClaudeHookCommand {
             if (resp is null || !resp.IsSuccessStatusCode) {
                 var permanent = resp is not null && (int)resp.StatusCode is < 500 and not 408 and not 429;
                 resp?.Dispose();
-                if (!permanent && sessionId is not null) {
-                    spool.Append(sessionId, "session-end", body);
-                    await Console.Error.WriteLineAsync($"[kcap] session-end spooled; will retry on the next kcap hook ({sessionId})");
+                if (!permanent) {
+                    if (sessionId is not null) {
+                        spool.Append(sessionId, "session-end", body);
+                        await Console.Error.WriteLineAsync($"[kcap] session-end spooled; will retry on the next kcap hook ({sessionId})");
+                    } else {
+                        await Console.Error.WriteLineAsync("[kcap] session-end transient failure but session_id missing — cannot spool; event dropped");
+                    }
                 }
                 return 0;
             }
