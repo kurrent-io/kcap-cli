@@ -291,8 +291,8 @@ public static class ClaudeHookCommand {
         }
 
         // Dedicated bounded path for session-start: spawn the watcher FIRST (transcript capture
-        // must never be lost even if the POST fails), then bounded POST, spool on transient
-        // failure, and emit the context envelope + plan-content POST on success.
+        // must never be lost even if the POST fails), then a single bounded POST, spool on
+        // transient failure, and emit the context envelope + plan-content POST on success.
         if (command == "session-start") {
             var startNode      = JsonNode.Parse(body);
             var sessionId      = startNode?["session_id"]?.GetValue<string>();
@@ -311,37 +311,31 @@ public static class ClaudeHookCommand {
                     agentId: null, cwd: sessionCwd, skipTitle: isResumeOrCompact);
             }
 
-            // 2. Bounded POST; spool on transient failure (exit-0: session-start is async in plugin).
+            // 2. Single bounded POST — keep resp alive to read the response body for the
+            //    context-envelope emission and plan-content POST on success.
             var remaining = HookBudget.Remaining(processStart, "session-start");
-            var (ok, permanent) = await PostLifecycleBoundedAsync(
-                client, $"{baseUrl}/hooks/session-start", body, remaining, CancellationToken.None);
-
-            if (!ok) {
-                if (!permanent && sessionId is not null) {
-                    spool.Append(sessionId, "session-start", body);
+            HttpResponseMessage? resp = null;
+            try {
+                if (remaining > TimeSpan.Zero) {
+                    using var content = new StringContent(body, Encoding.UTF8, "application/json");
+                    resp = await client.PostOnceAsync($"{baseUrl}/hooks/session-start", content, remaining, CancellationToken.None);
                 }
+            } catch { resp = null; }
+
+            if (resp is null || !resp.IsSuccessStatusCode) {
+                var permanent = resp is not null && (int)resp.StatusCode is < 500 and not 408 and not 429;
+                resp?.Dispose();
+                if (!permanent && sessionId is not null) spool.Append(sessionId, "session-start", body);
                 return 0;
             }
 
-            // 3. Success: re-issue a single bounded POST to read the response body for the
-            //    context-envelope emission and plan-content POST. PostLifecycleBoundedAsync
-            //    disposes its response, so we need this second call for the response payload.
-            //    The injected-client test seam observes this POST.
-            remaining = HookBudget.Remaining(processStart, "session-start");
+            // resp is 2xx — read the body ONCE for the envelope + plan-content emission.
             JsonNode? responseNode = null;
-            if (remaining > TimeSpan.Zero) {
-                try {
-                    using var responseContent = new StringContent(body, Encoding.UTF8, "application/json");
-                    using var resp = await client.PostOnceAsync(
-                        $"{baseUrl}/hooks/session-start", responseContent, remaining, CancellationToken.None);
-
-                    if (resp.IsSuccessStatusCode) {
-                        var responseBody = await resp.Content.ReadAsStringAsync();
-                        responseNode = JsonNode.Parse(responseBody);
-                    }
-                } catch {
-                    // Best effort — envelope is optional; don't fail the hook.
-                }
+            try {
+                var responseBody = await resp.Content.ReadAsStringAsync();
+                responseNode = JsonNode.Parse(responseBody);
+            } catch {
+                // Best effort — envelope is optional; don't fail the hook.
             }
 
             // Plan-content POST from response-resolved slug (only if not already injected).
@@ -377,6 +371,8 @@ public static class ClaudeHookCommand {
                     // Best effort — never break session capture for hook output emission.
                 }
             }
+
+            resp.Dispose();
 
             if (updateCheckTask is not null) {
                 await updateCheckTask;
