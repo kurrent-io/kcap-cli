@@ -41,7 +41,7 @@ public static class ClaudeHookCommand {
         try { body = await stdin.ReadToEndAsync(); } catch { return 0; }
 
         // Minimal parse (no auth/git) so we can spool AND start the watcher even if client creation hangs.
-        string? command = null, sessionId = null, transcriptPath = null, cwd = null, source = null;
+        string? command = null, sessionId = null, transcriptPath = null, cwd = null, source = null, agentId = null;
         try {
             var node = JsonNode.Parse(body);
             var ev   = node?["hook_event_name"]?.GetValue<string>();
@@ -50,6 +50,7 @@ public static class ClaudeHookCommand {
             transcriptPath = node?["transcript_path"]?.GetValue<string>();
             cwd            = node?["cwd"]?.GetValue<string>();
             source         = node?["source"]?.GetValue<string>();
+            agentId        = node?["agent_id"]?.GetValue<string>();
         } catch { }
 
         var clientCap = HookBudget.Remaining(processStart, command ?? "stop");
@@ -71,6 +72,10 @@ public static class ClaudeHookCommand {
             if (command is "session-start" or "session-end" && sessionId is not null) {
                 spool.Append(sessionId, command, NormalizeForSpool(body, command));
                 await Console.Error.WriteLineAsync($"[kcap] {command} spooled (auth/client creation exceeded hook budget); will retry on the next kcap hook ({sessionId})");
+            }
+            else if (command == "subagent-stop" && sessionId is not null && agentId is not null) {
+                spool.Append(sessionId, "subagent-stop", NormalizeForSpool(body, command));
+                await Console.Error.WriteLineAsync($"[kcap] subagent-stop spooled (auth/client creation exceeded hook budget); will retry on the next kcap hook ({sessionId}/{agentId})");
             }
             return 0;
         }
@@ -336,6 +341,15 @@ public static class ClaudeHookCommand {
                     var transcriptPath = node?["transcript_path"]?.GetValue<string>();
 
                     if (sessionId is not null && agentId is not null) {
+                        // Clamp the pre-drain cap so it cannot consume the entire remaining budget
+                        // that the bounded POST needs (mirrors the session-end fix). Reserve at
+                        // least Safety (1.5s) for the bounded POST so a slow drain doesn't starve
+                        // it entirely. Use whichever is smallest (AI-1005).
+                        var remaining    = HookBudget.Remaining(processStart, "subagent-stop");
+                        var effectiveCap = TimeSpan.FromMilliseconds(
+                            Math.Max(0, Math.Min(PreHookDrainCap.TotalMilliseconds,
+                                remaining.TotalMilliseconds - HookBudget.Safety.TotalMilliseconds)));
+
                         var drained = await TimeBudget.RunCappedAsync(
                             async () => {
                                 await WatcherManager.KillWatcher($"{sessionId}-{agentId}");
@@ -346,12 +360,12 @@ public static class ClaudeHookCommand {
                                     await WatcherManager.InlineDrainAsync(baseUrl, sessionId, agentTranscriptPath, agentId);
                                 }
                             },
-                            PreHookDrainCap
+                            effectiveCap
                         );
 
                         if (!drained) {
                             await Console.Error.WriteLineAsync(
-                                $"[kcap] subagent-stop pre-drain cap ({PreHookDrainCap.TotalSeconds:0}s) elapsed; proceeding to POST"
+                                $"[kcap] subagent-stop pre-drain cap ({effectiveCap.TotalSeconds:0.#}s) elapsed; proceeding to POST"
                             );
                         }
                     }
@@ -563,6 +577,50 @@ public static class ClaudeHookCommand {
             } catch { }
             resp.Dispose();
             return 0;
+        }
+
+        // Dedicated bounded POST for the per-agent subagent-stop: a single attempt clamped to the
+        // remaining hook budget that spools on transient failure, so a dropped SubagentCompleted is
+        // replayed on the next hook (AI-1005). Only the stop carrying agent_id maps to a completion;
+        // without it, fall through to the shared best-effort path (behavior unchanged).
+        if (command == "subagent-stop") {
+            string? sessionId = null, agentId = null;
+            try {
+                var node  = JsonNode.Parse(body);
+                sessionId = node?["session_id"]?.GetValue<string>();
+                agentId   = node?["agent_id"]?.GetValue<string>();
+            } catch { }
+
+            if (sessionId is not null && agentId is not null) {
+                // Ordering guard: if this session's backlog couldn't fully drain, spool the fresh
+                // subagent-stop so a stranded session-start reaches the server before it (AI-1005).
+                if (CurrentSessionHasBacklog(spool, sessionId)) {
+                    spool.Append(sessionId, "subagent-stop", body);
+                    await Console.Error.WriteLineAsync($"[kcap] subagent-stop spooled (ordering guard); will retry on the next kcap hook ({sessionId}/{agentId})");
+                    return 0;
+                }
+                var remaining = HookBudget.Remaining(processStart, command);
+                HttpResponseMessage? resp = null;
+                try {
+                    if (remaining > TimeSpan.Zero) {
+                        using var content = new StringContent(body, Encoding.UTF8, "application/json");
+                        resp = await client.PostOnceAsync($"{baseUrl}/hooks/subagent-stop", content, remaining, CancellationToken.None);
+                    }
+                } catch { resp = null; }
+
+                if (resp is null || !resp.IsSuccessStatusCode) {
+                    var permanent = resp is not null && (int)resp.StatusCode is < 500 and not 408 and not 429;
+                    resp?.Dispose();
+                    if (!permanent) {
+                        spool.Append(sessionId, "subagent-stop", body);
+                        await Console.Error.WriteLineAsync($"[kcap] subagent-stop spooled; will retry on the next kcap hook ({sessionId}/{agentId})");
+                    }
+                    return 0;
+                }
+
+                resp.Dispose();
+                return 0;
+            }
         }
 
         using var sharedContent = new StringContent(body, Encoding.UTF8, "application/json");
