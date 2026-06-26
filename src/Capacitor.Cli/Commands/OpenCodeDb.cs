@@ -97,7 +97,9 @@ internal sealed class OpenCodeDb : IDisposable {
                 partNode["id"]        = r.GetString(2);
                 partNode["messageID"] = r.GetString(3);
                 partNode["sessionID"] = r.GetString(4);
-                parts!.Add(partNode);
+                // Cast to JsonNode so the non-generic Add(JsonNode?) overload is chosen —
+                // the generic Add<T>(T) trips IL2026/IL3050 under AOT (see CLAUDE.md).
+                parts!.Add((JsonNode)partNode);
             }
         }
         if (curMsgId is not null) yield return BuildLine(curMsgId, sessionId, curMsgData, parts!);
