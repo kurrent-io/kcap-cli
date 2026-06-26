@@ -299,6 +299,27 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     [Test]
+    public async Task Web_resize_out_of_ushort_range_is_ignored() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = new AgentInstance("reg-6", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            IsPrivate = false, Status = "Running", CurrentCols = 120, CurrentRows = 40
+        };
+        agent.ClientDims[new FakeTerminalSink()] = new AgentInstance.Dim(120, 40);
+        orch.RegisterAgentForTest(agent);
+
+        // 70000 > ushort.MaxValue — would wrap to 4464 on a raw (ushort) cast. The guard ignores it
+        // so WebDims stays null and the clamp is untouched (no poisoned web entry).
+        orch.HandleResizeTerminalForTest(new ResizeTerminalCommand("reg-6", 70000, 40));
+
+        await Assert.That(agent.WebDims).IsNull();
+        await Assert.That(agent.CurrentCols).IsEqualTo((ushort)120);
+        await Assert.That(agent.CurrentRows).IsEqualTo((ushort)40);
+    }
+
+    [Test]
     public async Task Private_agent_ignores_server_origin_resize_and_stop() {
         var server = new CaptureServerConnection();
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());

@@ -955,17 +955,26 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // last web viewer left. Fold it into the same min-clamp as the local clients rather than
             // resizing the PTY directly — a small web viewer must not corrupt a large local terminal
             // (or vice-versa), and a departing web viewer must let the PTY grow back to the local size.
-            lock (agent.SinksLock) {
-                agent.WebDims = cmd is { Cols: > 0, Rows: > 0 }
-                    ? new AgentInstance.Dim((ushort)cmd.Cols, (ushort)cmd.Rows)
-                    : null;
-                ClampPtyLocked(agent);
-            }
+            //
+            // (0,0) clears WebDims. Accept other dims only when they're positive AND fit the PTY's
+            // ushort winsize — ignore anything else (negative, or > ushort.MaxValue) so a bad value
+            // can't wrap on the cast and poison the shared clamp (e.g. a wrapped 0 would block all
+            // resizing). The server already bounds-checks; this is defence-in-depth — the daemon must
+            // not trust the wire.
+            var clear = cmd is { Cols: 0, Rows: 0 };
+            var valid = cmd is { Cols: > 0 and <= ushort.MaxValue, Rows: > 0 and <= ushort.MaxValue };
 
-            // Announce the clamped size so every web viewer re-locks (and reconnect resends the real
-            // size, not stale ones). Outside the lock, best-effort, fire-and-forget — same as the
-            // local resize path in ApplyResizeClamp.
-            _ = SafeSendDimsAsync(agent);
+            if (clear || valid) {
+                lock (agent.SinksLock) {
+                    agent.WebDims = clear ? null : new AgentInstance.Dim((ushort)cmd.Cols, (ushort)cmd.Rows);
+                    ClampPtyLocked(agent);
+                }
+
+                // Announce the clamped size so every web viewer re-locks (and reconnect resends the
+                // real size, not stale ones). Outside the lock, best-effort, fire-and-forget — same
+                // as the local resize path in ApplyResizeClamp.
+                _ = SafeSendDimsAsync(agent);
+            }
         }
 
         return Task.CompletedTask;
