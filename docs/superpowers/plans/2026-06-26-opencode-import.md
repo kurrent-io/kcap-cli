@@ -155,7 +155,26 @@ public class OpenCodeDbTests {
         using var ocdb = new OpenCodeDb(db);
         var kids = ocdb.QueryChildren("ses_root");
 
-        await Assert.That(kids.Select(k => k.Id)).IsEquivalentTo(new[] { "ses_c1", "ses_c2" });
+        // Order-sensitive: c1 (t=210) must precede c2 (t=220).
+        await Assert.That(string.Join(",", kids.Select(k => k.Id))).IsEqualTo("ses_c1,ses_c2");
+    }
+
+    [Test]
+    public async Task reads_while_a_wal_writer_holds_uncheckpointed_data() {
+        using var tmp = new TempDir();
+        var db = BuildDb(tmp.Path);
+
+        // Open a writer in WAL mode and leave an uncommitted-to-main (uncheckpointed) write.
+        using var writer = new SqliteConnection($"Data Source={db}");
+        writer.Open();
+        Exec(writer, "PRAGMA journal_mode=WAL;");
+        InsertSession(db, "ses_live", null, "/w", "Live", 100);
+        // Do NOT checkpoint — the row lives in the -wal file, mimicking a running OpenCode.
+
+        using var ocdb = new OpenCodeDb(db); // read-only open must still see committed WAL data
+        var roots = ocdb.QueryRoots();
+
+        await Assert.That(roots.Select(r => r.Id)).Contains("ses_live");
     }
 
     sealed class TempDir : IDisposable {
@@ -164,6 +183,8 @@ public class OpenCodeDbTests {
     }
 }
 ```
+
+**Implementer note:** a read-only `SqliteConnection` cannot itself create the `-wal`/`-shm` files, but it can *read* a WAL db another connection created. The writer connection above must stay open for the duration of the read so the WAL isn't auto-removed. If the read-only open errors because the WAL exists, the connection string may need `Cache=Shared` — confirm during implementation and adjust `OpenCodeDb`'s connection string if so.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -323,7 +344,8 @@ public async Task SynthesizeLines_orders_by_message_chronology_not_lexical_id() 
         .Select(l => System.Text.Json.JsonDocument.Parse(l).RootElement.GetProperty("info").GetProperty("role").GetString())
         .ToList();
 
-    await Assert.That(roles).IsEquivalentTo(new[] { "user", "assistant" }); // chronological, not msg_a-first
+    // Order-sensitive: chronological (user@100 then assistant@200), NOT lexical msg_a-first.
+    await Assert.That(string.Join(",", roles)).IsEqualTo("user,assistant");
 }
 
 [Test]
@@ -342,21 +364,40 @@ public async Task SynthesizeLines_includes_message_with_no_parts() {
 }
 
 [Test]
-public async Task IsImportRelevantLine_rejects_structural_only_and_empty() {
-    // Structural-only assistant (step markers) and empty user text are not importable.
+public async Task IsImportRelevantLine_matches_server_normalizer_rules() {
+    // Importable:
+    //   user → non-hidden text only
+    await Assert.That(OpenCodeDb.IsImportRelevantLine(
+        """{"info":{"role":"user"},"parts":[{"id":"p","type":"text","text":"hi"}]}""")).IsTrue();
+    //   assistant → non-hidden reasoning or text
+    await Assert.That(OpenCodeDb.IsImportRelevantLine(
+        """{"info":{"role":"assistant"},"parts":[{"id":"p","type":"reasoning","text":"thinking"}]}""")).IsTrue();
+    //   assistant tool → terminal state AND id + callID + tool present
+    await Assert.That(OpenCodeDb.IsImportRelevantLine(
+        """{"info":{"role":"assistant"},"parts":[{"id":"p","type":"tool","callID":"c","tool":"bash","state":{"status":"completed"}}]}""")).IsTrue();
+
+    // NOT importable:
+    //   structural-only assistant
     await Assert.That(OpenCodeDb.IsImportRelevantLine(
         """{"info":{"role":"assistant"},"parts":[{"type":"step-start"},{"type":"step-finish"}]}""")).IsFalse();
+    //   empty user text
     await Assert.That(OpenCodeDb.IsImportRelevantLine(
-        """{"info":{"role":"user"},"parts":[{"type":"text","text":""}]}""")).IsFalse();
-    // A real text part is importable.
+        """{"info":{"role":"user"},"parts":[{"id":"p","type":"text","text":""}]}""")).IsFalse();
+    //   user reasoning (only assistant reasoning emits)
     await Assert.That(OpenCodeDb.IsImportRelevantLine(
-        """{"info":{"role":"user"},"parts":[{"type":"text","text":"hi"}]}""")).IsTrue();
-    // A terminal tool part is importable.
+        """{"info":{"role":"user"},"parts":[{"id":"p","type":"reasoning","text":"x"}]}""")).IsFalse();
+    //   user tool (tools require assistant role)
     await Assert.That(OpenCodeDb.IsImportRelevantLine(
-        """{"info":{"role":"assistant"},"parts":[{"type":"tool","state":{"status":"completed"}}]}""")).IsTrue();
-    // A non-terminal tool alone is not.
+        """{"info":{"role":"user"},"parts":[{"id":"p","type":"tool","callID":"c","tool":"bash","state":{"status":"completed"}}]}""")).IsFalse();
+    //   hidden text (synthetic/ignored skipped)
     await Assert.That(OpenCodeDb.IsImportRelevantLine(
-        """{"info":{"role":"assistant"},"parts":[{"type":"tool","state":{"status":"running"}}]}""")).IsFalse();
+        """{"info":{"role":"assistant"},"parts":[{"id":"p","type":"text","text":"x","synthetic":true}]}""")).IsFalse();
+    //   terminal tool missing callID/tool
+    await Assert.That(OpenCodeDb.IsImportRelevantLine(
+        """{"info":{"role":"assistant"},"parts":[{"id":"p","type":"tool","state":{"status":"completed"}}]}""")).IsFalse();
+    //   non-terminal tool
+    await Assert.That(OpenCodeDb.IsImportRelevantLine(
+        """{"info":{"role":"assistant"},"parts":[{"id":"p","type":"tool","callID":"c","tool":"bash","state":{"status":"running"}}]}""")).IsFalse();
 }
 ```
 
@@ -424,29 +465,44 @@ static string BuildLine(string msgId, string sessionId, string msgData, JsonArra
 
 /// <summary>
 /// True when a reconstructed line maps to at least one canonical server event
-/// under the <c>opencode</c> normalizer: a user/assistant message with real text,
-/// or a terminal (completed/error) tool part. Structural-only parts
-/// (step-start/step-finish), empty text, and non-terminal tools emit nothing.
-/// Keep in sync with the server normalizer (same coupling Pi documents).
+/// under the <c>opencode</c> normalizer. The rules are ROLE-AWARE and
+/// HIDDEN-AWARE — they mirror
+/// <c>Capacitor.Server/Sessions/Canonical/OpenCodeTranscriptNormalizer.cs</c>:
+/// <list type="bullet">
+///   <item>user → a non-hidden <c>text</c> part with non-empty text;</item>
+///   <item>assistant → a non-hidden <c>reasoning</c> or <c>text</c> part with non-empty text;</item>
+///   <item>assistant → a <c>tool</c> part with <c>id</c>, <c>callID</c>, <c>tool</c>, and
+///         terminal <c>state.status</c> (completed/error).</item>
+/// </list>
+/// A part is "hidden" when it carries <c>synthetic: true</c> or <c>ignored: true</c>.
+/// IMPLEMENTER: re-read the server normalizer before finalizing and add any rule
+/// it has that this misses — this predicate must not over-count (it gates TooShort).
 /// </summary>
 public static bool IsImportRelevantLine(string line) {
     try {
         using var doc = JsonDocument.Parse(line);
-        if (!doc.RootElement.TryGetProperty("parts", out var parts) || parts.ValueKind != JsonValueKind.Array)
-            return false;
-        foreach (var p in parts.EnumerateArray()) {
-            var type = p.TryGetProperty("type", out var t) ? t.GetString() : null;
-            switch (type) {
-                case "text":
-                case "reasoning":
-                    if (p.TryGetProperty("text", out var tx) && !string.IsNullOrWhiteSpace(tx.GetString()))
-                        return true;
-                    break;
-                case "tool":
-                    var status = p.TryGetProperty("state", out var st) && st.TryGetProperty("status", out var ss)
-                        ? ss.GetString() : null;
-                    if (status is "completed" or "error") return true;
-                    break;
+        var root = doc.RootElement;
+        var role = root.TryGetProperty("info", out var info) && info.TryGetProperty("role", out var rl)
+            ? rl.GetString() : null;
+        if (root.TryGetProperty("parts", out var parts) && parts.ValueKind == JsonValueKind.Array) {
+            foreach (var p in parts.EnumerateArray()) {
+                if (IsHidden(p)) continue;
+                var type = p.TryGetProperty("type", out var t) ? t.GetString() : null;
+                switch (role, type) {
+                    case ("user", "text"):
+                    case ("assistant", "text"):
+                    case ("assistant", "reasoning"):
+                        if (p.TryGetProperty("text", out var tx) && !string.IsNullOrWhiteSpace(tx.GetString()))
+                            return true;
+                        break;
+                    case ("assistant", "tool"):
+                        var status = p.TryGetProperty("state", out var st) && st.TryGetProperty("status", out var ss)
+                            ? ss.GetString() : null;
+                        if (status is "completed" or "error"
+                         && HasNonEmpty(p, "id") && HasNonEmpty(p, "callID") && HasNonEmpty(p, "tool"))
+                            return true;
+                        break;
+                }
             }
         }
         return false;
@@ -454,6 +510,13 @@ public static bool IsImportRelevantLine(string line) {
         return false;
     }
 }
+
+static bool IsHidden(JsonElement p) =>
+    (p.TryGetProperty("synthetic", out var s) && s.ValueKind == JsonValueKind.True) ||
+    (p.TryGetProperty("ignored",   out var i) && i.ValueKind == JsonValueKind.True);
+
+static bool HasNonEmpty(JsonElement p, string name) =>
+    p.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String && !string.IsNullOrEmpty(v.GetString());
 ```
 
 **Note for implementer:** the `SynthesizeLines_merges_ids` test asserts `info.sessionID == "ses_x"` and each part's `sessionID`/`messageID`/`id` — it will catch any wrong key wiring.
@@ -528,6 +591,22 @@ public class OpenCodeImportSourceTests {
         var source = new OpenCodeImportSource(Path.Combine(Path.GetTempPath(), "no-such-kcap.db"));
         await Assert.That(source.IsAvailable).IsFalse();
     }
+
+    [Test]
+    public async Task discovery_handles_null_directory_and_excludes_it_under_cwd_filter() {
+        using var tmp = new OpenCodeDbFixture();
+        tmp.AddSession("ses_nodir", null, dir: null, "No dir", 100);
+        tmp.AddMessageWithText("ses_nodir", "m1", "x", 100);
+
+        var source = new OpenCodeImportSource(tmp.DbPath);
+
+        var all = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        await Assert.That(all.Single().Cwd).IsNull();
+
+        // A --cwd filter cannot match a null directory → excluded.
+        var filtered = await source.DiscoverAsync(new DiscoveryFilters("/work/a", null, null, 0), CancellationToken.None);
+        await Assert.That(filtered.Count).IsEqualTo(0);
+    }
 }
 ```
 
@@ -559,34 +638,48 @@ internal sealed class OpenCodeDbFixture : IDisposable {
     SqliteConnection Open() { var c = new SqliteConnection($"Data Source={DbPath}"); c.Open(); return c; }
     static void Exec(SqliteConnection c, string sql) { using var cmd = c.CreateCommand(); cmd.CommandText = sql; cmd.ExecuteNonQuery(); }
 
-    public void AddSession(string id, string? parent, string dir, string title, long t) {
+    // dir is nullable so tests can cover a session with no directory (DBNull).
+    public void AddSession(string id, string? parent, string? dir, string title, long t) {
         using var c = Open(); using var cmd = c.CreateCommand();
         cmd.CommandText = "INSERT INTO session(id,parent_id,directory,title,version,time_created,time_updated) VALUES($i,$p,$d,$t,'1.17',$tc,$tc)";
         cmd.Parameters.AddWithValue("$i", id);
         cmd.Parameters.AddWithValue("$p", (object?)parent ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$d", dir);
+        cmd.Parameters.AddWithValue("$d", (object?)dir ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$t", title);
         cmd.Parameters.AddWithValue("$tc", t);
         cmd.ExecuteNonQuery();
     }
 
-    public void AddMessageWithText(string sid, string msgId, string text, long t) {
+    // Build JSON with JsonObject so quoting/escaping is correct and readable.
+    public void AddMessageWithText(string sid, string msgId, string text, long t, string? agent = null) {
+        var info = new System.Text.Json.Nodes.JsonObject {
+            ["role"] = "user",
+            ["time"] = new System.Text.Json.Nodes.JsonObject { ["created"] = t },
+        };
+        if (agent is not null) info["agent"] = agent;
+        var part = new System.Text.Json.Nodes.JsonObject {
+            ["id"] = "prt_" + msgId, ["type"] = "text", ["text"] = text,
+        };
+        InsertRaw(sid, msgId, t, info.ToJsonString(), "prt_" + msgId, part.ToJsonString());
+    }
+
+    // Convenience used by subagent tests: message carries info.agent.
+    public void AddMessageWithTextAndAgent(string sid, string msgId, string text, long t, string agent) =>
+        AddMessageWithText(sid, msgId, text, t, agent);
+
+    void InsertRaw(string sid, string msgId, long t, string msgData, string partId, string partData) {
         using var c = Open();
         using (var m = c.CreateCommand()) {
             m.CommandText = "INSERT INTO message(id,session_id,time_created,data) VALUES($i,$s,$t,$d)";
-            m.Parameters.AddWithValue("$i", msgId);
-            m.Parameters.AddWithValue("$s", sid);
-            m.Parameters.AddWithValue("$t", t);
-            m.Parameters.AddWithValue("$d", """{"role":"user","time":{"created":""" + t + "}}");
+            m.Parameters.AddWithValue("$i", msgId); m.Parameters.AddWithValue("$s", sid);
+            m.Parameters.AddWithValue("$t", t); m.Parameters.AddWithValue("$d", msgData);
             m.ExecuteNonQuery();
         }
         using (var p = c.CreateCommand()) {
             p.CommandText = "INSERT INTO part(id,message_id,session_id,time_created,data) VALUES($i,$m,$s,$t,$d)";
-            p.Parameters.AddWithValue("$i", "prt_" + msgId);
-            p.Parameters.AddWithValue("$m", msgId);
-            p.Parameters.AddWithValue("$s", sid);
-            p.Parameters.AddWithValue("$t", t);
-            p.Parameters.AddWithValue("$d", """{"type":"text","text":"""" + text + """"}""");
+            p.Parameters.AddWithValue("$i", partId); p.Parameters.AddWithValue("$m", msgId);
+            p.Parameters.AddWithValue("$s", sid); p.Parameters.AddWithValue("$t", t);
+            p.Parameters.AddWithValue("$d", partData);
             p.ExecuteNonQuery();
         }
     }
@@ -654,7 +747,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
                 SessionId:      row.Id, // raw ses_… — no GUID normalization
                 Vendor:         Vendor,
                 Cwd:            row.Directory,
-                FirstTimestamp: DateTimeOffset.FromUnixTimeMilliseconds(row.TimeCreated),
+                FirstTimestamp: FromEpoch(row.TimeCreated),
                 SourceMeta:     new Dictionary<string, object?> {
                     ["Title"]       = row.Title,
                     ["TimeUpdated"] = row.TimeUpdated,
@@ -662,6 +755,13 @@ internal sealed class OpenCodeImportSource : IImportSource {
         }
         return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
     }
+
+    // OpenCode stores epoch MILLISECONDS (observed ~1.78e12). Guard against a future
+    // seconds-based column: a value too small to be plausible ms is read as seconds.
+    static DateTimeOffset FromEpoch(long v) =>
+        v < 100_000_000_000L   // < ~1973-03 expressed in ms ⇒ the value must be seconds
+            ? DateTimeOffset.FromUnixTimeSeconds(v)
+            : DateTimeOffset.FromUnixTimeMilliseconds(v);
 
     public Task<IReadOnlyList<ImportCommand.SessionClassification>> ClassifyAsync(
         IReadOnlyList<DiscoveredSession> sessions, ClassifyContext ctx, CancellationToken ct) =>
@@ -765,6 +865,25 @@ public async Task classify_too_short_for_structural_only_session() {
 
     await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.TooShort);
 }
+
+[Test]
+public async Task classify_too_short_for_zero_message_session() {
+    using var fix = new OpenCodeDbFixture();
+    fix.AddSession("ses_empty", null, "/w", "Empty", 100); // no messages at all
+
+    using var server = WireMockServer.Start();
+    server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+          .RespondWith(Response.Create().WithStatusCode(404));
+    using var client = new HttpClient();
+
+    var source     = new OpenCodeImportSource(fix.DbPath);
+    var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+    var classified = await source.ClassifyAsync(discovered,
+        new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
+        CancellationToken.None);
+
+    await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.TooShort);
+}
 ```
 
 Add `AddStructuralMessage` to `OpenCodeDbFixture`:
@@ -811,7 +930,7 @@ public async Task<IReadOnlyList<ImportCommand.SessionClassification>> ClassifyAs
             Cwd            = s.Cwd,
             FirstTimestamp = s.FirstTimestamp,
             LastTimestamp  = s.SourceMeta!.TryGetValue("TimeUpdated", out var tu) && tu is long tums
-                ? DateTimeOffset.FromUnixTimeMilliseconds(tums) : null,
+                ? FromEpoch(tums) : null,
         };
 
         int importable;
@@ -887,9 +1006,12 @@ git commit -m "feat: OpenCodeImportSource binary classification (New/AlreadyLoad
 
 ---
 
-## Task 6: `ImportSessionAsync` — parent lifecycle + transcript + set-title
+## Task 6: Strict transcript sender + parent lifecycle + transcript + set-title
+
+**Why a strict sender:** OpenCode uses binary `New`/`AlreadyLoaded` classification (no resume). The shared `SessionImporter.PostTranscriptBatch` swallows HTTP failures and counts the batch as sent, so a partial send followed by `session-end` would leave a server watermark — and a re-run would then classify the session `AlreadyLoaded` and never retry. To keep re-runs repairable, OpenCode must **fail the import before any terminal lifecycle POST** if a transcript batch fails. We add an opt-in `failOnError` flag to the shared sender (default `false` → peers unchanged; OpenCode passes `true`).
 
 **Files:**
+- Modify: `src/Capacitor.Cli/Commands/SessionImporter.cs` (add `failOnError` to `SendTranscriptBatches` + `PostTranscriptBatch`)
 - Modify: `src/Capacitor.Cli/Commands/OpenCodeImportSource.cs`
 - Test: `test/Capacitor.Cli.Tests.Integration/OpenCodeImportSourceImportTests.cs`
 
@@ -941,6 +1063,36 @@ public class OpenCodeImportSourceImportTests : IDisposable {
         await Assert.That(logs).Contains("/hooks/set-title");
         await Assert.That(logs).Contains("/hooks/session-end/opencode");
     }
+
+    [Test]
+    public async Task ImportSession_fails_and_withholds_session_end_when_transcript_rejected() {
+        _fix.AddSession("ses_root", null, "/work/a", "T", 100);
+        _fix.AddMessageWithText("ses_root", "msg_1", "hello", 110);
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(404));
+        _server.Given(Request.Create().WithPath("/hooks/session-start/opencode").UsingPost())
+               .RespondWith(Response.Create().WithStatusCode(200));
+        // Transcript POST is rejected.
+        _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
+               .RespondWith(Response.Create().WithStatusCode(500));
+        _server.Given(Request.Create().WithPath("/hooks/session-end/opencode").UsingPost())
+               .RespondWith(Response.Create().WithStatusCode(200));
+
+        using var client = new HttpClient();
+        var source     = new OpenCodeImportSource(_fix.DbPath);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered,
+            new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
+
+        var outcome = await source.ImportSessionAsync(classified[0],
+            new ImportContext(client, _server.Url!, false), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+        // No watermark must be left: session-end must NOT have been posted.
+        var posted = _server.LogEntries.Select(e => e.RequestMessage.Path).ToList();
+        await Assert.That(posted).DoesNotContain("/hooks/session-end/opencode");
+    }
 }
 ```
 
@@ -951,7 +1103,27 @@ public class OpenCodeImportSourceImportTests : IDisposable {
 Run: `~/.dotnet/dotnet run --project test/Capacitor.Cli.Tests.Integration/Capacitor.Cli.Tests.Integration.csproj --treenode-filter "/*/*/OpenCodeImportSourceImportTests/*"`
 Expected: FAIL — `ImportSessionAsync` throws `NotImplementedException`.
 
-- [ ] **Step 3: Implement parent import (no children yet)**
+- [ ] **Step 3: Add the opt-in strict path to `SessionImporter`**
+
+In `src/Capacitor.Cli/Commands/SessionImporter.cs`, thread a `bool failOnError = false` parameter through `SendTranscriptBatches` (add it to the signature, default `false`) and pass it to each `PostTranscriptBatch` call. Update `PostTranscriptBatch` to accept `bool failOnError` and, when `true`, throw instead of swallowing:
+
+```csharp
+// in PostTranscriptBatch, replace the existing try/catch:
+try {
+    using var resp = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/transcript", content);
+    if (failOnError && !resp.IsSuccessStatusCode)
+        throw new HttpRequestException($"transcript batch rejected: HTTP {(int)resp.StatusCode}");
+} catch (HttpRequestException) {
+    if (failOnError) throw;   // strict callers (OpenCode) abort the import
+    // Default (Pi/Gemini/Kiro/Copilot): log but continue — unchanged behavior.
+}
+```
+
+Note: `PostWithRetryAsync` currently discards the response (`using var _`). Capture it as `resp` so the status can be checked. Default callers (no `failOnError`) keep the exact prior behavior.
+
+Verify peers still build: `~/.dotnet/dotnet build src/Capacitor.Cli/Capacitor.Cli.csproj`.
+
+- [ ] **Step 4: Implement parent import (no children yet)**
 
 Replace the `ImportSessionAsync` stub. Add `using System.Text;`, `using System.Text.Json.Nodes;`:
 
@@ -977,9 +1149,9 @@ public async Task<ImportOutcome> ImportSessionAsync(
         }
         sent = await SessionImporter.SendTranscriptBatches(
             httpClient: ctx.HttpClient, baseUrl: ctx.BaseUrl, sessionId: c.SessionId,
-            filePath: tmpFile, agentId: null, startLine: 0, vendor: Vendor);
+            filePath: tmpFile, agentId: null, startLine: 0, vendor: Vendor, failOnError: true);
     } catch {
-        return ImportOutcome.Failed;
+        return ImportOutcome.Failed; // strict: abort BEFORE session-end so no watermark is left
     } finally {
         try { File.Delete(tmpFile); } catch { }
     }
@@ -1039,16 +1211,16 @@ static async Task PostSetTitleAsync(HttpClient client, string baseUrl, string si
 }
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [ ] **Step 5: Run to verify both tests pass**
 
 Run: `~/.dotnet/dotnet run --project test/Capacitor.Cli.Tests.Integration/Capacitor.Cli.Tests.Integration.csproj --treenode-filter "/*/*/OpenCodeImportSourceImportTests/*"`
-Expected: PASS.
+Expected: PASS (both the happy-path and the strict-failure test).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/Capacitor.Cli/Commands/OpenCodeImportSource.cs test/Capacitor.Cli.Tests.Integration/OpenCodeImportSourceImportTests.cs
-git commit -m "feat: OpenCodeImportSource parent import (lifecycle + transcript + title)"
+git add src/Capacitor.Cli/Commands/SessionImporter.cs src/Capacitor.Cli/Commands/OpenCodeImportSource.cs test/Capacitor.Cli.Tests.Integration/OpenCodeImportSourceImportTests.cs
+git commit -m "feat: OpenCode parent import + opt-in strict transcript sender"
 ```
 
 ---
@@ -1089,19 +1261,30 @@ public async Task ImportSession_routes_children_as_subagents_before_session_end(
         new ImportContext(client, _server.Url!, false), CancellationToken.None);
     await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
 
-    // Order: subagent-start/stop must precede session-end.
-    var paths = _server.LogEntries
-        .OrderBy(e => e.RequestMessage.DateTime)
-        .Select(e => e.RequestMessage.Path).ToList();
-    await Assert.That(paths).Contains("/hooks/subagent-start");
-    await Assert.That(paths).Contains("/hooks/subagent-stop");
-    var lastSubagentStop = paths.LastIndexOf("/hooks/subagent-stop");
-    var sessionEnd       = paths.IndexOf("/hooks/session-end/opencode");
-    await Assert.That(lastSubagentStop < sessionEnd).IsTrue();
+    var entries = _server.LogEntries.OrderBy(e => e.RequestMessage.DateTime).ToList();
+    var paths   = entries.Select(e => e.RequestMessage.Path).ToList();
+
+    // (a) Full POST order: parent start → (parent transcript) → subagent-start →
+    //     (child transcript) → subagent-stop → session-end.
+    var startIdx   = paths.IndexOf("/hooks/session-start/opencode");
+    var subStart   = paths.IndexOf("/hooks/subagent-start");
+    var subStop    = paths.LastIndexOf("/hooks/subagent-stop");
+    var endIdx     = paths.IndexOf("/hooks/session-end/opencode");
+    await Assert.That(startIdx >= 0 && subStart > startIdx && subStop > subStart && endIdx > subStop).IsTrue();
+
+    // (b) subagent-start carries agent_id (canonical child id) + agent_type from info.agent.
+    var startBody = entries.First(e => e.RequestMessage.Path == "/hooks/subagent-start").RequestMessage.Body!;
+    await Assert.That(startBody).Contains("\"agent_id\":\"ses_kid\"");
+    await Assert.That(startBody).Contains("\"agent_type\":\"general\"");
+
+    // (c) the child transcript batch is tagged vendor=opencode and routed under the child agentId.
+    var transcriptBodies = entries.Where(e => e.RequestMessage.Path == "/hooks/transcript")
+                                  .Select(e => e.RequestMessage.Body!).ToList();
+    await Assert.That(transcriptBodies.Any(b => b.Contains("\"opencode\"") && b.Contains("ses_kid"))).IsTrue();
 }
 ```
 
-Add `AddMessageWithTextAndAgent` to the integration fixture — same as `AddMessageWithText` but the message `data` includes `"agent":"general"` so `info.agent` resolves the subagent type.
+Add `AddMessageWithTextAndAgent` to the integration fixture — same as `AddMessageWithText` but the message `data` includes `"agent":"general"` so `info.agent` resolves the subagent type. (`CanonicalAgentId("ses_kid")` returns `"ses_kid"` since `ses_…` ids contain no dashes.)
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -1110,11 +1293,16 @@ Expected: FAIL — no subagent POSTs (children not yet imported).
 
 - [ ] **Step 3: Implement subagent import**
 
-In `OpenCodeImportSource.cs`, replace the `// 3. (children go here...)` comment with a call, and add the method. Add `using Capacitor.Cli.Core.OpenCode;` (already present) for `OpenCodeSubagentDiscovery`:
+In `OpenCodeImportSource.cs`, replace the `// 3. (children go here...)` comment with a guarded call (a child failure must abort BEFORE the parent's `session-end`, same strict rationale as the parent transcript — otherwise the parent watermark would make a re-run skip the unrepaired children):
 
 ```csharp
     // 3. children as subagents — BEFORE session-end so SubagentCompleted precedes SessionEnded.
-    await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, ct);
+    //    Strict: any child failure aborts the import before session-end (no watermark left).
+    try {
+        await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, ct);
+    } catch {
+        return ImportOutcome.Failed;
+    }
 ```
 
 ```csharp
@@ -1127,27 +1315,29 @@ async Task ImportChildrenAsync(HttpClient client, string baseUrl, string rootId,
         var agentId   = OpenCodeSubagentDiscovery.CanonicalAgentId(child.Id);
         var agentType = ResolveAgentType(db, child.Id); // info.agent, fallback "subagent"
 
-        // fail-closed: no content unless the subagent registered first.
-        var startOk = await PostHookAsync(client, baseUrl, "subagent-start",
-            OpenCodeSubagentDiscovery.BuildStartPayload(rootId, agentId, agentType, child.Id), ct);
-        if (!startOk) continue;
-
+        // Synthesize the child transcript to a temp file FIRST — the subagent payload
+        // builders require a transcript_path, and we pass this same path to start + stop.
         var tmp = Path.Combine(Path.GetTempPath(), $"kcap-oc-{child.Id}-{Guid.NewGuid():N}.jsonl");
         try {
             await using (var w = new StreamWriter(tmp)) {
                 foreach (var line in db.SynthesizeLines(child.Id)) await w.WriteLineAsync(line);
             }
+
+            // fail-closed: no content unless the subagent registered first.
+            var startOk = await PostHookAsync(client, baseUrl, "subagent-start",
+                OpenCodeSubagentDiscovery.BuildStartPayload(rootId, agentId, agentType, tmp), ct);
+            if (!startOk) throw new HttpRequestException($"subagent-start failed for {child.Id}");
+
             await SessionImporter.SendTranscriptBatches(
                 httpClient: client, baseUrl: baseUrl, sessionId: rootId,
-                filePath: tmp, agentId: agentId, startLine: 0, vendor: Vendor);
-        } catch {
-            continue; // leave subagent-stop unsent; re-import retries (idempotent)
+                filePath: tmp, agentId: agentId, startLine: 0, vendor: Vendor, failOnError: true);
+
+            if (!await PostHookAsync(client, baseUrl, "subagent-stop",
+                    OpenCodeSubagentDiscovery.BuildStopPayload(rootId, agentId, agentType, tmp), ct))
+                throw new HttpRequestException($"subagent-stop failed for {child.Id}");
         } finally {
             try { File.Delete(tmp); } catch { }
         }
-
-        await PostHookAsync(client, baseUrl, "subagent-stop",
-            OpenCodeSubagentDiscovery.BuildStopPayload(rootId, agentId, agentType, child.Id), ct);
     }
 }
 
@@ -1164,7 +1354,7 @@ static string ResolveAgentType(OpenCodeDb db, string childId) {
 }
 ```
 
-**Implementer note:** `OpenCodeSubagentDiscovery.BuildStartPayload`/`BuildStopPayload` take `(parentSessionId, agentId, agentType, childTranscriptPath)`. Here there is no child transcript *file* path (we stream from db); pass the child id (or `""`) for the `transcript_path` field — confirm the server only requires the field to be non-null (the live payload uses a real path, but the server's shared subagent handler keys on session_id + agent_id). If the server validates the path, pass the temp file path instead and delete after stop.
+**Implementer note:** `OpenCodeSubagentDiscovery.BuildStartPayload`/`BuildStopPayload` take `(parentSessionId, agentId, agentType, childTranscriptPath)` and place the path in `transcript_path`/`agent_transcript_path`. We pass the **temp transcript file path** (created above) to both start and stop, and delete it in `finally` only after `subagent-stop` has been posted — so the path is valid for the whole subagent lifecycle, matching the live watcher's contract.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -1295,15 +1485,35 @@ git commit -m "docs: document kcap import --opencode (help + README)"
 
 **Files:** none (verification only)
 
-- [ ] **Step 1: AOT-publish the CLI and grep for trimming warnings**
+- [ ] **Step 1: AOT-publish the CLI for each target RID, capturing logs (no masking)**
 
-Run: `~/.dotnet/dotnet publish src/Capacitor.Cli/Capacitor.Cli.csproj -c Release 2>&1 | grep -E 'IL[23][01][0-9]{2}' || echo "NO AOT WARNINGS"`
-Expected: `NO AOT WARNINGS`. If any `IL3050`/`IL2026` appear from Microsoft.Data.Sqlite, STOP and report — revisit access strategy per the spec.
+The naive `publish | grep || echo "OK"` masks a publish *failure* (non-warning error) as success. Use `pipefail` and check the publish exit code separately, then grep the saved log:
 
-- [ ] **Step 2: AOT-publish the daemon (confirm no SQLite leakage)**
+```bash
+set -o pipefail
+for RID in osx-arm64 linux-x64 win-x64; do
+  echo "=== CLI $RID ==="
+  ~/.dotnet/dotnet publish src/Capacitor.Cli/Capacitor.Cli.csproj -c Release -r "$RID" \
+    2>&1 | tee "/tmp/kcap-aot-cli-$RID.log"
+  test "${PIPESTATUS[0]}" -eq 0 || { echo "PUBLISH FAILED for $RID"; break; }
+  grep -E 'IL[23][01][0-9]{2}' "/tmp/kcap-aot-cli-$RID.log" && { echo "AOT WARNINGS for $RID"; break; } \
+    || echo "NO AOT WARNINGS for $RID"
+done
+```
 
-Run: `~/.dotnet/dotnet publish src/Capacitor.Cli.Daemon/Capacitor.Cli.Daemon.csproj -c Release 2>&1 | grep -E 'IL[23][01][0-9]{2}' || echo "NO AOT WARNINGS"`
-Expected: `NO AOT WARNINGS`.
+Expected: each RID prints `NO AOT WARNINGS` and no `PUBLISH FAILED`. If any `IL3050`/`IL2026` appear from Microsoft.Data.Sqlite, STOP and report — revisit access strategy per the spec. (Run only the RIDs you can build on this host; note any skipped.)
+
+- [ ] **Step 2: AOT-publish the daemon (confirm no SQLite leakage into Core's consumer)**
+
+```bash
+set -o pipefail
+~/.dotnet/dotnet publish src/Capacitor.Cli.Daemon/Capacitor.Cli.Daemon.csproj -c Release \
+  2>&1 | tee /tmp/kcap-aot-daemon.log
+test "${PIPESTATUS[0]}" -eq 0 || echo "DAEMON PUBLISH FAILED"
+grep -E 'IL[23][01][0-9]{2}' /tmp/kcap-aot-daemon.log && echo "DAEMON AOT WARNINGS" || echo "NO AOT WARNINGS"
+```
+
+Expected: `NO AOT WARNINGS` and no failure — confirms the SQLite package did not reach the daemon via Core.
 
 - [ ] **Step 3: Record binary size delta**
 

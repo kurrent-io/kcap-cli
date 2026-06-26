@@ -1,7 +1,7 @@
 # OpenCode historical import (`kcap import --opencode`) — Design
 
 **Date:** 2026-06-26
-**Status:** Approved (design), rev3 after two Codex design-review passes, pending implementation plan
+**Status:** Approved; rev3 after two Codex design passes, reconciled with plan-review decisions (strict sender, role-aware predicate). Implementation plan written.
 **Author:** tony.young@kurrent.io (with Claude)
 
 ## Problem
@@ -139,15 +139,21 @@ import uses a **binary** classification against `/api/sessions/{id}/last-line`,
   line numbers `0..N`.
 - **`ProbeError`** — watermark probe failed; skip with a reason, like Pi.
 
-**Importable-line count (mirrors Pi's `IsImportRelevantLine` safeguard).** The
+**Importable-line count (role-aware, mirrors Pi's `IsImportRelevantLine`).** The
 `MinLines` threshold counts only lines that produce a canonical server event, not
-raw synthesized lines. A reconstructed `{info,parts}` line is *not* importable
-when it carries no normalizer-emitting content — e.g. an assistant message whose
-only parts are structural (`step-start` / `step-finish`), a user message with
-empty text, or a message whose tool parts are all non-terminal. Define this
-predicate alongside the synthesizer and keep it in sync with the server's
-`opencode` normalizer (the same coupling Pi documents). This prevents a session of
-purely structural lines from counting as substantive.
+raw synthesized lines. The predicate is **role-aware and hidden-aware**, matching
+the server's `OpenCodeTranscriptNormalizer`:
+- **user** → a non-hidden `text` part with non-empty text;
+- **assistant** → a non-hidden `reasoning` or `text` part with non-empty text;
+- **assistant** → a `tool` part with `id` + `callID` + `tool` + terminal
+  `state.status` (completed/error).
+
+A part is *hidden* when `synthetic: true` or `ignored: true`. Everything else
+(structural `step-start`/`step-finish`, empty text, user-role tools/reasoning,
+non-terminal tools, tools missing `callID`/`tool`) is non-importable. The
+predicate must not *over*-count, since it gates `TooShort`; keep it in sync with
+the server normalizer (same coupling Pi documents) and re-read that file before
+finalizing.
 
 ## Transcript synthesis
 
@@ -189,22 +195,24 @@ directly rather than reusing the plugin's `~/.cache` files (those only cover
 live-seen sessions). If `SendTranscriptBatches` requires a file path, write a
 transient file under the scratch dir and clean up in a `finally`.
 
-**Send-failure behavior (known limitation, accepted):**
-`SessionImporter.PostTranscriptBatch` swallows `HttpRequestException` and still
-counts the batch as sent, so a failed batch does not abort the import and
-`session-end` still fires. This is the **shared** behavior of every routed
-importer (Gemini/Pi/Kiro/Copilot), not OpenCode-specific. We accept it here for
-consistency and rely on server-side idempotency (deterministic message/`prt_`
-ids) so a re-run repairs a partially-sent session. Hardening
-`SendTranscriptBatches` across all importers is out of scope for this issue.
+**Send-failure behavior (strict for OpenCode — revised after plan review).**
+`SessionImporter.PostTranscriptBatch` shares behavior across importers that
+swallows a failed batch and still counts it as sent, so by default `session-end`
+fires even after a partial send. For Pi/Gemini that is repairable on re-run via
+`Partial`/resume — **but OpenCode has no resume** (binary New/AlreadyLoaded), so a
+partial send that still posted `session-end` would leave a watermark and a re-run
+would skip it forever as `AlreadyLoaded`. The "rely on idempotency" assumption
+does not hold once resume is removed.
 
-OpenCode-specific consequence to document for the user: the server's
-`session-end/opencode` recomputes session summary/model from the full stream, so a
-swallowed transcript failure followed by an accepted `session-end` can leave
-those stats incomplete **and the CLI may report the session as loaded**. A re-run
-repairs it (session-end recomputes), but the success report can be falsely
-positive in the failure window. Acceptable under the "match existing importers"
-decision; surfaced here so it is a known behavior, not a surprise.
+Therefore OpenCode opts into a **strict** transcript send: a `failOnError` flag is
+added to `SendTranscriptBatches`/`PostTranscriptBatch` (default `false` → peers
+unchanged) that checks `IsSuccessStatusCode` and throws on any rejected batch.
+OpenCode passes `failOnError: true` for both the parent transcript and every
+child, and **aborts the import (returns `Failed`) before any terminal lifecycle
+POST** (`session-end`, `subagent-stop`) if a batch fails. No watermark is left, so
+a re-run retries cleanly. This is the one place OpenCode diverges from "match
+existing importers" — justified by the binary policy. Hardening the shared sender
+for the *other* importers remains out of scope.
 
 ## Subagent (child) parity
 
