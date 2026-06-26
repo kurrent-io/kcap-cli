@@ -241,6 +241,24 @@ public class ClaudeHookCommandTests {
         await Assert.That(stopIdx).IsGreaterThan(startIdx);
     }
 
+    [Test]
+    public async Task subagent_stop_spooled_not_posted_when_current_session_backlog_remains() {
+        using var fx = new Fixture(HttpStatusCode.InternalServerError); // drain fails transiently → backlog remains
+        fx.Spool.Append(Sid, "session-start", $$"""{"session_id":"{{Sid}}"}""");
+
+        await fx.HandleAsync($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}""");
+
+        // The drain attempted the stranded session-start (and failed transiently, leaving backlog).
+        await Assert.That(fx.RouteOrder).Contains("session-start");
+        // Ordering guard fired: the fresh subagent-stop was spooled, NOT posted — so it never
+        // appears in RouteOrder. (Without the guard it would be POSTed before this session's
+        // stranded session-start is delivered.)
+        await Assert.That(fx.RouteOrder).DoesNotContain("subagent-stop");
+        // ...and it is durably spooled.
+        var all = string.Concat(fx.SpoolFiles.Select(File.ReadAllText));
+        await Assert.That(all).Contains("\"route\":\"subagent-stop\"");
+    }
+
     sealed class Fixture : IDisposable {
         readonly string _tmpHome = Path.Combine(Path.GetTempPath(), $"kcap-claude-hook-{Guid.NewGuid():N}");
         readonly string _spoolPath;
