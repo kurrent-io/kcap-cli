@@ -301,13 +301,13 @@ static class McpFlowsServer {
             new(
                 "object",
                 new() {
-                    ["kind"]         = new("string", "Review flow kind, e.g. 'spec-review', 'code-review', 'pr-review'."),
+                    ["kind"]         = new("string", "Review flow kind. Valid values: 'spec-review' (for specs and design documents), 'code-review' (for code changes and PRs)."),
                     ["target_kind"]  = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
                     ["target_ref"]   = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
                     ["target_title"] = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
                     ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done."),
                     ["instructions"] = new("string", "Optional additional instructions for the reviewer agent."),
-                    ["mode"]         = new("string", "Optional mode hint, e.g. 'blocking' or 'async'.")
+                    ["mode"]         = new("string", "Optional. Pass 'context-only' to treat the submitted context/diff as authoritative. Required for code-review unless the reviewer runs in your exact repo checkout; omitting it will cause the server to reject the request with an error.")
                 },
                 ["kind", "target_kind", "target_ref", "target_title", "context"]
             )
