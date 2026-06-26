@@ -82,8 +82,8 @@ static class CurateCommand {
             return 1;
         }
 
-        // De-dup symlinked CLAUDE.md/AGENTS.md (same real file → write once).
-        var actionable = DistinctByRealPath(plan.Files.Where(f => f.Action != CurateAction.NoOp).ToList());
+        // De-dup symlinked CLAUDE.md/AGENTS.md (same real file → write once, to the real target).
+        var actionable = ResolveAndDeduplicateTargets(plan.Files.Where(f => f.Action != CurateAction.NoOp).ToList());
 
         if (actionable.Count == 0) {
             await Console.Out.WriteLineAsync(guidelines.Count == 0
@@ -138,14 +138,24 @@ static class CurateCommand {
         return path;
     }
 
-    static List<FilePlan> DistinctByRealPath(List<FilePlan> files) {
+    /// <summary>
+    /// Resolve each plan's path to its real target (following symlinks) and de-duplicate
+    /// by that real path, so a symlinked CLAUDE.md/AGENTS.md pair is written once — to the
+    /// original file — and the symlink itself is preserved (we never overwrite the link).
+    /// </summary>
+    public static List<FilePlan> ResolveAndDeduplicateTargets(List<FilePlan> files) {
         var seen   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<FilePlan>();
         foreach (var f in files) {
             string real;
-            try { real = File.Exists(f.Path) ? Path.GetFullPath(new FileInfo(f.Path).ResolveLinkTarget(true)?.FullName ?? f.Path) : f.Path; }
-            catch { real = f.Path; }
-            if (seen.Add(real)) result.Add(f);
+            try {
+                real = File.Exists(f.Path)
+                    ? Path.GetFullPath(new FileInfo(f.Path).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? f.Path)
+                    : f.Path;
+            } catch {
+                real = f.Path;
+            }
+            if (seen.Add(real)) result.Add(f with { Path = real });   // write to the resolved real path
         }
         return result;
     }
