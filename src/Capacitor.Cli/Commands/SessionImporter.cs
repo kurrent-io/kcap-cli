@@ -467,8 +467,10 @@ static class SessionImporter {
             string                     filePath,
             string?                    agentId,
             int                        startLine,
-            IProgress<ImportProgress>? progress = null,
-            string                     vendor   = "claude"
+            IProgress<ImportProgress>? progress          = null,
+            string                     vendor            = "claude",
+            int                        lineNumberOffset  = 0,
+            bool                       failOnError       = false
         ) {
         if (!File.Exists(filePath)) return 0;
 
@@ -491,13 +493,13 @@ static class SessionImporter {
 
             if (!string.IsNullOrWhiteSpace(line)) {
                 batchLines.Add(line);
-                batchLineNumbers.Add(lineIndex);
+                batchLineNumbers.Add(checked(lineIndex + lineNumberOffset));
             }
 
             lineIndex++;
 
             if (batchLines.Count >= batchSize) {
-                await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers, vendor);
+                await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers, vendor, failOnError);
                 var flushed = batchLines.Count;
                 totalSent += flushed;
                 progress?.Report(new BatchFlushed(agentId, flushed));
@@ -507,7 +509,7 @@ static class SessionImporter {
         }
 
         if (batchLines.Count > 0) {
-            await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers, vendor);
+            await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers, vendor, failOnError);
             var flushed = batchLines.Count;
             totalSent += flushed;
             progress?.Report(new BatchFlushed(agentId, flushed));
@@ -523,7 +525,8 @@ static class SessionImporter {
             string?      agentId,
             List<string> lines,
             List<int>    lineNumbers,
-            string       vendor
+            string       vendor,
+            bool         failOnError = false
         ) {
         var batch = new TranscriptBatch {
             SessionId   = sessionId,
@@ -539,9 +542,13 @@ static class SessionImporter {
         using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
         try {
-            await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/transcript", content);
+            using var resp = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/transcript", content);
+            if (failOnError && !resp.IsSuccessStatusCode)
+                throw new HttpRequestException($"transcript batch rejected: HTTP {(int)resp.StatusCode}");
         } catch (HttpRequestException) {
-            // Log but continue — don't abort the whole history load for one failed batch
+            // Strict callers (OpenCode import) abort the import; default callers
+            // (Claude/Codex/Cursor/Copilot/Gemini/Kiro/Pi) log but continue — unchanged.
+            if (failOnError) throw;
         }
     }
 
