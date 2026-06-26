@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
@@ -22,7 +23,29 @@ public static class ClaudeHookCommand {
     // send the POST; the server's StopAndDrain + the "kcap import" hint recover the rest.
     static readonly TimeSpan PreHookDrainCap = TimeSpan.FromSeconds(8);
 
-    public static async Task<int> Handle(string baseUrl, TextReader stdin, Task? updateCheckTask = null, long processStart = 0) {
+    public static Task<int> Handle(string baseUrl, TextReader stdin, Task? updateCheckTask = null, long processStart = 0) {
+        var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
+        spool.ReapOlderThan(TimeSpan.FromDays(30));
+        var ps = processStart == 0 ? Stopwatch.GetTimestamp() : processStart;
+        return HandleWithDeps(spool, ps, baseUrl, stdin, updateCheckTask);
+    }
+
+    static async Task<int> HandleWithDeps(HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask) {
+        HttpClient? client = null;
+        try {
+            client = await HttpClientExtensions.CreateAuthenticatedClientAsync();
+            return await HandleCore(client, spool, processStart, baseUrl, stdin, updateCheckTask);
+        } catch {
+            return 0; // fail-open
+        } finally { client?.Dispose(); }
+    }
+
+    internal static async Task<int> WithHardCap(Task<int> inner, TimeSpan budget) {
+        var winner = await Task.WhenAny(inner, Task.Delay(budget));
+        return winner == inner ? await inner : 0;
+    }
+
+    internal static async Task<int> HandleCore(HttpClient client, HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask = null) {
         var body = await stdin.ReadToEndAsync();
 
         var eventName = ExtractEventName(body);
@@ -238,7 +261,6 @@ public static class ClaudeHookCommand {
             }
         }
 
-        using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync();
         using var content = new StringContent(body, Encoding.UTF8, "application/json");
 
         HttpResponseMessage response;
