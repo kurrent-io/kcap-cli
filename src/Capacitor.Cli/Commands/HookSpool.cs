@@ -46,7 +46,7 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
             var lines = File.ReadAllLines(path).ToList();
             while (lines.Count > 0 && lines.Sum(l => l.Length + 1) + incomingBytes > capBytes)
                 lines.RemoveAt(0);
-            File.WriteAllLines(path, lines);
+            File.WriteAllText(path, lines.Count > 0 ? string.Join('\n', lines) + "\n" : "");
         } catch { }
     }
 
