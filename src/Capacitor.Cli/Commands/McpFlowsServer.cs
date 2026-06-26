@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -6,6 +7,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Auth;
 
 namespace Capacitor.Cli.Commands;
 
@@ -83,10 +85,10 @@ static class McpFlowsServer {
             var apiRoot = baseUrl.TrimEnd('/');
 
             using var httpResponse = toolName switch {
-                "start_review_flow"      => await StartReviewFlowAsync(client, apiRoot, arguments, cwd, repoRoot, repoInfo),
-                "submit_review_round"    => await SubmitReviewRoundAsync(client, apiRoot, arguments),
-                "get_review_flow_status" => await client.GetAsync(BuildFlowUrl(apiRoot, arguments)),
-                "close_review_flow"      => await client.PostAsync(BuildFlowUrl(apiRoot, arguments) + "/close", null),
+                "start_review_flow"      => await SendWithRefreshRetryAsync(client, c => StartReviewFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo)),
+                "submit_review_round"    => await SendWithRefreshRetryAsync(client, c => SubmitReviewRoundAsync(c, apiRoot, arguments)),
+                "get_review_flow_status" => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildFlowUrl(apiRoot, arguments))),
+                "close_review_flow"      => await SendWithRefreshRetryAsync(client, c => c.PostAsync(BuildFlowUrl(apiRoot, arguments) + "/close", null)),
                 _                        => throw new ArgumentException($"Unknown tool: {toolName}")
             };
 
@@ -112,6 +114,31 @@ static class McpFlowsServer {
         } catch (HttpRequestException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         }
+    }
+
+    /// <summary>
+    /// Sends an HTTP request with one-shot retry on 401. The MCP server reuses a single
+    /// <see cref="HttpClient"/> for the lifetime of the agent session, so a cached token
+    /// that was valid at startup may have expired by the time a tool call is made. On 401
+    /// we ask <see cref="TokenStore.GetValidTokensAsync"/> for a fresh token (which triggers
+    /// the refresh flow for WorkOS / GitHubApp), update the client's <c>Authorization</c>
+    /// header, and retry the same request once. If refresh fails (genuinely not logged in
+    /// or refresh-token expired), the original 401 is returned and the caller surfaces the
+    /// friendly "Not logged in" message.
+    /// </summary>
+    static async Task<HttpResponseMessage> SendWithRefreshRetryAsync(HttpClient client, Func<HttpClient, Task<HttpResponseMessage>> send) {
+        var response = await send(client);
+
+        if (response.StatusCode != HttpStatusCode.Unauthorized) return response;
+
+        var refreshed = await TokenStore.GetValidTokensAsync();
+
+        if (refreshed is null) return response; // genuinely not logged in; keep the original 401
+
+        response.Dispose();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", refreshed.AccessToken);
+
+        return await send(client);
     }
 
     static async Task<System.Net.Http.HttpResponseMessage> StartReviewFlowAsync(
