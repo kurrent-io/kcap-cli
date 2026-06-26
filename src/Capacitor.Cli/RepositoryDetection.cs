@@ -177,6 +177,7 @@ static class RepositoryDetection {
     }
 
     static async Task<string?> RunCommandAsync(string cmd, string arguments, string cwd, TimeSpan timeout) {
+        Process? process = null;
         try {
             var psi = new ProcessStartInfo(cmd, arguments) {
                 WorkingDirectory       = cwd,
@@ -185,7 +186,7 @@ static class RepositoryDetection {
                 UseShellExecute        = false,
                 CreateNoWindow         = true
             };
-            using var process = Process.Start(psi);
+            process = Process.Start(psi);
 
             if (process is null) {
                 return null;
@@ -197,7 +198,13 @@ static class RepositoryDetection {
 
             return process.ExitCode == 0 ? output.Trim() : null;
         } catch {
+            // Timed out or failed — kill the child (and its tree) so a slow git/gh probe doesn't
+            // outlive the hook and accumulate across repeated invocations. Disposing alone only
+            // releases handles; it does not stop the process.
+            try { if (process is { HasExited: false }) process.Kill(entireProcessTree: true); } catch { }
             return null;
+        } finally {
+            process?.Dispose();
         }
     }
 

@@ -125,6 +125,22 @@ public static class ClaudeHookCommand {
         return winner == inner ? await inner : 0;
     }
 
+    // Await repo enrichment but never past the remaining hook budget. If it can't finish in time,
+    // proceed with the un-enriched body (repo info still reaches the session via the watcher's own
+    // detection) so the bounded POST/spool path is always reached before Claude kills the hook.
+    static async Task<string> AwaitEnrichmentWithinBudget(Task<string> enrichment, string fallbackBody, TimeSpan budget) {
+        if (budget <= TimeSpan.Zero) {
+            _ = enrichment.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default);
+            return fallbackBody;
+        }
+        var winner = await Task.WhenAny(enrichment, Task.Delay(budget));
+        if (winner != enrichment) {
+            _ = enrichment.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default); // observe if it later faults
+            return fallbackBody;
+        }
+        try { return await enrichment; } catch { return fallbackBody; }
+    }
+
     internal static async Task<int> HandleCore(HttpClient client, AuthStatus authStatus, HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask = null) {
         var body = await stdin.ReadToEndAsync();
 
@@ -208,7 +224,9 @@ public static class ClaudeHookCommand {
             // block after EnsureWatcherRunning so it never delays transcript-capture start.
             deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body, HookBudget.Remaining(processStart, command));
         } else if (command is "session-end" or "subagent-stop") {
-            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body);
+            // Budgeted like session-start so a slow git/gh probe can't push the bounded POST/spool
+            // path past the hook deadline. The await below is also budget-bounded as a hard backstop.
+            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body, HookBudget.Remaining(processStart, command));
         } else {
             body = await RepositoryDetection.EnrichWithRepositoryInfo(body);
         }
@@ -220,8 +238,12 @@ public static class ClaudeHookCommand {
         // visibility were being ignored.
         var activeProfile = await AppConfig.GetActiveProfileAsync();
 
-        // Check repo exclusion — silently exit for excluded repos.
-        if (activeProfile?.ExcludedRepos is { Length: > 0 } repos && await RepoExclusion.IsExcludedAsync(body, repos)) {
+        // Check repo exclusion — silently exit for excluded repos. Budget the fallback repo
+        // detection so a slow git/gh probe can't delay the session-start watcher spawn below
+        // (if detection can't resolve the repo in time, we fail open to capturing — the per-cwd
+        // cache makes subsequent sessions in an excluded repo resolve and exclude promptly).
+        if (activeProfile?.ExcludedRepos is { Length: > 0 } repos
+         && await RepoExclusion.IsExcludedAsync(body, repos, HookBudget.Remaining(processStart, command))) {
             return 0;
         }
 
@@ -302,7 +324,7 @@ public static class ClaudeHookCommand {
                     Console.Error.WriteLine($"[kcap] session-end pre-hook failed: {ex.Message}");
                 }
 
-                body = await deferredRepoTask!;
+                body = await AwaitEnrichmentWithinBudget(deferredRepoTask!, body, HookBudget.Remaining(processStart, command));
 
                 break;
             }
@@ -337,7 +359,7 @@ public static class ClaudeHookCommand {
                     Console.Error.WriteLine($"[kcap] subagent-stop pre-hook failed: {ex.Message}");
                 }
 
-                body = await deferredRepoTask!;
+                body = await AwaitEnrichmentWithinBudget(deferredRepoTask!, body, HookBudget.Remaining(processStart, command));
 
                 break;
             }
