@@ -204,8 +204,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.OnSendInput              += HandleSendInput;
         _server.OnSendSpecialKey         += HandleSendSpecialKey;
         _server.OnResizeTerminal         += HandleResizeTerminal;
-        _server.ReRegisterAgentsHook     =  ReRegisterAgentsAsync;
-        _server.FindRepoForRemoteHandler =  HandleFindRepoForRemote;
+        _server.ReRegisterAgentsHook          =  ReRegisterAgentsAsync;
+        _server.FindRepoForRemoteHandler      =  HandleFindRepoForRemote;
+        _server.RefreshAgentWorktreeHandler   =  HandleRefreshAgentWorktree;
 
         _server.GetLiveAgentIds = () => [
             .. _agents
@@ -913,6 +914,38 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         => _repoMatcher.FindAsync(req.Owner, req.Repo, req.CandidatePaths ?? [], _shutdownCts.Token);
 
     /// <summary>
+    /// Handles the server's <c>RefreshAgentWorktree</c> client-result invocation (AI-774).
+    /// Syncs the source repo's current working-tree state into the reviewer agent's daemon-created
+    /// worktree so the reviewer sees Claude's latest uncommitted changes before a follow-up round.
+    /// Guards: agent must exist, must not be private, and must be an OwnedWorktree (not borrowed cwd).
+    /// </summary>
+    async Task<RefreshAgentWorktreeResult> HandleRefreshAgentWorktree(RefreshAgentWorktreeCommand cmd) {
+        if (!_agents.TryGetValue(cmd.AgentId, out var agent))
+            return new RefreshAgentWorktreeResult(false, "agent not found");
+
+        if (agent.IsPrivate)
+            return new RefreshAgentWorktreeResult(false, "private agent");
+
+        if (agent.Work != WorkLocation.OwnedWorktree)
+            return new RefreshAgentWorktreeResult(false, "not an owned worktree");
+
+        try {
+            await _worktreeManager.SyncFromSourceAsync(
+                cmd.SourceRepoRoot,
+                agent.Worktree.Path,
+                cmd.ExcludePaths,
+                _shutdownCts.Token
+            );
+
+            return new RefreshAgentWorktreeResult(true, null);
+        } catch (Exception ex) {
+            LogRefreshWorktreeFailed(ex, cmd.AgentId, cmd.SourceRepoRoot, agent.Worktree.Path);
+
+            return new RefreshAgentWorktreeResult(false, ex.Message);
+        }
+    }
+
+    /// <summary>
     /// Registers an agent with the server exactly as a UI-launched agent: AgentRegistered +
     /// terminal dims + AgentRunStarted, then persists/announces the repo path. No-ops for a
     /// PrivateLocal agent. Shared by the hosted launch and the registered local launch so the
@@ -1262,6 +1295,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to spawn what's-done generator for session {SessionId}")]
     partial void LogWhatsDoneSpawnFailed(Exception? ex, string sessionId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to refresh worktree for agent {AgentId} (source={Source}, target={Target})")]
+    partial void LogRefreshWorktreeFailed(Exception ex, string agentId, string source, string target);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to persist repo path for agent {AgentId}")]
     partial void LogRepoPathPersistFailed(Exception ex, string agentId);

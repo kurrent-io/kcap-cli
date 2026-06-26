@@ -52,6 +52,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public Func<FindRepoForRemoteRequest, Task<string[]>>? FindRepoForRemoteHandler { get; set; }
 
     /// <summary>
+    /// Handler for the server's <c>RefreshAgentWorktree</c> client-result invocation (AI-774).
+    /// Receives the command and returns whether the sync succeeded. Set by
+    /// <see cref="AgentOrchestrator"/> at startup; when null, returns
+    /// <c>RefreshAgentWorktreeResult(false, "no handler")</c>.
+    /// </summary>
+    public Func<RefreshAgentWorktreeCommand, Task<RefreshAgentWorktreeResult>>? RefreshAgentWorktreeHandler { get; set; }
+
+    /// <summary>
     /// Callback invoked at <see cref="RegisterDaemon"/> time to snapshot the
     /// agent IDs currently hosted by this daemon. The server uses this to
     /// reconcile its registry against the daemon's view. Set by
@@ -131,6 +139,15 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         // startup) so the server treats this daemon as having no matches.
         _hub.On<FindRepoForRemoteRequest, string[]>("FindRepoForRemote",
             req => FindRepoForRemoteHandler?.Invoke(req) ?? Task.FromResult(Array.Empty<string>()));
+
+        // Client-result invocation: sync the source repo's working-tree state into a reviewer
+        // agent's daemon-created worktree before a code-review follow-up round (AI-774).
+        // Returns success/error so the server can decide whether to proceed normally or fall
+        // back to context-only. "no handler" is returned when the orchestrator hasn't wired
+        // the handler yet (e.g. early startup).
+        _hub.On<RefreshAgentWorktreeCommand, RefreshAgentWorktreeResult>("RefreshAgentWorktree",
+            cmd => RefreshAgentWorktreeHandler?.Invoke(cmd)
+                ?? Task.FromResult(new RefreshAgentWorktreeResult(false, "no handler")));
 
         // Server→client push carrying the user's decision for a hosted-agent permission request
         // (AI-864). Paired with the RequestPermission2 invocation in RequestPermissionAsync: that
