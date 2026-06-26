@@ -26,6 +26,7 @@ public static class SetupCommand {
         var forceDevice      = args.Contains("--device");
         var skipClaudeFlag   = args.Contains("--skip-claude-hooks");
         var skipCodexFlag    = args.Contains("--skip-codex-hooks");
+        var skipCodexNetworkFlag = args.Contains("--skip-codex-network-access");
         var skipCursorFlag   = args.Contains("--skip-cursor-hooks");
         var skipCopilotFlag  = args.Contains("--skip-copilot-hooks");
         var skipGeminiFlag   = args.Contains("--skip-gemini-hooks");
@@ -224,7 +225,16 @@ public static class SetupCommand {
             SkipKiro:    skipKiroFlag,
             SkipPi:      skipPiFlag,
             SkipOpenCode: skipOpenCodeFlag,
-            NoPrompt:    noPrompt);
+            NoPrompt:    noPrompt,
+            SkipCodexNetworkAccess: skipCodexNetworkFlag);
+
+        // AI-794 — allowlist the Capacitor server(s) Codex skills need to reach. A single
+        // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
+        // proxy; self-hosted servers are added as exact hosts. Derived from the active
+        // server URL plus every configured profile so switching profiles still works.
+        var profilesForDomains = await AppConfig.LoadProfileConfig();
+        var codexAllowDomains  = CodexConfigToml.BuildAllowDomains(
+            new[] { serverUrl }.Concat(profilesForDomains.Profiles.Values.Select(p => p.ServerUrl)));
 
         var stepPaths = new CodingAgentsStep.Paths(
             ClaudeSettingsPath:   claudeSettingsPath,
@@ -238,7 +248,8 @@ public static class SetupCommand {
             LegacyCodexSkillsDir: Path.Combine(CodexPaths.Home, "skills"),
             KiroHooksPath:        KiroPaths.KcapAgentJson(),
             PiExtensionPath:      PiPaths.KcapExtension(),
-            OpenCodeExtensionPath: OpenCodePaths.KcapPlugin());
+            OpenCodeExtensionPath: OpenCodePaths.KcapPlugin(),
+            CodexConfigTomlPath:  Path.Combine(CodexPaths.Home, "config.toml"));
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -251,7 +262,8 @@ public static class SetupCommand {
             CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny,
             InstallKiroHooks:       PluginCommand.InstallKiroHooks,
             InstallPiExtension:     PiExtensionInstaller.Install,
-            InstallOpenCodeExtension: OpenCodeExtensionInstaller.Install);
+            InstallOpenCodeExtension: OpenCodeExtensionInstaller.Install,
+            EnableCodexNetworkAccess: () => CodexConfigToml.EnableNetworkAccess(codexAllowDomains));
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });

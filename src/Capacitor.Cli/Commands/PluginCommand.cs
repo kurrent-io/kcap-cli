@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
@@ -413,6 +414,12 @@ public static class PluginCommand {
 
         AgentsSkillsInstaller.CleanLegacyCodexSkills(env.LegacyCodexSkills);
 
+        // AI-794 — enable Codex sandbox network access so the skills just installed can
+        // reach the Capacitor server. Opt out with --skip-codex-network-access. The
+        // --if-installed refresh path returns earlier, so npm postinstall never flips this.
+        if (!args.Contains("--skip-codex-network-access"))
+            await EnableCodexNetworkAccessAsync(env);
+
         if (scope == "project") {
             await env.Stdout.WriteLineAsync(
                 "Note: Codex requires the project's .codex directory to be trusted. " +
@@ -421,6 +428,36 @@ public static class PluginCommand {
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// AI-794 — turn on Codex's <c>workspace-write</c> sandbox network access, constrained
+    /// to the Capacitor server(s) of every configured profile, so kcap skills can reach the
+    /// server. Never fails the install: a write error is a warning, not an error code.
+    /// </summary>
+    static async Task EnableCodexNetworkAccessAsync(PluginEnvironment env) {
+        var profiles = await AppConfig.LoadProfileConfig();
+        var domains  = CodexConfigToml.BuildAllowDomains(profiles.Profiles.Values.Select(p => p.ServerUrl));
+
+        if (domains.Count == 0) {
+            await env.Stdout.WriteLineAsync(
+                "No Capacitor server configured yet — run `kcap setup` to allow Codex network access for kcap skills.");
+
+            return;
+        }
+
+        switch (CodexConfigToml.EnableNetworkAccess(domains, env.CodexConfigTomlPath)) {
+            case CodexConfigToml.Change.Updated:
+                await env.Stdout.WriteLineAsync($"Codex sandbox network access enabled for kcap ({env.CodexConfigTomlPath}).");
+                break;
+            case CodexConfigToml.Change.Unchanged:
+                await env.Stdout.WriteLineAsync("Codex sandbox already allows network access — no change needed.");
+                break;
+            default:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {env.CodexConfigTomlPath} — enable Codex sandbox network access manually (see README).");
+                break;
+        }
     }
 
     static async Task<int> RemoveCodex(string[] args, PluginEnvironment env) {

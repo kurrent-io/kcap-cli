@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using static Capacitor.Cli.Commands.CodingAgentsStep;
 
 namespace Capacitor.Cli.Tests.Unit;
@@ -241,6 +242,124 @@ public class CodingAgentsStepTests {
         await Assert.That(result.CodexSkillsInstalled).IsFalse();
         await Assert.That(sink.Lines).Contains(l => l.Contains("Codex hooks installed but agent skills"));
         await Assert.That(sink.Lines).Contains(l => l.Contains("/hooks") && l.Contains("trust"));
+    }
+
+    // ── Codex sandbox network access (AI-794) ────────────────────────────────
+
+    [Test]
+    public async Task Codex_network_access_enabled_when_hooks_installed_and_accepted() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CodexNetworkAccessApplied).IsTrue();
+        await Assert.That(calls.EnableCodexNetworkCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("network access enabled"));
+    }
+
+    [Test]
+    public async Task Codex_network_access_declined_is_not_applied() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        // Accept the hooks prompt, decline only the network prompt (which is the
+        // one asking to "reach your Capacitor" server).
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: text => !text.Contains("reach your Capacitor"), writeLine: sink.Write);
+
+        await Assert.That(result.CodexHooksInstalled).IsTrue();
+        await Assert.That(result.CodexNetworkAccessApplied).IsFalse();
+        await Assert.That(calls.EnableCodexNetworkCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("network access not changed"));
+    }
+
+    [Test]
+    public async Task Codex_network_access_skipped_by_flag() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipCodexNetworkAccess: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CodexHooksInstalled).IsTrue();
+        await Assert.That(result.CodexNetworkAccessApplied).IsFalse();
+        await Assert.That(calls.EnableCodexNetworkCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("--skip-codex-network-access"));
+    }
+
+    [Test]
+    public async Task Codex_network_access_unchanged_when_already_enabled() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { EnableCodexNetworkReturns = CodexConfigToml.Change.Unchanged };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.EnableCodexNetworkCalled).IsTrue();
+        await Assert.That(result.CodexNetworkAccessApplied).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("already allows network access"));
+    }
+
+    [Test]
+    public async Task Codex_network_access_failure_emits_warning() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { EnableCodexNetworkReturns = CodexConfigToml.Change.Failed };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.EnableCodexNetworkCalled).IsTrue();
+        await Assert.That(result.CodexNetworkAccessApplied).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not update") && l.Contains("config.toml"));
+    }
+
+    [Test]
+    public async Task Codex_network_access_not_attempted_when_hooks_fail() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CodexHooksReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CodexHooksInstalled).IsFalse();
+        await Assert.That(calls.EnableCodexNetworkCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Codex_network_access_auto_applied_in_no_prompt() {
+        var sink         = new Sink();
+        var calls        = new InstallerCalls();
+        var options      = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected     = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+        var promptCalled = false;
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => { promptCalled = true; return false; }, writeLine: sink.Write);
+
+        await Assert.That(result.CodexNetworkAccessApplied).IsTrue();
+        await Assert.That(calls.EnableCodexNetworkCalled).IsTrue();
+        await Assert.That(promptCalled).IsFalse();
     }
 
     [Test]
@@ -871,7 +990,8 @@ public class CodingAgentsStepTests {
         LegacyCodexSkillsDir: "/fake/.codex/skills",
         KiroHooksPath:        "/fake/.kiro/agents/kcap.json",
         PiExtensionPath:      "/fake/.pi/agent/extensions/kcap.ts",
-        OpenCodeExtensionPath: "/fake/.config/opencode/plugins/kcap.ts"
+        OpenCodeExtensionPath: "/fake/.config/opencode/plugins/kcap.ts",
+        CodexConfigTomlPath:  "/fake/.codex/config.toml"
     );
 
     sealed class Sink {
@@ -922,6 +1042,9 @@ public class CodingAgentsStepTests {
         public bool    LegacyCleanupCalled  { get; private set; }
         public string? LegacyCleanupArg     { get; private set; }
         public bool    LegacyCleanupReturns { get; set; } = true;
+
+        public bool                   EnableCodexNetworkCalled  { get; private set; }
+        public CodexConfigToml.Change EnableCodexNetworkReturns { get; set; } = CodexConfigToml.Change.Updated;
 
         public Installers AsInstallers() => new(
             InstallClaudePlugin: (s, p) => {
@@ -987,6 +1110,11 @@ public class CodingAgentsStepTests {
                 LegacyCleanupArg    = d;
 
                 return LegacyCleanupReturns;
+            },
+            EnableCodexNetworkAccess: () => {
+                EnableCodexNetworkCalled = true;
+
+                return EnableCodexNetworkReturns;
             }
         );
     }
