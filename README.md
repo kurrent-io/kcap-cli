@@ -113,9 +113,11 @@ If your repo directories have been renamed or deleted on disk, the import prints
 
 Open the server URL in your browser. The dashboard shows repositories, sessions, and agents. It updates in real time as Claude Code sessions are active.
 
-### Sessions MCP server for agents
+### Sessions and Flows MCP servers for agents
 
 The `kcap mcp sessions` stdio server lets coding agents search and recall past Capacitor sessions without leaving the chat. The Kurrent Capacitor plugin (installed by `kcap setup`) **auto-registers it for both Claude Code and Codex CLI** — no manual `claude mcp add` or TOML edit. The server is repo-aware: `cd` into a project before spawning your agent and `search_sessions` defaults to that repo's sessions.
+
+The `kcap mcp flows` stdio server lets agents start and interact with AI-powered review flows. Add it manually via `claude mcp add kcap-flows -- kcap mcp flows`. See the [Flows MCP server](#flows-mcp-server-for-agents) section for details.
 
 ## What it records
 
@@ -273,6 +275,33 @@ It provides three tools:
 - **`get_session_transcript`** — speaker-tagged events from a session. Pair `around_event` (and `agent_id` if the hit was in a subagent) with the values returned by `search_sessions` to fetch the exact decision context.
 
 The server is repo-aware — it resolves the current working directory to a repo hash at startup, and `search_sessions` defaults its `repo` filter to that hash unless you override it.
+
+### Flows MCP server (for agents)
+
+```bash
+kcap mcp flows
+```
+
+Stdio MCP server that lets coding agents start and interact with AI-powered review flows directly from within a session. Add it explicitly to your agent setup:
+
+```bash
+# Claude Code
+claude mcp add kcap-flows -- kcap mcp flows
+
+# Codex (~/.config/codex/mcp_servers.toml)
+# [kcap-flows]
+# command = "kcap"
+# args    = ["mcp", "flows"]
+```
+
+It provides four tools:
+
+- **`start_review_flow`** — start a new review flow (spec-review, code-review, pr-review, etc.). Provide `kind`, `target_kind`, `target_ref`, `target_title`, and `context`. Requester context (session ID, cwd, repo root, owner, name) is resolved automatically from the environment. Returns a `flow_run_id`.
+- **`submit_review_round`** — submit a follow-up round to an existing flow with updated context or a response to the reviewer's findings. Returns the new round's findings.
+- **`get_review_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow.
+- **`close_review_flow`** — mark a completed review flow as closed.
+
+Requires `kcap login`. The server creates an authenticated HTTP client at startup and posts to the Capacitor server's `/api/flows/*` endpoints.
 
 ### Loading historical sessions
 
