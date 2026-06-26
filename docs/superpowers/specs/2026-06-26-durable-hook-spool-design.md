@@ -97,33 +97,49 @@ Claude kills it. Today `ClaudeHookCommand` posts via `PostWithRetryAsync`
 `!IsSuccessStatusCode` branch runs — nothing is ever spooled and the bug
 persists. Budgeting only the *later* drain does not fix this.
 
-The fix is a **shared per-invocation deadline** that covers *everything the hook
-does before it can spool*, not just the POST:
+The fix is a **shared deadline anchored at process entry** that covers
+*everything the hook does before it can spool*, not just the POST:
 
-- A single `Stopwatch` from the start of `Handle`, and a hook-budget ceiling per
-  event (mirroring `kcap/hooks/hooks.json`: `SessionEnd` 15 s, `SessionStart` /
-  `Notification` / `Stop` / `SubagentStart` / `SubagentStop` 5 s) minus a
-  **safety margin (~1.5 s)**. The **safety-adjusted deadline** =
-  `start + ceiling − margin`; everywhere below, "remaining" means time left to
-  *that* deadline, not to the raw hook timeout. The margin reserves time for the
-  local spool write + process exit.
+- A monotonic clock captured in `Program.cs` `Main` **before any bootstrap**, and
+  a hook-budget ceiling per event (mirroring `kcap/hooks/hooks.json`:
+  `SessionEnd` 15 s, `SessionStart` / `Notification` / `Stop` / `SubagentStart` /
+  `SubagentStop` 5 s) minus a **safety margin (~1.5 s)**. The
+  **safety-adjusted deadline** = `process-start + ceiling − margin`; everywhere
+  below, "remaining" means time left to *that* deadline. The margin reserves time
+  for the local spool write + process exit. The deadline is threaded into the
+  hook command (a `Stopwatch` started in `Handle` is **too late** — see next
+  bullet).
+- **Bootstrap runs before the hook and must be inside the deadline.**
+  `Program.cs:45` calls `AppConfig.ResolveServerUrl(args)` *before* dispatching
+  the hook, and with multiple profiles that shells out to `git rev-parse`
+  (`AppConfig.cs:118`) and `git remote -v` (`AppConfig.cs:132`), each with a 5 s
+  wait — so a 5 s hook can be killed before `Handle` ever runs. On the hook path,
+  server-URL resolution is bounded by the deadline (its git slice capped) and
+  falls back to the cached/default `ResolvedServerUrl` rather than blocking.
+- **Spooling needs no server, no client, and no enrichment** — it's a local disk
+  write. So a **minimal normalized body** (`session_id`, `transcript_path`,
+  `cwd`, `hook_event_name`, and `ended_at` for end) is built *first*, before any
+  git/`gh`/auth work; the watcher (session-start) is spawned at the same point.
+  If anything afterward fails or the deadline fires, the hook spools the minimal
+  body and exits — delivery failure never means data loss. Repo enrichment
+  (`DetectRepositoryAsync`: ~5 s git + 2 s `gh pr view`, `RepositoryDetection.cs:81,129`)
+  runs **only with remaining headroom** and upgrades the body in place; if it's
+  skipped, repo info still reaches the session later via the watcher's own
+  SignalR repo-detection, so a minimal body is not a lasting gap.
 - **Auth/client creation is inside the deadline too.** `CreateAuthenticated
   ClientAsync` can block well past the hook timeout *before* any POST:
   `/auth/config` discovery, a cross-process token-lock wait of up to **15 s**
   (`TokenStore.cs:167`), and a token refresh whose HTTP call has no timeout/ct
-  (`TokenStore.cs:230`, up to the 100 s default against a hung server). The
-  deadline `CancellationToken` is threaded into client creation **and** a hard
-  outer cap (`Task.WhenAny(work, Delay(remaining))`, the pattern Cursor already
-  uses in `CursorHookCommand.WithHardCap`) wraps it, because some `TokenStore`
-  refresh paths don't honour the token.
-- **Spooling needs no server and no client** — it's a local disk write. So the
-  body (repo-enriched, `ended_at`-stamped) is prepared *first*; if auth/client
-  creation or the POST fails or the deadline fires, the hook still spools and
-  exits cleanly. Delivery failure never means data loss.
-- Every network step — the pre-event drain, the session-end inline transcript
-  drain, and the lifecycle POST — is clamped to **remaining**. If earlier steps
-  overrun, later steps get a small timeout and fail fast; either way the
-  spool-on-failure path is always reached before the kill.
+  (`TokenStore.cs:230`, up to the 100 s default against a hung server). A
+  **local** hard outer cap (`Task.WhenAny(work, Delay(remaining))`, the pattern
+  Cursor already uses in `CursorHookCommand.WithHardCap`) wraps client creation +
+  POST; the deadline `ct` is also passed where honoured. This stays in the hook
+  path — **no `TokenStore` refactor in this change** (the abandoned auth task is
+  reaped on process exit); deeper auth-timeout cleanup is a follow-up.
+- Every network step — the pre-event drain, optional enrichment, and the
+  lifecycle POST — is clamped to **remaining**. If earlier steps overrun, later
+  steps get a small timeout and fail fast; either way the spool-on-failure path
+  is always reached before the kill.
 - The lifecycle POST itself becomes a **single bounded attempt** via the
   existing `PostOnceAsync` (`HttpClientExtensions.cs:160`) with
   `timeout = remaining`, replacing `PostWithRetryAsync`. A single attempt that
@@ -162,6 +178,12 @@ server, **and** a hung auth/token-refresh path.
   partial/transient stop the undelivered remainder is rewritten to the temp
   (which nothing else touches). Orphaned `*.draining` temps (crash mid-drain)
   are re-discovered and drained on the next run.
+- **Recovered temps drain before the live file, oldest-first.** A partial drain
+  can leave a `<sid>.draining` temp while a concurrent append creates a fresh
+  live `<sid>.jsonl`; the temp holds the *older* entries. So for a given session
+  the drainer processes its `*.draining` temps (ordered by an embedded sequence /
+  mtime) **before** the live file, preserving same-session FIFO across the
+  rotate boundary.
 - **New method `DrainAllAsync(currentSessionId, poster, budget, ct)`** —
   drains the **current session's file first** (see Component 5 for why ordering
   needs this), then other sessions' files with any remaining budget. Each file
@@ -196,19 +218,20 @@ server, **and** a hung auth/token-refresh path.
   (`CursorHookEventMap.cs:12`). The spool component is event-agnostic (it stores
   whatever `route` it's handed); each vendor's command decides what to spool.
   This is **not** a narrowing of Cursor durability — see Idempotency & ordering.
-- **Migration must transform, not just move.** Old Cursor spool lines use
-  `{"hook_event_name", "body"}` and the new drainer keys on `route`, so a bare
-  file move would silently discard the backlog (the drainer skips lines without
-  `route`). The one-time, best-effort migration reads each
-  `~/.cursor/kcap-pending/*.jsonl` line, resolves `route` from the event name
-  via `CursorHookEventMap`, and writes the new-format file. Lines whose event no
-  longer maps are dropped. Failures are swallowed; un-migrated leftovers reap
-  after 30 days.
-- **Concurrency-safe:** the migration writes to a temp file then atomically
-  renames it into `~/.config/kcap/spool/` (never a partially-written target a
-  concurrent drainer could read), and skips a session whose target already
-  exists so a racing migrator/appender isn't clobbered. It then removes the old
-  source file.
+- **Migration transforms and merges via the spool API — never skip-or-clobber.**
+  Old Cursor spool lines use `{"hook_event_name", "body"}` and the new drainer
+  keys on `route`, so a bare file move would silently discard the backlog (the
+  drainer skips lines without `route`). The one-time, best-effort migration reads
+  each `~/.cursor/kcap-pending/*.jsonl` line, resolves `route` from the event
+  name via `CursorHookEventMap`, and **`Append`s it through the new `HookSpool`**
+  — which merges into any existing `~/.config/kcap/spool/<sid>.jsonl` rather than
+  overwriting it (the original "skip if target exists, then delete source" was
+  ambiguous: it either lost backlog or never migrated). Lines whose event no
+  longer maps are dropped; the source file is removed only after its lines are
+  appended (best-effort — a failure leaves the source to retry next run; the
+  re-run is harmless because already-appended duplicates replay idempotently).
+  `Append`'s own write is concurrency-safe (the live file is only ever appended
+  to, never rotated by a drainer).
 
 ### 3. `ClaudeHookCommand` — session-start
 
@@ -354,6 +377,9 @@ TUnit unit tests (Microsoft Testing Platform), WireMock.Net for HTTP:
 - **expired token + hung `/auth/refresh` → client creation is capped, the entry
   is still spooled, and the hook exits within budget** (auth path can't outlive
   the deadline)
+- **little/no remaining budget at `Handle` entry (bootstrap already consumed it)
+  → minimal body is spooled (session-end) / watcher still spawned (session-start)
+  and enrichment is skipped** (process-start deadline + minimal-body-first)
 - session-end on 4xx → not spooled
 - session-start on failure → spooled **and** watcher spawned
 - next hook with server up → backlog drained (cross-session), files deleted
@@ -393,17 +419,24 @@ TUnit unit tests (Microsoft Testing Platform), WireMock.Net for HTTP:
   `SpoolOnFailure` events)
 - `src/Capacitor.Cli/Commands/CursorHookEventMap.cs` (route now carried in the
   spool entry; event→route resolution at append + migration time)
-- `src/Capacitor.Cli/Commands/ClaudeHookCommand.cs` (shared per-invocation
-  deadline covering auth/client creation + a hard outer cap; drain step
-  current-session-first **before** the current event; bounded lifecycle POST via
-  `PostOnceAsync`; spool body prepared before client creation; session-start
-  restructure; session-end spool + `ended_at`; Claude poster handles
-  `generate_whats_done` and tri-state `DrainOutcome` on replay)
-- `src/Capacitor.Cli.Core/Auth/TokenStore.cs` (thread the deadline `ct` into the
-  refresh path where honoured; the hard outer cap covers the paths that don't —
-  optionally add a timeout to the `/auth/refresh` POST as defence-in-depth)
+- `src/Capacitor.Cli/Program.cs` (capture the process-start clock before
+  `ResolveServerUrl`; bound hook-path server-URL resolution by the deadline;
+  thread the deadline into the hook command)
+- `src/Capacitor.Cli/Commands/ClaudeHookCommand.cs` (consume the process-start
+  deadline; build a minimal body + spawn the watcher before enrichment;
+  enrichment only with remaining headroom; local hard outer cap around
+  auth/client creation + bounded `PostOnceAsync`; drain step current-session-
+  first **before** the current event; session-end spool + `ended_at`; Claude
+  poster handles `generate_whats_done` and tri-state `DrainOutcome` on replay)
+- `src/Capacitor.Cli/RepositoryDetection.cs` (`EnrichWithRepositoryInfo` /
+  `DetectRepositoryAsync` gain a remaining-budget cap so enrichment can be
+  skipped under deadline pressure)
 - `src/Capacitor.Cli.Core/HttpClientExtensions.cs` (reuse existing
   `PostOnceAsync` for the bounded lifecycle POST; no change expected)
+- `src/Capacitor.Cli.Core/Auth/TokenStore.cs` — **unchanged** in this change;
+  the hung-auth path is covered by the local hard outer cap. Deeper auth-timeout
+  cleanup (bounding `/auth/refresh`, threading ct through refresh) is a
+  follow-up.
 - `src/Capacitor.Cli.Core/PathHelpers.cs` (shared `spool` path — via existing
   `ConfigPath`, no change expected)
 - Tests under `test/Capacitor.Cli.Tests.Unit/`
