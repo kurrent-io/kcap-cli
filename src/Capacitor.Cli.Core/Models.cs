@@ -510,6 +510,19 @@ public record RepoEntry {
     public required DateTimeOffset LastUsed { get; init; }
 }
 
+public sealed record CurationApplyItem {
+    [JsonPropertyName("category")]      public string?               Category     { get; init; }
+    [JsonPropertyName("cluster_id")]    public string?               ClusterId    { get; init; }
+    [JsonPropertyName("promoted_text")] public string?               PromotedText { get; init; }
+    [JsonPropertyName("target_kinds")]  public IReadOnlyList<string>? TargetKinds { get; init; }
+    [JsonPropertyName("status")]        public string?               Status       { get; init; }
+}
+
+public sealed record CurationApplyResponse {
+    [JsonPropertyName("repo_hash")] public string?                      RepoHash { get; init; }
+    [JsonPropertyName("items")]     public IReadOnlyList<CurationApplyItem>? Items { get; init; }
+}
+
 [JsonSerializable(typeof(List<RecapEntry>))]
 [JsonSerializable(typeof(List<RepoRecapEntry>))]
 [JsonSerializable(typeof(EvalContextResult))]
@@ -584,6 +597,8 @@ public record RepoEntry {
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(string[]))]
 [JsonSerializable(typeof(RepoEntry[]))]
+[JsonSerializable(typeof(CurationApplyResponse))]
+[JsonSerializable(typeof(CurationApplyItem))]
 // UseStringEnumConverter=true matches the server's SignalR JSON protocol, which
 // serialises enums (e.g. LaunchKind) as camelCase strings. Without it the
 // source-gen LaunchKind JsonTypeInfo defaults to numeric and silently drops the
