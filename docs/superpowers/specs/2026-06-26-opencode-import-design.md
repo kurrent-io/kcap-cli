@@ -1,7 +1,7 @@
 # OpenCode historical import (`kcap import --opencode`) — Design
 
 **Date:** 2026-06-26
-**Status:** Approved (design), revised after Codex design review, pending implementation plan
+**Status:** Approved (design), rev3 after two Codex design-review passes, pending implementation plan
 **Author:** tony.young@kurrent.io (with Claude)
 
 ## Problem
@@ -63,13 +63,15 @@ is **normalizer-compatible**: the server keeps the first non-skipped snapshot pe
 `prt_` id and skips non-terminal tool snapshots, so the single final-state line is
 exactly the record it retains. No server changes required.
 
-**Consequence for watermarks:** a session that was also live-ingested has a
-larger server line count (more snapshot lines) than import reconstructs, so
-line-number comparison across the two paths is not meaningful. This is safe
-because (a) a live-captured session ran to session-end and is already fully
-ingested → import classifies it `AlreadyLoaded` and skips, and (b) content is
-keyed by deterministic message/`prt_` ids, so any re-send is idempotent
-regardless of line numbering.
+**Consequence for watermarks (revised — line spaces are incompatible):** the live
+path numbers lines by *snapshot* (many per message), import numbers by
+*final-state message* (one per message). Unlike Pi/Gemini — whose live and
+historical transcripts share one format, making line numbers comparable — an
+OpenCode session's two line spaces are **not** comparable. The server's
+high-water-mark filter drops batch lines with `line_number <= currentHwm`
+*before* normalization, so a naive `startLine`-based resume would either no-op or
+mis-resume. Therefore OpenCode import does **not** do line-number resume. See the
+explicit classification policy under *Discovery & classification*.
 
 ## Architecture
 
@@ -77,9 +79,11 @@ A new `OpenCodeImportSource : IImportSource` in
 `src/Capacitor.Cli/Commands/`, structured like
 [`PiImportSource`](../../../src/Capacitor.Cli/Commands/PiImportSource.cs): a
 **routed** source (`FilePath = ""`, `SupportsTitleGeneration = false`) that runs
-through `ImportSessionAsync` rather than the chain worker. SQLite read helpers
-live in `Capacitor.Cli.Core/OpenCode/` (e.g. `OpenCodeDb.cs`), keeping storage
-knowledge in Core beside `OpenCodePaths` / `OpenCodeSubagentDiscovery`.
+through `ImportSessionAsync` rather than the chain worker. The SQLite read helper
+(`OpenCodeDb`) lives in the **CLI** project (`src/Capacitor.Cli/Commands/`), not
+Core — see the AOT rationale below. Pure path logic stays in Core
+(`OpenCodePaths`), and subagent payload builders are reused from Core's
+`OpenCodeSubagentDiscovery`.
 
 ### Components
 
@@ -117,26 +121,68 @@ stays in `Capacitor.Cli`. Pure path logic remains in Core (`OpenCodePaths`).
   - `Cwd` = `session.directory`
   - `FirstTimestamp` = `session.time_created`
 - Discovery filters honored as in Pi: `--session`, `--cwd`, `--since`.
-- Classification mirrors Pi: count importable lines, probe
-  `/api/sessions/{id}/last-line`, assign New / Partial / AlreadyLoaded / TooShort
-  / ProbeError; resume from `serverLastLine + 1` when Partial.
+
+**Classification policy (OpenCode-specific — no line-number resume).** Because the
+live and import line spaces are incompatible (see *Line reconstruction*), OpenCode
+import uses a **binary** classification against `/api/sessions/{id}/last-line`,
+*not* Pi's `Partial`/resume math:
+
+- **`TooShort`** — fewer than `MinLines` *importable* lines (see below).
+- **`AlreadyLoaded`** — the server already has any watermark for this session id
+  (`serverLastLine` present). The session was live-captured (or previously
+  imported); skip it. We do **not** attempt to prove full completeness, and we do
+  **not** repair a truncated live session in v1 (the common case is a session that
+  ran to `session-end`). A deliberate repair mode — re-sending with line numbers
+  offset *above* the server HWM so content lands and dedupes by `prt_` id — is a
+  possible future enhancement, explicitly out of scope here.
+- **`New`** — no server watermark → import the full reconstructed transcript with
+  line numbers `0..N`.
+- **`ProbeError`** — watermark probe failed; skip with a reason, like Pi.
+
+**Importable-line count (mirrors Pi's `IsImportRelevantLine` safeguard).** The
+`MinLines` threshold counts only lines that produce a canonical server event, not
+raw synthesized lines. A reconstructed `{info,parts}` line is *not* importable
+when it carries no normalizer-emitting content — e.g. an assistant message whose
+only parts are structural (`step-start` / `step-finish`), a user message with
+empty text, or a message whose tool parts are all non-terminal. Define this
+predicate alongside the synthesizer and keep it in sync with the server's
+`opencode` normalizer (the same coupling Pi documents). This prevents a session of
+purely structural lines from counting as substantive.
 
 ## Transcript synthesis
 
-**Ordering:** messages by `(time_created, id)`; parts within a message by
-`(time_created, id)`. Empirically validated on a real session: `time_created` is
-distinct per part within a message (no ties in the sample) and the `prt_…` ids
-sort in the same order as `time_created` (OpenCode ids embed a monotonic
-timestamp), so `id` is a safe deterministic tie-breaker. Implementation must
-re-verify ordered output against live SDK order for a multi-part / tool-heavy
-session before merge.
+**Ordering:** messages by `(message.time_created, message.id)`; parts within a
+message by `(part.time_created, part.id)`. Empirically validated on a real
+session: `time_created` is distinct per part within a message (no ties in the
+sample) and the `prt_…` ids sort in the same order as `time_created` (OpenCode ids
+embed a monotonic timestamp), so `id` is a safe deterministic tie-breaker.
+
+The **pre-merge verification** must assert exact equivalence to live SDK order for
+a multi-part / tool-heavy session, specifically: (a) message order, (b) each
+message's `parts[]` order, (c) multi-part assistant messages, (d) terminal tool
+parts, and (e) either an observed equal-`time_created` tie resolved correctly by
+the `id` tie-breaker, **or** an explicit recorded statement that no tie occurred
+in the corpus checked. One tie-free sample does not by itself prove the
+tie-breaker.
 
 **Avoid the N+1 and unbounded memory:** do not issue one part query per message
-and do not hold a whole session in memory. Either (a) one ordered pass —
-`SELECT … FROM part WHERE session_id = ? ORDER BY message_id, time_created, id`
-joined/grouped to its message in a single streaming read — or (b) a forward
-cursor that emits each `{info, parts}` line into the batch sender as it is built.
-Large sessions stream to batches incrementally.
+and do not hold a whole session in memory. **Order by the driving message's
+chronology, not by `message_id` lexically** — `ORDER BY message_id` would group
+parts by lexical id, which is *not* guaranteed to equal message chronology. Use a
+join ordered by `m.time_created, m.id, p.time_created, p.id`:
+
+```sql
+SELECT m.id AS msg_id, m.data AS msg_data, p.id AS part_id, p.data AS part_data
+FROM message m JOIN part p ON p.message_id = m.id
+WHERE m.session_id = ?
+ORDER BY m.time_created, m.id, p.time_created, p.id
+```
+
+Group consecutive rows by `msg_id` in a single streaming pass and emit each
+`{info, parts}` line into the batch sender as the message's run completes. (A
+message with zero parts still needs a row — use a `LEFT JOIN` or a second
+message-only cursor so empty messages are not dropped.) Large sessions stream to
+batches incrementally.
 
 Streamed via `SessionImporter.SendTranscriptBatches`. Synthesized content is fed
 directly rather than reusing the plugin's `~/.cache` files (those only cover
@@ -151,6 +197,14 @@ importer (Gemini/Pi/Kiro/Copilot), not OpenCode-specific. We accept it here for
 consistency and rely on server-side idempotency (deterministic message/`prt_`
 ids) so a re-run repairs a partially-sent session. Hardening
 `SendTranscriptBatches` across all importers is out of scope for this issue.
+
+OpenCode-specific consequence to document for the user: the server's
+`session-end/opencode` recomputes session summary/model from the full stream, so a
+swallowed transcript failure followed by an accepted `session-end` can leave
+those stats incomplete **and the CLI may report the session as loaded**. A re-run
+repairs it (session-end recomputes), but the success report can be falsely
+positive in the failure window. Acceptable under the "match existing importers"
+decision; surfaced here so it is a known behavior, not a surprise.
 
 ## Subagent (child) parity
 
@@ -168,7 +222,8 @@ Full order per root:
 
 1. `POST /hooks/session-start/opencode` (parent).
 2. Stream parent transcript.
-3. For each child with `parent_id` = this root:
+3. For each child with `parent_id` = this root, in deterministic
+   `(session.time_created, session.id)` order:
    - `POST /hooks/subagent-start` (parent session id, `agent_id` = `CanonicalAgentId(childSid)`,
      `agent_type` from child's `info.agent`, fallback `"subagent"`) — **fail-closed:
      skip the child's content if start fails**, so a child stream never exists
@@ -187,12 +242,15 @@ children idempotently. Child failures never fail the already-imported parent.
 
 ## Lifecycle, idempotency, resume
 
-Mirrors Pi exactly:
+Mirrors Pi's idempotency model, with the parent/child sequencing from *Subagent
+parity*:
 
-- Lifecycle-before-transcript ordering: `session-start/opencode` → transcript →
-  `session-end/opencode`. A transcript that advanced the watermark past a failed
-  lifecycle POST would orphan the session; idempotent server-side via
-  deterministic event ids, so re-runs are safe.
+- Lifecycle-before-transcript ordering for the **parent**: `session-start/opencode`
+  → parent transcript → **child subagent phase** → `session-end/opencode` (the full
+  order is enumerated under *Subagent parity*; `session-end` is always last so
+  `SessionEnded` follows every `SubagentCompleted`). A transcript that advanced the
+  watermark past a failed lifecycle POST would orphan the session; idempotent
+  server-side via deterministic event ids, so re-runs are safe.
 - **Title (corrected contract):** unlike Pi, OpenCode's db has a real
   `session.title`. Forward it via **`POST /hooks/set-title`** after the transcript
   send — matching the established native-title importers
@@ -229,7 +287,13 @@ Microsoft.Data.Sqlite (or a small checked-in sample db):
 - Child → subagent routing: a parented session produces subagent-start/stop +
   child transcript under `agent_id = childSid`, not a standalone session.
 - Classification states against a stubbed `/api/sessions/{id}/last-line`
-  (WireMock): New / Partial / AlreadyLoaded.
+  (WireMock): `New` (no watermark) vs `AlreadyLoaded` (any watermark present) —
+  the binary policy, no `Partial`/resume.
+- Importable-line counting: a session of purely structural lines
+  (`step-start`/`step-finish`, empty user text, non-terminal tools) classifies
+  `TooShort`, not `New`.
+- Part-ordering: the join query preserves message chronology even when lexical
+  `message_id` order would diverge.
 
 ## Edge cases
 
@@ -246,6 +310,21 @@ Microsoft.Data.Sqlite (or a small checked-in sample db):
   OpenCode hook path already posts these ids, so this is established, but the
   importer must canonicalize identically (no GUID normalization;
   `CanonicalAgentId` only strips dashes, of which `ses_…` has none).
+- **Messages that normalize to no canonical event:** counted as non-importable
+  for `MinLines` (see *Classification policy*), but still emitted in the stream so
+  the server sees the full message sequence; the normalizer drops them. They must
+  not advance the importable-line count nor be silently elided from the transcript.
+- **Nested child sessions (grandchildren):** if a child itself has children, the
+  query `WHERE parent_id = <root>` finds only direct children. Decide explicitly:
+  v1 imports **direct children only** and treats any deeper nesting as flat under
+  the root's children, or skips grandchildren with a logged note. Confirm whether
+  OpenCode actually nests beyond one level before adding handling (YAGNI — current
+  observed data is one level).
+- **Multiple children ordering:** imported in `(time_created, id)` order (see
+  *Subagent parity*) for deterministic, reproducible runs.
+- **Mixed live/historical (partially live-captured) session:** classified
+  `AlreadyLoaded` by the binary policy and skipped; v1 does not repair a truncated
+  live session (documented under *Classification policy*).
 
 ## Out of scope / deliberate decisions
 
@@ -266,3 +345,9 @@ Microsoft.Data.Sqlite (or a small checked-in sample db):
   `agentId`-scoped watermark is needed.
 - **Part-ordering vs SDK** — empirically validated on one session; implementation
   must re-verify against live SDK order for a multi-part/tool session before merge.
+- **Line-space incompatibility (live vs import)** — handled by the binary
+  classification (no line-number resume). The residual gap is that a *truncated*
+  live session is skipped as `AlreadyLoaded` rather than repaired; accepted for v1.
+  A future repair mode would re-send above the server HWM and dedupe by `prt_` id —
+  contingent on confirming the server's `line_number <= HWM` pre-normalization
+  filter.
