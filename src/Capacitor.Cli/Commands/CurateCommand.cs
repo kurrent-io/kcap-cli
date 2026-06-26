@@ -48,7 +48,11 @@ static class CurateCommand {
 
         var json = await resp.Content.ReadAsStringAsync();
         var dto  = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.CurationApplyResponse);
-        var items = dto?.Items ?? [];
+        if (dto is null) {
+            await Console.Error.WriteLineAsync("Malformed response from server (could not parse curation payload).");
+            return 1;
+        }
+        var items = dto.Items ?? [];
 
         if (items.Count == 100)
             await Console.Error.WriteLineAsync("Warning: hit the 100-item page limit; some guidelines may be omitted.");

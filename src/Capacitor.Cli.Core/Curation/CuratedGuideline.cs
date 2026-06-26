@@ -14,7 +14,7 @@ public enum CurateAction { Create, Update, Remove, NoOp }
 public sealed record FilePlan(
     string                Path,
     CurateAction          Action,
-    string?               NewContent,   // null only when nothing will be written (NoOp / absent-on-remove)
+    string?               NewContent,   // null only on NoOp; Create/Update/Remove carry the new file content
     IReadOnlyList<string> Added,        // bullet texts added vs. the current block
     IReadOnlyList<string> Removed       // bullet texts removed vs. the current block
 );
