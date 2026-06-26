@@ -89,7 +89,7 @@ public class CursorHookCommandTests {
     [Test]
     public async Task spool_drain_runs_before_current_event_under_budget() {
         using var fx = new Fixture();
-        fx.Spool.Append(Sid, "sessionStart", $$"""{"hook_event_name":"sessionStart","session_id":"{{Sid}}"}""");
+        fx.Spool.Append(Sid, "session-start/cursor", $$"""{"hook_event_name":"sessionStart","session_id":"{{Sid}}"}""");
         await fx.HandleAsync($$"""{"hook_event_name":"sessionEnd","session_id":"{{Sid}}"}""");
         await Assert.That(fx.RouteOrder).IsEquivalentTo(["session-start/cursor", "session-end/cursor"]);
     }
@@ -220,7 +220,7 @@ public class CursorHookCommandTests {
         using var fx = new Fixture();
         fx.HoldOnPost = TimeSpan.FromMilliseconds(50);
 
-        fx.Spool.Append(Sid, "sessionStart", $$"""{"hook_event_name":"sessionStart","session_id":"{{Sid}}"}""");
+        fx.Spool.Append(Sid, "session-start/cursor", $$"""{"hook_event_name":"sessionStart","session_id":"{{Sid}}"}""");
 
         // 30 ms budget — first drained POST eats most of it, BudgetExpired flips
         // before the fresh event can post. The fresh sessionEnd must land back
@@ -241,6 +241,26 @@ public class CursorHookCommandTests {
         await Assert.That(spoolContent).Contains("sessionEnd");
     }
 
+    [Test]
+    public async Task legacy_cursor_spool_is_transformed_and_merged() {
+        var dir       = Path.Combine(Path.GetTempPath(), $"kcap-mig-{Guid.NewGuid():N}");
+        var legacyDir = Path.Combine(dir, "legacy");
+        var spoolDir  = Path.Combine(dir, "spool");
+        Directory.CreateDirectory(legacyDir);
+        try {
+            // Old format: {hook_event_name, body}
+            await File.WriteAllTextAsync(Path.Combine(legacyDir, $"{Sid}.jsonl"),
+                $"{{\"hook_event_name\":\"sessionEnd\",\"body\":\"{{\\\"session_id\\\":\\\"{Sid}\\\"}}\"}}\n");
+
+            var spool = new HookSpool(spoolDir);
+            CursorHookCommand.MigrateLegacyCursorSpool(spool, legacyDir);
+
+            var migrated = await File.ReadAllTextAsync(Path.Combine(spoolDir, $"{Sid}.jsonl"));
+            await Assert.That(migrated).Contains("\"route\":\"session-end/cursor\"");
+            await Assert.That(File.Exists(Path.Combine(legacyDir, $"{Sid}.jsonl"))).IsFalse();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
     sealed class Fixture : IDisposable {
         readonly string _tmpHome = Path.Combine(
             Path.GetTempPath(),
@@ -250,10 +270,10 @@ public class CursorHookCommandTests {
         readonly string _spoolPath;
         readonly string _transcriptPath;
 
-        public List<string>    Sent       { get; } = [];
-        public List<string>    RouteOrder { get; } = [];
-        public CursorHookSpool Spool      { get; }
-        public TimeSpan        HoldOnPost { get; set; } = TimeSpan.Zero;
+        public List<string> Sent       { get; } = [];
+        public List<string> RouteOrder { get; } = [];
+        public HookSpool    Spool      { get; }
+        public TimeSpan     HoldOnPost { get; set; } = TimeSpan.Zero;
 
         public HttpClient Client                { get; }
         public string     TranscriptPathEscaped => _transcriptPath.Replace(@"\", @"\\");
@@ -268,7 +288,7 @@ public class CursorHookCommandTests {
             Directory.CreateDirectory(_tmpHome);
             _spoolPath      = Path.Combine(_tmpHome, "spool");
             _transcriptPath = Path.Combine(_tmpHome, "transcript.jsonl");
-            Spool           = new CursorHookSpool(_spoolPath);
+            Spool           = new HookSpool(_spoolPath);
 
             var handler = new StubHandler(async req => {
                     var body = req.Content is null ? "" : await req.Content.ReadAsStringAsync();

@@ -85,7 +85,7 @@ public static class AppConfig {
         return resolved.ServerUrl;
     }
 
-    public static async Task<string?> ResolveServerUrl(string[] args) {
+    public static async Task<string?> ResolveServerUrl(string[] args, int gitTimeoutMs = 5000) {
         var idx          = Array.IndexOf(args, "--server-url");
         var cliServerUrl = (idx >= 0 && idx + 1 < args.Length) ? args[idx + 1] : null;
 
@@ -115,7 +115,7 @@ public static class AppConfig {
         {
             var config = await LoadProfileConfig();
 
-            var repoRoot = RepoRoot;
+            var repoRoot = GetGitRepoRoot(gitTimeoutMs) ?? Environment.CurrentDirectory;
 
             RepoConfig? repoConfig     = null;
             var         repoConfigPath = Path.Combine(repoRoot, ".kcap.json");
@@ -129,7 +129,7 @@ public static class AppConfig {
                 }
             }
 
-            var remoteUrls = GetGitRemoteUrls();
+            var remoteUrls = GetGitRemoteUrls(gitTimeoutMs);
 
             var resolver = new ProfileResolver(
                 config,
@@ -153,7 +153,7 @@ public static class AppConfig {
         }
     }
 
-    static string[] GetGitRemoteUrls() {
+    static string[] GetGitRemoteUrls(int timeoutMs = 5000) {
         try {
             var psi = new ProcessStartInfo("git", "remote -v") {
                 RedirectStandardOutput = true,
@@ -167,7 +167,7 @@ public static class AppConfig {
 
             var output = proc.StandardOutput.ReadToEnd();
 
-            if (!proc.WaitForExit(5000)) {
+            if (!proc.WaitForExit(timeoutMs)) {
                 try { proc.Kill(); } catch {
                     /* best effort */
                 }
@@ -185,7 +185,7 @@ public static class AppConfig {
         }
     }
 
-    static string? GetGitRepoRoot() {
+    static string? GetGitRepoRoot(int timeoutMs = 5000) {
         try {
             var psi = new ProcessStartInfo("git", "rev-parse --show-toplevel") {
                 RedirectStandardOutput = true,
@@ -199,7 +199,7 @@ public static class AppConfig {
 
             var output = proc.StandardOutput.ReadToEnd().Trim();
 
-            if (!proc.WaitForExit(5000)) {
+            if (!proc.WaitForExit(timeoutMs)) {
                 try { proc.Kill(); } catch {
                     /* best effort */
                 }

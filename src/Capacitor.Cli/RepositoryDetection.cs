@@ -8,7 +8,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli;
 
 static class RepositoryDetection {
-    public static async Task<string> EnrichWithRepositoryInfo(string json) {
+    public static async Task<string> EnrichWithRepositoryInfo(string json, TimeSpan? budget = null) {
         try {
             var node = JsonNode.Parse(json);
 
@@ -22,7 +22,7 @@ static class RepositoryDetection {
                 return json;
             }
 
-            var repo = await DetectRepositoryAsync(cwd);
+            var repo = await DetectRepositoryAsync(cwd, budget);
 
             if (repo is null) {
                 return json;
@@ -70,15 +70,23 @@ static class RepositoryDetection {
      && a.UserName  == b.UserName
      && a.UserEmail == b.UserEmail;
 
-    public static async Task<RepositoryPayload?> DetectRepositoryAsync(string cwd) {
+    public static async Task<RepositoryPayload?> DetectRepositoryAsync(string cwd, TimeSpan? budget = null) {
+        if (budget is { } b0 && b0 <= TimeSpan.Zero) return null;
         try {
+            // Bound the git/gh probes by the remaining hook budget so a slow repo never
+            // overruns the deadline. When no budget is set, keep the historical 5s/2s caps.
+            var sw     = Stopwatch.StartNew();
+            var gitCap = budget is { } b
+                ? TimeSpan.FromSeconds(Math.Min(5, Math.Max(0, b.TotalSeconds)))
+                : TimeSpan.FromSeconds(5);
+
             // Try loading cached base info
             var cache = LoadCache(cwd);
 
             string? userName, userEmail, remoteUrl, owner, repoName, branch;
 
             // Always detect branch fresh — it changes frequently during a session
-            var branchTask = RunCommandAsync("git", "branch --show-current", cwd, TimeSpan.FromSeconds(5));
+            var branchTask = RunCommandAsync("git", "branch --show-current", cwd, gitCap);
 
             if (cache is not null) {
                 userName  = cache.UserName;
@@ -89,9 +97,9 @@ static class RepositoryDetection {
                 branch    = await branchTask;
             } else {
                 // Run git commands in parallel
-                var userNameTask  = RunCommandAsync("git", "config user.name", cwd, TimeSpan.FromSeconds(5));
-                var userEmailTask = RunCommandAsync("git", "config user.email", cwd, TimeSpan.FromSeconds(5));
-                var remoteUrlTask = RunCommandAsync("git", "remote get-url origin", cwd, TimeSpan.FromSeconds(5));
+                var userNameTask  = RunCommandAsync("git", "config user.name", cwd, gitCap);
+                var userEmailTask = RunCommandAsync("git", "config user.email", cwd, gitCap);
+                var remoteUrlTask = RunCommandAsync("git", "remote get-url origin", cwd, gitCap);
 
                 await Task.WhenAll(userNameTask, userEmailTask, remoteUrlTask, branchTask);
 
@@ -121,25 +129,34 @@ static class RepositoryDetection {
                 );
             }
 
-            // Always try fresh PR detection (not cached)
+            // Always try fresh PR detection (not cached). Bound by whatever budget remains after
+            // the git probes; skip entirely if the budget is already exhausted.
             int?    prNumber = null;
             string? prTitle  = null, prUrl = null, prHeadRef = null;
 
-            try {
-                var prJson = await RunCommandAsync("gh", "pr view --json number,title,url,headRefName", cwd, TimeSpan.FromSeconds(2));
+            var ghCap = TimeSpan.FromSeconds(2);
+            if (budget is { } bgh) {
+                var remainingBudget = bgh - sw.Elapsed;
+                ghCap = TimeSpan.FromSeconds(Math.Min(2, Math.Max(0, remainingBudget.TotalSeconds)));
+            }
 
-                if (prJson is not null) {
-                    var prNode = JsonNode.Parse(prJson);
+            if (ghCap > TimeSpan.Zero) {
+                try {
+                    var prJson = await RunCommandAsync("gh", "pr view --json number,title,url,headRefName", cwd, ghCap);
 
-                    if (prNode is JsonObject prObj) {
-                        prNumber  = prObj["number"]?.GetValue<int>();
-                        prTitle   = prObj["title"]?.GetValue<string>();
-                        prUrl     = prObj["url"]?.GetValue<string>();
-                        prHeadRef = prObj["headRefName"]?.GetValue<string>();
+                    if (prJson is not null) {
+                        var prNode = JsonNode.Parse(prJson);
+
+                        if (prNode is JsonObject prObj) {
+                            prNumber  = prObj["number"]?.GetValue<int>();
+                            prTitle   = prObj["title"]?.GetValue<string>();
+                            prUrl     = prObj["url"]?.GetValue<string>();
+                            prHeadRef = prObj["headRefName"]?.GetValue<string>();
+                        }
                     }
+                } catch {
+                    // PR detection is best-effort
                 }
-            } catch {
-                // PR detection is best-effort
             }
 
             return new() {
@@ -160,6 +177,7 @@ static class RepositoryDetection {
     }
 
     static async Task<string?> RunCommandAsync(string cmd, string arguments, string cwd, TimeSpan timeout) {
+        Process? process = null;
         try {
             var psi = new ProcessStartInfo(cmd, arguments) {
                 WorkingDirectory       = cwd,
@@ -168,7 +186,7 @@ static class RepositoryDetection {
                 UseShellExecute        = false,
                 CreateNoWindow         = true
             };
-            using var process = Process.Start(psi);
+            process = Process.Start(psi);
 
             if (process is null) {
                 return null;
@@ -180,7 +198,13 @@ static class RepositoryDetection {
 
             return process.ExitCode == 0 ? output.Trim() : null;
         } catch {
+            // Timed out or failed — kill the child (and its tree) so a slow git/gh probe doesn't
+            // outlive the hook and accumulate across repeated invocations. Disposing alone only
+            // releases handles; it does not stop the process.
+            try { if (process is { HasExited: false }) process.Kill(entireProcessTree: true); } catch { }
             return null;
+        } finally {
+            process?.Dispose();
         }
     }
 

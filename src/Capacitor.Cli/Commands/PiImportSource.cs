@@ -31,7 +31,7 @@ internal sealed class PiImportSource : IImportSource {
         Func<string, Task<RepositoryPayload?>>? repoDetector        = null
     ) {
         _sessionsDir  = sessionsDirOverride ?? PiPaths.SessionsDir();
-        _repoDetector = repoDetector ?? RepositoryDetection.DetectRepositoryAsync;
+        _repoDetector = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd));
     }
 
     static StringComparison PathComparison =>

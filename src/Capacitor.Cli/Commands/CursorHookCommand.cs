@@ -53,7 +53,8 @@ public static class CursorHookCommand {
         HttpClient? client = null;
         try {
             client = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, cts.Token);
-            var spool = new CursorHookSpool(CursorPaths.SpoolDir());
+            var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
+            MigrateLegacyCursorSpool(spool, CursorPaths.SpoolDir());
             spool.ReapOlderThan(TimeSpan.FromDays(30));
             var remaining = DispatcherBudget - sw.Elapsed;
             if (remaining <= TimeSpan.Zero) return 0;
@@ -69,14 +70,14 @@ public static class CursorHookCommand {
 
     /// <summary>
     /// Test-friendly core. Caller owns the <see cref="HttpClient"/> and
-    /// <see cref="CursorHookSpool"/>.
+    /// <see cref="HookSpool"/>.
     /// </summary>
     public static async Task<int> HandleCore(
-            HttpClient      client,
-            string          baseUrl,
-            TextReader      stdin,
-            CursorHookSpool spool,
-            TimeSpan        budgetTotal
+            HttpClient client,
+            string     baseUrl,
+            TextReader stdin,
+            HookSpool  spool,
+            TimeSpan   budgetTotal
         ) {
         var sw = Stopwatch.StartNew();
         using var cts = new CancellationTokenSource(budgetTotal);
@@ -113,16 +114,23 @@ public static class CursorHookCommand {
             var normalized = node.ToJsonString();
 
             if (sessionId is not null) {
-                await foreach (var entry in spool.DrainAsync(sessionId, ct)) {
-                    if (BudgetExpired()) break;
-                    if (!CursorHookEventMap.TryResolve(entry.EventName, out var entryMapping)) {
-                        await entry.MarkDeliveredAsync();
-                        continue;
-                    }
-                    var ok = await TryPostHookAsync(client, baseUrl, entryMapping.RouteSegment, entry.Body, ct);
-                    if (!ok) break;
-                    await entry.MarkDeliveredAsync();
-                }
+                await spool.DrainAllAsync(sessionId, async (route, entryBody) => {
+                    if (BudgetExpired()) return DrainOutcome.TransientStop;
+                    try {
+                        using var content = new StringContent(entryBody, Encoding.UTF8, "application/json");
+                        using var resp    = await client.PostOnceAsync($"{baseUrl}/hooks/{route}", content, HookPostTimeout, ct);
+                        if (resp.IsSuccessStatusCode) return DrainOutcome.Delivered;
+                        var code = (int)resp.StatusCode;
+                        return code is >= 500 or 408 or 429 ? DrainOutcome.TransientStop : DrainOutcome.Drop;
+                    } catch { return DrainOutcome.TransientStop; }
+                }, budgetTotal, ct);
+            }
+
+            // Ordering guard: if a transient drain failure left this session's backlog in place,
+            // spool the fresh event so an earlier queued event (e.g. sessionStart) is not overtaken.
+            if (sessionId is not null && mapping.SpoolOnFailure && spool.HasBacklog(sessionId)) {
+                spool.Append(sessionId, mapping.RouteSegment, normalized);
+                return 0;
             }
 
             if (BudgetExpired()) {
@@ -131,7 +139,7 @@ public static class CursorHookCommand {
                 // canonical event would be lost when the spool replay backlog
                 // is large or the server is slow.
                 if (mapping.SpoolOnFailure && sessionId is not null) {
-                    spool.Append(sessionId, eventName, normalized);
+                    spool.Append(sessionId, mapping.RouteSegment, normalized);
                 }
                 return 0;
             }
@@ -159,17 +167,14 @@ public static class CursorHookCommand {
                 // Drain consumed the budget; preserve the unposted sessionEnd
                 // so the next invocation (if any) can still deliver it.
                 if (mapping.SpoolOnFailure && sessionId is not null) {
-                    spool.Append(sessionId, eventName, normalized);
+                    spool.Append(sessionId, mapping.RouteSegment, normalized);
                 }
                 return 0;
             }
 
             var posted = await TryPostHookAsync(client, baseUrl, mapping.RouteSegment, normalized, ct);
-            switch (posted) {
-                case false when mapping.SpoolOnFailure && sessionId is not null:
-                    spool.Append(sessionId, eventName, normalized); break;
-                case true when eventName == "sessionEnd" && sessionId is not null:
-                    spool.DeleteSession(sessionId); break;
+            if (!posted && mapping.SpoolOnFailure && sessionId is not null) {
+                spool.Append(sessionId, mapping.RouteSegment, normalized);
             }
 
             if (!drainBeforePost && !BudgetExpired() && sessionId is not null && !string.IsNullOrEmpty(transcriptPath)) {
@@ -185,6 +190,35 @@ public static class CursorHookCommand {
             // crash Cursor's agent loop.
             return 0;
         }
+    }
+
+    /// <summary>
+    /// Migrates legacy Cursor spool files (<c>{hook_event_name, body}</c> format)
+    /// from <paramref name="legacyDir"/> into <paramref name="dest"/> using the
+    /// new <c>{route, body}</c> format, then deletes the migrated files.
+    /// Best-effort — IO/JSON errors are swallowed to preserve fail-open contract.
+    /// </summary>
+    internal static void MigrateLegacyCursorSpool(HookSpool dest, string legacyDir) {
+        try {
+            if (!Directory.Exists(legacyDir)) return;
+            foreach (var file in Directory.EnumerateFiles(legacyDir, "*.jsonl")) {
+                try {
+                    var sid = Path.GetFileNameWithoutExtension(file);
+                    foreach (var line in File.ReadAllLines(file)) {
+                        if (string.IsNullOrWhiteSpace(line)) continue;
+                        string? ev, body;
+                        try {
+                            var n = JsonNode.Parse(line);
+                            ev   = n?["hook_event_name"]?.GetValue<string>();
+                            body = n?["body"]?.GetValue<string>();
+                        } catch { continue; }
+                        if (ev is null || body is null) continue;
+                        if (CursorHookEventMap.TryResolve(ev, out var m)) dest.Append(sid, m.RouteSegment, body);
+                    }
+                    File.Delete(file); // delete only after appending; a crash mid-file may re-append on retry (harmless: server dedupes replays)
+                } catch { /* per-file best effort */ }
+            }
+        } catch { }
     }
 
     static async Task<bool> TryPostHookAsync(

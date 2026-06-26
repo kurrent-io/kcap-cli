@@ -7,7 +7,7 @@ static class RepoExclusion {
     /// Checks if the session's repository is in the excluded repos list.
     /// Returns true if the repo is excluded (caller should skip processing).
     /// </summary>
-    public static async Task<bool> IsExcludedAsync(string body, string[]? excludedRepos) {
+    public static async Task<bool> IsExcludedAsync(string body, string[]? excludedRepos, TimeSpan? budget = null) {
         if (excludedRepos is null or { Length: 0 }) return false;
 
         try {
@@ -28,7 +28,7 @@ static class RepoExclusion {
 
             if (cwd is null) return false;
 
-            var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
+            var repo = await RepositoryDetection.DetectRepositoryAsync(cwd, budget);
 
             if (repo?.Owner is not null && repo.RepoName is not null) {
                 return excludedRepos.Contains($"{repo.Owner}/{repo.RepoName}", StringComparer.OrdinalIgnoreCase);

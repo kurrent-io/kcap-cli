@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
@@ -22,7 +23,125 @@ public static class ClaudeHookCommand {
     // send the POST; the server's StopAndDrain + the "kcap import" hint recover the rest.
     static readonly TimeSpan PreHookDrainCap = TimeSpan.FromSeconds(8);
 
-    public static async Task<int> Handle(string baseUrl, TextReader stdin, Task? updateCheckTask = null) {
+    public static Task<int> Handle(string baseUrl, TextReader stdin, Task? updateCheckTask = null, long processStart = 0) {
+        var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
+        spool.ReapOlderThan(TimeSpan.FromDays(30));
+        var ps = processStart == 0 ? Stopwatch.GetTimestamp() : processStart;
+        return HandleWithDeps(spool, ps, baseUrl, stdin, updateCheckTask);
+    }
+
+    static Task<int> HandleWithDeps(HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask)
+        => HandleWithDeps(spool, processStart, baseUrl, stdin, updateCheckTask,
+            () => HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl));
+
+    internal static async Task<int> HandleWithDeps(
+            HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask,
+            Func<Task<(HttpClient Client, AuthStatus Status)>> clientFactory) {
+        string body;
+        try { body = await stdin.ReadToEndAsync(); } catch { return 0; }
+
+        // Minimal parse (no auth/git) so we can spool AND start the watcher even if client creation hangs.
+        string? command = null, sessionId = null, transcriptPath = null, cwd = null, source = null;
+        try {
+            var node = JsonNode.Parse(body);
+            var ev   = node?["hook_event_name"]?.GetValue<string>();
+            command        = ev is null ? null : ToKebab(ev);
+            sessionId      = node?["session_id"]?.GetValue<string>()?.Replace("-", "");
+            transcriptPath = node?["transcript_path"]?.GetValue<string>();
+            cwd            = node?["cwd"]?.GetValue<string>();
+            source         = node?["source"]?.GetValue<string>();
+        } catch { }
+
+        var clientCap = HookBudget.Remaining(processStart, command ?? "stop");
+        var created   = await CreateClientWithinBudgetAsync(clientFactory, clientCap);
+
+        if (created is null) {
+            // Auth/client creation exceeded the hook budget (hung /auth/config or refresh during an
+            // outage). The watcher and the spool need no client — start capture and persist the
+            // lifecycle event so neither the transcript nor the session record is lost.
+            if (command == "session-start" && sessionId is not null && transcriptPath is not null) {
+                var isResumeOrCompact = source is not null &&
+                    (source.Equals("resume", StringComparison.OrdinalIgnoreCase) ||
+                     source.Equals("compact", StringComparison.OrdinalIgnoreCase));
+                try {
+                    await WatcherManager.EnsureWatcherRunning(baseUrl, sessionId, transcriptPath,
+                        agentId: null, cwd: cwd, skipTitle: isResumeOrCompact);
+                } catch { }
+            }
+            if (command is "session-start" or "session-end" && sessionId is not null) {
+                spool.Append(sessionId, command, NormalizeForSpool(body, command));
+                await Console.Error.WriteLineAsync($"[kcap] {command} spooled (auth/client creation exceeded hook budget); will retry on the next kcap hook ({sessionId})");
+            }
+            return 0;
+        }
+
+        var (client, authStatus) = created.Value;
+        try {
+            return await HandleCore(client, authStatus, spool, processStart, baseUrl, new StringReader(body), updateCheckTask);
+        } catch (Exception ex) {
+            await Console.Error.WriteLineAsync($"[kcap] claude hook failed (fail-open): {ex.Message}");
+            return 0;
+        } finally {
+            client.Dispose();
+        }
+    }
+
+    // Returns (client,status) if created within `cap`; null if the cap elapsed first
+    // (abandoned creation task reaped on process exit).
+    internal static async Task<(HttpClient Client, AuthStatus Status)?> CreateClientWithinBudgetAsync(
+            Func<Task<(HttpClient Client, AuthStatus Status)>> factory, TimeSpan cap) {
+        if (cap <= TimeSpan.Zero) return null;
+        var task = factory();
+        var winner = await Task.WhenAny(task, Task.Delay(cap));
+        if (winner != task) {
+            // Abandoned: observe ALL terminal states so a late fault (likely during the very
+            // outage this guards) doesn't surface as an UnobservedTaskException; dispose the
+            // client only if creation actually completed after the cap elapsed.
+            _ = task.ContinueWith(static t => {
+                if (t.IsFaulted) _ = t.Exception;
+                else if (t.Status == TaskStatus.RanToCompletion) t.Result.Client.Dispose();
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            return null;
+        }
+        try { return await task; } catch { return null; }
+    }
+
+    // Minimal normalization for an auth-timeout-spooled body: dashless ids (match the server's
+    // expected form) and, for session-end, an ended_at stamp so a late replay keeps idempotency.
+    static string NormalizeForSpool(string body, string command) {
+        try {
+            var node = JsonNode.Parse(body);
+            if (node is null) return body;
+            NormalizeGuidField(node, "session_id");
+            NormalizeGuidField(node, "agent_id");
+            if (command == "session-end" && node["ended_at"] is null)
+                node["ended_at"] = DateTimeOffset.UtcNow.ToString("O");
+            return node.ToJsonString();
+        } catch { return body; }
+    }
+
+    internal static async Task<int> WithHardCap(Task<int> inner, TimeSpan budget) {
+        var winner = await Task.WhenAny(inner, Task.Delay(budget));
+        return winner == inner ? await inner : 0;
+    }
+
+    // Await repo enrichment but never past the remaining hook budget. If it can't finish in time,
+    // proceed with the un-enriched body (repo info still reaches the session via the watcher's own
+    // detection) so the bounded POST/spool path is always reached before Claude kills the hook.
+    static async Task<string> AwaitEnrichmentWithinBudget(Task<string> enrichment, string fallbackBody, TimeSpan budget) {
+        if (budget <= TimeSpan.Zero) {
+            _ = enrichment.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default);
+            return fallbackBody;
+        }
+        var winner = await Task.WhenAny(enrichment, Task.Delay(budget));
+        if (winner != enrichment) {
+            _ = enrichment.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default); // observe if it later faults
+            return fallbackBody;
+        }
+        try { return await enrichment; } catch { return fallbackBody; }
+    }
+
+    internal static async Task<int> HandleCore(HttpClient client, AuthStatus authStatus, HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask = null) {
         var body = await stdin.ReadToEndAsync();
 
         var eventName = ExtractEventName(body);
@@ -93,11 +212,21 @@ public static class ClaudeHookCommand {
         }
 
         // Enrich hook payloads with repository info.
-        // For session-end and subagent-stop, defer enrichment to run in parallel with watcher kill.
+        // For session-start, session-end and subagent-stop, defer enrichment so a slow git/gh
+        // probe never delays transcript-capture start (watcher-FIRST): session-end/subagent-stop
+        // run it in parallel with the watcher kill, and session-start awaits it INSIDE its block
+        // after EnsureWatcherRunning. Other commands enrich inline.
         Task<string>? deferredRepoTask = null;
 
-        if (command is "session-end" or "subagent-stop") {
-            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body);
+        if (command == "session-start") {
+            // Budgeted so a slow git/gh probe self-skips under deadline pressure (repo info
+            // still arrives via the watcher's own detection). Awaited INSIDE the session-start
+            // block after EnsureWatcherRunning so it never delays transcript-capture start.
+            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body, HookBudget.Remaining(processStart, command));
+        } else if (command is "session-end" or "subagent-stop") {
+            // Budgeted like session-start so a slow git/gh probe can't push the bounded POST/spool
+            // path past the hook deadline. The await below is also budget-bounded as a hard backstop.
+            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body, HookBudget.Remaining(processStart, command));
         } else {
             body = await RepositoryDetection.EnrichWithRepositoryInfo(body);
         }
@@ -109,8 +238,12 @@ public static class ClaudeHookCommand {
         // visibility were being ignored.
         var activeProfile = await AppConfig.GetActiveProfileAsync();
 
-        // Check repo exclusion — silently exit for excluded repos.
-        if (activeProfile?.ExcludedRepos is { Length: > 0 } repos && await RepoExclusion.IsExcludedAsync(body, repos)) {
+        // Check repo exclusion — silently exit for excluded repos. Budget the fallback repo
+        // detection so a slow git/gh probe can't delay the session-start watcher spawn below
+        // (if detection can't resolve the repo in time, we fail open to capturing — the per-cwd
+        // cache makes subsequent sessions in an excluded repo resolve and exclude promptly).
+        if (activeProfile?.ExcludedRepos is { Length: > 0 } repos
+         && await RepoExclusion.IsExcludedAsync(body, repos, HookBudget.Remaining(processStart, command))) {
             return 0;
         }
 
@@ -125,45 +258,33 @@ public static class ClaudeHookCommand {
             }
         }
 
-        // Inject default_visibility from the active V2 profile for session-start
-        // hooks. The legacy top-level CapacitorConfig.DefaultVisibility shape is
-        // not populated by v2 configs (the field lives under the profile), so
-        // reading it there silently fell back to "org_public" and ignored
-        // per-profile `private` settings.
-        if (command == "session-start" && activeProfile?.DefaultVisibility is { } vis) {
-            try {
-                var node = JsonNode.Parse(body);
-
-                if (node is not null) {
-                    node["default_visibility"] = vis;
-                    body                       = node.ToJsonString();
-                }
-            } catch {
-                // Best effort
+        // Auth lapsed: do not POST (server would 401) and do not drain (a 401 would Drop the
+        // spool backlog). Exit cleanly (0) so Claude shows no per-turn error banner; nudge once on
+        // session-start via a systemMessage (shown to the user, not injected into the model context).
+        if (authStatus is AuthStatus.Expired or AuthStatus.NotAuthenticated) {
+            if (command == "session-start") {
+                var notice = new JsonObject {
+                    ["systemMessage"] = authStatus == AuthStatus.Expired
+                        ? "[kcap] Authentication expired — session recording is paused. Run 'kcap login' to resume."
+                        : "[kcap] Not authenticated — session recording is off. Run 'kcap login' to start recording."
+                };
+                Console.WriteLine(notice.ToJsonString());
             }
+            return 0;
         }
 
-        // For session-start: read plan file if slug is known and inject plan_content into payload.
-        var planContentInjected = false;
+        // Drain stranded lifecycle events before handling the fresh one. Current session
+        // first so a stranded session-start replays before this session's session-end.
+        try {
+            var drainBudget = TimeSpan.FromMilliseconds(Math.Min(2000, HookBudget.Remaining(processStart, command).TotalMilliseconds));
+            var curSid      = JsonNode.Parse(body)?["session_id"]?.GetValue<string>();
+            if (drainBudget > TimeSpan.Zero)
+                await spool.DrainAllAsync(curSid, ClaudePoster(client, baseUrl, drainBudget), drainBudget, CancellationToken.None);
+        } catch { /* fail-open */ }
 
-        if (command == "session-start") {
-            try {
-                var node = JsonNode.Parse(body);
-                var slug = node?["slug"]?.GetValue<string>();
-
-                if (slug is not null) {
-                    var planContent = ReadPlanFile(slug);
-
-                    if (planContent is not null) {
-                        node!["plan_content"] = planContent;
-                        body                  = node.ToJsonString();
-                        planContentInjected   = true;
-                    }
-                }
-            } catch {
-                // Best effort
-            }
-        }
+        // default_visibility and plan_content injection for session-start happen INSIDE the
+        // session-start block below, after EnsureWatcherRunning and the deferred repo enrichment
+        // await, so the watcher (transcript capture) is never delayed by them or by a slow probe.
 
         // For session-end and subagent-stop: kill watcher BEFORE posting hook
         // so transcript is fully drained before server computes stats.
@@ -175,6 +296,12 @@ public static class ClaudeHookCommand {
                     var transcriptPath = node?["transcript_path"]?.GetValue<string>();
 
                     if (sessionId is not null) {
+                        // Clamp the pre-drain cap so it cannot consume the entire remaining budget
+                        // that the bounded POST needs. Use whichever is smaller.
+                        var remaining     = HookBudget.Remaining(processStart, "session-end");
+                        var effectiveCap  = TimeSpan.FromMilliseconds(
+                            Math.Min(PreHookDrainCap.TotalMilliseconds, remaining.TotalMilliseconds));
+
                         var drained = await TimeBudget.RunCappedAsync(
                             async () => {
                                 await WatcherManager.KillWatcher(sessionId);
@@ -183,12 +310,12 @@ public static class ClaudeHookCommand {
                                     await WatcherManager.InlineDrainAsync(baseUrl, sessionId, transcriptPath, agentId: null);
                                 }
                             },
-                            PreHookDrainCap
+                            effectiveCap
                         );
 
                         if (!drained) {
                             await Console.Error.WriteLineAsync(
-                                $"[kcap] session-end pre-drain cap ({PreHookDrainCap.TotalSeconds:0}s) elapsed; proceeding to POST. "
+                                $"[kcap] session-end pre-drain cap ({effectiveCap.TotalSeconds:0.#}s) elapsed; proceeding to POST. "
                               + $"Transcript tail may be incomplete — recoverable via: kcap import --session {sessionId}"
                             );
                         }
@@ -197,7 +324,7 @@ public static class ClaudeHookCommand {
                     Console.Error.WriteLine($"[kcap] session-end pre-hook failed: {ex.Message}");
                 }
 
-                body = await deferredRepoTask!;
+                body = await AwaitEnrichmentWithinBudget(deferredRepoTask!, body, HookBudget.Remaining(processStart, command));
 
                 break;
             }
@@ -232,44 +359,218 @@ public static class ClaudeHookCommand {
                     Console.Error.WriteLine($"[kcap] subagent-stop pre-hook failed: {ex.Message}");
                 }
 
-                body = await deferredRepoTask!;
+                body = await AwaitEnrichmentWithinBudget(deferredRepoTask!, body, HookBudget.Remaining(processStart, command));
 
                 break;
             }
         }
 
-        var       authResult = await HttpClientExtensions.CreateClientWithAuthStatusAsync();
-        using var client     = authResult.Client;
-        var       authStatus = authResult.Status;
+        // Dedicated bounded path for session-start: spawn the watcher FIRST (transcript capture
+        // must never be lost even if the POST fails), then a single bounded POST, spool on
+        // transient failure, and emit the context envelope + plan-content POST on success.
+        if (command == "session-start") {
+            var startNode      = JsonNode.Parse(body);
+            var sessionId      = startNode?["session_id"]?.GetValue<string>();
+            var transcriptPath = startNode?["transcript_path"]?.GetValue<string>();
+            var sessionCwd     = startNode?["cwd"]?.GetValue<string>();
+            var source         = startNode?["source"]?.GetValue<string>();
+            var isResumeOrCompact = source is not null &&
+                (source.Equals("resume", StringComparison.OrdinalIgnoreCase) ||
+                 source.Equals("compact", StringComparison.OrdinalIgnoreCase));
 
-        // Recording is best-effort. When auth has lapsed there's no point POSTing a request the
-        // server will reject with 401 — and a non-zero exit makes Claude Code render a red
-        // "Stop hook error" banner on *every* turn until the user re-authenticates. Exit cleanly
-        // (0) so there's no banner, and nudge the user to re-login only on session-start (once per
-        // session) rather than on the high-frequency stop/notification/subagent events. The nudge
-        // is a `systemMessage` JSON object: Claude Code shows it to the user but — unlike plain
-        // session-start stdout — does NOT inject it into the model's context. (On exit 0 stderr is
-        // hidden entirely, so it can't carry a user-visible notice.)
-        if (authStatus is AuthStatus.Expired or AuthStatus.NotAuthenticated) {
-            if (command == "session-start") {
-                var notice = new JsonObject {
-                    ["systemMessage"] = authStatus == AuthStatus.Expired
-                        ? "[kcap] Authentication expired — session recording is paused. Run 'kcap login' to resume."
-                        : "[kcap] Not authenticated — session recording is off. Run 'kcap login' to start recording."
-                };
+            // 1. Capture never lost: spawn the watcher before any slow git/gh/POST.
+            //    Idempotent — safe to call even if the POST subsequently fails.
+            if (sessionId is not null && transcriptPath is not null) {
+                await WatcherManager.EnsureWatcherRunning(
+                    baseUrl, sessionId, transcriptPath,
+                    agentId: null, cwd: sessionCwd, skipTitle: isResumeOrCompact);
+            }
 
-                Console.WriteLine(notice.ToJsonString());
+            // Now that the watcher is running, await the deferred repo enrichment (a slow git/gh
+            // probe could not have delayed capture start) and then inject default_visibility +
+            // plan_content onto the enriched body before the POST.
+            body = await deferredRepoTask!;
+
+            // Inject default_visibility from the active V2 profile. The legacy top-level
+            // CapacitorConfig.DefaultVisibility shape is not populated by v2 configs (the field
+            // lives under the profile), so reading it there silently fell back to "org_public"
+            // and ignored per-profile `private` settings.
+            if (activeProfile?.DefaultVisibility is { } vis) {
+                try {
+                    var node = JsonNode.Parse(body);
+
+                    if (node is not null) {
+                        node["default_visibility"] = vis;
+                        body                       = node.ToJsonString();
+                    }
+                } catch {
+                    // Best effort
+                }
+            }
+
+            // Read plan file if slug is known and inject plan_content into payload.
+            var planContentInjected = false;
+
+            try {
+                var node = JsonNode.Parse(body);
+                var slug = node?["slug"]?.GetValue<string>();
+
+                if (slug is not null) {
+                    var planContent = ReadPlanFile(slug);
+
+                    if (planContent is not null) {
+                        node!["plan_content"] = planContent;
+                        body                  = node.ToJsonString();
+                        planContentInjected   = true;
+                    }
+                }
+            } catch {
+                // Best effort
+            }
+
+            // Ordering guard: if this session's backlog couldn't fully drain, spool the fresh
+            // session-start so a stranded session-start always reaches the server first.
+            if (CurrentSessionHasBacklog(spool, sessionId)) {
+                if (sessionId is not null) {
+                    spool.Append(sessionId, "session-start", body);
+                    await Console.Error.WriteLineAsync($"[kcap] session-start spooled (ordering guard); will retry on the next kcap hook ({sessionId})");
+                }
+                return 0;
+            }
+
+            // 2. Single bounded POST — keep resp alive to read the response body for the
+            //    context-envelope emission and plan-content POST on success.
+            var remaining = HookBudget.Remaining(processStart, "session-start");
+            HttpResponseMessage? resp = null;
+            try {
+                if (remaining > TimeSpan.Zero) {
+                    using var content = new StringContent(body, Encoding.UTF8, "application/json");
+                    resp = await client.PostOnceAsync($"{baseUrl}/hooks/session-start", content, remaining, CancellationToken.None);
+                }
+            } catch { resp = null; }
+
+            if (resp is null || !resp.IsSuccessStatusCode) {
+                var permanent = resp is not null && (int)resp.StatusCode is < 500 and not 408 and not 429;
+                resp?.Dispose();
+                if (!permanent && sessionId is not null) spool.Append(sessionId, "session-start", body);
+                return 0;
+            }
+
+            // resp is 2xx — read the body ONCE for the envelope + plan-content emission.
+            JsonNode? responseNode = null;
+            try {
+                var responseBody = await resp.Content.ReadAsStringAsync();
+                responseNode = JsonNode.Parse(responseBody);
+            } catch {
+                // Best effort — envelope is optional; don't fail the hook.
+            }
+
+            // Plan-content POST from response-resolved slug (only if not already injected).
+            if (responseNode is not null && !planContentInjected && sessionId is not null) {
+                try {
+                    var resolvedSlug = responseNode["slug"]?.GetValue<string>();
+
+                    if (resolvedSlug is not null) {
+                        var planContent = ReadPlanFile(resolvedSlug);
+
+                        if (planContent is not null) {
+                            await PostPlanContentAsync(client, baseUrl, sessionId, planContent);
+                        }
+                    }
+                } catch {
+                    // Best effort
+                }
+            }
+
+            // Context-envelope emission (lessons/version-nudge).
+            if (responseNode is not null) {
+                try {
+                    var disabled        = AppConfig.ResolvedProfile?.Profile?.DisableSessionGuidelines is true;
+                    var lessonsFragment = SessionGuidelinesEmitter.BuildFragment(responseNode, disabled);
+                    var nudgeFragment   = VersionNudgeEmitter.BuildFragment(responseNode, CapacitorVersion.CurrentDisplay());
+
+                    var envelope = SessionStartAdditionalContext.BuildEnvelope(lessonsFragment, nudgeFragment);
+
+                    if (envelope is not null) {
+                        Console.WriteLine(envelope);
+                    }
+                } catch {
+                    // Best effort — never break session capture for hook output emission.
+                }
+            }
+
+            resp.Dispose();
+
+            if (updateCheckTask is not null) {
+                await updateCheckTask;
             }
 
             return 0;
         }
 
-        using var content = new StringContent(body, Encoding.UTF8, "application/json");
+        // Dedicated bounded POST for session-end: single attempt clamped to the remaining
+        // hook budget, spools on transient failure, and checks generate_whats_done on success.
+        // Other commands continue through the shared PostWithRetryAsync path below.
+        if (command == "session-end") {
+            // Parse once: stamp ended_at and extract sessionId in a single pass.
+            string? sessionId = null;
+            try {
+                var node = JsonNode.Parse(body);
+                sessionId = node?["session_id"]?.GetValue<string>();
+                if (node is not null) {
+                    node["ended_at"] = DateTimeOffset.UtcNow.ToString("O");
+                    body             = node.ToJsonString();
+                }
+            } catch { }
+
+            // Ordering guard: if this session's backlog couldn't fully drain, spool the fresh
+            // session-end so a stranded session-start always reaches the server before it.
+            if (CurrentSessionHasBacklog(spool, sessionId)) {
+                if (sessionId is not null) {
+                    spool.Append(sessionId, "session-end", body);
+                    await Console.Error.WriteLineAsync($"[kcap] session-end spooled (ordering guard); will retry on the next kcap hook ({sessionId})");
+                }
+                return 0;
+            }
+
+            var remaining  = HookBudget.Remaining(processStart, "session-end");
+            HttpResponseMessage? resp = null;
+            try {
+                if (remaining > TimeSpan.Zero) {
+                    using var content = new StringContent(body, Encoding.UTF8, "application/json");
+                    resp = await client.PostOnceAsync($"{baseUrl}/hooks/session-end", content, remaining, CancellationToken.None);
+                }
+            } catch { resp = null; }
+
+            if (resp is null || !resp.IsSuccessStatusCode) {
+                var permanent = resp is not null && (int)resp.StatusCode is < 500 and not 408 and not 429;
+                resp?.Dispose();
+                if (!permanent) {
+                    if (sessionId is not null) {
+                        spool.Append(sessionId, "session-end", body);
+                        await Console.Error.WriteLineAsync($"[kcap] session-end spooled; will retry on the next kcap hook ({sessionId})");
+                    } else {
+                        await Console.Error.WriteLineAsync("[kcap] session-end transient failure but session_id missing — cannot spool; event dropped");
+                    }
+                }
+                return 0;
+            }
+
+            try {
+                var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync());
+                if (node?["generate_whats_done"]?.GetValue<bool>() == true && sessionId is not null)
+                    WatcherManager.SpawnWhatsDoneGenerator(baseUrl, sessionId);
+            } catch { }
+            resp.Dispose();
+            return 0;
+        }
+
+        using var sharedContent = new StringContent(body, Encoding.UTF8, "application/json");
 
         HttpResponseMessage response;
 
         try {
-            response = await client.PostWithRetryAsync($"{baseUrl}/hooks/{command}", content);
+            response = await client.PostWithRetryAsync($"{baseUrl}/hooks/{command}", sharedContent);
         } catch (HttpRequestException ex) {
             HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
 
@@ -282,84 +583,7 @@ public static class ClaudeHookCommand {
             return 1;
         }
 
-        // Check session-end response for generate_whats_done flag.
-        if (command == "session-end") {
-            try {
-                var responseBody = await response.Content.ReadAsStringAsync();
-                var responseNode = JsonNode.Parse(responseBody);
-
-                if (responseNode?["generate_whats_done"]?.GetValue<bool>() == true) {
-                    var node      = JsonNode.Parse(body);
-                    var sessionId = node?["session_id"]?.GetValue<string>();
-
-                    if (sessionId is not null) {
-                        WatcherManager.SpawnWhatsDoneGenerator(baseUrl, sessionId);
-                    }
-                }
-            } catch {
-                // Best effort
-            }
-        }
-
         switch (command) {
-            case "session-start": {
-                var node           = JsonNode.Parse(body);
-                var sessionId      = node?["session_id"]?.GetValue<string>();
-                var transcriptPath = node?["transcript_path"]?.GetValue<string>();
-                var sessionCwd     = node?["cwd"]?.GetValue<string>();
-
-                JsonNode? responseNode = null;
-                try {
-                    var responseBody = await response.Content.ReadAsStringAsync();
-                    responseNode     = JsonNode.Parse(responseBody);
-                } catch {
-                    // Best effort
-                }
-
-                if (responseNode is not null && !planContentInjected && sessionId is not null) {
-                    try {
-                        var resolvedSlug = responseNode["slug"]?.GetValue<string>();
-
-                        if (resolvedSlug is not null) {
-                            var planContent = ReadPlanFile(resolvedSlug);
-
-                            if (planContent is not null) {
-                                await PostPlanContentAsync(client, baseUrl, sessionId, planContent);
-                            }
-                        }
-                    } catch {
-                        // Best effort
-                    }
-                }
-
-                if (responseNode is not null) {
-                    try {
-                        var disabled        = AppConfig.ResolvedProfile?.Profile?.DisableSessionGuidelines is true;
-                        var lessonsFragment = SessionGuidelinesEmitter.BuildFragment(responseNode, disabled);
-                        var nudgeFragment   = VersionNudgeEmitter.BuildFragment(responseNode, CapacitorVersion.CurrentDisplay());
-
-                        var envelope = SessionStartAdditionalContext.BuildEnvelope(lessonsFragment, nudgeFragment);
-
-                        if (envelope is not null) {
-                            Console.WriteLine(envelope);
-                        }
-                    } catch {
-                        // Best effort — never break session capture for hook output emission.
-                    }
-                }
-
-                var source = node?["source"]?.GetValue<string>();
-
-                var isResumeOrCompact = source is not null
-                 && (source.Equals("resume", StringComparison.OrdinalIgnoreCase)
-                     || source.Equals("compact", StringComparison.OrdinalIgnoreCase));
-
-                if (sessionId is not null && transcriptPath is not null) {
-                    await WatcherManager.EnsureWatcherRunning(baseUrl, sessionId, transcriptPath, agentId: null, cwd: sessionCwd, skipTitle: isResumeOrCompact);
-                }
-
-                break;
-            }
             case "subagent-start": {
                 var node           = JsonNode.Parse(body);
                 var sessionId      = node?["session_id"]?.GetValue<string>();
@@ -459,4 +683,40 @@ public static class ClaudeHookCommand {
         using var planPayload = new StringContent(obj.ToJsonString(), Encoding.UTF8, "application/json");
         await httpClient.PostWithRetryAsync($"{url}/api/sessions/{sessionId}/plan", planPayload);
     }
+
+    /// <summary>
+    /// Returns a poster closure that POSTs a spooled entry to the server and maps the response
+    /// to a <see cref="DrainOutcome"/>. On a successful <c>session-end</c> replay, handles the
+    /// <c>generate_whats_done</c> side effect so it is not lost.
+    /// </summary>
+    static Func<string, string, Task<DrainOutcome>> ClaudePoster(HttpClient client, string baseUrl, TimeSpan perAttempt) =>
+        async (route, body) => {
+            try {
+                using var content = new StringContent(body, Encoding.UTF8, "application/json");
+                using var resp    = await client.PostOnceAsync($"{baseUrl}/hooks/{route}", content, perAttempt, CancellationToken.None);
+                if (!resp.IsSuccessStatusCode) {
+                    var code = (int)resp.StatusCode;
+                    return code is >= 500 or 408 or 429 ? DrainOutcome.TransientStop : DrainOutcome.Drop;
+                }
+                if (route == "session-end") {
+                    try {
+                        var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync());
+                        var sid  = JsonNode.Parse(body)?["session_id"]?.GetValue<string>();
+                        if (node?["generate_whats_done"]?.GetValue<bool>() == true && sid is not null)
+                            WatcherManager.SpawnWhatsDoneGenerator(baseUrl, sid);
+                    } catch { }
+                }
+                return DrainOutcome.Delivered;
+            } catch { return DrainOutcome.TransientStop; }
+        };
+
+    /// <summary>
+    /// Returns true if the given session still has undelivered spool entries (live .jsonl or in-flight
+    /// .draining files). Used as an ordering guard so a stranded session-start always reaches the
+    /// server before its session-end.
+    /// </summary>
+    static bool CurrentSessionHasBacklog(HookSpool spool, string? sid) =>
+        sid is not null && Directory.Exists(spool.Dir)
+        && (File.Exists(Path.Combine(spool.Dir, $"{sid}.jsonl"))
+            || Directory.EnumerateFiles(spool.Dir, $"{sid}.*.draining").Any());
 }

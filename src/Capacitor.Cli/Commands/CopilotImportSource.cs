@@ -36,7 +36,7 @@ internal sealed class CopilotImportSource : IImportSource {
     ) {
         _sessionStateDir       = sessionStateDirOverride ?? CopilotPaths.SessionStateDir();
         _legacySessionStateDir = legacyDirOverride       ?? CopilotPaths.LegacySessionStateDir();
-        _repoDetector          = repoDetector ?? RepositoryDetection.DetectRepositoryAsync;
+        _repoDetector          = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd));
     }
 
     static StringComparison PathComparison =>
