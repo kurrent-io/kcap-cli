@@ -267,13 +267,14 @@ public class PluginCommandCodexTests {
     }
 
     [Test]
-    public async Task SourceNames_contains_expected_five() {
+    public async Task SourceNames_contains_expected_skills() {
         var expected = new[] {
             "recap",
             "errors",
             "hide",
             "disable",
-            "validate-plan"
+            "validate-plan",
+            "review-flows"
         };
 
         await Assert.That(AgentsSkillsInstaller.SourceNames).IsEquivalentTo(expected);
