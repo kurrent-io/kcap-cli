@@ -1038,6 +1038,9 @@ static class ImportCommand {
                             var totalKnown  = new bool[ImportWorkerCount];
 
                             var wrappedEvents = events with {
+                                // TTY renders live per-session bars, so opt into the
+                                // sendable-line pre-count that sets their denominator.
+                                TrackPerSessionProgress = true,
                                 OnSessionStarted = (slot, c) => {
                                     var verb = c.Status == ClassificationStatus.Partial
                                         ? $"resuming from line {c.ResumeFromLine}"
@@ -2051,6 +2054,15 @@ static class ImportCommand {
         /// </summary>
         public required Action<int, int, int> OnSessionProgress { get; init; } // slot, linesAdded, total
 
+        /// <summary>
+        /// Whether a live per-session bar consumes <see cref="OnSessionProgress"/>.
+        /// When false (non-TTY / redirected output), <see cref="ImportSingleSessionAsync"/>
+        /// skips the per-session line pre-count — a full transcript read whose
+        /// denominator nothing would render. Defaults to false; the TTY slot
+        /// renderer sets it true.
+        /// </summary>
+        public bool TrackPerSessionProgress { get; init; }
+
         /// <summary>Fired when a successfully-imported session is ready for title generation.</summary>
         public required Action<(string SessionId, string FilePath, string? PreviousSessionId, string Vendor)> OnTitleTaskReady { get; init; }
 
@@ -2150,11 +2162,14 @@ static class ImportCommand {
         // Denominator for the per-slot progress bar: the number of parent-transcript
         // lines this import will POST. For a resume, only the lines past the server's
         // watermark are sent. 0 when the file is missing/unreadable — the slot then
-        // stays indeterminate instead of stuck at 0% (AI-907).
-        var sendableTotal = SessionImporter.CountSendableLines(
-            session.FilePath,
-            session.Status == ClassificationStatus.Partial ? session.ResumeFromLine : 0
-        );
+        // stays indeterminate instead of stuck at 0% (AI-907). Skipped entirely when
+        // no live bar consumes it (non-TTY) so we don't pre-scan every transcript.
+        var sendableTotal = events.TrackPerSessionProgress
+            ? SessionImporter.CountSendableLines(
+                session.FilePath,
+                session.Status == ClassificationStatus.Partial ? session.ResumeFromLine : 0
+            )
+            : 0;
 
         IProgress<ImportProgress> perSessionProgress = new CallbackProgress(ev => {
                 switch (ev) {

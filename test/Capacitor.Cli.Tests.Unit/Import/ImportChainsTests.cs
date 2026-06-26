@@ -114,6 +114,8 @@ public class ImportChainsTests : IDisposable {
         var progressTotals = new ConcurrentBag<int>();
 
         var events = new ImportCommand.ChainWorkerEvents {
+            // Opt into the sendable-line pre-count so OnSessionProgress carries a real total.
+            TrackPerSessionProgress = true,
             OnSessionStarted      = (_, _) => { },
             OnSubagentStarted     = (_, _, _) => { },
             OnSubagentFinished    = (_, _, _, _) => { },
@@ -132,6 +134,40 @@ public class ImportChainsTests : IDisposable {
         await Assert.That(progressLines.Sum()).IsEqualTo(250);
         // Every report carries the same denominator: the session's sendable total.
         await Assert.That(progressTotals.All(t => t == 250)).IsTrue();
+    }
+
+    [Test]
+    public async Task ImportChainsAsync_skips_line_precount_when_progress_disabled() {
+        // Perf gate (PR #186 review): when no live bar consumes the denominator
+        // (non-TTY, TrackPerSessionProgress defaults false), the per-session
+        // pre-count is skipped — OnSessionProgress still fires per batch but with
+        // total == 0, so we never read the whole transcript just to throw it away.
+        StubAllHookEndpoints();
+
+        var chains = new List<List<ImportCommand.SessionClassification>> {
+            new() { MakeNew("noprecount-s1", 250) },
+        };
+
+        var progressTotals = new ConcurrentBag<int>();
+
+        var events = new ImportCommand.ChainWorkerEvents {
+            // TrackPerSessionProgress omitted → defaults false (the non-TTY default).
+            OnSessionStarted      = (_, _) => { },
+            OnSubagentStarted     = (_, _, _) => { },
+            OnSubagentFinished    = (_, _, _, _) => { },
+            OnSessionProgress     = (_, _, total) => progressTotals.Add(total),
+            OnSessionErrored      = (_, _, _) => { },
+            OnSessionEnded        = (_, _, _, _) => { },
+            OnTitleTaskReady      = _ => { },
+            OnBackgroundWorkReady = _ => { },
+        };
+
+        using var client = new HttpClient();
+        await ImportCommand.ImportChainsAsync(client, _server.Url!, chains, events, CancellationToken.None);
+
+        // Batches still flowed, but the denominator was never computed.
+        await Assert.That(progressTotals.Count).IsEqualTo(3);
+        await Assert.That(progressTotals.All(t => t == 0)).IsTrue();
     }
 
     [Test]
