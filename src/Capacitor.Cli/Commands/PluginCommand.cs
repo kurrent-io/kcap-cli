@@ -448,14 +448,14 @@ public static class PluginCommand {
 
         switch (CodexConfigToml.EnableNetworkAccess(domains, env.CodexConfigTomlPath)) {
             case CodexConfigToml.Change.Updated:
-                await env.Stdout.WriteLineAsync("Codex sandbox network access enabled for kcap (~/.codex/config.toml).");
+                await env.Stdout.WriteLineAsync($"Codex sandbox network access enabled for kcap ({env.CodexConfigTomlPath}).");
                 break;
             case CodexConfigToml.Change.Unchanged:
                 await env.Stdout.WriteLineAsync("Codex sandbox already allows network access — no change needed.");
                 break;
             default:
                 await env.Stderr.WriteLineAsync(
-                    "Warning: could not update ~/.codex/config.toml — enable Codex sandbox network access manually (see README).");
+                    $"Warning: could not update {env.CodexConfigTomlPath} — enable Codex sandbox network access manually (see README).");
                 break;
         }
     }

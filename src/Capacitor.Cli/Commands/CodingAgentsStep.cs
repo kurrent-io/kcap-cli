@@ -29,7 +29,8 @@ internal static class CodingAgentsStep {
             string  LegacyCodexSkillsDir,
             string  KiroHooksPath = "",
             string  PiExtensionPath = "",
-            string  OpenCodeExtensionPath = ""
+            string  OpenCodeExtensionPath = "",
+            string  CodexConfigTomlPath = ""
         );
 
     internal record Installers(
@@ -86,7 +87,7 @@ internal static class CodingAgentsStep {
         var claudeInstalled       = HandleClaude(options, detected, paths, installers, prompt, writeLine);
         var codexHooksInstalled   = HandleCodexHooks(options, detected, paths, installers, prompt, writeLine);
         var codexSkillsInstalled  = codexHooksInstalled && HandleCodexSkills(paths, installers, writeLine);
-        var codexNetworkApplied   = HandleCodexNetworkAccess(options, installers, prompt, writeLine, codexHooksInstalled);
+        var codexNetworkApplied   = HandleCodexNetworkAccess(options, paths, installers, prompt, writeLine, codexHooksInstalled);
         var cursorHooksInstalled  = HandleCursorHooks(options, detected, paths, installers, prompt, writeLine);
         var copilotHooksInstalled = HandleCopilotHooks(options, detected, paths, installers, prompt, writeLine);
         var geminiHooksInstalled  = HandleGeminiHooks(options, detected, paths, installers, prompt, writeLine);
@@ -466,6 +467,7 @@ internal static class CodingAgentsStep {
     /// </summary>
     static bool HandleCodexNetworkAccess(
             Options            options,
+            Paths              paths,
             Installers         installers,
             Func<string, bool> prompt,
             Action<string>     writeLine,
@@ -490,9 +492,11 @@ internal static class CodingAgentsStep {
             return false;
         }
 
+        var configPath = Markup.Escape(paths.CodexConfigTomlPath);
+
         switch (installers.EnableCodexNetworkAccess()) {
             case CodexConfigToml.Change.Updated:
-                writeLine("  [green]✓[/] Codex sandbox network access enabled for kcap ([dim]~/.codex/config.toml[/])");
+                writeLine($"  [green]✓[/] Codex sandbox network access enabled for kcap ([dim]{configPath}[/])");
 
                 return true;
             case CodexConfigToml.Change.Unchanged:
@@ -500,7 +504,7 @@ internal static class CodingAgentsStep {
 
                 return false;
             default:
-                writeLine("  [yellow]⚠[/] Could not update ~/.codex/config.toml — enable Codex sandbox network access manually (see README).");
+                writeLine($"  [yellow]⚠[/] Could not update {configPath} — enable Codex sandbox network access manually (see README).");
 
                 return false;
         }

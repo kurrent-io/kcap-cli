@@ -11,8 +11,9 @@ namespace Capacitor.Cli.Daemon.Services;
 /// </summary>
 internal static class CodexConfigWriter {
     public static void TrustWorktree(string worktreePath, ILogger logger) {
-        if (CodexConfigToml.TrustWorktree(worktreePath) == CodexConfigToml.Change.Failed)
+        if (CodexConfigToml.TrustWorktree(worktreePath, out var error) == CodexConfigToml.Change.Failed)
             logger.LogWarning(
+                error,
                 "Failed to read/write {Path}; Codex worktree pre-trust not persisted",
                 Path.Combine(CodexPaths.Home, "config.toml"));
     }

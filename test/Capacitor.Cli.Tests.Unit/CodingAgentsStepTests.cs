@@ -990,7 +990,8 @@ public class CodingAgentsStepTests {
         LegacyCodexSkillsDir: "/fake/.codex/skills",
         KiroHooksPath:        "/fake/.kiro/agents/kcap.json",
         PiExtensionPath:      "/fake/.pi/agent/extensions/kcap.ts",
-        OpenCodeExtensionPath: "/fake/.config/opencode/plugins/kcap.ts"
+        OpenCodeExtensionPath: "/fake/.config/opencode/plugins/kcap.ts",
+        CodexConfigTomlPath:  "/fake/.codex/config.toml"
     );
 
     sealed class Sink {

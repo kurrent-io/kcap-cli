@@ -248,7 +248,8 @@ public static class SetupCommand {
             LegacyCodexSkillsDir: Path.Combine(CodexPaths.Home, "skills"),
             KiroHooksPath:        KiroPaths.KcapAgentJson(),
             PiExtensionPath:      PiPaths.KcapExtension(),
-            OpenCodeExtensionPath: OpenCodePaths.KcapPlugin());
+            OpenCodeExtensionPath: OpenCodePaths.KcapPlugin(),
+            CodexConfigTomlPath:  Path.Combine(CodexPaths.Home, "config.toml"));
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,

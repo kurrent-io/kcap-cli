@@ -50,7 +50,7 @@ public static class CodexConfigToml {
     public static Change EnableNetworkAccess(IReadOnlyCollection<string> allowDomains, string? configPath = null) =>
         allowDomains.Count == 0
             ? Change.Unchanged
-            : Update(configPath ?? DefaultConfigPath, root => MutateNetworkAccess(root, allowDomains));
+            : Update(configPath ?? DefaultConfigPath, root => MutateNetworkAccess(root, allowDomains), out _);
 
     /// <summary>
     /// Writes the per-worktree pre-trust entry:
@@ -60,7 +60,17 @@ public static class CodexConfigToml {
     /// </code>
     /// </summary>
     public static Change TrustWorktree(string worktreePath, string? configPath = null) =>
-        Update(configPath ?? DefaultConfigPath, root => MutateTrust(root, worktreePath));
+        TrustWorktree(worktreePath, out _, configPath);
+
+    /// <summary>
+    /// As <see cref="TrustWorktree(string,string?)"/>, but surfaces the underlying
+    /// exception on <see cref="Change.Failed"/> so the daemon can log the root cause
+    /// (parse vs permissions vs IO) it would otherwise lose to the swallowing
+    /// <see cref="Update"/>. <paramref name="error"/> is null unless the result is
+    /// <see cref="Change.Failed"/>.
+    /// </summary>
+    internal static Change TrustWorktree(string worktreePath, out Exception? error, string? configPath = null) =>
+        Update(configPath ?? DefaultConfigPath, root => MutateTrust(root, worktreePath), out error);
 
     /// <summary>
     /// Builds the Codex proxy allowlist from a set of Capacitor server URLs (the
@@ -112,16 +122,21 @@ public static class CodexConfigToml {
     /// changed <paramref name="root"/>. Returns <see cref="Change.Failed"/> on a
     /// parse error (we never clobber a config we can't read) or a write error,
     /// <see cref="Change.Unchanged"/> when nothing changed, otherwise
-    /// <see cref="Change.Updated"/>.
+    /// <see cref="Change.Updated"/>. <paramref name="error"/> carries the captured
+    /// exception on <see cref="Change.Failed"/> (null otherwise) so callers can log it.
     /// </summary>
-    static Change Update(string configPath, Func<TomlTable, bool> mutate) {
+    static Change Update(string configPath, Func<TomlTable, bool> mutate, out Exception? error) {
+        error = null;
+
         lock (_writeLock) {
             TomlTable root;
 
             if (File.Exists(configPath)) {
                 try {
                     root = TomlSerializer.Deserialize(File.ReadAllText(configPath), _tomlTypeInfo.TableInfo) ?? new TomlTable();
-                } catch {
+                } catch (Exception ex) {
+                    error = ex;
+
                     return Change.Failed;
                 }
             } else {
@@ -132,7 +147,9 @@ public static class CodexConfigToml {
 
             try {
                 changed = mutate(root);
-            } catch {
+            } catch (Exception ex) {
+                error = ex;
+
                 return Change.Failed;
             }
 
@@ -140,11 +157,16 @@ public static class CodexConfigToml {
 
             try {
                 // First-time users have no ~/.codex; create it before the atomic rename.
-                Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+                // GetDirectoryName is null/empty for a directory-less path — skip the
+                // create in that case (the file lands in the current directory).
+                var dir = Path.GetDirectoryName(configPath);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
                 WriteTomlAtomic(configPath, root);
 
                 return Change.Updated;
-            } catch {
+            } catch (Exception ex) {
+                error = ex;
+
                 return Change.Failed;
             }
         }
