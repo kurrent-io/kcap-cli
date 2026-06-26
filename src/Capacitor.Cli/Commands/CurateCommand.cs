@@ -47,9 +47,16 @@ static class CurateCommand {
         }
 
         var json = await resp.Content.ReadAsStringAsync();
-        var dto  = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.CurationApplyResponse);
+        const string malformedMessage = "Malformed response from server (could not parse curation payload).";
+        CurationApplyResponse? dto;
+        try {
+            dto = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.CurationApplyResponse);
+        } catch (JsonException) {
+            await Console.Error.WriteLineAsync(malformedMessage);
+            return 1;
+        }
         if (dto is null) {
-            await Console.Error.WriteLineAsync("Malformed response from server (could not parse curation payload).");
+            await Console.Error.WriteLineAsync(malformedMessage);
             return 1;
         }
         var items = dto.Items ?? [];

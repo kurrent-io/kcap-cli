@@ -98,6 +98,24 @@ public class CuratedBlockTests {
     }
 
     [Test]
+    public async Task Splice_remove_does_not_eat_blank_lines_outside_markers() {
+        // A block surrounded by user-authored blank lines — the blank lines that live
+        // outside the markers must survive removal.
+        var block  = CuratedBlock.Render([G("quality", "x")])!;
+        var input  = "intro\n\n" + block + "\n\noutro\n";
+
+        var result = CuratedBlock.Splice(input, null);
+
+        await Assert.That(result.Contains(CuratedBlock.StartMarker)).IsFalse();
+        await Assert.That(result.Contains(CuratedBlock.EndMarker)).IsFalse();
+        await Assert.That(result.Contains("intro")).IsTrue();
+        await Assert.That(result.Contains("outro")).IsTrue();
+        // The blank line between intro and the block, and between the block and outro,
+        // must both be preserved (the user put them there — they are outside the markers).
+        await Assert.That(result.Contains("\n\n")).IsTrue();
+    }
+
+    [Test]
     public async Task ExtractBullets_returns_block_lines() {
         var block = CuratedBlock.Render([G("quality", "a"), G("quality", "b")])!;
         var bullets = CuratedBlock.ExtractBullets("noise\n" + block + "\nmore noise\n");

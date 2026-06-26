@@ -70,9 +70,6 @@ public static class CuratedBlock {
 
     static void RemoveBlock(List<string> lines, (int start, int end) loc) {
         var (s, e) = loc;
-        // Also drop one immediately-following blank line we may have inserted on append.
-        if (e + 1 < lines.Count && lines[e + 1].Trim().Length == 0) e++;
-        if (s - 1 >= 0 && lines[s - 1].Trim().Length == 0) s--;
         lines.RemoveRange(s, e - s + 1);
     }
 
