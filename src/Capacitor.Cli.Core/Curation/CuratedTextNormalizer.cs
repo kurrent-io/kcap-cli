@@ -29,7 +29,7 @@ public static class CuratedTextNormalizer {
 
         // Defang the comment terminator: a zero-width space (U+200B) breaks the "-->"
         // token, which also neutralizes any embedded start/end marker (both end in "-->").
-        // Use the ​ escape, never a literal ZWSP, so the source stays reviewable.
-        return s.Replace("-->", "--​>");
+        // Use the \u200b escape, never a literal ZWSP, so the source stays reviewable.
+        return s.Replace("-->", "--\u200b>");
     }
 }
