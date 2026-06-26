@@ -149,6 +149,55 @@ public class ClaudeHookCommandTests {
         result.Value.Client.Dispose();
     }
 
+    const string AgentId = "a1b2c3d4";
+
+    [Test]
+    public async Task subagent_stop_on_5xx_is_spooled_and_returns_zero() {
+        using var fx = new Fixture(HttpStatusCode.InternalServerError);
+        var exit = await fx.HandleAsync($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}""");
+        await Assert.That(exit).IsEqualTo(0);
+        var files = fx.SpoolFiles.ToList();
+        await Assert.That(files.Count).IsEqualTo(1);
+        var content = await File.ReadAllTextAsync(files[0]);
+        await Assert.That(content).Contains("\"route\":\"subagent-stop\"");
+    }
+
+    [Test]
+    public async Task subagent_stop_against_hung_server_is_spooled_within_budget() {
+        using var fx = new Fixture();
+        fx.HoldOnPost = TimeSpan.FromSeconds(30); // server hangs past the bounded attempt
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var exit = await fx.HandleAsync($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}""");
+        sw.Stop();
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5)); // did not wait the full 30s
+        await Assert.That(fx.SpoolFiles.Any()).IsTrue();
+    }
+
+    [Test]
+    public async Task subagent_stop_on_4xx_is_not_spooled() {
+        using var fx = new Fixture(HttpStatusCode.BadRequest);
+        await fx.HandleAsync($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}""");
+        await Assert.That(fx.SpoolFiles.Any()).IsFalse();
+    }
+
+    [Test]
+    public async Task subagent_stop_without_agent_id_is_not_spooled() {
+        // No agent_id → no SubagentCompleted to deliver → unchanged shared-path behavior (no spool).
+        using var fx = new Fixture(); // OK
+        await fx.HandleAsync($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}""");
+        await Assert.That(fx.SpoolFiles.Any()).IsFalse();
+    }
+
+    [Test]
+    public async Task spooled_subagent_stop_is_replayed_on_next_hook() {
+        using var fx = new Fixture(); // server up
+        fx.Spool.Append(Sid, "subagent-stop", $$"""{"session_id":"{{Sid}}","agent_id":"{{AgentId}}"}""");
+        await fx.HandleAsync($$"""{"hook_event_name":"Stop","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}""");
+        await Assert.That(fx.RouteOrder).Contains("subagent-stop"); // drained + replayed
+        await Assert.That(fx.SpoolFiles.Any()).IsFalse();           // delivered + cleaned
+    }
+
     [Test]
     public async Task replayed_session_end_with_generate_whats_done_is_handled() {
         // Server returns generate_whats_done:false for the replayed session-end (set false to avoid process spawn).
