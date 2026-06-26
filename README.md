@@ -408,7 +408,7 @@ kcap plugin install --codex --if-installed           # refresh Codex hooks only 
 kcap plugin install --if-installed                   # refresh Claude plugin registration only if previously installed (used by npm postinstall)
 ```
 
-Installing with `--codex` (or `--skills`) writes five skills under `~/.agents/skills/`:
+Installing with `--codex` (or `--skills`) writes six skills under `~/.agents/skills/`:
 
 | Skill | Wraps | Purpose |
 |---|---|---|
@@ -417,8 +417,9 @@ Installing with `--codex` (or `--skills`) writes five skills under `~/.agents/sk
 | `kcap-hide` | `kcap hide` | Mark session owner-only |
 | `kcap-disable` | `kcap disable` | Stop recording + delete server data |
 | `kcap-validate-plan` | `kcap validate-plan` | Verify plan items were completed |
+| `kcap-review-flows` | `kcap mcp flows` | Structured iterative spec/code review loops |
 
-All five auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionId>` explicitly to operate on a different session.
+All six auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionId>` explicitly to operate on a different session.
 
 > **Codex sandbox network access (AI-794).** The skills shell out to `kcap …`, which talks to the Capacitor server — but Codex runs the agent's shell tool in a `workspace-write` sandbox that **blocks network by default**, so the skills fail (or demand escalation) until network access is allowed. Both `kcap setup` (one yes/no prompt after the Codex hooks step) and `kcap plugin install --codex` enable it for you. They write a constrained allowlist to `~/.codex/config.toml` rather than opening the network wholesale:
 >
