@@ -60,9 +60,10 @@ server recovers.
 A vendor-neutral, on-disk **hook spool**. When a lifecycle POST fails
 transiently (server unreachable / 5xx / timeout), the hook appends the payload
 to the spool and exits cleanly. On *every* subsequent `kcap hook` invocation, a
-**cross-session** drainer flushes all pending entries once the server is
-confirmed reachable. The server's existing session-start/session-end
-idempotency makes replay safe with no server changes.
+**cross-session** drainer flushes pending entries, stopping at the first
+transient failure (so it costs ~one request when the server is still down). The
+server's existing session-start/session-end idempotency makes replay safe with
+no server changes.
 
 ```
 lifecycle POST ──success──▶ done
@@ -91,25 +92,41 @@ Claude kills it. Today `ClaudeHookCommand` posts via `PostWithRetryAsync`
 `!IsSuccessStatusCode` branch runs — nothing is ever spooled and the bug
 persists. Budgeting only the *later* drain does not fix this.
 
-The fix is a **shared per-invocation deadline**:
+The fix is a **shared per-invocation deadline** that covers *everything the hook
+does before it can spool*, not just the POST:
 
 - A single `Stopwatch` from the start of `Handle`, and a hook-budget ceiling per
   event (mirroring `kcap/hooks/hooks.json`: `SessionEnd` 15 s, `SessionStart` /
   `Notification` / `Stop` / `SubagentStart` / `SubagentStop` 5 s) minus a
-  **safety margin (~1.5 s)** reserved so a failed POST still has time to spool
-  and exit.
+  **safety margin (~1.5 s)**. The **safety-adjusted deadline** =
+  `start + ceiling − margin`; everywhere below, "remaining" means time left to
+  *that* deadline, not to the raw hook timeout. The margin reserves time for the
+  local spool write + process exit.
+- **Auth/client creation is inside the deadline too.** `CreateAuthenticated
+  ClientAsync` can block well past the hook timeout *before* any POST:
+  `/auth/config` discovery, a cross-process token-lock wait of up to **15 s**
+  (`TokenStore.cs:167`), and a token refresh whose HTTP call has no timeout/ct
+  (`TokenStore.cs:230`, up to the 100 s default against a hung server). The
+  deadline `CancellationToken` is threaded into client creation **and** a hard
+  outer cap (`Task.WhenAny(work, Delay(remaining))`, the pattern Cursor already
+  uses in `CursorHookCommand.WithHardCap`) wraps it, because some `TokenStore`
+  refresh paths don't honour the token.
+- **Spooling needs no server and no client** — it's a local disk write. So the
+  body (repo-enriched, `ended_at`-stamped) is prepared *first*; if auth/client
+  creation or the POST fails or the deadline fires, the hook still spools and
+  exits cleanly. Delivery failure never means data loss.
 - Every network step — the pre-event drain, the session-end inline transcript
-  drain, and the lifecycle POST — is clamped to the **remaining** budget. If
-  earlier steps overrun, later steps get a small timeout and fail fast; either
-  way the spool-on-failure path is always reached before the kill.
+  drain, and the lifecycle POST — is clamped to **remaining**. If earlier steps
+  overrun, later steps get a small timeout and fail fast; either way the
+  spool-on-failure path is always reached before the kill.
 - The lifecycle POST itself becomes a **single bounded attempt** via the
   existing `PostOnceAsync` (`HttpClientExtensions.cs:160`) with
   `timeout = remaining`, replacing `PostWithRetryAsync`. A single attempt that
   fails fast and spools is more robust here than retries that risk the hook
   timeout — durable replay, not in-hook retry, provides the reliability.
 
-This guarantees spool-before-kill against connection refusal, 5xx, **and** a
-slow/hung server.
+This guarantees spool-before-kill against connection refusal, 5xx, a slow/hung
+server, **and** a hung auth/token-refresh path.
 
 ## Components
 
@@ -127,19 +144,39 @@ slow/hung server.
   event→route map. Line shape: `{"route": "<segment>", "body": "<raw payload>"}`.
   Lines lacking `route` (old Cursor format) are skipped and reaped — acceptable
   since spool entries are transient failed POSTs.
-- **New method `DrainAllAsync(poster, budget, ct)`** — cross-session drain:
-  enumerate all `*.jsonl`, FIFO-drain each via the existing per-file logic,
-  invoke `poster(route, body)` per entry, mark-delivered (rewrite remaining /
-  delete emptied file) on success, and **stop on the first failed POST or budget
-  expiry**. `poster` is a `Func<string /*route*/, string /*body*/, Task<bool>>`.
+- **Atomic rotate-on-drain (eliminates the rewrite race).** Today's drain reads
+  a snapshot of the file, then rewrites/deletes it after delivery
+  (`CursorHookSpool.cs:126`); a concurrent `Append` (`CursorHookSpool.cs:23`)
+  between read and rewrite is silently overwritten — and cross-session "every
+  hook drains" makes two processes touching one session file far more likely.
+  Replace the in-place rewrite with rotate: the drainer **atomically renames**
+  `<sid>.jsonl` → a private `<sid>.<pid>-<n>.draining` temp, then drains the
+  temp. Appends always target the live `<sid>.jsonl`, so they can never collide
+  with an in-flight drain; concurrent drainers each win-or-skip the atomic
+  rename, so only one drains a given file. On success the temp is deleted; on a
+  partial/transient stop the undelivered remainder is rewritten to the temp
+  (which nothing else touches). Orphaned `*.draining` temps (crash mid-drain)
+  are re-discovered and drained on the next run.
+- **New method `DrainAllAsync(currentSessionId, poster, budget, ct)`** —
+  drains the **current session's file first** (see Component 5 for why ordering
+  needs this), then other sessions' files with any remaining budget. Each file
+  is rotated then FIFO-drained; the drain **stops on the first transient failure
+  or budget expiry**. `poster` is
+  `Func<string /*route*/, string /*body*/, Task<DrainOutcome>>`.
+- **`DrainOutcome` is tri-state**, so a permanent failure can't poison the head
+  of the queue: `Delivered` (advance past the entry), `Drop` (permanent — e.g. a
+  `4xx` other than 408/429; advance past it, do not retry), `TransientStop`
+  (server down/timeout; stop draining this file, leave the remainder). Without
+  `Drop`, a single permanent `400/404` at the head would block everything behind
+  it until the 30-day reap.
 - **Route-specific replay side effects live in the poster, not the spool.** The
   poster is a vendor-owned closure that performs the POST *and* handles the
   response. The Claude poster therefore parses a replayed `session-end`
   response and spawns the what's-done generator when `generate_whats_done` is
   set (`ClaudeHookCommand.cs:260`) — otherwise a session un-stuck by replay
   would still have no summary, which was part of the original symptom. Keeping
-  this in the closure means `DrainAllAsync` stays generic (success/fail only)
-  while no live-path side effect is lost on replay.
+  this in the closure means `DrainAllAsync` stays generic (outcome only) while
+  no live-path side effect is lost on replay.
 - Retain `Append`, `ReapOlderThan`, the 1 MB cap eviction, and the
   `SafeSessionId` (`^[0-9a-fA-F]{32}$`) guard.
 
@@ -159,10 +196,14 @@ slow/hung server.
   file move would silently discard the backlog (the drainer skips lines without
   `route`). The one-time, best-effort migration reads each
   `~/.cursor/kcap-pending/*.jsonl` line, resolves `route` from the event name
-  via `CursorHookEventMap`, rewrites it in the new format under
-  `~/.config/kcap/spool/`, and removes the old file. Lines whose event no
+  via `CursorHookEventMap`, and writes the new-format file. Lines whose event no
   longer maps are dropped. Failures are swallowed; un-migrated leftovers reap
   after 30 days.
+- **Concurrency-safe:** the migration writes to a temp file then atomically
+  renames it into `~/.config/kcap/spool/` (never a partially-written target a
+  concurrent drainer could read), and skips a session whose target already
+  exists so a racing migrator/appender isn't clobbered. It then removes the old
+  source file.
 
 ### 3. `ClaudeHookCommand` — session-start
 
@@ -204,14 +245,26 @@ session has a stranded `session-start` in the spool and is now firing
 `session-end`, draining *after* would post `SessionEnded` before the replayed
 `SessionStarted` — an inversion. Draining first preserves lifecycle order.
 
-- **No success-gate needed.** `DrainAllAsync` stops on the first failed POST, so
-  when the server is down the drain fails fast on the first entry and bails
-  (~one bounded request, per the budget-discipline section) before the fresh
-  event is attempted. This is cheaper and simpler than gating on a later POST.
+- **Current session's backlog goes first, and gates the fresh event.**
+  Draining "all files before the event" is not enough on its own: if unrelated
+  session files consume the budget first, the current session's own stranded
+  `session-start` could still be undrained when its `session-end` posts — the
+  same inversion. So `DrainAllAsync` drains the current session's file **first**;
+  if that file cannot be fully drained (transient failure or budget), the fresh
+  event is **spooled instead of posted live**, preserving same-session order.
+  Cross-session files are drained only with leftover headroom and never affect
+  the fresh event's correctness (independent sessions have no ordering
+  relationship).
+- **No success-gate needed.** `DrainAllAsync` stops on the first transient
+  failure, so when the server is down the drain fails fast on the first entry
+  and bails (~one bounded request, per the budget-discipline section). Permanent
+  `4xx` entries are `Drop`ped rather than blocking the queue.
 - Budget: **≤ 2 s**, clamped to the shared per-invocation remaining budget so it
-  always leaves headroom for the current event's own work and bounded POST. The
-  per-event ceilings are listed in the budget-discipline section.
-  `PermissionRequest` early-returns before this point and is unaffected.
+  always leaves headroom for the current event's own work and bounded POST. On
+  the tight 5 s hooks the cross-session pass may get little or no budget — that
+  is fine; the current-session-first guarantee still holds and the backlog
+  flushes on a later, roomier hook. `PermissionRequest` early-returns before
+  this point and is unaffected.
 - Cheap no-op when the spool dir is empty (single existence/enumeration check).
 
 Because every hook drains and delivery is incremental + idempotent, a backlog
@@ -234,9 +287,10 @@ server returning, before any later `session-end` would need to.
     `sessionStart`, `sessionEnd`, `beforeSubmitPrompt`, `afterAgentThought`. The
     unification preserves this; it is **not** narrowed to the two lifecycle
     events.
-- **Lifecycle ordering on replay** is preserved by draining before the current
-  event (Component 5): a stranded `session-start` is replayed before the current
-  `session-end` for the same session.
+- **Lifecycle ordering on replay** is preserved by draining the current
+  session's file before its fresh event, and spooling the fresh event if that
+  backlog can't fully drain (Component 5): a stranded `session-start` always
+  reaches the server before the same session's `session-end`.
 - **Transcript-vs-start ordering:** transcript lines may still reach the server
   (via the watcher's SignalR stream) before a spooled `session-start` is
   replayed. This already happens today on resume and is tolerated by the
@@ -255,6 +309,10 @@ Spool on **transient** failures only:
 Do **not** spool on `2xx` (success) or other `4xx` (permanent — bad request,
 auth). This avoids spooling payloads that will never succeed.
 
+On **replay**, the same classification maps to `DrainOutcome`: `2xx` →
+`Delivered`, transient → `TransientStop`, permanent `4xx` → `Drop` (removed from
+the spool, not retried) so it can't poison the head of the queue for 30 days.
+
 ## Error handling / safety
 
 Entirely **fail-open**, matching the existing hook contract: any IO / JSON /
@@ -270,8 +328,13 @@ TUnit unit tests (Microsoft Testing Platform), WireMock.Net for HTTP:
 `HookSpool`:
 - append then `DrainAllAsync` delivers in FIFO order across multiple session
   files
-- stop-on-first-failure leaves undelivered entries in place
+- current-session file drains before other sessions' files
+- `TransientStop` leaves undelivered entries in place; `Drop` (permanent 4xx)
+  advances past the entry so it can't block the head
 - budget expiry leaves the remainder for next time
+- **concurrent `Append` during a drain is not lost** (rotate scheme: append
+  lands in the live file while the drain works the rotated temp)
+- orphaned `*.draining` temp (simulated crash) is recovered on the next drain
 - 1 MB cap evicts oldest entries
 - `ReapOlderThan` deletes stale files
 - fail-open on unreadable/locked files
@@ -282,11 +345,15 @@ TUnit unit tests (Microsoft Testing Platform), WireMock.Net for HTTP:
 - **session-end against a slow/hung server (WireMock fixed delay > bounded
   timeout) → POST aborts within the hook budget and the entry is spooled** (the
   root-cause test; would hang with `PostWithRetryAsync`)
+- **expired token + hung `/auth/refresh` → client creation is capped, the entry
+  is still spooled, and the hook exits within budget** (auth path can't outlive
+  the deadline)
 - session-end on 4xx → not spooled
 - session-start on failure → spooled **and** watcher spawned
 - next hook with server up → backlog drained (cross-session), files deleted
-- **drain runs before the current event** (replayed `session-start` posts before
-  the current `session-end`; mirrors the Cursor ordering test)
+- **current-session ordering:** with a stranded `session-start` in the current
+  session's spool, a `session-end` invocation replays the start first; if the
+  start can't drain, the end is spooled rather than posted (no inversion)
 - **replayed `session-end` whose response has `generate_whats_done` spawns the
   what's-done generator** (side effect not lost on replay)
 - drain budget never exceeds the hook's remaining headroom; drain fails fast
@@ -309,16 +376,22 @@ TUnit unit tests (Microsoft Testing Platform), WireMock.Net for HTTP:
 ## Affected files
 
 - `src/Capacitor.Cli/Commands/CursorHookSpool.cs` → generalized/renamed
-  `HookSpool.cs` (+ `route` field, `DrainAllAsync`)
+  `HookSpool.cs` (`route` field, rotate-on-drain,
+  `DrainAllAsync(currentSessionId, …)`, tri-state `DrainOutcome`)
 - `src/Capacitor.Cli/Commands/CursorHookCommand.cs` (use `HookSpool`, store
   route, cross-session drain, transforming dir migration; keep all four
   `SpoolOnFailure` events)
 - `src/Capacitor.Cli/Commands/CursorHookEventMap.cs` (route now carried in the
   spool entry; event→route resolution at append + migration time)
 - `src/Capacitor.Cli/Commands/ClaudeHookCommand.cs` (shared per-invocation
-  deadline; drain step **before** the current event; bounded lifecycle POST via
-  `PostOnceAsync`; session-start restructure; session-end spool + `ended_at`;
-  Claude poster handles `generate_whats_done` on replay)
+  deadline covering auth/client creation + a hard outer cap; drain step
+  current-session-first **before** the current event; bounded lifecycle POST via
+  `PostOnceAsync`; spool body prepared before client creation; session-start
+  restructure; session-end spool + `ended_at`; Claude poster handles
+  `generate_whats_done` and tri-state `DrainOutcome` on replay)
+- `src/Capacitor.Cli.Core/Auth/TokenStore.cs` (thread the deadline `ct` into the
+  refresh path where honoured; the hard outer cap covers the paths that don't —
+  optionally add a timeout to the `/auth/refresh` POST as defence-in-depth)
 - `src/Capacitor.Cli.Core/HttpClientExtensions.cs` (reuse existing
   `PostOnceAsync` for the bounded lifecycle POST; no change expected)
 - `src/Capacitor.Cli.Core/PathHelpers.cs` (shared `spool` path — via existing
