@@ -109,7 +109,10 @@ static class CurateCommand {
 
         // 8. Write atomically.
         try {
-            foreach (var f in actionable) WriteFileAtomic(f.Path, f.NewContent!);
+            foreach (var f in actionable) {
+                if (f.NewContent is null) continue;   // NoOp is already filtered out; defensive
+                WriteFileAtomic(f.Path, f.NewContent);
+            }
         } catch (IOException ex) {
             await Console.Error.WriteLineAsync($"Write failed: {ex.Message}");
             return 1;
@@ -126,14 +129,13 @@ static class CurateCommand {
         if (!OperatingSystem.IsWindows() && File.Exists(path)) mode = File.GetUnixFileMode(path);
 
         File.WriteAllText(tmp, content);
+        if (mode is { } m && !OperatingSystem.IsWindows()) File.SetUnixFileMode(tmp, m);
         File.Move(tmp, path, overwrite: true);
-
-        if (mode is { } m && !OperatingSystem.IsWindows()) File.SetUnixFileMode(path, m);
         return path;
     }
 
     static List<FilePlan> DistinctByRealPath(List<FilePlan> files) {
-        var seen   = new HashSet<string>(StringComparer.Ordinal);
+        var seen   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<FilePlan>();
         foreach (var f in files) {
             string real;
