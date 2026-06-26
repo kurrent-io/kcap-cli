@@ -39,8 +39,8 @@ server recovers.
   capture is never lost even when the start POST fails.
 - Recovery is automatic, requires no user action, and survives the hook process
   being killed by Claude's timeout.
-- Zero added latency on the hot path and no risk of pushing a hook past its
-  timeout.
+- Negligible added latency — a no-op when the spool is empty, fast-fail when the
+  server is down — and no risk of pushing a hook past its timeout.
 
 ## Non-goals
 
@@ -80,6 +80,37 @@ backlog on that session's *next* hook, which for a terminal event never comes
 (until resume). The drainer must flush *any* session's stranded events the next
 time *any* hook fires.
 
+## Hook-budget discipline (the actual root cause)
+
+Spooling on failure is only useful if the hook **reaches** the spool code before
+Claude kills it. Today `ClaudeHookCommand` posts via `PostWithRetryAsync`
+(`ClaudeHookCommand.cs:247`), whose default total budget is **30 s**
+(`HttpClientExtensions.cs:79`, `SendWithRetryAsync`). Against a *hung* server
+(as opposed to a clean connection refusal), that call blocks past the 15 s
+`SessionEnd` hook timeout, so Claude SIGKILLs the hook **before** the
+`!IsSuccessStatusCode` branch runs — nothing is ever spooled and the bug
+persists. Budgeting only the *later* drain does not fix this.
+
+The fix is a **shared per-invocation deadline**:
+
+- A single `Stopwatch` from the start of `Handle`, and a hook-budget ceiling per
+  event (mirroring `kcap/hooks/hooks.json`: `SessionEnd` 15 s, `SessionStart` /
+  `Notification` / `Stop` / `SubagentStart` / `SubagentStop` 5 s) minus a
+  **safety margin (~1.5 s)** reserved so a failed POST still has time to spool
+  and exit.
+- Every network step — the pre-event drain, the session-end inline transcript
+  drain, and the lifecycle POST — is clamped to the **remaining** budget. If
+  earlier steps overrun, later steps get a small timeout and fail fast; either
+  way the spool-on-failure path is always reached before the kill.
+- The lifecycle POST itself becomes a **single bounded attempt** via the
+  existing `PostOnceAsync` (`HttpClientExtensions.cs:160`) with
+  `timeout = remaining`, replacing `PostWithRetryAsync`. A single attempt that
+  fails fast and spools is more robust here than retries that risk the hook
+  timeout — durable replay, not in-hook retry, provides the reliability.
+
+This guarantees spool-before-kill against connection refusal, 5xx, **and** a
+slow/hung server.
+
 ## Components
 
 ### 1. `HookSpool` (generalize `CursorHookSpool`)
@@ -101,6 +132,14 @@ time *any* hook fires.
   invoke `poster(route, body)` per entry, mark-delivered (rewrite remaining /
   delete emptied file) on success, and **stop on the first failed POST or budget
   expiry**. `poster` is a `Func<string /*route*/, string /*body*/, Task<bool>>`.
+- **Route-specific replay side effects live in the poster, not the spool.** The
+  poster is a vendor-owned closure that performs the POST *and* handles the
+  response. The Claude poster therefore parses a replayed `session-end`
+  response and spawns the what's-done generator when `generate_whats_done` is
+  set (`ClaudeHookCommand.cs:260`) — otherwise a session un-stuck by replay
+  would still have no summary, which was part of the original symptom. Keeping
+  this in the closure means `DrainAllAsync` stays generic (success/fail only)
+  while no live-path side effect is lost on replay.
 - Retain `Append`, `ReapOlderThan`, the 1 MB cap eviction, and the
   `SafeSessionId` (`^[0-9a-fA-F]{32}$`) guard.
 
@@ -110,9 +149,20 @@ time *any* hook fires.
   (`mapping.RouteSegment`) instead of the event name, and uses
   `DrainAllAsync` (gaining cross-session recovery — its terminal `sessionEnd`
   is currently only replayed on resume).
-- Best-effort one-time migration: on first run, move existing
-  `~/.cursor/kcap-pending/*.jsonl` into `~/.config/kcap/spool/`. If skipped,
-  old entries simply reap after 30 days.
+- **Cursor keeps its full `SpoolOnFailure` set unchanged** — `sessionStart`,
+  `sessionEnd`, `beforeSubmitPrompt`, `afterAgentThought`
+  (`CursorHookEventMap.cs:12`). The spool component is event-agnostic (it stores
+  whatever `route` it's handed); each vendor's command decides what to spool.
+  This is **not** a narrowing of Cursor durability — see Idempotency & ordering.
+- **Migration must transform, not just move.** Old Cursor spool lines use
+  `{"hook_event_name", "body"}` and the new drainer keys on `route`, so a bare
+  file move would silently discard the backlog (the drainer skips lines without
+  `route`). The one-time, best-effort migration reads each
+  `~/.cursor/kcap-pending/*.jsonl` line, resolves `route` from the event name
+  via `CursorHookEventMap`, rewrites it in the new format under
+  `~/.config/kcap/spool/`, and removes the old file. Lines whose event no
+  longer maps are dropped. Failures are swallowed; un-migrated leftovers reap
+  after 30 days.
 
 ### 3. `ClaudeHookCommand` — session-start
 
@@ -122,9 +172,10 @@ Restructure so a failed start never loses the session:
   transcript capture continues regardless of POST outcome.
 - **On success:** emit the SessionStart context envelope + post plan content (as
   today).
-- **On transient failure:** `spool.Append(sid, "session-start", body)` (body is
-  already repo-enriched and carries the original payload). Replay later creates
-  the server record; the watcher's buffered transcript reconciles against it.
+- **On transient failure** (bounded POST per the budget-discipline section):
+  `spool.Append(sid, "session-start", body)` (body is already repo-enriched and
+  carries the original payload). Replay later creates the server record; the
+  watcher's buffered transcript reconciles against it.
 - `session-start` is `async: true` in the plugin, so Claude does not block on
   the exit code; return 0.
 
@@ -134,26 +185,34 @@ Restructure so a failed start never loses the session:
   before the POST, mirroring the watcher parent-exit path
   (`WatchCommand.PostSessionEndOnParentExitAsync`), so a late replay records the
   true end time rather than the flush time.
-- **On transient failure:** `spool.Append(sid, "session-end", body)`, write a
-  stderr breadcrumb (`recoverable via: kcap import --session <id>`), and
-  **return 0** (durably captured) instead of 1.
-- **4xx (permanent):** do not spool; preserve current behavior.
+- **Bounded POST** per the budget-discipline section (single `PostOnceAsync`
+  clamped to the remaining hook budget), replacing `PostWithRetryAsync`.
+- **On transient failure** (refusal / 5xx / 408 / 429 / timeout):
+  `spool.Append(sid, "session-end", body)`, write a stderr breadcrumb
+  (`recoverable via: kcap import --session <id>`), and **return 0** (durably
+  captured) instead of 1.
+- **4xx (permanent, except 408/429):** do not spool; preserve current behavior.
 
 ### 5. Drain step (every invocation)
 
-Run at the **end of `Handle`**, after the current event's own POST, **gated on
-that POST having succeeded** (server provably reachable now):
+Run **before** the current event's own POST — matching the existing Cursor
+ordering (`CursorHookCommand.cs:115`) and the test that pins it
+(`CursorHookCommandTests.cs:90`, `spool_drain_runs_before_current_event_under_budget`).
 
-- If the current POST failed, skip the drain entirely → ~0 cost when the server
-  is down.
-- Budget: **2 s**, further clamped to the hook's remaining headroom
-  (`hookTimeout − elapsed − 1 s safety`) so it never risks a hook timeout. The
-  per-event hook timeouts (`kcap/hooks/hooks.json`): `SessionEnd` 15 s;
-  `Notification`/`Stop` 5 s; `SessionStart`/`SubagentStart`/`SubagentStop` 5 s
-  (`async`). `PermissionRequest` early-returns before this point and is unaffected.
+Draining-before is required for **correctness**, not just parity: if the same
+session has a stranded `session-start` in the spool and is now firing
+`session-end`, draining *after* would post `SessionEnded` before the replayed
+`SessionStarted` — an inversion. Draining first preserves lifecycle order.
+
+- **No success-gate needed.** `DrainAllAsync` stops on the first failed POST, so
+  when the server is down the drain fails fast on the first entry and bails
+  (~one bounded request, per the budget-discipline section) before the fresh
+  event is attempted. This is cheaper and simpler than gating on a later POST.
+- Budget: **≤ 2 s**, clamped to the shared per-invocation remaining budget so it
+  always leaves headroom for the current event's own work and bounded POST. The
+  per-event ceilings are listed in the budget-discipline section.
+  `PermissionRequest` early-returns before this point and is unaffected.
 - Cheap no-op when the spool dir is empty (single existence/enumeration check).
-- Relies on `DrainAllAsync` stop-on-first-failure for the mid-drain
-  server-drop case.
 
 Because every hook drains and delivery is incremental + idempotent, a backlog
 flushes across successive hooks rather than needing one big flush — so a small
@@ -167,21 +226,30 @@ server returning, before any later `session-end` would need to.
   (`ImportCommand.cs:2259`) and the watcher parent-exit path re-POST
   session-end, and resume re-fires session-start; the server dedupes on
   deterministic event ids. No server changes required.
-- **Spool scope = session-start + session-end** only (the canonical
-  lifecycle events), matching Cursor's `SpoolOnFailure` selection. `stop`,
-  `notification`, and `subagent-*` are not spooled — they only ensure the
-  watcher runs and carry nothing lifecycle-critical to replay.
-- **Ordering:** transcript lines may reach the server (via the watcher's
-  SignalR stream) before a spooled `session-start` is replayed. This already
-  happens today on resume and is tolerated by the server's lazy session
-  handling; the spooled start reconciles when it lands.
+- **Spool scope is per-vendor, set by each hook command — not by the spool.**
+  - *Claude (new):* `session-start` + `session-end` (the canonical lifecycle
+    events). `stop`, `notification`, and `subagent-*` are not spooled — they
+    only ensure the watcher runs and carry nothing lifecycle-critical to replay.
+  - *Cursor (unchanged):* its existing four `SpoolOnFailure` events —
+    `sessionStart`, `sessionEnd`, `beforeSubmitPrompt`, `afterAgentThought`. The
+    unification preserves this; it is **not** narrowed to the two lifecycle
+    events.
+- **Lifecycle ordering on replay** is preserved by draining before the current
+  event (Component 5): a stranded `session-start` is replayed before the current
+  `session-end` for the same session.
+- **Transcript-vs-start ordering:** transcript lines may still reach the server
+  (via the watcher's SignalR stream) before a spooled `session-start` is
+  replayed. This already happens today on resume and is tolerated by the
+  server's lazy session handling; the spooled start reconciles when it lands.
 
 ## Failure classification
 
 Spool on **transient** failures only:
 
 - `HttpRequestException` (connection refused / DNS / reset)
-- request timeout (`TaskCanceledException` not originating from our own budget)
+- bounded-POST timeout against a slow/hung server — the `PostOnceAsync` deadline
+  firing surfaces as `OperationCanceledException`; this is the case
+  `PostWithRetryAsync` could not handle within the hook budget
 - HTTP `5xx`, `408`, `429`
 
 Do **not** spool on `2xx` (success) or other `4xx` (permanent — bad request,
@@ -211,11 +279,23 @@ TUnit unit tests (Microsoft Testing Platform), WireMock.Net for HTTP:
 
 `ClaudeHookCommand`:
 - session-end on 5xx / unreachable → spooled, returns 0, `ended_at` stamped
+- **session-end against a slow/hung server (WireMock fixed delay > bounded
+  timeout) → POST aborts within the hook budget and the entry is spooled** (the
+  root-cause test; would hang with `PostWithRetryAsync`)
 - session-end on 4xx → not spooled
 - session-start on failure → spooled **and** watcher spawned
 - next hook with server up → backlog drained (cross-session), files deleted
-- drain skipped when current POST fails (server down)
-- drain budget never exceeds the hook's remaining headroom
+- **drain runs before the current event** (replayed `session-start` posts before
+  the current `session-end`; mirrors the Cursor ordering test)
+- **replayed `session-end` whose response has `generate_whats_done` spawns the
+  what's-done generator** (side effect not lost on replay)
+- drain budget never exceeds the hook's remaining headroom; drain fails fast
+  when the server is down
+
+`CursorHookCommand` (regression guard):
+- still spools all four `SpoolOnFailure` events after the switch to `HookSpool`
+- migration transforms old `{hook_event_name,body}` lines into `{route,body}`
+  (backlog survives, not discarded)
 
 ## Known gaps / future work
 
@@ -231,11 +311,16 @@ TUnit unit tests (Microsoft Testing Platform), WireMock.Net for HTTP:
 - `src/Capacitor.Cli/Commands/CursorHookSpool.cs` → generalized/renamed
   `HookSpool.cs` (+ `route` field, `DrainAllAsync`)
 - `src/Capacitor.Cli/Commands/CursorHookCommand.cs` (use `HookSpool`, store
-  route, cross-session drain, dir migration)
+  route, cross-session drain, transforming dir migration; keep all four
+  `SpoolOnFailure` events)
 - `src/Capacitor.Cli/Commands/CursorHookEventMap.cs` (route now carried in the
-  spool entry; event→route resolution at append time)
-- `src/Capacitor.Cli/Commands/ClaudeHookCommand.cs` (session-start restructure,
-  session-end spool + `ended_at`, end-of-`Handle` drain step)
+  spool entry; event→route resolution at append + migration time)
+- `src/Capacitor.Cli/Commands/ClaudeHookCommand.cs` (shared per-invocation
+  deadline; drain step **before** the current event; bounded lifecycle POST via
+  `PostOnceAsync`; session-start restructure; session-end spool + `ended_at`;
+  Claude poster handles `generate_whats_done` on replay)
+- `src/Capacitor.Cli.Core/HttpClientExtensions.cs` (reuse existing
+  `PostOnceAsync` for the bounded lifecycle POST; no change expected)
 - `src/Capacitor.Cli.Core/PathHelpers.cs` (shared `spool` path — via existing
   `ConfigPath`, no change expected)
 - Tests under `test/Capacitor.Cli.Tests.Unit/`
