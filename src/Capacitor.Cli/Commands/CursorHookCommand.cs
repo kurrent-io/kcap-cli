@@ -208,7 +208,7 @@ public static class CursorHookCommand {
                         if (ev is null || body is null) continue;
                         if (CursorHookEventMap.TryResolve(ev, out var m)) dest.Append(sid, m.RouteSegment, body);
                     }
-                    File.Delete(file); // only after lines are appended; re-run is idempotent
+                    File.Delete(file); // delete only after appending; a crash mid-file may re-append on retry (harmless: server dedupes replays)
                 } catch { /* per-file best effort */ }
             }
         } catch { }
