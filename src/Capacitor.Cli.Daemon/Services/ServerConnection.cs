@@ -101,7 +101,13 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _hub.On<string>("StopAgent", agentId => SafeInvoke("StopAgent", () => OnStopAgent?.Invoke(agentId)));
         _hub.On<SendInputCommand>("SendInput", cmd => SafeInvoke("SendInput", () => OnSendInput?.Invoke(cmd)));
         _hub.On<string, string>("SendSpecialKey", (agentId, key) => SafeInvoke("SendSpecialKey", () => OnSendSpecialKey?.Invoke(agentId, key)));
-        _hub.On<ResizeTerminalCommand>("ResizeTerminal", cmd => SafeInvoke("ResizeTerminal", () => OnResizeTerminal?.Invoke(cmd)));
+        // "ResizeTerminalAggregate", not the legacy "ResizeTerminal": the payload is now the
+        // server-aggregated min terminal size across web viewers, with (0,0) meaning "clear web
+        // dims". A daemon predating web/local resize aggregation only registered "ResizeTerminal",
+        // so a newer server's aggregate (including the (0,0) clear) is silently ignored by it
+        // instead of resizing the PTY to 0×0 — graceful degradation during a non-atomic CLI/server
+        // rollout.
+        _hub.On<ResizeTerminalCommand>("ResizeTerminalAggregate", cmd => SafeInvoke("ResizeTerminalAggregate", () => OnResizeTerminal?.Invoke(cmd)));
 
         // Client-result invocations for per-phase eval dispatch.
         _hub.On<PrepareEvalCommand, PrepareResult>("PrepareEval",

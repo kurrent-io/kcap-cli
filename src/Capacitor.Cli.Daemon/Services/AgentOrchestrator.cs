@@ -54,6 +54,13 @@ public record AgentInstance(
     internal Dictionary<ITerminalSink, Dim> ClientDims { get; } = [];
     public readonly record struct Dim(ushort Cols, ushort Rows);
 
+    /// <summary>The server-aggregated min size across all web viewers (one value per agent,
+    /// computed server-side from per-connection web dims), folded into the same min-clamp as the
+    /// local clients so a small web viewer and a large local terminal share the one PTY at the
+    /// smallest size — tmux semantics across surfaces. <c>null</c> when no web viewer is
+    /// attached, so the clamp grows back to the local-only size. Guarded by <see cref="SinksLock"/>.</summary>
+    internal Dim? WebDims { get; set; }
+
     /// <summary>Tripped when the agent terminates (CleanupAgentAsync) so an attached local
     /// client that's blocked waiting on the user's keystrokes wakes, flushes the last output,
     /// and sends an Exited frame instead of hanging.</summary>
@@ -944,10 +951,30 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     Task HandleResizeTerminal(ResizeTerminalCommand cmd) {
         // Ignore server-origin resize for private agents (defence-in-depth; see HandleStopAgent).
         if (_agents.TryGetValue(cmd.AgentId, out var agent) && !agent.IsPrivate) {
-            agent.Process.Resize((ushort)cmd.Cols, (ushort)cmd.Rows);
-            // Keep the stored dims current so a later reconnect resends the real size, not stale ones.
-            agent.CurrentCols = (ushort)cmd.Cols;
-            agent.CurrentRows = (ushort)cmd.Rows;
+            // The server sends the min aggregate across all web viewers, or (0,0) when the
+            // last web viewer left. Fold it into the same min-clamp as the local clients rather than
+            // resizing the PTY directly — a small web viewer must not corrupt a large local terminal
+            // (or vice-versa), and a departing web viewer must let the PTY grow back to the local size.
+            //
+            // (0,0) clears WebDims. Accept other dims only when they're positive AND fit the PTY's
+            // ushort winsize — ignore anything else (negative, or > ushort.MaxValue) so a bad value
+            // can't wrap on the cast and poison the shared clamp (e.g. a wrapped 0 would block all
+            // resizing). The server already bounds-checks; this is defence-in-depth — the daemon must
+            // not trust the wire.
+            var clear = cmd is { Cols: 0, Rows: 0 };
+            var valid = cmd is { Cols: > 0 and <= ushort.MaxValue, Rows: > 0 and <= ushort.MaxValue };
+
+            if (clear || valid) {
+                lock (agent.SinksLock) {
+                    agent.WebDims = clear ? null : new AgentInstance.Dim((ushort)cmd.Cols, (ushort)cmd.Rows);
+                    ClampPtyLocked(agent);
+                }
+
+                // Announce the clamped size so every web viewer re-locks (and reconnect resends the
+                // real size, not stale ones). Outside the lock, best-effort, fire-and-forget — same
+                // as the local resize path in ApplyResizeClamp.
+                _ = SafeSendDimsAsync(agent);
+            }
         }
 
         return Task.CompletedTask;
