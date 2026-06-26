@@ -251,14 +251,14 @@ public class McpFlowsServerTests : IDisposable {
 
         var stubbedResponse = $$"""
             {
-              "flowRunId": "{{flowRunId}}",
-              "roundId": "{{roundId}}",
-              "roundNumber": 1,
+              "flow_run_id": "{{flowRunId}}",
+              "round_id": "{{roundId}}",
+              "round_number": 1,
               "status": "completed",
-              "resultKind": "FINDINGS",
-              "resultText": "## Review findings\n\nThe spec looks good.",
-              "reviewerAgentId": null,
-              "reviewerSessionId": null
+              "result_kind": "FINDINGS",
+              "result_text": "## Review findings\n\nThe spec looks good.",
+              "reviewer_agent_id": null,
+              "reviewer_session_id": null
             }
             """;
 
@@ -319,12 +319,12 @@ public class McpFlowsServerTests : IDisposable {
             await Assert.That(bodyNode).IsNotNull();
 
             // requesting_session_id: from KCAP_SESSION_ID (stripped of dashes)
-            var reqSessionId = bodyNode!["requestingSessionId"]?.GetValue<string>();
+            var reqSessionId = bodyNode!["requesting_session_id"]?.GetValue<string>();
             await Assert.That(reqSessionId).IsNotNull();
             await Assert.That(reqSessionId!.Contains("claudesessionaabbccdd") || reqSessionId.Contains("claude-session-aabbccdd")).IsTrue();
 
             // requesting_cwd: the subdirectory the server was started in
-            var reqCwd = bodyNode["requestingCwd"]?.GetValue<string>();
+            var reqCwd = bodyNode["requesting_cwd"]?.GetValue<string>();
             await Assert.That(reqCwd).IsNotNull();
             // cwd should be either subdir or contain "src/feature"
             await Assert.That(
@@ -338,7 +338,7 @@ public class McpFlowsServerTests : IDisposable {
             // Directory.GetCurrentDirectory() (which resolves symlinks on some platforms).
             // We verify the invariant: the repo root is a parent of the subdir, and it
             // contains the unique test-directory name so it can't be an arbitrary system dir.
-            var reqRepoRoot = bodyNode["requestingRepoRoot"]?.GetValue<string>();
+            var reqRepoRoot = bodyNode["requesting_repo_root"]?.GetValue<string>();
             await Assert.That(reqRepoRoot).IsNotNull();
             // The unique GUID portion of _cwdDir must appear somewhere in the repo root path
             // (both paths point to the same directory, just possibly via different symlink chains).
@@ -347,7 +347,7 @@ public class McpFlowsServerTests : IDisposable {
 
             // kind: matches what we passed
             await Assert.That(bodyNode["kind"]?.GetValue<string>()).IsEqualTo("spec-review");
-            await Assert.That(bodyNode["targetKind"]?.GetValue<string>()).IsEqualTo("spec");
+            await Assert.That(bodyNode["target_kind"]?.GetValue<string>()).IsEqualTo("spec");
             await Assert.That(bodyNode["context"]?.GetValue<string>()).IsEqualTo("Please review this spec for completeness.");
         } finally {
             await ShutdownAsync(proc);
@@ -360,13 +360,13 @@ public class McpFlowsServerTests : IDisposable {
 
         var stubbedStatus = $$"""
             {
-              "flowRunId": "{{flowRunId}}",
-              "definitionId": "spec-review",
+              "flow_run_id": "{{flowRunId}}",
+              "definition_id": "spec-review",
               "status": "completed",
-              "targetTitle": "My Spec",
-              "roundCount": 2,
-              "lastResultKind": "APPROVED",
-              "lastResultText": "Approved with minor comments."
+              "target_title": "My Spec",
+              "round_count": 2,
+              "last_result_kind": "APPROVED",
+              "last_result_text": "Approved with minor comments."
             }
             """;
 
@@ -412,14 +412,14 @@ public class McpFlowsServerTests : IDisposable {
 
         var stubbedResponse = $$"""
             {
-              "flowRunId": "{{flowRunId}}",
-              "roundId": "{{roundId}}",
-              "roundNumber": 2,
+              "flow_run_id": "{{flowRunId}}",
+              "round_id": "{{roundId}}",
+              "round_number": 2,
               "status": "completed",
-              "resultKind": "APPROVED",
-              "resultText": "Changes look good now.",
-              "reviewerAgentId": null,
-              "reviewerSessionId": null
+              "result_kind": "APPROVED",
+              "result_text": "Changes look good now.",
+              "reviewer_agent_id": null,
+              "reviewer_session_id": null
             }
             """;
 
@@ -479,7 +479,7 @@ public class McpFlowsServerTests : IDisposable {
             Response.Create()
                 .WithStatusCode(200)
                 .WithHeader("Content-Type", "application/json")
-                .WithBody($$"""{"flowRunId":"{{flowRunId}}","status":"closed"}""")
+                .WithBody($$"""{"flow_run_id":"{{flowRunId}}","status":"closed"}""")
         );
 
         using var proc = SpawnMcpServer();

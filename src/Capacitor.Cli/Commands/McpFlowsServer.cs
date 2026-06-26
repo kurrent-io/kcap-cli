@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using Capacitor.Cli.Core;
 
@@ -84,8 +85,8 @@ static class McpFlowsServer {
             using var httpResponse = toolName switch {
                 "start_review_flow"      => await StartReviewFlowAsync(client, apiRoot, arguments, cwd, repoRoot, repoInfo),
                 "submit_review_round"    => await SubmitReviewRoundAsync(client, apiRoot, arguments),
-                "get_review_flow_status" => await client.GetAsync(BuildFlowUrl(apiRoot, arguments, "get_review_flow_status")),
-                "close_review_flow"      => await client.PostAsync(BuildFlowUrl(apiRoot, arguments, "close_review_flow") + "/close", null),
+                "get_review_flow_status" => await client.GetAsync(BuildFlowUrl(apiRoot, arguments)),
+                "close_review_flow"      => await client.PostAsync(BuildFlowUrl(apiRoot, arguments) + "/close", null),
                 _                        => throw new ArgumentException($"Unknown tool: {toolName}")
             };
 
@@ -176,7 +177,7 @@ static class McpFlowsServer {
         );
     }
 
-    static string BuildFlowUrl(string apiRoot, JsonObject? arguments, string toolName) {
+    static string BuildFlowUrl(string apiRoot, JsonObject? arguments) {
         var flowRunId = arguments?["flow_run_id"]?.GetValue<string>()
             ?? throw new ArgumentException("Missing required argument: flow_run_id");
 
@@ -192,11 +193,11 @@ static class McpFlowsServer {
             var node = JsonNode.Parse(body)?.AsObject();
             if (node is null) return body;
 
-            var flowRunId   = node["flowRunId"]?.GetValue<string>()   ?? "";
-            var roundId     = node["roundId"]?.GetValue<string>()     ?? "";
+            var flowRunId   = node["flow_run_id"]?.GetValue<string>()   ?? "";
+            var roundId     = node["round_id"]?.GetValue<string>()     ?? "";
             var status      = node["status"]?.GetValue<string>()      ?? "";
-            var resultKind  = node["resultKind"]?.GetValue<string>()  ?? "";
-            var resultText  = node["resultText"]?.GetValue<string>();
+            var resultKind  = node["result_kind"]?.GetValue<string>()  ?? "";
+            var resultText  = node["result_text"]?.GetValue<string>();
 
             var sb = new StringBuilder();
             sb.Append("flow_run_id: "); AppendLine(sb, flowRunId);
@@ -220,13 +221,13 @@ static class McpFlowsServer {
             var node = JsonNode.Parse(body)?.AsObject();
             if (node is null) return body;
 
-            var flowRunId      = node["flowRunId"]?.GetValue<string>()      ?? "";
+            var flowRunId      = node["flow_run_id"]?.GetValue<string>()      ?? "";
             var status         = node["status"]?.GetValue<string>()         ?? "";
-            var definitionId   = node["definitionId"]?.GetValue<string>()   ?? "";
-            var targetTitle    = node["targetTitle"]?.GetValue<string>()    ?? "";
-            var roundCount     = node["roundCount"]?.GetValue<int>();
-            var lastResultKind = node["lastResultKind"]?.GetValue<string>();
-            var lastResultText = node["lastResultText"]?.GetValue<string>();
+            var definitionId   = node["definition_id"]?.GetValue<string>()   ?? "";
+            var targetTitle    = node["target_title"]?.GetValue<string>()    ?? "";
+            var roundCount     = node["round_count"]?.GetValue<int>();
+            var lastResultKind = node["last_result_kind"]?.GetValue<string>();
+            var lastResultText = node["last_result_text"]?.GetValue<string>();
 
             var sb = new StringBuilder();
             sb.Append("flow_run_id: ");   AppendLine(sb, flowRunId);
@@ -351,24 +352,24 @@ static class McpFlowsServer {
 
 /// <summary>CLI-side DTO for POST /api/flows/review/start — mirrors the server's StartReviewFlowRequest fields.</summary>
 record StartReviewFlowDto(
-    string  Kind,
-    string  TargetKind,
-    string  TargetRef,
-    string  TargetTitle,
-    string  Context,
-    string? Instructions,
-    string? RequestingSessionId,
-    string? RequestingCwd,
-    string? RequestingRepoRoot,
-    string? RepoOwner,
-    string? RepoName,
-    string? DaemonName,
-    string? RepoPath,
-    string? Mode
+    [property: JsonPropertyName("kind")]                   string  Kind,
+    [property: JsonPropertyName("target_kind")]            string  TargetKind,
+    [property: JsonPropertyName("target_ref")]             string  TargetRef,
+    [property: JsonPropertyName("target_title")]           string  TargetTitle,
+    [property: JsonPropertyName("context")]                string  Context,
+    [property: JsonPropertyName("instructions")]           string? Instructions,
+    [property: JsonPropertyName("requesting_session_id")] string? RequestingSessionId,
+    [property: JsonPropertyName("requesting_cwd")]         string? RequestingCwd,
+    [property: JsonPropertyName("requesting_repo_root")]   string? RequestingRepoRoot,
+    [property: JsonPropertyName("repo_owner")]             string? RepoOwner,
+    [property: JsonPropertyName("repo_name")]              string? RepoName,
+    [property: JsonPropertyName("daemon_name")]            string? DaemonName,
+    [property: JsonPropertyName("repo_path")]              string? RepoPath,
+    [property: JsonPropertyName("mode")]                   string? Mode
 );
 
 /// <summary>CLI-side DTO for POST /api/flows/{flowRunId}/rounds — mirrors the server's SubmitReviewRoundRequest.</summary>
 record SubmitReviewRoundDto(
-    string  Context,
-    string? Instructions
+    [property: JsonPropertyName("context")]      string  Context,
+    [property: JsonPropertyName("instructions")] string? Instructions
 );
