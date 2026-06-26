@@ -1,7 +1,7 @@
 # OpenCode historical import (`kcap import --opencode`) — Design
 
 **Date:** 2026-06-26
-**Status:** Approved (design), pending implementation plan
+**Status:** Approved (design), revised after Codex design review, pending implementation plan
 **Author:** tony.young@kurrent.io (with Claude)
 
 ## Problem
@@ -52,9 +52,24 @@ Reconstruction merges them back:
 
 Verified against a live `~/.cache/kcap` JSONL line: reconstructed keys match
 exactly (`info`: `agent,id,model,role,sessionID,summary,time`; `part`:
-`id,messageID,sessionID,text,type`). The result is structurally identical to the
-live path, so **the server's existing `opencode` normalizer consumes it with no
-server changes**.
+`id,messageID,sessionID,text,type`).
+
+**This is final-state reconstruction, not byte-identical to live JSONL.** The
+live plugin appends *multiple* snapshots for one message as its parts stream in
+or a tool transitions to a terminal state ([dedup key on
+`parts.length` + terminal-tool count](../../../src/Capacitor.Cli.Core/OpenCode/OpenCodeExtensionInstaller.cs)).
+SQLite holds only the final state, so import emits *one* line per message. This
+is **normalizer-compatible**: the server keeps the first non-skipped snapshot per
+`prt_` id and skips non-terminal tool snapshots, so the single final-state line is
+exactly the record it retains. No server changes required.
+
+**Consequence for watermarks:** a session that was also live-ingested has a
+larger server line count (more snapshot lines) than import reconstructs, so
+line-number comparison across the two paths is not meaningful. This is safe
+because (a) a live-captured session ran to session-end and is already fully
+ingested → import classifies it `AlreadyLoaded` and skips, and (b) content is
+keyed by deterministic message/`prt_` ids, so any re-send is idempotent
+regardless of line numbering.
 
 ## Architecture
 
@@ -70,18 +85,29 @@ knowledge in Core beside `OpenCodePaths` / `OpenCodeSubagentDiscovery`.
 
 | Unit | Responsibility | Depends on |
 |---|---|---|
-| `OpenCodeDb` (Core) | Open db read-only; query roots/children; synthesize `{info,parts}` lines per session | Microsoft.Data.Sqlite |
+| `OpenCodeDb` (**CLI**, not Core) | Open db read-only; query roots/children; synthesize `{info,parts}` lines per session | Microsoft.Data.Sqlite |
 | `OpenCodeImportSource` (CLI) | `IImportSource` impl: discover, classify, import (roots + subagent children) | `OpenCodeDb`, `OpenCodePaths`, `OpenCodeSubagentDiscovery`, `SessionImporter` |
 | `VendorSelection` / `Program.cs` | wire `--opencode` filter + register source | — |
+
+**Why `OpenCodeDb` lives in the CLI project, not Core:** `Capacitor.Cli.Core` is
+marked `IsAotCompatible`/`IsTrimmable` and is referenced by the AOT-published
+**daemon** as well as the CLI. Adding the Microsoft.Data.Sqlite +
+SQLitePCLRaw native bundle to Core would push that dependency onto the daemon,
+which never imports. Import is a CLI-only concern, so the SQLite-touching code
+stays in `Capacitor.Cli`. Pure path logic remains in Core (`OpenCodePaths`).
 
 ## Data access
 
 - Packages: **Microsoft.Data.Sqlite** + **SQLitePCLRaw.bundle_e_sqlite3**
-  (bundles native `e_sqlite3`; AOT-compatible, cross-platform).
-- Open **read-only** (`Mode=ReadOnly`), tolerating WAL (OpenCode may be running).
+  (bundles native `e_sqlite3`; AOT-compatible, cross-platform), pinned via the
+  repo's central package management, referenced only by the **CLI** project.
+- Open **read-only** (`Mode=ReadOnly`), tolerating WAL (OpenCode may be running);
+  test reading while OpenCode is actively writing.
 - `IsAvailable` = `File.Exists(Path.Combine(OpenCodePaths.DataDir(), "opencode.db"))`.
-- **AOT gate:** verify zero `IL3050`/`IL2026` on `dotnet publish -c Release`
-  before merge. If Microsoft.Data.Sqlite emits warnings, revisit access strategy.
+- **AOT gate (expanded):** publish AOT for the major RIDs and verify zero
+  `IL3050`/`IL2026` for **both** the CLI and the daemon, and record the binary
+  size delta. If Microsoft.Data.Sqlite emits trimming warnings, revisit access
+  strategy before merge.
 
 ## Discovery & classification
 
@@ -97,38 +123,67 @@ knowledge in Core beside `OpenCodePaths` / `OpenCodeSubagentDiscovery`.
 
 ## Transcript synthesis
 
-Per session, build lines in memory:
+**Ordering:** messages by `(time_created, id)`; parts within a message by
+`(time_created, id)`. Empirically validated on a real session: `time_created` is
+distinct per part within a message (no ties in the sample) and the `prt_…` ids
+sort in the same order as `time_created` (OpenCode ids embed a monotonic
+timestamp), so `id` is a safe deterministic tie-breaker. Implementation must
+re-verify ordered output against live SDK order for a multi-part / tool-heavy
+session before merge.
 
-```
-SELECT data, id FROM message WHERE session_id = ? ORDER BY time_created, id
-  per message:  SELECT data, id, message_id, session_id FROM part
-                WHERE message_id = ? ORDER BY time_created, id
-  emit {info, parts} via the merge rule above
-```
+**Avoid the N+1 and unbounded memory:** do not issue one part query per message
+and do not hold a whole session in memory. Either (a) one ordered pass —
+`SELECT … FROM part WHERE session_id = ? ORDER BY message_id, time_created, id`
+joined/grouped to its message in a single streaming read — or (b) a forward
+cursor that emits each `{info, parts}` line into the batch sender as it is built.
+Large sessions stream to batches incrementally.
 
-Streamed via `SessionImporter.SendTranscriptBatches`. Preference: feed synthesized
-content directly (in-memory) rather than reusing the plugin's `~/.cache` files
-(those only cover live-seen sessions). If `SendTranscriptBatches` requires a file
-path, write a transient file under the kcap cache/scratch dir and clean up.
+Streamed via `SessionImporter.SendTranscriptBatches`. Synthesized content is fed
+directly rather than reusing the plugin's `~/.cache` files (those only cover
+live-seen sessions). If `SendTranscriptBatches` requires a file path, write a
+transient file under the scratch dir and clean up in a `finally`.
+
+**Send-failure behavior (known limitation, accepted):**
+`SessionImporter.PostTranscriptBatch` swallows `HttpRequestException` and still
+counts the batch as sent, so a failed batch does not abort the import and
+`session-end` still fires. This is the **shared** behavior of every routed
+importer (Gemini/Pi/Kiro/Copilot), not OpenCode-specific. We accept it here for
+consistency and rely on server-side idempotency (deterministic message/`prt_`
+ids) so a re-run repairs a partially-sent session. Hardening
+`SendTranscriptBatches` across all importers is out of scope for this issue.
 
 ## Subagent (child) parity
 
 Children (`parent_id` set) are imported as **subagents of their parent**, not as
-standalone sessions, mirroring the live watcher
-([`WatchCommand`](../../../src/Capacitor.Cli/Commands/WatchCommand.cs) +
-[`OpenCodeSubagentDiscovery`](../../../src/Capacitor.Cli.Core/OpenCode/OpenCodeSubagentDiscovery.cs)):
+standalone sessions, following the **import** precedent in
+[`GeminiImportSource.ImportSubagentsAsync`](../../../src/Capacitor.Cli/Commands/GeminiImportSource.cs)
+and reusing the OpenCode payload builders in
+[`OpenCodeSubagentDiscovery`](../../../src/Capacitor.Cli.Core/OpenCode/OpenCodeSubagentDiscovery.cs).
 
-1. Import the root (session-start → transcript → session-end).
-2. For each child with `parent_id` = this root:
-   - `POST /hooks/subagent-start` (parent session id, `agent_id` = childSid,
-     `agent_type` from child's `info.agent`, fallback `"subagent"`).
-   - Stream the synthesized child transcript under `agent_id = childSid`.
+**Ordering (corrected — was a blocker):** children are imported **between the
+parent's transcript and the parent's `session-end`**, so `SubagentStarted` /
+`SubagentCompleted` land in the parent stream *ahead of* `SessionEnded` — exactly
+as `GeminiImportSource` sequences it ([:229](../../../src/Capacitor.Cli/Commands/GeminiImportSource.cs)).
+Full order per root:
+
+1. `POST /hooks/session-start/opencode` (parent).
+2. Stream parent transcript.
+3. For each child with `parent_id` = this root:
+   - `POST /hooks/subagent-start` (parent session id, `agent_id` = `CanonicalAgentId(childSid)`,
+     `agent_type` from child's `info.agent`, fallback `"subagent"`) — **fail-closed:
+     skip the child's content if start fails**, so a child stream never exists
+     without its `SubagentStarted`.
+   - Stream the synthesized child transcript under `agent_id = childSid`,
+     `startLine: 0`.
    - `POST /hooks/subagent-stop`.
+4. `POST /hooks/session-end/opencode` (parent).
 
-Reuse `OpenCodeSubagentDiscovery.BuildStartPayload` / `BuildStopPayload` and
-`CanonicalAgentId`. **Open item to confirm during implementation:** the exact
-watermark key the server uses for subagent subsessions (parent id vs. agentId) —
-mirror whatever `WatchCommand`'s opencode subagent streaming uses.
+**Watermark (open item resolved):** children are **not** watermark-probed. The
+import precedent sends each child from `startLine: 0` and relies on server-side
+idempotency (deterministic ids) — no `agentId`-scoped `last-line` query. (The live
+watcher *does* use an `agentId`-scoped probe because it streams incrementally;
+import does not need it and Gemini import does not do it.) A re-import re-sends
+children idempotently. Child failures never fail the already-imported parent.
 
 ## Lifecycle, idempotency, resume
 
@@ -138,10 +193,16 @@ Mirrors Pi exactly:
   `session-end/opencode`. A transcript that advanced the watermark past a failed
   lifecycle POST would orphan the session; idempotent server-side via
   deterministic event ids, so re-runs are safe.
-- **Title:** unlike Pi, OpenCode's db has a real `session.title`. Pass it on the
-  session-start payload so imported sessions get their true title instead of the
-  server fallback.
-- `started_at` = `session.time_created`; `ended_at` = `session.time_updated`.
+- **Title (corrected contract):** unlike Pi, OpenCode's db has a real
+  `session.title`. Forward it via **`POST /hooks/set-title`** after the transcript
+  send — matching the established native-title importers
+  ([Copilot](../../../src/Capacitor.Cli/Commands/CopilotImportSource.cs),
+  [Kiro](../../../src/Capacitor.Cli/Commands/KiroImportSource.cs)) — **not** by
+  stuffing `title` into the session-start payload (the start hook is not confirmed
+  to consume it). Best-effort: a title miss must not fail the import.
+- `started_at` = `session.time_created`; `ended_at` = `session.time_updated`
+  (epoch **milliseconds** in the db — confirmed sample values ~1.78e12 — convert
+  to `DateTimeOffset` via `FromUnixTimeMilliseconds`).
 
 ## Wiring & docs (same PR)
 
@@ -170,6 +231,22 @@ Microsoft.Data.Sqlite (or a small checked-in sample db):
 - Classification states against a stubbed `/api/sessions/{id}/last-line`
   (WireMock): New / Partial / AlreadyLoaded.
 
+## Edge cases
+
+- **Zero-message / empty sessions:** treat as `TooShort` (below `MinLines`) and
+  skip — no lifecycle POSTs, consistent with Pi/Gemini empty-transcript handling.
+- **Null/empty `session.directory`:** import with `Cwd = null`. A `--cwd` filter
+  cannot match a null directory, so such sessions are excluded under `--cwd`
+  (same as Pi when a header has no cwd). Scope resolution (`--org`/`--repo`) that
+  needs a repo simply can't attribute them — they fall to the unattributed bucket.
+- **`time_created` units:** epoch **milliseconds** (see Lifecycle) — guard against
+  a future seconds-based column by sanity-checking magnitude.
+- **Raw `ses_…` ids:** confirm with the server that a non-GUID session id is
+  accepted as a stable key on the lifecycle + transcript routes. The live
+  OpenCode hook path already posts these ids, so this is established, but the
+  importer must canonicalize identically (no GUID normalization;
+  `CanonicalAgentId` only strips dashes, of which `ses_…` has none).
+
 ## Out of scope / deliberate decisions
 
 - **No GUID normalization** of session ids — keep raw `ses_…` (matches live).
@@ -184,5 +261,8 @@ Microsoft.Data.Sqlite (or a small checked-in sample db):
   SQLite). Reconstruction reads only stable columns (`id`, `session_id`,
   `message_id`, `parent_id`, `directory`, `title`, `time_*`, `data`); a schema
   change would require revisiting, but the surface touched is minimal.
-- **Subagent watermark contract** — flagged above; resolve by mirroring
-  `WatchCommand`.
+- **Subagent watermark contract** — resolved: import sends children from
+  `startLine: 0` and relies on idempotency (Gemini import precedent), so no
+  `agentId`-scoped watermark is needed.
+- **Part-ordering vs SDK** — empirically validated on one session; implementation
+  must re-verify against live SDK order for a multi-part/tool session before merge.
