@@ -208,6 +208,39 @@ public class ClaudeHookCommandTests {
         await Assert.That(fx.SpoolFiles.Any()).IsFalse();
     }
 
+    [Test]
+    public async Task subagent_stop_spooled_when_client_creation_exceeds_budget() {
+        using var fx = new Fixture();
+        Func<Task<(HttpClient, AuthStatus)>> slowFactory = () =>
+            Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => (new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
+        // processStart ~3.4s in the past → subagent-stop remaining = 5 - 3.4 - 1.5 ≈ 0.1s cap.
+        var processStart = System.Diagnostics.Stopwatch.GetTimestamp()
+                         - (long)(3.4 * System.Diagnostics.Stopwatch.Frequency);
+        var sw   = System.Diagnostics.Stopwatch.StartNew();
+        var exit = await ClaudeHookCommand.HandleWithDeps(
+            fx.Spool, processStart, "http://localhost",
+            new StringReader($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}"""),
+            updateCheckTask: null, clientFactory: slowFactory);
+        sw.Stop();
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
+        var files = fx.SpoolFiles.ToList();
+        await Assert.That(files.Count).IsEqualTo(1);
+        var content = await File.ReadAllTextAsync(files[0]);
+        await Assert.That(content).Contains("\"route\":\"subagent-stop\"");
+    }
+
+    [Test]
+    public async Task current_session_start_replays_before_subagent_stop() {
+        using var fx = new Fixture(); // server up
+        fx.Spool.Append(Sid, "session-start", $$"""{"session_id":"{{Sid}}"}""");
+        await fx.HandleAsync($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}""");
+        var startIdx = fx.RouteOrder.IndexOf("session-start");
+        var stopIdx  = fx.RouteOrder.IndexOf("subagent-stop");
+        await Assert.That(startIdx).IsGreaterThanOrEqualTo(0);
+        await Assert.That(stopIdx).IsGreaterThan(startIdx);
+    }
+
     sealed class Fixture : IDisposable {
         readonly string _tmpHome = Path.Combine(Path.GetTempPath(), $"kcap-claude-hook-{Guid.NewGuid():N}");
         readonly string _spoolPath;

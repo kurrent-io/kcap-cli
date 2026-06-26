@@ -41,7 +41,7 @@ public static class ClaudeHookCommand {
         try { body = await stdin.ReadToEndAsync(); } catch { return 0; }
 
         // Minimal parse (no auth/git) so we can spool AND start the watcher even if client creation hangs.
-        string? command = null, sessionId = null, transcriptPath = null, cwd = null, source = null;
+        string? command = null, sessionId = null, transcriptPath = null, cwd = null, source = null, agentId = null;
         try {
             var node = JsonNode.Parse(body);
             var ev   = node?["hook_event_name"]?.GetValue<string>();
@@ -50,6 +50,7 @@ public static class ClaudeHookCommand {
             transcriptPath = node?["transcript_path"]?.GetValue<string>();
             cwd            = node?["cwd"]?.GetValue<string>();
             source         = node?["source"]?.GetValue<string>();
+            agentId        = node?["agent_id"]?.GetValue<string>();
         } catch { }
 
         var clientCap = HookBudget.Remaining(processStart, command ?? "stop");
@@ -71,6 +72,10 @@ public static class ClaudeHookCommand {
             if (command is "session-start" or "session-end" && sessionId is not null) {
                 spool.Append(sessionId, command, NormalizeForSpool(body, command));
                 await Console.Error.WriteLineAsync($"[kcap] {command} spooled (auth/client creation exceeded hook budget); will retry on the next kcap hook ({sessionId})");
+            }
+            else if (command == "subagent-stop" && sessionId is not null && agentId is not null) {
+                spool.Append(sessionId, "subagent-stop", NormalizeForSpool(body, command));
+                await Console.Error.WriteLineAsync($"[kcap] subagent-stop spooled (auth/client creation exceeded hook budget); will retry on the next kcap hook ({sessionId}/{agentId})");
             }
             return 0;
         }
@@ -587,6 +592,13 @@ public static class ClaudeHookCommand {
             } catch { }
 
             if (sessionId is not null && agentId is not null) {
+                // Ordering guard: if this session's backlog couldn't fully drain, spool the fresh
+                // subagent-stop so a stranded session-start reaches the server before it (AI-1005).
+                if (CurrentSessionHasBacklog(spool, sessionId)) {
+                    spool.Append(sessionId, "subagent-stop", body);
+                    await Console.Error.WriteLineAsync($"[kcap] subagent-stop spooled (ordering guard); will retry on the next kcap hook ({sessionId}/{agentId})");
+                    return 0;
+                }
                 var remaining = HookBudget.Remaining(processStart, command);
                 HttpResponseMessage? resp = null;
                 try {
