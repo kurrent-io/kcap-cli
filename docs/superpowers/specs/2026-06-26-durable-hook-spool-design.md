@@ -45,9 +45,14 @@ server recovers.
 ## Non-goals
 
 - **Long-tail delivery when the machine never runs `kcap` again.** The spooled
-  event sits on disk until a future `kcap` hook fires or the user runs
-  `kcap import`. A server-side quiet-session sweeper would be the backstop; it is
-  out of scope (this is a CLI-side solution by decision).
+  event sits on disk until a future `kcap` hook fires (the drainer re-POSTs it).
+  A server-side quiet-session sweeper would be the backstop; it is out of scope
+  (this is a CLI-side solution by decision). Note: `kcap import` is **not** a
+  recovery path for an already-loaded stuck session — its resume branch
+  (`ImportCommand.cs:2124`) only backfills transcript and never posts
+  `session-end`; only the `New`-session branch ends a session. The manual hatch
+  is replaying the `SessionEnd` hook (pipe a `session_end` payload to
+  `kcap hook --claude`), which is what this feature automates.
 - **Replaying real-time session-start side effects.** Context injection
   (lessons/version-nudge/plan content emitted to stdout) cannot be injected into
   an already-started session, so it is lost during an outage. Unavoidable.
@@ -230,8 +235,9 @@ Restructure so a failed start never loses the session:
   clamped to the remaining hook budget), replacing `PostWithRetryAsync`.
 - **On transient failure** (refusal / 5xx / 408 / 429 / timeout):
   `spool.Append(sid, "session-end", body)`, write a stderr breadcrumb
-  (`recoverable via: kcap import --session <id>`), and **return 0** (durably
-  captured) instead of 1.
+  (`spooled; will retry on the next kcap hook`), and **return 0** (durably
+  captured) instead of 1. (The drainer re-POSTs the spooled `session-end`
+  directly, so this does not go through the import resume path.)
 - **4xx (permanent, except 408/429):** do not spool; preserve current behavior.
 
 ### 5. Drain step (every invocation)
@@ -366,9 +372,13 @@ TUnit unit tests (Microsoft Testing Platform), WireMock.Net for HTTP:
 
 ## Known gaps / future work
 
-- Long-tail (machine never runs `kcap` again): manual `kcap import --session
-  <id>` remains the escape hatch; a server-side quiet-session sweeper is the
-  eventual backstop (separate, server-repo work).
+- Long-tail (machine never runs `kcap` again): the manual escape hatch is
+  replaying the `SessionEnd` hook (`kcap hook --claude` with a `session_end`
+  payload). `kcap import` does **not** end an already-loaded session (resume
+  backfills transcript only). A server-side quiet-session sweeper is the
+  eventual backstop (separate, server-repo work). *(Verified empirically while
+  recovering session `9dc27753…`: `kcap import` reported "Resumed 1" but left it
+  Active; the hook replay ended it and triggered the what's-done summary.)*
 - Session-start context injection is lost during an outage (unavoidable).
 - Watcher defects from the diagnosis (watchdog-never-started, abrupt watcher
   death) are separate work.
