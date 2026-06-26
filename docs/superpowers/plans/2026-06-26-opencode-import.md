@@ -81,6 +81,29 @@ HWM. The live watcher already uses this query; confirm the response shape.
 **Record** the four answers in the PR. None of them gate on a server `ended`
 signal — completeness lives in the ledger.
 
+> **CONFIRMED 2026-06-26** against `kurrent-io/kcap-server@main`:
+> - **Step 1 ✅** `OpenCodeTranscriptNormalizer` derives every `EventId` as
+>   `HashGuid(partId)` / `HashGuid(partId+":call")` / `HashGuid(partId+":result")`
+>   / `HashGuid(info.id)` — a pure hash of the `prt_`/message id, **independent of
+>   line number** (`SessionWriter.TranscriptPipeline.cs:278,84,114,201,223`).
+>   `WriteNormalizedEntryAsync` skips when `_seenCanonicalIds` already has the
+>   `EventId` (`:274`). So replay above the HWM dedupes by id. `_seenCanonicalIds`
+>   is in-memory per session.
+> - **Step 2 ✅** `if (lineNumbers[i] <= currentHwm) continue;` before normalization
+>   (`:143`); HWM (`_highWaterMark`, in-memory) advances to the highest fully-succeeded
+>   line (`:226-244`).
+> - **Step 3 ✅ (with caveat)** `GET …/last-line` returns `{ last_line_number }`
+>   **only — no `ended` field** (`SessionApiHandlers.cs:351`), confirming the ledger
+>   is required. It reads the max `$lineNumber` over the **last 50 events backward**
+>   (`EventStoreReadExtensions.cs:139-168`). Caveat: if >50 trailing non-`$lineNumber`
+>   events (lifecycle/summary) bury the transcript tail, it can under-report (or
+>   return null → classified `New`). Consequence is at worst a wasteful re-send that
+>   the HWM filter / `_seenCanonicalIds` dedup absorbs — the **same idempotency
+>   profile the live watcher already relies on** for reconnect-resend. Not a
+>   data-loss risk; the import can do no worse than live ingest.
+> - **Step 4 ✅** HWM + dedup keyed `{sessionId}|{agentId}` (`:129`); `last-line`
+>   accepts `?agentId=` (`SessionApiHandlers.cs:336-348`).
+
 ---
 
 ## Task 1: Add SQLite packages (CLI only)
