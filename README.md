@@ -296,7 +296,7 @@ claude mcp add kcap-flows -- kcap mcp flows
 
 It provides four tools:
 
-- **`start_review_flow`** — start a new review flow (spec-review, code-review, pr-review, etc.). Provide `kind`, `target_kind`, `target_ref`, `target_title`, and `context`. Requester context (session ID, cwd, repo root, owner, name) is resolved automatically from the environment. Returns a `flow_run_id`.
+- **`start_review_flow`** — start a new review flow (`spec-review` or `code-review`). Provide `kind`, `target_kind`, `target_ref`, `target_title`, and `context`. Requester context (session ID, cwd, repo root, owner, name) is resolved automatically from the environment. Returns a `flow_run_id`.
 - **`submit_review_round`** — submit a follow-up round to an existing flow with updated context or a response to the reviewer's findings. Returns the new round's findings.
 - **`get_review_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow.
 - **`close_review_flow`** — mark a completed review flow as closed.

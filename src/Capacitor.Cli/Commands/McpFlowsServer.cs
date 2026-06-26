@@ -100,9 +100,11 @@ static class McpFlowsServer {
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
             }
 
-            var payload = toolName == "get_review_flow_status"
-                ? FormatStatusResponse(body)
-                : FormatRoundResponse(body);
+            var payload = toolName switch {
+                "get_review_flow_status" => FormatStatusResponse(body),
+                "close_review_flow"      => FormatCloseResponse(body),
+                _                        => FormatRoundResponse(body)
+            };
 
             return BuildToolResult(id, payload);
         } catch (ArgumentException ex) {
@@ -248,6 +250,28 @@ static class McpFlowsServer {
                 sb.AppendLine();
                 sb.Append(lastResultText);
             }
+
+            return sb.ToString();
+        } catch {
+            return body;
+        }
+    }
+
+    /// <summary>
+    /// Formats a CloseReviewFlowResponse into a compact envelope.
+    /// The server returns only <c>flow_run_id</c> and <c>status</c>.
+    /// </summary>
+    static string FormatCloseResponse(string body) {
+        try {
+            var node = JsonNode.Parse(body)?.AsObject();
+            if (node is null) return body;
+
+            var flowRunId = node["flow_run_id"]?.GetValue<string>() ?? "";
+            var status    = node["status"]?.GetValue<string>()      ?? "";
+
+            var sb = new StringBuilder();
+            sb.Append("flow_run_id: "); AppendLine(sb, flowRunId);
+            sb.Append("status: ");      AppendLine(sb, status);
 
             return sb.ToString();
         } catch {

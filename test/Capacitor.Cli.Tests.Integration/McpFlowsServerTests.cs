@@ -491,6 +491,14 @@ public class McpFlowsServerTests : IDisposable {
             await Assert.That(result).IsNotNull();
             await Assert.That(result!["isError"]?.GetValue<bool>()).IsNotEqualTo(true);
 
+            var text = result["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(text).IsNotNull();
+            await Assert.That(text!.Contains($"flow_run_id: {flowRunId}")).IsTrue();
+            await Assert.That(text.Contains("status: closed")).IsTrue();
+            // FormatCloseResponse must NOT emit round_id or result_kind lines
+            await Assert.That(text.Contains("round_id:")).IsFalse();
+            await Assert.That(text.Contains("result_kind:")).IsFalse();
+
             var hits = _server.FindLogEntries(
                 Request.Create().WithPath($"/api/flows/{flowRunId}/close").UsingPost()
             );
