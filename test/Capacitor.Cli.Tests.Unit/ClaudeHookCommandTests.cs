@@ -99,6 +99,55 @@ public class ClaudeHookCommandTests {
         await Assert.That(endIdx).IsGreaterThan(startIdx);
     }
 
+    // CRITICAL 1: bound client creation. If CreateAuthenticatedClientAsync hangs (untimed
+    // /auth/config GET or token refresh during an outage) past the hook budget, the lifecycle
+    // event must still be spooled — spooling is a local disk write that needs no client.
+    [Test]
+    public async Task session_end_spooled_when_client_creation_exceeds_budget() {
+        using var fx = new Fixture();
+        // Slow factory: never completes within the cap (30s) so the budget elapses first.
+        Func<Task<HttpClient>> slowFactory = () =>
+            Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => new HttpClient(), TaskScheduler.Default);
+
+        // processStart ~13.4s in the past → session-end remaining = 15 - 13.4 - 1.5 ≈ 0.1s cap.
+        var processStart = System.Diagnostics.Stopwatch.GetTimestamp()
+                         - (long)(13.4 * System.Diagnostics.Stopwatch.Frequency);
+
+        var sw   = System.Diagnostics.Stopwatch.StartNew();
+        var exit = await ClaudeHookCommand.HandleWithDeps(
+            fx.Spool, processStart, "http://localhost",
+            new StringReader($$"""{"hook_event_name":"SessionEnd","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}"""),
+            updateCheckTask: null, clientFactory: slowFactory);
+        sw.Stop();
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(10)); // well under the 15s ceiling, not the 30s factory
+        var files = fx.SpoolFiles.ToList();
+        await Assert.That(files.Count).IsEqualTo(1);
+        var content = await File.ReadAllTextAsync(files[0]);
+        await Assert.That(content).Contains("\"route\":\"session-end\"");
+    }
+
+    [Test]
+    public async Task create_client_within_budget_returns_null_when_factory_slower_than_cap() {
+        Func<Task<HttpClient>> slow = () =>
+            Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => new HttpClient(), TaskScheduler.Default);
+        var sw     = System.Diagnostics.Stopwatch.StartNew();
+        var client = await ClaudeHookCommand.CreateClientWithinBudgetAsync(slow, TimeSpan.FromMilliseconds(50));
+        sw.Stop();
+        await Assert.That(client).IsNull();
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
+    }
+
+    [Test]
+    public async Task create_client_within_budget_returns_client_when_factory_fast() {
+        var made   = new HttpClient();
+        var client = await ClaudeHookCommand.CreateClientWithinBudgetAsync(() => Task.FromResult(made), TimeSpan.FromSeconds(2));
+        await Assert.That(client).IsNotNull();
+        await Assert.That(ReferenceEquals(client, made)).IsTrue();
+        client!.Dispose();
+    }
+
     [Test]
     public async Task replayed_session_end_with_generate_whats_done_is_handled() {
         // Server returns generate_whats_done:false for the replayed session-end (set false to avoid process spawn).
