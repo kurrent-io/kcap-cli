@@ -4,7 +4,7 @@
 
 **Goal:** Add `kcap import --opencode`, importing historical OpenCode sessions (including subagents) from OpenCode's SQLite db into Kurrent Capacitor, with no server changes.
 
-**Architecture:** A routed `OpenCodeImportSource : IImportSource` (modeled on `PiImportSource`/`GeminiImportSource`) reads `~/.local/share/opencode/opencode.db` via a CLI-only `OpenCodeDb` helper. It reconstructs the live plugin's `{info,parts}` JSONL per message from the `message`/`part` rows, classifies each root session **completeness-gated** (New / AlreadyLoaded-if-ended / Partial-repair-if-not-ended — line spaces between live and import are incompatible, so repair replays above the server HWM rather than resuming line-by-line), and imports roots with their child sessions routed as subagents before `session-end`. A strict transcript send withholds the terminal lifecycle event on failure so a partial import stays not-ended and is repaired on re-run.
+**Architecture:** A routed `OpenCodeImportSource : IImportSource` (modeled on `PiImportSource`/`GeminiImportSource`) reads `~/.local/share/opencode/opencode.db` via a CLI-only `OpenCodeDb` helper, reconstructing the live plugin's `{info,parts}` JSONL per message from the `message`/`part` rows. Completeness is tracked **client-side** in a per-server import ledger (the server exposes no completeness signal): a ledger hit → `AlreadyLoaded` (skip); otherwise `New` (no server watermark) or `Partial`-repair (watermark present → replay above the server HWM, idempotent by `prt_` id, since the live/import line spaces are incompatible). A strict transcript send returns `Failed` before any terminal lifecycle POST on a batch failure, so a partial import is never recorded in the ledger and is repaired on re-run. Child sessions are routed as subagents before `session-end`. The ledger is written only after `session-end` succeeds.
 
 **Tech Stack:** .NET 10, NativeAOT, Microsoft.Data.Sqlite + SQLitePCLRaw.bundle_e_sqlite3, TUnit, WireMock.Net.
 
@@ -19,13 +19,15 @@
 | `Directory.Packages.props` | Pin SQLite package versions | Modify |
 | `src/Capacitor.Cli/Capacitor.Cli.csproj` | Reference SQLite packages (CLI only, not Core) | Modify |
 | `src/Capacitor.Cli/Commands/OpenCodeDb.cs` | Read-only db open; query roots/children; stream-synthesize `{info,parts}` lines; importable-line predicate | Create |
-| `src/Capacitor.Cli/Commands/OpenCodeImportSource.cs` | `IImportSource`: discover roots, completeness-gated classify, import roots + subagent children + set-title | Create |
+| `src/Capacitor.Cli/Commands/OpenCodeImportLedger.cs` | Per-machine, per-server record of fully-imported sessions (client-side completeness signal) | Create |
+| `src/Capacitor.Cli/Commands/OpenCodeImportSource.cs` | `IImportSource`: discover roots, ledger-gated classify, import roots + subagent children + set-title, record ledger | Create |
 | `src/Capacitor.Cli/Commands/VendorSelection.cs` | Recognize `--opencode` | Modify |
 | `src/Capacitor.Cli/Program.cs` | Register `OpenCodeImportSource` in import sources | Modify |
 | `src/Capacitor.Cli.Core/Resources/help-import.txt` | Add `--opencode` filter line | Modify |
 | `src/Capacitor.Cli.Core/Resources/help-usage.txt` | Add OpenCode to import one-liner | Modify |
 | `README.md` | Quick-start + `kcap import` section | Modify |
 | `test/Capacitor.Cli.Tests.Unit/OpenCodeDbTests.cs` | DB reconstruction, ordering, importable predicate | Create |
+| `test/Capacitor.Cli.Tests.Unit/OpenCodeImportLedgerTests.cs` | Ledger record/report, server keying, corrupt-file tolerance | Create |
 | `test/Capacitor.Cli.Tests.Unit/OpenCodeImportSourceTests.cs` | Discovery (roots vs children), classification | Create |
 | `test/Capacitor.Cli.Tests.Unit/VendorSelectionTests.cs` | `--opencode` parsing (create if absent; else extend) | Modify/Create |
 | `test/Capacitor.Cli.Tests.Integration/OpenCodeImportSourceImportTests.cs` | Full discover→classify→import wire contract incl. subagents + set-title | Create |
@@ -41,48 +43,43 @@
 
 ## Task 0: Confirm the server repair contract (prerequisite — no code)
 
-The completeness-gated repair design depends on three server behaviors. Confirm
-each against the kcap-server repo (or a dev server) and record the answers in the
-PR description **before** implementing Task 5–7. If an assumption is false, take
-the documented fallback.
+Completeness is tracked **client-side** (the import ledger, Task 4b) — confirmed:
+the current server does **not** expose an `ended`/`completed` field on
+`/api/sessions/{id}/last-line` (it returns only `{ last_line_number }`), so we do
+not depend on one. What the repair path *does* depend on is the server's transcript
+ingest semantics. Confirm these against the kcap-server repo (or a dev server) and
+record the answers in the PR **before** implementing Task 5–7.
 
-- [ ] **Step 1: Is there a per-session "ended" signal?**
-
-Check what `GET /api/sessions/{id}/last-line` returns beyond `last_line_number`
-(does it include an `ended`/`completed`/`session_ended` field?), or whether a
-sibling endpoint exposes session status. Look at the server route handler and the
-session read model.
-  - **If yes:** use it to distinguish `AlreadyLoaded` (ended) from `Repair`
-    (watermark present but not ended).
-  - **If no:** fall back to *Always replay above HWM* — when any watermark
-    exists, reclassify as `Repair` (re-send offset above HWM) rather than
-    `AlreadyLoaded`. Correct but re-sends already-loaded sessions each run; note
-    the change in the PR.
-
-- [ ] **Step 2: Does transcript ingest dedupe by canonical id, independent of line number?**
+- [ ] **Step 1: Transcript ingest dedupes by canonical id, independent of line number.**
 
 Confirm the `opencode` normalizer + transcript pipeline keep-first per canonical
 message/`prt_` id (the live plugin relies on this: "the server keeps the FIRST
-append per `prt_` id"). This is what makes offset-above-HWM replay idempotent.
+append per `prt_` id"). This is what makes offset-above-HWM replay idempotent —
+re-sending already-ingested content under new line numbers must NOT duplicate it.
   - **If false:** STOP — offset replay would duplicate content; revisit with the
-    user (the binary policy + accept-gap option becomes the only safe choice).
+    user.
 
-- [ ] **Step 3: Does the HWM filter drop `line_number <= currentHwm` before normalization, and is HWM strictly the max line number seen?**
+- [ ] **Step 2: The HWM filter drops `line_number <= currentHwm` before normalization; higher numbers simply advance the HWM (no contiguity requirement).**
 
-Confirm replayed lines must be numbered **above** the current HWM to be processed,
-and that sending higher numbers simply advances the HWM (no contiguity
-requirement). This is why repair offsets line numbers above HWM.
+This is why repair offsets line numbers above the probed HWM.
 
-- [ ] **Step 4: Per-subsession watermark + ended signal.**
+- [ ] **Step 3: `GET /api/sessions/{id}/last-line` returns a watermark usable for repair.**
 
-Confirm child subsessions are watermarked by `(parentSessionId, agentId)` and
-that `GET /api/sessions/{parentId}/last-line?agentId={childAgentId}` returns the
-child's HWM (and ended/`SubagentCompleted` signal if available). The live watcher
-already uses this query, so the endpoint exists; confirm the response shape.
+Per server source, this endpoint scans the last ~50 stream events for the max
+`$lineNumber` rather than reading the in-memory HWM. Confirm it returns a
+**sufficiently high durable max line** even after trailing lifecycle / summary /
+subagent events — i.e. that replaying above it actually lands new content. If it
+can under-report the true max line, repair may re-ingest a suffix (still idempotent
+by canonical id, just slightly wasteful) — note this in the PR.
 
-**Record:** the four answers + chosen path (gated repair vs. always-replay
-fallback) in the PR description. The rest of the plan assumes Step 1 yields an
-ended signal; if not, apply the Step 1 fallback uniformly in Task 5/7.
+- [ ] **Step 4: Subsession watermark via `?agentId=`.**
+
+Confirm child subsessions are watermarked by `(parentSessionId, agentId)` and that
+`GET /api/sessions/{parentId}/last-line?agentId={childAgentId}` returns the child's
+HWM. The live watcher already uses this query; confirm the response shape.
+
+**Record** the four answers in the PR. None of them gate on a server `ended`
+signal — completeness lives in the ledger.
 
 ---
 
@@ -579,9 +576,11 @@ static bool IsHidden(JsonElement p) =>
     (p.TryGetProperty("synthetic", out var s) && s.ValueKind == JsonValueKind.True) ||
     (p.TryGetProperty("ignored",   out var i) && i.ValueKind == JsonValueKind.True);
 
-// Present and not JSON null (mirrors the server's null-check, not a non-empty-string check).
+// Present as a JSON string — mirrors the server's `part.Str(name)`, which treats only
+// string values as present (a numeric/object would be ignored). Empty string counts,
+// for exact parity with the server's null-check on the parsed string.
 static bool HasField(JsonElement p, string name) =>
-    p.TryGetProperty(name, out var v) && v.ValueKind != JsonValueKind.Null;
+    p.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String;
 
 // text present, string, length > 0 (matches server's Length > 0 — NOT IsNullOrWhiteSpace).
 static bool HasText(JsonElement p) =>
@@ -627,7 +626,7 @@ public class OpenCodeImportSourceTests {
         tmp.AddSession("ses_child", "ses_root", "/work/a", "Child", 1782241513761);
         tmp.AddMessageWithText("ses_root", "msg_1", "hello", 1782241513760);
 
-        var source   = new OpenCodeImportSource(tmp.DbPath);
+        var source   = new OpenCodeImportSource(tmp.DbPath, tmp.LedgerPath);
         var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
 
         await Assert.That(sessions.Count).IsEqualTo(1);
@@ -646,7 +645,7 @@ public class OpenCodeImportSourceTests {
         tmp.AddMessageWithText("ses_a", "m1", "x", 100);
         tmp.AddMessageWithText("ses_b", "m2", "y", 200);
 
-        var source = new OpenCodeImportSource(tmp.DbPath);
+        var source = new OpenCodeImportSource(tmp.DbPath, tmp.LedgerPath);
 
         var byCwd = await source.DiscoverAsync(new DiscoveryFilters("/work/b", null, null, 0), CancellationToken.None);
         await Assert.That(byCwd.Select(s => s.SessionId)).IsEquivalentTo(new[] { "ses_b" });
@@ -657,7 +656,8 @@ public class OpenCodeImportSourceTests {
 
     [Test]
     public async Task IsAvailable_false_when_db_missing() {
-        var source = new OpenCodeImportSource(Path.Combine(Path.GetTempPath(), "no-such-kcap.db"));
+        var source = new OpenCodeImportSource(Path.Combine(Path.GetTempPath(), "no-such-kcap.db"),
+            ledgerPathOverride: Path.Combine(Path.GetTempPath(), $"kcap-ledger-{Guid.NewGuid():N}.json"));
         await Assert.That(source.IsAvailable).IsFalse();
     }
 
@@ -669,7 +669,7 @@ public class OpenCodeImportSourceTests {
         tmp.AddMessageWithText("ses_ms",  "m1", "x", 1782241513759);
         tmp.AddMessageWithText("ses_sec", "m2", "x", 1782241513);
 
-        var source = new OpenCodeImportSource(tmp.DbPath);
+        var source = new OpenCodeImportSource(tmp.DbPath, tmp.LedgerPath);
         var byId = (await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None))
             .ToDictionary(s => s.SessionId, s => s.FirstTimestamp);
 
@@ -683,7 +683,7 @@ public class OpenCodeImportSourceTests {
         tmp.AddSession("ses_nodir", null, dir: null, "No dir", 100);
         tmp.AddMessageWithText("ses_nodir", "m1", "x", 100);
 
-        var source = new OpenCodeImportSource(tmp.DbPath);
+        var source = new OpenCodeImportSource(tmp.DbPath, tmp.LedgerPath);
 
         var all = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         await Assert.That(all.Single().Cwd).IsNull();
@@ -704,8 +704,9 @@ namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>Builds a throwaway OpenCode-shaped SQLite db for import tests.</summary>
 internal sealed class OpenCodeDbFixture : IDisposable {
-    public string Dir    { get; } = Directory.CreateTempSubdirectory("kcap-ocfix").FullName;
-    public string DbPath => Path.Combine(Dir, "opencode.db");
+    public string Dir        { get; } = Directory.CreateTempSubdirectory("kcap-ocfix").FullName;
+    public string DbPath     => Path.Combine(Dir, "opencode.db");
+    public string LedgerPath => Path.Combine(Dir, "ledger.json"); // isolates each test from the real ~/.cache ledger
 
     public OpenCodeDbFixture() {
         using var c = Open();
@@ -794,10 +795,14 @@ namespace Capacitor.Cli.Commands;
 /// subagents of their parent. See docs/superpowers/specs/2026-06-26-opencode-import-design.md.
 /// </summary>
 internal sealed class OpenCodeImportSource : IImportSource {
-    readonly string _dbPath;
+    readonly string                 _dbPath;
+    readonly OpenCodeImportLedger   _ledger;
+    readonly object                 _ledgerLock = new(); // routed imports may run concurrently
 
-    public OpenCodeImportSource(string? dbPathOverride = null) =>
+    public OpenCodeImportSource(string? dbPathOverride = null, string? ledgerPathOverride = null) {
         _dbPath = dbPathOverride ?? Path.Combine(OpenCodePaths.DataDir(), "opencode.db");
+        _ledger = OpenCodeImportLedger.Load(ledgerPathOverride ?? OpenCodeImportLedger.DefaultPath());
+    }
 
     public string Vendor => "opencode";
     public bool   IsAvailable => File.Exists(_dbPath);
@@ -872,7 +877,160 @@ git commit -m "feat: OpenCodeImportSource discovery (roots, filters)"
 
 ---
 
-## Task 5: `OpenCodeImportSource` — completeness-gated classification
+## Task 4b: OpenCode import ledger (client-side completeness record)
+
+**Why:** the server exposes no completeness signal, so without a ledger every
+re-run would re-send every already-imported session (correct via dedup, but
+wasteful). The ledger records a session as fully imported **only after its
+`session-end` posts** (which, by the strict ordering, means the parent transcript
+**and** all children succeeded). On re-run, a ledger hit → `AlreadyLoaded` (skip).
+A partial/failed import never reaches `session-end`, so it is never recorded and is
+repaired normally. **Caveat (documented):** the ledger is per-machine and trusts
+local state — if a recorded session is later deleted server-side, a re-run will
+wrongly skip it. The ledger is keyed by **server URL** so it never claims a session
+is loaded on a server that doesn't have it.
+
+**Files:**
+- Create: `src/Capacitor.Cli/Commands/OpenCodeImportLedger.cs`
+- Test: `test/Capacitor.Cli.Tests.Unit/OpenCodeImportLedgerTests.cs`
+
+- [ ] **Step 1: Write the failing test**
+
+```csharp
+using Capacitor.Cli.Commands;
+
+namespace Capacitor.Cli.Tests.Unit;
+
+public class OpenCodeImportLedgerTests {
+    [Test]
+    public async Task records_and_reports_complete_only_for_matching_line_count_and_server() {
+        using var tmp = new TempDir();
+        var path = Path.Combine(tmp.Path, "ledger.json");
+        const string url = "https://srv.example";
+
+        var ledger = OpenCodeImportLedger.Load(path);
+        await Assert.That(ledger.IsComplete(url, "ses_x", lineCount: 10)).IsFalse();
+
+        ledger.MarkComplete(url, "ses_x", lineCount: 10);
+        ledger.Save();
+
+        var reloaded = OpenCodeImportLedger.Load(path);
+        // Same id + same line count + same server → complete.
+        await Assert.That(reloaded.IsComplete(url, "ses_x", 10)).IsTrue();
+        // Grew since import (session continued) → not complete, re-import.
+        await Assert.That(reloaded.IsComplete(url, "ses_x", 11)).IsFalse();
+        // Different server → not complete.
+        await Assert.That(reloaded.IsComplete("https://other", "ses_x", 10)).IsFalse();
+        // Unknown id → not complete.
+        await Assert.That(reloaded.IsComplete(url, "ses_y", 10)).IsFalse();
+    }
+
+    [Test]
+    public async Task load_tolerates_missing_or_corrupt_file() {
+        using var tmp = new TempDir();
+        var path = Path.Combine(tmp.Path, "nope.json");
+        await Assert.That(OpenCodeImportLedger.Load(path).IsComplete("u", "s", 1)).IsFalse(); // missing
+        await File.WriteAllTextAsync(path, "{ not json");
+        await Assert.That(OpenCodeImportLedger.Load(path).IsComplete("u", "s", 1)).IsFalse(); // corrupt → empty
+    }
+
+    sealed class TempDir : IDisposable {
+        public string Path { get; } = Directory.CreateTempSubdirectory("kcap-ledger").FullName;
+        public void Dispose() { try { Directory.Delete(Path, true); } catch { } }
+    }
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `~/.dotnet/dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj --treenode-filter "/*/*/OpenCodeImportLedgerTests/*"`
+Expected: FAIL — `OpenCodeImportLedger` not defined.
+
+- [ ] **Step 3: Implement the ledger (AOT-safe JSON via source-generated context)**
+
+This repo is NativeAOT — use a `JsonSerializerContext`, never reflection-based
+`JsonSerializer`. Create `src/Capacitor.Cli/Commands/OpenCodeImportLedger.cs`:
+
+```csharp
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace Capacitor.Cli.Commands;
+
+/// <summary>
+/// Per-machine record of OpenCode sessions fully imported to a given server, used
+/// to skip already-loaded sessions on re-run (the server exposes no completeness
+/// signal). Shape: { "<serverUrl>": { "<sessionId>": <reconstructedLineCount> } }.
+/// Keyed by server URL so it never claims a session is loaded on the wrong server.
+/// </summary>
+internal sealed class OpenCodeImportLedger {
+    readonly string _path;
+    readonly Dictionary<string, Dictionary<string, int>> _byServer;
+
+    OpenCodeImportLedger(string path, Dictionary<string, Dictionary<string, int>> data) {
+        _path = path; _byServer = data;
+    }
+
+    public static string DefaultPath() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                     ".cache", "kcap", "opencode-imported.json");
+
+    public static OpenCodeImportLedger Load(string path) {
+        try {
+            if (File.Exists(path)) {
+                var json = File.ReadAllText(path);
+                var data = JsonSerializer.Deserialize(json, OpenCodeLedgerJsonContext.Default.DictionaryStringDictionaryStringInt32);
+                if (data is not null) return new(path, data);
+            }
+        } catch { /* missing/corrupt → empty ledger */ }
+        return new(path, new(StringComparer.Ordinal));
+    }
+
+    public bool IsComplete(string serverUrl, string sessionId, int lineCount) =>
+        _byServer.TryGetValue(serverUrl, out var sessions)
+        && sessions.TryGetValue(sessionId, out var recorded)
+        && recorded == lineCount;
+
+    public void MarkComplete(string serverUrl, string sessionId, int lineCount) {
+        if (!_byServer.TryGetValue(serverUrl, out var sessions)) {
+            sessions = new(StringComparer.Ordinal);
+            _byServer[serverUrl] = sessions;
+        }
+        sessions[sessionId] = lineCount;
+    }
+
+    public void Save() {
+        try {
+            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+            var json = JsonSerializer.Serialize(_byServer, OpenCodeLedgerJsonContext.Default.DictionaryStringDictionaryStringInt32);
+            File.WriteAllText(_path, json);
+        } catch { /* best effort — a ledger write failure must not fail the import */ }
+    }
+}
+
+[JsonSerializable(typeof(Dictionary<string, Dictionary<string, int>>))]
+internal partial class OpenCodeLedgerJsonContext : JsonSerializerContext { }
+```
+
+**Implementer note:** confirm the generated property name for the nested dictionary
+type on `OpenCodeLedgerJsonContext.Default` (it may differ from
+`DictionaryStringDictionaryStringInt32`); use whatever the source generator emits.
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `~/.dotnet/dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj --treenode-filter "/*/*/OpenCodeImportLedgerTests/*"`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/Capacitor.Cli/Commands/OpenCodeImportLedger.cs test/Capacitor.Cli.Tests.Unit/OpenCodeImportLedgerTests.cs
+git commit -m "feat: OpenCode import ledger (client-side completeness record)"
+```
+
+---
+
+## Task 5: `OpenCodeImportSource` — ledger-gated classification
 
 **Files:**
 - Modify: `src/Capacitor.Cli/Commands/OpenCodeImportSource.cs`
@@ -899,7 +1057,7 @@ public async Task classify_new_when_server_has_no_watermark() {
           .RespondWith(Response.Create().WithStatusCode(404));
     using var client = new HttpClient();
 
-    var source     = new OpenCodeImportSource(fix.DbPath);
+    var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
     var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
     var classified = await source.ClassifyAsync(discovered,
         new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
@@ -911,17 +1069,22 @@ public async Task classify_new_when_server_has_no_watermark() {
 }
 
 [Test]
-public async Task classify_already_loaded_when_watermark_present_AND_ended() {
+public async Task classify_already_loaded_when_ledger_has_matching_count_for_this_server() {
     using var fix = new OpenCodeDbFixture();
     fix.AddSession("ses_x", null, "/w", "T", 100);
-    fix.AddMessageWithText("ses_x", "m1", "hello", 100);
+    fix.AddMessageWithText("ses_x", "m1", "hello", 100); // → 1 reconstructed {info,parts} line
 
     using var server = WireMockServer.Start();
+    // Pre-seed the ledger: ses_x fully imported to THIS server, total reconstructed lines = 1.
+    var seed = OpenCodeImportLedger.Load(fix.LedgerPath);
+    seed.MarkComplete(server.Url!, "ses_x", lineCount: 1);
+    seed.Save();
+    // Even if probed, the watermark is irrelevant once the ledger hits.
     server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
-          .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":5,"ended":true}"""));
+          .RespondWith(Response.Create().WithStatusCode(404));
     using var client = new HttpClient();
 
-    var source     = new OpenCodeImportSource(fix.DbPath);
+    var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
     var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
     var classified = await source.ClassifyAsync(discovered,
         new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
@@ -931,23 +1094,23 @@ public async Task classify_already_loaded_when_watermark_present_AND_ended() {
 }
 
 [Test]
-public async Task classify_repair_when_watermark_present_but_NOT_ended() {
+public async Task classify_repair_when_not_in_ledger_and_watermark_present() {
     using var fix = new OpenCodeDbFixture();
     fix.AddSession("ses_x", null, "/w", "T", 100);
     fix.AddMessageWithText("ses_x", "m1", "hello", 100);
 
-    using var server = WireMockServer.Start();
+    using var server = WireMockServer.Start(); // ledger empty (fresh fix)
     server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
-          .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":42}""")); // no "ended"
+          .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":42}"""));
     using var client = new HttpClient();
 
-    var source     = new OpenCodeImportSource(fix.DbPath);
+    var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
     var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
     var classified = await source.ClassifyAsync(discovered,
         new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
         CancellationToken.None);
 
-    // Repair is modeled as Partial, carrying the HWM (42) so import offsets lines above it.
+    // Not in ledger + watermark present → Partial repair, carrying the HWM (42).
     await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
     await Assert.That(classified[0].ResumeFromLine).IsEqualTo(42);
 }
@@ -964,7 +1127,7 @@ public async Task classify_too_short_for_structural_only_session() {
           .RespondWith(Response.Create().WithStatusCode(404));
     using var client = new HttpClient();
 
-    var source     = new OpenCodeImportSource(fix.DbPath);
+    var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
     var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
     var classified = await source.ClassifyAsync(discovered,
         new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
@@ -983,7 +1146,7 @@ public async Task classify_too_short_for_zero_message_session() {
           .RespondWith(Response.Create().WithStatusCode(404));
     using var client = new HttpClient();
 
-    var source     = new OpenCodeImportSource(fix.DbPath);
+    var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
     var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
     var classified = await source.ClassifyAsync(discovered,
         new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
@@ -1019,7 +1182,7 @@ public void AddStructuralMessage(string sid, string msgId, long t) {
 Run: `~/.dotnet/dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj --treenode-filter "/*/*/OpenCodeImportSourceTests/*"`
 Expected: FAIL — `ClassifyAsync` throws `NotImplementedException`.
 
-- [ ] **Step 3: Implement completeness-gated classification**
+- [ ] **Step 3: Implement ledger-gated classification**
 
 Replace the `ClassifyAsync` stub in `OpenCodeImportSource.cs`. Add `using System.Net;`, `using System.Text.Json;`, `using Capacitor.Cli.Core;` (for `GetWithRetryAsync`):
 
@@ -1040,67 +1203,68 @@ public async Task<IReadOnlyList<ImportCommand.SessionClassification>> ClassifyAs
                 ? FromEpoch(tums) : null,
         };
 
-        int importable;
+        int total, importable;
         try {
-            importable = db.SynthesizeLines(s.SessionId).Count(OpenCodeDb.IsImportRelevantLine);
+            (total, importable) = CountLines(db, s.SessionId);
         } catch {
             results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, 0, "transcript read failed"));
             continue;
         }
 
         if (importable < ctx.MinLines) {
-            results.Add(Make(s, meta, ImportCommand.ClassificationStatus.TooShort, importable));
+            results.Add(Make(s, meta, ImportCommand.ClassificationStatus.TooShort, total));
             continue;
         }
 
-        ServerState server;
+        // Completeness is tracked client-side (the ledger): a ledger hit on this server
+        // with the same reconstructed line count means we already fully imported it.
+        lock (_ledgerLock) {
+            if (_ledger.IsComplete(ctx.BaseUrl, s.SessionId, total)) {
+                results.Add(Make(s, meta, ImportCommand.ClassificationStatus.AlreadyLoaded, total));
+                continue;
+            }
+        }
+
+        // Not in the ledger → New (no server watermark) or Partial-repair (watermark
+        // present → replay ABOVE the HWM, idempotent via canonical prt_ ids; the live
+        // and import line spaces are incompatible, so we never resume line-by-line).
+        int? hwm;
         try {
-            server = await FetchServerStateAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, agentId: null, ct);
+            hwm = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, agentId: null, ct);
         } catch {
-            results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, importable, "watermark probe failed"));
+            results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, total, "watermark probe failed"));
             continue;
         }
 
-        // Completeness-gated policy (the live/import line spaces are incompatible, so
-        // no line-by-line resume — we repair by replaying ABOVE the HWM, idempotent
-        // via canonical prt_ ids):
-        //   • no watermark            → New        (send 0..N)
-        //   • watermark + ended       → AlreadyLoaded (skip — proven complete)
-        //   • watermark + NOT ended   → Partial    (repair: replay offset above HWM)
-        ImportCommand.SessionClassification c;
-        if (server.LastLine is not { } hwm) {
-            c = Make(s, meta, ImportCommand.ClassificationStatus.New, importable);
-        } else if (server.Ended) {
-            c = Make(s, meta, ImportCommand.ClassificationStatus.AlreadyLoaded, importable);
-        } else {
-            // Repair: carry the HWM in ResumeFromLine; ImportSessionAsync offsets lines above it.
-            c = Make(s, meta, ImportCommand.ClassificationStatus.Partial, importable) with { ResumeFromLine = hwm };
-        }
+        var c = hwm is { } h
+            ? Make(s, meta, ImportCommand.ClassificationStatus.Partial, total) with { ResumeFromLine = h }
+            : Make(s, meta, ImportCommand.ClassificationStatus.New, total);
         results.Add(c);
     }
     return results;
 }
 
-/// <summary>Server view of a (sub)session: HWM line and whether it has a terminal
-/// (Session/Subagent)Ended event. <c>Ended</c> is the completeness signal — we
-/// only ever post the terminal lifecycle event on a fully-successful import.</summary>
-internal readonly record struct ServerState(int? LastLine, bool Ended);
+/// <summary>Single pass: (total reconstructed lines, importable lines). Total is the
+/// ledger key (drift detector); importable gates MinLines.</summary>
+static (int Total, int Importable) CountLines(OpenCodeDb db, string sessionId) {
+    int total = 0, importable = 0;
+    foreach (var line in db.SynthesizeLines(sessionId)) {
+        total++;
+        if (OpenCodeDb.IsImportRelevantLine(line)) importable++;
+    }
+    return (total, importable);
+}
 
-static async Task<ServerState> FetchServerStateAsync(
+static async Task<int?> FetchServerLastLineAsync(
     HttpClient http, string baseUrl, string sessionId, string? agentId, CancellationToken ct) {
     var url = $"{baseUrl}/api/sessions/{sessionId}/last-line" + (agentId is not null ? $"?agentId={agentId}" : "");
     using var resp = await http.GetWithRetryAsync(url, ct: ct);
-    if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return new(null, false);
+    if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
     if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
     var body = await resp.Content.ReadAsStringAsync(ct);
     using var doc = JsonDocument.Parse(body);
-    var root = doc.RootElement;
-    int? last = root.TryGetProperty("last_line_number", out var ln) && ln.ValueKind == JsonValueKind.Number
+    return doc.RootElement.TryGetProperty("last_line_number", out var ln) && ln.ValueKind == JsonValueKind.Number
         ? ln.GetInt32() : null;
-    // IMPLEMENTER (Task 0, Step 1): confirm the exact ended field name. If the endpoint
-    // exposes none, the fallback is: treat any watermark as NOT ended (always repair).
-    var ended = root.TryGetProperty("ended", out var e) && e.ValueKind == JsonValueKind.True;
-    return new(last, ended);
 }
 
 static ImportCommand.SessionClassification Make(
@@ -1130,14 +1294,14 @@ Expected: PASS.
 
 ```bash
 git add src/Capacitor.Cli/Commands/OpenCodeImportSource.cs test/Capacitor.Cli.Tests.Unit/OpenCodeImportSourceTests.cs test/Capacitor.Cli.Tests.Unit/OpenCodeDbFixture.cs
-git commit -m "feat: OpenCodeImportSource completeness-gated classification (New/AlreadyLoaded/Partial/TooShort)"
+git commit -m "feat: OpenCodeImportSource ledger-gated classification (New/AlreadyLoaded/Partial/TooShort)"
 ```
 
 ---
 
 ## Task 6: Strict transcript sender + parent lifecycle + transcript + set-title
 
-**Why a strict sender (works with the completeness gate):** the shared `SessionImporter.PostTranscriptBatch` swallows HTTP failures and counts the batch as sent. A partial multi-batch send may already have advanced the server HWM; withholding `session-end` does not undo that. The strict sender's job is therefore **not** "leave no watermark" — it's "**don't mark the session complete on failure**": by aborting before any terminal lifecycle POST (`session-end`/`subagent-stop`), the session stays *not-ended*, so the completeness-gated classifier (Task 5) reclassifies it `Partial` on re-run and **repairs** it (replay above HWM) instead of skipping it as `AlreadyLoaded`. Strict-send + completeness-gated repair are the two halves of one guarantee. We add an opt-in `failOnError` flag (default `false` → peers unchanged; OpenCode passes `true`).
+**Why a strict sender (works with the ledger):** the shared `SessionImporter.PostTranscriptBatch` swallows HTTP failures and counts the batch as sent. A partial multi-batch send may already have advanced the server HWM; returning early does not undo that. The strict sender's job is therefore **not** "leave no watermark" — it's "**don't record the session as complete on failure**": by aborting before any terminal lifecycle POST (`session-end`/`subagent-stop`) — which is also where the ledger is written — the session is **never recorded in the ledger**, so the ledger-gated classifier (Task 5) reclassifies it `Partial` on re-run and **repairs** it (replay above HWM) instead of skipping it as `AlreadyLoaded`. Strict-send + ledger-gated repair are the two halves of one guarantee. We add an opt-in `failOnError` flag (default `false` → peers unchanged; OpenCode passes `true`).
 
 **Files:**
 - Modify: `src/Capacitor.Cli/Commands/SessionImporter.cs` (add `failOnError` to `SendTranscriptBatches` + `PostTranscriptBatch`)
@@ -1175,7 +1339,7 @@ public class OpenCodeImportSourceImportTests : IDisposable {
                    .RespondWith(Response.Create().WithStatusCode(200));
 
         using var client = new HttpClient();
-        var source     = new OpenCodeImportSource(_fix.DbPath);
+        var source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
             new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
@@ -1209,7 +1373,7 @@ public class OpenCodeImportSourceImportTests : IDisposable {
                .RespondWith(Response.Create().WithStatusCode(200));
 
         using var client = new HttpClient();
-        var source     = new OpenCodeImportSource(_fix.DbPath);
+        var source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
             new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
@@ -1218,14 +1382,75 @@ public class OpenCodeImportSourceImportTests : IDisposable {
             new ImportContext(client, _server.Url!, false), CancellationToken.None);
 
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
-        // No watermark must be left: session-end must NOT have been posted.
+        // session-end must NOT have been posted — so the session is never recorded in
+        // the ledger and the next run repairs it instead of skipping it.
         var posted = _server.LogEntries.Select(e => e.RequestMessage.Path).ToList();
         await Assert.That(posted).DoesNotContain("/hooks/session-end/opencode");
+    }
+
+    [Test]
+    public async Task batch2_failure_then_rerun_repairs_above_hwm() {
+        _fix.AddSession("ses_root", null, "/work/a", "T", 100);
+        // 150 importable messages → 2 transcript batches (batchSize 100).
+        for (var i = 0; i < 150; i++)
+            _fix.AddMessageWithText("ses_root", $"msg_{i:D3}", $"line {i}", 100 + i);
+
+        using var client = new HttpClient();
+        var ctx       = new ClassifyContext(client, _server.Url!, 0, null, null);
+        var importCtx = new ImportContext(client, _server.Url!, false);
+        var source    = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+
+        // ── Run 1: batch 1 → 200, batch 2 → 500 (WireMock scenario state machine). ──
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(404));
+        _server.Given(Request.Create().WithPath("/hooks/session-start/opencode").UsingPost())
+               .RespondWith(Response.Create().WithStatusCode(200));
+        _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost().InScenario("b")
+                   .WillSetStateTo("after1")) // first transcript POST
+               .RespondWith(Response.Create().WithStatusCode(200));
+        _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost().InScenario("b")
+                   .WhenStateIs("after1"))
+               .RespondWith(Response.Create().WithStatusCode(500)); // second batch fails
+
+        var c1 = await source.ClassifyAsync(
+            await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
+        await Assert.That(c1[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
+        await Assert.That(await source.ImportSessionAsync(c1[0], importCtx, CancellationToken.None))
+            .IsEqualTo(ImportOutcome.Failed);
+        await Assert.That(_server.LogEntries.Select(e => e.RequestMessage.Path))
+            .DoesNotContain("/hooks/session-end/opencode"); // not recorded → repairable
+
+        // ── Run 2: server now reports the HWM left by batch 1 (line 99); all POSTs OK. ──
+        _server.Reset();
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
+        foreach (var p in new[] { "/hooks/session-start/opencode", "/hooks/transcript",
+                                  "/hooks/set-title", "/hooks/session-end/opencode" })
+            _server.Given(Request.Create().WithPath(p).UsingPost())
+                   .RespondWith(Response.Create().WithStatusCode(200));
+
+        var source2 = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+        var c2 = await source2.ClassifyAsync(
+            await source2.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
+        await Assert.That(c2[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial); // repair
+        await Assert.That(await source2.ImportSessionAsync(c2[0], importCtx, CancellationToken.None))
+            .IsEqualTo(ImportOutcome.Resumed);
+
+        // Repaired: session-end posted, and every replayed line number is above the HWM (99).
+        await Assert.That(_server.LogEntries.Select(e => e.RequestMessage.Path)).Contains("/hooks/session-end/opencode");
+        foreach (var e in _server.LogEntries.Where(e => e.RequestMessage.Path == "/hooks/transcript")) {
+            using var doc = System.Text.Json.JsonDocument.Parse(e.RequestMessage.Body!);
+            foreach (var n in doc.RootElement.GetProperty("line_numbers").EnumerateArray())
+                await Assert.That(n.GetInt32() > 99).IsTrue();
+        }
     }
 }
 ```
 
-(Define `OpenCodeDbFixtureIt` in the integration project with the same builder methods as `OpenCodeDbFixture` from Task 4.)
+(Define `OpenCodeDbFixtureIt` in the integration project with the same members as
+`OpenCodeDbFixture` from Task 4 — including `Dir`, `DbPath`, **`LedgerPath`**, and
+the `Add*` builders — so integration tests are isolated from the real `~/.cache`
+ledger too.)
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -1244,7 +1469,10 @@ bool failOnError      = false // strict callers abort the import on a rejected b
 ```
 
 - Where it builds line numbers (`batchLineNumbers.Add(lineIndex)`), change to
-  `batchLineNumbers.Add(lineIndex + lineNumberOffset)`.
+  `batchLineNumbers.Add(checked(lineIndex + lineNumberOffset))`. The `checked`
+  arithmetic guards the (low-risk) case where many repeated repairs push the offset
+  toward `int.MaxValue` — it throws `OverflowException` (caught by the strict
+  caller → `Failed`) instead of silently wrapping to a negative line number.
 - Pass `failOnError` to each `PostTranscriptBatch` call.
 
 Update `PostTranscriptBatch` to accept `bool failOnError = false` and, when `true`, throw instead of swallowing:
@@ -1303,8 +1531,9 @@ public async Task<ImportOutcome> ImportSessionAsync(
             lineNumberOffset: lineOffset, failOnError: true);
     } catch {
         // Strict: abort before session-end. A partial send may have advanced the HWM,
-        // but since session-end is withheld the session stays NOT-ended, so a re-run
-        // classifies it Partial and REPAIRS it (replay above HWM) — not AlreadyLoaded.
+        // but the ledger is written only after session-end — which we never reach — so
+        // the session is NOT recorded, and a re-run classifies it Partial and REPAIRS
+        // it (replay above HWM) instead of skipping as AlreadyLoaded.
         return ImportOutcome.Failed;
     } finally {
         try { File.Delete(tmpFile); } catch { }
@@ -1316,11 +1545,18 @@ public async Task<ImportOutcome> ImportSessionAsync(
     if (!string.IsNullOrWhiteSpace(title))
         await PostSetTitleAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, title!, ct);
 
-    // 5. session-end (posted only after parent transcript + all children succeeded;
-    //    this is what flips the session to "ended" and lets a future run skip it).
+    // 5. session-end (posted only after parent transcript + all children succeeded).
     if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/opencode",
             BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), ct))
         return ImportOutcome.Failed;
+
+    // 6. Record completeness in the ledger — ONLY now, after session-end succeeded
+    //    (so a partial/failed import is never recorded and is repaired on re-run).
+    //    Keyed by server URL + the reconstructed line count (TotalLines) for drift.
+    lock (_ledgerLock) {
+        _ledger.MarkComplete(ctx.BaseUrl, c.SessionId, c.TotalLines);
+        _ledger.Save();
+    }
 
     return repair ? ImportOutcome.Resumed : (sent == 0 ? ImportOutcome.Skipped : ImportOutcome.Loaded);
 }
@@ -1406,7 +1642,7 @@ public async Task ImportSession_routes_children_as_subagents_before_session_end(
                .RespondWith(Response.Create().WithStatusCode(200));
 
     using var client = new HttpClient();
-    var source     = new OpenCodeImportSource(_fix.DbPath);
+    var source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
     var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
     await Assert.That(discovered.Select(d => d.SessionId)).IsEquivalentTo(new[] { "ses_root" }); // child excluded
     var classified = await source.ClassifyAsync(discovered,
@@ -1448,19 +1684,20 @@ public async Task ImportSession_routes_children_as_subagents_before_session_end(
 
 Add `AddMessageWithTextAndAgent` to the integration fixture — same as `AddMessageWithText` but the message `data` includes `"agent":"general"` so `info.agent` resolves the subagent type. (`CanonicalAgentId("ses_kid")` returns `"ses_kid"` since `ses_…` ids contain no dashes.)
 
-- [ ] **Step 1b: Write the failing repair test (watermark present, not ended → re-run repairs above HWM)**
+- [ ] **Step 1b: Write the failing repair test (watermark present, not in ledger → re-run repairs above HWM)**
 
-This is the scenario Codex flagged: a prior run left a watermark (HWM=42) but no
-`SessionEnded`. The re-run must classify `Partial`, replay the transcript with line
-numbers **above 42**, and post `session-end`.
+This is the scenario Codex flagged: a prior run left a watermark (HWM=42) but the
+session was never recorded in the ledger (the import failed before `session-end`).
+The re-run must classify `Partial`, replay the transcript with line numbers
+**above 42**, and post `session-end`.
 
 ```csharp
 [Test]
-public async Task rerun_repairs_not_ended_session_by_replaying_above_hwm() {
+public async Task rerun_repairs_unrecorded_session_by_replaying_above_hwm() {
     _fix.AddSession("ses_root", null, "/work/a", "T", 100);
     _fix.AddMessageWithText("ses_root", "msg_1", "hello", 110);
 
-    // Watermark present (42) but NOT ended → repair.
+    // Watermark present (42), ledger empty → repair.
     _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":42}"""));
     foreach (var p in new[] { "/hooks/session-start/opencode", "/hooks/transcript",
@@ -1469,7 +1706,7 @@ public async Task rerun_repairs_not_ended_session_by_replaying_above_hwm() {
                .RespondWith(Response.Create().WithStatusCode(200));
 
     using var client = new HttpClient();
-    var source     = new OpenCodeImportSource(_fix.DbPath);
+    var source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
     var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
     var classified = await source.ClassifyAsync(discovered,
         new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
@@ -1493,6 +1730,52 @@ public async Task rerun_repairs_not_ended_session_by_replaying_above_hwm() {
 (Confirm the `TranscriptBatch` JSON property name is `line_numbers` against
 `src/Capacitor.Cli.Core/Models.cs` — adjust the assertion if the wire name differs.)
 
+- [ ] **Step 1c: Write the failing ledger test (second run skips without re-sending)**
+
+The whole point of the ledger: a re-run of a fully-imported session must classify
+`AlreadyLoaded` and skip — no transcript re-send.
+
+```csharp
+[Test]
+public async Task second_run_skips_via_ledger_and_does_not_resend() {
+    _fix.AddSession("ses_root", null, "/work/a", "T", 100);
+    _fix.AddMessageWithText("ses_root", "msg_1", "hello", 110);
+
+    _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+           .RespondWith(Response.Create().WithStatusCode(404)); // run 1: New
+    foreach (var p in new[] { "/hooks/session-start/opencode", "/hooks/transcript",
+                              "/hooks/set-title", "/hooks/session-end/opencode" })
+        _server.Given(Request.Create().WithPath(p).UsingPost())
+               .RespondWith(Response.Create().WithStatusCode(200));
+
+    using var client = new HttpClient();
+    var ctx       = new ClassifyContext(client, _server.Url!, 0, null, null);
+    var importCtx = new ImportContext(client, _server.Url!, false);
+
+    // Run 1 — imports (New → Loaded) and records the ledger on session-end.
+    var s1 = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+    var c1 = await s1.ClassifyAsync(
+        await s1.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
+    await Assert.That(c1[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
+    await Assert.That(await s1.ImportSessionAsync(c1[0], importCtx, CancellationToken.None))
+        .IsEqualTo(ImportOutcome.Loaded);
+
+    var transcriptCountAfterRun1 = _server.LogEntries.Count(e => e.RequestMessage.Path == "/hooks/transcript");
+
+    // Run 2 — a FRESH source reloads the ledger from disk → AlreadyLoaded → skip.
+    var s2 = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+    var c2 = await s2.ClassifyAsync(
+        await s2.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
+    await Assert.That(c2[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
+    await Assert.That(await s2.ImportSessionAsync(c2[0], importCtx, CancellationToken.None))
+        .IsEqualTo(ImportOutcome.Skipped);
+
+    // No new transcript POSTs on run 2.
+    await Assert.That(_server.LogEntries.Count(e => e.RequestMessage.Path == "/hooks/transcript"))
+        .IsEqualTo(transcriptCountAfterRun1);
+}
+```
+
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `~/.dotnet/dotnet run --project test/Capacitor.Cli.Tests.Integration/Capacitor.Cli.Tests.Integration.csproj --treenode-filter "/*/*/OpenCodeImportSourceImportTests/*"`
@@ -1504,9 +1787,9 @@ In `OpenCodeImportSource.cs`, replace the `// 3. (children go here...)` comment 
 
 ```csharp
     // 3. children as subagents — BEFORE session-end so SubagentCompleted precedes SessionEnded.
-    //    Strict: any child failure aborts the import before session-end. A partial child
-    //    send may advance the child HWM, but withholding subagent-stop keeps the child
-    //    NOT-ended, so a re-run repairs it (replay above child HWM).
+    //    Strict: any child failure aborts the import before session-end, so the parent
+    //    is never recorded in the ledger and a re-run repairs the child (replay above
+    //    its HWM). A partial child send may advance the child HWM — harmless (deduped).
     try {
         await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, ct);
     } catch {
@@ -1524,11 +1807,14 @@ async Task ImportChildrenAsync(HttpClient client, string baseUrl, string rootId,
         var agentId   = OpenCodeSubagentDiscovery.CanonicalAgentId(child.Id);
         var agentType = ResolveAgentType(db, child.Id); // info.agent, fallback "subagent"
 
-        // Per-subsession completeness gate, keyed by (rootId, agentId):
-        //   ended → skip (already complete); not-ended+watermark → repair offset above child HWM; none → 0.
-        var server = await FetchServerStateAsync(client, baseUrl, rootId, agentId, ct);
-        if (server is { LastLine: not null, Ended: true }) continue; // child already complete
-        var childOffset = server.LastLine is { } chwm ? chwm + 1 : 0;
+        // No per-child completeness gate: a fully-imported parent is skipped wholesale
+        // via the ledger (parent in ledger ⟹ session-end posted ⟹ all children done), so
+        // children are only reached during a (re)import of an incomplete parent. We just
+        // offset above the child's HWM so a repair replays above already-ingested content
+        // (idempotent by prt_ id); re-sending a complete child within a repair run is
+        // harmless. Child watermark is keyed by (rootId, agentId).
+        var chwm = await FetchServerLastLineAsync(client, baseUrl, rootId, agentId, ct);
+        var childOffset = chwm is { } v ? v + 1 : 0;
 
         // Synthesize the child transcript to a temp file FIRST — the subagent payload
         // builders require a transcript_path, and we pass this same path to start + stop.
@@ -1768,3 +2054,5 @@ git commit -am "chore: AOT verification fixups for OpenCode import" --allow-empt
 - **Raw `ses_…` ids** are used verbatim as session ids — no GUID normalization. `CanonicalAgentId` only strips dashes (none in `ses_…`).
 - **Grandchildren:** `QueryChildren(rootId)` returns direct children only. Current OpenCode data nests one level; deeper nesting is out of scope (YAGNI) — if encountered, a grandchild simply won't be imported under its grandparent. Do not add handling without evidence OpenCode nests deeper.
 - **Confirm against `PiImportSource`** for exact `SessionMetadata` property names and `GetWithRetryAsync`/`PostWithRetryAsync` namespaces before finalizing.
+- **Import ledger** (`~/.cache/kcap/opencode-imported.json`) is the client-side completeness signal — the server exposes none. It's keyed by server URL and written only after `session-end` succeeds. Caveat: a session deleted server-side after being recorded is wrongly skipped on re-run; a `--reimport`/`--force` bypass is a possible future flag (out of scope). A live-captured session (ingested by the watcher, not import) isn't in the ledger, so its first import is a `Partial` repair (re-sent once, deduped) — `--since` bounds this.
+- **All tests must pass a temp `ledgerPathOverride`** (via the fixture's `LedgerPath`) so they never read/write the real `~/.cache` ledger.

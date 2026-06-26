@@ -1,7 +1,7 @@
 # OpenCode historical import (`kcap import --opencode`) — Design
 
 **Date:** 2026-06-26
-**Status:** Approved; rev5 — completeness-gated repair (strict send + replay-above-HWM) after two design passes + two plan-review passes. Implementation plan written (rev3, with Task 0 server-contract confirmation).
+**Status:** Approved; rev6 — ledger-gated repair (client-side completeness + strict send + replay-above-HWM) after two design passes + three plan-review passes. Implementation plan written (rev4, with Task 0 server-contract confirmation + Task 4b import ledger).
 **Author:** tony.young@kurrent.io (with Claude)
 
 ## Problem
@@ -90,6 +90,7 @@ Core — see the AOT rationale below. Pure path logic stays in Core
 | Unit | Responsibility | Depends on |
 |---|---|---|
 | `OpenCodeDb` (**CLI**, not Core) | Open db read-only; query roots/children; synthesize `{info,parts}` lines per session | Microsoft.Data.Sqlite |
+| `OpenCodeImportLedger` (CLI) | Per-machine, per-server record of fully-imported sessions (client-side completeness) | source-gen JSON |
 | `OpenCodeImportSource` (CLI) | `IImportSource` impl: discover, classify, import (roots + subagent children) | `OpenCodeDb`, `OpenCodePaths`, `OpenCodeSubagentDiscovery`, `SessionImporter` |
 | `VendorSelection` / `Program.cs` | wire `--opencode` filter + register source | — |
 
@@ -122,33 +123,39 @@ stays in `Capacitor.Cli`. Pure path logic remains in Core (`OpenCodePaths`).
   - `FirstTimestamp` = `session.time_created`
 - Discovery filters honored as in Pi: `--session`, `--cwd`, `--since`.
 
-**Classification policy (OpenCode-specific — completeness-gated repair).** The live
-and import line spaces are incompatible (see *Line reconstruction*), so there is no
-line-by-line resume. But a pure binary "any watermark → skip" is **unsafe**: the
-server HWM advances on *transcript ingest*, independent of `session-end`, so a
-partial multi-batch import (batch 1 accepted, batch 2 failed) leaves a watermark
-and would be skipped forever, never repaired. Instead we gate on **completeness**,
-using the server's `ended` signal (we only ever post the terminal `session-end` /
-`subagent-stop` on a fully-successful import, so "ended" ⟺ "complete"):
+**Classification policy (OpenCode-specific — ledger-gated repair).** The live and
+import line spaces are incompatible (see *Line reconstruction*), so there is no
+line-by-line resume; and the current server exposes **no completeness signal** on
+`/api/sessions/{id}/last-line` (only `{ last_line_number }`). A pure "any watermark
+→ skip" is unsafe: the server HWM advances on *transcript ingest* independent of
+`session-end`, so a partial multi-batch import would be skipped forever. So
+completeness is tracked **client-side** in a per-machine, per-server **import
+ledger** (`OpenCodeImportLedger`, `~/.cache/kcap/opencode-imported.json`):
 
 - **`TooShort`** — fewer than `MinLines` *importable* lines (see below).
-- **`New`** — no server watermark → import full transcript, line numbers `0..N`.
-- **`AlreadyLoaded`** — watermark present **and** the session is `ended` → proven
-  complete; skip.
-- **`Partial` (repair)** — watermark present but **not** `ended` → re-send the full
-  reconstructed transcript with line numbers offset **above** the server HWM
+- **`AlreadyLoaded`** — the ledger records this session on this server with a
+  matching reconstructed line count → skip (no re-send).
+- **`New`** — not in the ledger and no server watermark → import full transcript,
+  line numbers `0..N`.
+- **`Partial` (repair)** — not in the ledger but a server watermark exists → re-send
+  the full reconstructed transcript with line numbers offset **above** the HWM
   (carried in `ResumeFromLine`). Already-ingested content dedupes by canonical
-  `prt_` id (keep-first); the missing tail lands; `session-end` then flips the
-  session to `ended`. Idempotent and self-repairing.
+  `prt_` id (keep-first); the missing tail lands.
 - **`ProbeError`** — watermark probe failed; skip with a reason, like Pi.
 
-This depends on three server behaviors confirmed in **Task 0** of the plan: (1) a
-per-session/per-subsession `ended` signal on the `last-line` endpoint; (2)
-transcript dedup by canonical id independent of line number; (3) the HWM filter
-drops `line_number <= HWM` before normalization. **Fallback** if (1) is
-unavailable: treat any watermark as not-ended (always replay above HWM) — correct
-but re-sends already-loaded sessions each run. Subsessions are gated identically
-via `?agentId=` (HWM + `SubagentCompleted`).
+The ledger is written **only after `session-end` succeeds** — which, by the strict
+ordering, means the parent transcript *and* all children succeeded. A partial/failed
+import never reaches `session-end`, so it is never recorded and is repaired on
+re-run. **Caveat (documented):** the ledger trusts local state — a session deleted
+server-side after being recorded would be wrongly skipped; keyed by server URL so
+it never claims a session is loaded on the wrong server.
+
+The repair path depends on two server behaviors confirmed in **Task 0**: transcript
+dedup by canonical id independent of line number, and the HWM filter dropping
+`line_number <= HWM` before normalization (so replay must be numbered above the
+probed HWM). No dependency on a server `ended` signal. Subsessions: a complete
+parent is skipped wholesale via the ledger, so children are only (re)sent during an
+incomplete parent's import — each offset above its own `(parent, agentId)` HWM.
 
 **Importable-line count (role-aware, mirrors Pi's `IsImportRelevantLine`).** The
 `MinLines` threshold counts only lines that produce a canonical server event, not
@@ -223,15 +230,15 @@ child, and **aborts the import (returns `Failed`) before any terminal lifecycle
 POST** (`session-end`, `subagent-stop`) if a batch fails.
 
 Critically, a partial send **may still have advanced the server HWM** (earlier
-batches were accepted) — withholding `session-end` does *not* undo that. So the
-strict sender alone does not make re-runs safe; it works **together with the
-completeness-gated classification**: because `session-end` was withheld, the
-session stays **not-ended**, so a re-run classifies it `Partial` and **repairs** it
-(replay above HWM), rather than skipping it as `AlreadyLoaded`. Strict-send (don't
-mark complete on failure) + completeness-gated repair (re-send when not complete)
-are the two halves of the same guarantee. This is the one place OpenCode diverges
-from "match existing importers" — justified by the no-resume line space. Hardening
-the shared sender for the *other* importers remains out of scope.
+batches were accepted) — returning `Failed` does *not* undo that. So the strict
+sender alone does not make re-runs safe; it works **together with the ledger**:
+because the import aborted before `session-end`, the session is **never recorded in
+the ledger**, so a re-run classifies it `Partial` and **repairs** it (replay above
+HWM), rather than skipping it as `AlreadyLoaded`. Strict-send (don't record on
+failure) + ledger-gated repair (re-send when not recorded) are the two halves of
+the same guarantee. This is the one place OpenCode diverges from "match existing
+importers" — justified by the no-resume line space. Hardening the shared sender for
+the *other* importers remains out of scope.
 
 ## Subagent (child) parity
 
@@ -250,25 +257,26 @@ Full order per root:
 1. `POST /hooks/session-start/opencode` (parent).
 2. Stream parent transcript.
 3. For each child with `parent_id` = this root, in deterministic
-   `(session.time_created, session.id)` order, apply the **same completeness gate
-   as the parent**, keyed by `(rootId, agentId)` via `?agentId=`:
-   - child `ended` (SubagentCompleted) → **skip** (already complete);
-   - else `POST /hooks/subagent-start` (parent session id, `agent_id` =
+   `(session.time_created, session.id)` order:
+   - `POST /hooks/subagent-start` (parent session id, `agent_id` =
      `CanonicalAgentId(childSid)`, `agent_type` from child's `info.agent`, fallback
      `"subagent"`, `transcript_path` = the child's temp file) — **fail-closed**;
    - stream the synthesized child transcript under `agent_id = childSid`, with line
-     numbers offset above the child HWM (0 when none — repair otherwise),
+     numbers offset above the child's `(rootId, agentId)` HWM (0 when none),
      `failOnError: true`;
    - `POST /hooks/subagent-stop`.
 4. `POST /hooks/session-end/opencode` (parent).
 
-**Subagent watermark/repair:** children are completeness-gated exactly like the
-parent. A child that already has `SubagentCompleted` is skipped; a child with a
-watermark but no completion is repaired (replay above its HWM). A child send
-failure throws and **aborts the whole import before the parent's `session-end`**
-(strict) — so the parent stays not-ended and the next run repairs the unfinished
-child. The `agentId`-scoped `last-line` query is the same one the live watcher
-uses.
+**Subagent watermark/repair:** there is **no per-child completeness gate** — a fully
+imported parent is skipped wholesale via the ledger (parent recorded ⟺ `session-end`
+posted ⟺ all children done), so children are only reached while (re)importing an
+incomplete parent. Each child is offset above its own `(rootId, agentId)` HWM so a
+repair replays above already-ingested content (idempotent by `prt_` id);
+re-sending a complete child within a repair run is harmless. A child send failure
+throws and **aborts the whole import before the parent's `session-end`** (strict) —
+so the parent is never recorded in the ledger and the next run repairs the
+unfinished child. The `agentId`-scoped `last-line` query is the same one the live
+watcher uses.
 
 ## Lifecycle, idempotency, resume
 
@@ -317,11 +325,13 @@ Microsoft.Data.Sqlite (or a small checked-in sample db):
 - Child → subagent routing: a parented session produces subagent-start/stop +
   child transcript under `agent_id = childSid`, not a standalone session.
 - Classification states against a stubbed `/api/sessions/{id}/last-line`
-  (WireMock): `New` (no watermark), `AlreadyLoaded` (watermark + `ended:true`),
-  and `Partial`/repair (watermark, no `ended` → carries the HWM in
-  `ResumeFromLine`).
-- Repair path: a not-ended session replays the transcript with line numbers
-  **above** the HWM and posts `session-end` (integration test).
+  (WireMock) + the ledger: `AlreadyLoaded` (ledger hit, matching line count),
+  `New` (not in ledger, no watermark), `Partial`/repair (not in ledger, watermark
+  present → carries the HWM in `ResumeFromLine`).
+- Ledger round-trip: a second run of a fully-imported session classifies
+  `AlreadyLoaded` and posts **no** transcript (integration test).
+- Repair path: a not-recorded session with a watermark replays the transcript with
+  line numbers **above** the HWM and posts `session-end` (integration test).
 - Importable-line counting: a session of purely structural lines
   (`step-start`/`step-finish`, empty user text, non-terminal tools) classifies
   `TooShort`, not `New`.
@@ -356,9 +366,10 @@ Microsoft.Data.Sqlite (or a small checked-in sample db):
 - **Multiple children ordering:** imported in `(time_created, id)` order (see
   *Subagent parity*) for deterministic, reproducible runs.
 - **Mixed live/historical (partially live-captured) session:** if it ran to
-  `session-end` it is `ended` → `AlreadyLoaded` (skip); if it was truncated
-  (not `ended`) → `Partial` → repaired by replaying above the HWM (see
-  *Classification policy*).
+  it was live-captured (not via import), it is **not in the import ledger**, so the
+  first import classifies it `Partial` (server watermark present) and replays above
+  the HWM — deduped server-side, then recorded in the ledger and skipped thereafter.
+  So a live-captured session is re-sent once via import; `--since` bounds how many.
 
 ## Out of scope / deliberate decisions
 
@@ -379,9 +390,13 @@ Microsoft.Data.Sqlite (or a small checked-in sample db):
   `agentId`-scoped watermark is needed.
 - **Part-ordering vs SDK** — empirically validated on one session; implementation
   must re-verify against live SDK order for a multi-part/tool session before merge.
-- **Line-space incompatibility (live vs import)** — handled by completeness-gated
+- **Line-space incompatibility (live vs import)** — handled by ledger-gated
   classification: no line-by-line resume; repair replays the full transcript above
-  the server HWM and dedupes by `prt_` id. Correctness rests on the three server
-  behaviors confirmed in plan Task 0 (ended signal, dedup-by-canonical-id, HWM
-  filter). If the `ended` signal is unavailable, the fallback (always replay above
-  HWM) keeps correctness at the cost of re-sending already-loaded sessions.
+  the server HWM and dedupes by `prt_` id. Correctness rests on the two server
+  behaviors confirmed in plan Task 0 (dedup-by-canonical-id, HWM filter). No server
+  `ended` signal is required — completeness lives in the client ledger.
+- **Ledger drift (accepted)** — the import ledger is per-machine and trusts local
+  state: a session recorded as imported but later deleted server-side would be
+  wrongly skipped on re-run. Mitigations: keyed by server URL; only recorded after
+  a fully-successful `session-end`. A future `--reimport`/`--force` flag could
+  bypass the ledger — out of scope for v1.
