@@ -57,6 +57,28 @@ public class SessionImporterProgressTests : IDisposable {
     }
 
     [Test]
+    public async Task CountSendableLines_counts_non_blank_lines_from_start() {
+        // The per-session progress denominator (AI-907): must equal the number of
+        // lines SendTranscriptBatches/ImportSessionAsync actually POST — non-blank
+        // lines from startLine to EOF.
+        var path = Path.GetTempFileName();
+        try {
+            await File.WriteAllLinesAsync(path, ["a", "", "b", "   ", "c"]);
+
+            // Whole file: 3 non-blank lines (a, b, c); the two blank lines don't count.
+            await Assert.That(SessionImporter.CountSendableLines(path)).IsEqualTo(3);
+
+            // From line index 2 onward: "b", "   ", "c" → 2 non-blank (b, c).
+            await Assert.That(SessionImporter.CountSendableLines(path, startLine: 2)).IsEqualTo(2);
+
+            // A missing file is best-effort 0 (slot stays indeterminate, never errors).
+            await Assert.That(SessionImporter.CountSendableLines(path + ".nope")).IsEqualTo(0);
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
     public async Task ImportSessionAsync_fires_subagent_events_around_inline_import() {
         _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));

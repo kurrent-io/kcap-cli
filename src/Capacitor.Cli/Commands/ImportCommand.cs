@@ -899,6 +899,7 @@ static class ImportCommand {
         var events = new ChainWorkerEvents {
             OnSessionStarted  = (_, _) => { },    // non-TTY: session start is silent; TTY overrides below
             OnSubagentStarted = (_, _, _) => { }, // non-TTY: subagent start is silent; TTY overrides below
+            OnSessionProgress = (_, _, _) => { }, // non-TTY: no live per-session bar; TTY overrides below
             OnSubagentFinished = (_, _, aid, lines) => display.Line(
                 $"  ↳ imported subagent {aid} ({lines} lines)",
                 $"  [dim]↳[/] imported subagent [cyan]{Markup.Escape(aid)}[/] ({lines} lines)"
@@ -1014,10 +1015,12 @@ static class ImportCommand {
                     .StartAsync(async ctx => {
                             var bar = ctx.AddTask("[green]Importing[/]", maxValue: chains.Sum(c => c.Count));
 
-                            // Four description-only progress tasks rendered as live "slot rows"
-                            // beneath the main bar. IsIndeterminate=true draws a stripe
-                            // animation while a worker is processing; setting it to false
-                            // and Description="idle" parks the slot.
+                            // Four progress tasks rendered as live "slot rows" beneath the
+                            // main bar — one per worker. Each fills as its session's transcript
+                            // lines are posted: MaxValue is the session's sendable-line count and
+                            // Value advances per flushed batch via OnSessionProgress. A slot that
+                            // has no batch yet (or whose total couldn't be counted) draws an
+                            // indeterminate stripe rather than a stuck 0% (AI-907).
                             var slots = new ProgressTask[ImportWorkerCount];
 
                             for (var i = 0; i < ImportWorkerCount; i++) {
@@ -1025,43 +1028,66 @@ static class ImportCommand {
                                 slots[i].IsIndeterminate = false;
                             }
 
-                            // currentSession[slot] holds the SessionId currently rendered on
-                            // the slot row, used to revert the description after a subagent
-                            // finishes (revert from "↳ subagent X" to "Loading <parent>").
+                            // Per-slot render state. currentSid/currentVerb let us revert the
+                            // description after a subagent finishes (from "↳ subagent X" back to
+                            // "Loading <parent>"); totalKnown tracks whether OnSessionProgress has
+                            // supplied a real denominator yet, so subagent⇄parent transitions
+                            // restore a determinate bar only when one exists.
                             var currentVerb = new string[ImportWorkerCount];
                             var currentSid  = new string[ImportWorkerCount];
+                            var totalKnown  = new bool[ImportWorkerCount];
 
                             var wrappedEvents = events with {
+                                // TTY renders live per-session bars, so opt into the
+                                // sendable-line pre-count that sets their denominator.
+                                TrackPerSessionProgress = true,
                                 OnSessionStarted = (slot, c) => {
                                     var verb = c.Status == ClassificationStatus.Partial
                                         ? $"resuming from line {c.ResumeFromLine}"
                                         : "new";
                                     currentSid[slot]  = c.SessionId;
                                     currentVerb[slot] = verb;
-                                    SetSlot(slot, $"  [bold]Slot {slot + 1}[/] — Loading [cyan]{Markup.Escape(c.SessionId)}[/] ({verb})");
+                                    // Fresh bar; indeterminate stripe until the first batch reports
+                                    // the line total.
+                                    totalKnown[slot]            = false;
+                                    slots[slot].Value           = 0;
+                                    slots[slot].MaxValue        = 1;
+                                    slots[slot].IsIndeterminate = true;
+                                    slots[slot].Description     = LoadingDesc(slot, c.SessionId, verb);
+                                },
+                                OnSessionProgress = (slot, linesAdded, total) => {
+                                    if (total > 0) {
+                                        slots[slot].MaxValue        = total;
+                                        slots[slot].IsIndeterminate = false;
+                                        totalKnown[slot]            = true;
+                                    }
+
+                                    slots[slot].Increment(linesAdded);
                                 },
                                 OnSubagentStarted = (slot, sid, aid) => {
-                                    SetSlot(slot, $"  [bold]Slot {slot + 1}[/] — [dim]↳[/] subagent [cyan]{Markup.Escape(aid)}[/] (parent {Markup.Escape(sid)})");
+                                    // Subagent lines don't advance the parent bar; show a stripe
+                                    // and swap the description while the subagent streams.
+                                    slots[slot].IsIndeterminate = true;
+                                    slots[slot].Description     = $"  [bold]Slot {slot + 1}[/] — [dim]↳[/] subagent [cyan]{Markup.Escape(aid)}[/] (parent {Markup.Escape(sid)})";
                                 },
                                 OnSubagentFinished = (slot, _, _, _) => {
-                                    // Revert to the parent session's "Loading" description.
-                                    // No scrollback line in TTY mode — subagent activity was
-                                    // already visible on the slot row while it ran.
+                                    // Revert to the parent's "Loading" description and resume the
+                                    // determinate bar (only if a real total was reported; otherwise
+                                    // keep the stripe). No scrollback line in TTY mode — subagent
+                                    // activity was already visible on the slot row while it ran.
                                     if (!string.IsNullOrEmpty(currentSid[slot])) {
-                                        SetSlot(
-                                            slot,
-                                            $"  [bold]Slot {slot + 1}[/] — Loading [cyan]{Markup.Escape(currentSid[slot])}[/] ({currentVerb[slot]})"
-                                        );
+                                        slots[slot].IsIndeterminate = !totalKnown[slot];
+                                        slots[slot].Description     = LoadingDesc(slot, currentSid[slot], currentVerb[slot]);
                                     }
                                 },
                                 OnSessionEnded = (slot, c, _, _) => {
                                     importedSessionIds.Add(c.SessionId);
-                                    // Description stays on the just-finished session until
-                                    // the next OnSessionStarted swaps it. We only flip the
-                                    // stripe off here so a slot that drains (queue empty)
-                                    // looks calm.
+                                    // Snap the slot bar to 100% and park the stripe; the description
+                                    // stays on the just-finished session until the next
+                                    // OnSessionStarted swaps it.
                                     bar.Increment(1);
                                     slots[slot].IsIndeterminate = false;
+                                    slots[slot].Value           = slots[slot].MaxValue;
                                     // Suppress the legacy per-session log line in TTY mode
                                     // by NOT calling the base handler. Slot rows showed the
                                     // session while it ran; errors render via scrollback below.
@@ -1085,14 +1111,15 @@ static class ImportCommand {
                             void IdleSlot(int slot) {
                                 slots[slot].Description     = $"  Slot {slot + 1} — idle";
                                 slots[slot].IsIndeterminate = false;
+                                slots[slot].Value           = 0;
+                                slots[slot].MaxValue        = 1;
+                                totalKnown[slot]            = false;
                                 currentSid[slot]            = "";
                                 currentVerb[slot]           = "";
                             }
 
-                            void SetSlot(int slot, string markup) {
-                                slots[slot].Description     = markup;
-                                slots[slot].IsIndeterminate = true;
-                            }
+                            static string LoadingDesc(int slot, string sid, string verb) =>
+                                $"  [bold]Slot {slot + 1}[/] — Loading [cyan]{Markup.Escape(sid)}[/] ({verb})";
                         }
                     );
                 importResult = r!;
@@ -2017,6 +2044,25 @@ static class ImportCommand {
         public required Action<int, SessionClassification, SessionImportOutcome, int> OnSessionEnded { get; init; }
         // slot, classification, outcome (Loaded|Resumed), linesSent
 
+        /// <summary>
+        /// Fired after each parent-transcript batch is flushed, to advance the
+        /// per-slot progress bar. <c>linesAdded</c> is the size of the batch just
+        /// posted; <c>total</c> is the session's full sendable-line count (the
+        /// bar's denominator, or 0 when unknown). Subagent batches are excluded —
+        /// they're surfaced via <see cref="OnSubagentStarted"/> / <see cref="OnSubagentFinished"/>
+        /// and don't advance the parent bar.
+        /// </summary>
+        public required Action<int, int, int> OnSessionProgress { get; init; } // slot, linesAdded, total
+
+        /// <summary>
+        /// Whether a live per-session bar consumes <see cref="OnSessionProgress"/>.
+        /// When false (non-TTY / redirected output), <see cref="ImportSingleSessionAsync"/>
+        /// skips the per-session line pre-count — a full transcript read whose
+        /// denominator nothing would render. Defaults to false; the TTY slot
+        /// renderer sets it true.
+        /// </summary>
+        public bool TrackPerSessionProgress { get; init; }
+
         /// <summary>Fired when a successfully-imported session is ready for title generation.</summary>
         public required Action<(string SessionId, string FilePath, string? PreviousSessionId, string Vendor)> OnTitleTaskReady { get; init; }
 
@@ -2113,10 +2159,25 @@ static class ImportCommand {
             ChainWorkerEvents     events,
             CancellationToken     ct
         ) {
+        // Denominator for the per-slot progress bar: the number of parent-transcript
+        // lines this import will POST. For a resume, only the lines past the server's
+        // watermark are sent. 0 when the file is missing/unreadable — the slot then
+        // stays indeterminate instead of stuck at 0% (AI-907). Skipped entirely when
+        // no live bar consumes it (non-TTY) so we don't pre-scan every transcript.
+        var sendableTotal = events.TrackPerSessionProgress
+            ? SessionImporter.CountSendableLines(
+                session.FilePath,
+                session.Status == ClassificationStatus.Partial ? session.ResumeFromLine : 0
+            )
+            : 0;
+
         IProgress<ImportProgress> perSessionProgress = new CallbackProgress(ev => {
                 switch (ev) {
-                    case SubagentStarted ss:  events.OnSubagentStarted(slot, session.SessionId, ss.AgentId); break;
-                    case SubagentFinished sf: events.OnSubagentFinished(slot, session.SessionId, sf.AgentId, sf.LinesSent); break;
+                    // Only parent-transcript batches (AgentId == null) advance the
+                    // slot bar; subagent batches are surfaced via the subagent events.
+                    case BatchFlushed { AgentId: null } bf: events.OnSessionProgress(slot, bf.LinesAdded, sendableTotal); break;
+                    case SubagentStarted ss:               events.OnSubagentStarted(slot, session.SessionId, ss.AgentId); break;
+                    case SubagentFinished sf:              events.OnSubagentFinished(slot, session.SessionId, sf.AgentId, sf.LinesSent); break;
                 }
             }
         );

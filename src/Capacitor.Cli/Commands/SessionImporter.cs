@@ -568,6 +568,37 @@ static class SessionImporter {
         return results;
     }
 
+    /// <summary>
+    /// Count the non-blank lines from <paramref name="startLine"/> (inclusive) to
+    /// EOF — i.e. the number of lines <see cref="SendTranscriptBatches"/> /
+    /// <see cref="ImportSessionAsync"/> will actually POST for the main transcript.
+    /// This is the denominator for the per-session import progress bar: the sum of
+    /// every <see cref="BatchFlushed"/> with a null <c>AgentId</c> equals this count.
+    /// Best-effort — returns 0 on a missing file or any I/O error, which callers
+    /// treat as "total unknown" (the bar stays indeterminate).
+    /// </summary>
+    internal static int CountSendableLines(string filePath, int startLine = 0) {
+        if (!File.Exists(filePath)) return 0;
+
+        try {
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+
+            var count     = 0;
+            var lineIndex = 0;
+
+            while (reader.ReadLine() is { } line) {
+                if (lineIndex >= startLine && !string.IsNullOrWhiteSpace(line)) count++;
+
+                lineIndex++;
+            }
+
+            return count;
+        } catch {
+            return 0;
+        }
+    }
+
     internal static string? DecodeCwdFromDirName(string encodedCwd) {
         // Encoded cwd has / replaced with - (e.g., -Users-alexey-dev-myproject)
         // Reverse: replace leading - with /, then interior - with /
