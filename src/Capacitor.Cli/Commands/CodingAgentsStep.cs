@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Spectre.Console;
 
 namespace Capacitor.Cli.Commands;
@@ -12,7 +13,7 @@ internal static class CodingAgentsStep {
     // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini
     // (AI-887), Kiro (AI-888), and Pi (AI-886) were all added after the original
     // four vendors.
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false);
 
     internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false);
 
@@ -42,7 +43,8 @@ internal static class CodingAgentsStep {
             Func<string /*legacyDir*/, bool>                          CleanLegacyCodexSkills,
             Func<string /*agentJsonPath*/, bool>?                     InstallKiroHooks = null,
             Func<string /*extensionPath*/, bool>?                     InstallPiExtension = null,
-            Func<string /*pluginPath*/, bool>?                        InstallOpenCodeExtension = null
+            Func<string /*pluginPath*/, bool>?                        InstallOpenCodeExtension = null,
+            Func<CodexConfigToml.Change>?                            EnableCodexNetworkAccess = null
         );
 
     internal record Result(
@@ -54,7 +56,8 @@ internal static class CodingAgentsStep {
             bool GeminiHooksInstalled = false,
             bool KiroHooksInstalled = false,
             bool PiExtensionInstalled = false,
-            bool OpenCodeExtensionInstalled = false
+            bool OpenCodeExtensionInstalled = false,
+            bool CodexNetworkAccessApplied = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -83,6 +86,7 @@ internal static class CodingAgentsStep {
         var claudeInstalled       = HandleClaude(options, detected, paths, installers, prompt, writeLine);
         var codexHooksInstalled   = HandleCodexHooks(options, detected, paths, installers, prompt, writeLine);
         var codexSkillsInstalled  = codexHooksInstalled && HandleCodexSkills(paths, installers, writeLine);
+        var codexNetworkApplied   = HandleCodexNetworkAccess(options, installers, prompt, writeLine, codexHooksInstalled);
         var cursorHooksInstalled  = HandleCursorHooks(options, detected, paths, installers, prompt, writeLine);
         var copilotHooksInstalled = HandleCopilotHooks(options, detected, paths, installers, prompt, writeLine);
         var geminiHooksInstalled  = HandleGeminiHooks(options, detected, paths, installers, prompt, writeLine);
@@ -104,7 +108,8 @@ internal static class CodingAgentsStep {
                 geminiHooksInstalled,
                 kiroHooksInstalled,
                 piExtensionInstalled,
-                openCodeExtensionInstalled
+                openCodeExtensionInstalled,
+                codexNetworkApplied
             )
         );
     }
@@ -450,6 +455,55 @@ internal static class CodingAgentsStep {
         writeLine("  [dim]  accept once to trust them all (or run /hooks inside Codex to trust them individually).[/]");
 
         return true;
+    }
+
+    /// <summary>
+    /// AI-794 — Codex runs the agent's shell tool in a network-blocked sandbox, so kcap
+    /// skills (which shell out to <c>kcap …</c>) can't reach the Capacitor server. After
+    /// Codex hooks install, offer to enable sandbox network access for the configured
+    /// server(s) via <see cref="Installers.EnableCodexNetworkAccess"/>. Gated on hooks
+    /// actually installing — there's nothing to fix if the Codex integration is off.
+    /// </summary>
+    static bool HandleCodexNetworkAccess(
+            Options            options,
+            Installers         installers,
+            Func<string, bool> prompt,
+            Action<string>     writeLine,
+            bool               codexHooksInstalled
+        ) {
+        if (!codexHooksInstalled || installers.EnableCodexNetworkAccess is null) return false;
+
+        if (options.SkipCodexNetworkAccess) {
+            writeLine("  [dim]· Codex sandbox network access left unchanged (--skip-codex-network-access)[/]");
+
+            return false;
+        }
+
+        writeLine("  [dim]  kcap skills (recap, errors, …) run in Codex's sandbox, which blocks network by default.[/]");
+
+        var shouldApply = options.NoPrompt
+            || prompt("Allow Codex's sandbox to reach your Capacitor server(s) so kcap skills work?");
+
+        if (!shouldApply) {
+            writeLine("  [dim]· Codex sandbox network access not changed — kcap skills may prompt for escalation (see README)[/]");
+
+            return false;
+        }
+
+        switch (installers.EnableCodexNetworkAccess()) {
+            case CodexConfigToml.Change.Updated:
+                writeLine("  [green]✓[/] Codex sandbox network access enabled for kcap ([dim]~/.codex/config.toml[/])");
+
+                return true;
+            case CodexConfigToml.Change.Unchanged:
+                writeLine("  [dim]· Codex sandbox already allows network access — no change needed[/]");
+
+                return false;
+            default:
+                writeLine("  [yellow]⚠[/] Could not update ~/.codex/config.toml — enable Codex sandbox network access manually (see README).");
+
+                return false;
+        }
     }
 
     static bool HandleCursorHooks(

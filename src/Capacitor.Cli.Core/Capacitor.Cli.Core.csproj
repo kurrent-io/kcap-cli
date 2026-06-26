@@ -30,5 +30,6 @@
     <ItemGroup>
         <PackageReference Include="Duende.IdentityModel.OidcClient" />
         <PackageReference Include="Duende.IdentityModel" />
+        <PackageReference Include="Tomlyn" />
     </ItemGroup>
 </Project>

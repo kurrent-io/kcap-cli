@@ -40,6 +40,14 @@ Options:
   --skills            Install only the agent-agnostic skills to ~/.agents/skills/.
                       Use this if you only have Cursor (or another agent that
                       reads ~/.agents/skills/) and don't want Codex hooks.
+  --skip-codex-network-access
+                      With --codex: skip enabling Codex sandbox network access.
+                      By default `install --codex` also allows Codex's
+                      workspace-write sandbox to reach your configured Capacitor
+                      server(s) (a network_proxy allowlist in
+                      ~/.codex/config.toml) so kcap skills work. The
+                      --if-installed refresh path never touches this, so the npm
+                      postinstall hook leaves config.toml alone.
   --if-installed      Refresh-only mode: no-op unless the user has previously
                       installed the target (marker file or pre-marker entry
                       detected). Used by the npm postinstall hook to refresh
