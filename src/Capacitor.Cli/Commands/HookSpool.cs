@@ -25,6 +25,9 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
     static readonly Regex SafeSessionId = SafeSessionIdRegex();
     static          int   seqCounter;
 
+    /// <summary>The directory where spool files are stored.</summary>
+    internal string Dir => spoolDir;
+
     string? LivePathFor(string sessionId) =>
         SafeSessionId.IsMatch(sessionId) ? Path.Combine(spoolDir, $"{sessionId}.jsonl") : null;
 

@@ -171,6 +171,15 @@ public static class ClaudeHookCommand {
             }
         }
 
+        // Drain stranded lifecycle events before handling the fresh one. Current session
+        // first so a stranded session-start replays before this session's session-end.
+        try {
+            var drainBudget = TimeSpan.FromMilliseconds(Math.Min(2000, HookBudget.Remaining(processStart, command).TotalMilliseconds));
+            var curSid      = JsonNode.Parse(body)?["session_id"]?.GetValue<string>();
+            if (drainBudget > TimeSpan.Zero)
+                await spool.DrainAllAsync(curSid, ClaudePoster(client, baseUrl, drainBudget), drainBudget, CancellationToken.None);
+        } catch { /* fail-open */ }
+
         // Inject default_visibility from the active V2 profile for session-start
         // hooks. The legacy top-level CapacitorConfig.DefaultVisibility shape is
         // not populated by v2 configs (the field lives under the profile), so
@@ -311,6 +320,13 @@ public static class ClaudeHookCommand {
                     agentId: null, cwd: sessionCwd, skipTitle: isResumeOrCompact);
             }
 
+            // Ordering guard: if this session's backlog couldn't fully drain, spool the fresh
+            // session-start so a stranded session-start always reaches the server first.
+            if (CurrentSessionHasBacklog(spool, sessionId)) {
+                if (sessionId is not null) spool.Append(sessionId, "session-start", body);
+                return 0;
+            }
+
             // 2. Single bounded POST — keep resp alive to read the response body for the
             //    context-envelope emission and plan-content POST on success.
             var remaining = HookBudget.Remaining(processStart, "session-start");
@@ -395,6 +411,16 @@ public static class ClaudeHookCommand {
                     body             = node.ToJsonString();
                 }
             } catch { }
+
+            // Ordering guard: if this session's backlog couldn't fully drain, spool the fresh
+            // session-end so a stranded session-start always reaches the server before it.
+            if (CurrentSessionHasBacklog(spool, sessionId)) {
+                if (sessionId is not null) {
+                    spool.Append(sessionId, "session-end", body);
+                    await Console.Error.WriteLineAsync($"[kcap] session-end spooled (ordering guard); will retry on the next kcap hook ({sessionId})");
+                }
+                return 0;
+            }
 
             var remaining  = HookBudget.Remaining(processStart, "session-end");
             HttpResponseMessage? resp = null;
@@ -546,4 +572,40 @@ public static class ClaudeHookCommand {
         using var planPayload = new StringContent(obj.ToJsonString(), Encoding.UTF8, "application/json");
         await httpClient.PostWithRetryAsync($"{url}/api/sessions/{sessionId}/plan", planPayload);
     }
+
+    /// <summary>
+    /// Returns a poster closure that POSTs a spooled entry to the server and maps the response
+    /// to a <see cref="DrainOutcome"/>. On a successful <c>session-end</c> replay, handles the
+    /// <c>generate_whats_done</c> side effect so it is not lost.
+    /// </summary>
+    static Func<string, string, Task<DrainOutcome>> ClaudePoster(HttpClient client, string baseUrl, TimeSpan perAttempt) =>
+        async (route, body) => {
+            try {
+                using var content = new StringContent(body, Encoding.UTF8, "application/json");
+                using var resp    = await client.PostOnceAsync($"{baseUrl}/hooks/{route}", content, perAttempt, CancellationToken.None);
+                if (!resp.IsSuccessStatusCode) {
+                    var code = (int)resp.StatusCode;
+                    return code is >= 500 or 408 or 429 ? DrainOutcome.TransientStop : DrainOutcome.Drop;
+                }
+                if (route == "session-end") {
+                    try {
+                        var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync());
+                        var sid  = JsonNode.Parse(body)?["session_id"]?.GetValue<string>();
+                        if (node?["generate_whats_done"]?.GetValue<bool>() == true && sid is not null)
+                            WatcherManager.SpawnWhatsDoneGenerator(baseUrl, sid);
+                    } catch { }
+                }
+                return DrainOutcome.Delivered;
+            } catch { return DrainOutcome.TransientStop; }
+        };
+
+    /// <summary>
+    /// Returns true if the given session still has undelivered spool entries (live .jsonl or in-flight
+    /// .draining files). Used as an ordering guard so a stranded session-start always reaches the
+    /// server before its session-end.
+    /// </summary>
+    static bool CurrentSessionHasBacklog(HookSpool spool, string? sid) =>
+        sid is not null && Directory.Exists(spool.Dir)
+        && (File.Exists(Path.Combine(spool.Dir, $"{sid}.jsonl"))
+            || Directory.EnumerateFiles(spool.Dir, $"{sid}.*.draining").Any());
 }

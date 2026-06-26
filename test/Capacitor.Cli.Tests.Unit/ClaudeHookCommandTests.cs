@@ -78,6 +78,37 @@ public class ClaudeHookCommandTests {
             .IsEqualTo(Sid);
     }
 
+    [Test]
+    public async Task pending_backlog_is_drained_on_next_hook_when_server_up() {
+        using var fx = new Fixture(); // 200 OK
+        fx.Spool.Append(Sid, "session-end", $$"""{"session_id":"{{Sid}}"}""");
+        // A fresh, unrelated stop hook with the server up flushes the backlog.
+        await fx.HandleAsync($$"""{"hook_event_name":"Stop","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}""");
+        await Assert.That(fx.RouteOrder).Contains("session-end"); // replayed
+        await Assert.That(fx.SpoolFiles.Any()).IsFalse();          // delivered + cleaned
+    }
+
+    [Test]
+    public async Task current_session_start_replays_before_its_session_end() {
+        using var fx = new Fixture();
+        fx.Spool.Append(Sid, "session-start", $$"""{"session_id":"{{Sid}}"}""");
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionEnd","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}""");
+        var startIdx = fx.RouteOrder.IndexOf("session-start");
+        var endIdx   = fx.RouteOrder.IndexOf("session-end");
+        await Assert.That(startIdx).IsGreaterThanOrEqualTo(0);
+        await Assert.That(endIdx).IsGreaterThan(startIdx);
+    }
+
+    [Test]
+    public async Task replayed_session_end_with_generate_whats_done_is_handled() {
+        // Server returns generate_whats_done:false for the replayed session-end (set false to avoid process spawn).
+        using var fx = new Fixture();
+        fx.RespondJson = """{"generate_whats_done":false}""";
+        fx.Spool.Append(Sid, "session-end", $$"""{"session_id":"{{Sid}}"}""");
+        await fx.HandleAsync($$"""{"hook_event_name":"Stop","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}""");
+        await Assert.That(fx.SpoolFiles.Any()).IsFalse();
+    }
+
     sealed class Fixture : IDisposable {
         readonly string _tmpHome = Path.Combine(Path.GetTempPath(), $"kcap-claude-hook-{Guid.NewGuid():N}");
         readonly string _spoolPath;
@@ -86,6 +117,7 @@ public class ClaudeHookCommandTests {
         public HookSpool Spool { get; }
         public HttpClient Client { get; }
         public TimeSpan HoldOnPost { get; set; } = TimeSpan.Zero;
+        public string? RespondJson { get; set; }
         readonly HttpStatusCode _postStatus;
 
         public Fixture(HttpStatusCode postStatus = HttpStatusCode.OK) {
@@ -100,7 +132,9 @@ public class ClaudeHookCommandTests {
                 if (path.StartsWith("/hooks/")) RouteOrder.Add(path.Replace("/hooks/", ""));
                 if (req.Method == HttpMethod.Get) return new HttpResponseMessage(HttpStatusCode.NotFound);
                 if (HoldOnPost > TimeSpan.Zero) await Task.Delay(HoldOnPost, ct);
-                return new HttpResponseMessage(_postStatus);
+                var resp = new HttpResponseMessage(_postStatus);
+                if (RespondJson is not null) resp.Content = new System.Net.Http.StringContent(RespondJson, System.Text.Encoding.UTF8, "application/json");
+                return resp;
             }));
         }
 
