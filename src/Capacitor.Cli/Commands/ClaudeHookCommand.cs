@@ -94,8 +94,13 @@ public static class ClaudeHookCommand {
         var task = factory();
         var winner = await Task.WhenAny(task, Task.Delay(cap));
         if (winner != task) {
-            _ = task.ContinueWith(static t => { _ = t.Exception; t.Result.Client.Dispose(); },
-                CancellationToken.None, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
+            // Abandoned: observe ALL terminal states so a late fault (likely during the very
+            // outage this guards) doesn't surface as an UnobservedTaskException; dispose the
+            // client only if creation actually completed after the cap elapsed.
+            _ = task.ContinueWith(static t => {
+                if (t.IsFaulted) _ = t.Exception;
+                else if (t.Status == TaskStatus.RanToCompletion) t.Result.Client.Dispose();
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             return null;
         }
         try { return await task; } catch { return null; }

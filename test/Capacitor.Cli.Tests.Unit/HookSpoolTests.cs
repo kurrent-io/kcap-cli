@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 
 namespace Capacitor.Cli.Tests.Unit;
@@ -124,6 +125,30 @@ public class HookSpoolTests {
             File.SetLastWriteTimeUtc(f, DateTime.UtcNow.AddDays(-40));
             new HookSpool(dir).ReapOlderThan(TimeSpan.FromDays(30));
             await Assert.That(File.Exists(f)).IsFalse();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Test]
+    public async Task cap_holds_in_bytes_for_non_ascii_payloads() {
+        var dir = TmpDir();
+        try {
+            // Multi-byte UTF-8 bodies: char-count under-counts bytes, so a char-based cap would
+            // let the file grow past capBytes. With byte-based counting the file stays bounded.
+            var spool = new HookSpool(dir, capBytes: 400);
+            for (var i = 0; i < 30; i++)
+                spool.Append(SidA, "session-end", $$"""{"i":{{i}},"t":"日本語テキスト😀"}""");
+
+            var path  = Path.Combine(dir, $"{SidA}.jsonl");
+            var bytes = new FileInfo(path).Length;
+            await Assert.That(bytes).IsLessThanOrEqualTo(400L);
+            // Eviction happened (FIFO): newest entry retained, oldest dropped.
+            var ids = (await File.ReadAllLinesAsync(path))
+                .Select(l => JsonNode.Parse(l)!["body"]!.GetValue<string>())
+                .Select(b => JsonNode.Parse(b)!["i"]!.GetValue<int>())
+                .ToList();
+            await Assert.That(ids.Count).IsLessThan(30);
+            await Assert.That(ids).Contains(29);
+            await Assert.That(ids).DoesNotContain(0);
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 }

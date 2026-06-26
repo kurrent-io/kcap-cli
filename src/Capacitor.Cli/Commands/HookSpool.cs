@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
@@ -37,7 +38,7 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
         try {
             Directory.CreateDirectory(spoolDir);
             var line = new JsonObject { ["route"] = route, ["body"] = rawPayloadJson }.ToJsonString();
-            EnsureUnderCap(path, line.Length + 1);
+            EnsureUnderCap(path, Encoding.UTF8.GetByteCount(line) + 1);
             File.AppendAllText(path, $"{line}\n");
         } catch { /* best effort */ }
     }
@@ -46,8 +47,11 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
         try {
             if (!File.Exists(path)) return;
             if (new FileInfo(path).Length + incomingBytes <= capBytes) return;
+            // Count UTF-8 BYTES (not chars) so the cap holds for non-ASCII payloads — the file is
+            // byte-measured (FileInfo.Length), so a char-based count would under-count and let the
+            // file grow past capBytes.
             var lines = File.ReadAllLines(path).ToList();
-            while (lines.Count > 0 && lines.Sum(l => l.Length + 1) + incomingBytes > capBytes)
+            while (lines.Count > 0 && lines.Sum(l => Encoding.UTF8.GetByteCount(l) + 1) + incomingBytes > capBytes)
                 lines.RemoveAt(0);
             File.WriteAllText(path, lines.Count > 0 ? string.Join('\n', lines) + "\n" : "");
         } catch { }

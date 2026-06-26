@@ -122,6 +122,7 @@ The `kcap mcp sessions` stdio server lets coding agents search and recall past C
 Once set up, Capacitor runs silently in the background. Every Claude Code (and Codex CLI, if you installed those hooks) session is captured automatically:
 
 - **Session lifecycle** — start, end, interruptions, context compaction
+- **Durable lifecycle delivery** — if the server is briefly unreachable when a `SessionStart`/`SessionEnd` hook fires (for example during a deploy), the event is spooled to `~/.config/kcap/spool/` and automatically re-sent on the next hook, so sessions don't get stuck "active" or lose their start record. No action needed; stale spool entries are reaped after 30 days.
 - **Transcript data** — streamed in real time via a background watcher process over SignalR
 - **Subagent activity** — full tree of spawned subagents with their own transcripts
 - **Tool usage** — every tool call with timing and results
