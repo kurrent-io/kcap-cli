@@ -82,6 +82,7 @@ public class ImportChainsTests : IDisposable {
             OnSessionStarted      = (_, _) => { },
             OnSubagentStarted     = (_, _, _) => { },
             OnSubagentFinished    = (_, _, _, _) => { },
+            OnSessionProgress     = (_, _, _) => { },
             OnSessionErrored      = (_, _, _) => { },
             OnSessionEnded        = (_, c, _, _) => completedLines.Add($"Loading {c.SessionId}..."),
             OnTitleTaskReady      = _ => { },
@@ -94,6 +95,43 @@ public class ImportChainsTests : IDisposable {
         await Assert.That(result.Loaded).IsEqualTo(3);
         await Assert.That(result.Errored).IsEqualTo(0);
         await Assert.That(completedLines.Count).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task ImportChainsAsync_reports_per_session_progress() {
+        // Regression (AI-907): per-session slot rows always showed 0% because
+        // BatchFlushed events were never wired to the slot bar. OnSessionProgress
+        // must now fire once per flushed parent batch, carrying the batch size and
+        // the session's full sendable-line total.
+        StubAllHookEndpoints();
+
+        // 250 non-blank lines → batches of 100 → flushes of 100, 100, 50.
+        var chains = new List<List<ImportCommand.SessionClassification>> {
+            new() { MakeNew("prog-s1", 250) },
+        };
+
+        var progressLines  = new ConcurrentBag<int>();
+        var progressTotals = new ConcurrentBag<int>();
+
+        var events = new ImportCommand.ChainWorkerEvents {
+            OnSessionStarted      = (_, _) => { },
+            OnSubagentStarted     = (_, _, _) => { },
+            OnSubagentFinished    = (_, _, _, _) => { },
+            OnSessionProgress     = (_, lines, total) => { progressLines.Add(lines); progressTotals.Add(total); },
+            OnSessionErrored      = (_, _, _) => { },
+            OnSessionEnded        = (_, _, _, _) => { },
+            OnTitleTaskReady      = _ => { },
+            OnBackgroundWorkReady = _ => { },
+        };
+
+        using var client = new HttpClient();
+        await ImportCommand.ImportChainsAsync(client, _server.Url!, chains, events, CancellationToken.None);
+
+        // Three batches were flushed and the line counts sum to the whole transcript.
+        await Assert.That(progressLines.Count).IsEqualTo(3);
+        await Assert.That(progressLines.Sum()).IsEqualTo(250);
+        // Every report carries the same denominator: the session's sendable total.
+        await Assert.That(progressTotals.All(t => t == 250)).IsTrue();
     }
 
     [Test]
@@ -111,6 +149,7 @@ public class ImportChainsTests : IDisposable {
             OnSessionStarted      = (_, _) => { },
             OnSubagentStarted     = (_, _, _) => { },
             OnSubagentFinished    = (_, _, _, _) => { },
+            OnSessionProgress     = (_, _, _) => { },
             OnSessionErrored      = (_, _, _) => { },
             OnSessionEnded        = (_, c, _, _) => order.Enqueue($"Loading {c.SessionId}..."),
             OnTitleTaskReady      = _ => { },
@@ -141,6 +180,7 @@ public class ImportChainsTests : IDisposable {
             OnSessionStarted      = (_, _) => { },
             OnSubagentStarted     = (_, _, _) => { },
             OnSubagentFinished    = (_, _, _, _) => { },
+            OnSessionProgress     = (_, _, _) => { },
             OnSessionErrored      = (_, _, _) => { },
             OnSessionEnded        = (_, _, _, _) => { },
             OnTitleTaskReady      = _ => { },
@@ -191,6 +231,7 @@ public class ImportChainsTests : IDisposable {
             OnSessionStarted      = (_, _) => { },
             OnSubagentStarted     = (_, _, _) => { },
             OnSubagentFinished    = (_, _, _, _) => { },
+            OnSessionProgress     = (_, _, _) => { },
             OnSessionErrored      = (_, _, _) => { },
             OnSessionEnded        = (_, _, _, _) => { },
             OnTitleTaskReady      = _ => { },
