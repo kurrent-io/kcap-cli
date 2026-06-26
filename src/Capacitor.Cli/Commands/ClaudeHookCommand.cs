@@ -45,6 +45,25 @@ public static class ClaudeHookCommand {
         return winner == inner ? await inner : 0;
     }
 
+    /// <summary>
+    /// Single bounded attempt. ok=true on 2xx. permanent=true on a 4xx that is not
+    /// 408/429 (do not spool). Any exception/timeout → (false, false) → spool as transient.
+    /// </summary>
+    internal static async Task<(bool ok, bool permanent)> PostLifecycleBoundedAsync(
+            HttpClient client, string url, string body, TimeSpan remaining, CancellationToken ct) {
+        if (remaining <= TimeSpan.Zero) return (false, false);
+        try {
+            using var content = new StringContent(body, Encoding.UTF8, "application/json");
+            using var resp    = await client.PostOnceAsync(url, content, remaining, ct);
+            if (resp.IsSuccessStatusCode) return (true, false);
+            var code      = (int)resp.StatusCode;
+            var transient = code is >= 500 or 408 or 429;
+            return (false, !transient);
+        } catch {
+            return (false, false); // unreachable / hung / timeout — transient
+        }
+    }
+
     internal static async Task<int> HandleCore(HttpClient client, HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask = null) {
         var body = await stdin.ReadToEndAsync();
 
@@ -198,6 +217,12 @@ public static class ClaudeHookCommand {
                     var transcriptPath = node?["transcript_path"]?.GetValue<string>();
 
                     if (sessionId is not null) {
+                        // Clamp the pre-drain cap so it cannot consume the entire remaining budget
+                        // that the bounded POST needs. Use whichever is smaller.
+                        var remaining     = HookBudget.Remaining(processStart, "session-end");
+                        var effectiveCap  = TimeSpan.FromMilliseconds(
+                            Math.Min(PreHookDrainCap.TotalMilliseconds, remaining.TotalMilliseconds));
+
                         var drained = await TimeBudget.RunCappedAsync(
                             async () => {
                                 await WatcherManager.KillWatcher(sessionId);
@@ -206,12 +231,12 @@ public static class ClaudeHookCommand {
                                     await WatcherManager.InlineDrainAsync(baseUrl, sessionId, transcriptPath, agentId: null);
                                 }
                             },
-                            PreHookDrainCap
+                            effectiveCap
                         );
 
                         if (!drained) {
                             await Console.Error.WriteLineAsync(
-                                $"[kcap] session-end pre-drain cap ({PreHookDrainCap.TotalSeconds:0}s) elapsed; proceeding to POST. "
+                                $"[kcap] session-end pre-drain cap ({effectiveCap.TotalSeconds:0.#}s) elapsed; proceeding to POST. "
                               + $"Transcript tail may be incomplete — recoverable via: kcap import --session {sessionId}"
                             );
                         }
@@ -261,12 +286,52 @@ public static class ClaudeHookCommand {
             }
         }
 
-        using var content = new StringContent(body, Encoding.UTF8, "application/json");
+        // Dedicated bounded POST for session-end: single attempt clamped to the remaining
+        // hook budget, spools on transient failure, and checks generate_whats_done on success.
+        // Other commands continue through the shared PostWithRetryAsync path below.
+        if (command == "session-end") {
+            // Stamp ended_at so a spooled replay records the true end time.
+            try {
+                var n = JsonNode.Parse(body)!;
+                n["ended_at"] = DateTimeOffset.UtcNow.ToString("O");
+                body = n.ToJsonString();
+            } catch { }
+
+            var remaining  = HookBudget.Remaining(processStart, "session-end");
+            var sessionId  = JsonNode.Parse(body)?["session_id"]?.GetValue<string>();
+            HttpResponseMessage? resp = null;
+            try {
+                if (remaining > TimeSpan.Zero) {
+                    using var content = new StringContent(body, Encoding.UTF8, "application/json");
+                    resp = await client.PostOnceAsync($"{baseUrl}/hooks/session-end", content, remaining, CancellationToken.None);
+                }
+            } catch { resp = null; }
+
+            if (resp is null || !resp.IsSuccessStatusCode) {
+                var permanent = resp is not null && (int)resp.StatusCode is < 500 and not 408 and not 429;
+                resp?.Dispose();
+                if (!permanent && sessionId is not null) {
+                    spool.Append(sessionId, "session-end", body);
+                    await Console.Error.WriteLineAsync($"[kcap] session-end spooled; will retry on the next kcap hook ({sessionId})");
+                }
+                return 0;
+            }
+
+            try {
+                var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync());
+                if (node?["generate_whats_done"]?.GetValue<bool>() == true && sessionId is not null)
+                    WatcherManager.SpawnWhatsDoneGenerator(baseUrl, sessionId);
+            } catch { }
+            resp.Dispose();
+            return 0;
+        }
+
+        using var sharedContent = new StringContent(body, Encoding.UTF8, "application/json");
 
         HttpResponseMessage response;
 
         try {
-            response = await client.PostWithRetryAsync($"{baseUrl}/hooks/{command}", content);
+            response = await client.PostWithRetryAsync($"{baseUrl}/hooks/{command}", sharedContent);
         } catch (HttpRequestException ex) {
             HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
 
@@ -277,25 +342,6 @@ public static class ClaudeHookCommand {
             Console.Error.WriteLine($"HTTP {(int)response.StatusCode}");
 
             return 1;
-        }
-
-        // Check session-end response for generate_whats_done flag.
-        if (command == "session-end") {
-            try {
-                var responseBody = await response.Content.ReadAsStringAsync();
-                var responseNode = JsonNode.Parse(responseBody);
-
-                if (responseNode?["generate_whats_done"]?.GetValue<bool>() == true) {
-                    var node      = JsonNode.Parse(body);
-                    var sessionId = node?["session_id"]?.GetValue<string>();
-
-                    if (sessionId is not null) {
-                        WatcherManager.SpawnWhatsDoneGenerator(baseUrl, sessionId);
-                    }
-                }
-            } catch {
-                // Best effort
-            }
         }
 
         switch (command) {
