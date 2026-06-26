@@ -42,7 +42,9 @@ if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
     return 0;
 }
 
-var baseUrl = await AppConfig.ResolveServerUrl(args);
+var hookProcessStart = System.Diagnostics.Stopwatch.GetTimestamp();
+var isHook = command == "hook";
+var baseUrl = await AppConfig.ResolveServerUrl(args, gitTimeoutMs: isHook ? 1000 : 5000);
 
 // Fire-and-forget update check (prints hint to stderr after command finishes).
 // Skipped for `uninstall` — the check writes ~/.config/kcap/update-check.json,
@@ -605,7 +607,7 @@ switch (command) {
     }
     case "hook": {
         if (args.Contains("--claude")) {
-            return await ClaudeHookCommand.Handle(baseUrl!, Console.In, updateCheckTask);
+            return await ClaudeHookCommand.Handle(baseUrl!, Console.In, updateCheckTask, hookProcessStart);
         }
         if (args.Contains("--codex")) {
             return await CodexHookCommand.Handle(baseUrl!, Console.In);

@@ -22,7 +22,7 @@ public static class ClaudeHookCommand {
     // send the POST; the server's StopAndDrain + the "kcap import" hint recover the rest.
     static readonly TimeSpan PreHookDrainCap = TimeSpan.FromSeconds(8);
 
-    public static async Task<int> Handle(string baseUrl, TextReader stdin, Task? updateCheckTask = null) {
+    public static async Task<int> Handle(string baseUrl, TextReader stdin, Task? updateCheckTask = null, long processStart = 0) {
         var body = await stdin.ReadToEndAsync();
 
         var eventName = ExtractEventName(body);

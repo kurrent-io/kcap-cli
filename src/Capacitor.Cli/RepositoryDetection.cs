@@ -8,7 +8,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli;
 
 static class RepositoryDetection {
-    public static async Task<string> EnrichWithRepositoryInfo(string json) {
+    public static async Task<string> EnrichWithRepositoryInfo(string json, TimeSpan? budget = null) {
         try {
             var node = JsonNode.Parse(json);
 
@@ -22,7 +22,7 @@ static class RepositoryDetection {
                 return json;
             }
 
-            var repo = await DetectRepositoryAsync(cwd);
+            var repo = await DetectRepositoryAsync(cwd, budget);
 
             if (repo is null) {
                 return json;
@@ -70,7 +70,8 @@ static class RepositoryDetection {
      && a.UserName  == b.UserName
      && a.UserEmail == b.UserEmail;
 
-    public static async Task<RepositoryPayload?> DetectRepositoryAsync(string cwd) {
+    public static async Task<RepositoryPayload?> DetectRepositoryAsync(string cwd, TimeSpan? budget = null) {
+        if (budget is { } b && b <= TimeSpan.Zero) return null;
         try {
             // Try loading cached base info
             var cache = LoadCache(cwd);

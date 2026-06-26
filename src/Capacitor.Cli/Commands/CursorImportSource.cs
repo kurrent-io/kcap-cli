@@ -42,7 +42,7 @@ internal sealed class CursorImportSource : IImportSource {
         _projectsDir         = projectsDirOverride         ?? CursorPaths.ProjectsDir();
         _workspaceStorageDir = workspaceStorageDirOverride ?? CursorPaths.Resolve().WorkspaceStorageDir;
         _sanitizedToFolder   = new Lazy<IReadOnlyDictionary<string, string?>>(BuildSanitizedToFolderMap);
-        _repoDetector        = repoDetector ?? RepositoryDetection.DetectRepositoryAsync;
+        _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd));
     }
 
     /// <summary>
