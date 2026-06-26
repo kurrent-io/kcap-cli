@@ -59,13 +59,42 @@ public class CuratedBlockTests {
 
     [Test]
     public async Task Splice_fails_closed_on_malformed_markers() {
+        // start-only
         var startOnly = "before\n" + CuratedBlock.StartMarker + "\n- x\n";
         await Assert.That(() => CuratedBlock.Splice(startOnly, null)).Throws<CuratedBlockException>();
 
+        // end-only
+        var endOnly = "before\n" + CuratedBlock.EndMarker + "\n- x\n";
+        await Assert.That(() => CuratedBlock.Splice(endOnly, null)).Throws<CuratedBlockException>();
+
+        // out-of-order (end before start)
+        var outOfOrder = CuratedBlock.EndMarker + "\n- x\n" + CuratedBlock.StartMarker + "\n";
+        await Assert.That(() => CuratedBlock.Splice(outOfOrder, null)).Throws<CuratedBlockException>();
+
+        // two blocks
         var twoBlocks =
             CuratedBlock.StartMarker + "\n- a\n" + CuratedBlock.EndMarker + "\n" +
             CuratedBlock.StartMarker + "\n- b\n" + CuratedBlock.EndMarker + "\n";
         await Assert.That(() => CuratedBlock.Splice(twoBlocks, null)).Throws<CuratedBlockException>();
+    }
+
+    [Test]
+    public async Task Splice_result_ends_with_exactly_one_trailing_newline() {
+        var content = "# My Project\n\nHand-written notes.\n";
+        var block   = CuratedBlock.Render([G("quality", "always close writers")])!;
+
+        // After appending a block the result ends with exactly one newline.
+        var appended = CuratedBlock.Splice(content, block);
+        await Assert.That(appended.EndsWith("\n")).IsTrue();
+        await Assert.That(appended.EndsWith("\n\n")).IsFalse();
+
+        // Byte-idempotent: second splice produces same output.
+        await Assert.That(CuratedBlock.Splice(appended, block)).IsEqualTo(appended);
+
+        // After removing the block the result ends with exactly one newline.
+        var removed = CuratedBlock.Splice(appended, null);
+        await Assert.That(removed.EndsWith("\n")).IsTrue();
+        await Assert.That(removed.EndsWith("\n\n")).IsFalse();
     }
 
     [Test]

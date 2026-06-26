@@ -43,7 +43,9 @@ public static class CuratedBlock {
         if (renderedBlock is null) {
             if (loc is null) return content;     // nothing to remove
             RemoveBlock(lines, loc.Value);
-            return string.Join(newline, lines);
+            var removedJoined = string.Join(newline, lines);
+            removedJoined = removedJoined.TrimEnd('\r', '\n');
+            return removedJoined.Length == 0 ? removedJoined : removedJoined + newline;
         }
 
         var blockLines = renderedBlock.Replace("\r\n", "\n").Split('\n');
@@ -59,7 +61,9 @@ public static class CuratedBlock {
             lines.InsertRange(s, blockLines);
         }
 
-        return string.Join(newline, lines);
+        var joined = string.Join(newline, lines);
+        joined = joined.TrimEnd('\r', '\n');
+        return joined.Length == 0 ? joined : joined + newline;
     }
 
     static string[] Normalize(string content) => content.Replace("\r\n", "\n").Split('\n');
@@ -75,9 +79,8 @@ public static class CuratedBlock {
     static (int start, int end)? Locate(string[] lines) {
         int start = -1, end = -1, starts = 0, ends = 0;
         for (var i = 0; i < lines.Length; i++) {
-            var t = lines[i].Trim();
-            if (t == StartMarker) { starts++; if (start < 0) start = i; }
-            else if (t == EndMarker) { ends++; end = i; }
+            if (lines[i] == StartMarker) { starts++; if (start < 0) start = i; }
+            else if (lines[i] == EndMarker) { ends++; end = i; }
         }
 
         if (starts == 0 && ends == 0) return null;
