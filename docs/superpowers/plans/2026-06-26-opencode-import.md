@@ -4,7 +4,7 @@
 
 **Goal:** Add `kcap import --opencode`, importing historical OpenCode sessions (including subagents) from OpenCode's SQLite db into Kurrent Capacitor, with no server changes.
 
-**Architecture:** A routed `OpenCodeImportSource : IImportSource` (modeled on `PiImportSource`/`GeminiImportSource`) reads `~/.local/share/opencode/opencode.db` via a CLI-only `OpenCodeDb` helper. It reconstructs the live plugin's `{info,parts}` JSONL per message from the `message`/`part` rows, classifies each root session binary New/AlreadyLoaded (line spaces between live and import are incompatible — no resume), and imports roots with their child sessions routed as subagents before `session-end`.
+**Architecture:** A routed `OpenCodeImportSource : IImportSource` (modeled on `PiImportSource`/`GeminiImportSource`) reads `~/.local/share/opencode/opencode.db` via a CLI-only `OpenCodeDb` helper. It reconstructs the live plugin's `{info,parts}` JSONL per message from the `message`/`part` rows, classifies each root session **completeness-gated** (New / AlreadyLoaded-if-ended / Partial-repair-if-not-ended — line spaces between live and import are incompatible, so repair replays above the server HWM rather than resuming line-by-line), and imports roots with their child sessions routed as subagents before `session-end`. A strict transcript send withholds the terminal lifecycle event on failure so a partial import stays not-ended and is repaired on re-run.
 
 **Tech Stack:** .NET 10, NativeAOT, Microsoft.Data.Sqlite + SQLitePCLRaw.bundle_e_sqlite3, TUnit, WireMock.Net.
 
@@ -19,7 +19,7 @@
 | `Directory.Packages.props` | Pin SQLite package versions | Modify |
 | `src/Capacitor.Cli/Capacitor.Cli.csproj` | Reference SQLite packages (CLI only, not Core) | Modify |
 | `src/Capacitor.Cli/Commands/OpenCodeDb.cs` | Read-only db open; query roots/children; stream-synthesize `{info,parts}` lines; importable-line predicate | Create |
-| `src/Capacitor.Cli/Commands/OpenCodeImportSource.cs` | `IImportSource`: discover roots, binary classify, import roots + subagent children + set-title | Create |
+| `src/Capacitor.Cli/Commands/OpenCodeImportSource.cs` | `IImportSource`: discover roots, completeness-gated classify, import roots + subagent children + set-title | Create |
 | `src/Capacitor.Cli/Commands/VendorSelection.cs` | Recognize `--opencode` | Modify |
 | `src/Capacitor.Cli/Program.cs` | Register `OpenCodeImportSource` in import sources | Modify |
 | `src/Capacitor.Cli.Core/Resources/help-import.txt` | Add `--opencode` filter line | Modify |
@@ -36,6 +36,53 @@
 - Build: `~/.dotnet/dotnet build src/Capacitor.Cli/Capacitor.Cli.csproj`
 - Unit tests: `~/.dotnet/dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj --treenode-filter "/*/*/OpenCodeDbTests/*"`
 - AOT publish: `~/.dotnet/dotnet publish src/Capacitor.Cli/Capacitor.Cli.csproj -c Release`
+
+---
+
+## Task 0: Confirm the server repair contract (prerequisite — no code)
+
+The completeness-gated repair design depends on three server behaviors. Confirm
+each against the kcap-server repo (or a dev server) and record the answers in the
+PR description **before** implementing Task 5–7. If an assumption is false, take
+the documented fallback.
+
+- [ ] **Step 1: Is there a per-session "ended" signal?**
+
+Check what `GET /api/sessions/{id}/last-line` returns beyond `last_line_number`
+(does it include an `ended`/`completed`/`session_ended` field?), or whether a
+sibling endpoint exposes session status. Look at the server route handler and the
+session read model.
+  - **If yes:** use it to distinguish `AlreadyLoaded` (ended) from `Repair`
+    (watermark present but not ended).
+  - **If no:** fall back to *Always replay above HWM* — when any watermark
+    exists, reclassify as `Repair` (re-send offset above HWM) rather than
+    `AlreadyLoaded`. Correct but re-sends already-loaded sessions each run; note
+    the change in the PR.
+
+- [ ] **Step 2: Does transcript ingest dedupe by canonical id, independent of line number?**
+
+Confirm the `opencode` normalizer + transcript pipeline keep-first per canonical
+message/`prt_` id (the live plugin relies on this: "the server keeps the FIRST
+append per `prt_` id"). This is what makes offset-above-HWM replay idempotent.
+  - **If false:** STOP — offset replay would duplicate content; revisit with the
+    user (the binary policy + accept-gap option becomes the only safe choice).
+
+- [ ] **Step 3: Does the HWM filter drop `line_number <= currentHwm` before normalization, and is HWM strictly the max line number seen?**
+
+Confirm replayed lines must be numbered **above** the current HWM to be processed,
+and that sending higher numbers simply advances the HWM (no contiguity
+requirement). This is why repair offsets line numbers above HWM.
+
+- [ ] **Step 4: Per-subsession watermark + ended signal.**
+
+Confirm child subsessions are watermarked by `(parentSessionId, agentId)` and
+that `GET /api/sessions/{parentId}/last-line?agentId={childAgentId}` returns the
+child's HWM (and ended/`SubagentCompleted` signal if available). The live watcher
+already uses this query, so the endpoint exists; confirm the response shape.
+
+**Record:** the four answers + chosen path (gated repair vs. always-replay
+fallback) in the PR description. The rest of the plan assumes Step 1 yields an
+ended signal; if not, apply the Step 1 fallback uniformly in Task 5/7.
 
 ---
 
@@ -171,6 +218,10 @@ public class OpenCodeDbTests {
         InsertSession(db, "ses_live", null, "/w", "Live", 100);
         // Do NOT checkpoint — the row lives in the -wal file, mimicking a running OpenCode.
 
+        // Prove the intended condition actually holds: the WAL sidecars exist.
+        await Assert.That(File.Exists(db + "-wal")).IsTrue();
+        await Assert.That(File.Exists(db + "-shm")).IsTrue();
+
         using var ocdb = new OpenCodeDb(db); // read-only open must still see committed WAL data
         var roots = ocdb.QueryRoots();
 
@@ -184,7 +235,7 @@ public class OpenCodeDbTests {
 }
 ```
 
-**Implementer note:** a read-only `SqliteConnection` cannot itself create the `-wal`/`-shm` files, but it can *read* a WAL db another connection created. The writer connection above must stay open for the duration of the read so the WAL isn't auto-removed. If the read-only open errors because the WAL exists, the connection string may need `Cache=Shared` — confirm during implementation and adjust `OpenCodeDb`'s connection string if so.
+**Settled (not "confirm later"):** `OpenCodeDb` uses `Mode=ReadOnly; Cache=Private`. `Cache=Shared` is **not** required and must not be added — it is unrelated to reading a WAL db's sidecars, and a read-only connection reads committed WAL data fine as long as the writer connection stays open (as it does above). If this test ever fails to open the db, that's a real bug to fix, not a reason to flip to shared cache.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -389,15 +440,24 @@ public async Task IsImportRelevantLine_matches_server_normalizer_rules() {
     //   user tool (tools require assistant role)
     await Assert.That(OpenCodeDb.IsImportRelevantLine(
         """{"info":{"role":"user"},"parts":[{"id":"p","type":"tool","callID":"c","tool":"bash","state":{"status":"completed"}}]}""")).IsFalse();
-    //   hidden text (synthetic/ignored skipped)
+    //   hidden text — synthetic:true
     await Assert.That(OpenCodeDb.IsImportRelevantLine(
         """{"info":{"role":"assistant"},"parts":[{"id":"p","type":"text","text":"x","synthetic":true}]}""")).IsFalse();
+    //   hidden text — ignored:true
+    await Assert.That(OpenCodeDb.IsImportRelevantLine(
+        """{"info":{"role":"assistant"},"parts":[{"id":"p","type":"text","text":"x","ignored":true}]}""")).IsFalse();
     //   terminal tool missing callID/tool
     await Assert.That(OpenCodeDb.IsImportRelevantLine(
         """{"info":{"role":"assistant"},"parts":[{"id":"p","type":"tool","state":{"status":"completed"}}]}""")).IsFalse();
     //   non-terminal tool
     await Assert.That(OpenCodeDb.IsImportRelevantLine(
         """{"info":{"role":"assistant"},"parts":[{"id":"p","type":"tool","callID":"c","tool":"bash","state":{"status":"running"}}]}""")).IsFalse();
+    //   assistant text/reasoning with MISSING id → skipped by server
+    await Assert.That(OpenCodeDb.IsImportRelevantLine(
+        """{"info":{"role":"assistant"},"parts":[{"type":"text","text":"no id"}]}""")).IsFalse();
+    //   whitespace-only text counts (server uses Length > 0, not IsNullOrWhiteSpace)
+    await Assert.That(OpenCodeDb.IsImportRelevantLine(
+        """{"info":{"role":"assistant"},"parts":[{"id":"p","type":"text","text":" "}]}""")).IsTrue();
 }
 ```
 
@@ -489,17 +549,21 @@ public static bool IsImportRelevantLine(string line) {
                 if (IsHidden(p)) continue;
                 var type = p.TryGetProperty("type", out var t) ? t.GetString() : null;
                 switch (role, type) {
+                    // user text: non-empty (server uses Length > 0, so whitespace counts as content).
                     case ("user", "text"):
+                        if (HasText(p)) return true;
+                        break;
+                    // assistant text/reasoning: server skips the part when id is null, then requires Length > 0.
                     case ("assistant", "text"):
                     case ("assistant", "reasoning"):
-                        if (p.TryGetProperty("text", out var tx) && !string.IsNullOrWhiteSpace(tx.GetString()))
-                            return true;
+                        if (HasField(p, "id") && HasText(p)) return true;
                         break;
+                    // assistant tool: id + callID + tool present (null-checked, not non-empty) + terminal state.
                     case ("assistant", "tool"):
                         var status = p.TryGetProperty("state", out var st) && st.TryGetProperty("status", out var ss)
                             ? ss.GetString() : null;
                         if (status is "completed" or "error"
-                         && HasNonEmpty(p, "id") && HasNonEmpty(p, "callID") && HasNonEmpty(p, "tool"))
+                         && HasField(p, "id") && HasField(p, "callID") && HasField(p, "tool"))
                             return true;
                         break;
                 }
@@ -515,8 +579,13 @@ static bool IsHidden(JsonElement p) =>
     (p.TryGetProperty("synthetic", out var s) && s.ValueKind == JsonValueKind.True) ||
     (p.TryGetProperty("ignored",   out var i) && i.ValueKind == JsonValueKind.True);
 
-static bool HasNonEmpty(JsonElement p, string name) =>
-    p.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String && !string.IsNullOrEmpty(v.GetString());
+// Present and not JSON null (mirrors the server's null-check, not a non-empty-string check).
+static bool HasField(JsonElement p, string name) =>
+    p.TryGetProperty(name, out var v) && v.ValueKind != JsonValueKind.Null;
+
+// text present, string, length > 0 (matches server's Length > 0 — NOT IsNullOrWhiteSpace).
+static bool HasText(JsonElement p) =>
+    p.TryGetProperty("text", out var tx) && tx.ValueKind == JsonValueKind.String && tx.GetString()!.Length > 0;
 ```
 
 **Note for implementer:** the `SynthesizeLines_merges_ids` test asserts `info.sessionID == "ses_x"` and each part's `sessionID`/`messageID`/`id` — it will catch any wrong key wiring.
@@ -590,6 +659,22 @@ public class OpenCodeImportSourceTests {
     public async Task IsAvailable_false_when_db_missing() {
         var source = new OpenCodeImportSource(Path.Combine(Path.GetTempPath(), "no-such-kcap.db"));
         await Assert.That(source.IsAvailable).IsFalse();
+    }
+
+    [Test]
+    public async Task discovery_treats_ms_as_ms_and_seconds_as_seconds() {
+        using var tmp = new OpenCodeDbFixture();
+        tmp.AddSession("ses_ms",  null, "/w", "ms",  1782241513759); // milliseconds (real OpenCode)
+        tmp.AddSession("ses_sec", null, "/w", "sec", 1782241513);    // seconds (hypothetical future column)
+        tmp.AddMessageWithText("ses_ms",  "m1", "x", 1782241513759);
+        tmp.AddMessageWithText("ses_sec", "m2", "x", 1782241513);
+
+        var source = new OpenCodeImportSource(tmp.DbPath);
+        var byId = (await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None))
+            .ToDictionary(s => s.SessionId, s => s.FirstTimestamp);
+
+        await Assert.That(byId["ses_ms"]).IsEqualTo(DateTimeOffset.FromUnixTimeMilliseconds(1782241513759));
+        await Assert.That(byId["ses_sec"]).IsEqualTo(DateTimeOffset.FromUnixTimeSeconds(1782241513));
     }
 
     [Test]
@@ -787,7 +872,7 @@ git commit -m "feat: OpenCodeImportSource discovery (roots, filters)"
 
 ---
 
-## Task 5: `OpenCodeImportSource` — binary classification
+## Task 5: `OpenCodeImportSource` — completeness-gated classification
 
 **Files:**
 - Modify: `src/Capacitor.Cli/Commands/OpenCodeImportSource.cs`
@@ -826,14 +911,14 @@ public async Task classify_new_when_server_has_no_watermark() {
 }
 
 [Test]
-public async Task classify_already_loaded_when_server_has_any_watermark() {
+public async Task classify_already_loaded_when_watermark_present_AND_ended() {
     using var fix = new OpenCodeDbFixture();
     fix.AddSession("ses_x", null, "/w", "T", 100);
     fix.AddMessageWithText("ses_x", "m1", "hello", 100);
 
     using var server = WireMockServer.Start();
     server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
-          .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":5}"""));
+          .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":5,"ended":true}"""));
     using var client = new HttpClient();
 
     var source     = new OpenCodeImportSource(fix.DbPath);
@@ -843,6 +928,28 @@ public async Task classify_already_loaded_when_server_has_any_watermark() {
         CancellationToken.None);
 
     await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
+}
+
+[Test]
+public async Task classify_repair_when_watermark_present_but_NOT_ended() {
+    using var fix = new OpenCodeDbFixture();
+    fix.AddSession("ses_x", null, "/w", "T", 100);
+    fix.AddMessageWithText("ses_x", "m1", "hello", 100);
+
+    using var server = WireMockServer.Start();
+    server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+          .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":42}""")); // no "ended"
+    using var client = new HttpClient();
+
+    var source     = new OpenCodeImportSource(fix.DbPath);
+    var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+    var classified = await source.ClassifyAsync(discovered,
+        new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
+        CancellationToken.None);
+
+    // Repair is modeled as Partial, carrying the HWM (42) so import offsets lines above it.
+    await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
+    await Assert.That(classified[0].ResumeFromLine).IsEqualTo(42);
 }
 
 [Test]
@@ -912,7 +1019,7 @@ public void AddStructuralMessage(string sid, string msgId, long t) {
 Run: `~/.dotnet/dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj --treenode-filter "/*/*/OpenCodeImportSourceTests/*"`
 Expected: FAIL — `ClassifyAsync` throws `NotImplementedException`.
 
-- [ ] **Step 3: Implement binary classification**
+- [ ] **Step 3: Implement completeness-gated classification**
 
 Replace the `ClassifyAsync` stub in `OpenCodeImportSource.cs`. Add `using System.Net;`, `using System.Text.Json;`, `using Capacitor.Cli.Core;` (for `GetWithRetryAsync`):
 
@@ -946,23 +1053,54 @@ public async Task<IReadOnlyList<ImportCommand.SessionClassification>> ClassifyAs
             continue;
         }
 
-        int? serverLastLine;
+        ServerState server;
         try {
-            serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, ct);
+            server = await FetchServerStateAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, agentId: null, ct);
         } catch {
             results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, importable, "watermark probe failed"));
             continue;
         }
 
-        // Binary policy: any server watermark → AlreadyLoaded (skip). No line-number resume:
-        // live snapshot line space ≠ import final-state line space. See design spec.
-        var status = serverLastLine is not null
-            ? ImportCommand.ClassificationStatus.AlreadyLoaded
-            : ImportCommand.ClassificationStatus.New;
-
-        results.Add(Make(s, meta, status, importable));
+        // Completeness-gated policy (the live/import line spaces are incompatible, so
+        // no line-by-line resume — we repair by replaying ABOVE the HWM, idempotent
+        // via canonical prt_ ids):
+        //   • no watermark            → New        (send 0..N)
+        //   • watermark + ended       → AlreadyLoaded (skip — proven complete)
+        //   • watermark + NOT ended   → Partial    (repair: replay offset above HWM)
+        ImportCommand.SessionClassification c;
+        if (server.LastLine is not { } hwm) {
+            c = Make(s, meta, ImportCommand.ClassificationStatus.New, importable);
+        } else if (server.Ended) {
+            c = Make(s, meta, ImportCommand.ClassificationStatus.AlreadyLoaded, importable);
+        } else {
+            // Repair: carry the HWM in ResumeFromLine; ImportSessionAsync offsets lines above it.
+            c = Make(s, meta, ImportCommand.ClassificationStatus.Partial, importable) with { ResumeFromLine = hwm };
+        }
+        results.Add(c);
     }
     return results;
+}
+
+/// <summary>Server view of a (sub)session: HWM line and whether it has a terminal
+/// (Session/Subagent)Ended event. <c>Ended</c> is the completeness signal — we
+/// only ever post the terminal lifecycle event on a fully-successful import.</summary>
+internal readonly record struct ServerState(int? LastLine, bool Ended);
+
+static async Task<ServerState> FetchServerStateAsync(
+    HttpClient http, string baseUrl, string sessionId, string? agentId, CancellationToken ct) {
+    var url = $"{baseUrl}/api/sessions/{sessionId}/last-line" + (agentId is not null ? $"?agentId={agentId}" : "");
+    using var resp = await http.GetWithRetryAsync(url, ct: ct);
+    if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return new(null, false);
+    if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
+    var body = await resp.Content.ReadAsStringAsync(ct);
+    using var doc = JsonDocument.Parse(body);
+    var root = doc.RootElement;
+    int? last = root.TryGetProperty("last_line_number", out var ln) && ln.ValueKind == JsonValueKind.Number
+        ? ln.GetInt32() : null;
+    // IMPLEMENTER (Task 0, Step 1): confirm the exact ended field name. If the endpoint
+    // exposes none, the fallback is: treat any watermark as NOT ended (always repair).
+    var ended = root.TryGetProperty("ended", out var e) && e.ValueKind == JsonValueKind.True;
+    return new(last, ended);
 }
 
 static ImportCommand.SessionClassification Make(
@@ -979,15 +1117,6 @@ static ImportCommand.SessionClassification Make(
     SourceMeta       = s.SourceMeta,
 };
 
-static async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct) {
-    using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct: ct);
-    if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
-    if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
-    var body = await resp.Content.ReadAsStringAsync(ct);
-    using var doc = JsonDocument.Parse(body);
-    return doc.RootElement.TryGetProperty("last_line_number", out var ln) && ln.ValueKind == JsonValueKind.Number
-        ? ln.GetInt32() : null;
-}
 ```
 
 **Implementer note:** confirm `SessionMetadata`'s property names (`SessionId`, `Cwd`, `FirstTimestamp`, `LastTimestamp`) against `PiImportSource`'s usage — copy exactly what compiles there.
@@ -1001,14 +1130,14 @@ Expected: PASS.
 
 ```bash
 git add src/Capacitor.Cli/Commands/OpenCodeImportSource.cs test/Capacitor.Cli.Tests.Unit/OpenCodeImportSourceTests.cs test/Capacitor.Cli.Tests.Unit/OpenCodeDbFixture.cs
-git commit -m "feat: OpenCodeImportSource binary classification (New/AlreadyLoaded/TooShort)"
+git commit -m "feat: OpenCodeImportSource completeness-gated classification (New/AlreadyLoaded/Partial/TooShort)"
 ```
 
 ---
 
 ## Task 6: Strict transcript sender + parent lifecycle + transcript + set-title
 
-**Why a strict sender:** OpenCode uses binary `New`/`AlreadyLoaded` classification (no resume). The shared `SessionImporter.PostTranscriptBatch` swallows HTTP failures and counts the batch as sent, so a partial send followed by `session-end` would leave a server watermark — and a re-run would then classify the session `AlreadyLoaded` and never retry. To keep re-runs repairable, OpenCode must **fail the import before any terminal lifecycle POST** if a transcript batch fails. We add an opt-in `failOnError` flag to the shared sender (default `false` → peers unchanged; OpenCode passes `true`).
+**Why a strict sender (works with the completeness gate):** the shared `SessionImporter.PostTranscriptBatch` swallows HTTP failures and counts the batch as sent. A partial multi-batch send may already have advanced the server HWM; withholding `session-end` does not undo that. The strict sender's job is therefore **not** "leave no watermark" — it's "**don't mark the session complete on failure**": by aborting before any terminal lifecycle POST (`session-end`/`subagent-stop`), the session stays *not-ended*, so the completeness-gated classifier (Task 5) reclassifies it `Partial` on re-run and **repairs** it (replay above HWM) instead of skipping it as `AlreadyLoaded`. Strict-send + completeness-gated repair are the two halves of one guarantee. We add an opt-in `failOnError` flag (default `false` → peers unchanged; OpenCode passes `true`).
 
 **Files:**
 - Modify: `src/Capacitor.Cli/Commands/SessionImporter.cs` (add `failOnError` to `SendTranscriptBatches` + `PostTranscriptBatch`)
@@ -1103,9 +1232,22 @@ public class OpenCodeImportSourceImportTests : IDisposable {
 Run: `~/.dotnet/dotnet run --project test/Capacitor.Cli.Tests.Integration/Capacitor.Cli.Tests.Integration.csproj --treenode-filter "/*/*/OpenCodeImportSourceImportTests/*"`
 Expected: FAIL — `ImportSessionAsync` throws `NotImplementedException`.
 
-- [ ] **Step 3: Add the opt-in strict path to `SessionImporter`**
+- [ ] **Step 3: Add opt-in `failOnError` + `lineNumberOffset` to `SessionImporter`**
 
-In `src/Capacitor.Cli/Commands/SessionImporter.cs`, thread a `bool failOnError = false` parameter through `SendTranscriptBatches` (add it to the signature, default `false`) and pass it to each `PostTranscriptBatch` call. Update `PostTranscriptBatch` to accept `bool failOnError` and, when `true`, throw instead of swallowing:
+In `src/Capacitor.Cli/Commands/SessionImporter.cs`, on the **routed** overload
+(`SendTranscriptBatches(httpClient, baseUrl, sessionId, filePath, agentId, startLine, progress, vendor)` —
+the one Pi/Gemini use), add two optional parameters, both defaulting to keep peer behavior identical:
+
+```csharp
+int  lineNumberOffset = 0,   // added to every emitted line number (repair: offset above server HWM)
+bool failOnError      = false // strict callers abort the import on a rejected batch
+```
+
+- Where it builds line numbers (`batchLineNumbers.Add(lineIndex)`), change to
+  `batchLineNumbers.Add(lineIndex + lineNumberOffset)`.
+- Pass `failOnError` to each `PostTranscriptBatch` call.
+
+Update `PostTranscriptBatch` to accept `bool failOnError = false` and, when `true`, throw instead of swallowing:
 
 ```csharp
 // in PostTranscriptBatch, replace the existing try/catch:
@@ -1119,7 +1261,9 @@ try {
 }
 ```
 
-Note: `PostWithRetryAsync` currently discards the response (`using var _`). Capture it as `resp` so the status can be checked. Default callers (no `failOnError`) keep the exact prior behavior.
+Notes:
+- `PostWithRetryAsync` currently discards the response (`using var _`). Capture it as `resp` so the status can be checked.
+- Both new params are **defaulted**, so every existing caller (including the Claude/Codex overload's internal `PostTranscriptBatch` calls) compiles and behaves exactly as before. Only OpenCode passes non-defaults.
 
 Verify peers still build: `~/.dotnet/dotnet build src/Capacitor.Cli/Capacitor.Cli.csproj`.
 
@@ -1132,7 +1276,13 @@ public async Task<ImportOutcome> ImportSessionAsync(
     ImportCommand.SessionClassification c, ImportContext ctx, CancellationToken ct) {
     if (c.Status == ImportCommand.ClassificationStatus.AlreadyLoaded) return ImportOutcome.Skipped;
 
-    var title = c.SourceMeta!.TryGetValue("Title", out var t) ? t as string : null;
+    var title  = c.SourceMeta!.TryGetValue("Title", out var t) ? t as string : null;
+    var repair = c.Status == ImportCommand.ClassificationStatus.Partial;
+    // Repair replays the FULL transcript with line numbers offset above the server
+    // HWM (ResumeFromLine), so previously-accepted content dedupes by prt_ id and the
+    // gap lands. New imports send from 0. (Line spaces are incompatible, so we never
+    // "resume from line N" — we re-send everything, just renumbered above the HWM.)
+    var lineOffset = repair ? c.ResumeFromLine + 1 : 0;
 
     // 1. session-start (lifecycle-before-transcript; idempotent server-side).
     if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/opencode",
@@ -1149,9 +1299,13 @@ public async Task<ImportOutcome> ImportSessionAsync(
         }
         sent = await SessionImporter.SendTranscriptBatches(
             httpClient: ctx.HttpClient, baseUrl: ctx.BaseUrl, sessionId: c.SessionId,
-            filePath: tmpFile, agentId: null, startLine: 0, vendor: Vendor, failOnError: true);
+            filePath: tmpFile, agentId: null, startLine: 0, vendor: Vendor,
+            lineNumberOffset: lineOffset, failOnError: true);
     } catch {
-        return ImportOutcome.Failed; // strict: abort BEFORE session-end so no watermark is left
+        // Strict: abort before session-end. A partial send may have advanced the HWM,
+        // but since session-end is withheld the session stays NOT-ended, so a re-run
+        // classifies it Partial and REPAIRS it (replay above HWM) — not AlreadyLoaded.
+        return ImportOutcome.Failed;
     } finally {
         try { File.Delete(tmpFile); } catch { }
     }
@@ -1162,12 +1316,13 @@ public async Task<ImportOutcome> ImportSessionAsync(
     if (!string.IsNullOrWhiteSpace(title))
         await PostSetTitleAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, title!, ct);
 
-    // 5. session-end.
+    // 5. session-end (posted only after parent transcript + all children succeeded;
+    //    this is what flips the session to "ended" and lets a future run skip it).
     if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/opencode",
             BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), ct))
         return ImportOutcome.Failed;
 
-    return sent == 0 ? ImportOutcome.Skipped : ImportOutcome.Loaded;
+    return repair ? ImportOutcome.Resumed : (sent == 0 ? ImportOutcome.Skipped : ImportOutcome.Loaded);
 }
 
 static JsonObject BuildSessionStartPayload(string sid, string? cwd, DateTimeOffset? startedAt, bool forcePrivate) {
@@ -1277,14 +1432,66 @@ public async Task ImportSession_routes_children_as_subagents_before_session_end(
     await Assert.That(startBody).Contains("\"agent_id\":\"ses_kid\"");
     await Assert.That(startBody).Contains("\"agent_type\":\"general\"");
 
-    // (c) the child transcript batch is tagged vendor=opencode and routed under the child agentId.
-    var transcriptBodies = entries.Where(e => e.RequestMessage.Path == "/hooks/transcript")
-                                  .Select(e => e.RequestMessage.Body!).ToList();
-    await Assert.That(transcriptBodies.Any(b => b.Contains("\"opencode\"") && b.Contains("ses_kid"))).IsTrue();
+    // (c) the child transcript batch is tagged vendor=opencode, routed under the child
+    //     agentId, AND posted between subagent-start and subagent-stop.
+    var childTranscriptIdx = -1;
+    for (var i = 0; i < entries.Count; i++) {
+        var e = entries[i];
+        if (e.RequestMessage.Path == "/hooks/transcript"
+         && e.RequestMessage.Body!.Contains("\"opencode\"")
+         && e.RequestMessage.Body!.Contains("ses_kid")) { childTranscriptIdx = i; break; }
+    }
+    await Assert.That(childTranscriptIdx).IsGreaterThan(subStart);
+    await Assert.That(childTranscriptIdx).IsLessThan(subStop);
 }
 ```
 
 Add `AddMessageWithTextAndAgent` to the integration fixture — same as `AddMessageWithText` but the message `data` includes `"agent":"general"` so `info.agent` resolves the subagent type. (`CanonicalAgentId("ses_kid")` returns `"ses_kid"` since `ses_…` ids contain no dashes.)
+
+- [ ] **Step 1b: Write the failing repair test (watermark present, not ended → re-run repairs above HWM)**
+
+This is the scenario Codex flagged: a prior run left a watermark (HWM=42) but no
+`SessionEnded`. The re-run must classify `Partial`, replay the transcript with line
+numbers **above 42**, and post `session-end`.
+
+```csharp
+[Test]
+public async Task rerun_repairs_not_ended_session_by_replaying_above_hwm() {
+    _fix.AddSession("ses_root", null, "/work/a", "T", 100);
+    _fix.AddMessageWithText("ses_root", "msg_1", "hello", 110);
+
+    // Watermark present (42) but NOT ended → repair.
+    _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+           .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":42}"""));
+    foreach (var p in new[] { "/hooks/session-start/opencode", "/hooks/transcript",
+                              "/hooks/set-title", "/hooks/session-end/opencode" })
+        _server.Given(Request.Create().WithPath(p).UsingPost())
+               .RespondWith(Response.Create().WithStatusCode(200));
+
+    using var client = new HttpClient();
+    var source     = new OpenCodeImportSource(_fix.DbPath);
+    var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+    var classified = await source.ClassifyAsync(discovered,
+        new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
+    await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
+
+    var outcome = await source.ImportSessionAsync(classified[0],
+        new ImportContext(client, _server.Url!, false), CancellationToken.None);
+    await Assert.That(outcome).IsEqualTo(ImportOutcome.Resumed);
+
+    // (a) every transcript line number is > 42 (replayed above the HWM).
+    var body = _server.LogEntries.First(e => e.RequestMessage.Path == "/hooks/transcript").RequestMessage.Body!;
+    using var doc = System.Text.Json.JsonDocument.Parse(body);
+    foreach (var n in doc.RootElement.GetProperty("line_numbers").EnumerateArray())
+        await Assert.That(n.GetInt32() > 42).IsTrue();
+
+    // (b) session-end IS posted on a successful repair (so a later run can skip it).
+    await Assert.That(_server.LogEntries.Select(e => e.RequestMessage.Path)).Contains("/hooks/session-end/opencode");
+}
+```
+
+(Confirm the `TranscriptBatch` JSON property name is `line_numbers` against
+`src/Capacitor.Cli.Core/Models.cs` — adjust the assertion if the wire name differs.)
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -1297,7 +1504,9 @@ In `OpenCodeImportSource.cs`, replace the `// 3. (children go here...)` comment 
 
 ```csharp
     // 3. children as subagents — BEFORE session-end so SubagentCompleted precedes SessionEnded.
-    //    Strict: any child failure aborts the import before session-end (no watermark left).
+    //    Strict: any child failure aborts the import before session-end. A partial child
+    //    send may advance the child HWM, but withholding subagent-stop keeps the child
+    //    NOT-ended, so a re-run repairs it (replay above child HWM).
     try {
         await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, ct);
     } catch {
@@ -1315,6 +1524,12 @@ async Task ImportChildrenAsync(HttpClient client, string baseUrl, string rootId,
         var agentId   = OpenCodeSubagentDiscovery.CanonicalAgentId(child.Id);
         var agentType = ResolveAgentType(db, child.Id); // info.agent, fallback "subagent"
 
+        // Per-subsession completeness gate, keyed by (rootId, agentId):
+        //   ended → skip (already complete); not-ended+watermark → repair offset above child HWM; none → 0.
+        var server = await FetchServerStateAsync(client, baseUrl, rootId, agentId, ct);
+        if (server is { LastLine: not null, Ended: true }) continue; // child already complete
+        var childOffset = server.LastLine is { } chwm ? chwm + 1 : 0;
+
         // Synthesize the child transcript to a temp file FIRST — the subagent payload
         // builders require a transcript_path, and we pass this same path to start + stop.
         var tmp = Path.Combine(Path.GetTempPath(), $"kcap-oc-{child.Id}-{Guid.NewGuid():N}.jsonl");
@@ -1330,7 +1545,8 @@ async Task ImportChildrenAsync(HttpClient client, string baseUrl, string rootId,
 
             await SessionImporter.SendTranscriptBatches(
                 httpClient: client, baseUrl: baseUrl, sessionId: rootId,
-                filePath: tmp, agentId: agentId, startLine: 0, vendor: Vendor, failOnError: true);
+                filePath: tmp, agentId: agentId, startLine: 0, vendor: Vendor,
+                lineNumberOffset: childOffset, failOnError: true);
 
             if (!await PostHookAsync(client, baseUrl, "subagent-stop",
                     OpenCodeSubagentDiscovery.BuildStopPayload(rootId, agentId, agentType, tmp), ct))
@@ -1495,13 +1711,13 @@ for RID in osx-arm64 linux-x64 win-x64; do
   echo "=== CLI $RID ==="
   ~/.dotnet/dotnet publish src/Capacitor.Cli/Capacitor.Cli.csproj -c Release -r "$RID" \
     2>&1 | tee "/tmp/kcap-aot-cli-$RID.log"
-  test "${PIPESTATUS[0]}" -eq 0 || { echo "PUBLISH FAILED for $RID"; break; }
-  grep -E 'IL[23][01][0-9]{2}' "/tmp/kcap-aot-cli-$RID.log" && { echo "AOT WARNINGS for $RID"; break; } \
-    || echo "NO AOT WARNINGS for $RID"
+  test "${PIPESTATUS[0]}" -eq 0 || { echo "PUBLISH FAILED for $RID"; exit 1; }
+  if grep -E 'IL[23][01][0-9]{2}' "/tmp/kcap-aot-cli-$RID.log"; then echo "AOT WARNINGS for $RID"; exit 1; fi
+  echo "NO AOT WARNINGS for $RID"
 done
 ```
 
-Expected: each RID prints `NO AOT WARNINGS` and no `PUBLISH FAILED`. If any `IL3050`/`IL2026` appear from Microsoft.Data.Sqlite, STOP and report — revisit access strategy per the spec. (Run only the RIDs you can build on this host; note any skipped.)
+Expected: each RID prints `NO AOT WARNINGS` and the loop exits 0. A publish failure or any `IL3050`/`IL2026` from Microsoft.Data.Sqlite exits non-zero — STOP and report; revisit access strategy per the spec. (Run only the RIDs you can build on this host; note any skipped in the PR.)
 
 - [ ] **Step 2: AOT-publish the daemon (confirm no SQLite leakage into Core's consumer)**
 
@@ -1509,11 +1725,12 @@ Expected: each RID prints `NO AOT WARNINGS` and no `PUBLISH FAILED`. If any `IL3
 set -o pipefail
 ~/.dotnet/dotnet publish src/Capacitor.Cli.Daemon/Capacitor.Cli.Daemon.csproj -c Release \
   2>&1 | tee /tmp/kcap-aot-daemon.log
-test "${PIPESTATUS[0]}" -eq 0 || echo "DAEMON PUBLISH FAILED"
-grep -E 'IL[23][01][0-9]{2}' /tmp/kcap-aot-daemon.log && echo "DAEMON AOT WARNINGS" || echo "NO AOT WARNINGS"
+test "${PIPESTATUS[0]}" -eq 0 || { echo "DAEMON PUBLISH FAILED"; exit 1; }
+if grep -E 'IL[23][01][0-9]{2}' /tmp/kcap-aot-daemon.log; then echo "DAEMON AOT WARNINGS"; exit 1; fi
+echo "NO AOT WARNINGS"
 ```
 
-Expected: `NO AOT WARNINGS` and no failure — confirms the SQLite package did not reach the daemon via Core.
+Expected: `NO AOT WARNINGS` and exit 0 — confirms the SQLite package did not reach the daemon via Core. (A failed publish exits non-zero *before* the grep, so it can never be masked as success.)
 
 - [ ] **Step 3: Record binary size delta**
 
@@ -1547,7 +1764,7 @@ git commit -am "chore: AOT verification fixups for OpenCode import" --allow-empt
 
 ## Notes for the implementer
 
-- **`SendTranscriptBatches` swallows failed batches** (counts them as sent) — this is shared behavior; we rely on server-side idempotency. Do not "fix" it here (out of scope per the spec).
+- **`SendTranscriptBatches` strict path:** the `failOnError`/`lineNumberOffset` params are **opt-in and defaulted** — peers (Pi/Gemini/Kiro/Copilot) keep their exact prior behavior; only OpenCode passes non-defaults. Do not change the shared sender's default path or "fix" the swallowing for other importers (out of scope).
 - **Raw `ses_…` ids** are used verbatim as session ids — no GUID normalization. `CanonicalAgentId` only strips dashes (none in `ses_…`).
 - **Grandchildren:** `QueryChildren(rootId)` returns direct children only. Current OpenCode data nests one level; deeper nesting is out of scope (YAGNI) — if encountered, a grandchild simply won't be imported under its grandparent. Do not add handling without evidence OpenCode nests deeper.
 - **Confirm against `PiImportSource`** for exact `SessionMetadata` property names and `GetWithRetryAsync`/`PostWithRetryAsync` namespaces before finalizing.

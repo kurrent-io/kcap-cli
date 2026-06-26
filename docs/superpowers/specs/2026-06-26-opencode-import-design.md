@@ -1,7 +1,7 @@
 # OpenCode historical import (`kcap import --opencode`) — Design
 
 **Date:** 2026-06-26
-**Status:** Approved; rev3 after two Codex design passes, reconciled with plan-review decisions (strict sender, role-aware predicate). Implementation plan written.
+**Status:** Approved; rev5 — completeness-gated repair (strict send + replay-above-HWM) after two design passes + two plan-review passes. Implementation plan written (rev3, with Task 0 server-contract confirmation).
 **Author:** tony.young@kurrent.io (with Claude)
 
 ## Problem
@@ -122,22 +122,33 @@ stays in `Capacitor.Cli`. Pure path logic remains in Core (`OpenCodePaths`).
   - `FirstTimestamp` = `session.time_created`
 - Discovery filters honored as in Pi: `--session`, `--cwd`, `--since`.
 
-**Classification policy (OpenCode-specific — no line-number resume).** Because the
-live and import line spaces are incompatible (see *Line reconstruction*), OpenCode
-import uses a **binary** classification against `/api/sessions/{id}/last-line`,
-*not* Pi's `Partial`/resume math:
+**Classification policy (OpenCode-specific — completeness-gated repair).** The live
+and import line spaces are incompatible (see *Line reconstruction*), so there is no
+line-by-line resume. But a pure binary "any watermark → skip" is **unsafe**: the
+server HWM advances on *transcript ingest*, independent of `session-end`, so a
+partial multi-batch import (batch 1 accepted, batch 2 failed) leaves a watermark
+and would be skipped forever, never repaired. Instead we gate on **completeness**,
+using the server's `ended` signal (we only ever post the terminal `session-end` /
+`subagent-stop` on a fully-successful import, so "ended" ⟺ "complete"):
 
 - **`TooShort`** — fewer than `MinLines` *importable* lines (see below).
-- **`AlreadyLoaded`** — the server already has any watermark for this session id
-  (`serverLastLine` present). The session was live-captured (or previously
-  imported); skip it. We do **not** attempt to prove full completeness, and we do
-  **not** repair a truncated live session in v1 (the common case is a session that
-  ran to `session-end`). A deliberate repair mode — re-sending with line numbers
-  offset *above* the server HWM so content lands and dedupes by `prt_` id — is a
-  possible future enhancement, explicitly out of scope here.
-- **`New`** — no server watermark → import the full reconstructed transcript with
-  line numbers `0..N`.
+- **`New`** — no server watermark → import full transcript, line numbers `0..N`.
+- **`AlreadyLoaded`** — watermark present **and** the session is `ended` → proven
+  complete; skip.
+- **`Partial` (repair)** — watermark present but **not** `ended` → re-send the full
+  reconstructed transcript with line numbers offset **above** the server HWM
+  (carried in `ResumeFromLine`). Already-ingested content dedupes by canonical
+  `prt_` id (keep-first); the missing tail lands; `session-end` then flips the
+  session to `ended`. Idempotent and self-repairing.
 - **`ProbeError`** — watermark probe failed; skip with a reason, like Pi.
+
+This depends on three server behaviors confirmed in **Task 0** of the plan: (1) a
+per-session/per-subsession `ended` signal on the `last-line` endpoint; (2)
+transcript dedup by canonical id independent of line number; (3) the HWM filter
+drops `line_number <= HWM` before normalization. **Fallback** if (1) is
+unavailable: treat any watermark as not-ended (always replay above HWM) — correct
+but re-sends already-loaded sessions each run. Subsessions are gated identically
+via `?agentId=` (HWM + `SubagentCompleted`).
 
 **Importable-line count (role-aware, mirrors Pi's `IsImportRelevantLine`).** The
 `MinLines` threshold counts only lines that produce a canonical server event, not
@@ -209,10 +220,18 @@ added to `SendTranscriptBatches`/`PostTranscriptBatch` (default `false` → peer
 unchanged) that checks `IsSuccessStatusCode` and throws on any rejected batch.
 OpenCode passes `failOnError: true` for both the parent transcript and every
 child, and **aborts the import (returns `Failed`) before any terminal lifecycle
-POST** (`session-end`, `subagent-stop`) if a batch fails. No watermark is left, so
-a re-run retries cleanly. This is the one place OpenCode diverges from "match
-existing importers" — justified by the binary policy. Hardening the shared sender
-for the *other* importers remains out of scope.
+POST** (`session-end`, `subagent-stop`) if a batch fails.
+
+Critically, a partial send **may still have advanced the server HWM** (earlier
+batches were accepted) — withholding `session-end` does *not* undo that. So the
+strict sender alone does not make re-runs safe; it works **together with the
+completeness-gated classification**: because `session-end` was withheld, the
+session stays **not-ended**, so a re-run classifies it `Partial` and **repairs** it
+(replay above HWM), rather than skipping it as `AlreadyLoaded`. Strict-send (don't
+mark complete on failure) + completeness-gated repair (re-send when not complete)
+are the two halves of the same guarantee. This is the one place OpenCode diverges
+from "match existing importers" — justified by the no-resume line space. Hardening
+the shared sender for the *other* importers remains out of scope.
 
 ## Subagent (child) parity
 
@@ -231,22 +250,25 @@ Full order per root:
 1. `POST /hooks/session-start/opencode` (parent).
 2. Stream parent transcript.
 3. For each child with `parent_id` = this root, in deterministic
-   `(session.time_created, session.id)` order:
-   - `POST /hooks/subagent-start` (parent session id, `agent_id` = `CanonicalAgentId(childSid)`,
-     `agent_type` from child's `info.agent`, fallback `"subagent"`) — **fail-closed:
-     skip the child's content if start fails**, so a child stream never exists
-     without its `SubagentStarted`.
-   - Stream the synthesized child transcript under `agent_id = childSid`,
-     `startLine: 0`.
+   `(session.time_created, session.id)` order, apply the **same completeness gate
+   as the parent**, keyed by `(rootId, agentId)` via `?agentId=`:
+   - child `ended` (SubagentCompleted) → **skip** (already complete);
+   - else `POST /hooks/subagent-start` (parent session id, `agent_id` =
+     `CanonicalAgentId(childSid)`, `agent_type` from child's `info.agent`, fallback
+     `"subagent"`, `transcript_path` = the child's temp file) — **fail-closed**;
+   - stream the synthesized child transcript under `agent_id = childSid`, with line
+     numbers offset above the child HWM (0 when none — repair otherwise),
+     `failOnError: true`;
    - `POST /hooks/subagent-stop`.
 4. `POST /hooks/session-end/opencode` (parent).
 
-**Watermark (open item resolved):** children are **not** watermark-probed. The
-import precedent sends each child from `startLine: 0` and relies on server-side
-idempotency (deterministic ids) — no `agentId`-scoped `last-line` query. (The live
-watcher *does* use an `agentId`-scoped probe because it streams incrementally;
-import does not need it and Gemini import does not do it.) A re-import re-sends
-children idempotently. Child failures never fail the already-imported parent.
+**Subagent watermark/repair:** children are completeness-gated exactly like the
+parent. A child that already has `SubagentCompleted` is skipped; a child with a
+watermark but no completion is repaired (replay above its HWM). A child send
+failure throws and **aborts the whole import before the parent's `session-end`**
+(strict) — so the parent stays not-ended and the next run repairs the unfinished
+child. The `agentId`-scoped `last-line` query is the same one the live watcher
+uses.
 
 ## Lifecycle, idempotency, resume
 
@@ -295,8 +317,11 @@ Microsoft.Data.Sqlite (or a small checked-in sample db):
 - Child → subagent routing: a parented session produces subagent-start/stop +
   child transcript under `agent_id = childSid`, not a standalone session.
 - Classification states against a stubbed `/api/sessions/{id}/last-line`
-  (WireMock): `New` (no watermark) vs `AlreadyLoaded` (any watermark present) —
-  the binary policy, no `Partial`/resume.
+  (WireMock): `New` (no watermark), `AlreadyLoaded` (watermark + `ended:true`),
+  and `Partial`/repair (watermark, no `ended` → carries the HWM in
+  `ResumeFromLine`).
+- Repair path: a not-ended session replays the transcript with line numbers
+  **above** the HWM and posts `session-end` (integration test).
 - Importable-line counting: a session of purely structural lines
   (`step-start`/`step-finish`, empty user text, non-terminal tools) classifies
   `TooShort`, not `New`.
@@ -330,9 +355,10 @@ Microsoft.Data.Sqlite (or a small checked-in sample db):
   observed data is one level).
 - **Multiple children ordering:** imported in `(time_created, id)` order (see
   *Subagent parity*) for deterministic, reproducible runs.
-- **Mixed live/historical (partially live-captured) session:** classified
-  `AlreadyLoaded` by the binary policy and skipped; v1 does not repair a truncated
-  live session (documented under *Classification policy*).
+- **Mixed live/historical (partially live-captured) session:** if it ran to
+  `session-end` it is `ended` → `AlreadyLoaded` (skip); if it was truncated
+  (not `ended`) → `Partial` → repaired by replaying above the HWM (see
+  *Classification policy*).
 
 ## Out of scope / deliberate decisions
 
@@ -353,9 +379,9 @@ Microsoft.Data.Sqlite (or a small checked-in sample db):
   `agentId`-scoped watermark is needed.
 - **Part-ordering vs SDK** — empirically validated on one session; implementation
   must re-verify against live SDK order for a multi-part/tool session before merge.
-- **Line-space incompatibility (live vs import)** — handled by the binary
-  classification (no line-number resume). The residual gap is that a *truncated*
-  live session is skipped as `AlreadyLoaded` rather than repaired; accepted for v1.
-  A future repair mode would re-send above the server HWM and dedupe by `prt_` id —
-  contingent on confirming the server's `line_number <= HWM` pre-normalization
-  filter.
+- **Line-space incompatibility (live vs import)** — handled by completeness-gated
+  classification: no line-by-line resume; repair replays the full transcript above
+  the server HWM and dedupes by `prt_` id. Correctness rests on the three server
+  behaviors confirmed in plan Task 0 (ended signal, dedup-by-canonical-id, HWM
+  filter). If the `ended` signal is unavailable, the fallback (always replay above
+  HWM) keeps correctness at the cost of re-sending already-loaded sessions.
