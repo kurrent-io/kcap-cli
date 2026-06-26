@@ -225,8 +225,19 @@ public static class TokenStore {
     static readonly TimeSpan RefreshRetryBudget = TimeSpan.FromSeconds(5);
 
     static async Task<StoredTokens?> RefreshGitHubAsync(StoredTokens tokens) {
-        var       baseUrl = AppConfig.ResolvedServerUrl ?? Environment.GetEnvironmentVariable("KCAP_URL") ?? "http://localhost:5108";
-        using var http    = new HttpClient();
+        var baseUrl = AppConfig.ResolvedServerUrl ?? Environment.GetEnvironmentVariable("KCAP_URL") ?? "http://localhost:5108";
+        var url     = $"{baseUrl}/auth/refresh";
+
+        // PostWithRetryAsync runs EnsureAbsolute, which Environment.Exit(2)s on a scheme-less URL.
+        // Refresh is reached from daemon/background callers via GetValidTokensAsync and must fail
+        // gracefully (return null), never terminate the process — so validate here instead of
+        // letting the retry helper exit. The hook *entry* paths still EnsureAbsolute-and-exit by
+        // design; this guard only covers the refresh call.
+        if (!HttpClientExtensions.IsAcceptableUrl(url)) {
+            return null;
+        }
+
+        using var http = new HttpClient();
 
         var requestBody = JsonSerializer.Serialize(
             new() { AccessToken = tokens.AccessToken },
@@ -235,7 +246,7 @@ public static class TokenStore {
         var payload = new StringContent(requestBody, System.Text.Encoding.UTF8, "application/json");
 
         try {
-            var response = await http.PostWithRetryAsync($"{baseUrl}/auth/refresh", payload, RefreshRetryBudget);
+            var response = await http.PostWithRetryAsync(url, payload, RefreshRetryBudget);
 
             if (!response.IsSuccessStatusCode) {
                 return null;
