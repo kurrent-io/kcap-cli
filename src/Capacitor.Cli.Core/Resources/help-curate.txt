@@ -1,0 +1,18 @@
+kcap curate — apply curated guidelines to your project instruction files
+
+Usage:
+  kcap curate apply [--dry-run] [--yes]
+
+Writes the repo's promoted CLAUDE.md curation guidelines into CLAUDE.md and/or
+AGENTS.md at the repository root, inside a managed block. Updates both files when
+both exist, the one that exists otherwise, or creates AGENTS.md when neither does.
+
+Options:
+  --dry-run    Show what would change and exit without writing.
+  --yes, -y    Skip the confirmation prompt (for scripts/CI).
+
+Notes:
+  - Run from inside the git repository.
+  - Only guidelines promoted with the CLAUDE.md target are applied.
+  - Re-running re-syncs the managed block to the server's current promoted set;
+    content outside the markers is never touched.

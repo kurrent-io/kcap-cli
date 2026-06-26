@@ -48,6 +48,9 @@ Session:
   hide                             Hide session (owner-only visibility)
   review <pr>                      Launch Claude with PR review context
 
+Curation:
+  curate apply [--dry-run] [--yes]   Write promoted guidelines into CLAUDE.md / AGENTS.md
+
 MCP servers (stdio):
   mcp review [--owner --repo --pr]   PR review context for agents
   mcp judge --session <id>           Per-session judge tools
