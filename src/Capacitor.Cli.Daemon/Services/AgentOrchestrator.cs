@@ -57,7 +57,7 @@ public record AgentInstance(
     /// <summary>The server-aggregated min size across all web viewers (one value per agent,
     /// computed server-side from per-connection web dims), folded into the same min-clamp as the
     /// local clients so a small web viewer and a large local terminal share the one PTY at the
-    /// smallest size — tmux semantics across surfaces (AI-973). <c>null</c> when no web viewer is
+    /// smallest size — tmux semantics across surfaces. <c>null</c> when no web viewer is
     /// attached, so the clamp grows back to the local-only size. Guarded by <see cref="SinksLock"/>.</summary>
     internal Dim? WebDims { get; set; }
 
@@ -951,7 +951,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     Task HandleResizeTerminal(ResizeTerminalCommand cmd) {
         // Ignore server-origin resize for private agents (defence-in-depth; see HandleStopAgent).
         if (_agents.TryGetValue(cmd.AgentId, out var agent) && !agent.IsPrivate) {
-            // The server sends the min aggregate across all web viewers (AI-973), or (0,0) when the
+            // The server sends the min aggregate across all web viewers, or (0,0) when the
             // last web viewer left. Fold it into the same min-clamp as the local clients rather than
             // resizing the PTY directly — a small web viewer must not corrupt a large local terminal
             // (or vice-versa), and a departing web viewer must let the PTY grow back to the local size.

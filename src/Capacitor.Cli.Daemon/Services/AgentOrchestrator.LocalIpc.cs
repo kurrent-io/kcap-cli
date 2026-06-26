@@ -208,8 +208,8 @@ internal partial class AgentOrchestrator {
     /// <summary>
     /// Min-clamp the one PTY to the smallest cols × rows across every attached viewer — the local
     /// clients (<see cref="AgentInstance.ClientDims"/>) <b>and</b> the server-aggregated web viewers
-    /// (<see cref="AgentInstance.WebDims"/>) — so no surface's redraw is corrupted (tmux semantics,
-    /// AI-973). Recomputed on local attach/detach/resize and on a server-origin web resize. Caller
+    /// (<see cref="AgentInstance.WebDims"/>) — so no surface's redraw is corrupted (tmux semantics).
+    /// Recomputed on local attach/detach/resize and on a server-origin web resize. Caller
     /// holds <see cref="AgentInstance.SinksLock"/>; no-op when no viewer has a reported size.
     /// </summary>
     void ClampPtyLocked(AgentInstance agent) {
