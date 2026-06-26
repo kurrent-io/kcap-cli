@@ -238,7 +238,32 @@ public static class ClaudeHookCommand {
             }
         }
 
-        using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync();
+        var       authResult = await HttpClientExtensions.CreateClientWithAuthStatusAsync();
+        using var client     = authResult.Client;
+        var       authStatus = authResult.Status;
+
+        // Recording is best-effort. When auth has lapsed there's no point POSTing a request the
+        // server will reject with 401 — and a non-zero exit makes Claude Code render a red
+        // "Stop hook error" banner on *every* turn until the user re-authenticates. Exit cleanly
+        // (0) so there's no banner, and nudge the user to re-login only on session-start (once per
+        // session) rather than on the high-frequency stop/notification/subagent events. The nudge
+        // is a `systemMessage` JSON object: Claude Code shows it to the user but — unlike plain
+        // session-start stdout — does NOT inject it into the model's context. (On exit 0 stderr is
+        // hidden entirely, so it can't carry a user-visible notice.)
+        if (authStatus is AuthStatus.Expired or AuthStatus.NotAuthenticated) {
+            if (command == "session-start") {
+                var notice = new JsonObject {
+                    ["systemMessage"] = authStatus == AuthStatus.Expired
+                        ? "[kcap] Authentication expired — session recording is paused. Run 'kcap login' to resume."
+                        : "[kcap] Not authenticated — session recording is off. Run 'kcap login' to start recording."
+                };
+
+                Console.WriteLine(notice.ToJsonString());
+            }
+
+            return 0;
+        }
+
         using var content = new StringContent(body, Encoding.UTF8, "application/json");
 
         HttpResponseMessage response;

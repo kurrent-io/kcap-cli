@@ -7,35 +7,74 @@ using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.Cli.Core;
 
+/// <summary>
+/// Outcome of building an authenticated client. Lets hook callers decide whether a POST is even
+/// worth attempting and whether to surface a re-auth prompt, instead of blindly POSTing a request
+/// the server will reject with 401.
+/// </summary>
+public enum AuthStatus {
+    /// <summary>A valid Bearer token is attached to the client.</summary>
+    Ok,
+
+    /// <summary>The server requires no auth ("None" provider) — the client is usable as-is.</summary>
+    NoAuthRequired,
+
+    /// <summary>A token is stored but expired and could not be refreshed — re-login required.</summary>
+    Expired,
+
+    /// <summary>No token is stored at all — login required.</summary>
+    NotAuthenticated,
+}
+
 public static class HttpClientExtensions {
     /// <summary>
-    /// Creates an HttpClient with a Bearer token from the local token store.
-    /// Checks auth discovery first — if the server uses "None" provider, skips auth entirely.
-    /// All CLI commands that call the Capacitor server should use this
-    /// instead of <c>new HttpClient()</c>.
+    /// Builds an <see cref="HttpClient"/> and reports the auth outcome. Attaches a Bearer token when
+    /// one is valid (refreshing transparently if needed); otherwise leaves the client unauthenticated
+    /// and returns the reason. Does NOT write to stderr — the caller chooses how, and whether, to
+    /// surface it. Hook callers should prefer this over <see cref="CreateAuthenticatedClientAsync"/>
+    /// so they can stay quiet on high-frequency events and exit cleanly instead of erroring per-turn.
     /// </summary>
-    public static async Task<HttpClient> CreateAuthenticatedClientAsync(string? baseUrl = null, CancellationToken ct = default) {
+    public static async Task<(HttpClient Client, AuthStatus Status)> CreateClientWithAuthStatusAsync(string? baseUrl = null, CancellationToken ct = default) {
         var client = new HttpClient();
 
         baseUrl ??= AppConfig.ResolvedServerUrl ?? Environment.GetEnvironmentVariable("KCAP_URL") ?? "http://localhost:5108";
         var provider = await DiscoverProviderAsync(baseUrl, ct);
 
         if (provider == "None") {
-            return client; // No auth needed
+            return (client, AuthStatus.NoAuthRequired); // No auth needed
         }
 
         var tokens = await TokenStore.GetValidTokensAsync();
 
         if (tokens is not null) {
             client.DefaultRequestHeaders.Authorization = new("Bearer", tokens.AccessToken);
-        } else {
-            var stored = await TokenStore.LoadAsync();
 
-            if (stored is not null) {
+            return (client, AuthStatus.Ok);
+        }
+
+        var stored = await TokenStore.LoadAsync();
+
+        return (client, stored is not null ? AuthStatus.Expired : AuthStatus.NotAuthenticated);
+    }
+
+    /// <summary>
+    /// Creates an HttpClient with a Bearer token from the local token store, printing an actionable
+    /// re-auth hint to stderr when no valid token is available. Checks auth discovery first — if the
+    /// server uses "None" provider, skips auth entirely. Interactive CLI commands use this; hook
+    /// callers should prefer <see cref="CreateClientWithAuthStatusAsync"/> so they control messaging.
+    /// </summary>
+    public static async Task<HttpClient> CreateAuthenticatedClientAsync(string? baseUrl = null, CancellationToken ct = default) {
+        var (client, status) = await CreateClientWithAuthStatusAsync(baseUrl, ct);
+
+        switch (status) {
+            case AuthStatus.Expired:
                 await Console.Error.WriteLineAsync("Authentication token has expired. Run 'kcap login' to re-authenticate.");
-            } else {
+
+                break;
+            case AuthStatus.NotAuthenticated:
                 await Console.Error.WriteLineAsync("Not authenticated. Run 'kcap login' to authenticate.");
-            }
+
+                break;
         }
 
         return client;
