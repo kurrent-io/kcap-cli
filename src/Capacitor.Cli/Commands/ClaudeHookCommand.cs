@@ -136,10 +136,14 @@ public static class ClaudeHookCommand {
 
         // Enrich hook payloads with repository info.
         // For session-end and subagent-stop, defer enrichment to run in parallel with watcher kill.
+        // For session-start, pass a time budget so enrichment self-skips under deadline pressure
+        // (repo info still arrives via the watcher's own detection).
         Task<string>? deferredRepoTask = null;
 
         if (command is "session-end" or "subagent-stop") {
             deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body);
+        } else if (command == "session-start") {
+            body = await RepositoryDetection.EnrichWithRepositoryInfo(body, HookBudget.Remaining(processStart, command));
         } else {
             body = await RepositoryDetection.EnrichWithRepositoryInfo(body);
         }
@@ -286,6 +290,101 @@ public static class ClaudeHookCommand {
             }
         }
 
+        // Dedicated bounded path for session-start: spawn the watcher FIRST (transcript capture
+        // must never be lost even if the POST fails), then bounded POST, spool on transient
+        // failure, and emit the context envelope + plan-content POST on success.
+        if (command == "session-start") {
+            var startNode      = JsonNode.Parse(body);
+            var sessionId      = startNode?["session_id"]?.GetValue<string>();
+            var transcriptPath = startNode?["transcript_path"]?.GetValue<string>();
+            var sessionCwd     = startNode?["cwd"]?.GetValue<string>();
+            var source         = startNode?["source"]?.GetValue<string>();
+            var isResumeOrCompact = source is not null &&
+                (source.Equals("resume", StringComparison.OrdinalIgnoreCase) ||
+                 source.Equals("compact", StringComparison.OrdinalIgnoreCase));
+
+            // 1. Capture never lost: spawn the watcher before any slow git/gh/POST.
+            //    Idempotent — safe to call even if the POST subsequently fails.
+            if (sessionId is not null && transcriptPath is not null) {
+                await WatcherManager.EnsureWatcherRunning(
+                    baseUrl, sessionId, transcriptPath,
+                    agentId: null, cwd: sessionCwd, skipTitle: isResumeOrCompact);
+            }
+
+            // 2. Bounded POST; spool on transient failure (exit-0: session-start is async in plugin).
+            var remaining = HookBudget.Remaining(processStart, "session-start");
+            var (ok, permanent) = await PostLifecycleBoundedAsync(
+                client, $"{baseUrl}/hooks/session-start", body, remaining, CancellationToken.None);
+
+            if (!ok) {
+                if (!permanent && sessionId is not null) {
+                    spool.Append(sessionId, "session-start", body);
+                }
+                return 0;
+            }
+
+            // 3. Success: re-issue a single bounded POST to read the response body for the
+            //    context-envelope emission and plan-content POST. PostLifecycleBoundedAsync
+            //    disposes its response, so we need this second call for the response payload.
+            //    The injected-client test seam observes this POST.
+            remaining = HookBudget.Remaining(processStart, "session-start");
+            JsonNode? responseNode = null;
+            if (remaining > TimeSpan.Zero) {
+                try {
+                    using var responseContent = new StringContent(body, Encoding.UTF8, "application/json");
+                    using var resp = await client.PostOnceAsync(
+                        $"{baseUrl}/hooks/session-start", responseContent, remaining, CancellationToken.None);
+
+                    if (resp.IsSuccessStatusCode) {
+                        var responseBody = await resp.Content.ReadAsStringAsync();
+                        responseNode = JsonNode.Parse(responseBody);
+                    }
+                } catch {
+                    // Best effort — envelope is optional; don't fail the hook.
+                }
+            }
+
+            // Plan-content POST from response-resolved slug (only if not already injected).
+            if (responseNode is not null && !planContentInjected && sessionId is not null) {
+                try {
+                    var resolvedSlug = responseNode["slug"]?.GetValue<string>();
+
+                    if (resolvedSlug is not null) {
+                        var planContent = ReadPlanFile(resolvedSlug);
+
+                        if (planContent is not null) {
+                            await PostPlanContentAsync(client, baseUrl, sessionId, planContent);
+                        }
+                    }
+                } catch {
+                    // Best effort
+                }
+            }
+
+            // Context-envelope emission (lessons/version-nudge).
+            if (responseNode is not null) {
+                try {
+                    var disabled        = AppConfig.ResolvedProfile?.Profile?.DisableSessionGuidelines is true;
+                    var lessonsFragment = SessionGuidelinesEmitter.BuildFragment(responseNode, disabled);
+                    var nudgeFragment   = VersionNudgeEmitter.BuildFragment(responseNode, CapacitorVersion.CurrentDisplay());
+
+                    var envelope = SessionStartAdditionalContext.BuildEnvelope(lessonsFragment, nudgeFragment);
+
+                    if (envelope is not null) {
+                        Console.WriteLine(envelope);
+                    }
+                } catch {
+                    // Best effort — never break session capture for hook output emission.
+                }
+            }
+
+            if (updateCheckTask is not null) {
+                await updateCheckTask;
+            }
+
+            return 0;
+        }
+
         // Dedicated bounded POST for session-end: single attempt clamped to the remaining
         // hook budget, spools on transient failure, and checks generate_whats_done on success.
         // Other commands continue through the shared PostWithRetryAsync path below.
@@ -352,64 +451,6 @@ public static class ClaudeHookCommand {
         }
 
         switch (command) {
-            case "session-start": {
-                var node           = JsonNode.Parse(body);
-                var sessionId      = node?["session_id"]?.GetValue<string>();
-                var transcriptPath = node?["transcript_path"]?.GetValue<string>();
-                var sessionCwd     = node?["cwd"]?.GetValue<string>();
-
-                JsonNode? responseNode = null;
-                try {
-                    var responseBody = await response.Content.ReadAsStringAsync();
-                    responseNode     = JsonNode.Parse(responseBody);
-                } catch {
-                    // Best effort
-                }
-
-                if (responseNode is not null && !planContentInjected && sessionId is not null) {
-                    try {
-                        var resolvedSlug = responseNode["slug"]?.GetValue<string>();
-
-                        if (resolvedSlug is not null) {
-                            var planContent = ReadPlanFile(resolvedSlug);
-
-                            if (planContent is not null) {
-                                await PostPlanContentAsync(client, baseUrl, sessionId, planContent);
-                            }
-                        }
-                    } catch {
-                        // Best effort
-                    }
-                }
-
-                if (responseNode is not null) {
-                    try {
-                        var disabled        = AppConfig.ResolvedProfile?.Profile?.DisableSessionGuidelines is true;
-                        var lessonsFragment = SessionGuidelinesEmitter.BuildFragment(responseNode, disabled);
-                        var nudgeFragment   = VersionNudgeEmitter.BuildFragment(responseNode, CapacitorVersion.CurrentDisplay());
-
-                        var envelope = SessionStartAdditionalContext.BuildEnvelope(lessonsFragment, nudgeFragment);
-
-                        if (envelope is not null) {
-                            Console.WriteLine(envelope);
-                        }
-                    } catch {
-                        // Best effort — never break session capture for hook output emission.
-                    }
-                }
-
-                var source = node?["source"]?.GetValue<string>();
-
-                var isResumeOrCompact = source is not null
-                 && (source.Equals("resume", StringComparison.OrdinalIgnoreCase)
-                     || source.Equals("compact", StringComparison.OrdinalIgnoreCase));
-
-                if (sessionId is not null && transcriptPath is not null) {
-                    await WatcherManager.EnsureWatcherRunning(baseUrl, sessionId, transcriptPath, agentId: null, cwd: sessionCwd, skipTitle: isResumeOrCompact);
-                }
-
-                break;
-            }
             case "subagent-start": {
                 var node           = JsonNode.Parse(body);
                 var sessionId      = node?["session_id"]?.GetValue<string>();

@@ -66,6 +66,18 @@ public class ClaudeHookCommandTests {
         await Assert.That(fx.SpoolFiles.Any()).IsFalse();
     }
 
+    [Test]
+    public async Task session_start_on_failure_is_spooled_with_minimal_body() {
+        using var fx = new Fixture(HttpStatusCode.InternalServerError);
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp","source":"startup"}""");
+        var files = fx.SpoolFiles.ToList();
+        await Assert.That(files.Count).IsEqualTo(1);
+        var content = await File.ReadAllTextAsync(files[0]);
+        await Assert.That(content).Contains("\"route\":\"session-start\"");
+        await Assert.That(JsonNode.Parse(JsonNode.Parse(content.Split('\n')[0])!["body"]!.GetValue<string>())!["session_id"]!.GetValue<string>())
+            .IsEqualTo(Sid);
+    }
+
     sealed class Fixture : IDisposable {
         readonly string _tmpHome = Path.Combine(Path.GetTempPath(), $"kcap-claude-hook-{Guid.NewGuid():N}");
         readonly string _spoolPath;
