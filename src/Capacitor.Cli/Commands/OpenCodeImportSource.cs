@@ -128,6 +128,8 @@ internal sealed class OpenCodeImportSource : IImportSource {
             int? hwm;
             try {
                 hwm = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, agentId: null, ct);
+            } catch (OperationCanceledException) {
+                throw; // cancellation is not a probe error
             } catch {
                 results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, total, "watermark probe failed"));
                 continue;
@@ -291,7 +293,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
             Feed(line);
         }
         foreach (var child in db.QueryChildren(sessionId)) {
-            Feed(" child:" + child.Id);
+            Feed("\u0000child:" + child.Id);
             foreach (var line in db.SynthesizeLines(child.Id)) Feed(line);
         }
         return (total, importable, Convert.ToHexString(hash.GetHashAndReset()));
@@ -342,6 +344,8 @@ internal sealed class OpenCodeImportSource : IImportSource {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
             using var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{route}", content, ct: ct);
             return resp.IsSuccessStatusCode;
+        } catch (OperationCanceledException) {
+            throw; // don't mask cancellation as a hook failure
         } catch { return false; }
     }
 

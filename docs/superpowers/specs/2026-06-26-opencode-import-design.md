@@ -413,9 +413,10 @@ Microsoft.Data.Sqlite (or a small checked-in sample db):
   permanent. Accepted for v1 (the failure requires a rare server-side write error;
   `processed` is not a reliable client-side signal because non-importable lines emit
   zero events). **Follow-up:** a server-side strict transcript response (non-2xx on
-  any write failure) — tracked separately for the kcap-server repo.
+  any write failure) — tracked in **AI-1023** (kcap-server).
 - **Subagent lifecycle hooks return OK on a write failure (known, server-side, shared
   with live).** `/hooks/subagent-start|stop` return `200` even if the lifecycle append
   fails, so a child's `SubagentStarted/Completed` could be lost while transcript +
   parent end succeed — the same exposure the live watcher already carries. Accepted
-  for v1; **follow-up:** server returns 500 on subagent lifecycle write failure.
+  for v1; **follow-up:** server returns 500 on subagent lifecycle write failure
+  (tracked in **AI-1023**).
