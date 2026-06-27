@@ -512,6 +512,28 @@ static partial class WatchCommand {
     /// </summary>
     static readonly TimeSpan ParentExitPostBudget = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// Codex has no session-end hook and the desktop app's single long-lived
+    /// `codex app-server` process is the watchdog's parent PID for EVERY
+    /// conversation, so the parent-exit watchdog never fires per-conversation —
+    /// sessions stay "active" until the whole app quits. This idle window is the
+    /// fallback: if the rollout file gets no new lines for this long, the watcher
+    /// POSTs session-end (reason "idle_timeout"). Self-correcting — Codex fires a
+    /// Stop hook per turn that re-spawns the watcher and the read model
+    /// reactivates the session, so a resumed conversation comes back to life.
+    /// </summary>
+    internal static readonly TimeSpan DefaultCodexIdleTimeout = TimeSpan.FromMinutes(60);
+
+    /// <summary>
+    /// Resolves the Codex idle timeout from KCAP_CODEX_IDLE_MINUTES, falling back
+    /// to <see cref="DefaultCodexIdleTimeout"/> for unset/blank/non-numeric/
+    /// non-positive values. Pure so the parsing is unit-testable.
+    /// </summary>
+    internal static TimeSpan ResolveCodexIdleTimeout(string? envValue) =>
+        int.TryParse(envValue, out var minutes) && minutes > 0
+            ? TimeSpan.FromMinutes(minutes)
+            : DefaultCodexIdleTimeout;
+
     internal static async Task PostSessionEndOnParentExitAsync(
             string             baseUrl,
             string             sessionId,

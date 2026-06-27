@@ -207,6 +207,20 @@ public class WatchCommandTests {
         await Assert.That(vendorParam!.HasDefaultValue).IsTrue();
         await Assert.That(vendorParam.DefaultValue).IsEqualTo("claude");
     }
+
+    [Test]
+    [Arguments(null, 60)]      // unset → default 60 min
+    [Arguments("", 60)]        // empty → default
+    [Arguments("abc", 60)]     // non-numeric → default
+    [Arguments("0", 60)]       // non-positive → default (clamped)
+    [Arguments("-5", 60)]      // negative → default
+    [Arguments("15", 15)]      // valid override
+    [Arguments("600", 600)]    // large but allowed
+    public async Task ResolveCodexIdleTimeout_parses_env_with_default(string? env, int expectedMinutes) {
+        var result = WatchCommand.ResolveCodexIdleTimeout(env);
+
+        await Assert.That(result).IsEqualTo(TimeSpan.FromMinutes(expectedMinutes));
+    }
 }
 
 public class CodexTranscriptExtractionTests {
