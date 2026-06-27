@@ -229,7 +229,8 @@ public class WatchCommandTests {
     public async Task ShouldEndOnIdle_true_for_idle_codex_session_watcher() {
         var should = WatchCommand.ShouldEndOnIdle(
             vendor: "codex", isSessionWatcher: true, thresholdReached: true,
-            lastActivityAt: IdleNow - TimeSpan.FromMinutes(61), now: IdleNow, idleTimeout: IdleWindow);
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(61), now: IdleNow, idleTimeout: IdleWindow,
+            toolInFlight: false);
 
         await Assert.That(should).IsTrue();
     }
@@ -243,7 +244,8 @@ public class WatchCommandTests {
     public async Task ShouldEndOnIdle_false_for_non_codex(string vendor) {
         var should = WatchCommand.ShouldEndOnIdle(
             vendor: vendor, isSessionWatcher: true, thresholdReached: true,
-            lastActivityAt: IdleNow - TimeSpan.FromMinutes(61), now: IdleNow, idleTimeout: IdleWindow);
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(61), now: IdleNow, idleTimeout: IdleWindow,
+            toolInFlight: false);
 
         await Assert.That(should).IsFalse();
     }
@@ -252,7 +254,8 @@ public class WatchCommandTests {
     public async Task ShouldEndOnIdle_false_when_not_yet_idle() {
         var should = WatchCommand.ShouldEndOnIdle(
             vendor: "codex", isSessionWatcher: true, thresholdReached: true,
-            lastActivityAt: IdleNow - TimeSpan.FromMinutes(59), now: IdleNow, idleTimeout: IdleWindow);
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(59), now: IdleNow, idleTimeout: IdleWindow,
+            toolInFlight: false);
 
         await Assert.That(should).IsFalse();
     }
@@ -261,7 +264,8 @@ public class WatchCommandTests {
     public async Task ShouldEndOnIdle_false_for_subagent_watcher() {
         var should = WatchCommand.ShouldEndOnIdle(
             vendor: "codex", isSessionWatcher: false, thresholdReached: true,
-            lastActivityAt: IdleNow - TimeSpan.FromMinutes(61), now: IdleNow, idleTimeout: IdleWindow);
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(61), now: IdleNow, idleTimeout: IdleWindow,
+            toolInFlight: false);
 
         await Assert.That(should).IsFalse();
     }
@@ -270,7 +274,8 @@ public class WatchCommandTests {
     public async Task ShouldEndOnIdle_false_below_threshold() {
         var should = WatchCommand.ShouldEndOnIdle(
             vendor: "codex", isSessionWatcher: true, thresholdReached: false,
-            lastActivityAt: IdleNow - TimeSpan.FromMinutes(61), now: IdleNow, idleTimeout: IdleWindow);
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(61), now: IdleNow, idleTimeout: IdleWindow,
+            toolInFlight: false);
 
         await Assert.That(should).IsFalse();
     }
@@ -280,9 +285,86 @@ public class WatchCommandTests {
         // Strictly greater-than: exactly == idleTimeout is NOT yet idle.
         var should = WatchCommand.ShouldEndOnIdle(
             vendor: "codex", isSessionWatcher: true, thresholdReached: true,
-            lastActivityAt: IdleNow - TimeSpan.FromMinutes(60), now: IdleNow, idleTimeout: IdleWindow);
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(60), now: IdleNow, idleTimeout: IdleWindow,
+            toolInFlight: false);
 
         await Assert.That(should).IsFalse();
+    }
+
+    [Test]
+    public async Task ShouldEndOnIdle_false_when_tool_in_flight_even_if_idle() {
+        // A tool call is in progress — must NOT idle-end even after the timeout window.
+        var should = WatchCommand.ShouldEndOnIdle(
+            vendor: "codex", isSessionWatcher: true, thresholdReached: true,
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(61), now: IdleNow, idleTimeout: IdleWindow,
+            toolInFlight: true);
+
+        await Assert.That(should).IsFalse();
+    }
+}
+
+public class UpdateCodexPendingToolCallsTests {
+    [Test]
+    public async Task FunctionCall_AddsCallId() {
+        var pending = new HashSet<string>(StringComparer.Ordinal);
+        const string line = """{"type":"response_item","payload":{"type":"function_call","call_id":"call_1","name":"shell","arguments":"{}"}}""";
+
+        WatchCommand.UpdateCodexPendingToolCalls(pending, line);
+
+        await Assert.That(pending.Contains("call_1")).IsTrue();
+    }
+
+    [Test]
+    public async Task CustomToolCall_AddsCallId() {
+        var pending = new HashSet<string>(StringComparer.Ordinal);
+        const string line = """{"type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_2","name":"my_tool","arguments":"{}"}}""";
+
+        WatchCommand.UpdateCodexPendingToolCalls(pending, line);
+
+        await Assert.That(pending.Contains("call_2")).IsTrue();
+    }
+
+    [Test]
+    public async Task FunctionCallOutput_RemovesCallId() {
+        var pending = new HashSet<string>(StringComparer.Ordinal) { "call_1" };
+        const string line = """{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"done"}}""";
+
+        WatchCommand.UpdateCodexPendingToolCalls(pending, line);
+
+        await Assert.That(pending.Contains("call_1")).IsFalse();
+    }
+
+    [Test]
+    public async Task CustomToolCallOutput_RemovesCallId() {
+        var pending = new HashSet<string>(StringComparer.Ordinal) { "call_2" };
+        const string line = """{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_2","output":"done"}}""";
+
+        WatchCommand.UpdateCodexPendingToolCalls(pending, line);
+
+        await Assert.That(pending.Contains("call_2")).IsFalse();
+    }
+
+    [Test]
+    public async Task MessageResponseItem_LeavesSetUnchanged() {
+        var pending = new HashSet<string>(StringComparer.Ordinal) { "existing" };
+        const string line = """{"type":"response_item","payload":{"type":"message","role":"assistant","content":[]}}""";
+
+        WatchCommand.UpdateCodexPendingToolCalls(pending, line);
+
+        // Set unchanged — still contains "existing", nothing added
+        await Assert.That(pending.Count).IsEqualTo(1);
+        await Assert.That(pending.Contains("existing")).IsTrue();
+    }
+
+    [Test]
+    public async Task MalformedJson_LeavesSetUnchanged_NoThrow() {
+        var pending = new HashSet<string>(StringComparer.Ordinal) { "existing" };
+
+        // Must not throw; set must remain unchanged
+        WatchCommand.UpdateCodexPendingToolCalls(pending, "not json at all {{}}");
+
+        await Assert.That(pending.Count).IsEqualTo(1);
+        await Assert.That(pending.Contains("existing")).IsTrue();
     }
 }
 

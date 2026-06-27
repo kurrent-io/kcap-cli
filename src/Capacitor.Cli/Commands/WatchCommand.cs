@@ -316,7 +316,8 @@ static partial class WatchCommand {
                         state.ThresholdReached,
                         state.LastActivityAt,
                         DateTimeOffset.UtcNow,
-                        codexIdleTimeout)) {
+                        codexIdleTimeout,
+                        toolInFlight: state.PendingCodexToolCalls.Count > 0)) {
                     Log($"Codex rollout idle for >{codexIdleTimeout.TotalMinutes:F0}m; ending session (idle_timeout)");
                     idleExit = true;
                     cts.Cancel();
@@ -563,6 +564,12 @@ static partial class WatchCommand {
     /// session), session watchers (not subagents), and threshold-reached sessions
     /// (below-threshold short-lived sessions have no server session to end). Uses
     /// strictly-greater-than so the boundary tick is not yet considered idle.
+    /// Also suppressed when a tool call is in flight (<paramref name="toolInFlight"/>
+    /// true): a long-running shell command / custom tool legitimately produces no
+    /// new rollout lines between its function_call start and its _output completion —
+    /// ending while it's running would falsely terminate an active session. No hard
+    /// ceiling on tool duration: if the process dies, the parent-exit watchdog takes
+    /// over; a hung-but-alive tool is a real in-flight turn (YAGNI — no ceiling).
     /// </summary>
     internal static bool ShouldEndOnIdle(
             string         vendor,
@@ -570,12 +577,52 @@ static partial class WatchCommand {
             bool           thresholdReached,
             DateTimeOffset lastActivityAt,
             DateTimeOffset now,
-            TimeSpan       idleTimeout
+            TimeSpan       idleTimeout,
+            bool           toolInFlight = false
         ) =>
         vendor == "codex"
         && isSessionWatcher
         && thresholdReached
-        && now - lastActivityAt > idleTimeout;
+        && now - lastActivityAt > idleTimeout
+        && !toolInFlight;
+
+    /// <summary>
+    /// Updates <paramref name="pending"/> based on a single Codex rollout line.
+    /// A <c>function_call</c> or <c>custom_tool_call</c> response_item adds its
+    /// <c>call_id</c> to the set; the matching <c>_output</c> variant removes it.
+    /// All other lines and malformed JSON are silently ignored so this is safe to
+    /// call unconditionally for every line of any vendor transcript.
+    /// </summary>
+    internal static void UpdateCodexPendingToolCalls(HashSet<string> pending, string line) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Str("type") != "response_item") return;
+
+            var payload = root.Obj("payload");
+
+            if (payload is not { } p) return;
+
+            var callId = p.Str("call_id");
+
+            if (callId is null) return;
+
+            switch (p.Str("type")) {
+                case "function_call"
+                  or "custom_tool_call":
+                    pending.Add(callId);
+                    break;
+
+                case "function_call_output"
+                  or "custom_tool_call_output":
+                    pending.Remove(callId);
+                    break;
+            }
+        } catch {
+            // Ignore malformed / non-JSON lines — never break the drain loop
+        }
+    }
 
     internal static async Task PostSessionEndOnParentExitAsync(
             string             baseUrl,
@@ -738,6 +785,14 @@ static partial class WatchCommand {
 
             if (newLines.Count > 0) {
                 state.LastActivityAt = DateTimeOffset.UtcNow;
+            }
+
+            // Track Codex tool calls in flight across all new lines (Codex-only,
+            // but runs unconditionally so it is not gated on the title phase or
+            // threshold). Non-Codex lines have a different top-level shape (no
+            // response_item), so this is a cheap no-op for them.
+            foreach (var line in newLines) {
+                UpdateCodexPendingToolCalls(state.PendingCodexToolCalls, line);
             }
 
             // Capture first user text (needed for title generation)

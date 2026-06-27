@@ -511,7 +511,7 @@ KCAP_CODEX_PATH=/opt/codex/bin/codex  kcap daemon
 
 | Environment variable | Default | Description |
 |----------------------|---------|-------------|
-| `KCAP_CODEX_IDLE_MINUTES` | `60` | How long a Codex rollout file may be idle (no new lines) before the `kcap watch` background watcher ends the session (`reason: idle_timeout`). Increase for very long thinking/compute turns; decrease for faster cleanup of abandoned sessions. Invalid or non-positive values fall back to the 60-minute default. |
+| `KCAP_CODEX_IDLE_MINUTES` | `60` | How long a Codex rollout file may be idle (no new rollout lines and no Codex tool call in flight) before the `kcap watch` background watcher ends the session (`reason: idle_timeout`). Increase for very long thinking/compute turns; decrease for faster cleanup of abandoned sessions. Invalid or non-positive values fall back to the 60-minute default. |
 
 #### Daemon log verbosity
 
