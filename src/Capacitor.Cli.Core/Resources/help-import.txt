@@ -26,6 +26,7 @@ Vendor filters (additive — pass one or more to restrict the run):
   --gemini                Import Gemini CLI session transcripts
   --kiro                  Import AWS Kiro CLI sessions (~/.kiro/sessions/cli)
   --pi                    Import Pi (badlogic/pi-mono) session transcripts
+  --opencode              Import SST OpenCode sessions (~/.local/share/opencode/opencode.db)
 
 Scope (one of, required for non-interactive use):
   --all                   Import every discovered session

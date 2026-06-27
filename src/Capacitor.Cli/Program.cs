@@ -311,6 +311,23 @@ switch (command) {
                 return 1;
         }
     }
+    case "curate": {
+        if (args.Length < 2) {
+            Console.Error.WriteLine("Usage: kcap curate apply [--dry-run] [--yes]");
+            return 1;
+        }
+        switch (args[1]) {
+            case "apply": {
+                var dryRun = args.Contains("--dry-run");
+                var yes    = args.Contains("--yes") || args.Contains("-y");
+                return await CurateCommand.HandleApply(baseUrl!, dryRun, yes);
+            }
+            default:
+                Console.Error.WriteLine($"Unknown curate subcommand: {args[1]}");
+                Console.Error.WriteLine("Usage: kcap curate apply [--dry-run] [--yes]");
+                return 1;
+        }
+    }
     case "cleanup":
         return await CleanupCommand.HandleCleanup();
     case "uninstall":
@@ -469,6 +486,7 @@ switch (command) {
             new GeminiImportSource(),
             new KiroImportSource(),
             new PiImportSource(),
+            new OpenCodeImportSource(),
         };
         IReadOnlyList<IImportSource> sources = explicitVendorSelection
             ? allSources.Where(s => vsel.Vendors.Contains(s.Vendor)).ToList()

@@ -42,11 +42,14 @@ Session:
   validate-plan [id]               Validate plan completion for a session
   eval [--model N] [--chain] [id]  Run LLM-as-judge evaluation over a session
   generate-whats-done [--codex] <id>  Generate what's-done summary (--codex uses `codex exec`)
-  import [vendor-filters] [options]   Import local sessions (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi)
+  import [vendor-filters] [options]   Import local sessions (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode)
   set-title <title>                Set session title
   disable                          Stop recording and delete session data
   hide                             Hide session (owner-only visibility)
   review <pr>                      Launch Claude with PR review context
+
+Curation:
+  curate apply [--dry-run] [--yes]   Write promoted guidelines into CLAUDE.md / AGENTS.md
 
 MCP servers (stdio):
   mcp review [--owner --repo --pr]   PR review context for agents
