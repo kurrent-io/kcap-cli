@@ -221,6 +221,69 @@ public class WatchCommandTests {
 
         await Assert.That(result).IsEqualTo(TimeSpan.FromMinutes(expectedMinutes));
     }
+
+    static readonly DateTimeOffset IdleNow    = new(2026, 6, 27, 12, 0, 0, TimeSpan.Zero);
+    static readonly TimeSpan       IdleWindow = TimeSpan.FromMinutes(60);
+
+    [Test]
+    public async Task ShouldEndOnIdle_true_for_idle_codex_session_watcher() {
+        var should = WatchCommand.ShouldEndOnIdle(
+            vendor: "codex", isSessionWatcher: true, thresholdReached: true,
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(61), now: IdleNow, idleTimeout: IdleWindow);
+
+        await Assert.That(should).IsTrue();
+    }
+
+    [Test]
+    [Arguments("claude")]
+    [Arguments("gemini")]
+    [Arguments("pi")]
+    [Arguments("copilot")]
+    [Arguments("kiro")]
+    public async Task ShouldEndOnIdle_false_for_non_codex(string vendor) {
+        var should = WatchCommand.ShouldEndOnIdle(
+            vendor: vendor, isSessionWatcher: true, thresholdReached: true,
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(61), now: IdleNow, idleTimeout: IdleWindow);
+
+        await Assert.That(should).IsFalse();
+    }
+
+    [Test]
+    public async Task ShouldEndOnIdle_false_when_not_yet_idle() {
+        var should = WatchCommand.ShouldEndOnIdle(
+            vendor: "codex", isSessionWatcher: true, thresholdReached: true,
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(59), now: IdleNow, idleTimeout: IdleWindow);
+
+        await Assert.That(should).IsFalse();
+    }
+
+    [Test]
+    public async Task ShouldEndOnIdle_false_for_subagent_watcher() {
+        var should = WatchCommand.ShouldEndOnIdle(
+            vendor: "codex", isSessionWatcher: false, thresholdReached: true,
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(61), now: IdleNow, idleTimeout: IdleWindow);
+
+        await Assert.That(should).IsFalse();
+    }
+
+    [Test]
+    public async Task ShouldEndOnIdle_false_below_threshold() {
+        var should = WatchCommand.ShouldEndOnIdle(
+            vendor: "codex", isSessionWatcher: true, thresholdReached: false,
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(61), now: IdleNow, idleTimeout: IdleWindow);
+
+        await Assert.That(should).IsFalse();
+    }
+
+    [Test]
+    public async Task ShouldEndOnIdle_false_exactly_at_timeout_boundary() {
+        // Strictly greater-than: exactly == idleTimeout is NOT yet idle.
+        var should = WatchCommand.ShouldEndOnIdle(
+            vendor: "codex", isSessionWatcher: true, thresholdReached: true,
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(60), now: IdleNow, idleTimeout: IdleWindow);
+
+        await Assert.That(should).IsFalse();
+    }
 }
 
 public class CodexTranscriptExtractionTests {

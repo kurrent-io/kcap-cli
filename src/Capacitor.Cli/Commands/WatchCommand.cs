@@ -534,6 +534,28 @@ static partial class WatchCommand {
             ? TimeSpan.FromMinutes(minutes)
             : DefaultCodexIdleTimeout;
 
+    /// <summary>
+    /// Whether the watcher should self-terminate and POST session-end because the
+    /// Codex rollout file has gone idle. Pure so the policy is unit-testable.
+    /// Gated to: vendor codex (only vendor whose parent-exit watchdog can't fire
+    /// per-conversation — the desktop app's shared app-server never exits per
+    /// session), session watchers (not subagents), and threshold-reached sessions
+    /// (below-threshold short-lived sessions have no server session to end). Uses
+    /// strictly-greater-than so the boundary tick is not yet considered idle.
+    /// </summary>
+    internal static bool ShouldEndOnIdle(
+            string         vendor,
+            bool           isSessionWatcher,
+            bool           thresholdReached,
+            DateTimeOffset lastActivityAt,
+            DateTimeOffset now,
+            TimeSpan       idleTimeout
+        ) =>
+        vendor == "codex"
+        && isSessionWatcher
+        && thresholdReached
+        && now - lastActivityAt > idleTimeout;
+
     internal static async Task PostSessionEndOnParentExitAsync(
             string             baseUrl,
             string             sessionId,
