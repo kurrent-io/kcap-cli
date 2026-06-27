@@ -47,29 +47,38 @@ internal sealed class OpenCodeImportSource : IImportSource {
     public Task<IReadOnlyList<DiscoveredSession>> DiscoverAsync(DiscoveryFilters filters, CancellationToken ct) {
         if (!File.Exists(_dbPath)) return Task.FromResult<IReadOnlyList<DiscoveredSession>>([]);
 
-        using var db = new OpenCodeDb(_dbPath);
         var normalizedCwd = filters.FilterCwd is { } cwd ? Norm(cwd) : null;
         var sinceMs = filters.Since is { } s
             ? new DateTimeOffset(s.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)).ToUnixTimeMilliseconds()
             : (long?)null;
 
         var result = new List<DiscoveredSession>();
-        foreach (var row in db.QueryRoots()) {
-            ct.ThrowIfCancellationRequested();
-            if (filters.FilterSession is { } fs && !string.Equals(row.Id, fs, StringComparison.Ordinal)) continue;
-            if (normalizedCwd is not null &&
-                (row.Directory is null || !Norm(row.Directory).Equals(normalizedCwd, PathComparison))) continue;
-            if (sinceMs is { } cutoff && row.TimeCreated < cutoff) continue;
+        try {
+            // A corrupt / schema-drifted opencode.db must NOT crash the whole `kcap import`
+            // (other vendors share the run). On open/query failure, warn and skip OpenCode.
+            using var db = new OpenCodeDb(_dbPath);
+            foreach (var row in db.QueryRoots()) {
+                ct.ThrowIfCancellationRequested();
+                if (filters.FilterSession is { } fs && !string.Equals(row.Id, fs, StringComparison.Ordinal)) continue;
+                if (normalizedCwd is not null &&
+                    (row.Directory is null || !Norm(row.Directory).Equals(normalizedCwd, PathComparison))) continue;
+                if (sinceMs is { } cutoff && row.TimeCreated < cutoff) continue;
 
-            result.Add(new DiscoveredSession(
-                SessionId:      row.Id, // raw ses_… — no GUID normalization
-                Vendor:         Vendor,
-                Cwd:            row.Directory,
-                FirstTimestamp: FromEpoch(row.TimeCreated),
-                SourceMeta:     new Dictionary<string, object?> {
-                    ["Title"]       = row.Title,
-                    ["TimeUpdated"] = row.TimeUpdated,
-                }));
+                result.Add(new DiscoveredSession(
+                    SessionId:      row.Id, // raw ses_… — no GUID normalization
+                    Vendor:         Vendor,
+                    Cwd:            row.Directory,
+                    FirstTimestamp: FromEpoch(row.TimeCreated),
+                    SourceMeta:     new Dictionary<string, object?> {
+                        ["Title"]       = row.Title,
+                        ["TimeUpdated"] = row.TimeUpdated,
+                    }));
+            }
+        } catch (OperationCanceledException) {
+            throw;
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"[kcap] OpenCode discovery skipped (unreadable {_dbPath}): {ex.Message}");
+            return Task.FromResult<IReadOnlyList<DiscoveredSession>>([]);
         }
         return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
     }
@@ -139,7 +148,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
         // Repair replays the FULL transcript with line numbers offset above the server
         // HWM (ResumeFromLine), so previously-accepted content dedupes by prt_ id and the
         // gap lands. New imports send from 0.
-        var lineOffset = repair ? c.ResumeFromLine + 1 : 0;
+        var lineOffset = repair ? checked(c.ResumeFromLine + 1) : 0;
 
         // 1. session-start (lifecycle-before-transcript; idempotent server-side).
         if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/opencode",
@@ -158,6 +167,8 @@ internal sealed class OpenCodeImportSource : IImportSource {
                 httpClient: ctx.HttpClient, baseUrl: ctx.BaseUrl, sessionId: c.SessionId,
                 filePath: tmpFile, agentId: null, startLine: 0, vendor: Vendor,
                 lineNumberOffset: lineOffset, failOnError: true);
+        } catch (OperationCanceledException) {
+            throw; // cancellation is not an import failure — let it propagate
         } catch {
             // Strict: abort before session-end. A partial send may have advanced the HWM,
             // but the ledger is written only after session-end — which we never reach — so
@@ -170,6 +181,8 @@ internal sealed class OpenCodeImportSource : IImportSource {
         // 3. children as subagents — BEFORE session-end so SubagentCompleted precedes SessionEnded.
         try {
             await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, ct);
+        } catch (OperationCanceledException) {
+            throw;
         } catch {
             return ImportOutcome.Failed;
         }
@@ -205,7 +218,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
             // ledger, so children are only reached during an incomplete parent's import. Offset
             // above the child's (rootId, agentId) HWM so a repair replays above ingested content.
             var chwm = await FetchServerLastLineAsync(client, baseUrl, rootId, agentId, ct);
-            var childOffset = chwm is { } v ? v + 1 : 0;
+            var childOffset = chwm is { } v ? checked(v + 1) : 0;
 
             var tmp = Path.Combine(Path.GetTempPath(), $"kcap-oc-{child.Id}-{Guid.NewGuid():N}.jsonl");
             try {

@@ -51,13 +51,19 @@ internal sealed class OpenCodeDb : IDisposable {
         var rows = new List<OpenCodeSessionRow>();
         using var r = cmd.ExecuteReader();
         while (r.Read()) {
-            rows.Add(new OpenCodeSessionRow(
-                Id:          r.GetString(0),
-                ParentId:    r.IsDBNull(1) ? null : r.GetString(1),
-                Directory:   r.IsDBNull(2) ? null : r.GetString(2),
-                Title:       r.IsDBNull(3) ? "" : r.GetString(3),
-                TimeCreated: r.GetInt64(4),
-                TimeUpdated: r.GetInt64(5)));
+            OpenCodeSessionRow row;
+            try {
+                row = new OpenCodeSessionRow(
+                    Id:          r.GetString(0),
+                    ParentId:    r.IsDBNull(1) ? null : r.GetString(1),
+                    Directory:   r.IsDBNull(2) ? null : r.GetString(2),
+                    Title:       r.IsDBNull(3) ? "" : r.GetString(3),
+                    TimeCreated: r.IsDBNull(4) ? 0 : r.GetInt64(4),
+                    TimeUpdated: r.IsDBNull(5) ? 0 : r.GetInt64(5));
+            } catch {
+                continue; // skip a malformed / schema-drifted row rather than abort the scan
+            }
+            rows.Add(row);
         }
         return rows;
     }
