@@ -134,7 +134,10 @@ ledger** (`OpenCodeImportLedger`, `~/.cache/kcap/opencode-imported.json`):
 
 - **`TooShort`** — fewer than `MinLines` *importable* lines (see below).
 - **`AlreadyLoaded`** — the ledger records this session on this server with a
-  matching reconstructed line count → skip (no re-send).
+  matching **content fingerprint** (a SHA-256 over the parent's reconstructed
+  transcript *and* its children) → skip (no re-send). The fingerprint (not a bare
+  line count) means a same-line-count mutation — a tool part completing, an
+  in-place text edit, a changed/added child — invalidates the skip and re-imports.
 - **`New`** — not in the ledger and no server watermark → import full transcript,
   line numbers `0..N`.
 - **`Partial` (repair)** — not in the ledger but a server watermark exists → re-send
@@ -143,7 +146,8 @@ ledger** (`OpenCodeImportLedger`, `~/.cache/kcap/opencode-imported.json`):
   `prt_` id (keep-first); the missing tail lands.
 - **`ProbeError`** — watermark probe failed; skip with a reason, like Pi.
 
-The ledger is written **only after `session-end` succeeds** — which, by the strict
+The ledger value is a content fingerprint (parent + children), keyed by server URL.
+It is written **only after `session-end` succeeds** — which, by the strict
 ordering, means the parent transcript *and* all children succeeded. A partial/failed
 import never reaches `session-end`, so it is never recorded and is repaired on
 re-run. **Caveat (documented):** the ledger trusts local state — a session deleted
@@ -400,3 +404,18 @@ Microsoft.Data.Sqlite (or a small checked-in sample db):
   wrongly skipped on re-run. Mitigations: keyed by server URL; only recorded after
   a fully-successful `session-end`. A future `--reimport`/`--force` flag could
   bypass the ledger — out of scope for v1.
+- **Server returns 200 on a swallowed per-event write failure (known, server-side
+  fix).** `/hooks/transcript` returns `200 { processed }` even when an individual
+  canonical write throws (the pipeline logs and continues; the HWM just doesn't
+  advance past it). So the strict sender's HTTP-status check can't detect it, and
+  the ledger may then record a session whose tail didn't persist. The *live* watcher
+  recovers (it re-sends from the un-advanced HWM); import's ledger makes the skip
+  permanent. Accepted for v1 (the failure requires a rare server-side write error;
+  `processed` is not a reliable client-side signal because non-importable lines emit
+  zero events). **Follow-up:** a server-side strict transcript response (non-2xx on
+  any write failure) — tracked separately for the kcap-server repo.
+- **Subagent lifecycle hooks return OK on a write failure (known, server-side, shared
+  with live).** `/hooks/subagent-start|stop` return `200` even if the lifecycle append
+  fails, so a child's `SubagentStarted/Completed` could be lost while transcript +
+  parent end succeed — the same exposure the live watcher already carries. Accepted
+  for v1; **follow-up:** server returns 500 on subagent lifecycle write failure.

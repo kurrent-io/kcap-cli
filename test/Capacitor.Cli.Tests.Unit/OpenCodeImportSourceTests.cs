@@ -102,26 +102,30 @@ public class OpenCodeImportSourceTests {
     }
 
     [Test]
-    public async Task classify_already_loaded_when_ledger_has_matching_count_for_this_server() {
+    public async Task classify_already_loaded_after_a_full_import_records_the_ledger() {
         using var fix = new OpenCodeDbFixture();
         fix.AddSession("ses_x", null, "/w", "T", 100);
-        fix.AddMessageWithText("ses_x", "m1", "hello", 100); // → 1 reconstructed line
+        fix.AddMessageWithText("ses_x", "m1", "hello", 100);
 
         using var server = WireMockServer.Start();
-        var seed = OpenCodeImportLedger.Load(fix.LedgerPath);
-        seed.MarkComplete(server.Url!, "ses_x", lineCount: 1);
-        seed.Save();
         server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
               .RespondWith(Response.Create().WithStatusCode(404));
+        foreach (var p in new[] { "/hooks/session-start/opencode", "/hooks/transcript",
+                                  "/hooks/set-title", "/hooks/session-end/opencode" })
+            server.Given(Request.Create().WithPath(p).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
         using var client = new HttpClient();
+        var ctx = new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null);
 
-        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
-        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
-        var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
-            CancellationToken.None);
+        // First run records the ledger (with the internally-computed fingerprint) on session-end.
+        var s1 = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var c1 = await s1.ClassifyAsync(await s1.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
+        await Assert.That(c1[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
+        await s1.ImportSessionAsync(c1[0], new ImportContext(client, server.Url!, false), CancellationToken.None);
 
-        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
+        // Fresh source reloads the ledger → fingerprint matches → AlreadyLoaded.
+        var s2 = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var c2 = await s2.ClassifyAsync(await s2.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
+        await Assert.That(c2[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
     }
 
     [Test]

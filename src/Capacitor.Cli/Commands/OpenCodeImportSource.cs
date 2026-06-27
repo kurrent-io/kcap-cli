@@ -99,9 +99,9 @@ internal sealed class OpenCodeImportSource : IImportSource {
                     ? FromEpoch(tums) : null,
             };
 
-            int total, importable;
+            int total, importable; string fingerprint;
             try {
-                (total, importable) = CountLines(db, s.SessionId);
+                (total, importable, fingerprint) = ComputeClassificationInfo(db, s.SessionId);
             } catch {
                 results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, 0, "transcript read failed"));
                 continue;
@@ -112,17 +112,19 @@ internal sealed class OpenCodeImportSource : IImportSource {
                 continue;
             }
 
-            // Completeness is tracked client-side (the ledger): a ledger hit on this server
-            // with the same reconstructed line count means we already fully imported it.
+            // Completeness is tracked client-side (the ledger): a hit on this server with a
+            // matching content fingerprint (parent transcript + children) means we already
+            // fully imported it AND it hasn't changed since — skip.
             lock (_ledgerLock) {
-                if (_ledger.IsComplete(ctx.BaseUrl, s.SessionId, total)) {
+                if (_ledger.IsComplete(ctx.BaseUrl, s.SessionId, fingerprint)) {
                     results.Add(Make(s, meta, ImportCommand.ClassificationStatus.AlreadyLoaded, total));
                     continue;
                 }
             }
 
             // Not in the ledger → New (no server watermark) or Partial-repair (watermark
-            // present → replay ABOVE the HWM, idempotent via canonical prt_ ids).
+            // present → replay ABOVE the HWM, idempotent via canonical prt_ ids). Carry the
+            // fingerprint so ImportSessionAsync records it verbatim once session-end succeeds.
             int? hwm;
             try {
                 hwm = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, agentId: null, ct);
@@ -131,9 +133,10 @@ internal sealed class OpenCodeImportSource : IImportSource {
                 continue;
             }
 
-            var c = hwm is { } h
+            var meta2 = WithFingerprint(s.SourceMeta!, fingerprint);
+            var c = (hwm is { } h
                 ? Make(s, meta, ImportCommand.ClassificationStatus.Partial, total) with { ResumeFromLine = h }
-                : Make(s, meta, ImportCommand.ClassificationStatus.New, total);
+                : Make(s, meta, ImportCommand.ClassificationStatus.New, total)) with { SourceMeta = meta2 };
             results.Add(c);
         }
         return results;
@@ -197,9 +200,12 @@ internal sealed class OpenCodeImportSource : IImportSource {
             return ImportOutcome.Failed;
 
         // 6. Record completeness in the ledger — ONLY now, after session-end succeeded.
-        lock (_ledgerLock) {
-            _ledger.MarkComplete(ctx.BaseUrl, c.SessionId, c.TotalLines);
-            _ledger.Save();
+        //    The fingerprint was computed at classify time and carried on SourceMeta.
+        if (c.SourceMeta!.TryGetValue("Fingerprint", out var fpObj) && fpObj is string fp) {
+            lock (_ledgerLock) {
+                _ledger.MarkComplete(ctx.BaseUrl, c.SessionId, fp);
+                _ledger.Save();
+            }
         }
 
         return repair ? ImportOutcome.Resumed : (sent == 0 ? ImportOutcome.Skipped : ImportOutcome.Loaded);
@@ -271,15 +277,29 @@ internal sealed class OpenCodeImportSource : IImportSource {
         SourceMeta       = s.SourceMeta,
     };
 
-    // Single pass: (total reconstructed lines, importable lines). Total is the ledger key
-    // (drift detector); importable gates MinLines.
-    static (int Total, int Importable) CountLines(OpenCodeDb db, string sessionId) {
+    // Parent total reconstructed lines, importable lines (gates MinLines), and a content
+    // fingerprint over the parent transcript AND its direct children — the ledger key, so a
+    // same-line-count mutation (tool completing, in-place edit, changed/added child) re-imports.
+    static (int Total, int Importable, string Fingerprint) ComputeClassificationInfo(OpenCodeDb db, string sessionId) {
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        void Feed(string s) { hash.AppendData(Encoding.UTF8.GetBytes(s)); hash.AppendData("\n"u8); }
+
         int total = 0, importable = 0;
-        foreach (var line in db.SynthesizeLines(sessionId)) {
+        foreach (var line in db.SynthesizeLines(sessionId)) {  // parent reader fully drained before children query
             total++;
             if (OpenCodeDb.IsImportRelevantLine(line)) importable++;
+            Feed(line);
         }
-        return (total, importable);
+        foreach (var child in db.QueryChildren(sessionId)) {
+            Feed(" child:" + child.Id);
+            foreach (var line in db.SynthesizeLines(child.Id)) Feed(line);
+        }
+        return (total, importable, Convert.ToHexString(hash.GetHashAndReset()));
+    }
+
+    static Dictionary<string, object?> WithFingerprint(IReadOnlyDictionary<string, object?> src, string fingerprint) {
+        var d = new Dictionary<string, object?>(src) { ["Fingerprint"] = fingerprint };
+        return d;
     }
 
     static async Task<int?> FetchServerLastLineAsync(
