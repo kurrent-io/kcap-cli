@@ -156,6 +156,9 @@ static partial class WatchCommand {
         }
 
         var state = new WatchState();
+        state.LastActivityAt = DateTimeOffset.UtcNow;
+        var codexIdleTimeout = ResolveCodexIdleTimeout(Environment.GetEnvironmentVariable("KCAP_CODEX_IDLE_MINUTES"));
+        var idleExit = false;
 
         if (skipTitle) {
             state.TitleGenerated = true;
@@ -307,6 +310,20 @@ static partial class WatchCommand {
                     await ScanOpenCodeSubagents(baseUrl, sessionId, transcriptPath, seenSubagents, cts.Token);
                 }
 
+                if (ShouldEndOnIdle(
+                        vendor,
+                        isSessionWatcher: agentId is null,
+                        state.ThresholdReached,
+                        state.LastActivityAt,
+                        DateTimeOffset.UtcNow,
+                        codexIdleTimeout)) {
+                    Log($"Codex rollout idle for >{codexIdleTimeout.TotalMinutes:F0}m; ending session (idle_timeout)");
+                    idleExit = true;
+                    cts.Cancel();
+
+                    break;
+                }
+
                 try {
                     await Task.Delay(TimeSpan.FromSeconds(1), cts.Token);
                 } catch (OperationCanceledException) {
@@ -356,8 +373,12 @@ static partial class WatchCommand {
         //     server may not have a meaningful session to end.
         // Runs after SignalR dispose so the server's StopAndDrainAsync skips the
         // 10s drain wait (no live watcher connection to signal).
-        if (Volatile.Read(ref parentExited) == 1 && agentId is null && state.ThresholdReached) {
-            await PostSessionEndOnParentExitAsync(baseUrl, sessionId, transcriptPath, cwd, vendor, state.Repository);
+        var endReason = Volatile.Read(ref parentExited) == 1 ? "parent_exited"
+                      : idleExit                              ? "idle_timeout"
+                      :                                         null;
+
+        if (endReason is not null && agentId is null && state.ThresholdReached) {
+            await PostSessionEndOnParentExitAsync(baseUrl, sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
         }
 
         await logWriter.DisposeAsync();
@@ -562,7 +583,8 @@ static partial class WatchCommand {
             string             transcriptPath,
             string?            cwd,
             string             vendor,
-            RepositoryPayload? repository
+            RepositoryPayload? repository,
+            string             reason = "parent_exited"
         ) {
         if (!KnownVendors.Contains(vendor)) {
             Log($"Parent-exit session-end skipped: unknown vendor '{vendor}'");
@@ -621,7 +643,7 @@ static partial class WatchCommand {
                 ["transcript_path"] = transcriptPath,
                 ["cwd"]             = cwd ?? "",
                 ["hook_event_name"] = "session_end",
-                ["reason"]          = "parent_exited",
+                ["reason"]          = reason,
                 // Stamp the exit time so the server can scope the SessionEnded id
                 // per run. Vendors with no session-end hook (Kiro) end ONLY via this
                 // path, so without a timestamp a resumed session's second exit would
@@ -713,6 +735,10 @@ static partial class WatchCommand {
             }
 
             var linesRead = lineIndex;
+
+            if (newLines.Count > 0) {
+                state.LastActivityAt = DateTimeOffset.UtcNow;
+            }
 
             // Capture first user text (needed for title generation)
             if (state is { TitleGenerated: false, FirstUserText: null } && agentId is null) {
