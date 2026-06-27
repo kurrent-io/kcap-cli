@@ -483,6 +483,7 @@ switch (command) {
             new GeminiImportSource(),
             new KiroImportSource(),
             new PiImportSource(),
+            new OpenCodeImportSource(),
         };
         IReadOnlyList<IImportSource> sources = explicitVendorSelection
             ? allSources.Where(s => vsel.Vendors.Contains(s.Vendor)).ToList()
