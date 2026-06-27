@@ -114,9 +114,11 @@ If your repo directories have been renamed or deleted on disk, the import prints
 
 Open the server URL in your browser. The dashboard shows repositories, sessions, and agents. It updates in real time as Claude Code sessions are active.
 
-### Sessions MCP server for agents
+### Sessions and Flows MCP servers for agents
 
 The `kcap mcp sessions` stdio server lets coding agents search and recall past Capacitor sessions without leaving the chat. The Kurrent Capacitor plugin (installed by `kcap setup`) **auto-registers it for both Claude Code and Codex CLI** — no manual `claude mcp add` or TOML edit. The server is repo-aware: `cd` into a project before spawning your agent and `search_sessions` defaults to that repo's sessions.
+
+The `kcap mcp flows` stdio server lets agents start and interact with AI-powered review flows. Add it manually via `claude mcp add kcap-flows -- kcap mcp flows`. See the [Flows MCP server](#flows-mcp-server-for-agents) section for details.
 
 ## What it records
 
@@ -275,6 +277,33 @@ It provides three tools:
 
 The server is repo-aware — it resolves the current working directory to a repo hash at startup, and `search_sessions` defaults its `repo` filter to that hash unless you override it.
 
+### Flows MCP server (for agents)
+
+```bash
+kcap mcp flows
+```
+
+Stdio MCP server that lets coding agents start and interact with AI-powered review flows directly from within a session. Add it explicitly to your agent setup:
+
+```bash
+# Claude Code
+claude mcp add kcap-flows -- kcap mcp flows
+
+# Codex (~/.config/codex/mcp_servers.toml)
+# [kcap-flows]
+# command = "kcap"
+# args    = ["mcp", "flows"]
+```
+
+It provides four tools:
+
+- **`start_review_flow`** — start a new review flow (`spec-review` or `code-review`). Provide `kind`, `target_kind`, `target_ref`, `target_title`, and `context`. Requester context (session ID, cwd, repo root, owner, name) is resolved automatically from the environment. Returns a `flow_run_id`.
+- **`submit_review_round`** — submit a follow-up round to an existing flow with updated context or a response to the reviewer's findings. Returns the new round's findings.
+- **`get_review_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow.
+- **`close_review_flow`** — mark a completed review flow as closed.
+
+Requires `kcap login`. The server creates an authenticated HTTP client at startup and posts to the Capacitor server's `/api/flows/*` endpoints.
+
 ### Curate guidelines
 
 Sync the repo's promoted curation guidelines into its `CLAUDE.md` and/or `AGENTS.md` via a managed block. The server tracks which guidelines have been promoted for the current repo; `curate apply` fetches them and writes (or updates) a `<!-- kcap:curated:start -->…<!-- kcap:curated:end -->` block in the relevant files. Content outside the markers is never touched.
@@ -285,6 +314,7 @@ kcap curate apply --dry-run   # print what would change without writing anything
 kcap curate apply --yes       # apply without prompting (CI / scripted)
 kcap curate apply -y          # shorthand for --yes
 ```
+
 
 ### Loading historical sessions
 
@@ -394,7 +424,7 @@ kcap plugin install --codex --if-installed           # refresh Codex hooks only 
 kcap plugin install --if-installed                   # refresh Claude plugin registration only if previously installed (used by npm postinstall)
 ```
 
-Installing with `--codex` (or `--skills`) writes five skills under `~/.agents/skills/`:
+Installing with `--codex` (or `--skills`) writes six skills under `~/.agents/skills/`:
 
 | Skill | Wraps | Purpose |
 |---|---|---|
@@ -403,8 +433,9 @@ Installing with `--codex` (or `--skills`) writes five skills under `~/.agents/sk
 | `kcap-hide` | `kcap hide` | Mark session owner-only |
 | `kcap-disable` | `kcap disable` | Stop recording + delete server data |
 | `kcap-validate-plan` | `kcap validate-plan` | Verify plan items were completed |
+| `kcap-review-flows` | `kcap mcp flows` | Structured iterative spec/code review loops |
 
-All five auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionId>` explicitly to operate on a different session.
+The first five (`kcap-recap`, `kcap-errors`, `kcap-hide`, `kcap-disable`, `kcap-validate-plan`) auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionId>` explicitly to operate on a different session. `kcap-review-flows` works differently — it operates via flow IDs through `kcap mcp flows` rather than session auto-resolution; see [Flows MCP server (for agents)](#flows-mcp-server-for-agents) for details.
 
 > **Codex sandbox network access (AI-794).** The skills shell out to `kcap …`, which talks to the Capacitor server — but Codex runs the agent's shell tool in a `workspace-write` sandbox that **blocks network by default**, so the skills fail (or demand escalation) until network access is allowed. Both `kcap setup` (one yes/no prompt after the Codex hooks step) and `kcap plugin install --codex` enable it for you. They write a constrained allowlist to `~/.codex/config.toml` rather than opening the network wholesale:
 >

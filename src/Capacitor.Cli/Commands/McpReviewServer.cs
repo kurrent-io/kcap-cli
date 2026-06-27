@@ -366,4 +366,6 @@ record SessionSearchQuery(string Query, int? Limit = null);
 [JsonSerializable(typeof(McpError))]
 [JsonSerializable(typeof(SearchQuery))]
 [JsonSerializable(typeof(SessionSearchQuery))]
+[JsonSerializable(typeof(StartReviewFlowDto))]
+[JsonSerializable(typeof(SubmitReviewRoundDto))]
 partial class McpJsonContext : JsonSerializerContext;

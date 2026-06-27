@@ -25,7 +25,8 @@ public static class AgentsSkillsInstaller {
         "errors",
         "hide",
         "disable",
-        "validate-plan"
+        "validate-plan",
+        "review-flows"
     ];
 
     /// <summary>

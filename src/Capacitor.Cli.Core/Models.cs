@@ -562,6 +562,8 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(ReviewLaunchInfo))]
 [JsonSerializable(typeof(LaunchKind))]
 [JsonSerializable(typeof(FindRepoForRemoteRequest))]
+[JsonSerializable(typeof(RefreshAgentWorktreeCommand))]
+[JsonSerializable(typeof(RefreshAgentWorktreeResult))]
 [JsonSerializable(typeof(SendInputCommand))]
 [JsonSerializable(typeof(ResizeTerminalCommand))]
 [JsonSerializable(typeof(PrepareEvalCommand))]
@@ -688,6 +690,28 @@ public readonly record struct FindRepoForRemoteRequest(
         string   Owner,
         string   Repo,
         string[] CandidatePaths
+    );
+
+/// <summary>
+/// Server → daemon command to sync the source repo's current working-tree state (tracked +
+/// untracked non-ignored files) into the reviewer agent's daemon-created worktree, so the
+/// reviewer sees Claude's latest uncommitted changes before a code-review follow-up round.
+/// Wire keys (snake_case): <c>agent_id</c>, <c>source_repo_root</c>, <c>exclude_paths</c>.
+/// </summary>
+public readonly record struct RefreshAgentWorktreeCommand(
+        string   AgentId,
+        string   SourceRepoRoot,
+        string[] ExcludePaths
+    );
+
+/// <summary>
+/// Daemon reply to <see cref="RefreshAgentWorktreeCommand"/>. <see cref="Success"/> is
+/// <c>false</c> when a guard prevented the sync or the sync itself threw; <see cref="Error"/>
+/// carries the reason. Wire keys: <c>success</c>, <c>error</c>.
+/// </summary>
+public readonly record struct RefreshAgentWorktreeResult(
+        bool    Success,
+        string? Error
     );
 
 public readonly record struct SendInputCommand(
