@@ -20,6 +20,28 @@ public class ImportScopeArgsTests {
     }
 
     [Test]
+    public async Task ParseFlags_reads_org_value() {
+        var f = ImportScopeArgs.ParseFlags(["import", "--org", "EventStore"]);
+        await Assert.That(f.Org).IsTrue();
+        await Assert.That(f.OrgArg).IsEqualTo("EventStore");
+    }
+
+    [Test]
+    public async Task ParseFlags_bare_org_has_null_orgarg() {
+        var f = ImportScopeArgs.ParseFlags(["import", "--org"]);
+        await Assert.That(f.Org).IsTrue();
+        await Assert.That(f.OrgArg).IsNull();
+    }
+
+    [Test]
+    public async Task ParseFlags_org_followed_by_flag_stays_bare() {
+        var f = ImportScopeArgs.ParseFlags(["import", "--org", "--yes"]);
+        await Assert.That(f.Org).IsTrue();
+        await Assert.That(f.OrgArg).IsNull();
+        await Assert.That(f.Yes).IsTrue();
+    }
+
+    [Test]
     public async Task ParseFlags_reads_yes_short_form() {
         var f = ImportScopeArgs.ParseFlags(["import", "--all", "-y"]);
         await Assert.That(f.Yes).IsTrue();
@@ -61,10 +83,12 @@ public class ImportScopeArgsTests {
     }
 
     [Test]
-    public async Task Resolve_returns_Org_with_active_profile() {
+    public async Task Resolve_returns_Org_for_explicit_org_value() {
+        // The org comes from the flag value, NOT the profile name — so it works
+        // identically under GitHub and WorkOS sign-in.
         var input = new ImportScopeArgs.ResolveInput(
-            Flags: new(All: false, Org: true, RepoArg: null, Yes: false, Private: false),
-            ActiveProfile: "EventStore",
+            Flags: new(All: false, Org: true, RepoArg: null, Yes: false, Private: false, OrgArg: "EventStore"),
+            ActiveProfile: "acme-tenant-slug",
             IsInteractive: true,
             CurrentRepo: null);
 
@@ -72,10 +96,40 @@ public class ImportScopeArgsTests {
 
         await Assert.That(r.Scope).IsTypeOf<ImportScope.Org>();
         await Assert.That(((ImportScope.Org)r.Scope!).OrgLogin).IsEqualTo("EventStore");
+        await Assert.That(r.NeedOrgPick).IsFalse();
     }
 
     [Test]
-    public async Task Resolve_errors_on_Org_when_profile_is_default() {
+    public async Task Resolve_bare_org_uses_remembered_stored_org() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: false, Org: true, RepoArg: null, Yes: false, Private: false),
+            ActiveProfile: "acme-tenant-slug",
+            IsInteractive: true,
+            CurrentRepo: null,
+            StoredOrg: "EventStore");
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        await Assert.That(((ImportScope.Org)r.Scope!).OrgLogin).IsEqualTo("EventStore");
+        await Assert.That(r.NeedOrgPick).IsFalse();
+    }
+
+    [Test]
+    public async Task Resolve_explicit_org_value_overrides_stored_org() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: false, Org: true, RepoArg: null, Yes: false, Private: false, OrgArg: "kurrent"),
+            ActiveProfile: "acme-tenant-slug",
+            IsInteractive: true,
+            CurrentRepo: null,
+            StoredOrg: "EventStore");
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        await Assert.That(((ImportScope.Org)r.Scope!).OrgLogin).IsEqualTo("kurrent");
+    }
+
+    [Test]
+    public async Task Resolve_bare_org_interactive_without_stored_org_needs_pick() {
         var input = new ImportScopeArgs.ResolveInput(
             Flags: new(All: false, Org: true, RepoArg: null, Yes: false, Private: false),
             ActiveProfile: "default",
@@ -85,7 +139,23 @@ public class ImportScopeArgsTests {
         var r = ImportScopeArgs.Resolve(input);
 
         await Assert.That(r.Scope).IsNull();
-        await Assert.That(r.Error!).Contains("tenant-bound profile");
+        await Assert.That(r.Error).IsNull();
+        await Assert.That(r.NeedOrgPick).IsTrue();
+    }
+
+    [Test]
+    public async Task Resolve_bare_org_non_interactive_without_stored_org_errors() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: false, Org: true, RepoArg: null, Yes: true, Private: false),
+            ActiveProfile: "default",
+            IsInteractive: false,
+            CurrentRepo: null);
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        await Assert.That(r.Scope).IsNull();
+        await Assert.That(r.NeedOrgPick).IsFalse();
+        await Assert.That(r.Error!).Contains("--org <owner>");
     }
 
     [Test]

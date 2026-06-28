@@ -427,7 +427,9 @@ static class ImportCommand {
             bool                          skipConfirmation        = false,
             bool                          forcePrivate            = false,
             string                        activeProfile           = "default",
-            (string Owner, string Name)?  currentRepo             = null
+            (string Owner, string Name)?  currentRepo             = null,
+            bool                          needOrgPick             = false,
+            string?                       storedOrg               = null
         ) {
         using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
         var       display    = ImportDisplay.Create();
@@ -617,14 +619,29 @@ static class ImportCommand {
                 .Select(v => v!.Value)
                 .ToList();
 
-            scope = ImportScopePrompt.RunPicker(activeProfile, currentRepo, distinct);
+            if (needOrgPick) {
+                // Bare `--org` with no value/remembered org: pick the GitHub org to
+                // scope on from the owners seen across discovered sessions.
+                var owner = ImportScopePrompt.RunOrgPicker(distinct);
+                scope = owner is null ? null : new ImportScope.Org(owner);
+            } else {
+                scope = ImportScopePrompt.RunPicker(currentRepo, distinct);
+            }
 
             if (scope is null) {
-                // RunPicker has already printed the specific reason (e.g. "Active profile
-                // has no org" or "No repositories detected in discovered sessions") via
-                // AnsiConsole. Don't tack on a misleading "cancelled" message.
+                // The picker has already printed the specific reason (e.g. "No
+                // git-remote owners detected" or "No repositories detected in
+                // discovered sessions") via AnsiConsole. Don't tack on a
+                // misleading "cancelled" message.
                 return 1;
             }
+        }
+
+        // Remember an org chosen interactively or passed via `--org <owner>` so a
+        // later bare `kcap import --org` reuses it without re-prompting.
+        if (scope is ImportScope.Org chosenOrg &&
+            !string.Equals(chosenOrg.OrgLogin, storedOrg, StringComparison.OrdinalIgnoreCase)) {
+            await PersistImportOrgAsync(activeProfile, chosenOrg.OrgLogin);
         }
 
         // --- Per-source scope filtering ---
@@ -1700,6 +1717,28 @@ static class ImportCommand {
 
         var sessionWord = count == 1 ? "session" : "sessions";
         display.Line($"Attributed {count} {sessionWord} to a parent project via worktree path.");
+    }
+
+    /// <summary>
+    /// Persist the org chosen for <c>kcap import --org</c> onto the active profile so a
+    /// later bare <c>--org</c> reuses it. Best-effort: failing to remember the choice must
+    /// not abort the import. Creates the profile entry if it doesn't exist yet (e.g. the
+    /// <c>default</c> profile), so the org is remembered even without a tenant-bound profile.
+    /// </summary>
+    static async Task PersistImportOrgAsync(string profileName, string org) {
+        try {
+            var cfg     = await AppConfig.LoadProfileConfig();
+            var profile = cfg.Profiles.GetValueOrDefault(profileName) ?? new Core.Config.Profile();
+            var updated = cfg with {
+                Profiles = new Dictionary<string, Core.Config.Profile>(cfg.Profiles) {
+                    [profileName] = profile with { ImportOrg = org }
+                }
+            };
+
+            await AppConfig.SaveProfileConfig(updated);
+        } catch {
+            // Remembering the org is a convenience, not part of the import contract.
+        }
     }
 
     internal static void ReportMissingCwds(
