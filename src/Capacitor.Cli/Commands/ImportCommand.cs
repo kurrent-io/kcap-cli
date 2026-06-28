@@ -1726,6 +1726,9 @@ static class ImportCommand {
     /// <c>default</c> profile), so the org is remembered even without a tenant-bound profile.
     /// </summary>
     static async Task PersistImportOrgAsync(string profileName, string org) {
+        if (string.IsNullOrWhiteSpace(org)) return;
+        org = org.Trim();
+
         try {
             var cfg     = await AppConfig.LoadProfileConfig();
             var profile = cfg.Profiles.GetValueOrDefault(profileName) ?? new Core.Config.Profile();

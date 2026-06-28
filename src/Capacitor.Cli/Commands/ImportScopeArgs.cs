@@ -92,8 +92,10 @@ public static class ImportScopeArgs {
         if (f.Org) {
             // Explicit `--org <owner>` wins. The owner is the GitHub org/owner to
             // match against each session's git-remote owner — NOT the profile name
-            // (which under WorkOS is a tenant slug, not a GitHub org).
-            var org = !string.IsNullOrEmpty(f.OrgArg) ? f.OrgArg : input.StoredOrg;
+            // (which under WorkOS is a tenant slug, not a GitHub org). Trim so a
+            // padded value (e.g. "EventStore ") can't produce a scope that never
+            // matches a detected owner.
+            var org = (!string.IsNullOrWhiteSpace(f.OrgArg) ? f.OrgArg : input.StoredOrg)?.Trim();
 
             if (!string.IsNullOrEmpty(org)) {
                 return new(new ImportScope.Org(org), f.Yes, f.Private, null);

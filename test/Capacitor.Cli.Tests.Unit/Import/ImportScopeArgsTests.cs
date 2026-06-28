@@ -100,6 +100,33 @@ public class ImportScopeArgsTests {
     }
 
     [Test]
+    public async Task Resolve_trims_explicit_org_value() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: false, Org: true, RepoArg: null, Yes: false, Private: false, OrgArg: "  EventStore  "),
+            ActiveProfile: "acme-tenant-slug",
+            IsInteractive: true,
+            CurrentRepo: null);
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        await Assert.That(((ImportScope.Org)r.Scope!).OrgLogin).IsEqualTo("EventStore");
+    }
+
+    [Test]
+    public async Task Resolve_whitespace_only_org_value_falls_through_to_pick() {
+        var input = new ImportScopeArgs.ResolveInput(
+            Flags: new(All: false, Org: true, RepoArg: null, Yes: false, Private: false, OrgArg: "   "),
+            ActiveProfile: "acme-tenant-slug",
+            IsInteractive: true,
+            CurrentRepo: null);
+
+        var r = ImportScopeArgs.Resolve(input);
+
+        await Assert.That(r.Scope).IsNull();
+        await Assert.That(r.NeedOrgPick).IsTrue();
+    }
+
+    [Test]
     public async Task Resolve_bare_org_uses_remembered_stored_org() {
         var input = new ImportScopeArgs.ResolveInput(
             Flags: new(All: false, Org: true, RepoArg: null, Yes: false, Private: false),

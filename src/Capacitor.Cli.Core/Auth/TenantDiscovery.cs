@@ -54,7 +54,12 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
 
         foreach (var t in discovered) {
             var name = t.ProfileName;
-            profiles[name] = (profiles.GetValueOrDefault(name) ?? template) with {
+            // Seed a brand-new tenant profile from the template, but never inherit the
+            // template's remembered import org — that GitHub owner belongs to a different
+            // tenant and would silently scope this tenant's `kcap import --org`. Existing
+            // profiles keep their own ImportOrg.
+            var basis = profiles.GetValueOrDefault(name) ?? template with { ImportOrg = null };
+            profiles[name] = basis with {
                 ServerUrl = AppConfig.NormalizeUrl(t.Origin)
             };
         }
