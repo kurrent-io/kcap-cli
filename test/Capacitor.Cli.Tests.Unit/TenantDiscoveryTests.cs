@@ -159,6 +159,30 @@ public class TenantDiscoveryTests {
     }
 
     [Test]
+    public async Task MergeProfiles_does_not_leak_import_org_into_new_profiles() {
+        var existing = new ProfileConfig {
+            ActiveProfile = "acme",
+            Profiles = new Dictionary<string, Profile> {
+                ["acme"] = new() { ServerUrl = "https://a.example", DefaultVisibility = "private", ImportOrg = "AcmeOrg" }
+            }
+        };
+        DiscoveredTenant[] discovered = [
+            new() { OrgId = 1, OrgLogin = "acme",  Origin = "https://a.example" },
+            new() { OrgId = 2, OrgLogin = "newly", Origin = "https://n.example" }
+        ];
+
+        var merged = TenantDiscovery.MergeProfiles(existing, discovered, discovered[1]);
+
+        // The remembered import org belongs to "acme" — a brand-new tenant profile
+        // must not inherit it (it would silently scope a different tenant's import).
+        await Assert.That(merged.Profiles["newly"].ImportOrg).IsNull();
+        // Other template settings still flow through to the new profile.
+        await Assert.That(merged.Profiles["newly"].DefaultVisibility).IsEqualTo("private");
+        // The existing profile keeps its own remembered org.
+        await Assert.That(merged.Profiles["acme"].ImportOrg).IsEqualTo("AcmeOrg");
+    }
+
+    [Test]
     public async Task MergeProfiles_preserves_existing_profile_settings() {
         var existing = new ProfileConfig {
             Profiles = new Dictionary<string, Profile> {

@@ -90,7 +90,8 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 
 ```bash
 kcap import                     # every detected agent (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode)
-kcap import --org               # sessions for the org bound to your active profile
+kcap import --org EventStore    # sessions whose git-remote owner is EventStore
+kcap import --org               # pick an org from your discovered repos (and remember it)
 kcap import --repo owner/repo   # sessions for one specific repo
 kcap import --cursor            # only Cursor
 kcap import --copilot           # only Copilot
@@ -106,7 +107,7 @@ kcap import --opencode          # only OpenCode
 
 This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), `~/.gemini/tmp/<project>/chats/` (Gemini), `~/.kiro/sessions/cli/` (Kiro), `~/.pi/agent/sessions/` (Pi), and `~/.local/share/opencode/opencode.db` (OpenCode) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, `--gemini`, `--kiro`, `--pi`, or `--opencode` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
 
-You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org` uses the active profile name as the GitHub org login — it works out of the box when the profile was created by `kcap setup` (which names it after the picked tenant), and errors otherwise. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
+You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org <owner>` filters by the git-remote owner (GitHub org/user) detected on each session — independent of your profile name, so it behaves identically under GitHub and WorkOS sign-in. A bare `--org` lets you pick an owner from your discovered repos and remembers it for next time. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
 If your repo directories have been renamed or deleted on disk, the import prints a list of unresolved cwds up front. See [Renamed repo directories (`kcap remap`)](#renamed-repo-directories-kcap-remap) to recover those sessions.
 
@@ -322,14 +323,15 @@ Backfill older sessions from every detected coding agent in a single run. All se
 
 ```bash
 kcap import --all                            # every discovered session from every agent
-kcap import --org                            # sessions whose repo owner matches your active profile name
+kcap import --org EventStore                 # sessions whose git-remote owner is EventStore
+kcap import --org                            # pick an owner from discovered repos, then remember it
 kcap import --repo owner/repo                # one specific repo
 kcap import --repo .                         # the repo at the current cwd (must be a git repo with an origin remote)
 ```
 
 Run `kcap import` with no scope on an interactive terminal to get a picker. Each run shows a confirmation summary (scope, matched count, repo samples, visibility) before uploading anything.
 
-`--org` is a shortcut: it takes the active profile *name* and uses it as a GitHub org login to filter on. `kcap setup` names the profile after the picked tenant, so `--org` works out of the box for tenant-bound profiles; on the `default` profile, or a manually-named profile like `work`, use `--repo <owner/name>` instead (or run `kcap setup` to bind a profile to your org).
+`--org` filters by the **git-remote owner** (GitHub org/user) detected on each session — not by your profile name. This makes it independent of how you signed in: under WorkOS the active profile is named after the tenant slug (which is not a GitHub org), so the owner to scope on is taken from the flag value or chosen from your discovered repos instead. Pass it explicitly as `--org <owner>`, or run a bare `kcap import --org` once on an interactive terminal to pick an owner from your discovered repos — the choice is saved to the active profile (`import_org`) and reused by later bare `--org` runs. Non-interactive runs (CI) must pass `--org <owner>` (or have a remembered org).
 
 By default every available agent is imported. Pass one or more vendor filters to restrict the run:
 
@@ -354,11 +356,11 @@ OpenCode historical import reads its SQLite database (`~/.local/share/opencode/o
 Additional flags:
 
 ```bash
-kcap import --org --yes                      # skip the confirmation prompt
-kcap import --org --private                  # mark every imported session as Only Visible to You
-kcap import --org --since 2026-01-01         # only sessions on or after this date
-kcap import --org --cwd /path/to/project     # filter by working directory
-kcap import --org --session abc123           # single session
+kcap import --org EventStore --yes           # skip the confirmation prompt
+kcap import --org EventStore --private        # mark every imported session as Only Visible to You
+kcap import --org EventStore --since 2026-01-01  # only sessions on or after this date
+kcap import --org EventStore --cwd /path/to/project  # filter by working directory
+kcap import --org EventStore --session abc123    # single session
 ```
 
 Non-interactive runs (no TTY, e.g. CI) must pass both a scope flag and `--yes`. The command is idempotent and resumable — re-running with the same scope only uploads what's missing or incomplete. A server-side tracker deduplicates events on `(stream, eventId)` so previously-imported turns don't get re-appended.

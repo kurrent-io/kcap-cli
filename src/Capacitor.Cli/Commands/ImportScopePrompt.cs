@@ -37,6 +37,23 @@ public static partial class ImportScopePrompt {
     }
 
     /// <summary>
+    /// Build the option strings for the "which org" picker: the distinct,
+    /// case-insensitively deduplicated, alphabetically sorted set of git-remote
+    /// owners across the discovered repos.
+    /// </summary>
+    public static string[] BuildOrgChoices(IReadOnlyList<(string Owner, string Name)> discoveredRepos) {
+        var owners = discoveredRepos
+            .Select(r => r.Owner)
+            .Where(o => !string.IsNullOrEmpty(o))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        owners.Sort(StringComparer.OrdinalIgnoreCase);
+
+        return [.. owners];
+    }
+
+    /// <summary>
     /// Build the confirmation summary block printed before the y/N prompt.
     /// The same text is printed in non-TTY runs (with --yes) so the imported
     /// scope is recorded in CI logs.
@@ -91,7 +108,6 @@ public static partial class ImportScopePrompt {
     /// options (no current repo + no detected repos).
     /// </summary>
     public static ImportScope? RunPicker(
-            string                                     activeProfile,
             (string Owner, string Name)?               currentRepo,
             IReadOnlyList<(string Owner, string Name)> discoveredRepos
         ) {
@@ -101,7 +117,7 @@ public static partial class ImportScopePrompt {
                 .AddChoices("all", "org", "repo")
                 .UseConverter(c => c switch {
                         "all"  => "Everything",
-                        "org"  => $"Org repos only ({activeProfile})",
+                        "org"  => "All repos in one org",
                         "repo" => "Specific repository",
                         _      => c,
                     }
@@ -111,12 +127,10 @@ public static partial class ImportScopePrompt {
         switch (choice) {
             case "all":
                 return new ImportScope.All();
-            case "org" when string.IsNullOrEmpty(activeProfile) || activeProfile == "default":
-                AnsiConsole.MarkupLine("[red]Active profile has no org. Run `kcap setup`.[/]");
-
-                return null;
             case "org":
-                return new ImportScope.Org(activeProfile);
+                var owner = RunOrgPicker(discoveredRepos);
+
+                return owner is null ? null : new ImportScope.Org(owner);
         }
 
         var repoChoices = BuildRepoChoices(currentRepo, discoveredRepos);
@@ -139,6 +153,28 @@ public static partial class ImportScopePrompt {
         var parts = clean.Split('/');
 
         return new ImportScope.Repo(parts[0], parts[1]);
+    }
+
+    /// <summary>
+    /// Prompt for which git-remote owner (GitHub org) to scope the import to,
+    /// choosing from the owners seen across discovered sessions. Returns the
+    /// chosen owner, or null when no owners were detected (a reason is printed).
+    /// </summary>
+    public static string? RunOrgPicker(IReadOnlyList<(string Owner, string Name)> discoveredRepos) {
+        var owners = BuildOrgChoices(discoveredRepos);
+
+        if (owners.Length == 0) {
+            AnsiConsole.MarkupLine("[red]No git-remote owners detected in discovered sessions. Use --repo <owner/name> or --all.[/]");
+
+            return null;
+        }
+
+        return AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Which org? [dim](git-remote owner)[/]")
+                .PageSize(15)
+                .AddChoices(owners)
+        );
     }
 
     /// <summary>

@@ -518,9 +518,22 @@ public static class SetupCommand {
     //     internally. If the delay wins, HttpClient disposal on method-exit
     //     cancels the in-flight POST.
     static async Task PingCliSetupAsync(string serverUrl) {
+        // The ping is intentionally silent (see method-doc), which also hides why the
+        // dashboard welcome modal never flips when it fails — e.g. a token the server
+        // rejects or maps to a different identity. Set KCAP_DEBUG to surface the
+        // outcome on stderr without changing the best-effort, non-blocking contract.
+        var  debug = Environment.GetEnvironmentVariable("KCAP_DEBUG") is { Length: > 0 };
+        void Debug(string message) {
+            if (debug) Console.Error.WriteLine($"[kcap] cli-setup ping: {message}");
+        }
+
         try {
             var tokens = await TokenStore.LoadAsync();
-            if (tokens is null || tokens.IsExpired) return;
+            if (tokens is null || tokens.IsExpired) {
+                Debug(tokens is null ? "skipped — no stored token" : "skipped — token expired");
+
+                return;
+            }
 
             using var http = new HttpClient();
             http.DefaultRequestHeaders.Authorization = new("Bearer", tokens.AccessToken);
@@ -537,11 +550,13 @@ public static class SetupCommand {
             if (winner == pingTask) {
                 // Observe the result so any exception is consumed by the outer
                 // catch (instead of surfacing as UnobservedTaskException later).
-                (await pingTask).Dispose();
+                using var resp = await pingTask;
+                Debug($"{(int)resp.StatusCode} {resp.StatusCode} (provider={tokens.Provider})");
             } else {
                 // Wall-clock cap hit. HttpClient.Dispose() at method-exit
                 // cancels the in-flight POST; observe the orphan so its
                 // cancellation exception doesn't go unhandled.
+                Debug("timed out after 5s");
                 _ = pingTask.ContinueWith(
                     t => {
                         if (t.IsCompletedSuccessfully) t.Result.Dispose();
@@ -549,8 +564,9 @@ public static class SetupCommand {
                     },
                     TaskScheduler.Default);
             }
-        } catch {
-            // Swallow — see method-doc.
+        } catch (Exception e) {
+            // Swallow — see method-doc. KCAP_DEBUG surfaces the reason.
+            Debug($"failed — {e.GetType().Name}: {e.Message}");
         }
     }
 

@@ -495,6 +495,7 @@ switch (command) {
         // --- Scope resolution (AI-613) ---
         var profileConfig = await AppConfig.LoadProfileConfig();
         var activeProfile = string.IsNullOrEmpty(profileConfig.ActiveProfile) ? "default" : profileConfig.ActiveProfile;
+        var storedOrg     = profileConfig.Profiles.GetValueOrDefault(activeProfile)?.ImportOrg;
 
         var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(Environment.CurrentDirectory);
         (string Owner, string Name)? currentRepo = currentRepoDetected is { Owner: { } o, RepoName: { } n }
@@ -506,7 +507,8 @@ switch (command) {
             Flags:         flags,
             ActiveProfile: activeProfile,
             IsInteractive: !Console.IsInputRedirected && !Console.IsOutputRedirected,
-            CurrentRepo:   currentRepo));
+            CurrentRepo:   currentRepo,
+            StoredOrg:     storedOrg));
 
         if (resolveResult.Error is not null) {
             Console.Error.WriteLine(resolveResult.Error);
@@ -526,7 +528,9 @@ switch (command) {
             skipConfirmation:        resolveResult.Yes,
             forcePrivate:            resolveResult.Private,
             activeProfile:           activeProfile,
-            currentRepo:             currentRepo);
+            currentRepo:             currentRepo,
+            needOrgPick:             resolveResult.NeedOrgPick,
+            storedOrg:               storedOrg);
     }
     case "watch" when args.Length < 3:
         Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex|copilot|gemini|kiro|pi|opencode]");
