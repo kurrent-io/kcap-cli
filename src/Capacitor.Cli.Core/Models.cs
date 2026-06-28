@@ -122,6 +122,21 @@ class WatchState {
     public int          LinesReadAhead      { get; set; } // file position while buffering
     public bool         ThresholdReached    { get; set; }
 
+    // Last wall-clock time new transcript content was observed on the rollout file.
+    // Drives the Codex idle-timeout fallback (see WatchCommand.ShouldEndOnIdle).
+    // Initialized when the watcher starts; updated in DrainNewLines on new lines.
+    public DateTimeOffset LastActivityAt { get; set; } = DateTimeOffset.UtcNow;
+
+    // Tracks Codex tool-call call_ids that are currently in flight (started but
+    // not yet finished). A function_call/custom_tool_call response_item adds the
+    // call_id; its matching _output removes it. While this set is non-empty, the
+    // idle-end check is suppressed: a long-running shell command or custom tool can
+    // legitimately produce no new rollout lines for >60 min between its start and
+    // output lines (the tool is still running). No hard ceiling: if the tool hangs
+    // forever but the Codex process is still alive, the parent-exit watchdog will
+    // eventually fire and end the session — adding a ceiling here would be YAGNI.
+    public HashSet<string> PendingCodexToolCalls { get; } = new(StringComparer.Ordinal);
+
     public const int TranscriptThreshold = 10;
 }
 
