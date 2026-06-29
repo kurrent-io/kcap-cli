@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -249,4 +251,56 @@ public class CodexLauncherTests {
         Review: null,
         ReviewLaunch: null
     );
+
+    static LauncherContext NewReviewCtx(string prompt, string cliPath, string baseUrl) {
+        var mcp = new ReviewLaunchBuilder.ReviewMcpServer(
+            Command: cliPath,
+            Args: ["mcp", "review", "--owner", "acme", "--repo", "widgets", "--pr", "42"],
+            Env: new Dictionary<string, string> { ["KCAP_URL"] = baseUrl });
+
+        return new(
+            AgentId: "a-rev",
+            SourceRepoPath: "/tmp/repo",
+            Worktree: new WorktreeInfo(Path: "/tmp/wt", Branch: "wt-branch", SourceRepo: "/tmp/repo"),
+            Prompt: null,
+            Model: "gpt-5.3-codex",
+            Effort: null,
+            Tools: null,
+            IsReview: true,
+            Review: new ReviewLaunchInfo("acme", "widgets", 42),
+            ReviewLaunch: new ReviewLaunchBuilder.ReviewLaunch(McpConfigPath: null, SystemPrompt: prompt, Mcp: mcp));
+    }
+
+    [Test]
+    public async Task BuildArgs_review_injects_kcap_review_mcp_server_via_config_overrides() {
+        var result = NewLauncher().BuildArgs(NewReviewCtx("Review PR acme/widgets#42", "/opt/kcap", "https://srv"));
+        var joined = string.Join(' ', result.Args);
+
+        await Assert.That(joined).Contains("mcp_servers.kcap-review.command=\"/opt/kcap\"");
+        await Assert.That(joined).Contains("mcp_servers.kcap-review.args=[\"mcp\",\"review\",\"--owner\",\"acme\",\"--repo\",\"widgets\",\"--pr\",\"42\"]");
+        await Assert.That(joined).Contains("mcp_servers.kcap-review.env={KCAP_URL=\"https://srv\"}");
+    }
+
+    [Test]
+    public async Task BuildArgs_review_passes_prompt_after_double_dash_and_no_system_prompt() {
+        var result = NewLauncher().BuildArgs(NewReviewCtx("REVIEW PROMPT BODY", "/opt/kcap", "https://srv"));
+
+        var dashIdx = Array.IndexOf(result.Args, "--");
+        await Assert.That(dashIdx).IsGreaterThan(-1);
+        await Assert.That(result.Args[dashIdx + 1]).IsEqualTo("REVIEW PROMPT BODY");
+        await Assert.That(result.Args).DoesNotContain("--system-prompt");
+    }
+
+    [Test]
+    public async Task BuildArgs_review_returns_null_mcp_config_path() {
+        var result = NewLauncher().BuildArgs(NewReviewCtx("p", "/opt/kcap", "https://srv"));
+        await Assert.That(result.McpConfigPath).IsNull();
+    }
+
+    [Test]
+    public async Task BuildArgs_review_toml_escapes_quotes_and_backslashes_in_command() {
+        var ctx = NewReviewCtx("p", "C:\\Program Files\\kcap\\kcap.exe", "https://srv");
+        var joined = string.Join(' ', NewLauncher().BuildArgs(ctx).Args);
+        await Assert.That(joined).Contains("mcp_servers.kcap-review.command=\"C:\\\\Program Files\\\\kcap\\\\kcap.exe\"");
+    }
 }

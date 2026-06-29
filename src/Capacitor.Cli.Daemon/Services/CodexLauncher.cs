@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.Extensions.Logging;
 
@@ -63,6 +64,10 @@ internal sealed partial class CodexLauncher(
     }
 
     public LaunchArgs BuildArgs(LauncherContext ctx) {
+        if (ctx is { IsReview: true, ReviewLaunch: { } launch }) {
+            return BuildReviewArgs(ctx, launch);
+        }
+
         var args = new List<string> {
             "--cd",
             ctx.Worktree.Path,
@@ -94,6 +99,50 @@ internal sealed partial class CodexLauncher(
 
         return new([.. args], McpConfigPath: null);
     }
+
+    /// Review launch: inject the same kcap-review MCP server Claude gets, but via
+    /// ephemeral `-c` overrides (no ~/.codex/config.toml mutation, nothing to clean
+    /// up), and pass the rendered review prompt as Codex's initial prompt (Codex has
+    /// no --system-prompt equivalent).
+    static LaunchArgs BuildReviewArgs(LauncherContext ctx, ReviewLaunchBuilder.ReviewLaunch launch) {
+        const string serverName = "kcap-review";
+        var          mcp        = launch.Mcp;
+
+        var args = new List<string> {
+            "--cd",
+            ctx.Worktree.Path,
+            "--sandbox",
+            "workspace-write",
+            "--ask-for-approval",
+            "on-request"
+        };
+
+        var argsList = string.Join(",", mcp.Args.Select(TomlString));
+        var envList  = string.Join(",", mcp.Env.Select(kv => $"{kv.Key}={TomlString(kv.Value)}"));
+
+        args.Add("-c");
+        args.Add($"mcp_servers.{serverName}.command={TomlString(mcp.Command)}");
+        args.Add("-c");
+        args.Add($"mcp_servers.{serverName}.args=[{argsList}]");
+        args.Add("-c");
+        args.Add($"mcp_servers.{serverName}.env={{{envList}}}");
+
+        if (!string.IsNullOrEmpty(ctx.Model)) {
+            args.Add("-m");
+            args.Add(ctx.Model);
+        }
+
+        args.Add("--no-alt-screen");
+        args.Add("--");
+        args.Add(launch.SystemPrompt);
+
+        return new([.. args], McpConfigPath: null);
+    }
+
+    /// Encode a value as a TOML basic string: wrap in double quotes and escape
+    /// backslashes and double quotes (covers Windows paths and arbitrary URLs).
+    static string TomlString(string value) =>
+        "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 
     /// Local launch: emit the mandatory daemon-level flags Codex always needs, then append
     /// the user's verbatim post-`--` args. A user duplicate of a mandatory flag is rejected
