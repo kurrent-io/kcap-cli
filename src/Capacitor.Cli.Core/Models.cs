@@ -270,6 +270,61 @@ public record EvalQuestionDto {
     // keep producing text-only judge runs.
     [JsonPropertyName("needs_tools")]
     public bool NeedsTools { get; init; }
+
+    // AI-9 Phase 3 — the catalog prompt version this question's rendered prompt
+    // ran against. Null on the back-compat /api/eval/questions alias (which does
+    // not emit it) and on older servers; populated only by /api/eval/catalog.
+    [JsonPropertyName("prompt_version")]
+    public string? PromptVersion { get; init; }
+}
+
+/// <summary>
+/// Wire-format DTO for <c>GET /api/eval/catalog</c> (AI-9 Phase 3). Carries the
+/// server-rendered retrospective prompt + its version, and the active questions
+/// with raw text + server-rendered prompt + per-question prompt version +
+/// needs_tools. There is NO top-level question template — the daemon uses each
+/// question's rendered <c>Prompt</c> directly. The daemon fetches this once per
+/// run and reconciles its run question list from it. Mirrors the server's Phase-2
+/// EvalCatalogResponse shape (the CLI cannot reference the server library — shape
+/// is duplicated).
+/// </summary>
+public record EvalCatalogDto {
+    [JsonPropertyName("retrospective_prompt")]
+    public required string RetrospectivePrompt { get; init; }
+
+    [JsonPropertyName("retrospective_prompt_version")]
+    public required string RetrospectivePromptVersion { get; init; }
+
+    [JsonPropertyName("questions")]
+    public List<EvalCatalogQuestionDto> Questions { get; init; } = [];
+}
+
+/// <summary>A single active question from <c>GET /api/eval/catalog</c>.</summary>
+public record EvalCatalogQuestionDto {
+    [JsonPropertyName("category")]
+    public required string Category { get; init; }
+
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    [JsonPropertyName("title")]
+    public required string Title { get; init; }
+
+    [JsonPropertyName("question_text")]
+    public required string QuestionText { get; init; }   // RAW (tools path)
+
+    [JsonPropertyName("prompt")]
+    public required string Prompt { get; init; }         // server-rendered (text path)
+
+    [JsonPropertyName("prompt_version")]
+    public required string PromptVersion { get; init; }
+
+    // SHOULD-FIX (round 2): `required` so a Phase-2 response that OMITS needs_tools
+    // fails deserialization loudly rather than silently defaulting false (which would
+    // route a tools question to the text path). System.Text.Json enforces `required`
+    // members — a missing `needs_tools` throws JsonException. See the missing-field test.
+    [JsonPropertyName("needs_tools")]
+    public required bool NeedsTools { get; init; }
 }
 
 // Per-question verdict returned by each judge invocation. Matches the server
@@ -303,6 +358,11 @@ public record EvalQuestionVerdict {
     // dashboard can surface actual budget spent per question.
     [JsonPropertyName("tools_used")]
     public int? ToolsUsed { get; init; }
+
+    // AI-9 Phase 3 — catalog prompt version stamped at aggregation time before
+    // POSTing the V3 payload. Null until Aggregate fills it from the catalog.
+    [JsonPropertyName("prompt_version")]
+    public string? PromptVersion { get; init; }
 }
 
 public record EvalCategoryResult {
@@ -480,6 +540,36 @@ public record SessionEvalCompletedPayloadV2 {
     public List<EvalFactSnapshotPayload> FactsUsed { get; init; } = [];
 }
 
+// Posted to POST /api/sessions/{id}/evals/v3 (AI-9 Phase 3). Differs from V2 by
+// adding retrospective_prompt_version; the per-question version rides on each
+// EvalQuestionVerdict.PromptVersion. Wire shape must stay 1:1 with the server's
+// SessionEvalCompletedPayloadV3 in Capacitor.Server.
+public record SessionEvalCompletedPayloadV3 {
+    [JsonPropertyName("eval_run_id")]
+    public required string EvalRunId { get; init; }
+
+    [JsonPropertyName("judge_model")]
+    public required string JudgeModel { get; init; }
+
+    [JsonPropertyName("categories")]
+    public List<EvalCategoryResult> Categories { get; init; } = [];
+
+    [JsonPropertyName("overall_score")]
+    public required int OverallScore { get; init; }
+
+    [JsonPropertyName("summary")]
+    public required string Summary { get; init; }
+
+    [JsonPropertyName("retrospective")]
+    public EvalRetrospectiveV2? Retrospective { get; init; }
+
+    [JsonPropertyName("retrospective_prompt_version")]
+    public string? RetrospectivePromptVersion { get; init; }
+
+    [JsonPropertyName("facts_used")]
+    public List<EvalFactSnapshotPayload> FactsUsed { get; init; } = [];
+}
+
 enum HistorySessionStatus { New, Partial, AlreadyLoaded }
 
 class SessionMetadata {
@@ -554,6 +644,9 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(List<JudgeFact>))]
 [JsonSerializable(typeof(EvalFactSnapshotPayload))]
 [JsonSerializable(typeof(List<EvalFactSnapshotPayload>))]
+[JsonSerializable(typeof(EvalCatalogDto))]
+[JsonSerializable(typeof(EvalCatalogQuestionDto))]
+[JsonSerializable(typeof(SessionEvalCompletedPayloadV3))]
 [JsonSerializable(typeof(List<ErrorEntry>))]
 [JsonSerializable(typeof(RepositoryPayload))]
 [JsonSerializable(typeof(GitCacheEntry))]
