@@ -295,10 +295,10 @@ Stdio MCP server that lets coding agents start and interact with AI-powered revi
 # Claude Code
 claude mcp add kcap-flows -- kcap mcp flows
 
-# Codex (~/.config/codex/mcp_servers.toml)
-# [kcap-flows]
-# command = "kcap"
-# args    = ["mcp", "flows"]
+# Codex (CLI or desktop app) — add to ~/.codex/config.toml:
+# [mcp_servers.kcap-flows]
+# command = "kcap"           # use an absolute path (e.g. /opt/homebrew/bin/kcap) for the
+# args    = ["mcp", "flows"] # desktop app, which launches MCP servers without your shell PATH
 ```
 
 It provides four tools:
