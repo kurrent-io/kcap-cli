@@ -265,4 +265,226 @@ static class RecapCommand {
             _             => ""
         };
     }
+
+    /// <summary>
+    /// `kcap recap --per-turn &lt;sessionId&gt;` — prints a compact per-turn index
+    /// (turn #, prompt excerpt, tool names, file count, token count, time range),
+    /// one block per turn. Parses the server's snake_case JSON with JsonDocument
+    /// (the CLI has no TurnClosed DTO and JsonDocument is AOT-safe).
+    /// </summary>
+    public static async Task<int> HandlePerTurnRecap(string baseUrl, string sessionId) {
+        using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
+
+        HttpResponseMessage resp;
+
+        try {
+            resp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/turns");
+        } catch (HttpRequestException ex) {
+            HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
+
+            return 1;
+        }
+
+        if (await HttpClientExtensions.HandleUnauthorizedAsync(resp)) {
+            return 1;
+        }
+
+        if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) {
+            Console.Error.WriteLine($"Session not found: {sessionId}");
+
+            return 1;
+        }
+
+        if (!resp.IsSuccessStatusCode) {
+            Console.Error.WriteLine($"HTTP {(int)resp.StatusCode}");
+
+            return 1;
+        }
+
+        var json = await resp.Content.ReadAsStringAsync();
+
+        using var doc = JsonDocument.Parse(json);
+
+        if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() == 0) {
+            await Console.Out.WriteLineAsync("No turns found. The session may still be active or has no recorded turns.");
+
+            return 0;
+        }
+
+        await Console.Out.WriteLineAsync($"# Turns for session {sessionId}");
+        await Console.Out.WriteLineAsync();
+
+        foreach (var turn in doc.RootElement.EnumerateArray()) {
+            var turnIndex  = turn.TryGetProperty("turn_index", out var ti) ? ti.GetInt32() : -1;
+            var userPrompt = turn.TryGetProperty("user_prompt", out var up) ? up.GetString() ?? "" : "";
+            var prompt     = userPrompt.Length == 0
+                ? $"(turn {turnIndex})"
+                : userPrompt.Length > 80 ? userPrompt[..80] + "…" : userPrompt;
+
+            var tools = "—";
+
+            if (turn.TryGetProperty("tools", out var toolsEl) && toolsEl.ValueKind == JsonValueKind.Array) {
+                var names = new List<string>();
+
+                foreach (var t in toolsEl.EnumerateArray()) {
+                    if (t.TryGetProperty("name", out var n) && n.GetString() is { Length: > 0 } nm) {
+                        names.Add(nm);
+                    }
+                }
+
+                if (names.Count > 0) tools = string.Join(", ", names.Distinct());
+            }
+
+            var files  = turn.TryGetProperty("files", out var f) && f.ValueKind == JsonValueKind.Array ? f.GetArrayLength() : 0;
+            var tokens = turn.TryGetProperty("total_tokens", out var tk) ? tk.GetInt64() : 0;
+            var time   = $"{FormatTurnTime(turn, "first_event_at")}–{FormatTurnTime(turn, "last_event_at")}";
+
+            await Console.Out.WriteLineAsync($"Turn {turnIndex,3}: {prompt}");
+            await Console.Out.WriteLineAsync($"         tools={tools}  files={files}  tokens={tokens}  time={time}");
+            await Console.Out.WriteLineAsync();
+        }
+
+        Console.Error.WriteLine($"Use `kcap recap --get-turn <N> {sessionId}` for full turn detail.");
+
+        return 0;
+    }
+
+    /// <summary>
+    /// `kcap recap --get-turn &lt;N&gt; [sessionId]` — prints the formatted event transcript for a
+    /// single turn (user prompt, tool calls, assistant text). The turn number is the flag's value;
+    /// the session id is the usual positional (or comes from the current session).
+    /// </summary>
+    public static async Task<int> HandleGetTurn(string baseUrl, string sessionId, int turnIndex) {
+        using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
+
+        HttpResponseMessage resp;
+
+        try {
+            resp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/turns/{turnIndex}");
+        } catch (HttpRequestException ex) {
+            HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
+
+            return 1;
+        }
+
+        if (await HttpClientExtensions.HandleUnauthorizedAsync(resp)) {
+            return 1;
+        }
+
+        if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) {
+            Console.Error.WriteLine($"Turn {turnIndex} not found for session {sessionId}");
+
+            return 1;
+        }
+
+        if (!resp.IsSuccessStatusCode) {
+            Console.Error.WriteLine($"HTTP {(int)resp.StatusCode}");
+
+            return 1;
+        }
+
+        var json = await resp.Content.ReadAsStringAsync();
+
+        using var doc = JsonDocument.Parse(json);
+
+        if (!doc.RootElement.TryGetProperty("trace", out var trace) || trace.ValueKind != JsonValueKind.Array) {
+            await Console.Out.WriteLineAsync("No trace available for this turn.");
+
+            return 0;
+        }
+
+        await Console.Out.WriteLineAsync($"# Turn {turnIndex} — session {sessionId}");
+        await Console.Out.WriteLineAsync();
+
+        // Trace entries from subagent streams carry agent_id (and agent_type); root entries don't.
+        // The builder interleaves them by timestamp, so emit an attribution header whenever the
+        // active agent changes — preserving the subagent grouping that `--full` recap shows.
+        string? currentAgentId = null;
+        var     sawAgentHeader = false;
+
+        foreach (var entry in trace.EnumerateArray()) {
+            var entryAgentId = entry.TryGetProperty("agent_id", out var aidEl) && aidEl.ValueKind == JsonValueKind.String
+                ? aidEl.GetString()
+                : null;
+
+            if (entryAgentId != currentAgentId) {
+                currentAgentId = entryAgentId;
+
+                if (entryAgentId is { Length: > 0 }) {
+                    var agentType = entry.TryGetProperty("agent_type", out var atEl) && atEl.ValueKind == JsonValueKind.String
+                        ? atEl.GetString()
+                        : null;
+                    await Console.Out.WriteLineAsync(agentType is { Length: > 0 }
+                        ? $"### Subagent: {agentType} ({entryAgentId})"
+                        : $"### Subagent: {entryAgentId}");
+                    await Console.Out.WriteLineAsync();
+                    sawAgentHeader = true;
+                } else if (sawAgentHeader) {
+                    // Only note the return to the main session if we previously showed a subagent header.
+                    await Console.Out.WriteLineAsync("### (main session)");
+                    await Console.Out.WriteLineAsync();
+                }
+            }
+
+            var kind = entry.TryGetProperty("kind", out var k) ? k.GetString() : null;
+
+            switch (kind) {
+                case "user_message":
+                    await Console.Out.WriteLineAsync("## User");
+                    await Console.Out.WriteLineAsync(GetTraceString(entry, "text"));
+                    await Console.Out.WriteLineAsync();
+
+                    break;
+
+                case "assistant_message":
+                    await Console.Out.WriteLineAsync("## Assistant");
+                    await Console.Out.WriteLineAsync(GetTraceString(entry, "text"));
+                    await Console.Out.WriteLineAsync();
+
+                    break;
+
+                case "tool_invocation":
+                    await Console.Out.WriteLineAsync($"## Tool: {GetTraceString(entry, "tool")}");
+
+                    if (entry.TryGetProperty("arguments", out var args) && args.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined) {
+                        await Console.Out.WriteLineAsync(args.ToString());
+                    }
+
+                    await Console.Out.WriteLineAsync();
+
+                    break;
+
+                case "tool_result":
+                    var isErr = entry.TryGetProperty("is_error", out var e) && e.ValueKind == JsonValueKind.True;
+                    await Console.Out.WriteLineAsync(isErr ? "### Error" : "### Result");
+                    await Console.Out.WriteLineAsync(GetTraceString(entry, "output"));
+                    await Console.Out.WriteLineAsync();
+
+                    break;
+
+                default:
+                    // assistant_thinking, plan, or any future kind that carries text — surface it
+                    // generically rather than silently dropping turn content.
+                    if (!string.IsNullOrEmpty(kind) && GetTraceString(entry, "text") is { Length: > 0 } text) {
+                        await Console.Out.WriteLineAsync($"## {kind}");
+                        await Console.Out.WriteLineAsync(text);
+                        await Console.Out.WriteLineAsync();
+                    }
+
+                    break;
+            }
+        }
+
+        return 0;
+    }
+
+    static string FormatTurnTime(JsonElement turn, string prop) =>
+        turn.TryGetProperty(prop, out var el)
+        && el.ValueKind == JsonValueKind.String
+        && DateTimeOffset.TryParse(el.GetString(), out var dto)
+            ? dto.ToLocalTime().ToString("HH:mm")
+            : "?";
+
+    static string GetTraceString(JsonElement el, string prop) =>
+        el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
 }

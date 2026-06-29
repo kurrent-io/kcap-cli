@@ -101,22 +101,46 @@ switch (command) {
         return await ErrorsCommand.HandleErrors(baseUrl!, errSessionId, useChain);
     }
     case "recap": {
-        var useChain = args.Contains("--chain");
-        var useFull  = args.Contains("--full");
-        var useRepo  = args.Contains("--repo");
+        var useChain   = args.Contains("--chain");
+        var useFull    = args.Contains("--full");
+        var useRepo    = args.Contains("--repo");
+        var usePerTurn = args.Contains("--per-turn");
+        var useGetTurn = args.Contains("--get-turn");
 
         if (useRepo) {
             return await RecapCommand.HandleRepoRecap(baseUrl!);
         }
 
-        var recapSessionId = ResolveSessionId(args);
+        // --get-turn takes a value (the turn index), so declare it as a value flag
+        // or ResolveSessionId would mistake the index for the sessionId.
+        var recapSessionId = ResolveSessionId(args, valueFlags: ["--get-turn"]);
 
         if (recapSessionId is null) {
-            Console.Error.WriteLine("Usage: kcap recap [--chain] [--full] [--repo] [sessionId]");
+            Console.Error.WriteLine("Usage: kcap recap [--chain] [--full] [--repo] [--per-turn] [--get-turn <N>] [sessionId]");
             Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
             Console.Error.WriteLine("  Use --repo to see recent session summaries for the current repository.");
+            Console.Error.WriteLine("  Use --per-turn for a per-turn index, or --get-turn <N> for one turn's transcript.");
 
             return 1;
+        }
+
+        if (usePerTurn) {
+            return await RecapCommand.HandlePerTurnRecap(baseUrl!, recapSessionId);
+        }
+
+        if (useGetTurn) {
+            var getTurnIdx = args
+                .SkipWhile(a => a != "--get-turn")
+                .Skip(1)
+                .FirstOrDefault(a => !a.StartsWith('-'));
+
+            if (getTurnIdx is null || !int.TryParse(getTurnIdx, out var turnIndex)) {
+                Console.Error.WriteLine("Usage: kcap recap --get-turn <turnIndex> [sessionId]");
+
+                return 1;
+            }
+
+            return await RecapCommand.HandleGetTurn(baseUrl!, recapSessionId, turnIndex);
         }
 
         return await RecapCommand.HandleRecap(baseUrl!, recapSessionId, useChain, useFull);
