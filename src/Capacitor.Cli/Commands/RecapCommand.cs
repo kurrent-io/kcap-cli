@@ -344,7 +344,7 @@ static class RecapCommand {
             await Console.Out.WriteLineAsync();
         }
 
-        Console.Error.WriteLine($"Use `kcap recap --get-turn {sessionId} <N>` for full turn detail.");
+        Console.Error.WriteLine($"Use `kcap recap --get-turn <N> {sessionId}` for full turn detail.");
 
         return 0;
     }
@@ -395,7 +395,36 @@ static class RecapCommand {
         await Console.Out.WriteLineAsync($"# Turn {turnIndex} — session {sessionId}");
         await Console.Out.WriteLineAsync();
 
+        // Trace entries from subagent streams carry agent_id (and agent_type); root entries don't.
+        // The builder interleaves them by timestamp, so emit an attribution header whenever the
+        // active agent changes — preserving the subagent grouping that `--full` recap shows.
+        string? currentAgentId = null;
+        var     sawAgentHeader = false;
+
         foreach (var entry in trace.EnumerateArray()) {
+            var entryAgentId = entry.TryGetProperty("agent_id", out var aidEl) && aidEl.ValueKind == JsonValueKind.String
+                ? aidEl.GetString()
+                : null;
+
+            if (entryAgentId != currentAgentId) {
+                currentAgentId = entryAgentId;
+
+                if (entryAgentId is { Length: > 0 }) {
+                    var agentType = entry.TryGetProperty("agent_type", out var atEl) && atEl.ValueKind == JsonValueKind.String
+                        ? atEl.GetString()
+                        : null;
+                    await Console.Out.WriteLineAsync(agentType is { Length: > 0 }
+                        ? $"### Subagent: {agentType} ({entryAgentId})"
+                        : $"### Subagent: {entryAgentId}");
+                    await Console.Out.WriteLineAsync();
+                    sawAgentHeader = true;
+                } else if (sawAgentHeader) {
+                    // Only note the return to the main session if we previously showed a subagent header.
+                    await Console.Out.WriteLineAsync("### (main session)");
+                    await Console.Out.WriteLineAsync();
+                }
+            }
+
             var kind = entry.TryGetProperty("kind", out var k) ? k.GetString() : null;
 
             switch (kind) {

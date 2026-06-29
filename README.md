@@ -175,10 +175,10 @@ kcap recap --full <sessionId>       # full transcript
 kcap recap --chain <sessionId>      # summaries across continuation chain
 kcap recap --chain --full <sessionId>  # full transcript across chain
 kcap recap --per-turn <sessionId>   # compact per-turn index (prompt, tools, files, tokens, time)
-kcap recap --get-turn <sessionId> <N>  # full event transcript for a single turn
+kcap recap --get-turn <N> <sessionId>  # full event transcript for a single turn
 ```
 
-`--per-turn` prints a one-block-per-turn index — useful for orienting in a long session before drilling into a specific turn with `--get-turn <N>` (the turn number shown in the `--per-turn` index).
+`--per-turn` prints a one-block-per-turn index — useful for orienting in a long session before drilling into a specific turn with `--get-turn <N>` (the turn number shown in the `--per-turn` index). `--get-turn` takes the turn number as its value; the session id is the usual positional (or comes from the current session), so `kcap recap <sessionId> --get-turn <N>` works too.
 
 The identifier can be a session GUID or a meta session slug. Find these from the dashboard or the current session's hook payloads. When run inside a Claude Code session with the kcap plugin, the session ID is set automatically.
 
