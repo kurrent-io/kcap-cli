@@ -15,6 +15,15 @@ static class McpFlowsServer {
     public static async Task<int> RunAsync(string baseUrl) {
         using var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
 
+        // The review-flow endpoints are long-polls: start_review_flow / submit_review_round
+        // block server-side until the AI reviewer returns findings (FlowResultWaiter allows
+        // up to 10 minutes). The default HttpClient.Timeout (100s) would abort the POST first,
+        // which the server sees as a cancelled request and tears the reviewer down (~2 min) —
+        // so no real review could ever complete (AI-1061). Disable the client-side deadline and
+        // let the server's FlowResultWaiter and the harness MCP tool timeout bound the wait,
+        // mirroring the long-poll clients in PermissionRequestCommand / CodexHookCommand.
+        client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
+
         var cwd      = Directory.GetCurrentDirectory();
         var repoRoot = GitRepository.FindRoot(cwd);
         var tools    = BuildToolsList();
