@@ -345,7 +345,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 IsReview: isReview,
                 Review: cmd.Review,
                 ReviewLaunch: isReview && cmd.Review is { } reviewArgs
-                    ? await ReviewLaunchBuilder.BuildAsync(_config.ServerUrl ?? "", reviewArgs.Owner, reviewArgs.Repo, reviewArgs.PrNumber)
+                    ? await ReviewLaunchBuilder.BuildAsync(cmd.Vendor, _config.CapacitorPath, _config.ServerUrl ?? "", reviewArgs.Owner, reviewArgs.Repo, reviewArgs.PrNumber)
                     : null
             );
 

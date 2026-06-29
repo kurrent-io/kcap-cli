@@ -68,7 +68,7 @@ internal sealed partial class ClaudeLauncher(
             mcpConfigPath = launch.McpConfigPath;
 
             args.Add("--mcp-config");
-            args.Add(launch.McpConfigPath);
+            args.Add(launch.McpConfigPath!);
             args.Add("--system-prompt");
             args.Add(launch.SystemPrompt);
 

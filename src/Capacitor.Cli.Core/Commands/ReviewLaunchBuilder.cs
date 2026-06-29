@@ -4,48 +4,64 @@ using System.Text.Json.Nodes;
 namespace Capacitor.Cli.Core.Commands;
 
 /// <summary>
-/// Shared helper that builds the <c>claude</c> invocation for a PR review:
-/// a temp MCP config pointing at <c>kcap mcp review</c> plus the embedded
-/// review system prompt with PR placeholders substituted. Used by both the
-/// interactive <c>kcap review</c> command and the daemon's hosted-review
-/// launch path so the review experience stays identical between them.
+/// Shared helper that builds a PR-review launch for a given vendor: the rendered
+/// review system prompt (PR placeholders substituted) plus a vendor-neutral MCP
+/// server descriptor pointing at <c>kcap mcp review</c>. For Claude it also writes
+/// the temp <c>--mcp-config</c> JSON; Codex injects the same server via <c>-c</c>
+/// overrides and needs no file. The kcap CLI path is passed in because inside the
+/// daemon the running process is <c>kcap-daemon</c> (no <c>mcp review</c> subcommand).
 /// </summary>
 public static class ReviewLaunchBuilder {
-    public record ReviewLaunch(string McpConfigPath, string SystemPrompt);
+    public record ReviewMcpServer(string Command, string[] Args, IReadOnlyDictionary<string, string> Env);
 
-    /// <summary>
-    /// Writes a temp MCP config and returns the path plus the rendered system
-    /// prompt. Caller is responsible for deleting the config file when the
-    /// claude process exits.
-    /// </summary>
-    public static async Task<ReviewLaunch> BuildAsync(string baseUrl, string owner, string repo, int prNumber) {
-        // Render the system prompt first. EmbeddedResources.Load can throw
-        // (e.g. resource missing under trimming), and if we wrote the temp
-        // file before that throw, the caller never sees a path to clean up
-        // and the file leaks. Building the prompt up front keeps the temp
-        // file's lifetime fully inside the caller's try/finally.
+    public record ReviewLaunch(string? McpConfigPath, string SystemPrompt, ReviewMcpServer Mcp);
+
+    public static async Task<ReviewLaunch> BuildAsync(
+            string vendor, string cliPath, string baseUrl, string owner, string repo, int prNumber) {
+        // Render the system prompt first. EmbeddedResources.Load can throw; building
+        // the prompt before writing any temp file keeps the file's lifetime fully
+        // inside the caller's try/finally so a throw never leaks a path-less file.
         var systemPrompt = EmbeddedResources.Load("prompt-review.txt")
             .Replace("{prNumber}", prNumber.ToString())
             .Replace("{owner}", owner)
             .Replace("{repo}", repo);
 
-        var kcapPath = Environment.ProcessPath ?? "kcap";
+        var mcp = new ReviewMcpServer(
+            Command: cliPath,
+            Args: ["mcp", "review", "--owner", owner, "--repo", repo, "--pr", prNumber.ToString()],
+            Env: new Dictionary<string, string> { ["KCAP_URL"] = baseUrl });
+
+        string? configPath = null;
+
+        if (vendor == "claude") {
+            configPath = await WriteClaudeMcpConfigAsync(mcp);
+        }
+
+        return new ReviewLaunch(configPath, systemPrompt, mcp);
+    }
+
+    static async Task<string> WriteClaudeMcpConfigAsync(ReviewMcpServer mcp) {
+        // Use the implicit string -> JsonValue conversion (cast to JsonNode?) rather
+        // than JsonValue.Create / collection expressions, which lower to generic
+        // Add<T> and trip NativeAOT (IL3050). This matches the existing pattern.
+        var argsNode = new JsonArray();
+
+        foreach (var a in mcp.Args) {
+            argsNode.Add((JsonNode?)a);
+        }
+
+        var envNode = new JsonObject();
+
+        foreach (var kv in mcp.Env) {
+            envNode[kv.Key] = (JsonNode?)kv.Value;
+        }
 
         var mcpConfig = new JsonObject {
             ["mcpServers"] = new JsonObject {
                 ["kcap-review"] = new JsonObject {
-                    ["command"] = kcapPath,
-                    ["args"] = new JsonArray(
-                        "mcp",
-                        "review",
-                        "--owner",
-                        owner,
-                        "--repo",
-                        repo,
-                        "--pr",
-                        prNumber.ToString()
-                    ),
-                    ["env"] = new JsonObject { ["KCAP_URL"] = baseUrl }
+                    ["command"] = mcp.Command,
+                    ["args"]    = argsNode,
+                    ["env"]     = envNode
                 }
             }
         };
@@ -54,6 +70,6 @@ public static class ReviewLaunchBuilder {
         var json       = mcpConfig.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
         await File.WriteAllTextAsync(configPath, json);
 
-        return new ReviewLaunch(configPath, systemPrompt);
+        return configPath;
     }
 }
