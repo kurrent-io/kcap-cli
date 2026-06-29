@@ -156,8 +156,10 @@ jobs:
           # of truth: src/Capacitor.Cli/Commands/SqliteNativeResolver.cs). A mismatch (e.g.
           # publish post-processed the native) would ship an asset that every cold-cache
           # OpenCode import fails to verify — fail the release here instead.
+          # `|| true`: a zero-match grep returns non-zero, which under `set -euo pipefail`
+          # would abort the substitution before the actionable empty-check below can run.
           pin=$(grep -E "\[\"$rid\"\]" src/Capacitor.Cli/Commands/SqliteNativeResolver.cs \
-                | grep -oE '[0-9a-f]{64}' | head -1)
+                | grep -oE '[0-9a-f]{64}' | head -1 || true)
           if [ -z "$pin" ]; then
             echo "::error::no SqliteNativeResolver pin found for $rid"
             exit 1

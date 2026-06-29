@@ -134,9 +134,12 @@ internal static class SqliteNativeResolver {
     static (byte[] bytes, string source) Fetch(NativeAsset asset, string rid, string? baseUrlOverride, string selfVersion) {
         var baseUrl = string.IsNullOrWhiteSpace(baseUrlOverride)
             ? $"https://github.com/kurrent-io/kcap-cli/releases/download/v{selfVersion}"
-            : baseUrlOverride.TrimEnd('/', '\\');
+            : baseUrlOverride;
 
-        // Local mirror (airgap): a plain directory path or file:// URL.
+        // Local mirror (airgap): a plain directory path or file:// URL. Don't trim separators
+        // here — Path.Combine tolerates a trailing one, and trimming would corrupt filesystem
+        // or drive roots (e.g. "/" -> "" or "C:\" -> "C:"). HTTP URLs get their trailing slash
+        // trimmed below when the asset path is appended.
         if (!baseUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
             !baseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) {
             // Parse inside the try so a malformed file:// URI yields the actionable
