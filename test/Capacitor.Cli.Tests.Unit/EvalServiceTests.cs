@@ -382,32 +382,31 @@ public class EvalServiceTests {
         await Assert.That(agg.OverallScore).IsEqualTo(1);
     }
 
-    // ── BuildQuestionPrompt ────────────────────────────────────────────────
+    // ── BuildTextQuestionPrompt (AI-9 Phase 3) ─────────────────────────────
+    //
+    // The legacy embedded-template BuildQuestionPrompt was removed in Phase 3.
+    // The text path now uses the catalog's server-RENDERED prompt carried on
+    // the reconciled question's Prompt; BuildTextQuestionPrompt fills the
+    // runtime placeholders and strips any residual {CACHE_BOUNDARY}.
 
     [Test]
-    public async Task BuildQuestionPrompt_substitutes_all_placeholders() {
-        const string template = "session={SESSION_ID} run={EVAL_RUN_ID} cat={CATEGORY} id={QUESTION_ID} q={QUESTION_TEXT} trace={TRACE_JSON} patterns={KNOWN_PATTERNS}";
+    public async Task BuildTextQuestionPrompt_substitutes_all_placeholders() {
+        // The reconciled question's Prompt IS the rendered template.
+        var question = DestructiveCommandsQuestion with {
+            Prompt = "session={SESSION_ID} run={EVAL_RUN_ID} cat={CATEGORY} id={QUESTION_ID} trace={TRACE_JSON}{CACHE_BOUNDARY}"
+        };
 
-        var prompt = EvalService.BuildQuestionPrompt(
-            template,
-            "sess-1",
-            "run-42",
-            DestructiveCommandsQuestion,
-            "{\"trace\":[]}",
-            "- some pattern"
-        );
+        var prompt = EvalService.BuildTextQuestionPrompt(question, "sess-1", "run-42", "{\"trace\":[]}");
 
         await Assert.That(prompt).Contains("session=sess-1");
         await Assert.That(prompt).Contains("run=run-42");
         await Assert.That(prompt).Contains("cat=safety");
         await Assert.That(prompt).Contains("id=destructive_commands");
-        await Assert.That(prompt).Contains("q=Did the agent run destructive commands?");
         await Assert.That(prompt).Contains("trace={\"trace\":[]}");
-        await Assert.That(prompt).Contains("patterns=- some pattern");
-        // No unresolved placeholders.
+        // No unresolved placeholders; the CLI judge has no cache boundary.
         await Assert.That(prompt).DoesNotContain("{SESSION_ID}");
         await Assert.That(prompt).DoesNotContain("{TRACE_JSON}");
-        await Assert.That(prompt).DoesNotContain("{KNOWN_PATTERNS}");
+        await Assert.That(prompt).DoesNotContain("{CACHE_BOUNDARY}");
     }
 
     // ── FormatKnownPatterns ────────────────────────────────────────────────
@@ -555,24 +554,25 @@ public class EvalServiceTests {
 
     [Test]
     public async Task BuildRetrospectivePrompt_substitutes_all_placeholders() {
+        // AI-9 Phase 3: the template now comes from the catalog (passed in) and
+        // carries a {TRACE_JSON} placeholder the daemon fills with its already-
+        // fetched trace (SF#1).
+        var template = "meta={SESSION_META} verdicts={VERDICTS_JSON} patterns={KNOWN_PATTERNS} trace={TRACE_JSON}";
         var meta     = "session-id: abc\nrun-id: xyz\nmodel: sonnet";
         var verdicts = "[{\"category\":\"safety\",\"score\":5}]";
         var facts    = "safety:\n- agents sometimes read .env by accident";
+        var trace    = "{\"trace\":[1,2,3]}";
 
-        var prompt = EvalService.BuildRetrospectivePrompt(meta, verdicts, facts);
+        var prompt = EvalService.BuildRetrospectivePrompt(template, meta, verdicts, facts, trace);
 
-        // DEV-1484: {TRACE_JSON} was dropped — the trace is no longer
-        // embedded, the judge pulls session data via MCP tools instead.
-        // KNOWN_PATTERNS soft-dropped: placeholder removed from the
-        // template; passing a value is now inert, and the rendered prompt
-        // does not contain the facts block at all.
         await Assert.That(prompt).DoesNotContain("{SESSION_META}");
         await Assert.That(prompt).DoesNotContain("{VERDICTS_JSON}");
         await Assert.That(prompt).DoesNotContain("{KNOWN_PATTERNS}");
         await Assert.That(prompt).DoesNotContain("{TRACE_JSON}");
         await Assert.That(prompt).Contains(meta);
         await Assert.That(prompt).Contains(verdicts);
-        await Assert.That(prompt).DoesNotContain(facts);
+        await Assert.That(prompt).Contains(facts);
+        await Assert.That(prompt).Contains(trace);   // SF#1 — trace is embedded, not blanked
     }
 
     // ── Truncate (log-safe sanitisation) ────────────────────────────────────

@@ -77,7 +77,7 @@ static class EvalCommand {
         return csv?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
-    static void Render(SessionEvalCompletedPayloadV2 agg, string sessionId) {
+    static void Render(SessionEvalCompletedPayloadV3 agg, string sessionId) {
         var output = Console.Out;
         output.WriteLine();
         output.WriteLine($"Eval results for session {sessionId}");
@@ -143,7 +143,7 @@ static class EvalCommand {
         public void OnRetrospectiveFailed(string reason) =>
             Log($"  Retrospective failed: {reason}");
 
-        public void OnFinished(SessionEvalCompletedPayloadV2 aggregate) =>
+        public void OnFinished(SessionEvalCompletedPayloadV3 aggregate) =>
             Log("Eval result persisted.");
 
         public void OnFailed(string reason) =>

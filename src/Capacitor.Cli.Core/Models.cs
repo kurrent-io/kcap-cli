@@ -276,6 +276,13 @@ public record EvalQuestionDto {
     // not emit it) and on older servers; populated only by /api/eval/catalog.
     [JsonPropertyName("prompt_version")]
     public string? PromptVersion { get; init; }
+
+    // AI-9 Phase 3 — RAW question text from the catalog, used by the tools path
+    // (the embedded tools template substitutes this into {QUESTION_TEXT}). Null on
+    // the alias / older servers. Distinct from Prompt, which on a reconciled
+    // text-path question holds the server-RENDERED prompt.
+    [JsonPropertyName("raw_text")]
+    public string? RawText { get; init; }
 }
 
 /// <summary>

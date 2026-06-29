@@ -56,7 +56,7 @@ public interface IEvalObserver {
     void OnRetrospectiveFailed(string reason);
 
     /// <summary>Fired once after all judges finished, results aggregated, and the aggregate POSTed to the server.</summary>
-    void OnFinished(SessionEvalCompletedPayloadV2 aggregate);
+    void OnFinished(SessionEvalCompletedPayloadV3 aggregate);
 
     /// <summary>Fired when the eval failed before producing an aggregate (e.g. context fetch failed, all judges failed, persist failed).</summary>
     void OnFailed(string reason);

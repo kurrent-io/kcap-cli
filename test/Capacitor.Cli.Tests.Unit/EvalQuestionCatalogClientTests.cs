@@ -35,7 +35,7 @@ public class EvalQuestionCatalogClientTests : IDisposable {
 
         public void OnRetrospectiveFailed(string reason) { }
 
-        public void OnFinished(SessionEvalCompletedPayloadV2 aggregate) { }
+        public void OnFinished(SessionEvalCompletedPayloadV3 aggregate) { }
 
         public void OnFailed(string reason) => FailureMessages.Add(reason);
     }

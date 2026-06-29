@@ -51,11 +51,17 @@ internal sealed class EvalRunner {
         var       observer   = new DaemonEvalObserver(_connection, cmd.EvalRunId, cmd.SessionId, _logger);
 
         try {
+            // AI-9 Phase 3 — fetch the catalog (rendered prompts + raw text +
+            // versions) so PrepareAsync reconciles the run question list from it.
+            var catalog = await EvalCatalogClient.FetchAsync(_baseUrl, httpClient, observer, _shutdownToken);
+            if (catalog is null) return new(false, "catalog load failed", null, 0, 0, 0, 0, 0);
+
             var ctx = await EvalService.PrepareAsync(
                 _baseUrl,
                 httpClient,
                 cmd.SessionId,
                 cmd.Questions,
+                catalog,
                 cmd.Chain,
                 cmd.ThresholdBytes,
                 observer,
@@ -94,13 +100,21 @@ internal sealed class EvalRunner {
         var       observer   = new DaemonEvalObserver(_connection, cmd.EvalRunId, ctx.SessionId, _logger);
 
         try {
+            // AI-9 Phase 3 — the SignalR-supplied cmd.Question carries raw text
+            // and a null prompt version; the RECONCILED question from the cached
+            // context (matched by id) carries the catalog's rendered Prompt, RawText,
+            // and PromptVersion. Judge the reconciled item, not the wire DTO.
+            var reconciled = ctx.Questions.FirstOrDefault(q => q.Id == cmd.Question.Id);
+            if (reconciled is null)
+                return new(false, null, $"question '{cmd.Question.Id}' not in reconciled catalog", 0, 0);
+
             // Model is carried on the cached EvalContext (set during Prepare) —
             // the per-question wire format doesn't repeat it.
             var verdict = await EvalService.RunQuestionAsync(
                 ctx,
                 httpClient,
                 _baseUrl,
-                cmd.Question,
+                reconciled,
                 ctx.Model,
                 cmd.Index,
                 cmd.Total,
@@ -133,11 +147,11 @@ internal sealed class EvalRunner {
         try {
             // FinalizeAsync signature was updated in Task 6.5 — the taxonomy is
             // carried on ctx.Questions, not passed separately.
-            // AI-795 T18: FinalizeAsync now returns SessionEvalCompletedPayloadV2;
+            // AI-9 Phase 3: FinalizeAsync now returns SessionEvalCompletedPayloadV3;
             // FinalizeResult.Aggregate is the V1 wire DTO held by the server
             // orchestrator, which only inspects Success on this result so we
-            // pass null for Aggregate. The V2 payload is already persisted to
-            // /api/sessions/{id}/evals/v2 inside FinalizeAsync.
+            // pass null for Aggregate. The V3 payload is already persisted to
+            // /api/sessions/{id}/evals/v3 inside FinalizeAsync.
             var aggregate = await EvalService.FinalizeAsync(
                 ctx,
                 httpClient,
@@ -248,7 +262,7 @@ sealed class DaemonEvalObserver(
         Relay(() => connection.EvalRetrospectiveFailedAsync(sessionId, evalRunId, reason), "EvalRetrospectiveFailed");
     }
 
-    public void OnFinished(SessionEvalCompletedPayloadV2 aggregate) {
+    public void OnFinished(SessionEvalCompletedPayloadV3 aggregate) {
         logger.LogInformation("Eval {Run} finished on session {Sid}: {Score}/5", evalRunId, sessionId, aggregate.OverallScore);
         Relay(() => connection.EvalFinishedAsync(evalRunId, sessionId, aggregate.OverallScore, aggregate.Summary), "EvalFinished");
     }

@@ -10,8 +10,7 @@ public class EvalCatalogClientTests {
             Task.FromResult(new HttpResponseMessage(code) { Content = new StringContent(body) });
     }
 
-    // NIT-fix: uses the CURRENT (V2) IEvalObserver.OnFinished signature -- Task 5
-    // flips the interface to V3 and updates this stub then. No stray method.
+    // AI-9 Phase 3 (Task 5) — IEvalObserver.OnFinished now takes V3.
     sealed class CapturingObserver : IEvalObserver {
         public string? FailReason;
         public void OnFailed(string reason) => FailReason = reason;
@@ -25,7 +24,7 @@ public class EvalCatalogClientTests {
         public void OnRetrospectiveStarted() { }
         public void OnRetrospectiveCompleted(EvalRetrospectiveV2 r) { }
         public void OnRetrospectiveFailed(string r) { }
-        public void OnFinished(SessionEvalCompletedPayloadV2 a) { }   // V2 until Task 5
+        public void OnFinished(SessionEvalCompletedPayloadV3 a) { }
     }
 
     const string CatalogJson = """

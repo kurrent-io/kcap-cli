@@ -98,7 +98,7 @@ public class EvalRunnerV2PostTests : IDisposable {
         public void OnRetrospectiveStarted() { }
         public void OnRetrospectiveCompleted(EvalRetrospectiveV2 r) { }
         public void OnRetrospectiveFailed(string r) { }
-        public void OnFinished(SessionEvalCompletedPayloadV2 a) { }
+        public void OnFinished(SessionEvalCompletedPayloadV3 a) { }
         public void OnFailed(string r) { }
     }
 }
