@@ -129,18 +129,19 @@ jobs:
       # SQLitePCLRaw.bundle_e_sqlite3. NativeAOT does NOT statically link the engine and we
       # deliberately do NOT bundle it (it's only needed for OpenCode import) — instead the
       # CLI downloads it on demand from this release's assets (SqliteNativeResolver).
-      # Publish the PRISTINE per-RID native (from the restored NuGet package, not the
-      # re-signed publish output) as a release asset, named to match the resolver's pin
-      # table: <basename>-<rid>.<ext> (e.g. libe_sqlite3-osx-arm64.dylib, e_sqlite3-win-x64.dll).
+      # Source the per-RID native straight from the publish output: it's exactly the bytes
+      # the binary was built against (== the pinned SHA-256 in SqliteNativeResolver) and is
+      # always present, unlike a NuGet cache path that may be absent/polluted on a clean
+      # runner. Name it to match the resolver's pin table: <basename>-<rid>.<ext>
+      # (e.g. libe_sqlite3-osx-arm64.dylib, e_sqlite3-win-x64.dll).
       - name: Stage e_sqlite3 native release asset
         shell: bash
         run: |
           set -euo pipefail
-          src=$(find "$HOME/.nuget/packages/sqlitepclraw.lib.e_sqlite3" \
-                  -path "*/runtimes/${{ matrix.rid }}/native/*e_sqlite3*" -type f | head -1)
+          src=$(ls publish/cli/*e_sqlite3* 2>/dev/null | head -1)
           if [ -z "$src" ]; then
-            echo "::error::pristine e_sqlite3 native not found in NuGet cache for ${{ matrix.rid }}"
-            find "$HOME/.nuget/packages/sqlitepclraw.lib.e_sqlite3" -maxdepth 3 -type d || true
+            echo "::error::e_sqlite3 native not found in publish/cli for ${{ matrix.rid }}"
+            ls -la publish/cli/ || true
             exit 1
           fi
           mkdir -p sqlite-native

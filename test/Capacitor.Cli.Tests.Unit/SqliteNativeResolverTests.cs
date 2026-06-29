@@ -89,9 +89,12 @@ public class SqliteNativeResolverTests {
 
     // --- helpers -----------------------------------------------------------
 
+    // SourceGear.sqlite3 is the native package SQLitePCLRaw.bundle_e_sqlite3 actually restores
+    // (NOT SQLitePCLRaw.lib.e_sqlite3). EngineVersion is its version; this path exists on any
+    // machine that restored the project, so the drift guard fails loudly if the bundle bumps.
     static string PristineNativePath(string rid) {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Combine(home, ".nuget", "packages", "sqlitepclraw.lib.e_sqlite3",
+        return Path.Combine(home, ".nuget", "packages", "sourcegear.sqlite3",
             SqliteNativeResolver.EngineVersion, "runtimes", rid, "native",
             SqliteNativeResolver.Assets[rid].FileName);
     }

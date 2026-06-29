@@ -27,25 +27,27 @@ internal static class SqliteNativeResolver {
     const string LibraryName = "e_sqlite3";
 
     /// <summary>
-    /// Pinned to the <c>SQLitePCLRaw.lib.e_sqlite3</c> version that
-    /// <c>SQLitePCLRaw.bundle_e_sqlite3</c> (see <c>Directory.Packages.props</c>) restores.
-    /// Doubles as the cache-bucket key so bumping the engine re-fetches instead of loading a
-    /// stale lib. If you bump the bundle, regenerate <see cref="Assets"/> hashes — the
-    /// <c>SqliteNativeResolverTests</c> pin guard fails until you do.
+    /// Version of the native package that <c>SQLitePCLRaw.bundle_e_sqlite3</c> (see
+    /// <c>Directory.Packages.props</c>) actually restores — currently <c>SourceGear.sqlite3</c>
+    /// (NOT <c>SQLitePCLRaw.lib.e_sqlite3</c>). These hashes are the exact bytes the AOT build
+    /// links against, so they also match the per-RID library in the publish output. Doubles as
+    /// the cache-bucket key so bumping the engine re-fetches instead of loading a stale lib.
+    /// If you bump the bundle, regenerate <see cref="Assets"/> — the <c>SqliteNativeResolverTests</c>
+    /// pin guard fails until you do.
     /// </summary>
-    internal const string EngineVersion = "3.50.3";
+    internal const string EngineVersion = "3.50.4.5";
 
     internal sealed record NativeAsset(string FileName, string AssetName, string Sha256);
 
-    /// <summary>RID → the pristine native library shipped by SQLitePCLRaw, by SHA-256.</summary>
+    /// <summary>RID → the pristine native library shipped by SourceGear.sqlite3, by SHA-256.</summary>
     internal static readonly IReadOnlyDictionary<string, NativeAsset> Assets =
         new Dictionary<string, NativeAsset>(StringComparer.Ordinal) {
-            ["osx-arm64"]        = new("libe_sqlite3.dylib", "libe_sqlite3-osx-arm64.dylib",      "c2e6eb6f3acdd204502111f158400e65bf7af73c30869a238e7dc9e5c704265c"),
-            ["linux-x64"]        = new("libe_sqlite3.so",    "libe_sqlite3-linux-x64.so",         "63ed8433123cf71158ecdb7981abcb54401193d0d1bf80562633888cd21d02c4"),
-            ["linux-arm64"]      = new("libe_sqlite3.so",    "libe_sqlite3-linux-arm64.so",       "ac6cbb9e3b7cd33ebfe7fb16da09dc6bfb2258426ef40e42980ed1e744ae517b"),
-            ["linux-musl-x64"]   = new("libe_sqlite3.so",    "libe_sqlite3-linux-musl-x64.so",    "11f22cda735dc861348cd070746ae2c55e90369ff80afdfb9e2107d1120cbcb1"),
-            ["linux-musl-arm64"] = new("libe_sqlite3.so",    "libe_sqlite3-linux-musl-arm64.so",  "daedee2db762691d6ba3119833698739b1975fd08bd6dc3feb609ff90d1252b1"),
-            ["win-x64"]          = new("e_sqlite3.dll",      "e_sqlite3-win-x64.dll",             "3061b1c0e66be7ba1a3223b5b3af90aff353c9bca07bd0a02aefbe2dfbacb81f"),
+            ["osx-arm64"]        = new("libe_sqlite3.dylib", "libe_sqlite3-osx-arm64.dylib",      "7b319cd32435ab28c97041fad74b892be218e6f0f74790802105309c1ec515a9"),
+            ["linux-x64"]        = new("libe_sqlite3.so",    "libe_sqlite3-linux-x64.so",         "a5e8aed525023e6c209d37d3e762e2e76ed3a830464569a419abfc3cf12d7a6c"),
+            ["linux-arm64"]      = new("libe_sqlite3.so",    "libe_sqlite3-linux-arm64.so",       "1e3d72f01195cd8fc1e9f17a7d1e9a8fa589b390c08f81b4d3a7af721effe0eb"),
+            ["linux-musl-x64"]   = new("libe_sqlite3.so",    "libe_sqlite3-linux-musl-x64.so",    "73b683c168b3cdc68f1fd005645da7fdedf17895378c2b41903172e296a990c2"),
+            ["linux-musl-arm64"] = new("libe_sqlite3.so",    "libe_sqlite3-linux-musl-arm64.so",  "d881b6b8a258f5e3fe1419b46366fc1afd90e941818d30aa2d2cec650449fed0"),
+            ["win-x64"]          = new("e_sqlite3.dll",      "e_sqlite3-win-x64.dll",             "aabf85d7a8b416fb15203cb754fcfc9858c8f1dd3bbc7eab82335f6c362ba0d6"),
         };
 
     static int _registered;
@@ -105,7 +107,7 @@ internal static class SqliteNativeResolver {
 
         Directory.CreateDirectory(cacheDir);
 
-        var (bytes, source) = Fetch(asset, baseUrlOverride, selfVersion);
+        var (bytes, source) = Fetch(asset, rid, baseUrlOverride, selfVersion);
 
         var actual = Sha256(bytes);
         if (!string.Equals(actual, asset.Sha256, StringComparison.OrdinalIgnoreCase)) {
@@ -114,19 +116,22 @@ internal static class SqliteNativeResolver {
                 $"(expected sha256 {asset.Sha256}, got {actual}). Refusing to load it.");
         }
 
-        // Atomic publish into the cache: write a unique temp file then move into place,
-        // tolerating a concurrent process that already won the race.
-        var tmp = $"{target}.{Environment.ProcessId}.tmp";
+        // Atomic publish into the cache: write a per-attempt temp file (unique even across
+        // concurrent writers in the same process) then move it into place. On a lost race,
+        // only trust the existing target if its bytes still verify — otherwise rethrow.
+        var tmp = Path.Combine(cacheDir, $"{asset.FileName}.{Guid.NewGuid():N}.tmp");
         File.WriteAllBytes(tmp, bytes);
         try {
             File.Move(tmp, target, overwrite: true);
-        } catch (IOException) when (File.Exists(target)) {
+        } catch (IOException) {
             try { File.Delete(tmp); } catch { /* best effort */ }
+            if (!(File.Exists(target) && FileSha256(target) == asset.Sha256))
+                throw;
         }
         return target;
     }
 
-    static (byte[] bytes, string source) Fetch(NativeAsset asset, string? baseUrlOverride, string selfVersion) {
+    static (byte[] bytes, string source) Fetch(NativeAsset asset, string rid, string? baseUrlOverride, string selfVersion) {
         var baseUrl = string.IsNullOrWhiteSpace(baseUrlOverride)
             ? $"https://github.com/kurrent-io/kcap-cli/releases/download/v{selfVersion}"
             : baseUrlOverride.TrimEnd('/', '\\');
@@ -140,7 +145,7 @@ internal static class SqliteNativeResolver {
             try {
                 return (File.ReadAllBytes(local), local);
             } catch (Exception ex) {
-                throw NotAvailable(asset, local, ex);
+                throw NotAvailable(asset, rid, local, ex);
             }
         }
 
@@ -150,15 +155,15 @@ internal static class SqliteNativeResolver {
             http.DefaultRequestHeaders.UserAgent.ParseAdd($"kcap/{selfVersion}");
             return (http.GetByteArrayAsync(url).GetAwaiter().GetResult(), url);
         } catch (Exception ex) {
-            throw NotAvailable(asset, url, ex);
+            throw NotAvailable(asset, rid, url, ex);
         }
     }
 
-    static DllNotFoundException NotAvailable(NativeAsset asset, string source, Exception inner) =>
+    static DllNotFoundException NotAvailable(NativeAsset asset, string rid, string source, Exception inner) =>
         new($"kcap import --opencode needs the SQLite native library and tried to fetch it from " +
             $"{source}, but that failed: {inner.Message}. If you are offline or behind a proxy, " +
-            $"download {asset.AssetName} into {Path.Combine(DefaultCacheRoot(), EngineVersion, "<rid>")} " +
-            $"(renamed to {asset.FileName}), or set KCAP_SQLITE_NATIVE_BASE_URL to an internal mirror " +
+            $"download {asset.AssetName} to {Path.Combine(DefaultCacheRoot(), EngineVersion, rid, asset.FileName)} " +
+            $"(create the directories), or set KCAP_SQLITE_NATIVE_BASE_URL to an internal mirror " +
             $"(an HTTP base URL or a local directory).", inner);
 
     /// <summary>Runtime RID, normalized to one of <see cref="Assets"/>' keys.</summary>
