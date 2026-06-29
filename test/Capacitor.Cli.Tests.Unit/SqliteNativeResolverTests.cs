@@ -11,22 +11,22 @@ namespace Capacitor.Cli.Tests.Unit;
 /// </summary>
 public class SqliteNativeResolverTests {
     /// <summary>
-    /// Drift guard: the SHA-256 pinned for THIS platform must match the native that
-    /// SQLitePCLRaw actually restored. If SQLitePCLRaw.bundle_e_sqlite3 is bumped, this
-    /// fails until EngineVersion + the Assets hashes are regenerated.
+    /// Drift guard for ALL shipped RIDs, not just the test runner's: the SourceGear.sqlite3
+    /// package ships every runtime native after restore, so a single CI agent can validate
+    /// all six pins. Catches a typo in (say) the macOS or musl-arm64 hash that linux/windows
+    /// CI would otherwise miss, letting the release publish an asset users can't verify.
+    /// Fails until EngineVersion + the Assets hashes are regenerated after a bundle bump.
     /// </summary>
     [Test]
-    public async Task pinned_hash_matches_restored_native_for_current_rid() {
-        var rid = SqliteNativeResolver.CurrentRid();
-        await Assert.That(SqliteNativeResolver.Assets.ContainsKey(rid))
-            .IsTrue().Because($"this test host's rid '{rid}' should be a shipped RID");
-
-        var pristine = PristineNativePath(rid);
-        await Assert.That(File.Exists(pristine))
-            .IsTrue().Because($"restored SQLitePCLRaw native expected at {pristine} — " +
-                              "if the bundle version changed, update EngineVersion + Assets pins");
-
-        await Assert.That(Sha256(pristine)).IsEqualTo(SqliteNativeResolver.Assets[rid].Sha256);
+    public async Task pinned_hashes_match_restored_natives_for_all_rids() {
+        foreach (var (rid, asset) in SqliteNativeResolver.Assets) {
+            var pristine = PristineNativePath(rid);
+            await Assert.That(File.Exists(pristine))
+                .IsTrue().Because($"restored SourceGear native expected at {pristine} — " +
+                                  "if the bundle version changed, update EngineVersion + Assets pins");
+            await Assert.That(Sha256(pristine)).IsEqualTo(asset.Sha256)
+                .Because($"pin for {rid} must match the restored native bytes");
+        }
     }
 
     /// <summary>The resolver's asset name must match release.yml's `<base>-<rid>.<ext>`.</summary>

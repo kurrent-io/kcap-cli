@@ -77,14 +77,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
         } catch (OperationCanceledException) {
             throw;
         } catch (Exception ex) {
-            // Surface the actionable cause, not "a type initializer threw an exception".
-            // Prefer the on-demand native-lib failure (SqliteNativeResolver throws a
-            // DllNotFoundException with download/mirror guidance) anywhere in the chain;
-            // otherwise the base exception (e.g. a genuinely corrupt db's SQLite error).
-            Exception cause = ex.GetBaseException();
-            for (var e = ex; e is not null; e = e.InnerException)
-                if (e is DllNotFoundException) { cause = e; break; }
-            Console.Error.WriteLine($"[kcap] OpenCode discovery skipped ({_dbPath}): {cause.Message}");
+            Console.Error.WriteLine($"[kcap] OpenCode discovery skipped ({_dbPath}): {SurfaceCause(ex)}");
             return Task.FromResult<IReadOnlyList<DiscoveredSession>>([]);
         }
         return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
@@ -97,19 +90,25 @@ internal sealed class OpenCodeImportSource : IImportSource {
         // single vendor's unreadable db must skip OpenCode, not crash the whole import run.
         if (sessions.Count == 0) return [];
 
-        using var db = new OpenCodeDb(_dbPath);
+        // Discovery succeeded earlier, but the db may have become unreadable since (deleted,
+        // perms, WAL sidecars, or an on-demand native-lib fetch failure on this second open).
+        // Fail only OpenCode — mark the slice as probe errors instead of throwing out of the
+        // multi-vendor probe task.
+        OpenCodeDb opened;
+        try {
+            opened = new OpenCodeDb(_dbPath);
+        } catch (Exception ex) {
+            var reason = $"opencode.db open failed: {SurfaceCause(ex)}";
+            return [.. sessions.Select(s =>
+                Make(s, MetaFor(s), ImportCommand.ClassificationStatus.ProbeError, 0, reason))];
+        }
+        using var db = opened;
         var results = new List<ImportCommand.SessionClassification>(sessions.Count);
 
         foreach (var s in sessions) {
             ct.ThrowIfCancellationRequested();
 
-            var meta = new SessionMetadata {
-                SessionId      = s.SessionId,
-                Cwd            = s.Cwd,
-                FirstTimestamp = s.FirstTimestamp,
-                LastTimestamp  = s.SourceMeta!.TryGetValue("TimeUpdated", out var tu) && tu is long tums
-                    ? FromEpoch(tums) : null,
-            };
+            var meta = MetaFor(s);
 
             int total, importable; string fingerprint;
             try {
@@ -275,6 +274,28 @@ internal sealed class OpenCodeImportSource : IImportSource {
             } catch { }
         }
         return "subagent";
+    }
+
+    static SessionMetadata MetaFor(DiscoveredSession s) => new() {
+        SessionId      = s.SessionId,
+        Cwd            = s.Cwd,
+        FirstTimestamp = s.FirstTimestamp,
+        LastTimestamp  = s.SourceMeta!.TryGetValue("TimeUpdated", out var tu) && tu is long tums
+            ? FromEpoch(tums) : null,
+    };
+
+    /// <summary>
+    /// Surface the actionable cause of a SQLite open failure, not "a type initializer threw
+    /// an exception". Prefer the on-demand native-lib failure (SqliteNativeResolver throws a
+    /// DllNotFoundException with download/mirror guidance) anywhere in the chain; otherwise the
+    /// base exception (e.g. a genuinely corrupt db's SQLite error — GetBaseException would
+    /// otherwise over-unwrap a download failure to its inner DNS/socket error).
+    /// </summary>
+    static string SurfaceCause(Exception ex) {
+        Exception cause = ex.GetBaseException();
+        for (var e = ex; e is not null; e = e.InnerException)
+            if (e is DllNotFoundException) { cause = e; break; }
+        return cause.Message;
     }
 
     static ImportCommand.SessionClassification Make(

@@ -139,10 +139,13 @@ internal static class SqliteNativeResolver {
         // Local mirror (airgap): a plain directory path or file:// URL.
         if (!baseUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
             !baseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) {
-            var dir = baseUrl.StartsWith("file://", StringComparison.OrdinalIgnoreCase)
-                ? new Uri(baseUrl).LocalPath : baseUrl;
-            var local = Path.Combine(dir, asset.AssetName);
+            // Parse inside the try so a malformed file:// URI yields the actionable
+            // NotAvailable guidance rather than a raw UriFormatException out of the resolver.
+            var local = asset.AssetName;
             try {
+                var dir = baseUrl.StartsWith("file://", StringComparison.OrdinalIgnoreCase)
+                    ? new Uri(baseUrl).LocalPath : baseUrl;
+                local = Path.Combine(dir, asset.AssetName);
                 return (File.ReadAllBytes(local), local);
             } catch (Exception ex) {
                 throw NotAvailable(asset, rid, local, ex);

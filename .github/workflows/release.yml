@@ -138,15 +138,43 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          src=$(ls publish/cli/*e_sqlite3* 2>/dev/null | head -1)
-          if [ -z "$src" ]; then
-            echo "::error::e_sqlite3 native not found in publish/cli for ${{ matrix.rid }}"
+          rid="${{ matrix.rid }}"
+
+          # Require exactly one match. nullglob so zero matches is an empty array (not the
+          # literal pattern), and avoids set -e aborting mid-assignment before we can report.
+          shopt -s nullglob
+          matches=(publish/cli/*e_sqlite3*)
+          shopt -u nullglob
+          if [ "${#matches[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one e_sqlite3 native in publish/cli for $rid, found ${#matches[@]}"
             ls -la publish/cli/ || true
             exit 1
           fi
+          src="${matches[0]}"
+
+          # Verify the bytes match the SHA-256 the resolver pins for this RID (single source
+          # of truth: src/Capacitor.Cli/Commands/SqliteNativeResolver.cs). A mismatch (e.g.
+          # publish post-processed the native) would ship an asset that every cold-cache
+          # OpenCode import fails to verify — fail the release here instead.
+          pin=$(grep -E "\[\"$rid\"\]" src/Capacitor.Cli/Commands/SqliteNativeResolver.cs \
+                | grep -oE '[0-9a-f]{64}' | head -1)
+          if [ -z "$pin" ]; then
+            echo "::error::no SqliteNativeResolver pin found for $rid"
+            exit 1
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "$src" | cut -d' ' -f1)
+          else
+            actual=$(shasum -a 256 "$src" | cut -d' ' -f1)
+          fi
+          if [ "$actual" != "$pin" ]; then
+            echo "::error::e_sqlite3 native for $rid ($actual) does not match resolver pin ($pin)"
+            exit 1
+          fi
+
           mkdir -p sqlite-native
           base=$(basename "$src"); name="${base%.*}"; ext="${base##*.}"
-          cp "$src" "sqlite-native/${name}-${{ matrix.rid }}.${ext}"
+          cp "$src" "sqlite-native/${name}-${rid}.${ext}"
           ls -la sqlite-native/
 
       - name: Copy binaries to npm package
