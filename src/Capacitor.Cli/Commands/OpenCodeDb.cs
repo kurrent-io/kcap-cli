@@ -26,6 +26,11 @@ internal sealed record OpenCodeSessionRow(
 internal sealed class OpenCodeDb : IDisposable {
     readonly SqliteConnection _conn;
 
+    // Install the on-demand native-SQLite resolver before SqliteConnection's static ctor
+    // runs its first e_sqlite3 P/Invoke. A static ctor on this type is guaranteed to run
+    // before the instance ctor body references SqliteConnection below.
+    static OpenCodeDb() => SqliteNativeResolver.Register();
+
     public OpenCodeDb(string dbPath) {
         _conn = new SqliteConnection(new SqliteConnectionStringBuilder {
             DataSource = dbPath,

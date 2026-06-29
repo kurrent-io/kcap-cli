@@ -125,6 +125,60 @@ jobs:
             exit 1
           fi
 
+      # `kcap import --opencode` reads opencode.db via Microsoft.Data.Sqlite +
+      # SQLitePCLRaw.bundle_e_sqlite3. NativeAOT does NOT statically link the engine and we
+      # deliberately do NOT bundle it (it's only needed for OpenCode import) — instead the
+      # CLI downloads it on demand from this release's assets (SqliteNativeResolver).
+      # Source the per-RID native straight from the publish output: it's exactly the bytes
+      # the binary was built against (== the pinned SHA-256 in SqliteNativeResolver) and is
+      # always present, unlike a NuGet cache path that may be absent/polluted on a clean
+      # runner. Name it to match the resolver's pin table: <basename>-<rid>.<ext>
+      # (e.g. libe_sqlite3-osx-arm64.dylib, e_sqlite3-win-x64.dll).
+      - name: Stage e_sqlite3 native release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          rid="${{ matrix.rid }}"
+
+          # Require exactly one match. nullglob so zero matches is an empty array (not the
+          # literal pattern), and avoids set -e aborting mid-assignment before we can report.
+          shopt -s nullglob
+          matches=(publish/cli/*e_sqlite3*)
+          shopt -u nullglob
+          if [ "${#matches[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one e_sqlite3 native in publish/cli for $rid, found ${#matches[@]}"
+            ls -la publish/cli/ || true
+            exit 1
+          fi
+          src="${matches[0]}"
+
+          # Verify the bytes match the SHA-256 the resolver pins for this RID (single source
+          # of truth: src/Capacitor.Cli/Commands/SqliteNativeResolver.cs). A mismatch (e.g.
+          # publish post-processed the native) would ship an asset that every cold-cache
+          # OpenCode import fails to verify — fail the release here instead.
+          # `|| true`: a zero-match grep returns non-zero, which under `set -euo pipefail`
+          # would abort the substitution before the actionable empty-check below can run.
+          pin=$(grep -E "\[\"$rid\"\]" src/Capacitor.Cli/Commands/SqliteNativeResolver.cs \
+                | grep -oE '[0-9a-f]{64}' | head -1 || true)
+          if [ -z "$pin" ]; then
+            echo "::error::no SqliteNativeResolver pin found for $rid"
+            exit 1
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "$src" | cut -d' ' -f1)
+          else
+            actual=$(shasum -a 256 "$src" | cut -d' ' -f1)
+          fi
+          if [ "$actual" != "$pin" ]; then
+            echo "::error::e_sqlite3 native for $rid ($actual) does not match resolver pin ($pin)"
+            exit 1
+          fi
+
+          mkdir -p sqlite-native
+          base=$(basename "$src"); name="${base%.*}"; ext="${base##*.}"
+          cp "$src" "sqlite-native/${name}-${rid}.${ext}"
+          ls -la sqlite-native/
+
       - name: Copy binaries to npm package
         shell: bash
         run: |
@@ -162,6 +216,14 @@ jobs:
         with:
           name: release-${{ matrix.rid }}
           path: kcap-${{ matrix.rid }}.*
+
+      # Per-RID SQLite native, downloaded on demand by SqliteNativeResolver. Named
+      # release-* so the github-release job's `pattern: release-*` publishes it.
+      - name: Upload e_sqlite3 native asset
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-sqlite-native-${{ matrix.rid }}
+          path: sqlite-native/
 
   publish-npm:
     needs: build
