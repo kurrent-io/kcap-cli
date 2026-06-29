@@ -425,7 +425,7 @@ The daemon starts Codex with `--sandbox workspace-write` and `--ask-for-approval
 >
 > npm 11+ blocks install scripts by default. Add `allow-scripts[]=@kurrent/kcap` to your `~/.npmrc` (or pass `--allow-scripts=@kurrent/kcap` on the install command line) to opt in to the auto-refresh; otherwise re-run the relevant `kcap plugin install ... --if-installed` commands manually after each upgrade. (`npm approve-scripts` does not work for global installs — that's a known npm UX bug.)
 
-PR review for hosted Codex agents is not yet supported (tracked in AI-632). The sandbox and approval-mode selectors in the launch dialog are also planned as a follow-up (AI-633).
+PR review is supported for hosted Codex agents as well as Claude — the same `kcap-review` MCP context is injected either way. The sandbox and approval-mode selectors in the launch dialog are planned as a follow-up (AI-633).
 
 #### Cursor IDE hooks
 
