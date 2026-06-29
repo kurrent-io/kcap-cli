@@ -15,6 +15,13 @@ public class EvalToolsRoutingTests {
         ("efficiency", "direct_approach")
     ];
 
+    // TEXT-path question (NeedsTools == false) — negative case
+    static readonly EvalCatalogQuestionDto TextQuestion = new() {
+        Category = "quality", Id = "well_scoped_tasks", Title = "t",
+        QuestionText = "RAW well_scoped_tasks", Prompt = "RENDERED well_scoped_tasks",
+        PromptVersion = "1", NeedsTools = false
+    };
+
     [Test]
     public async Task Each_known_tools_question_reconciles_with_NeedsTools_and_RawText() {
         var catalog = new EvalCatalogDto {
@@ -24,11 +31,13 @@ public class EvalToolsRoutingTests {
                     Category = q.Category, Id = q.Id, Title = "t",
                     QuestionText = $"RAW {q.Id}", Prompt = $"RENDERED {q.Id}",
                     PromptVersion = "1", NeedsTools = true
-                })
+                }),
+                TextQuestion
             ]
         };
 
-        var reconciled = EvalService.ReconcileQuestions([.. ToolsQuestions.Select(q => q.Id)], catalog);
+        string[] allIds = [.. ToolsQuestions.Select(q => q.Id), TextQuestion.Id];
+        var reconciled = EvalService.ReconcileQuestions(allIds, catalog);
 
         foreach (var (cat, id) in ToolsQuestions) {
             var rq = reconciled.Single(r => r.Id == id);
@@ -43,5 +52,8 @@ public class EvalToolsRoutingTests {
             await Assert.That(toolsPrompt).Contains($"RAW {id}");
             await Assert.That(toolsPrompt).Contains($"cat={cat}");
         }
+
+        // Negative case: TEXT-path question must reconcile with NeedsTools == false
+        await Assert.That(reconciled.Single(r => r.Id == "well_scoped_tasks").NeedsTools).IsFalse();
     }
 }
