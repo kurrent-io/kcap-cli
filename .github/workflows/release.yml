@@ -125,6 +125,29 @@ jobs:
             exit 1
           fi
 
+      # `kcap import --opencode` reads opencode.db via Microsoft.Data.Sqlite +
+      # SQLitePCLRaw.bundle_e_sqlite3. NativeAOT does NOT statically link the engine and we
+      # deliberately do NOT bundle it (it's only needed for OpenCode import) — instead the
+      # CLI downloads it on demand from this release's assets (SqliteNativeResolver).
+      # Publish the PRISTINE per-RID native (from the restored NuGet package, not the
+      # re-signed publish output) as a release asset, named to match the resolver's pin
+      # table: <basename>-<rid>.<ext> (e.g. libe_sqlite3-osx-arm64.dylib, e_sqlite3-win-x64.dll).
+      - name: Stage e_sqlite3 native release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          src=$(find "$HOME/.nuget/packages/sqlitepclraw.lib.e_sqlite3" \
+                  -path "*/runtimes/${{ matrix.rid }}/native/*e_sqlite3*" -type f | head -1)
+          if [ -z "$src" ]; then
+            echo "::error::pristine e_sqlite3 native not found in NuGet cache for ${{ matrix.rid }}"
+            find "$HOME/.nuget/packages/sqlitepclraw.lib.e_sqlite3" -maxdepth 3 -type d || true
+            exit 1
+          fi
+          mkdir -p sqlite-native
+          base=$(basename "$src"); name="${base%.*}"; ext="${base##*.}"
+          cp "$src" "sqlite-native/${name}-${{ matrix.rid }}.${ext}"
+          ls -la sqlite-native/
+
       - name: Copy binaries to npm package
         shell: bash
         run: |
@@ -162,6 +185,14 @@ jobs:
         with:
           name: release-${{ matrix.rid }}
           path: kcap-${{ matrix.rid }}.*
+
+      # Per-RID SQLite native, downloaded on demand by SqliteNativeResolver. Named
+      # release-* so the github-release job's `pattern: release-*` publishes it.
+      - name: Upload e_sqlite3 native asset
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-sqlite-native-${{ matrix.rid }}
+          path: sqlite-native/
 
   publish-npm:
     needs: build

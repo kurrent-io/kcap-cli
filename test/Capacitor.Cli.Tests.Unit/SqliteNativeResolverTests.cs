@@ -1,0 +1,121 @@
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using Capacitor.Cli.Commands;
+
+namespace Capacitor.Cli.Tests.Unit;
+
+/// <summary>
+/// Covers the on-demand native-SQLite loader used by `kcap import --opencode`.
+/// The AOT binary doesn't bundle e_sqlite3; <see cref="SqliteNativeResolver"/> downloads
+/// the pristine per-RID native, integrity-checks it, caches it, and loads it.
+/// </summary>
+public class SqliteNativeResolverTests {
+    /// <summary>
+    /// Drift guard: the SHA-256 pinned for THIS platform must match the native that
+    /// SQLitePCLRaw actually restored. If SQLitePCLRaw.bundle_e_sqlite3 is bumped, this
+    /// fails until EngineVersion + the Assets hashes are regenerated.
+    /// </summary>
+    [Test]
+    public async Task pinned_hash_matches_restored_native_for_current_rid() {
+        var rid = SqliteNativeResolver.CurrentRid();
+        await Assert.That(SqliteNativeResolver.Assets.ContainsKey(rid))
+            .IsTrue().Because($"this test host's rid '{rid}' should be a shipped RID");
+
+        var pristine = PristineNativePath(rid);
+        await Assert.That(File.Exists(pristine))
+            .IsTrue().Because($"restored SQLitePCLRaw native expected at {pristine} — " +
+                              "if the bundle version changed, update EngineVersion + Assets pins");
+
+        await Assert.That(Sha256(pristine)).IsEqualTo(SqliteNativeResolver.Assets[rid].Sha256);
+    }
+
+    /// <summary>The resolver's asset name must match release.yml's `<base>-<rid>.<ext>`.</summary>
+    [Test]
+    public async Task asset_names_follow_release_naming_convention() {
+        foreach (var (rid, a) in SqliteNativeResolver.Assets) {
+            var expected = $"{Path.GetFileNameWithoutExtension(a.FileName)}-{rid}{Path.GetExtension(a.FileName)}";
+            await Assert.That(a.AssetName).IsEqualTo(expected);
+        }
+    }
+
+    [Test]
+    public async Task downloads_from_mirror_verifies_caches_and_loads() {
+        var rid = SqliteNativeResolver.CurrentRid();
+        using var mirror = new TempDir();
+        using var cache  = new TempDir();
+        var asset = SqliteNativeResolver.Assets[rid];
+
+        // Seed a local mirror (the airgap path) with the pristine native.
+        File.Copy(PristineNativePath(rid), Path.Combine(mirror.Path, asset.AssetName));
+
+        var path = SqliteNativeResolver.EnsureNativeLibrary(rid, mirror.Path, cache.Path, "0.0.0");
+
+        await Assert.That(File.Exists(path)).IsTrue();
+        await Assert.That(Sha256(path)).IsEqualTo(asset.Sha256);
+        await Assert.That(IsLoadableSqlite(path)).IsTrue()
+            .Because("the cached native must be a real, loadable SQLite engine");
+
+        // Second call is cache-only — works even after the mirror disappears.
+        Directory.Delete(mirror.Path, true);
+        var again = SqliteNativeResolver.EnsureNativeLibrary(rid, mirror.Path, cache.Path, "0.0.0");
+        await Assert.That(again).IsEqualTo(path);
+    }
+
+    [Test]
+    public async Task rejects_a_corrupt_download_and_caches_nothing() {
+        var rid = SqliteNativeResolver.CurrentRid();
+        using var mirror = new TempDir();
+        using var cache  = new TempDir();
+        var asset = SqliteNativeResolver.Assets[rid];
+
+        File.WriteAllBytes(Path.Combine(mirror.Path, asset.AssetName), [0xDE, 0xAD, 0xBE, 0xEF]);
+
+        await Assert.That(() =>
+                SqliteNativeResolver.EnsureNativeLibrary(rid, mirror.Path, cache.Path, "0.0.0"))
+            .Throws<DllNotFoundException>();
+
+        var wouldBe = Path.Combine(cache.Path, SqliteNativeResolver.EngineVersion, rid, asset.FileName);
+        await Assert.That(File.Exists(wouldBe)).IsFalse()
+            .Because("a failed integrity check must not leave a half-written lib in the cache");
+    }
+
+    [Test]
+    public async Task unsupported_rid_throws_actionable_error() {
+        using var cache = new TempDir();
+        await Assert.That(() =>
+                SqliteNativeResolver.EnsureNativeLibrary("plan9-pdp11", null, cache.Path, "0.0.0"))
+            .Throws<DllNotFoundException>();
+    }
+
+    // --- helpers -----------------------------------------------------------
+
+    static string PristineNativePath(string rid) {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return Path.Combine(home, ".nuget", "packages", "sqlitepclraw.lib.e_sqlite3",
+            SqliteNativeResolver.EngineVersion, "runtimes", rid, "native",
+            SqliteNativeResolver.Assets[rid].FileName);
+    }
+
+    static string Sha256(string path) {
+        using var s = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(s)).ToLowerInvariant();
+    }
+
+    delegate IntPtr LibVersionFn();
+
+    static bool IsLoadableSqlite(string path) {
+        if (!NativeLibrary.TryLoad(path, out var h)) return false;
+        try {
+            if (!NativeLibrary.TryGetExport(h, "sqlite3_libversion", out var fn)) return false;
+            var version = Marshal.PtrToStringAnsi(Marshal.GetDelegateForFunctionPointer<LibVersionFn>(fn)());
+            return version is not null && version.StartsWith('3');
+        } finally {
+            NativeLibrary.Free(h);
+        }
+    }
+
+    sealed class TempDir : IDisposable {
+        public string Path { get; } = Directory.CreateTempSubdirectory("kcap-sqlite-native").FullName;
+        public void Dispose() { try { Directory.Delete(Path, true); } catch { } }
+    }
+}

@@ -77,7 +77,14 @@ internal sealed class OpenCodeImportSource : IImportSource {
         } catch (OperationCanceledException) {
             throw;
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[kcap] OpenCode discovery skipped (unreadable {_dbPath}): {ex.Message}");
+            // Surface the actionable cause, not "a type initializer threw an exception".
+            // Prefer the on-demand native-lib failure (SqliteNativeResolver throws a
+            // DllNotFoundException with download/mirror guidance) anywhere in the chain;
+            // otherwise the base exception (e.g. a genuinely corrupt db's SQLite error).
+            Exception cause = ex.GetBaseException();
+            for (var e = ex; e is not null; e = e.InnerException)
+                if (e is DllNotFoundException) { cause = e; break; }
+            Console.Error.WriteLine($"[kcap] OpenCode discovery skipped ({_dbPath}): {cause.Message}");
             return Task.FromResult<IReadOnlyList<DiscoveredSession>>([]);
         }
         return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
@@ -85,6 +92,11 @@ internal sealed class OpenCodeImportSource : IImportSource {
 
     public async Task<IReadOnlyList<ImportCommand.SessionClassification>> ClassifyAsync(
         IReadOnlyList<DiscoveredSession> sessions, ClassifyContext ctx, CancellationToken ct) {
+        // DiscoverAsync defensively swallows db-open failures (returns []), but Classify
+        // is still invoked for every source. Don't open the db for an empty slice — a
+        // single vendor's unreadable db must skip OpenCode, not crash the whole import run.
+        if (sessions.Count == 0) return [];
+
         using var db = new OpenCodeDb(_dbPath);
         var results = new List<ImportCommand.SessionClassification>(sessions.Count);
 
