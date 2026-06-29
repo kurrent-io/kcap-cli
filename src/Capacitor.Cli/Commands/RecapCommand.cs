@@ -350,8 +350,9 @@ static class RecapCommand {
     }
 
     /// <summary>
-    /// `kcap recap --get-turn &lt;sessionId&gt; &lt;turnIndex&gt;` — prints the formatted
-    /// event transcript for a single turn (user prompt, tool calls, assistant text).
+    /// `kcap recap --get-turn &lt;N&gt; [sessionId]` — prints the formatted event transcript for a
+    /// single turn (user prompt, tool calls, assistant text). The turn number is the flag's value;
+    /// the session id is the usual positional (or comes from the current session).
     /// </summary>
     public static async Task<int> HandleGetTurn(string baseUrl, string sessionId, int turnIndex) {
         using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
