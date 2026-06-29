@@ -232,38 +232,45 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     [Test]
-    public async Task Launch_review_kind_with_vendor_codex_emits_launch_failed() {
-        var server     = new CaptureServerConnection();
-        var ptyFactory = new SpyPtyProcessFactory();
-        var codexSpy   = new SpyHostedAgentLauncher("codex", cliPath: "spy-codex");
+    public async Task Launch_review_kind_with_vendor_codex_is_accepted_and_reaches_review_validation() {
+        // A git repo with NO origin remote: a Codex review now passes the vendor
+        // gate (which used to reject it) and fails later at origin validation —
+        // the SAME point a Claude review would. Proves the gate is lifted.
+        var (repoPath, cleanup) = CreateGitRepo();
 
-        var launchers = new Dictionary<string, IHostedAgentLauncher> {
-            ["codex"] = codexSpy
-        };
+        try {
+            var server     = new CaptureServerConnection();
+            var ptyFactory = new SpyPtyProcessFactory();
+            var codexSpy   = new SpyHostedAgentLauncher("codex", cliPath: "spy-codex");
 
-        await using var orch = BuildOrchestrator(server, ptyFactory, launchers);
+            var launchers = new Dictionary<string, IHostedAgentLauncher> { ["codex"] = codexSpy };
 
-        var cmd = new LaunchAgentCommand(
-            AgentId: "agent-r1",
-            Prompt: null,
-            Model: "gpt-5",
-            Effort: null,
-            RepoPath: "/tmp/whatever",
-            Tools: null,
-            AttachmentIds: null,
-            Vendor: "codex",
-            Kind: LaunchKind.Review,
-            Review: new ReviewLaunchInfo("acme", "widgets", 42)
-        );
+            await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
-        await orch.HandleLaunchAgentForTest(cmd);
+            var cmd = new LaunchAgentCommand(
+                AgentId: "agent-r1",
+                Prompt: null,
+                Model: "gpt-5",
+                Effort: null,
+                RepoPath: repoPath,
+                Tools: null,
+                AttachmentIds: null,
+                Vendor: "codex",
+                Kind: LaunchKind.Review,
+                Review: new ReviewLaunchInfo("acme", "widgets", 42)
+            );
 
-        await Assert.That(server.LaunchFailedCalls.Count).IsEqualTo(1);
-        await Assert.That(server.LaunchFailedCalls[0].AgentId).IsEqualTo("agent-r1");
-        await Assert.That(server.LaunchFailedCalls[0].Reason).Contains("PR review for Codex");
-        await Assert.That(codexSpy.BuildArgsCalls).IsEqualTo(0);
-        await Assert.That(codexSpy.PrepareCalls).IsEqualTo(0);
-        await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
+            await orch.HandleLaunchAgentForTest(cmd);
+
+            await Assert.That(server.LaunchFailedCalls.Count).IsEqualTo(1);
+            // The old Codex-specific rejection is gone...
+            await Assert.That(server.LaunchFailedCalls[0].Reason).DoesNotContain("PR review for Codex");
+            // ...and it failed at the shared origin check instead.
+            await Assert.That(server.LaunchFailedCalls[0].Reason).Contains("origin");
+            await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
+        } finally {
+            cleanup();
+        }
     }
 
     [Test]

@@ -243,12 +243,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
-        if (isReview && cmd.Vendor == "codex") {
-            await _server.LaunchFailedAsync(cmd.AgentId, "PR review for Codex is not yet supported");
-
-            return;
-        }
-
         WorktreeInfo? worktree      = null;
         string?       mcpConfigPath = null;
 
