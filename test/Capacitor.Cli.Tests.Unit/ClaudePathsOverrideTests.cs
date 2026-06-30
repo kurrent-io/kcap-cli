@@ -27,6 +27,7 @@ public class ClaudePathsOverrideTests {
             await Assert.That(ClaudePaths.Home()).IsEqualTo(relocated);
             await Assert.That(ClaudePaths.Projects).IsEqualTo(Path.Combine(relocated, "projects"));
             await Assert.That(ClaudePaths.UserSettings).IsEqualTo(Path.Combine(relocated, "settings.json"));
+            await Assert.That(ClaudePaths.Plans).IsEqualTo(Path.Combine(relocated, "plans"));
         } finally {
             Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", original);
         }

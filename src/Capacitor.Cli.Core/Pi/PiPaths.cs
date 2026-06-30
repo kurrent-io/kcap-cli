@@ -23,7 +23,7 @@ public static class PiPaths {
     /// </summary>
     public static string AgentDir(string? home = null, string? agentDir = null) {
         agentDir ??= Environment.GetEnvironmentVariable("PI_CODING_AGENT_DIR");
-        if (!string.IsNullOrEmpty(agentDir)) return ExpandTilde(agentDir, home);
+        if (!string.IsNullOrWhiteSpace(agentDir)) return ExpandTilde(agentDir, home);
 
         return Path.Combine(Root(home), "agent");
     }

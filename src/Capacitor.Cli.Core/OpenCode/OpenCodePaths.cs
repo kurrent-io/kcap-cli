@@ -14,7 +14,7 @@ namespace Capacitor.Cli.Core.OpenCode;
 public static class OpenCodePaths {
     public static string ConfigDir(string? home = null, string? configDir = null) {
         configDir ??= Environment.GetEnvironmentVariable("OPENCODE_CONFIG_DIR");
-        if (!string.IsNullOrEmpty(configDir)) return configDir;
+        if (!string.IsNullOrWhiteSpace(configDir)) return configDir;
 
         var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
         if (!string.IsNullOrEmpty(xdg)) return Path.Combine(xdg, "opencode");

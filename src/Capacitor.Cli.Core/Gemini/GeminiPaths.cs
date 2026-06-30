@@ -14,7 +14,7 @@ public static class GeminiPaths {
     public static string Root(string? home = null, string? geminiCliHome = null) {
         geminiCliHome ??= Environment.GetEnvironmentVariable("GEMINI_CLI_HOME");
 
-        var baseDir = !string.IsNullOrEmpty(geminiCliHome)
+        var baseDir = !string.IsNullOrWhiteSpace(geminiCliHome)
             ? geminiCliHome
             : home ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
