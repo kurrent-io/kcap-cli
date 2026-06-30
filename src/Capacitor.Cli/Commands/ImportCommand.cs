@@ -1570,6 +1570,74 @@ static class ImportCommand {
     }
 
     /// <summary>
+    /// Single ≤20-line scan that both extracts a transcript's cwd and detects
+    /// whether it is one of kcap's own headless sub-session runs (title /
+    /// what's-done generation). Folding the two probes into one file read keeps
+    /// import discovery to a single scan per transcript instead of opening the
+    /// file once for <see cref="TitleGenerator.IsCapacitorSubSession"/> and
+    /// again for <see cref="ExtractCwdFromTranscript"/>.
+    ///
+    /// <para>
+    /// The sub-session marker is the opening <c>queue-operation</c>/<c>enqueue</c>
+    /// entry carrying a known helper prompt — the same signal (and first-5-line
+    /// window) <see cref="TitleGenerator.IsCapacitorSubSession"/> uses, so the
+    /// two stay in agreement. The marker wins over any cwd seen in that window,
+    /// matching the original two-pass behaviour. Detection is Claude-only;
+    /// Codex rollouts have no analogous transcript, so <paramref name="codex"/>
+    /// short-circuits the marker check.
+    /// </para>
+    /// </summary>
+    internal static (bool IsSubSession, string? Cwd) ExtractCwdAndDetectSubSession(string filePath, bool codex) {
+        string? cwd = null;
+
+        try {
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+
+            var linesChecked = 0;
+
+            while (reader.ReadLine() is { } line && linesChecked < 20) {
+                linesChecked++;
+
+                if (string.IsNullOrWhiteSpace(line)) {
+                    continue;
+                }
+
+                try {
+                    using var doc  = JsonDocument.Parse(line);
+                    var       root = doc.RootElement;
+
+                    // Marker lives in the opening queue-operation entry; mirror
+                    // IsCapacitorSubSession's first-5-line window so the two
+                    // never disagree. A detected helper run wins over any cwd.
+                    if (!codex
+                     && linesChecked <= 5
+                     && root.Str("type")      == "queue-operation"
+                     && root.Str("operation") == "enqueue"
+                     && root.Str("content") is { } content
+                     && TitleGenerator.IsKnownCapacitorPrompt(content)) {
+                        return (true, null);
+                    }
+
+                    // Codex stores cwd inside a session_meta envelope; Claude
+                    // stores it at the JSONL root.
+                    cwd ??= codex ? root.Obj("payload")?.Str("cwd") : root.Str("cwd");
+
+                    // Once the marker window is past and a cwd is in hand there
+                    // is nothing left to find — stop early.
+                    if (cwd is not null && linesChecked >= 5) {
+                        break;
+                    }
+                } catch (JsonException) { }
+            }
+        } catch {
+            // Best effort — same posture as ExtractCwdFromTranscript.
+        }
+
+        return (false, cwd);
+    }
+
+    /// <summary>
     /// Codex-shape variant of <see cref="ExtractSessionMetadata"/>. Reads the first
     /// <c>session_meta</c> line and pulls cwd, the inner timestamp (when codex
     /// started, not when the envelope was written), and the model. Codex rollouts
@@ -1872,7 +1940,7 @@ static class ImportCommand {
         return final;
     }
 
-    static async Task<Dictionary<string, (string Owner, string Name)?>> ResolveTranscriptReposAsync(
+    internal static async Task<Dictionary<string, (string Owner, string Name)?>> ResolveTranscriptReposAsync(
             IReadOnlyList<(string SessionId, string FilePath, string EncodedCwd)> transcripts,
             bool                                                                  codex,
             ImportDisplay                                                         display,
@@ -1890,7 +1958,23 @@ static class ImportCommand {
         var perTranscript = new (string SessionId, string? Cwd)[transcripts.Count];
 
         for (var i = 0; i < transcripts.Count; i++) {
-            var raw       = ExtractCwdFromTranscript(transcripts[i].FilePath, codex);
+            // One scan recovers the cwd and flags kcap's own headless
+            // sub-sessions (title / what's-done generation). Those helper runs
+            // execute in an ephemeral temp working dir that is deleted the
+            // instant the run ends, so their recorded cwd never exists on disk.
+            // Classification already drops them from the import as internal
+            // sub-sessions, but leaving them in here floods the missing-cwd
+            // report with dozens of dead temp paths the user can neither remap
+            // nor act on. Excluding them keeps that report scoped to genuine
+            // user sessions whose repo really did move.
+            var (isSubSession, raw) = ExtractCwdAndDetectSubSession(transcripts[i].FilePath, codex);
+
+            if (isSubSession) {
+                perTranscript[i] = (transcripts[i].SessionId, null);
+
+                continue;
+            }
+
             var effective = raw is null ? null : ResolveCwd(raw, cwdRemap, worktreeAttributed, transcripts[i].SessionId);
 
             perTranscript[i] = (transcripts[i].SessionId, effective);
