@@ -18,7 +18,7 @@ Options:
                       merges every *.json in that directory, so user-authored
                       hook files are never touched.
   --gemini            Target Gemini CLI: merge kcap's hooks into the SHARED
-                      ~/.gemini/settings.json (honours $GEMINI_HOME). User-authored
+                      ~/.gemini/settings.json (honours $GEMINI_CLI_HOME). User-authored
                       hook entries and every other settings key are preserved; if
                       the file exists but isn't valid JSON the install fails closed
                       and leaves it untouched.
