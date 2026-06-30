@@ -12,8 +12,12 @@ public class PiPathsTests {
 
     [Test]
     public async Task AgentDir_expands_leading_tilde_against_home() {
+        // Contract: a leading "~/" is replaced by home; the remainder ("pi/agent")
+        // is appended verbatim as one segment. Expected must Path.Combine the
+        // remainder as a single segment too — combining it as ("pi", "agent")
+        // would rewrite its inner separator to "\" on Windows and mismatch.
         await Assert.That(PiPaths.AgentDir(home: "/fake/home", agentDir: "~/pi/agent"))
-            .IsEqualTo(Path.Combine("/fake/home", "pi", "agent"));
+            .IsEqualTo(Path.Combine("/fake/home", "pi/agent"));
     }
 
     [Test]
