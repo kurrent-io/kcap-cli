@@ -306,7 +306,13 @@ internal sealed partial class ClaudeLauncher(
     /// A crash or concurrent reader never sees a truncated file — either the
     /// previous contents or the new contents, never a partial write.
     /// </summary>
-    static void WriteJsonAtomic(string path, JsonNode root) {
+    internal static void WriteJsonAtomic(string path, JsonNode root) {
+        // The temp file is written alongside the target, so the destination dir must
+        // exist. With CLAUDE_CONFIG_DIR set, ~/.claude.json relocates to
+        // $CLAUDE_CONFIG_DIR/.claude.json, whose dir may not exist yet on a fresh/
+        // relocated config — create it so the trust write doesn't throw.
+        if (Path.GetDirectoryName(path) is { Length: > 0 } dir) Directory.CreateDirectory(dir);
+
         var tmp = path + ".tmp-" + Environment.ProcessId + "-" + Guid.NewGuid().ToString("N");
         File.WriteAllText(tmp, root.ToJsonString(IndentedJsonOpts));
 
