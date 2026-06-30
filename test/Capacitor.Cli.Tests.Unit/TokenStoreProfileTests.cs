@@ -24,6 +24,13 @@ public class TokenStoreProfileTests {
     public void Cleanup() {
         if (File.Exists(LegacyPath)) File.Delete(LegacyPath);
         if (Directory.Exists(TokensDir)) Directory.Delete(TokensDir, recursive: true);
+
+        // Reset the shared profile config so the active profile resolves to "default".
+        // A config.json left in the shared KCAP_CONFIG_DIR by another test would make
+        // LoadAsync() resolve a different (file-less) profile, turning the legacy-fallback
+        // assertions order-dependent.
+        var cfg = Capacitor.Cli.Core.Config.AppConfig.GetConfigPath();
+        if (File.Exists(cfg)) File.Delete(cfg);
     }
 
     [Test]
@@ -177,6 +184,93 @@ public class TokenStoreProfileTests {
 
         var stray = Directory.EnumerateFiles(TokensDir, "*.tmp").ToArray();
         await Assert.That(stray).IsEmpty();
+    }
+
+    [Test]
+    [NotInParallel(nameof(TokenStoreProfileTests))]
+    public async Task LoadAsync_corrupt_active_profile_does_not_fall_back_to_legacy() {
+        // A present-but-corrupt active profile means "not authenticated" — it must NOT
+        // resurrect stale credentials from a surviving legacy tokens.json (AI-1082 review).
+        Directory.CreateDirectory(TokensDir);
+        Directory.CreateDirectory(Path.GetDirectoryName(LegacyPath)!);
+        await File.WriteAllTextAsync(
+            LegacyPath,
+            System.Text.Json.JsonSerializer.Serialize(MakeTokens("legacy"), CapacitorJsonContext.Default.StoredTokens));
+        var valid = System.Text.Json.JsonSerializer.Serialize(MakeTokens("active"), CapacitorJsonContext.Default.StoredTokens);
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "default.json"), valid + ",\"x\":1}");
+
+        await Assert.That(await TokenStore.LoadAsync()).IsNull();
+    }
+
+    [Test]
+    [NotInParallel(nameof(TokenStoreProfileTests))]
+    public async Task LoadAsync_missing_active_profile_still_falls_back_to_valid_legacy() {
+        // Genuine pre-upgrade install: no per-profile file, valid legacy file — fallback preserved.
+        if (Directory.Exists(TokensDir)) Directory.Delete(TokensDir, recursive: true);
+        Directory.CreateDirectory(Path.GetDirectoryName(LegacyPath)!);
+        await File.WriteAllTextAsync(
+            LegacyPath,
+            System.Text.Json.JsonSerializer.Serialize(MakeTokens("legacy"), CapacitorJsonContext.Default.StoredTokens));
+
+        var loaded = await TokenStore.LoadAsync();
+
+        await Assert.That(loaded).IsNotNull();
+        await Assert.That(loaded!.GitHubUsername).IsEqualTo("legacy");
+    }
+
+    [Test]
+    [NotInParallel(nameof(TokenStoreProfileTests))]
+    public async Task DeleteAsync_removes_leaked_temp_files() {
+        // Logout must remove ALL token material, including temps leaked by a crash
+        // between write and move (AI-1082 review).
+        Directory.CreateDirectory(TokensDir);
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "default.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "default.json.999.deadbeef.tmp"), "secret");
+
+        await TokenStore.DeleteAsync();
+
+        await Assert.That(Directory.EnumerateFiles(TokensDir, "*.tmp").Any()).IsFalse();
+    }
+
+    [Test]
+    [NotInParallel(nameof(TokenStoreProfileTests))]
+    public async Task Delete_profile_removes_only_its_leaked_temp_files() {
+        Directory.CreateDirectory(TokensDir);
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "acme.json"), "{}");
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "acme.json.1.aaaa.tmp"), "secret");
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "contoso.json.2.bbbb.tmp"), "other");
+
+        TokenStore.Delete("acme");
+
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "acme.json.1.aaaa.tmp"))).IsFalse();
+        await Assert.That(File.Exists(Path.Combine(TokensDir, "contoso.json.2.bbbb.tmp"))).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel(nameof(TokenStoreProfileTests))]
+    public async Task SaveAsync_cleans_up_temp_when_publish_fails() {
+        // Force File.Move to fail by making the destination an existing directory; the
+        // finally must still remove the temp so no secret-bearing *.tmp is left behind.
+        Directory.CreateDirectory(TokensDir);
+        Directory.CreateDirectory(Path.Combine(TokensDir, "blocked.json"));
+
+        var threw = false;
+        try { await TokenStore.SaveAsync("blocked", MakeTokens("x")); }
+        catch { threw = true; }
+
+        await Assert.That(threw).IsTrue();
+        await Assert.That(Directory.EnumerateFiles(TokensDir, "*.tmp").Any()).IsFalse();
+    }
+
+    [Test]
+    [NotInParallel(nameof(TokenStoreProfileTests))]
+    public async Task SaveAsync_sets_owner_only_file_mode_on_unix() {
+        if (OperatingSystem.IsWindows()) return; // Unix file-mode behavior only
+
+        await TokenStore.SaveAsync("acme", MakeTokens("alice"));
+
+        var mode = File.GetUnixFileMode(Path.Combine(TokensDir, "acme.json"));
+        await Assert.That(mode).IsEqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
     static StoredTokens MakeTokens(string username) => new() {
