@@ -19,6 +19,22 @@ static class ClaudePaths {
     public static string UserSettings => Path.Combine(Home(), "settings.json");
 
     /// <summary>
+    /// Path to Claude's user-global config FILE (account/OAuth, MCP servers,
+    /// per-project trust flags under <c>projects[path]</c>). Its base differs
+    /// from <see cref="Home"/>: with CLAUDE_CONFIG_DIR set it lives INSIDE the
+    /// config dir (<c>$CLAUDE_CONFIG_DIR/.claude.json</c>); by default it is a
+    /// SIBLING of <c>~/.claude</c> (<c>$HOME/.claude.json</c>). Verified against
+    /// Claude Code 2.1.196 — do NOT collapse this into Path.Combine(Home(), …).
+    /// </summary>
+    public static string UserConfigJson(string? home = null, string? configDir = null) {
+        configDir ??= Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+        if (!string.IsNullOrWhiteSpace(configDir)) return Path.Combine(configDir, ".claude.json");
+
+        home ??= PathHelpers.HomeDirectory;
+        return Path.Combine(home, ".claude.json");
+    }
+
+    /// <summary>
     /// Returns the project directory for a given repo path.
     /// Claude uses the absolute path with directory separators replaced by dashes.
     /// </summary>

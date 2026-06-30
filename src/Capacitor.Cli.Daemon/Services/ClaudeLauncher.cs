@@ -212,7 +212,10 @@ internal sealed partial class ClaudeLauncher(
             // is stored globally in ~/.claude.json under projects[path]. On a fresh
             // machine the file may not exist yet — create a minimal object so trust
             // is always persisted.
-            var claudeJsonPath = Path.Combine(PathHelpers.HomeDirectory, ".claude.json");
+            // The spawned `claude` inherits CLAUDE_CONFIG_DIR from the daemon's
+            // environment, so it reads/writes the same file we resolve here —
+            // $CLAUDE_CONFIG_DIR/.claude.json when set, else ~/.claude.json.
+            var claudeJsonPath = ClaudePaths.UserConfigJson();
             var root           = LoadJsonObject(claudeJsonPath);
 
             if (root["projects"] is not JsonObject projects) {
@@ -303,7 +306,13 @@ internal sealed partial class ClaudeLauncher(
     /// A crash or concurrent reader never sees a truncated file — either the
     /// previous contents or the new contents, never a partial write.
     /// </summary>
-    static void WriteJsonAtomic(string path, JsonNode root) {
+    internal static void WriteJsonAtomic(string path, JsonNode root) {
+        // The temp file is written alongside the target, so the destination dir must
+        // exist. With CLAUDE_CONFIG_DIR set, ~/.claude.json relocates to
+        // $CLAUDE_CONFIG_DIR/.claude.json, whose dir may not exist yet on a fresh/
+        // relocated config — create it so the trust write doesn't throw.
+        if (Path.GetDirectoryName(path) is { Length: > 0 } dir) Directory.CreateDirectory(dir);
+
         var tmp = path + ".tmp-" + Environment.ProcessId + "-" + Guid.NewGuid().ToString("N");
         File.WriteAllText(tmp, root.ToJsonString(IndentedJsonOpts));
 
@@ -334,7 +343,7 @@ internal sealed partial class ClaudeLauncher(
     }
 
     static void WriteMcpConfig(string sourceRepoPath, string worktreePath) {
-        var claudeJsonPath = Path.Combine(PathHelpers.HomeDirectory, ".claude.json");
+        var claudeJsonPath = ClaudePaths.UserConfigJson();
 
         if (!File.Exists(claudeJsonPath)) return;
 
