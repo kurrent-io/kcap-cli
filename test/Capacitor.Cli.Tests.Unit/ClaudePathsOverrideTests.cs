@@ -34,6 +34,33 @@ public class ClaudePathsOverrideTests {
     }
 
     [Test]
+    public async Task UserConfigJson_config_dir_param_puts_json_inside_the_config_dir() {
+        // Override param is non-null -> env var never read (parallel-safe).
+        await Assert.That(ClaudePaths.UserConfigJson(home: "/fake/home", configDir: "/relocated"))
+            .IsEqualTo(Path.Combine("/relocated", ".claude.json"));
+    }
+
+    [Test]
+    [NotInParallel("HomeEnvVarMutation")]
+    public async Task UserConfigJson_default_is_sibling_of_claude_dir_and_env_relocates_inside() {
+        var original = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+        try {
+            // Default: <home>/.claude.json (NOT <home>/.claude/.claude.json).
+            Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", null);
+            await Assert.That(ClaudePaths.UserConfigJson(home: "/fake/home"))
+                .IsEqualTo(Path.Combine("/fake/home", ".claude.json"));
+
+            // Override via env var: .claude.json lives INSIDE the config dir.
+            var relocated = Path.Combine(Path.GetTempPath(), "kcap-claude-cfg");
+            Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", relocated);
+            await Assert.That(ClaudePaths.UserConfigJson())
+                .IsEqualTo(Path.Combine(relocated, ".claude.json"));
+        } finally {
+            Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", original);
+        }
+    }
+
+    [Test]
     [NotInParallel("HomeEnvVarMutation")]
     public async Task PluginEnvironment_ClaudeHome_delegates_and_honors_override() {
         var original = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
