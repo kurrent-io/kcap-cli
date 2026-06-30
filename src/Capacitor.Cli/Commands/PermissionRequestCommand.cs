@@ -10,7 +10,10 @@ static class PermissionRequestCommand {
     public static Task<int> Handle(string baseUrl) =>
         Handle(baseUrl, body: null);
 
-    public static async Task<int> Handle(string baseUrl, string? body) {
+    // selfHealWatcher is false when the caller determined the session is excluded
+    // (excluded_repos/excluded_paths): we still handle the permission decision, but must NOT
+    // spawn a transcript-uploading watcher for a project the user opted out of recording.
+    public static async Task<int> Handle(string baseUrl, string? body, bool selfHealWatcher = true) {
         body ??= await Console.In.ReadToEndAsync();
 
         JsonNode? node;
@@ -37,8 +40,11 @@ static class PermissionRequestCommand {
         // Self-heal the transcript watcher (see TryEnsureWatcher). Done before the
         // rendered/non-rendered split so both the interactive path and the daemon-hosted
         // long-poll recover a dead or never-started watcher; idempotent, so a no-op when
-        // one is already running.
-        await TryEnsureWatcher(baseUrl, sessionId, node);
+        // one is already running. Skipped for excluded sessions (the caller passes
+        // selfHealWatcher: false) so exclusions are honored just like at session-start.
+        if (selfHealWatcher) {
+            await TryEnsureWatcher(baseUrl, sessionId, node);
+        }
 
         var isRenderedAgent = Environment.GetEnvironmentVariable("KCAP_RENDERED_AGENT") is "1";
 
@@ -90,23 +96,27 @@ static class PermissionRequestCommand {
     /// </summary>
     internal static async Task TryEnsureWatcher(string baseUrl, string sessionId, JsonNode node) {
         try {
-            if (node["agent_id"]?.GetValue<string>() is { Length: > 0 }) {
+            if (GetString(node, "agent_id") is { Length: > 0 }) {
                 return;
             }
 
-            var transcriptPath = node["transcript_path"]?.GetValue<string>();
+            var transcriptPath = GetString(node, "transcript_path");
 
             if (string.IsNullOrEmpty(transcriptPath)) {
                 return;
             }
 
-            var cwd = node["cwd"]?.GetValue<string>();
-
-            await WatcherManager.EnsureWatcherRunning(baseUrl, sessionId, transcriptPath, agentId: null, cwd: cwd);
+            await WatcherManager.EnsureWatcherRunning(
+                baseUrl, sessionId, transcriptPath, agentId: null, cwd: GetString(node, "cwd"));
         } catch (Exception ex) {
             await Console.Error.WriteLineAsync($"[kcap] permission-request watcher self-heal failed: {ex.Message}");
         }
     }
+
+    // Reads an optional string field, treating null / missing / non-string uniformly as
+    // absent — a frequently-firing hook should not throw + log on a variant payload.
+    static string? GetString(JsonNode node, string field) =>
+        node[field] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
 
     internal static bool TryGetLoopbackDaemonUrl(out string daemonUrl) {
         daemonUrl = "";
