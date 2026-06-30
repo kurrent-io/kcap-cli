@@ -1872,7 +1872,7 @@ static class ImportCommand {
         return final;
     }
 
-    static async Task<Dictionary<string, (string Owner, string Name)?>> ResolveTranscriptReposAsync(
+    internal static async Task<Dictionary<string, (string Owner, string Name)?>> ResolveTranscriptReposAsync(
             IReadOnlyList<(string SessionId, string FilePath, string EncodedCwd)> transcripts,
             bool                                                                  codex,
             ImportDisplay                                                         display,
@@ -1890,6 +1890,22 @@ static class ImportCommand {
         var perTranscript = new (string SessionId, string? Cwd)[transcripts.Count];
 
         for (var i = 0; i < transcripts.Count; i++) {
+            // Skip kcap's own headless sub-sessions (title / what's-done
+            // generation). They run in an ephemeral temp working dir that is
+            // deleted as soon as the run finishes, so their recorded cwd never
+            // exists on disk. Classification already drops them from the import
+            // as internal sub-sessions, but leaving them in here floods the
+            // missing-cwd report with dozens of dead temp paths the user can
+            // neither remap nor act on. Excluding them keeps that report scoped
+            // to genuine user sessions whose repo really did move. Codex
+            // rollouts have no analogous sub-session transcript, so this is
+            // Claude-only (matching the classification short-circuit).
+            if (!codex && TitleGenerator.IsCapacitorSubSession(transcripts[i].FilePath)) {
+                perTranscript[i] = (transcripts[i].SessionId, null);
+
+                continue;
+            }
+
             var raw       = ExtractCwdFromTranscript(transcripts[i].FilePath, codex);
             var effective = raw is null ? null : ResolveCwd(raw, cwdRemap, worktreeAttributed, transcripts[i].SessionId);
 
