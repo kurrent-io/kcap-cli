@@ -153,6 +153,32 @@ public class TokenStoreProfileTests {
         await Assert.That(await TokenStore.GetValidTokensAsync()).IsNull();
     }
 
+    [Test]
+    [NotInParallel(nameof(TokenStoreProfileTests))]
+    public async Task SaveAsync_concurrent_writes_never_corrupt() {
+        // Alternate long (WorkOS-JWT-sized) and short (GitHub-token-sized) payloads so a
+        // shorter write landing over a longer one would splice — the byte-492 signature.
+        var longTok  = MakeTokens("alice") with { AccessToken = new string('A', 1200) };
+        var shortTok = MakeTokens("bob")   with { AccessToken = "gho_short" };
+
+        var writers = Enumerable.Range(0, 64)
+            .Select(i => TokenStore.SaveAsync("race", i % 2 == 0 ? longTok : shortTok));
+        await Task.WhenAll(writers);
+
+        // Whoever wrote last wins, but the file must always be a single complete document.
+        var loaded = await TokenStore.LoadAsync("race");
+        await Assert.That(loaded).IsNotNull();
+    }
+
+    [Test]
+    [NotInParallel(nameof(TokenStoreProfileTests))]
+    public async Task SaveAsync_leaves_no_temp_residue() {
+        await TokenStore.SaveAsync("acme", MakeTokens("alice"));
+
+        var stray = Directory.EnumerateFiles(TokensDir, "*.tmp").ToArray();
+        await Assert.That(stray).IsEmpty();
+    }
+
     static StoredTokens MakeTokens(string username) => new() {
         AccessToken    = "t",
         ExpiresAt      = DateTimeOffset.UtcNow.AddHours(1),

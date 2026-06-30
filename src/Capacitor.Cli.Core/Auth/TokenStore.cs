@@ -74,9 +74,21 @@ public static class TokenStore {
     public static async Task SaveAsync(string profile, StoredTokens tokens) {
         Directory.CreateDirectory(TokenDir);
         var path     = ProfileTokenPath(profile);
-        var tempPath = $"{path}.tmp";
-        await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(tokens, CapacitorJsonContext.Default.StoredTokens));
-        File.Move(tempPath, path, overwrite: true);
+        // Unique per write so concurrent writers (hooks/watcher/daemon/MCP/login share this
+        // store) never write the same temp file and splice each other's bytes. The atomic
+        // File.Move then publishes one complete document, last-writer-wins.
+        var tempPath = $"{path}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+
+        try {
+            await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(tokens, CapacitorJsonContext.Default.StoredTokens));
+            File.Move(tempPath, path, overwrite: true);
+        } finally {
+            // Success renames the temp away; only a failed write/move leaves it. Unlike the
+            // old shared name, a leaked unique temp never gets reused, so clean it up.
+            if (File.Exists(tempPath)) {
+                try { File.Delete(tempPath); } catch { /* best-effort */ }
+            }
+        }
 
         if (!OperatingSystem.IsWindows()) {
             File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
