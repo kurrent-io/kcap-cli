@@ -549,7 +549,7 @@ public class McpFlowsServerTests : IDisposable {
             await Assert.That(text.Contains("result_kind: findings")).IsTrue();
 
             // Exactly 2 GETs: the 500 and then the terminal 200.
-            await Assert.That(_server.FindLogEntries(Request.Create().WithPath($"/api/flows/{flowRunId}").UsingGet()).Count >= 2).IsTrue();
+            await Assert.That(_server.FindLogEntries(Request.Create().WithPath($"/api/flows/{flowRunId}").UsingGet()).Count).IsEqualTo(2);
         } finally { await ShutdownAsync(proc); }
     }
 
@@ -585,7 +585,12 @@ public class McpFlowsServerTests : IDisposable {
             var result = response["result"]?.AsObject();
             await Assert.That(result).IsNotNull();
             // The tool should return a result (not an MCP error) — we got a formatted envelope back.
-            await Assert.That(result!["content"]?[0]?["text"]?.GetValue<string>()).IsNotNull();
+            var text = result!["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(text).IsNotNull();
+            // Verify the response is the polled-round envelope (contains flow_run_id),
+            // not the graceful-cap message ("Review still running").
+            await Assert.That(text!.Contains("flow_run_id:")).IsTrue();
+            await Assert.That(text.Contains("Review still running")).IsFalse();
         } finally { await ShutdownAsync(proc); }
     }
 
