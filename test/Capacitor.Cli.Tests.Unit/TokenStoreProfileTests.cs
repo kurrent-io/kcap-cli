@@ -112,6 +112,47 @@ public class TokenStoreProfileTests {
             .Throws<ArgumentException>();
     }
 
+    [Test]
+    public async Task LoadAsync_with_corrupt_json_returns_null() {
+        Directory.CreateDirectory(TokensDir);
+        var valid   = System.Text.Json.JsonSerializer.Serialize(MakeTokens("alice"), CapacitorJsonContext.Default.StoredTokens);
+        var corrupt = valid + ",\"provider\":\"workos\"}"; // complete object, then stray comma + tail (the customer's signature)
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "acme.json"), corrupt);
+
+        var loaded = await TokenStore.LoadAsync("acme");
+
+        await Assert.That(loaded).IsNull();
+    }
+
+    [Test]
+    public async Task LoadAsync_with_empty_file_returns_null() {
+        Directory.CreateDirectory(TokensDir);
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "acme.json"), "");
+
+        await Assert.That(await TokenStore.LoadAsync("acme")).IsNull();
+    }
+
+    [Test]
+    [NotInParallel(nameof(TokenStoreProfileTests))]
+    public async Task LoadAsync_legacy_corrupt_file_returns_null() {
+        Directory.CreateDirectory(Path.GetDirectoryName(LegacyPath)!);
+        await File.WriteAllTextAsync(LegacyPath, "{\"access_token\":\"x\"},garbage");
+
+        // No per-profile file exists, so the parameterless LoadAsync() falls back to the legacy path.
+        await Assert.That(await TokenStore.LoadAsync()).IsNull();
+    }
+
+    [Test]
+    [NotInParallel(nameof(TokenStoreProfileTests))]
+    public async Task GetValidTokensAsync_with_corrupt_file_returns_null() {
+        // Reproduces the customer crash through the public entry point StatusCommand uses.
+        Directory.CreateDirectory(TokensDir);
+        var valid   = System.Text.Json.JsonSerializer.Serialize(MakeTokens("alice"), CapacitorJsonContext.Default.StoredTokens);
+        await File.WriteAllTextAsync(Path.Combine(TokensDir, "default.json"), valid + ",\"x\":1}");
+
+        await Assert.That(await TokenStore.GetValidTokensAsync()).IsNull();
+    }
+
     static StoredTokens MakeTokens(string username) => new() {
         AccessToken    = "t",
         ExpiresAt      = DateTimeOffset.UtcNow.AddHours(1),

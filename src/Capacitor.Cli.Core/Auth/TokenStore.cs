@@ -50,13 +50,25 @@ public static class TokenStore {
         return Path.Combine(TokenDir, $"{profile}.json");
     }
 
+    // A corrupt, empty, partially-written, or hand-edited token file is equivalent to
+    // "no usable credentials": return null so the CLI degrades to "run kcap login"
+    // instead of throwing JsonException out of every command, hook, the daemon, and MCP.
+    // The next successful login/refresh overwrites the file. Catch JsonException only —
+    // IO/permission errors are real faults that must not be masked as unauthenticated.
+    static async Task<StoredTokens?> ReadTokensAsync(string path) {
+        if (!File.Exists(path)) return null;
+        var json = await File.ReadAllTextAsync(path);
+        try {
+            return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.StoredTokens);
+        } catch (JsonException) {
+            return null;
+        }
+    }
+
     // ── Profile-aware overloads ──────────────────────────────────────────────
 
     public static async Task<StoredTokens?> LoadAsync(string profile) {
-        var path = ProfileTokenPath(profile);
-        if (!File.Exists(path)) return null;
-        var json = await File.ReadAllTextAsync(path);
-        return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.StoredTokens);
+        return await ReadTokensAsync(ProfileTokenPath(profile));
     }
 
     public static async Task SaveAsync(string profile, StoredTokens tokens) {
@@ -89,9 +101,7 @@ public static class TokenStore {
         if (perProfile is not null) return perProfile;
 
         // Fall back to legacy single-file layout for pre-upgrade installs
-        if (!File.Exists(LegacyTokenPath)) return null;
-        var json = await File.ReadAllTextAsync(LegacyTokenPath);
-        return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.StoredTokens);
+        return await ReadTokensAsync(LegacyTokenPath);
     }
 
     public static async Task SaveAsync(StoredTokens tokens) {
