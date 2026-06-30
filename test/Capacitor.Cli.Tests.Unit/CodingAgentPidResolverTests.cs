@@ -49,6 +49,28 @@ public class CodingAgentPidResolverTests {
     }
 
     [Test]
+    public async Task Skips_the_npm_node_shim_and_resolves_the_durable_claude() {
+        // The real macOS hook topology: `kcap hook` runs under the npm `node` shim
+        // (`node /opt/homebrew/bin/kcap`), which is the process-group leader and a
+        // direct child of the durable terminal claude. The walk must step over the
+        // "node" shim and resolve claude. This only works once GetProcessInfoMac reads
+        // the exec-path name ("claude") instead of proc_bsdinfo's title field, which a
+        // node agent sets to its version string ("2.1.196") — with the old field the
+        // walk found no claude and the watchdog latched onto the transient shim, which
+        // dies the moment the hook returns and took the watcher down with it.
+        // kcap(200) -> node-shim(150) -> claude(100) -> zsh(80)
+        var lookup = ProcTable.Of(
+            (150, 100, "node"),
+            (100, 80, "/Users/alexey/.local/bin/claude"),
+            (80, 1, "-zsh")
+        );
+
+        var pid = ProcessHelpers.ResolveCodingAgentPid(startPid: 150, vendor: "claude", lookup);
+
+        await Assert.That(pid).IsEqualTo(100);
+    }
+
+    [Test]
     public async Task Resolves_codex_by_name() {
         // codex(50) -> zsh(20). The ancestry walk must work uniformly for both vendors.
         var lookup = ProcTable.Of((50, 20, "codex"), (20, 1, "-zsh"));

@@ -32,12 +32,24 @@ static partial class ProcessHelpers {
     private static partial int setsid_native();
 
     // macOS: proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) fills a
-    // proc_bsdinfo struct. We read only pbi_ppid (offset 16) and pbi_name (offset
-    // 64, 32 bytes) out of the 136-byte struct, so no struct marshalling is needed.
+    // proc_bsdinfo struct. We read pbi_ppid (offset 16) for the parent PID and only
+    // FALL BACK to pbi_name (offset 64, 32 bytes) for the process name — the primary
+    // name source is the exec path from KERN_PROCARGS2 (see ReadExecPathMac), because
+    // both pbi_comm and pbi_name carry the mutable process *title*, which a node-based
+    // agent (Claude Code) sets to its version string ("2.1.196"), not "claude".
     [LibraryImport("libproc", EntryPoint = "proc_pidinfo")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     private static unsafe partial int proc_pidinfo(int pid, int flavor, ulong arg, byte* buffer, int buffersize);
 
+    // sysctl({CTL_KERN, KERN_PROCARGS2, pid}) returns argc + the kernel's recorded
+    // executable path + argv + env for a process. The exec path is immune to a process
+    // changing its title, so it is the reliable name source for the agent ancestry walk.
+    [LibraryImport("libc", EntryPoint = "sysctl", SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe partial int sysctl(int* name, uint namelen, byte* oldp, nuint* oldlenp, byte* newp, nuint newlen);
+
+    const int CtlKern          = 1;
+    const int KernProcArgs2    = 49;
     const int ProcPidTBsdInfo  = 3;
     const int ProcBsdInfoSize  = 136;
     const int ProcBsdInfoPpid  = 16;
@@ -425,11 +437,73 @@ static partial class ProcessHelpers {
 
         var ppid = BitConverter.ToInt32(buf.Slice(ProcBsdInfoPpid, sizeof(int)));
 
-        var nameSpan = buf.Slice(ProcBsdInfoName, 32);
-        var nul      = nameSpan.IndexOf((byte)0);
-        var comm     = Encoding.UTF8.GetString(nul >= 0 ? nameSpan[..nul] : nameSpan);
+        // Take the name from the executable path, NOT proc_bsdinfo's name fields: a
+        // node-based agent (Claude Code) calls setproctitle with its version string,
+        // which overwrites BOTH pbi_comm and pbi_name (they read "2.1.196", never
+        // "claude"), so the ancestry walk would miss the durable agent and the
+        // parent-PID watchdog would fall back to the transient hook process-group
+        // leader — killing the watcher mid-session. The kernel's recorded exec path
+        // is unaffected by a title change. Fall back to pbi_name only when the exec
+        // path is unreadable (e.g. a zombie or a permission-restricted process).
+        var comm = ReadExecPathMac(pid);
+
+        if (string.IsNullOrEmpty(comm)) {
+            var nameSpan = buf.Slice(ProcBsdInfoName, 32);
+            var nul      = nameSpan.IndexOf((byte)0);
+            comm = Encoding.UTF8.GetString(nul >= 0 ? nameSpan[..nul] : nameSpan);
+        }
 
         return (ppid, comm);
+    }
+
+    /// <summary>
+    /// Returns the executable path of <paramref name="pid"/> via the
+    /// <c>KERN_PROCARGS2</c> sysctl — the same source <c>ps</c> uses — or null if it
+    /// can't be read. Unlike <c>proc_bsdinfo</c>'s name fields, the exec path is the
+    /// kernel's recorded image path and is not affected by a process changing its
+    /// title, so it reliably identifies the coding agent for the ancestry walk.
+    /// </summary>
+    static unsafe string? ReadExecPathMac(int pid) {
+        Span<int> mib = [CtlKern, KernProcArgs2, pid];
+        nuint     size = 0;
+
+        fixed (int* m = mib) {
+            // First call (oldp = null) reports the buffer size to allocate. The buffer
+            // holds argc + exec_path + argv + env, so it can't be guessed up front.
+            if (sysctl(m, 3, null, &size, null, 0) != 0 || size == 0) {
+                return null;
+            }
+
+            var buf = new byte[size];
+
+            fixed (byte* b = buf) {
+                // Reuse the same `size` as the buffer length; a short buffer would make
+                // sysctl fail with ENOMEM rather than truncate, so we'd just fall back.
+                if (sysctl(m, 3, b, &size, null, 0) != 0) {
+                    return null;
+                }
+            }
+
+            return ParseExecPath(buf.AsSpan(0, (int)size));
+        }
+    }
+
+    /// <summary>
+    /// Extracts the executable path from a <c>KERN_PROCARGS2</c> buffer: a 4-byte
+    /// <c>argc</c> followed by the NUL-terminated exec path string. Pure so the
+    /// parsing is unit-testable with a synthetic buffer. Returns null when the buffer
+    /// is too short to contain the path or the path is empty.
+    /// </summary>
+    internal static string? ParseExecPath(ReadOnlySpan<byte> procArgs2) {
+        if (procArgs2.Length <= sizeof(int)) {
+            return null;
+        }
+
+        var rest = procArgs2[sizeof(int)..]; // skip the leading argc
+        var nul  = rest.IndexOf((byte)0);
+        var path = nul >= 0 ? rest[..nul] : rest;
+
+        return path.IsEmpty ? null : Encoding.UTF8.GetString(path);
     }
 
     static (int ppid, string comm)? GetProcessInfoLinux(int pid) {
@@ -451,10 +525,33 @@ static partial class ProcessHelpers {
             return null;
         }
 
-        var comm = stat.Substring(open + 1, close - open - 1);
-        var rest = stat[(close + 1)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var statComm = stat.Substring(open + 1, close - open - 1);
+        var rest     = stat[(close + 1)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
-        return rest.Length >= 2 && int.TryParse(rest[1], out var ppid) ? (ppid, comm) : null;
+        if (rest.Length < 2 || !int.TryParse(rest[1], out var ppid)) {
+            return null;
+        }
+
+        // Prefer the executable basename from /proc/<pid>/exe over the stat comm for the
+        // same reason as macOS (see GetProcessInfoMac): node's process.title support
+        // prctl(PR_SET_NAME)s the stat comm to the agent's version string, so a node-
+        // based agent's stat comm reads "2.1.196" rather than "claude". The /exe symlink
+        // is maintained by the kernel and a title change can't touch it. Falls back to
+        // the stat comm when the link is unreadable (kernel threads, permissions), so
+        // this can only improve resolution, never regress it. Note: when the agent is
+        // launched as `node <script>` (rather than a packaged binary) the link resolves
+        // to "node"; that case still relies on the legacy fallback.
+        string comm = statComm;
+
+        try {
+            if (File.ResolveLinkTarget($"/proc/{pid}/exe", returnFinalTarget: false)?.Name is { Length: > 0 } exeName) {
+                comm = exeName;
+            }
+        } catch {
+            // Best effort — keep the stat comm.
+        }
+
+        return (ppid, comm);
     }
 
     /// <summary>
