@@ -92,13 +92,20 @@ public static class TokenStore {
         // File.Move then publishes one complete document, last-writer-wins.
         var tempPath = $"{path}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
 
+        // Create the temp owner-only from the very first byte. A chmod *after* writing would
+        // leave a window where the token secret exists group/world-readable under the process
+        // umask (and a crash in that window leaks a readable temp). UnixCreateMode applies the
+        // mode at creation; it is ignored on Windows, so set it only on Unix. The rename then
+        // carries 0600 onto the final file.
+        var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write, Share = FileShare.None };
+        if (!OperatingSystem.IsWindows()) {
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        }
+
         try {
-            await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(tokens, CapacitorJsonContext.Default.StoredTokens));
-            // Restrict the temp to owner-only BEFORE publishing, so even a temp leaked by a
-            // crash between write and move isn't group/world-readable (TokenDir itself is
-            // world-traversable). The rename preserves this mode onto the final file.
-            if (!OperatingSystem.IsWindows()) {
-                File.SetUnixFileMode(tempPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            await using (var stream = new FileStream(tempPath, options))
+            await using (var writer = new StreamWriter(stream)) {
+                await writer.WriteAsync(JsonSerializer.Serialize(tokens, CapacitorJsonContext.Default.StoredTokens));
             }
             File.Move(tempPath, path, overwrite: true);
         } finally {
