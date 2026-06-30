@@ -1,7 +1,29 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace Capacitor.Cli.Tests.Unit;
+
+/// <summary>
+/// Builds a synthetic <c>KERN_PROCARGS2</c> payload (little-endian argc, then the
+/// NUL-terminated exec path, then argv) for <see cref="ProcessHelpers.ParseExecPath"/>
+/// tests. Kept out of the test class so the TUnit source generator only sees [Test]s.
+/// </summary>
+static class ProcArgs2 {
+    public static byte[] Of(int argc, string execPath, params string[] argv) {
+        var bytes = new List<byte>();
+        bytes.AddRange(BitConverter.GetBytes(argc));
+        bytes.AddRange(Encoding.UTF8.GetBytes(execPath));
+        bytes.Add(0);
+
+        foreach (var a in argv) {
+            bytes.AddRange(Encoding.UTF8.GetBytes(a));
+            bytes.Add(0);
+        }
+
+        return bytes.ToArray();
+    }
+}
 
 public class ProcessHelpersTests {
     [Test]
@@ -129,5 +151,29 @@ public class ProcessHelpersTests {
 
         await Assert.That(parent).IsNotNull();
         await Assert.That(ProcessHelpers.IsProcessAlive(self.Value.ppid)).IsTrue();
+    }
+
+    [Test]
+    public async Task ParseExecPath_extracts_the_exec_path_from_a_procargs2_buffer() {
+        // The exec path is the kernel's recorded image path and the only name source
+        // immune to a process changing its title (Claude Code sets its title to its
+        // version string, which clobbers proc_bsdinfo's name fields). Reading it is what
+        // lets the agent ancestry walk match "claude" rather than "2.1.196".
+        var buf = ProcArgs2.Of(2, "/Users/alexey/.local/bin/claude", "claude", "--resume");
+
+        await Assert.That(ProcessHelpers.ParseExecPath(buf)).IsEqualTo("/Users/alexey/.local/bin/claude");
+    }
+
+    [Test]
+    public async Task ParseExecPath_returns_null_for_a_buffer_too_short_for_a_path() {
+        // Just the 4-byte argc with no path, and a buffer shorter than argc itself.
+        await Assert.That(ProcessHelpers.ParseExecPath(new byte[] { 1, 0, 0, 0 })).IsNull();
+        await Assert.That(ProcessHelpers.ParseExecPath(new byte[] { 0, 0 })).IsNull();
+    }
+
+    [Test]
+    public async Task ParseExecPath_returns_null_when_the_exec_path_is_empty() {
+        // argc followed immediately by the NUL terminator — no path present.
+        await Assert.That(ProcessHelpers.ParseExecPath(ProcArgs2.Of(1, "", "claude"))).IsNull();
     }
 }
