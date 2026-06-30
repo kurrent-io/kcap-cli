@@ -16,7 +16,26 @@ public static class PiPaths {
         return Path.Combine(home, ".pi");
     }
 
-    public static string AgentDir(string? home = null) => Path.Combine(Root(home), "agent");
+    /// <summary>
+    /// Agent state dir. <c>PI_CODING_AGENT_DIR</c> (when set) relocates THIS leaf
+    /// directly — Pi uses the env value verbatim (tilde-expanded) as the agent
+    /// dir; the <c>/agent</c> suffix is appended only on the default fallback.
+    /// </summary>
+    public static string AgentDir(string? home = null, string? agentDir = null) {
+        agentDir ??= Environment.GetEnvironmentVariable("PI_CODING_AGENT_DIR");
+        if (!string.IsNullOrWhiteSpace(agentDir)) return ExpandTilde(agentDir, home);
+
+        return Path.Combine(Root(home), "agent");
+    }
+
+    /// <summary>Expand a leading <c>~</c>/<c>~/</c> against <paramref name="home"/>
+    /// (or the OS user profile), matching Pi's <c>expandTildePath</c>.</summary>
+    static string ExpandTilde(string path, string? home) {
+        if (path != "~" && !path.StartsWith("~/") && !path.StartsWith("~\\")) return path;
+
+        var baseDir = home ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return path.Length <= 1 ? baseDir : Path.Combine(baseDir, path[2..]);
+    }
 
     /// <summary>
     /// Session JSONL root — one <c>*.jsonl</c> per session, possibly nested in

@@ -4,12 +4,19 @@ static class ClaudePaths {
     // Lazy: HOME may be mutated at runtime (tests inject a fake home), so
     // these must re-evaluate on every access, the same way AgentsPaths does.
     // A static-readonly initializer would bake in HOME at first touch and
-    // ignore subsequent changes.
-    static string Home => Path.Combine(PathHelpers.HomeDirectory, ".claude");
+    // ignore subsequent changes. CLAUDE_CONFIG_DIR (when set) replaces ~/.claude
+    // wholesale — settings.json, projects/, plans/ all move under it.
+    public static string Home(string? home = null, string? configDir = null) {
+        configDir ??= Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+        if (!string.IsNullOrWhiteSpace(configDir)) return configDir;
 
-    public static string Projects     => Path.Combine(Home, "projects");
-    public static string Plans        => Path.Combine(Home, "plans");
-    public static string UserSettings => Path.Combine(Home, "settings.json");
+        home ??= PathHelpers.HomeDirectory;
+        return Path.Combine(home, ".claude");
+    }
+
+    public static string Projects     => Path.Combine(Home(), "projects");
+    public static string Plans        => Path.Combine(Home(), "plans");
+    public static string UserSettings => Path.Combine(Home(), "settings.json");
 
     /// <summary>
     /// Returns the project directory for a given repo path.

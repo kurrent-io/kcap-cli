@@ -25,9 +25,9 @@ public sealed record PluginEnvironment(
     TextWriter     Stdout,
     TextWriter     Stderr
 ) {
-    public string ClaudeHome          => Path.Combine(HomeDirectory, ".claude");
+    public string ClaudeHome          => ClaudePaths.Home(HomeDirectory);
     public string ClaudeUserSettings  => Path.Combine(ClaudeHome, "settings.json");
-    public string CodexHome           => Path.Combine(HomeDirectory, ".codex");
+    public string CodexHome           => CodexPaths.Home(HomeDirectory);
     public string CodexUserHooksJson  => Path.Combine(CodexHome, "hooks.json");
     public string CodexConfigTomlPath => Path.Combine(CodexHome, "config.toml");
     public string CursorUserHooksJson => CursorPaths.UserHooksJson(HomeDirectory);

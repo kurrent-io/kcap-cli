@@ -22,7 +22,7 @@ public static class CodexConfigToml {
 
     public enum Change { Unchanged, Updated, Failed }
 
-    static string DefaultConfigPath => Path.Combine(CodexPaths.Home, "config.toml");
+    static string DefaultConfigPath => Path.Combine(CodexPaths.Home(), "config.toml");
 
     /// <summary>
     /// AI-794 — enable network access for Codex's <c>workspace-write</c> sandbox so

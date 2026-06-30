@@ -148,7 +148,7 @@ public static class UninstallCommand {
         // would survive. Sweep the directory for our prefix to catch those.
         // Same for legacy ~/.codex/skills/.
         if (!SweepCapacitorPrefixedDirs(AgentsPaths.UserSkillsDir))            hadFailures = true;
-        if (!SweepCapacitorPrefixedDirs(Path.Combine(CodexPaths.Home, "skills"))) hadFailures = true;
+        if (!SweepCapacitorPrefixedDirs(Path.Combine(CodexPaths.Home(), "skills"))) hadFailures = true;
 
         if (projectRoot is not null) {
             var claudeProject = Path.Combine(projectRoot, ".claude", "settings.local.json");

@@ -15,6 +15,6 @@ internal static class CodexConfigWriter {
             logger.LogWarning(
                 error,
                 "Failed to read/write {Path}; Codex worktree pre-trust not persisted",
-                Path.Combine(CodexPaths.Home, "config.toml"));
+                Path.Combine(CodexPaths.Home(), "config.toml"));
     }
 }

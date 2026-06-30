@@ -2,18 +2,23 @@ namespace Capacitor.Cli.Core.Gemini;
 
 /// <summary>
 /// Filesystem layout for Google Gemini CLI state. Everything lives under a
-/// single root: <c>$GEMINI_HOME</c> when set, otherwise <c>~/.gemini</c> on
-/// every OS. Unlike Copilot's dedicated <c>hooks/kcap.json</c>, Gemini's hooks
-/// live in the SHARED <c>settings.json</c> under a <c>hooks</c> key, so the
-/// installer must MERGE (see <see cref="GeminiHooksParser"/>).
+/// single root: <c>$GEMINI_CLI_HOME/.gemini</c> when <c>GEMINI_CLI_HOME</c> is
+/// set (it names the PARENT dir, not the .gemini dir itself), otherwise
+/// <c>~/.gemini</c> on every OS. Note: <c>GEMINI_HOME</c> is NOT a real Gemini
+/// CLI variable and is intentionally not honored. Unlike Copilot's dedicated
+/// <c>hooks/kcap.json</c>, Gemini's hooks live in the SHARED <c>settings.json</c>
+/// under a <c>hooks</c> key, so the installer must MERGE (see
+/// <see cref="GeminiHooksParser"/>).
 /// </summary>
 public static class GeminiPaths {
-    public static string Root(string? home = null, string? geminiHome = null) {
-        geminiHome ??= Environment.GetEnvironmentVariable("GEMINI_HOME");
-        if (!string.IsNullOrEmpty(geminiHome)) return geminiHome;
+    public static string Root(string? home = null, string? geminiCliHome = null) {
+        geminiCliHome ??= Environment.GetEnvironmentVariable("GEMINI_CLI_HOME");
 
-        home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Combine(home, ".gemini");
+        var baseDir = !string.IsNullOrWhiteSpace(geminiCliHome)
+            ? geminiCliHome
+            : home ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        return Path.Combine(baseDir, ".gemini");   // GEMINI_CLI_HOME is the PARENT of .gemini
     }
 
     /// <summary>
@@ -22,22 +27,22 @@ public static class GeminiPaths {
     /// to be the only signal. Callers that also want the PATH probe OR this
     /// with <c>AgentDetector.IsInstalled("gemini")</c>.
     /// </summary>
-    public static bool IsInstalled(string? home = null, string? geminiHome = null)
-        => Directory.Exists(Root(home, geminiHome));
+    public static bool IsInstalled(string? home = null, string? geminiCliHome = null)
+        => Directory.Exists(Root(home, geminiCliHome));
 
     /// <summary>
     /// Shared settings file (<c>~/.gemini/settings.json</c>) — holds user config
     /// plus the <c>hooks</c> block kcap merges into. NEVER overwrite wholesale.
     /// </summary>
-    public static string SettingsJson(string? home = null, string? geminiHome = null)
-        => Path.Combine(Root(home, geminiHome), "settings.json");
+    public static string SettingsJson(string? home = null, string? geminiCliHome = null)
+        => Path.Combine(Root(home, geminiCliHome), "settings.json");
 
     /// <summary>
     /// Per-project temporary state root: <c>~/.gemini/tmp/&lt;project&gt;/</c>.
     /// Chat recordings live under <c>chats/</c> within each project dir.
     /// </summary>
-    public static string TmpDir(string? home = null, string? geminiHome = null)
-        => Path.Combine(Root(home, geminiHome), "tmp");
+    public static string TmpDir(string? home = null, string? geminiCliHome = null)
+        => Path.Combine(Root(home, geminiCliHome), "tmp");
 
     /// <summary>Chat-recording directory for a project tmp dir: <c>&lt;tmp&gt;/&lt;project&gt;/chats</c>.</summary>
     public static string ChatsDir(string projectTmpDir)
