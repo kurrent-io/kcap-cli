@@ -529,6 +529,63 @@ public class McpFlowsServerTests : IDisposable {
         }
     }
 
+    [Test]
+    public async Task Start_review_flow_async_polls_until_terminal_findings() {
+        const string flowRunId = "flow-poll-1";
+        const string scenario  = "poll";
+
+        // POST returns running + round_number 1.
+        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type","application/json")
+                .WithBody($$"""{"flow_run_id":"{{flowRunId}}","round_id":"r1","round_number":1,"status":"running","result_kind":null,"result_text":null,"reviewer_agent_id":"a1","reviewer_session_id":"s1"}"""));
+
+        // GET #1: still running. GET #2: terminal findings.
+        _server.Given(Request.Create().WithPath($"/api/flows/{flowRunId}").UsingGet())
+            .InScenario(scenario).WillSetStateTo("seen-once")
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type","application/json")
+                .WithBody($$"""{"flow_run_id":"{{flowRunId}}","definition_id":"spec-review","status":"running","target_title":"t","round_count":1,"round_number":1,"round_status":"running","round_result_kind":null,"round_result_text":null}"""));
+        _server.Given(Request.Create().WithPath($"/api/flows/{flowRunId}").UsingGet())
+            .InScenario(scenario).WhenStateIs("seen-once")
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type","application/json")
+                .WithBody($$"""{"flow_run_id":"{{flowRunId}}","definition_id":"spec-review","status":"findings","target_title":"t","round_count":1,"round_number":1,"round_status":"findings","round_result_kind":"findings","round_result_text":"FINDINGS:\n- P1"}"""));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var args = new JsonObject {
+                ["kind"]="spec-review", ["target_kind"]="spec", ["target_ref"]="r",
+                ["target_title"]="t", ["context"]="please review"
+            };
+            var response = await SendRequest(proc, ToolsCallRequest(20, "start_review_flow", args), TimeSpan.FromSeconds(30));
+            var text = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(text!.Contains("FINDINGS:")).IsTrue();
+            await Assert.That(text.Contains("result_kind: findings")).IsTrue();
+
+            // The POST carried async:true.
+            var postBody = JsonNode.Parse(_server.FindLogEntries(Request.Create().WithPath("/api/flows/review/start").UsingPost())[0].RequestMessage.Body ?? "")?.AsObject();
+            await Assert.That(postBody!["async"]?.GetValue<bool>()).IsTrue();
+            // At least 2 GETs (running then terminal).
+            await Assert.That(_server.FindLogEntries(Request.Create().WithPath($"/api/flows/{flowRunId}").UsingGet()).Count >= 2).IsTrue();
+        } finally { await ShutdownAsync(proc); }
+    }
+
+    [Test]
+    public async Task Start_review_flow_uses_terminal_result_from_post_without_polling() {
+        const string flowRunId = "flow-old-server";
+        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type","application/json")
+                .WithBody($$"""{"flow_run_id":"{{flowRunId}}","round_id":"r1","round_number":1,"status":"completed","result_kind":"FINDINGS","result_text":"## done","reviewer_agent_id":null,"reviewer_session_id":null}"""));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var args = new JsonObject { ["kind"]="spec-review", ["target_kind"]="spec", ["target_ref"]="r", ["target_title"]="t", ["context"]="c" };
+            var response = await SendRequest(proc, ToolsCallRequest(21, "start_review_flow", args));
+            var text = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(text!.Contains("## done")).IsTrue();
+            // No GET polling happened (status was already terminal).
+            await Assert.That(_server.FindLogEntries(Request.Create().WithPath($"/api/flows/{flowRunId}").UsingGet()).Count).IsEqualTo(0);
+        } finally { await ShutdownAsync(proc); }
+    }
+
     /// <summary>
     /// Writes a non-expired token to the per-test config dir's token store so the
     /// CLI's <c>HttpClientExtensions.CreateAuthenticatedClientAsync</c> attaches a

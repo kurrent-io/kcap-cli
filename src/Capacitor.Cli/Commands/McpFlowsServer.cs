@@ -93,9 +93,25 @@ static class McpFlowsServer {
         try {
             var apiRoot = baseUrl.TrimEnd('/');
 
+            // start_review_flow and submit_review_round may need async poll — handle separately.
+            if (toolName is "start_review_flow" or "submit_review_round") {
+                using var postResponse = toolName == "start_review_flow"
+                    ? await SendWithRefreshRetryAsync(client, c => StartReviewFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo))
+                    : await SendWithRefreshRetryAsync(client, c => SubmitReviewRoundAsync(c, apiRoot, arguments));
+
+                var postBody = await postResponse.Content.ReadAsStringAsync();
+
+                if (postResponse.StatusCode == HttpStatusCode.Unauthorized)
+                    return BuildToolResult(id, "Not logged in. Run 'kcap login' on the host shell.", isError: true);
+
+                if (!postResponse.IsSuccessStatusCode)
+                    return BuildToolResult(id, $"Error: HTTP {(int)postResponse.StatusCode} — {postBody}", isError: true);
+
+                var payload = await ResolveRoundResultAsync(client, apiRoot, postBody);
+                return BuildToolResult(id, payload);
+            }
+
             using var httpResponse = toolName switch {
-                "start_review_flow"      => await SendWithRefreshRetryAsync(client, c => StartReviewFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo)),
-                "submit_review_round"    => await SendWithRefreshRetryAsync(client, c => SubmitReviewRoundAsync(c, apiRoot, arguments)),
                 "get_review_flow_status" => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildFlowUrl(apiRoot, arguments))),
                 "close_review_flow"      => await SendWithRefreshRetryAsync(client, c => c.PostAsync(BuildFlowUrl(apiRoot, arguments) + "/close", null)),
                 _                        => throw new ArgumentException($"Unknown tool: {toolName}")
@@ -111,13 +127,13 @@ static class McpFlowsServer {
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
             }
 
-            var payload = toolName switch {
+            var statusPayload = toolName switch {
                 "get_review_flow_status" => FormatStatusResponse(body),
                 "close_review_flow"      => FormatCloseResponse(body),
                 _                        => FormatRoundResponse(body)
             };
 
-            return BuildToolResult(id, payload);
+            return BuildToolResult(id, statusPayload);
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
@@ -182,7 +198,8 @@ static class McpFlowsServer {
             RepoName:             repoInfo?.RepoName,
             DaemonName:           null,
             RepoPath:             repoRoot,
-            Mode:                 mode
+            Mode:                 mode,
+            Async:                true
         );
 
         return await client.PostAsync(
@@ -207,7 +224,7 @@ static class McpFlowsServer {
             );
         }
 
-        var body = new SubmitReviewRoundDto(Context: context, Instructions: instructions);
+        var body = new SubmitReviewRoundDto(Context: context, Instructions: instructions, Async: true);
 
         return client.PostAsync(
             $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}/rounds",
@@ -220,6 +237,95 @@ static class McpFlowsServer {
             ?? throw new ArgumentException("Missing required argument: flow_run_id");
 
         return $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
+    }
+
+    static readonly TimeSpan PollInterval  = TimeSpan.FromSeconds(3);
+    static readonly TimeSpan PollCap       = TimeSpan.FromMinutes(8);   // safely below MCP_TOOL_TIMEOUT
+    static readonly TimeSpan PerGetTimeout = TimeSpan.FromSeconds(20);
+    static readonly TimeSpan NotFoundGrace = TimeSpan.FromSeconds(10);
+
+    static readonly HashSet<string> TerminalRoundStatuses =
+        new(StringComparer.Ordinal) { "findings", "clean", "waiting", "unclear", "failed", "cancelled" };
+
+    /// <summary>If the POST already carries a terminal result (old/blocking server), return it.
+    /// Otherwise poll GET /api/flows/{id} until the started round is terminal (AI-1061).</summary>
+    static async Task<string> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody) {
+        var node      = JsonNode.Parse(postBody)?.AsObject();
+        var status    = node?["status"]?.GetValue<string>();
+        var flowRunId = node?["flow_run_id"]?.GetValue<string>();
+        var roundNum  = node?["round_number"]?.GetValue<int>();
+
+        if (status != "running" || flowRunId is null || roundNum is null)
+            return FormatRoundResponse(postBody); // terminal-in-POST (old server) or unparseable
+
+        return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value);
+    }
+
+    static async Task<string> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber) {
+        var url      = $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
+        var deadline = DateTimeOffset.UtcNow + PollCap;
+        var firstSeenNotFound = (DateTimeOffset?)null;
+
+        while (DateTimeOffset.UtcNow < deadline) {
+            using var getCts = new CancellationTokenSource(PerGetTimeout);
+            HttpResponseMessage resp;
+            try {
+                resp = await SendWithRefreshRetryAsync(client, c => c.GetAsync(url, getCts.Token));
+            } catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException) {
+                await Task.Delay(PollInterval); continue; // transient — retry within cap
+            }
+
+            using (resp) {
+                if (resp.StatusCode == HttpStatusCode.NotFound) {
+                    firstSeenNotFound ??= DateTimeOffset.UtcNow;
+                    if (DateTimeOffset.UtcNow - firstSeenNotFound > NotFoundGrace)
+                        return $"Error: flow_run_id {flowRunId} not found.";
+                    await Task.Delay(PollInterval); continue;
+                }
+                if (resp.StatusCode == HttpStatusCode.Unauthorized)
+                    return "Not logged in. Run 'kcap login' on the host shell.";
+
+                var body = await resp.Content.ReadAsStringAsync();
+                if (!resp.IsSuccessStatusCode) { await Task.Delay(PollInterval); continue; }
+
+                var node     = JsonNode.Parse(body)?.AsObject();
+                var rn       = node?["round_number"]?.GetValue<int>();
+                var rs       = node?["round_status"]?.GetValue<string>();
+                var runStatus = node?["status"]?.GetValue<string>();
+
+                // If the run-level status is terminal, stop regardless of round status
+                // (guards against a run that failed with an in-flight round left at "running").
+                if (runStatus is "closed" or "failed") {
+                    if (rn == roundNumber && rs is not null)
+                        return FormatPolledRoundResult(node!, flowRunId);
+                    // Run terminal but round not matching yet — return what we have
+                    return FormatPolledRoundResult(node!, flowRunId);
+                }
+
+                // Only act on OUR round; an earlier projection may still show a prior round.
+                if (rn == roundNumber && rs is not null && TerminalRoundStatuses.Contains(rs))
+                    return FormatPolledRoundResult(node!, flowRunId);
+            }
+            await Task.Delay(PollInterval);
+        }
+
+        return $"Review still running for flow_run_id {flowRunId} (round {roundNumber}). " +
+               "Call get_review_flow_status to retrieve the result when ready.";
+    }
+
+    /// <summary>Formats the terminal GET /api/flows/{id} response into the same envelope+text as FormatRoundResponse.</summary>
+    static string FormatPolledRoundResult(JsonObject node, string flowRunId) {
+        var roundNumber = node["round_number"]?.GetValue<int>();
+        var resultKind  = node["round_result_kind"]?.GetValue<string>() ?? node["round_status"]?.GetValue<string>() ?? "";
+        var resultText  = node["round_result_text"]?.GetValue<string>();
+
+        var sb = new StringBuilder();
+        sb.Append("flow_run_id: "); AppendLine(sb, flowRunId);
+        if (roundNumber.HasValue) { sb.Append("round_number: "); sb.AppendLine(roundNumber.Value.ToString()); }
+        sb.Append("status: ");      AppendLine(sb, node["status"]?.GetValue<string>() ?? "");
+        sb.Append("result_kind: "); AppendLine(sb, resultKind);
+        if (!string.IsNullOrEmpty(resultText)) { sb.AppendLine(); sb.Append(resultText); }
+        return sb.ToString();
     }
 
     /// <summary>
@@ -356,7 +462,7 @@ static class McpFlowsServer {
     static McpTool[] BuildToolsList() => [
         new(
             "start_review_flow",
-            "Start a new review flow. The server starts an AI reviewer agent that will analyse the target and return findings. " +
+            "Start a new review flow. Returns findings (same UX); the server runs the reviewer asynchronously and the CLI polls internally. " +
             "Returns a flow_run_id that identifies this review session — save it to call submit_review_round or get_review_flow_status later.",
             new(
                 "object",
@@ -374,7 +480,7 @@ static class McpFlowsServer {
         ),
         new(
             "submit_review_round",
-            "Submit a follow-up round to an existing review flow. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback. Returns the new round's findings.",
+            "Submit a follow-up round to an existing review flow. Returns findings (same UX); the server runs the reviewer asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback.",
             new(
                 "object",
                 new() {
@@ -425,11 +531,13 @@ record StartReviewFlowDto(
     [property: JsonPropertyName("repo_name")]              string? RepoName,
     [property: JsonPropertyName("daemon_name")]            string? DaemonName,
     [property: JsonPropertyName("repo_path")]              string? RepoPath,
-    [property: JsonPropertyName("mode")]                   string? Mode
+    [property: JsonPropertyName("mode")]                   string? Mode,
+    [property: JsonPropertyName("async")]                  bool    Async
 );
 
 /// <summary>CLI-side DTO for POST /api/flows/{flowRunId}/rounds — mirrors the server's SubmitReviewRoundRequest.</summary>
 record SubmitReviewRoundDto(
     [property: JsonPropertyName("context")]      string  Context,
-    [property: JsonPropertyName("instructions")] string? Instructions
+    [property: JsonPropertyName("instructions")] string? Instructions,
+    [property: JsonPropertyName("async")]        bool    Async
 );
