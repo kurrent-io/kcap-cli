@@ -34,6 +34,12 @@ static class PermissionRequestCommand {
             return 0;
         }
 
+        // Self-heal the transcript watcher (see TryEnsureWatcher). Done before the
+        // rendered/non-rendered split so both the interactive path and the daemon-hosted
+        // long-poll recover a dead or never-started watcher; idempotent, so a no-op when
+        // one is already running.
+        await TryEnsureWatcher(baseUrl, sessionId, node);
+
         var isRenderedAgent = Environment.GetEnvironmentVariable("KCAP_RENDERED_AGENT") is "1";
 
         if (isRenderedAgent) {
@@ -70,6 +76,36 @@ static class PermissionRequestCommand {
         }
 
         return await PostAsync(baseUrl + "/hooks/permission-request", payload, authenticated: true);
+    }
+
+    /// <summary>
+    /// Self-heals the transcript watcher from a permission-request payload. Permission
+    /// requests fire frequently mid-session, so this is a cheap recovery point when the
+    /// watcher died or never started — an abruptly-killed agent orphans its watcher,
+    /// leaving the session stuck "active" because session-end is never POSTed.
+    /// Idempotent: <see cref="WatcherManager.EnsureWatcherRunning"/> is a no-op when the
+    /// watcher is already alive. Scoped to the MAIN session — a present <c>agent_id</c>
+    /// marks a subagent tool call, whose watcher uses a distinct key + transcript and is
+    /// ensured at subagent-start. Best-effort: never throws into the hook path.
+    /// </summary>
+    internal static async Task TryEnsureWatcher(string baseUrl, string sessionId, JsonNode node) {
+        try {
+            if (node["agent_id"]?.GetValue<string>() is { Length: > 0 }) {
+                return;
+            }
+
+            var transcriptPath = node["transcript_path"]?.GetValue<string>();
+
+            if (string.IsNullOrEmpty(transcriptPath)) {
+                return;
+            }
+
+            var cwd = node["cwd"]?.GetValue<string>();
+
+            await WatcherManager.EnsureWatcherRunning(baseUrl, sessionId, transcriptPath, agentId: null, cwd: cwd);
+        } catch (Exception ex) {
+            await Console.Error.WriteLineAsync($"[kcap] permission-request watcher self-heal failed: {ex.Message}");
+        }
     }
 
     internal static bool TryGetLoopbackDaemonUrl(out string daemonUrl) {
