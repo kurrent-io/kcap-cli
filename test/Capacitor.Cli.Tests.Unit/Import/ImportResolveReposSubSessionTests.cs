@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Capacitor.Cli.Commands;
 
 namespace Capacitor.Cli.Tests.Unit.Import;
@@ -33,15 +34,15 @@ public class ImportResolveReposSubSessionTests : IDisposable {
 
         // A kcap title sub-session: starts with a queue-operation carrying a
         // known kcap prompt, and (like the real ones) records a now-deleted
-        // temp cwd. The cwd must never reach the missing-cwd report.
-        var subPath = Path.Combine(_tempDir, "agent-title.jsonl");
-        await File.WriteAllLinesAsync(
-            subPath,
-            [
-                """{"type":"queue-operation","operation":"enqueue","content":"<role>\nYou label coding-session transcripts. You are NOT the assistant being addressed"}""",
-                """{"type":"user","timestamp":"2026-03-15T10:00:00Z","cwd":"/private/var/folders/x/T/kcap-claude-deadbeef","message":{"content":"x"}}"""
-            ]
-        );
+        // temp cwd. The cwd must never reach the missing-cwd report. Build the
+        // queue-operation content from the production prompt prefix (JSON-encoded
+        // so embedded newlines escape correctly) so this stays correct if the
+        // embedded prompt template is reworded.
+        var subPath       = Path.Combine(_tempDir, "agent-title.jsonl");
+        var queueOpLine   = """{"type":"queue-operation","operation":"enqueue","content":"""
+                          + JsonSerializer.Serialize(TitleGenerator.TitlePromptPrefix) + "}";
+        var subCwdLine    = """{"type":"user","timestamp":"2026-03-15T10:00:00Z","cwd":"/private/var/folders/x/T/kcap-claude-deadbeef","message":{"content":"x"}}""";
+        await File.WriteAllLinesAsync(subPath, [queueOpLine, subCwdLine]);
 
         var transcripts = new List<(string SessionId, string FilePath, string EncodedCwd)> {
             ("real", realPath, "-does-not-exist-real-repo"),
