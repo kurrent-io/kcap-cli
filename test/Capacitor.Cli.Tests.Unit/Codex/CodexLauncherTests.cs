@@ -303,4 +303,33 @@ public class CodexLauncherTests {
         var joined = string.Join(' ', NewLauncher().BuildArgs(ctx).Args);
         await Assert.That(joined).Contains("mcp_servers.kcap-review.command=\"C:\\\\Program Files\\\\kcap\\\\kcap.exe\"");
     }
+
+    [Test]
+    public async Task BuildArgs_review_toml_escapes_control_chars_in_command_args_and_env() {
+        // TOML basic strings forbid raw control characters; an unescaped tab/newline/CR
+        // produces invalid TOML and fails the Codex launch at config-parse time. Exercise
+        // the encoder on all three injected surfaces: command, an args element, env value.
+        var mcp = new ReviewLaunchBuilder.ReviewMcpServer(
+            Command: "kcap\twith\tctrl",
+            Args: ["mcp", "review", "line1\nline2"],
+            Env: new Dictionary<string, string> { ["KCAP_URL"] = "https://srv\r/x" });
+
+        var ctx = new LauncherContext(
+            AgentId: "a-rev",
+            SourceRepoPath: "/tmp/repo",
+            Worktree: new WorktreeInfo(Path: "/tmp/wt", Branch: "wt-branch", SourceRepo: "/tmp/repo"),
+            Prompt: null,
+            Model: "gpt-5.3-codex",
+            Effort: null,
+            Tools: null,
+            IsReview: true,
+            Review: new ReviewLaunchInfo("acme", "widgets", 42),
+            ReviewLaunch: new ReviewLaunchBuilder.ReviewLaunch(McpConfigPath: null, SystemPrompt: "p", Mcp: mcp));
+
+        var joined = string.Join(' ', NewLauncher().BuildArgs(ctx).Args);
+
+        await Assert.That(joined).Contains("mcp_servers.kcap-review.command=\"kcap\\twith\\tctrl\"");
+        await Assert.That(joined).Contains("\"line1\\nline2\"");
+        await Assert.That(joined).Contains("mcp_servers.kcap-review.env={KCAP_URL=\"https://srv\\r/x\"}");
+    }
 }

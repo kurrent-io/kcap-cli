@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Commands;
@@ -140,9 +141,38 @@ internal sealed partial class CodexLauncher(
     }
 
     /// Encode a value as a TOML basic string: wrap in double quotes and escape
-    /// backslashes and double quotes (covers Windows paths and arbitrary URLs).
-    static string TomlString(string value) =>
-        "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    /// backslashes, double quotes, and control characters. TOML basic strings forbid
+    /// raw control chars, so an unescaped tab/newline/CR would yield invalid TOML and
+    /// fail the Codex `-c` config parse. Covers Windows paths and arbitrary URLs.
+    static string TomlString(string value) {
+        var sb = new StringBuilder(value.Length + 2);
+        sb.Append('"');
+
+        foreach (var c in value) {
+            switch (c) {
+                case '\\': sb.Append("\\\\"); break;
+                case '"':  sb.Append("\\\""); break;
+                case '\b': sb.Append("\\b");  break;
+                case '\t': sb.Append("\\t");  break;
+                case '\n': sb.Append("\\n");  break;
+                case '\f': sb.Append("\\f");  break;
+                case '\r': sb.Append("\\r");  break;
+                default:
+                    // Remaining C0 controls (and DEL) have no short escape — emit \uXXXX.
+                    if (c < ' ' || c == (char)0x7f) {
+                        sb.Append("\\u").Append(((int)c).ToString("X4"));
+                    } else {
+                        sb.Append(c);
+                    }
+
+                    break;
+            }
+        }
+
+        sb.Append('"');
+
+        return sb.ToString();
+    }
 
     /// Local launch: emit the mandatory daemon-level flags Codex always needs, then append
     /// the user's verbatim post-`--` args. A user duplicate of a mandatory flag is rejected
