@@ -53,10 +53,12 @@ mcp flows:
     Claude Code:
       claude mcp add kcap-flows -- kcap mcp flows
 
-    Codex (~/.config/codex/mcp_servers.toml):
-      [kcap-flows]
+    Codex (CLI or desktop app) — add to ~/.codex/config.toml:
+      [mcp_servers.kcap-flows]
       command = "kcap"
       args    = ["mcp", "flows"]
+      # desktop app launches with no shell PATH, so command
+      # needs an absolute path (e.g. /opt/homebrew/bin/kcap)
 
 INSTALL
 
@@ -72,7 +74,9 @@ INSTALL
     Claude Code:
       claude mcp add kcap-judge -- kcap mcp judge
 
-    Codex (~/.config/codex/mcp_servers.toml):
-      [kcap-judge]
+    Codex (CLI or desktop app) — add to ~/.codex/config.toml:
+      [mcp_servers.kcap-judge]
       command = "kcap"
       args    = ["mcp", "judge"]
+      # desktop app launches with no shell PATH, so command
+      # needs an absolute path (e.g. /opt/homebrew/bin/kcap)

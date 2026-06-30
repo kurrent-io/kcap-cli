@@ -4,7 +4,7 @@ This plugin integrates [Kurrent Capacitor](../README.md) with Claude Code and Co
 
 ## What it does
 
-**MCP servers** — Two stdio servers, both auto-registered on plugin install (no manual `claude mcp add` or `~/.config/codex/mcp_servers.toml` edit):
+**MCP servers** — Two stdio servers, both auto-registered on plugin install (no manual `claude mcp add` or `~/.codex/config.toml` edit):
 
 ### `kcap-sessions`
 
