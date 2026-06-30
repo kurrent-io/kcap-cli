@@ -76,6 +76,30 @@ public class EvalCatalogClientTests {
         await Assert.That(observer.FailReason).Contains("empty");
     }
 
+    // Fail-closed (not throw) on a JSON `"questions": null` — it overrides the [] initializer,
+    // so `.Count` would NRE without the explicit null guard.
+    [Test]
+    public async Task Returns_null_on_null_questions_array() {
+        const string body = """{"retrospective_prompt":"r","retrospective_prompt_version":"1","questions":null}""";
+        using var http = new HttpClient(new StubHandler(HttpStatusCode.OK, body));
+        var observer = new CapturingObserver();
+        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, CancellationToken.None);
+        await Assert.That(catalog).IsNull();
+        await Assert.That(observer.FailReason).Contains("questions");
+    }
+
+    // Fail-closed (not throw) on a `"questions": [null]` element — the field accesses would NRE
+    // without the per-item null guard in the validation loop.
+    [Test]
+    public async Task Returns_null_on_null_question_entry() {
+        const string body = """{"retrospective_prompt":"r","retrospective_prompt_version":"1","questions":[null]}""";
+        using var http = new HttpClient(new StubHandler(HttpStatusCode.OK, body));
+        var observer = new CapturingObserver();
+        var catalog = await EvalCatalogClient.FetchAsync("http://server", http, observer, CancellationToken.None);
+        await Assert.That(catalog).IsNull();
+        await Assert.That(observer.FailReason).Contains("null question");
+    }
+
     [Test]
     public async Task Returns_null_on_missing_retrospective_prompt() {
         const string body = "{\"retrospective_prompt\":\"\",\"retrospective_prompt_version\":\"1\"," +

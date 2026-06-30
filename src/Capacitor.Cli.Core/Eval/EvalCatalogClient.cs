@@ -36,8 +36,11 @@ public static class EvalCatalogClient {
             }
 
             // SF#4 -- fail-fast integrity checks before any judge invocation.
-            if (parsed.Questions.Count == 0) {
-                observer.OnFailed("eval catalog is empty");
+            // A JSON `"questions": null` overrides the [] initializer, so guard the null case
+            // explicitly: `is not { Count: > 0 }` is true for both null and empty -> fail closed
+            // rather than NRE on `.Count` (which the catch below would NOT swallow).
+            if (parsed.Questions is not { Count: > 0 }) {
+                observer.OnFailed("eval catalog is empty or missing the questions array");
                 return null;
             }
             if (string.IsNullOrWhiteSpace(parsed.RetrospectivePrompt)) {
@@ -50,6 +53,12 @@ public static class EvalCatalogClient {
             }
             var seenIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var q in parsed.Questions) {
+                // A `"questions": [null]` element deserializes to a null entry; reject it
+                // (fail closed) rather than NRE on the field accesses below.
+                if (q is null) {
+                    observer.OnFailed("eval catalog contains a null question entry");
+                    return null;
+                }
                 if (string.IsNullOrWhiteSpace(q.Id)
                         || string.IsNullOrWhiteSpace(q.QuestionText)
                         || string.IsNullOrWhiteSpace(q.Prompt)
