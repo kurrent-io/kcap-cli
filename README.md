@@ -256,6 +256,8 @@ Output is a per-category + overall score (1-5, with `pass`/`warn`/`fail` verdict
 
 Expect ~1-3 minutes total depending on the model and session size — judges run sequentially.
 
+> **Server requirement:** `kcap eval` fetches its question catalog from the server (`GET /api/eval/catalog`) and posts results to `POST /api/sessions/{id}/evals/v3`. It fails fast with a clear error against a server that doesn't expose the catalog endpoint, so the server must be running a build that includes the eval catalog (Capacitor AI-9). Upgrade the server if `kcap eval` reports the catalog endpoint is unavailable.
+
 ### PR review with full context
 
 ```bash
