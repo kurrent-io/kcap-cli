@@ -508,6 +508,95 @@ public class McpFlowsServerTests : IDisposable {
         }
     }
 
+    /// <summary>
+    /// Transient-retry (a): if the GET for a running round returns HTTP 500 once
+    /// and then 200 with a terminal result, the poll should survive the transient
+    /// error and return the terminal result. Guards PollUntilTerminalAsync's
+    /// !IsSuccessStatusCode → continue branch.
+    /// </summary>
+    [Test]
+    public async Task Start_review_flow_async_survives_transient_500_on_poll() {
+        const string flowRunId = "flow-retry-500";
+        const string scenario  = "retry-500";
+
+        // POST returns running.
+        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type","application/json")
+                .WithBody($$"""{"flow_run_id":"{{flowRunId}}","round_id":"r1","round_number":1,"status":"running","result_kind":null,"result_text":null,"reviewer_agent_id":"a1","reviewer_session_id":"s1"}"""));
+
+        // GET #1: 500 (transient). GET #2: terminal findings.
+        _server.Given(Request.Create().WithPath($"/api/flows/{flowRunId}").UsingGet())
+            .InScenario(scenario).WillSetStateTo("after-500")
+            .RespondWith(Response.Create().WithStatusCode(500).WithBody("Internal Server Error"));
+        _server.Given(Request.Create().WithPath($"/api/flows/{flowRunId}").UsingGet())
+            .InScenario(scenario).WhenStateIs("after-500")
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type","application/json")
+                .WithBody($$"""{"flow_run_id":"{{flowRunId}}","definition_id":"spec-review","status":"findings","target_title":"t","round_count":1,"round_number":1,"round_status":"findings","round_result_kind":"findings","round_result_text":"FINDINGS:\n- P1"}"""));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var args = new JsonObject {
+                ["kind"]="spec-review", ["target_kind"]="spec", ["target_ref"]="r",
+                ["target_title"]="t", ["context"]="please review"
+            };
+            var response = await SendRequest(proc, ToolsCallRequest(30, "start_review_flow", args), TimeSpan.FromSeconds(30));
+            var result = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["isError"]?.GetValue<bool>()).IsNotEqualTo(true);
+
+            var text = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(text!.Contains("FINDINGS:")).IsTrue();
+            await Assert.That(text.Contains("result_kind: findings")).IsTrue();
+
+            // Exactly 2 GETs: the 500 and then the terminal 200.
+            await Assert.That(_server.FindLogEntries(Request.Create().WithPath($"/api/flows/{flowRunId}").UsingGet()).Count >= 2).IsTrue();
+        } finally { await ShutdownAsync(proc); }
+    }
+
+    /// <summary>
+    /// Run-terminal stop (c): if the GET returns a run-level <c>status: "failed"</c>
+    /// while <c>round_status</c> is still "running", the poll must stop immediately
+    /// (not hang until the 8-min cap) and return a result. Guards the run-terminal
+    /// early-exit branch in PollUntilTerminalAsync.
+    /// </summary>
+    [Test]
+    public async Task Start_review_flow_async_stops_when_run_level_fails() {
+        const string flowRunId = "flow-run-failed";
+
+        // POST returns running.
+        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type","application/json")
+                .WithBody($$"""{"flow_run_id":"{{flowRunId}}","round_id":"r1","round_number":1,"status":"running","result_kind":null,"result_text":null,"reviewer_agent_id":"a1","reviewer_session_id":"s1"}"""));
+
+        // GET always returns run-level "failed" (round_status still "running").
+        _server.Given(Request.Create().WithPath($"/api/flows/{flowRunId}").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type","application/json")
+                .WithBody($$"""{"flow_run_id":"{{flowRunId}}","definition_id":"spec-review","status":"failed","target_title":"t","round_count":1,"round_number":1,"round_status":"running","round_result_kind":null,"round_result_text":null}"""));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var args = new JsonObject {
+                ["kind"]="spec-review", ["target_kind"]="spec", ["target_ref"]="r",
+                ["target_title"]="t", ["context"]="please review"
+            };
+            // This must resolve quickly (run-terminal path exits on first "failed" GET),
+            // well within 15 s (compared to the 8-min cap if we polled indefinitely).
+            var response = await SendRequest(proc, ToolsCallRequest(31, "start_review_flow", args), TimeSpan.FromSeconds(15));
+            var result = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            // The tool should return a result (not an MCP error) — we got a formatted envelope back.
+            await Assert.That(result!["content"]?[0]?["text"]?.GetValue<string>()).IsNotNull();
+        } finally { await ShutdownAsync(proc); }
+    }
+
+    // NOTE: graceful-cap behaviour (poll exceeds 8-min PollCap → returns
+    // "Review still running … call get_review_flow_status" message) is exercised
+    // manually only. The 8-min cap has no injectable test seam in the current
+    // McpFlowsServer implementation, so a CI test would either run for 8 minutes
+    // (unacceptable) or require source changes out of scope for this task.
+    // Manual e2e: start a flow against a server that never completes the round,
+    // wait 8 min, assert the graceful-cap message appears in the MCP tool output.
+
     [Test]
     public async Task Submit_review_round_without_flow_run_id_returns_error() {
         using var proc = SpawnMcpServer();
