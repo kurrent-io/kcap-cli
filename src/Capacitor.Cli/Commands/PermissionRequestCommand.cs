@@ -10,7 +10,10 @@ static class PermissionRequestCommand {
     public static Task<int> Handle(string baseUrl) =>
         Handle(baseUrl, body: null);
 
-    public static async Task<int> Handle(string baseUrl, string? body) {
+    // selfHealWatcher is false when the caller determined the session is excluded
+    // (excluded_repos/excluded_paths): we still handle the permission decision, but must NOT
+    // spawn a transcript-uploading watcher for a project the user opted out of recording.
+    public static async Task<int> Handle(string baseUrl, string? body, bool selfHealWatcher = true) {
         body ??= await Console.In.ReadToEndAsync();
 
         JsonNode? node;
@@ -32,6 +35,15 @@ static class PermissionRequestCommand {
             Console.Error.WriteLine("[kcap] No session_id in permission-request");
 
             return 0;
+        }
+
+        // Self-heal the transcript watcher (see TryEnsureWatcher). Done before the
+        // rendered/non-rendered split so both the interactive path and the daemon-hosted
+        // long-poll recover a dead or never-started watcher; idempotent, so a no-op when
+        // one is already running. Skipped for excluded sessions (the caller passes
+        // selfHealWatcher: false) so exclusions are honored just like at session-start.
+        if (selfHealWatcher) {
+            await TryEnsureWatcher(baseUrl, sessionId, node);
         }
 
         var isRenderedAgent = Environment.GetEnvironmentVariable("KCAP_RENDERED_AGENT") is "1";
@@ -71,6 +83,40 @@ static class PermissionRequestCommand {
 
         return await PostAsync(baseUrl + "/hooks/permission-request", payload, authenticated: true);
     }
+
+    /// <summary>
+    /// Self-heals the transcript watcher from a permission-request payload. Permission
+    /// requests fire frequently mid-session, so this is a cheap recovery point when the
+    /// watcher died or never started — an abruptly-killed agent orphans its watcher,
+    /// leaving the session stuck "active" because session-end is never POSTed.
+    /// Idempotent: <see cref="WatcherManager.EnsureWatcherRunning"/> is a no-op when the
+    /// watcher is already alive. Scoped to the MAIN session — a present <c>agent_id</c>
+    /// marks a subagent tool call, whose watcher uses a distinct key + transcript and is
+    /// ensured at subagent-start. Best-effort: never throws into the hook path.
+    /// </summary>
+    internal static async Task TryEnsureWatcher(string baseUrl, string sessionId, JsonNode node) {
+        try {
+            if (GetString(node, "agent_id") is { Length: > 0 }) {
+                return;
+            }
+
+            var transcriptPath = GetString(node, "transcript_path");
+
+            if (string.IsNullOrEmpty(transcriptPath)) {
+                return;
+            }
+
+            await WatcherManager.EnsureWatcherRunning(
+                baseUrl, sessionId, transcriptPath, agentId: null, cwd: GetString(node, "cwd"));
+        } catch (Exception ex) {
+            await Console.Error.WriteLineAsync($"[kcap] permission-request watcher self-heal failed: {ex.Message}");
+        }
+    }
+
+    // Reads an optional string field, treating null / missing / non-string uniformly as
+    // absent — a frequently-firing hook should not throw + log on a variant payload.
+    static string? GetString(JsonNode node, string field) =>
+        node[field] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
 
     internal static bool TryGetLoopbackDaemonUrl(out string daemonUrl) {
         daemonUrl = "";

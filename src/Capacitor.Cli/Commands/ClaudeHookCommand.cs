@@ -146,6 +146,30 @@ public static class ClaudeHookCommand {
         try { return await enrichment; } catch { return fallbackBody; }
     }
 
+    // Repo/path exclusion gate shared by the main command path and the permission-request
+    // watcher self-heal: true when the active profile excludes this session's repo or cwd
+    // (caller should skip capture). The fallback repo detection is budgeted so a slow git/gh
+    // probe can't blow the hook deadline; if it can't resolve in time we fail open to capturing
+    // (the per-cwd cache makes subsequent sessions in an excluded repo resolve and exclude promptly).
+    internal static async Task<bool> IsSessionExcludedAsync(Profile? profile, string body, long processStart, string command) {
+        if (profile?.ExcludedRepos is { Length: > 0 } repos
+         && await RepoExclusion.IsExcludedAsync(body, repos, HookBudget.Remaining(processStart, command))) {
+            return true;
+        }
+
+        if (profile?.ExcludedPaths is { Length: > 0 } paths) {
+            try {
+                var cwd = JsonNode.Parse(body)?["cwd"]?.GetValue<string>();
+
+                if (PathExclusion.IsExcluded(cwd, paths)) return true;
+            } catch {
+                // Best effort
+            }
+        }
+
+        return false;
+    }
+
     internal static async Task<int> HandleCore(HttpClient client, AuthStatus authStatus, HookSpool spool, long processStart, string baseUrl, TextReader stdin, Task? updateCheckTask = null) {
         var body = await stdin.ReadToEndAsync();
 
@@ -197,9 +221,18 @@ public static class ClaudeHookCommand {
             // Best effort — don't fail if JSON parsing fails.
         }
 
-        // PermissionRequest has its own handler path (daemon bridge / fire-and-forget).
+        // PermissionRequest has its own handler path (daemon bridge / fire-and-forget). The
+        // repo/path exclusion gates run further below (AFTER this dispatch), so the watcher
+        // self-heal — which would start uploading the transcript — must apply them HERE first;
+        // otherwise a permission prompt in an excluded project spawns a watcher that
+        // session-start intentionally skipped (data leak). Disabled sessions already returned
+        // above. The permission record/long-poll itself is unaffected: hosted agents need the
+        // decision regardless of exclusion.
         if (command == "permission-request") {
-            return await PermissionRequestCommand.Handle(baseUrl, body);
+            var permProfile = await AppConfig.GetActiveProfileAsync();
+            var selfHeal    = !await IsSessionExcludedAsync(permProfile, body, processStart, command);
+
+            return await PermissionRequestCommand.Handle(baseUrl, body, selfHeal);
         }
 
         // On session-start, clear the last-emitted repo cache so this session always gets a
@@ -243,24 +276,9 @@ public static class ClaudeHookCommand {
         // visibility were being ignored.
         var activeProfile = await AppConfig.GetActiveProfileAsync();
 
-        // Check repo exclusion — silently exit for excluded repos. Budget the fallback repo
-        // detection so a slow git/gh probe can't delay the session-start watcher spawn below
-        // (if detection can't resolve the repo in time, we fail open to capturing — the per-cwd
-        // cache makes subsequent sessions in an excluded repo resolve and exclude promptly).
-        if (activeProfile?.ExcludedRepos is { Length: > 0 } repos
-         && await RepoExclusion.IsExcludedAsync(body, repos, HookBudget.Remaining(processStart, command))) {
+        // Silently exit for excluded repos/paths (see IsSessionExcludedAsync).
+        if (await IsSessionExcludedAsync(activeProfile, body, processStart, command)) {
             return 0;
-        }
-
-        // Check path exclusion against the V2 profile that applies to this process.
-        if (activeProfile?.ExcludedPaths is { Length: > 0 } paths) {
-            try {
-                var cwd = JsonNode.Parse(body)?["cwd"]?.GetValue<string>();
-
-                if (PathExclusion.IsExcluded(cwd, paths)) return 0;
-            } catch {
-                // Best effort
-            }
         }
 
         // Auth lapsed: do not POST (server would 401) and do not drain (a 401 would Drop the
