@@ -162,11 +162,19 @@ public partial class AgentOrchestratorVendorTests {
         await orch.RegisterAgentForTestAsync(pub);
         await Assert.That(server.Calls).Contains(nameof(ServerConnection.AgentRegisteredAsync));
 
-        server.Calls.Clear();
+        // Assert the private-agent skip on a fresh orchestrator + connection rather than
+        // clearing the public one's Calls. RegisterAgentAsync for a public agent kicks off
+        // fire-and-forget background work (the UpdateRepoPathsAsync Task.Run, gated behind
+        // RepoPathStore file I/O, and AppendAgentRunEventAsync) that can land in Calls AFTER
+        // a Clear() under slow I/O — a timing race that flaked CI. A pristine connection that
+        // only ever sees the private registration must see zero calls, since RegisterAgentAsync
+        // returns immediately for private agents without touching the server.
+        var privServer = new TripwireServerConnection();
+        await using var privOrch = BuildOrchestrator(privServer, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         var priv = new AgentInstance("priv-1", null, "", null, "/r", "claude",
             new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true };
-        await orch.RegisterAgentForTestAsync(priv);
-        await Assert.That(server.Calls.Count).IsEqualTo(0);
+        await privOrch.RegisterAgentForTestAsync(priv);
+        await Assert.That(privServer.Calls.Count).IsEqualTo(0);
     }
 
     [Test]

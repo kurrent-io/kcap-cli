@@ -45,7 +45,8 @@ static class ReviewCommand {
             return 1;
         }
 
-        var launch = await ReviewLaunchBuilder.BuildAsync(baseUrl, owner, repo, prNumber);
+        var launch = await ReviewLaunchBuilder.BuildAsync(
+            "claude", Environment.ProcessPath ?? "kcap", baseUrl, owner, repo, prNumber);
 
         try {
             await Console.Error.WriteLineAsync("Launching claude with review MCP server...");
@@ -56,7 +57,7 @@ static class ReviewCommand {
             };
 
             psi.ArgumentList.Add("--mcp-config");
-            psi.ArgumentList.Add(launch.McpConfigPath);
+            psi.ArgumentList.Add(launch.McpConfigPath!);
             psi.ArgumentList.Add("--system-prompt");
             psi.ArgumentList.Add(launch.SystemPrompt);
 
@@ -73,7 +74,7 @@ static class ReviewCommand {
             return process.ExitCode;
         } finally {
             try {
-                File.Delete(launch.McpConfigPath);
+                File.Delete(launch.McpConfigPath!);
             } catch {
                 // Best effort cleanup
             }
