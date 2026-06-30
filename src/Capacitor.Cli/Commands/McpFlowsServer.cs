@@ -107,8 +107,8 @@ static class McpFlowsServer {
                 if (!postResponse.IsSuccessStatusCode)
                     return BuildToolResult(id, $"Error: HTTP {(int)postResponse.StatusCode} — {postBody}", isError: true);
 
-                var payload = await ResolveRoundResultAsync(client, apiRoot, postBody);
-                return BuildToolResult(id, payload);
+                var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody);
+                return BuildToolResult(id, payload, isError);
             }
 
             using var httpResponse = toolName switch {
@@ -247,24 +247,34 @@ static class McpFlowsServer {
     static readonly HashSet<string> TerminalRoundStatuses =
         new(StringComparer.Ordinal) { "findings", "clean", "waiting", "unclear", "failed", "cancelled" };
 
+    // Structured result from the poll path so callers can propagate isError correctly.
+    record PollResult(string Payload, bool IsError);
+
+    // Maximum consecutive transient failures (5xx / network / TLS) before giving up.
+    const int MaxTransientRetries = 5;
+
     /// <summary>If the POST already carries a terminal result (old/blocking server), return it.
     /// Otherwise poll GET /api/flows/{id} until the started round is terminal (AI-1061).</summary>
-    static async Task<string> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody) {
+    static async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody) {
         var node      = JsonNode.Parse(postBody)?.AsObject();
         var status    = node?["status"]?.GetValue<string>();
         var flowRunId = node?["flow_run_id"]?.GetValue<string>();
         var roundNum  = node?["round_number"]?.GetValue<int>();
 
         if (status != "running" || flowRunId is null || roundNum is null)
-            return FormatRoundResponse(postBody); // terminal-in-POST (old server) or unparseable
+            return new(FormatRoundResponse(postBody), false); // terminal-in-POST (old server) or unparseable
 
         return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value);
     }
 
-    static async Task<string> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber) {
-        var url      = $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
-        var deadline = DateTimeOffset.UtcNow + PollCap;
-        var firstSeenNotFound = (DateTimeOffset?)null;
+    static async Task<PollResult> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber) {
+        var url                   = $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
+        var pollStartedAt         = DateTimeOffset.UtcNow;
+        var deadline              = pollStartedAt + PollCap;
+        // Fix #3: anchor the 404 grace window to poll start, not to first-seen-404.
+        var notFoundGraceDeadline = pollStartedAt + NotFoundGrace;
+        var consecutiveTransient  = 0;
+        var lastTransientError    = (string?)null;
 
         while (DateTimeOffset.UtcNow < deadline) {
             using var getCts = new CancellationTokenSource(PerGetTimeout);
@@ -272,45 +282,73 @@ static class McpFlowsServer {
             try {
                 resp = await SendWithRefreshRetryAsync(client, c => c.GetAsync(url, getCts.Token));
             } catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException) {
-                await Task.Delay(PollInterval); continue; // transient — retry within cap
+                // Fix #4: count network/TLS/timeout as transient; stop after budget.
+                consecutiveTransient++;
+                lastTransientError = ex.Message;
+                if (consecutiveTransient > MaxTransientRetries)
+                    return new($"Error: poll failed after {MaxTransientRetries} consecutive network errors: {lastTransientError}", true);
+                await Task.Delay(PollInterval); continue;
             }
 
             using (resp) {
                 if (resp.StatusCode == HttpStatusCode.NotFound) {
-                    firstSeenNotFound ??= DateTimeOffset.UtcNow;
-                    if (DateTimeOffset.UtcNow - firstSeenNotFound > NotFoundGrace)
-                        return $"Error: flow_run_id {flowRunId} not found.";
+                    // Fix #3: 404 only gets the grace window anchored to poll start.
+                    if (DateTimeOffset.UtcNow > notFoundGraceDeadline)
+                        return new($"Error: flow_run_id {flowRunId} not found.", true);
                     await Task.Delay(PollInterval); continue;
                 }
+
                 if (resp.StatusCode == HttpStatusCode.Unauthorized)
-                    return "Not logged in. Run 'kcap login' on the host shell.";
+                    return new("Not logged in. Run 'kcap login' on the host shell.", true);
 
-                var body = await resp.Content.ReadAsStringAsync();
-                if (!resp.IsSuccessStatusCode) { await Task.Delay(PollInterval); continue; }
+                // Fix #4: non-transient 4xx (e.g. 400, 403) fail immediately.
+                var statusCode = (int)resp.StatusCode;
+                if (statusCode is >= 400 and < 500) {
+                    var errBody = await resp.Content.ReadAsStringAsync();
+                    return new($"Error: HTTP {statusCode} — {errBody}", true);
+                }
 
-                var node     = JsonNode.Parse(body)?.AsObject();
-                var rn       = node?["round_number"]?.GetValue<int>();
-                var rs       = node?["round_status"]?.GetValue<string>();
+                // Fix #4: 5xx / other non-success counts toward the transient budget.
+                if (!resp.IsSuccessStatusCode) {
+                    consecutiveTransient++;
+                    lastTransientError = $"HTTP {statusCode}";
+                    if (consecutiveTransient > MaxTransientRetries)
+                        return new($"Error: poll failed after {MaxTransientRetries} consecutive server errors: {lastTransientError}", true);
+                    await Task.Delay(PollInterval); continue;
+                }
+
+                // Successful response — reset transient counter.
+                consecutiveTransient = 0;
+                lastTransientError   = null;
+
+                var body      = await resp.Content.ReadAsStringAsync();
+                var node      = JsonNode.Parse(body)?.AsObject();
+                var rn        = node?["round_number"]?.GetValue<int>();
+                var rs        = node?["round_status"]?.GetValue<string>();
                 var runStatus = node?["status"]?.GetValue<string>();
 
-                // If the run-level status is terminal, stop regardless of round status
-                // (guards against a run that failed with an in-flight round left at "running").
+                // Fix #1: run-level terminal stops the loop, but only return round result
+                // when the projected round matches the one we submitted.
                 if (runStatus is "closed" or "failed") {
-                    if (rn == roundNumber && rs is not null)
-                        return FormatPolledRoundResult(node!, flowRunId);
-                    // Run terminal but round not matching yet — return what we have
-                    return FormatPolledRoundResult(node!, flowRunId);
+                    if (rn == roundNumber && rs is not null && TerminalRoundStatuses.Contains(rs))
+                        return new(FormatPolledRoundResult(node!, flowRunId), false);
+                    // Run became terminal before our round produced a result — explicit error.
+                    return new($"Error: review run {runStatus} before round {roundNumber} produced a result.", true);
                 }
 
                 // Only act on OUR round; an earlier projection may still show a prior round.
                 if (rn == roundNumber && rs is not null && TerminalRoundStatuses.Contains(rs))
-                    return FormatPolledRoundResult(node!, flowRunId);
+                    return new(FormatPolledRoundResult(node!, flowRunId), false);
             }
             await Task.Delay(PollInterval);
         }
 
-        return $"Review still running for flow_run_id {flowRunId} (round {roundNumber}). " +
-               "Call get_review_flow_status to retrieve the result when ready.";
+        // Genuine 8-min cap: round still legitimately running.
+        return new(
+            $"Review still running for flow_run_id {flowRunId} (round {roundNumber}). " +
+            "Call get_review_flow_status to retrieve the result when ready.",
+            false
+        );
     }
 
     /// <summary>Formats the terminal GET /api/flows/{id} response into the same envelope+text as FormatRoundResponse.</summary>
