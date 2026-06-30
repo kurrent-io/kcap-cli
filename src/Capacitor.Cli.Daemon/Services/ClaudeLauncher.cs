@@ -212,7 +212,10 @@ internal sealed partial class ClaudeLauncher(
             // is stored globally in ~/.claude.json under projects[path]. On a fresh
             // machine the file may not exist yet — create a minimal object so trust
             // is always persisted.
-            var claudeJsonPath = Path.Combine(PathHelpers.HomeDirectory, ".claude.json");
+            // The spawned `claude` inherits CLAUDE_CONFIG_DIR from the daemon's
+            // environment, so it reads/writes the same file we resolve here —
+            // $CLAUDE_CONFIG_DIR/.claude.json when set, else ~/.claude.json.
+            var claudeJsonPath = ClaudePaths.UserConfigJson();
             var root           = LoadJsonObject(claudeJsonPath);
 
             if (root["projects"] is not JsonObject projects) {
@@ -334,7 +337,7 @@ internal sealed partial class ClaudeLauncher(
     }
 
     static void WriteMcpConfig(string sourceRepoPath, string worktreePath) {
-        var claudeJsonPath = Path.Combine(PathHelpers.HomeDirectory, ".claude.json");
+        var claudeJsonPath = ClaudePaths.UserConfigJson();
 
         if (!File.Exists(claudeJsonPath)) return;
 
