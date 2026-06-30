@@ -74,11 +74,24 @@ internal sealed partial class CodexLauncher(
             ctx.Worktree.Path,
             "--sandbox",
             "workspace-write",
+            // Hosted Codex agents run unattended → never pause for approval (writes stay confined
+            // by the workspace-write sandbox). NOTE: review-flow reviewers and interactive rendered
+            // agents are BOTH LaunchKind.Default, so this is unconditional for now; per-kind scoping
+            // (LaunchKind.ReviewFlow) is a coordinated server+CLI follow-up.
             "--ask-for-approval",
-            "on-request"
+            "never",
+            // No MCP servers: stops the reviewer recursively invoking kcap-flows' start_review_flow
+            // (the kcap-review-flows skill would otherwise trigger a nested review flow). The agent
+            // works from its prompt + read-only file inspection.
+            "-c",
+            "mcp_servers={}"
         };
 
-        if (!string.IsNullOrEmpty(ctx.Model)) {
+        // "default" is the no-override sentinel from the flow/agent dispatch. Passing it as
+        // `-m default` is rejected by Codex on a ChatGPT account ("The 'default' model is not
+        // supported when using Codex with a ChatGPT account") and silently yields an empty turn.
+        // Omit -m so Codex uses the model from ~/.codex/config.toml (mirrors the effort=="auto" case).
+        if (!string.IsNullOrEmpty(ctx.Model) && !string.Equals(ctx.Model, "default", StringComparison.OrdinalIgnoreCase)) {
             args.Add("-m");
             args.Add(ctx.Model);
         }

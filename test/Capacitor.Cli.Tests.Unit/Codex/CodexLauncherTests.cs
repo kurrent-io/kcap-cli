@@ -29,12 +29,13 @@ public class CodexLauncherTests {
     );
 
     [Test]
-    public async Task BuildArgs_includes_workspace_write_sandbox_and_on_request_approval() {
+    public async Task BuildArgs_uses_never_approval_for_hosted_codex() {
         var args = NewLauncher().BuildArgs(NewCtx()).Args;
         await Assert.That(args).Contains("--sandbox");
         await Assert.That(args).Contains("workspace-write");
         await Assert.That(args).Contains("--ask-for-approval");
-        await Assert.That(args).Contains("on-request");
+        await Assert.That(args).Contains("never");
+        await Assert.That(args).DoesNotContain("on-request");
     }
 
     [Test]
@@ -89,6 +90,23 @@ public class CodexLauncherTests {
         var mIdx = Array.IndexOf(args, "-m");
         await Assert.That(mIdx).IsGreaterThan(-1);
         await Assert.That(args[mIdx + 1]).IsEqualTo("gpt-5.4");
+    }
+
+    [Test]
+    public async Task BuildArgs_omits_model_when_default_sentinel() {
+        var args = NewLauncher().BuildArgs(NewCtx(model: "default")).Args;
+        await Assert.That(Array.IndexOf(args, "-m")).IsEqualTo(-1);
+        await Assert.That(args).DoesNotContain("default");
+    }
+
+    [Test]
+    public async Task BuildArgs_clears_mcp_servers() {
+        var args   = NewLauncher().BuildArgs(NewCtx()).Args;
+        var joined = string.Join(' ', args);
+        await Assert.That(joined).Contains("mcp_servers={}");
+        var cIdx = Array.IndexOf(args, "-c");
+        await Assert.That(cIdx).IsGreaterThan(-1);
+        await Assert.That(args[cIdx + 1]).IsEqualTo("mcp_servers={}");
     }
 
     [Test]
