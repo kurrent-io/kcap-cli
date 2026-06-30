@@ -11,10 +11,10 @@ public class CodexPathsHomeIsolationTests {
 
         try {
             // Force any prior static init that might cache HOME's value
-            _ = CodexPaths.Home;
+            _ = CodexPaths.Home();
 
             Environment.SetEnvironmentVariable("HOME", tmp.FullName);
-            await Assert.That(CodexPaths.Home).IsEqualTo(Path.Combine(tmp.FullName, ".codex"));
+            await Assert.That(CodexPaths.Home()).IsEqualTo(Path.Combine(tmp.FullName, ".codex"));
         } finally {
             Environment.SetEnvironmentVariable("HOME", originalHome);
             tmp.Delete(recursive: true);

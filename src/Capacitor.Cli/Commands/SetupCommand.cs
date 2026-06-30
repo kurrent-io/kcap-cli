@@ -245,11 +245,11 @@ public static class SetupCommand {
             CopilotHooksPath:     CopilotPaths.KcapHooksJson(),
             GeminiSettingsPath:   GeminiPaths.SettingsJson(),
             AgentsSkillsDir:      AgentsPaths.UserSkillsDir,
-            LegacyCodexSkillsDir: Path.Combine(CodexPaths.Home, "skills"),
+            LegacyCodexSkillsDir: Path.Combine(CodexPaths.Home(), "skills"),
             KiroHooksPath:        KiroPaths.KcapAgentJson(),
             PiExtensionPath:      PiPaths.KcapExtension(),
             OpenCodeExtensionPath: OpenCodePaths.KcapPlugin(),
-            CodexConfigTomlPath:  Path.Combine(CodexPaths.Home, "config.toml"));
+            CodexConfigTomlPath:  Path.Combine(CodexPaths.Home(), "config.toml"));
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,

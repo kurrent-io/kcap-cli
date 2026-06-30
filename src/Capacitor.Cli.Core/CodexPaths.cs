@@ -1,9 +1,18 @@
 namespace Capacitor.Cli.Core;
 
 public static class CodexPaths {
-    public static string Home          => Path.Combine(PathHelpers.HomeDirectory, ".codex");
-    public static string Sessions      => Path.Combine(Home, "sessions");
-    public static string UserHooksJson => Path.Combine(Home, "hooks.json");
+    // CODEX_HOME (when set) replaces ~/.codex wholesale — Codex's own
+    // find_codex_home() reads it first. Lazy so test HOME injection re-evaluates.
+    public static string Home(string? home = null, string? codexHome = null) {
+        codexHome ??= Environment.GetEnvironmentVariable("CODEX_HOME");
+        if (!string.IsNullOrWhiteSpace(codexHome)) return codexHome;
+
+        home ??= PathHelpers.HomeDirectory;
+        return Path.Combine(home, ".codex");
+    }
+
+    public static string Sessions      => Path.Combine(Home(), "sessions");
+    public static string UserHooksJson => Path.Combine(Home(), "hooks.json");
 
     /// <summary>
     /// Walk <c>~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl</c>, optionally pruning
