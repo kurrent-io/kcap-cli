@@ -89,23 +89,25 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 ### 3. Import existing sessions (optional)
 
 ```bash
-kcap import                     # every detected agent (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi)
-kcap import --org               # sessions for the org bound to your active profile
+kcap import                     # every detected agent (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode)
+kcap import --org EventStore    # sessions whose git-remote owner is EventStore
+kcap import --org               # pick an org from your discovered repos (and remember it)
 kcap import --repo owner/repo   # sessions for one specific repo
 kcap import --cursor            # only Cursor
 kcap import --copilot           # only Copilot
 kcap import --gemini            # only Gemini
 kcap import --kiro              # only Kiro
 kcap import --pi                # only Pi (badlogic/pi-mono)
+kcap import --opencode          # only OpenCode
 ```
 
 > **Pi** has no shell hooks, so live capture uses a shipped Pi extension rather than a hooks file: run `kcap plugin install --pi` (or accept the `kcap setup` prompt) to write `~/.pi/agent/extensions/kcap.ts`, which `pi` auto-loads and streams each session live. Historical `kcap import --pi` works with or without it.
 
-> **OpenCode** likewise has no shell hooks: live capture uses a shipped OpenCode plugin. Run `kcap plugin install --opencode` (or accept the `kcap setup` prompt) to write `~/.config/opencode/plugins/kcap.ts`, which `opencode` auto-loads and streams each session live (`vendor=opencode`). Subagents (the `task` tool / `@agent`) are captured too — the plugin fetches each child session via the SDK and streams it, so it nests under the parent in the trace. Capture is **live-only** — OpenCode's on-disk format is unstable, so there is no `kcap import --opencode`.
+> **OpenCode** likewise has no shell hooks: live capture uses a shipped OpenCode plugin. Run `kcap plugin install --opencode` (or accept the `kcap setup` prompt) to write `~/.config/opencode/plugins/kcap.ts`, which `opencode` auto-loads and streams each session live (`vendor=opencode`). Subagents (the `task` tool / `@agent`) are captured too — the plugin fetches each child session via the SDK and streams it, so it nests under the parent in the trace. Historical `kcap import --opencode` reads OpenCode's SQLite database (`~/.local/share/opencode/opencode.db`) and imports child sessions as subagents, so it backfills sessions from before the plugin was installed.
 
-This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), `~/.gemini/tmp/<project>/chats/` (Gemini), `~/.kiro/sessions/cli/` (Kiro), and `~/.pi/agent/sessions/` (Pi) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, `--gemini`, `--kiro`, or `--pi` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
+This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), `~/.gemini/tmp/<project>/chats/` (Gemini), `~/.kiro/sessions/cli/` (Kiro), `~/.pi/agent/sessions/` (Pi), and `~/.local/share/opencode/opencode.db` (OpenCode) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, `--gemini`, `--kiro`, `--pi`, or `--opencode` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
 
-You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org` uses the active profile name as the GitHub org login — it works out of the box when the profile was created by `kcap setup` (which names it after the picked tenant), and errors otherwise. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
+You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org <owner>` filters by the git-remote owner (GitHub org/user) detected on each session — independent of your profile name, so it behaves identically under GitHub and WorkOS sign-in. A bare `--org` lets you pick an owner from your discovered repos and remembers it for next time. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
 If your repo directories have been renamed or deleted on disk, the import prints a list of unresolved cwds up front. See [Renamed repo directories (`kcap remap`)](#renamed-repo-directories-kcap-remap) to recover those sessions.
 
@@ -113,16 +115,18 @@ If your repo directories have been renamed or deleted on disk, the import prints
 
 Open the server URL in your browser. The dashboard shows repositories, sessions, and agents. It updates in real time as Claude Code sessions are active.
 
-### Sessions MCP server for agents
+### Sessions and Flows MCP servers for agents
 
 The `kcap mcp sessions` stdio server lets coding agents search and recall past Capacitor sessions without leaving the chat. The Kurrent Capacitor plugin (installed by `kcap setup`) **auto-registers it for both Claude Code and Codex CLI** — no manual `claude mcp add` or TOML edit. The server is repo-aware: `cd` into a project before spawning your agent and `search_sessions` defaults to that repo's sessions.
+
+The `kcap mcp flows` stdio server lets agents start and interact with AI-powered review flows. Add it manually via `claude mcp add kcap-flows -- kcap mcp flows`. See the [Flows MCP server](#flows-mcp-server-for-agents) section for details.
 
 ## What it records
 
 Once set up, Capacitor runs silently in the background. Every Claude Code (and Codex CLI, if you installed those hooks) session is captured automatically:
 
 - **Session lifecycle** — start, end, interruptions, context compaction
-- **Durable lifecycle delivery** — if the server is briefly unreachable when a `SessionStart`/`SessionEnd` hook fires (for example during a deploy), the event is spooled to `~/.config/kcap/spool/` and automatically re-sent on the next hook, so sessions don't get stuck "active" or lose their start record. No action needed; stale spool entries are reaped after 30 days.
+- **Durable lifecycle delivery** — if the server is briefly unreachable when a `SessionStart`/`SessionEnd` hook (or a per-subagent `SubagentStop` carrying an `agent_id`) fires (for example during a deploy), the event is spooled to `~/.config/kcap/spool/` and automatically re-sent on the next hook, so sessions don't get stuck "active", lose their start record, or leave subagents stuck "running". No action needed; stale spool entries are reaped after 30 days.
 - **Transcript data** — streamed in real time via a background watcher process over SignalR
 - **Subagent activity** — full tree of spawned subagents with their own transcripts
 - **Tool usage** — every tool call with timing and results
@@ -174,7 +178,11 @@ kcap recap <sessionId>              # summary (default)
 kcap recap --full <sessionId>       # full transcript
 kcap recap --chain <sessionId>      # summaries across continuation chain
 kcap recap --chain --full <sessionId>  # full transcript across chain
+kcap recap --per-turn <sessionId>   # compact per-turn index (prompt, tools, files, tokens, time)
+kcap recap --get-turn <N> <sessionId>  # full event transcript for a single turn
 ```
+
+`--per-turn` prints a one-block-per-turn index — useful for orienting in a long session before drilling into a specific turn with `--get-turn <N>` (the turn number shown in the `--per-turn` index). `--get-turn` takes the turn number as its value; the session id is the usual positional (or comes from the current session), so `kcap recap <sessionId> --get-turn <N>` works too.
 
 The identifier can be a session GUID or a meta session slug. Find these from the dashboard or the current session's hook payloads. When run inside a Claude Code session with the kcap plugin, the session ID is set automatically.
 
@@ -271,8 +279,48 @@ It provides three tools:
 - **`search_sessions`** — free-text search over past sessions (and subagent transcripts) in the current repo. Pass `repo: "all"` to search across every repo you can see, or `repo: "owner/name"` for a different one. Filter by `author` / `author_github_id`. Returns ranked hits with `session_id`, snippet, and (for transcript hits) `hit_event_index` + `agent_id` for drilling in.
 - **`get_session_summary`** — concise `summary_text` + `plan` for a session. Use this to orient before reading the transcript.
 - **`get_session_transcript`** — speaker-tagged events from a session. Pair `around_event` (and `agent_id` if the hit was in a subagent) with the values returned by `search_sessions` to fetch the exact decision context.
+- **`get_turn`** — the full event transcript for one turn (user prompt, tool calls + results, assistant text) by `session_id` + `turn_index`. A turn is one user message and the assistant's full response up to the next user message.
 
 The server is repo-aware — it resolves the current working directory to a repo hash at startup, and `search_sessions` defaults its `repo` filter to that hash unless you override it.
+
+### Flows MCP server (for agents)
+
+```bash
+kcap mcp flows
+```
+
+Stdio MCP server that lets coding agents start and interact with AI-powered review flows directly from within a session. Add it explicitly to your agent setup:
+
+```bash
+# Claude Code
+claude mcp add kcap-flows -- kcap mcp flows
+
+# Codex (~/.config/codex/mcp_servers.toml)
+# [kcap-flows]
+# command = "kcap"
+# args    = ["mcp", "flows"]
+```
+
+It provides four tools:
+
+- **`start_review_flow`** — start a new review flow (`spec-review` or `code-review`). Provide `kind`, `target_kind`, `target_ref`, `target_title`, and `context`. Requester context (session ID, cwd, repo root, owner, name) is resolved automatically from the environment. Returns a `flow_run_id`.
+- **`submit_review_round`** — submit a follow-up round to an existing flow with updated context or a response to the reviewer's findings. Returns the new round's findings.
+- **`get_review_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow.
+- **`close_review_flow`** — mark a completed review flow as closed.
+
+Requires `kcap login`. The server creates an authenticated HTTP client at startup and posts to the Capacitor server's `/api/flows/*` endpoints.
+
+### Curate guidelines
+
+Sync the repo's promoted curation guidelines into its `CLAUDE.md` and/or `AGENTS.md` via a managed block. The server tracks which guidelines have been promoted for the current repo; `curate apply` fetches them and writes (or updates) a `<!-- kcap:curated:start -->…<!-- kcap:curated:end -->` block in the relevant files. Content outside the markers is never touched.
+
+```bash
+kcap curate apply             # preview changes and confirm interactively
+kcap curate apply --dry-run   # print what would change without writing anything
+kcap curate apply --yes       # apply without prompting (CI / scripted)
+kcap curate apply -y          # shorthand for --yes
+```
+
 
 ### Loading historical sessions
 
@@ -280,14 +328,15 @@ Backfill older sessions from every detected coding agent in a single run. All se
 
 ```bash
 kcap import --all                            # every discovered session from every agent
-kcap import --org                            # sessions whose repo owner matches your active profile name
+kcap import --org EventStore                 # sessions whose git-remote owner is EventStore
+kcap import --org                            # pick an owner from discovered repos, then remember it
 kcap import --repo owner/repo                # one specific repo
 kcap import --repo .                         # the repo at the current cwd (must be a git repo with an origin remote)
 ```
 
 Run `kcap import` with no scope on an interactive terminal to get a picker. Each run shows a confirmation summary (scope, matched count, repo samples, visibility) before uploading anything.
 
-`--org` is a shortcut: it takes the active profile *name* and uses it as a GitHub org login to filter on. `kcap setup` names the profile after the picked tenant, so `--org` works out of the box for tenant-bound profiles; on the `default` profile, or a manually-named profile like `work`, use `--repo <owner/name>` instead (or run `kcap setup` to bind a profile to your org).
+`--org` filters by the **git-remote owner** (GitHub org/user) detected on each session — not by your profile name. This makes it independent of how you signed in: under WorkOS the active profile is named after the tenant slug (which is not a GitHub org), so the owner to scope on is taken from the flag value or chosen from your discovered repos instead. Pass it explicitly as `--org <owner>`, or run a bare `kcap import --org` once on an interactive terminal to pick an owner from your discovered repos — the choice is saved to the active profile (`import_org`) and reused by later bare `--org` runs. Non-interactive runs (CI) must pass `--org <owner>` (or have a remembered org).
 
 By default every available agent is imported. Pass one or more vendor filters to restrict the run:
 
@@ -300,22 +349,25 @@ kcap import --copilot --all                  # only Copilot — every discovered
 kcap import --gemini --all                   # only Gemini — every discovered transcript
 kcap import --kiro --all                     # only Kiro — every session log under ~/.kiro/sessions/cli
 kcap import --pi --all                       # only Pi — every discovered session
+kcap import --opencode --all                 # only OpenCode — every session in opencode.db
 ```
 
 Cursor historical import walks every JSONL transcript under `~/.cursor/projects/*/agent-transcripts/*/*.jsonl` and posts each line through the same `POST /hooks/transcript` route the live hook path uses, so live and historical ingest converge on one canonical event stream. The walker resolves each session's working directory by matching its sanitized workspace name against `~/Library/Application Support/Cursor/User/workspaceStorage/*/workspace.json` (on Linux: `~/.config/Cursor/User/...`); sessions whose workspace can't be resolved are still imported, just without `cwd` and git owner/repo enrichment.
 
 Kiro historical import reads each session's append-only log at `~/.kiro/sessions/cli/{id}.jsonl` (plus the sibling `{id}.json` for cwd / model / title) and posts the lines through `POST /hooks/transcript` — the same lines the live watcher tails, so live and historical ingest converge. Set `KIRO_HOME` to point at a non-default location. Kiro persists no token counts, so imported Kiro sessions show no token usage (by design). Re-imports are idempotent — event ids are deterministic over `(session id, message/tool id, kind)`.
 
+OpenCode historical import reads its SQLite database (`~/.local/share/opencode/opencode.db`, honouring `XDG_DATA_HOME`) and reconstructs the same `{info,parts}` lines the live plugin streams — so live and historical ingest converge on one canonical event stream (`vendor=opencode`). Child sessions are imported as subagents of their parent (`/hooks/subagent-*`), matching the live nesting. Because the server exposes no completeness signal, kcap records each fully-imported session in a local ledger (`~/.cache/kcap/opencode-imported.json`, keyed by server) to skip it on re-run; a session interrupted mid-import is repaired on the next run. Re-imports are idempotent — canonical event ids derive from OpenCode's stable `prt_` part ids.
+
 Claude (`CLAUDE_CONFIG_DIR`), Codex (`CODEX_HOME`), Gemini (`GEMINI_CLI_HOME`, which names the parent of `.gemini`), OpenCode (`OPENCODE_CONFIG_DIR`), and Pi (`PI_CODING_AGENT_DIR`, which names the `~/.pi/agent` leaf) historical/live paths follow each agent's own config-relocation environment variable when it is set, so a relocated config is discovered automatically.
 
 Additional flags:
 
 ```bash
-kcap import --org --yes                      # skip the confirmation prompt
-kcap import --org --private                  # mark every imported session as Only Visible to You
-kcap import --org --since 2026-01-01         # only sessions on or after this date
-kcap import --org --cwd /path/to/project     # filter by working directory
-kcap import --org --session abc123           # single session
+kcap import --org EventStore --yes           # skip the confirmation prompt
+kcap import --org EventStore --private        # mark every imported session as Only Visible to You
+kcap import --org EventStore --since 2026-01-01  # only sessions on or after this date
+kcap import --org EventStore --cwd /path/to/project  # filter by working directory
+kcap import --org EventStore --session abc123    # single session
 ```
 
 Non-interactive runs (no TTY, e.g. CI) must pass both a scope flag and `--yes`. The command is idempotent and resumable — re-running with the same scope only uploads what's missing or incomplete. A server-side tracker deduplicates events on `(stream, eventId)` so previously-imported turns don't get re-appended.
@@ -381,7 +433,7 @@ kcap plugin install --codex --if-installed           # refresh Codex hooks only 
 kcap plugin install --if-installed                   # refresh Claude plugin registration only if previously installed (used by npm postinstall)
 ```
 
-Installing with `--codex` (or `--skills`) writes five skills under `~/.agents/skills/`:
+Installing with `--codex` (or `--skills`) writes six skills under `~/.agents/skills/`:
 
 | Skill | Wraps | Purpose |
 |---|---|---|
@@ -390,8 +442,9 @@ Installing with `--codex` (or `--skills`) writes five skills under `~/.agents/sk
 | `kcap-hide` | `kcap hide` | Mark session owner-only |
 | `kcap-disable` | `kcap disable` | Stop recording + delete server data |
 | `kcap-validate-plan` | `kcap validate-plan` | Verify plan items were completed |
+| `kcap-review-flows` | `kcap mcp flows` | Structured iterative spec/code review loops |
 
-All five auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionId>` explicitly to operate on a different session.
+The first five (`kcap-recap`, `kcap-errors`, `kcap-hide`, `kcap-disable`, `kcap-validate-plan`) auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionId>` explicitly to operate on a different session. `kcap-review-flows` works differently — it operates via flow IDs through `kcap mcp flows` rather than session auto-resolution; see [Flows MCP server (for agents)](#flows-mcp-server-for-agents) for details.
 
 > **Codex sandbox network access (AI-794).** The skills shell out to `kcap …`, which talks to the Capacitor server — but Codex runs the agent's shell tool in a `workspace-write` sandbox that **blocks network by default**, so the skills fail (or demand escalation) until network access is allowed. Both `kcap setup` (one yes/no prompt after the Codex hooks step) and `kcap plugin install --codex` enable it for you. They write a constrained allowlist to `~/.codex/config.toml` rather than opening the network wholesale:
 >
@@ -497,6 +550,12 @@ You can also override these at runtime with environment variables (take preceden
 KCAP_CLAUDE_PATH=/opt/claude/bin/claude kcap daemon
 KCAP_CODEX_PATH=/opt/codex/bin/codex  kcap daemon
 ```
+
+**Codex session-end tuning.** Because Codex has no session-end hook, the watcher owns session-end via two triggers: parent `codex` process exit, and rollout-file idle timeout. The idle trigger is particularly important for the Codex desktop app, whose shared `codex app-server` process never exits per-conversation.
+
+| Environment variable | Default | Description |
+|----------------------|---------|-------------|
+| `KCAP_CODEX_IDLE_MINUTES` | `60` | How long a Codex rollout file may be idle (no new rollout lines and no Codex tool call in flight) before the `kcap watch` background watcher ends the session (`reason: idle_timeout`). Increase for very long thinking/compute turns; decrease for faster cleanup of abandoned sessions. Invalid or non-positive values fall back to the 60-minute default. |
 
 #### Daemon log verbosity
 

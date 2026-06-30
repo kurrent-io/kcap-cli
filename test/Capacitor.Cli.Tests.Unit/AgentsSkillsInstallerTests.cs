@@ -3,7 +3,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit;
 
 public class AgentsSkillsInstallerTests {
-    static readonly string[] SourceNames = ["recap", "errors", "disable", "hide", "validate-plan"];
+    static readonly string[] SourceNames = ["recap", "errors", "disable", "hide", "validate-plan", "review-flows"];
 
     [Test]
     public async Task Install_copies_each_source_to_kcap_prefixed_target() {

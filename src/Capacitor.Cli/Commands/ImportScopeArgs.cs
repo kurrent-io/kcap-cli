@@ -11,34 +11,44 @@ public static class ImportScopeArgs {
             bool    Org,
             string? RepoArg,
             bool    Yes,
-            bool    Private
+            bool    Private,
+            string? OrgArg = null // explicit owner after `--org`, or null for bare `--org`
         );
 
     public sealed record ResolveInput(
             ParsedFlags                  Flags,
             string                       ActiveProfile,
             bool                         IsInteractive,
-            (string Owner, string Name)? CurrentRepo
+            (string Owner, string Name)? CurrentRepo,
+            string?                      StoredOrg = null // org remembered on the active profile
         );
 
     public sealed record ResolveResult(
-            ImportScope? Scope, // null => either picker needed or error
+            ImportScope? Scope, // null => picker needed, org-pick needed, or error
             bool         Yes,
             bool         Private,
-            string?      Error
+            string?      Error,
+            bool         NeedOrgPick = false // bare `--org`, no value/stored org: pick from discovered repos
         );
 
     public static ParsedFlags ParseFlags(string[] args) {
         string? repo                                = null;
-        var     idx                                 = Array.IndexOf(args, "--repo");
-        if (idx >= 0 && idx + 1 < args.Length) repo = args[idx + 1];
+        var     repoIdx                             = Array.IndexOf(args, "--repo");
+        if (repoIdx >= 0 && repoIdx + 1 < args.Length) repo = args[repoIdx + 1];
+
+        // `--org` may be bare or take an explicit owner. Only treat the next token
+        // as the owner when it isn't another flag (so `--org --yes` stays bare).
+        string? org    = null;
+        var     orgIdx = Array.IndexOf(args, "--org");
+        if (orgIdx >= 0 && orgIdx + 1 < args.Length && !args[orgIdx + 1].StartsWith('-')) org = args[orgIdx + 1];
 
         return new(
             All: args.Contains("--all"),
             Org: args.Contains("--org"),
             RepoArg: repo,
             Yes: args.Contains("--yes") || args.Contains("-y"),
-            Private: args.Contains("--private")
+            Private: args.Contains("--private"),
+            OrgArg: org
         );
     }
 
@@ -80,16 +90,29 @@ public static class ImportScopeArgs {
         }
 
         if (f.Org) {
-            if (string.IsNullOrEmpty(input.ActiveProfile) || input.ActiveProfile == "default") {
-                return new(
-                    null,
-                    f.Yes,
-                    f.Private,
-                    "--org requires a tenant-bound profile. Run `kcap setup` first, or use --all / --repo <owner/name>."
-                );
+            // Explicit `--org <owner>` wins. The owner is the GitHub org/owner to
+            // match against each session's git-remote owner — NOT the profile name
+            // (which under WorkOS is a tenant slug, not a GitHub org). Trim so a
+            // padded value (e.g. "EventStore ") can't produce a scope that never
+            // matches a detected owner.
+            var org = (!string.IsNullOrWhiteSpace(f.OrgArg) ? f.OrgArg : input.StoredOrg)?.Trim();
+
+            if (!string.IsNullOrEmpty(org)) {
+                return new(new ImportScope.Org(org), f.Yes, f.Private, null);
             }
 
-            return new(new ImportScope.Org(input.ActiveProfile), f.Yes, f.Private, null);
+            // Bare `--org` with nothing remembered: pick an org from discovered repos
+            // when interactive; otherwise we have no owner to scope on.
+            if (input.IsInteractive) {
+                return new(null, f.Yes, f.Private, Error: null, NeedOrgPick: true);
+            }
+
+            return new(
+                null,
+                f.Yes,
+                f.Private,
+                "--org needs an owner: pass `--org <owner>`, or run `kcap import --org` once interactively to choose and remember one."
+            );
         }
 
         // --repo <value>

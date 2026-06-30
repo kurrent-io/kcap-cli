@@ -114,6 +114,7 @@ static class McpSessionsServer {
                 "search_sessions"        => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildSearchUrl(baseUrl, arguments, cwdRepoHash))),
                 "get_session_summary"    => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildSummaryUrl(baseUrl, arguments))),
                 "get_session_transcript" => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildTranscriptUrl(baseUrl, arguments))),
+                "get_turn"               => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildTurnDetailUrl(baseUrl, arguments))),
                 _                        => throw new ArgumentException($"Unknown tool: {toolName}")
             };
 
@@ -206,6 +207,17 @@ static class McpSessionsServer {
          ?? throw new ArgumentException("Missing required argument: session_id");
 
         return $"{baseUrl}/api/sessions/{Uri.EscapeDataString(id)}/recap?chain=false";
+    }
+
+    static string BuildTurnDetailUrl(string baseUrl, JsonObject? args) {
+        var id = args?["session_id"]?.GetValue<string>()
+         ?? throw new ArgumentException("Missing required argument: session_id");
+
+        if (!TryReadInt(args, "turn_index", out var turnIndex)) {
+            throw new ArgumentException("Missing required argument: turn_index");
+        }
+
+        return $"{baseUrl}/api/sessions/{Uri.EscapeDataString(id)}/turns/{turnIndex}";
     }
 
     static string BuildTranscriptUrl(string baseUrl, JsonObject? args) {
@@ -470,6 +482,18 @@ static class McpSessionsServer {
                     ["include_thinking"] = new("boolean", "Include assistant thinking blocks. Default false.")
                 },
                 ["session_id"]
+            )
+        ),
+        new(
+            "get_turn",
+            "Get the full event transcript for one turn (user prompt, tool calls + results, assistant text) by session_id + turn_index. A turn is one user message and the assistant's full response up to the next user message. Use get_session_summary or search_sessions to find a session, then drill into specific turns by index.",
+            new(
+                "object",
+                new() {
+                    ["session_id"] = new("string",  "Session ID (from search_sessions or get_session_summary)."),
+                    ["turn_index"] = new("integer", "Zero-based turn index.")
+                },
+                ["session_id", "turn_index"]
             )
         )
     ];

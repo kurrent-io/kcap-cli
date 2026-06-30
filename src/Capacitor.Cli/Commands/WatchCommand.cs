@@ -156,6 +156,9 @@ static partial class WatchCommand {
         }
 
         var state = new WatchState();
+        state.LastActivityAt = DateTimeOffset.UtcNow;
+        var codexIdleTimeout = ResolveCodexIdleTimeout(Environment.GetEnvironmentVariable("KCAP_CODEX_IDLE_MINUTES"));
+        var idleExit = false;
 
         if (skipTitle) {
             state.TitleGenerated = true;
@@ -307,6 +310,21 @@ static partial class WatchCommand {
                     await ScanOpenCodeSubagents(baseUrl, sessionId, transcriptPath, seenSubagents, cts.Token);
                 }
 
+                if (ShouldEndOnIdle(
+                        vendor,
+                        isSessionWatcher: agentId is null,
+                        state.ThresholdReached,
+                        state.LastActivityAt,
+                        DateTimeOffset.UtcNow,
+                        codexIdleTimeout,
+                        toolInFlight: state.PendingCodexToolCalls.Count > 0)) {
+                    Log($"Codex rollout idle for >{codexIdleTimeout.TotalMinutes:F0}m; ending session (idle_timeout)");
+                    idleExit = true;
+                    cts.Cancel();
+
+                    break;
+                }
+
                 try {
                     await Task.Delay(TimeSpan.FromSeconds(1), cts.Token);
                 } catch (OperationCanceledException) {
@@ -356,8 +374,12 @@ static partial class WatchCommand {
         //     server may not have a meaningful session to end.
         // Runs after SignalR dispose so the server's StopAndDrainAsync skips the
         // 10s drain wait (no live watcher connection to signal).
-        if (Volatile.Read(ref parentExited) == 1 && agentId is null && state.ThresholdReached) {
-            await PostSessionEndOnParentExitAsync(baseUrl, sessionId, transcriptPath, cwd, vendor, state.Repository);
+        var endReason = Volatile.Read(ref parentExited) == 1 ? "parent_exited"
+                      : idleExit                              ? "idle_timeout"
+                      :                                         null;
+
+        if (endReason is not null && agentId is null && state.ThresholdReached) {
+            await PostSessionEndOnParentExitAsync(baseUrl, sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
         }
 
         await logWriter.DisposeAsync();
@@ -512,13 +534,104 @@ static partial class WatchCommand {
     /// </summary>
     static readonly TimeSpan ParentExitPostBudget = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// Codex has no session-end hook and the desktop app's single long-lived
+    /// `codex app-server` process is the watchdog's parent PID for EVERY
+    /// conversation, so the parent-exit watchdog never fires per-conversation —
+    /// sessions stay "active" until the whole app quits. This idle window is the
+    /// fallback: if the rollout file gets no new lines for this long, the watcher
+    /// POSTs session-end (reason "idle_timeout"). Self-correcting — Codex fires a
+    /// Stop hook per turn that re-spawns the watcher and the read model
+    /// reactivates the session, so a resumed conversation comes back to life.
+    /// </summary>
+    internal static readonly TimeSpan DefaultCodexIdleTimeout = TimeSpan.FromMinutes(60);
+
+    /// <summary>
+    /// Resolves the Codex idle timeout from KCAP_CODEX_IDLE_MINUTES, falling back
+    /// to <see cref="DefaultCodexIdleTimeout"/> for unset/blank/non-numeric/
+    /// non-positive values. Pure so the parsing is unit-testable.
+    /// </summary>
+    internal static TimeSpan ResolveCodexIdleTimeout(string? envValue) =>
+        int.TryParse(envValue, out var minutes) && minutes > 0
+            ? TimeSpan.FromMinutes(minutes)
+            : DefaultCodexIdleTimeout;
+
+    /// <summary>
+    /// Whether the watcher should self-terminate and POST session-end because the
+    /// Codex rollout file has gone idle. Pure so the policy is unit-testable.
+    /// Gated to: vendor codex (only vendor whose parent-exit watchdog can't fire
+    /// per-conversation — the desktop app's shared app-server never exits per
+    /// session), session watchers (not subagents), and threshold-reached sessions
+    /// (below-threshold short-lived sessions have no server session to end). Uses
+    /// strictly-greater-than so the boundary tick is not yet considered idle.
+    /// Also suppressed when a tool call is in flight (<paramref name="toolInFlight"/>
+    /// true): a long-running shell command / custom tool legitimately produces no
+    /// new rollout lines between its function_call start and its _output completion —
+    /// ending while it's running would falsely terminate an active session. No hard
+    /// ceiling on tool duration: if the process dies, the parent-exit watchdog takes
+    /// over; a hung-but-alive tool is a real in-flight turn (YAGNI — no ceiling).
+    /// </summary>
+    internal static bool ShouldEndOnIdle(
+            string         vendor,
+            bool           isSessionWatcher,
+            bool           thresholdReached,
+            DateTimeOffset lastActivityAt,
+            DateTimeOffset now,
+            TimeSpan       idleTimeout,
+            bool           toolInFlight = false
+        ) =>
+        vendor == "codex"
+        && isSessionWatcher
+        && thresholdReached
+        && now - lastActivityAt > idleTimeout
+        && !toolInFlight;
+
+    /// <summary>
+    /// Updates <paramref name="pending"/> based on a single Codex rollout line.
+    /// A <c>function_call</c> or <c>custom_tool_call</c> response_item adds its
+    /// <c>call_id</c> to the set; the matching <c>_output</c> variant removes it.
+    /// All other lines and malformed JSON are silently ignored so this is safe to
+    /// call unconditionally for every line of any vendor transcript.
+    /// </summary>
+    internal static void UpdateCodexPendingToolCalls(HashSet<string> pending, string line) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Str("type") != "response_item") return;
+
+            var payload = root.Obj("payload");
+
+            if (payload is not { } p) return;
+
+            var callId = p.Str("call_id");
+
+            if (callId is null) return;
+
+            switch (p.Str("type")) {
+                case "function_call"
+                  or "custom_tool_call":
+                    pending.Add(callId);
+                    break;
+
+                case "function_call_output"
+                  or "custom_tool_call_output":
+                    pending.Remove(callId);
+                    break;
+            }
+        } catch {
+            // Ignore malformed / non-JSON lines — never break the drain loop
+        }
+    }
+
     internal static async Task PostSessionEndOnParentExitAsync(
             string             baseUrl,
             string             sessionId,
             string             transcriptPath,
             string?            cwd,
             string             vendor,
-            RepositoryPayload? repository
+            RepositoryPayload? repository,
+            string             reason = "parent_exited"
         ) {
         if (!KnownVendors.Contains(vendor)) {
             Log($"Parent-exit session-end skipped: unknown vendor '{vendor}'");
@@ -577,7 +690,7 @@ static partial class WatchCommand {
                 ["transcript_path"] = transcriptPath,
                 ["cwd"]             = cwd ?? "",
                 ["hook_event_name"] = "session_end",
-                ["reason"]          = "parent_exited",
+                ["reason"]          = reason,
                 // Stamp the exit time so the server can scope the SessionEnded id
                 // per run. Vendors with no session-end hook (Kiro) end ONLY via this
                 // path, so without a timestamp a resumed session's second exit would
@@ -669,6 +782,18 @@ static partial class WatchCommand {
             }
 
             var linesRead = lineIndex;
+
+            if (newLines.Count > 0) {
+                state.LastActivityAt = DateTimeOffset.UtcNow;
+            }
+
+            // Track Codex tool calls in flight across all new lines (Codex-only,
+            // but runs unconditionally so it is not gated on the title phase or
+            // threshold). Non-Codex lines have a different top-level shape (no
+            // response_item), so this is a cheap no-op for them.
+            foreach (var line in newLines) {
+                UpdateCodexPendingToolCalls(state.PendingCodexToolCalls, line);
+            }
 
             // Capture first user text (needed for title generation)
             if (state is { TitleGenerated: false, FirstUserText: null } && agentId is null) {

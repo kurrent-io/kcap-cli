@@ -101,22 +101,46 @@ switch (command) {
         return await ErrorsCommand.HandleErrors(baseUrl!, errSessionId, useChain);
     }
     case "recap": {
-        var useChain = args.Contains("--chain");
-        var useFull  = args.Contains("--full");
-        var useRepo  = args.Contains("--repo");
+        var useChain   = args.Contains("--chain");
+        var useFull    = args.Contains("--full");
+        var useRepo    = args.Contains("--repo");
+        var usePerTurn = args.Contains("--per-turn");
+        var useGetTurn = args.Contains("--get-turn");
 
         if (useRepo) {
             return await RecapCommand.HandleRepoRecap(baseUrl!);
         }
 
-        var recapSessionId = ResolveSessionId(args);
+        // --get-turn takes a value (the turn index), so declare it as a value flag
+        // or ResolveSessionId would mistake the index for the sessionId.
+        var recapSessionId = ResolveSessionId(args, valueFlags: ["--get-turn"]);
 
         if (recapSessionId is null) {
-            Console.Error.WriteLine("Usage: kcap recap [--chain] [--full] [--repo] [sessionId]");
+            Console.Error.WriteLine("Usage: kcap recap [--chain] [--full] [--repo] [--per-turn] [--get-turn <N>] [sessionId]");
             Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
             Console.Error.WriteLine("  Use --repo to see recent session summaries for the current repository.");
+            Console.Error.WriteLine("  Use --per-turn for a per-turn index, or --get-turn <N> for one turn's transcript.");
 
             return 1;
+        }
+
+        if (usePerTurn) {
+            return await RecapCommand.HandlePerTurnRecap(baseUrl!, recapSessionId);
+        }
+
+        if (useGetTurn) {
+            var getTurnIdx = args
+                .SkipWhile(a => a != "--get-turn")
+                .Skip(1)
+                .FirstOrDefault(a => !a.StartsWith('-'));
+
+            if (getTurnIdx is null || !int.TryParse(getTurnIdx, out var turnIndex)) {
+                Console.Error.WriteLine("Usage: kcap recap --get-turn <turnIndex> [sessionId]");
+
+                return 1;
+            }
+
+            return await RecapCommand.HandleGetTurn(baseUrl!, recapSessionId, turnIndex);
         }
 
         return await RecapCommand.HandleRecap(baseUrl!, recapSessionId, useChain, useFull);
@@ -267,10 +291,11 @@ switch (command) {
     }
     case "mcp": {
         if (args.Length < 2) {
-            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions …");
+            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows …");
             Console.Error.WriteLine("  kcap mcp review [--owner <owner> --repo <repo> --pr <number>]");
             Console.Error.WriteLine("  kcap mcp judge --session <sessionId>");
             Console.Error.WriteLine("  kcap mcp sessions");
+            Console.Error.WriteLine("  kcap mcp flows");
 
             return 1;
         }
@@ -302,9 +327,28 @@ switch (command) {
             }
             case "sessions":
                 return await McpSessionsServer.RunAsync(baseUrl!);
+            case "flows":
+                return await McpFlowsServer.RunAsync(baseUrl!);
             default:
                 Console.Error.WriteLine($"Unknown mcp subcommand: {args[1]}");
 
+                return 1;
+        }
+    }
+    case "curate": {
+        if (args.Length < 2) {
+            Console.Error.WriteLine("Usage: kcap curate apply [--dry-run] [--yes]");
+            return 1;
+        }
+        switch (args[1]) {
+            case "apply": {
+                var dryRun = args.Contains("--dry-run");
+                var yes    = args.Contains("--yes") || args.Contains("-y");
+                return await CurateCommand.HandleApply(baseUrl!, dryRun, yes);
+            }
+            default:
+                Console.Error.WriteLine($"Unknown curate subcommand: {args[1]}");
+                Console.Error.WriteLine("Usage: kcap curate apply [--dry-run] [--yes]");
                 return 1;
         }
     }
@@ -466,6 +510,7 @@ switch (command) {
             new GeminiImportSource(),
             new KiroImportSource(),
             new PiImportSource(),
+            new OpenCodeImportSource(),
         };
         IReadOnlyList<IImportSource> sources = explicitVendorSelection
             ? allSources.Where(s => vsel.Vendors.Contains(s.Vendor)).ToList()
@@ -474,6 +519,7 @@ switch (command) {
         // --- Scope resolution (AI-613) ---
         var profileConfig = await AppConfig.LoadProfileConfig();
         var activeProfile = string.IsNullOrEmpty(profileConfig.ActiveProfile) ? "default" : profileConfig.ActiveProfile;
+        var storedOrg     = profileConfig.Profiles.GetValueOrDefault(activeProfile)?.ImportOrg;
 
         var currentRepoDetected = await RepositoryDetection.DetectRepositoryAsync(Environment.CurrentDirectory);
         (string Owner, string Name)? currentRepo = currentRepoDetected is { Owner: { } o, RepoName: { } n }
@@ -485,7 +531,8 @@ switch (command) {
             Flags:         flags,
             ActiveProfile: activeProfile,
             IsInteractive: !Console.IsInputRedirected && !Console.IsOutputRedirected,
-            CurrentRepo:   currentRepo));
+            CurrentRepo:   currentRepo,
+            StoredOrg:     storedOrg));
 
         if (resolveResult.Error is not null) {
             Console.Error.WriteLine(resolveResult.Error);
@@ -505,7 +552,9 @@ switch (command) {
             skipConfirmation:        resolveResult.Yes,
             forcePrivate:            resolveResult.Private,
             activeProfile:           activeProfile,
-            currentRepo:             currentRepo);
+            currentRepo:             currentRepo,
+            needOrgPick:             resolveResult.NeedOrgPick,
+            storedOrg:               storedOrg);
     }
     case "watch" when args.Length < 3:
         Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex|copilot|gemini|kiro|pi|opencode]");

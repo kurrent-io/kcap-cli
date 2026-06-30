@@ -46,6 +46,36 @@ public class ImportScopePromptTests {
         await Assert.That(choices).IsEquivalentTo(new[] { "A/x", "A/y" });
     }
 
+    // --- BuildOrgChoices ---
+
+    [Test]
+    public async Task BuildOrgChoices_distinct_owners_sorted() {
+        var owners = ImportScopePrompt.BuildOrgChoices(
+            [
+                ("EventStore", "kurrentdb"),
+                ("EventStore", "kcap"),       // same owner, different repo
+                ("alexeyzimarev", "scratchpad"),
+            ]
+        );
+
+        await Assert.That(owners).IsEquivalentTo(new[] { "alexeyzimarev", "EventStore" });
+    }
+
+    [Test]
+    public async Task BuildOrgChoices_deduplicates_case_insensitively() {
+        var owners = ImportScopePrompt.BuildOrgChoices(
+            [("EventStore", "a"), ("eventstore", "b")]
+        );
+
+        await Assert.That(owners.Length).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task BuildOrgChoices_empty_when_no_repos() {
+        var owners = ImportScopePrompt.BuildOrgChoices([]);
+        await Assert.That(owners).IsEmpty();
+    }
+
     // --- FormatSummary ---
 
     [Test]

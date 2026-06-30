@@ -206,16 +206,24 @@ internal partial class AgentOrchestrator {
     }
 
     /// <summary>
-    /// Min-clamp the one PTY to the smallest cols × rows across the attached local clients
-    /// (tmux semantics), so no client's redraw is corrupted. Recomputed on attach/detach/
-    /// resize. Caller holds <see cref="AgentInstance.SinksLock"/>; no-op when no client has a
-    /// reported size.
+    /// Min-clamp the one PTY to the smallest cols × rows across every attached viewer — the local
+    /// clients (<see cref="AgentInstance.ClientDims"/>) <b>and</b> the server-aggregated web viewers
+    /// (<see cref="AgentInstance.WebDims"/>) — so no surface's redraw is corrupted (tmux semantics).
+    /// Recomputed on local attach/detach/resize and on a server-origin web resize. Caller
+    /// holds <see cref="AgentInstance.SinksLock"/>; no-op when no viewer has a reported size.
     /// </summary>
     void ClampPtyLocked(AgentInstance agent) {
-        if (agent.ClientDims.Count == 0) return;
+        ushort c = 0, r = 0;
 
-        var c = agent.ClientDims.Values.Min(d => d.Cols);
-        var r = agent.ClientDims.Values.Min(d => d.Rows);
+        foreach (var d in agent.ClientDims.Values) {
+            if (c == 0 || d.Cols < c) c = d.Cols;
+            if (r == 0 || d.Rows < r) r = d.Rows;
+        }
+        if (agent.WebDims is { } w) {
+            if (c == 0 || w.Cols < c) c = w.Cols;
+            if (r == 0 || w.Rows < r) r = w.Rows;
+        }
+
         if (c > 0 && r > 0) {
             agent.Process.Resize(c, r);
             agent.CurrentCols = c;

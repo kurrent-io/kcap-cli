@@ -26,12 +26,19 @@ Vendor filters (additive — pass one or more to restrict the run):
   --gemini                Import Gemini CLI session transcripts
   --kiro                  Import AWS Kiro CLI sessions (~/.kiro/sessions/cli)
   --pi                    Import Pi (badlogic/pi-mono) session transcripts
+  --opencode              Import SST OpenCode sessions (~/.local/share/opencode/opencode.db)
 
 Scope (one of, required for non-interactive use):
   --all                   Import every discovered session
-  --org                   Import only sessions from your active profile's org
+  --org <owner>           Import only sessions whose git-remote owner matches <owner>
+  --org                   Bare: pick an org from discovered repos (interactive) and
+                          remember it; reuses the remembered org on later runs
   --repo <owner/name>     Import only sessions from a specific repo
   --repo .                Import only sessions from the current cwd's repo
+
+The org is the git-remote owner (GitHub org/user), independent of your profile
+name — so `--org` works the same under GitHub and WorkOS sign-in. A bare `--org`
+with no remembered org needs an interactive terminal (or pass `--org <owner>`).
 
 Without a scope flag on an interactive terminal, an interactive picker is shown.
 

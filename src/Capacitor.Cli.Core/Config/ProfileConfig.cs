@@ -69,6 +69,16 @@ public record Profile {
 
     [JsonPropertyName("remotes")]
     public string[] Remotes { get; init; } = [];
+
+    /// <summary>
+    /// GitHub org/owner used by <c>kcap import --org</c> to filter sessions by
+    /// their git-remote owner. Decoupled from the profile name: under WorkOS the
+    /// profile is named after the tenant slug, which is not a GitHub org, so the
+    /// org to scope on is chosen from discovered repos (or passed as
+    /// <c>--org &lt;owner&gt;</c>) and remembered here for subsequent bare <c>--org</c> runs.
+    /// </summary>
+    [JsonPropertyName("import_org")]
+    public string? ImportOrg { get; init; }
 }
 
 /// <summary>Repo-level .kcap.json committed to VCS.</summary>

@@ -184,6 +184,43 @@ public class WatcherParentExitPostTests : IDisposable {
     }
 
     [Test]
+    public async Task IdleTimeout_PostsSessionEnd_WithIdleTimeoutReason() {
+        // When a Codex rollout file goes idle, the watcher calls PostSessionEndOnParentExitAsync
+        // with reason "idle_timeout". Validate the payload reaches /hooks/session-end/codex
+        // and the reason field is "idle_timeout" (not "parent_exited").
+        _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"provider":"None"}"""));
+
+        _server.Given(Request.Create().WithPath("/hooks/session-end/codex").UsingPost())
+            .RespondWith(
+                Response.Create()
+                    .WithStatusCode(200)
+                    .WithHeader("Content-Type", "application/json")
+                    .WithBody("""{"generate_whats_done":false}""")
+            );
+
+        var sessionId = $"test-{Guid.NewGuid():N}";
+
+        await WatchCommand.PostSessionEndOnParentExitAsync(
+            baseUrl:        _server.Url!,
+            sessionId:      sessionId,
+            transcriptPath: "/tmp/fake.jsonl",
+            cwd:            "/repo",
+            vendor:         "codex",
+            repository:     null,
+            reason:         "idle_timeout"
+        );
+
+        var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
+        await Assert.That(requests.Count).IsEqualTo(1);
+
+        var body = JsonDocument.Parse(requests[0].RequestMessage.Body!).RootElement;
+        await Assert.That(body.GetProperty("session_id").GetString()).IsEqualTo(sessionId);
+        await Assert.That(body.GetProperty("hook_event_name").GetString()).IsEqualTo("session_end");
+        await Assert.That(body.GetProperty("reason").GetString()).IsEqualTo("idle_timeout");
+    }
+
+    [Test]
     public async Task ParentExit_FinalizesGeminiSubagents_BeforeSessionEnd() {
         // Regression (PR #170 review, BLOCKING): the watcher's parent-exit fallback must run
         // the Gemini subagent teardown. Gemini fires no subagent-stop hook and its child

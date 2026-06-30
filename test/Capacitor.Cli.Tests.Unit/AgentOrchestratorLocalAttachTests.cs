@@ -235,6 +235,91 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     [Test]
+    public async Task Web_resize_min_clamps_per_dimension_with_local_client() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = new AgentInstance("reg-3", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            IsPrivate = false, Status = "Running", CurrentCols = 80, CurrentRows = 24
+        };
+        // A local client reports 80×24; the web viewer wants 120×40.
+        agent.ClientDims[new FakeTerminalSink()] = new AgentInstance.Dim(80, 24);
+        orch.RegisterAgentForTest(agent);
+
+        orch.HandleResizeTerminalForTest(new ResizeTerminalCommand("reg-3", 120, 40));
+
+        // Per-dimension min across local ∪ web: cols min(80,120)=80, rows min(24,40)=24.
+        await Assert.That(agent.CurrentCols).IsEqualTo((ushort)80);
+        await Assert.That(agent.CurrentRows).IsEqualTo((ushort)24);
+        await Assert.That(server.LastDims).IsEqualTo((80, 24)); // clamped size announced back to web
+    }
+
+    [Test]
+    public async Task Web_resize_shrinks_pty_below_a_larger_local_client() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = new AgentInstance("reg-4", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            IsPrivate = false, Status = "Running", CurrentCols = 200, CurrentRows = 50
+        };
+        agent.ClientDims[new FakeTerminalSink()] = new AgentInstance.Dim(200, 50);
+        orch.RegisterAgentForTest(agent);
+
+        orch.HandleResizeTerminalForTest(new ResizeTerminalCommand("reg-4", 100, 30));
+
+        // The smaller web viewer wins both dimensions.
+        await Assert.That(agent.CurrentCols).IsEqualTo((ushort)100);
+        await Assert.That(agent.CurrentRows).IsEqualTo((ushort)30);
+    }
+
+    [Test]
+    public async Task Web_resize_zero_dims_clears_web_and_grows_back_to_local() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = new AgentInstance("reg-5", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            IsPrivate = false, Status = "Running", CurrentCols = 150, CurrentRows = 40
+        };
+        agent.ClientDims[new FakeTerminalSink()] = new AgentInstance.Dim(150, 40);
+        orch.RegisterAgentForTest(agent);
+
+        // A small web viewer attaches and clamps the PTY down.
+        orch.HandleResizeTerminalForTest(new ResizeTerminalCommand("reg-5", 80, 20));
+        await Assert.That(agent.CurrentCols).IsEqualTo((ushort)80);
+        await Assert.That(agent.CurrentRows).IsEqualTo((ushort)20);
+
+        // Last web viewer leaves: the server sends (0,0); the PTY grows back to the local size.
+        orch.HandleResizeTerminalForTest(new ResizeTerminalCommand("reg-5", 0, 0));
+        await Assert.That(agent.WebDims).IsNull();
+        await Assert.That(agent.CurrentCols).IsEqualTo((ushort)150);
+        await Assert.That(agent.CurrentRows).IsEqualTo((ushort)40);
+    }
+
+    [Test]
+    public async Task Web_resize_out_of_ushort_range_is_ignored() {
+        var server = new TripwireServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = new AgentInstance("reg-6", null, "", null, "/r", "claude",
+            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            IsPrivate = false, Status = "Running", CurrentCols = 120, CurrentRows = 40
+        };
+        agent.ClientDims[new FakeTerminalSink()] = new AgentInstance.Dim(120, 40);
+        orch.RegisterAgentForTest(agent);
+
+        // 70000 > ushort.MaxValue — would wrap to 4464 on a raw (ushort) cast. The guard ignores it
+        // so WebDims stays null and the clamp is untouched (no poisoned web entry).
+        orch.HandleResizeTerminalForTest(new ResizeTerminalCommand("reg-6", 70000, 40));
+
+        await Assert.That(agent.WebDims).IsNull();
+        await Assert.That(agent.CurrentCols).IsEqualTo((ushort)120);
+        await Assert.That(agent.CurrentRows).IsEqualTo((ushort)40);
+    }
+
+    [Test]
     public async Task Private_agent_ignores_server_origin_resize_and_stop() {
         var server = new CaptureServerConnection();
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
@@ -381,6 +466,13 @@ public partial class AgentOrchestratorVendorTests {
         public override long Seek(long o, SeekOrigin s) => throw new NotSupportedException();
         public override void SetLength(long v) => throw new NotSupportedException();
         protected override void Dispose(bool disposing) { if (disposing) { readSide.Dispose(); writeSide.Dispose(); } }
+    }
+
+    /// A no-op local sink used only as a stable key to seed AgentInstance.ClientDims in resize
+    /// tests (the real socket attach loop isn't needed to exercise the min-clamp).
+    sealed class FakeTerminalSink : ITerminalSink {
+        public void TryEnqueue(byte[] chunk) { }
+        public bool Detached => false;
     }
 
     /// Records the name of any per-agent server method invoked. A PrivateLocal agent must

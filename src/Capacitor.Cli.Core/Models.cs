@@ -122,6 +122,21 @@ class WatchState {
     public int          LinesReadAhead      { get; set; } // file position while buffering
     public bool         ThresholdReached    { get; set; }
 
+    // Last wall-clock time new transcript content was observed on the rollout file.
+    // Drives the Codex idle-timeout fallback (see WatchCommand.ShouldEndOnIdle).
+    // Initialized when the watcher starts; updated in DrainNewLines on new lines.
+    public DateTimeOffset LastActivityAt { get; set; } = DateTimeOffset.UtcNow;
+
+    // Tracks Codex tool-call call_ids that are currently in flight (started but
+    // not yet finished). A function_call/custom_tool_call response_item adds the
+    // call_id; its matching _output removes it. While this set is non-empty, the
+    // idle-end check is suppressed: a long-running shell command or custom tool can
+    // legitimately produce no new rollout lines for >60 min between its start and
+    // output lines (the tool is still running). No hard ceiling: if the tool hangs
+    // forever but the Codex process is still alive, the parent-exit watchdog will
+    // eventually fire and end the session — adding a ceiling here would be YAGNI.
+    public HashSet<string> PendingCodexToolCalls { get; } = new(StringComparer.Ordinal);
+
     public const int TranscriptThreshold = 10;
 }
 
@@ -510,6 +525,19 @@ public record RepoEntry {
     public required DateTimeOffset LastUsed { get; init; }
 }
 
+public sealed record CurationApplyItem {
+    [JsonPropertyName("category")]      public string?               Category     { get; init; }
+    [JsonPropertyName("cluster_id")]    public string?               ClusterId    { get; init; }
+    [JsonPropertyName("promoted_text")] public string?               PromotedText { get; init; }
+    [JsonPropertyName("target_kinds")]  public IReadOnlyList<string>? TargetKinds { get; init; }
+    [JsonPropertyName("status")]        public string?               Status       { get; init; }
+}
+
+public sealed record CurationApplyResponse {
+    [JsonPropertyName("repo_hash")] public string?                      RepoHash { get; init; }
+    [JsonPropertyName("items")]     public IReadOnlyList<CurationApplyItem>? Items { get; init; }
+}
+
 [JsonSerializable(typeof(List<RecapEntry>))]
 [JsonSerializable(typeof(List<RepoRecapEntry>))]
 [JsonSerializable(typeof(EvalContextResult))]
@@ -549,6 +577,8 @@ public record RepoEntry {
 [JsonSerializable(typeof(ReviewLaunchInfo))]
 [JsonSerializable(typeof(LaunchKind))]
 [JsonSerializable(typeof(FindRepoForRemoteRequest))]
+[JsonSerializable(typeof(RefreshAgentWorktreeCommand))]
+[JsonSerializable(typeof(RefreshAgentWorktreeResult))]
 [JsonSerializable(typeof(SendInputCommand))]
 [JsonSerializable(typeof(ResizeTerminalCommand))]
 [JsonSerializable(typeof(PrepareEvalCommand))]
@@ -584,6 +614,8 @@ public record RepoEntry {
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(string[]))]
 [JsonSerializable(typeof(RepoEntry[]))]
+[JsonSerializable(typeof(CurationApplyResponse))]
+[JsonSerializable(typeof(CurationApplyItem))]
 // UseStringEnumConverter=true matches the server's SignalR JSON protocol, which
 // serialises enums (e.g. LaunchKind) as camelCase strings. Without it the
 // source-gen LaunchKind JsonTypeInfo defaults to numeric and silently drops the
@@ -673,6 +705,28 @@ public readonly record struct FindRepoForRemoteRequest(
         string   Owner,
         string   Repo,
         string[] CandidatePaths
+    );
+
+/// <summary>
+/// Server → daemon command to sync the source repo's current working-tree state (tracked +
+/// untracked non-ignored files) into the reviewer agent's daemon-created worktree, so the
+/// reviewer sees Claude's latest uncommitted changes before a code-review follow-up round.
+/// Wire keys (snake_case): <c>agent_id</c>, <c>source_repo_root</c>, <c>exclude_paths</c>.
+/// </summary>
+public readonly record struct RefreshAgentWorktreeCommand(
+        string   AgentId,
+        string   SourceRepoRoot,
+        string[] ExcludePaths
+    );
+
+/// <summary>
+/// Daemon reply to <see cref="RefreshAgentWorktreeCommand"/>. <see cref="Success"/> is
+/// <c>false</c> when a guard prevented the sync or the sync itself threw; <see cref="Error"/>
+/// carries the reason. Wire keys: <c>success</c>, <c>error</c>.
+/// </summary>
+public readonly record struct RefreshAgentWorktreeResult(
+        bool    Success,
+        string? Error
     );
 
 public readonly record struct SendInputCommand(
