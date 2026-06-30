@@ -224,16 +224,17 @@ public static class EvalService {
     /// <see cref="FinalizeAsync"/>. All fields are non-null on success.
     /// </summary>
     public sealed record EvalContext(
-        string                                       EvalRunId,
-        string                                       EncodedSessionId,
-        string                                       SessionId,
-        string                                       TraceJson,
-        EvalContextResult                            ContextResult,
-        string                                       PromptTemplate,
-        string                                       ToolsPromptTemplate,
-        IReadOnlyList<EvalQuestionDto>               Questions,
-        string                                       Model,
-        bool                                         ForceTools
+        string                         EvalRunId,
+        string                         EncodedSessionId,
+        string                         SessionId,
+        string                         TraceJson,
+        EvalContextResult              ContextResult,
+        string                         ToolsPromptTemplate,        // still embedded (no catalog slot)
+        string                         RetrospectivePrompt,        // from catalog (rendered)
+        string                         RetrospectivePromptVersion, // from catalog
+        IReadOnlyList<EvalQuestionDto> Questions,                  // RECONCILED from the catalog
+        string                         Model,
+        bool                           ForceTools
     );
 
     /// <summary>
@@ -250,7 +251,7 @@ public static class EvalService {
     /// <see cref="IEvalObserver.OnFailed"/> either way.
     /// </para>
     /// </summary>
-    public static async Task<SessionEvalCompletedPayloadV2?> RunAsync(
+    public static async Task<SessionEvalCompletedPayloadV3?> RunAsync(
             string                          baseUrl,
             HttpClient                      httpClient,
             string                          sessionId,
@@ -277,12 +278,20 @@ public static class EvalService {
                 return null;
             }
 
-            var ctx = await PrepareAsync(baseUrl, httpClient, sessionId, questions, chain, thresholdBytes, observer, ct, model, evalRunId);
+            // AI-9 Phase 3 — fetch the full catalog (rendered prompts + raw text +
+            // versions) so PrepareAsync can reconcile the run question list from it.
+            var catalog = await EvalCatalogClient.FetchAsync(baseUrl, httpClient, observer, ct);
+            if (catalog is null) return null;   // FetchAsync already emitted OnFailed
+
+            var ctx = await PrepareAsync(baseUrl, httpClient, sessionId, questions, catalog, chain, thresholdBytes, observer, ct, model, evalRunId);
             if (ctx is null) return null;
 
+            // Iterate the RECONCILED questions (ctx.Questions) — the text path uses
+            // each question's server-rendered Prompt and Aggregate stamps the right
+            // catalog PromptVersion on every verdict.
             var verdicts = new List<EvalQuestionVerdict>();
-            for (var i = 0; i < questions.Count; i++) {
-                var verdict = await RunQuestionAsync(ctx, httpClient, baseUrl, questions[i], model, i + 1, questions.Count, observer, ct);
+            for (var i = 0; i < ctx.Questions.Count; i++) {
+                var verdict = await RunQuestionAsync(ctx, httpClient, baseUrl, ctx.Questions[i], model, i + 1, ctx.Questions.Count, observer, ct);
                 if (verdict is not null) verdicts.Add(verdict);
             }
 
@@ -307,6 +316,7 @@ public static class EvalService {
             HttpClient                     httpClient,
             string                         sessionId,
             IReadOnlyList<EvalQuestionDto> questions,
+            EvalCatalogDto                 catalog,
             bool                           chain,
             int?                           thresholdBytes,
             IEvalObserver                  observer,
@@ -410,20 +420,31 @@ public static class EvalService {
         // "stable" trends). FactsUsed snapshots persist as empty for new
         // evals; the read-side projection + UI panel stay in place so
         // historical eval audit views keep working.
-        var promptTemplate      = EmbeddedResources.Load("prompt-eval-question.txt");
+        // AI-9 Phase 3 — reconcile the run question list FROM the catalog (rendered
+        // prompts + raw text + versions). The text path uses each question's rendered
+        // Prompt directly; the tools path keeps the embedded wrapper + raw text.
+        var selectedIds = questions.Select(q => q.Id).ToList();
+        IReadOnlyList<EvalQuestionDto> reconciled;
+        try {
+            reconciled = ReconcileQuestions(selectedIds, catalog);
+        } catch (ArgumentException ex) {
+            observer.OnFailed($"eval catalog reconciliation failed: {ex.Message}");
+            return null;
+        }
         var toolsPromptTemplate = EmbeddedResources.Load("prompt-eval-question-tools.txt");
 
         return new EvalContext(
-            EvalRunId:           evalRunId,
-            EncodedSessionId:    encodedSessionId,
-            SessionId:           context.SessionId,
-            TraceJson:           traceJson,
-            ContextResult:       context,
-            PromptTemplate:      promptTemplate,
-            ToolsPromptTemplate: toolsPromptTemplate,
-            Questions:           questions,
-            Model:               model,
-            ForceTools:          forceTools
+            EvalRunId:                  evalRunId,
+            EncodedSessionId:           encodedSessionId,
+            SessionId:                  context.SessionId,
+            TraceJson:                  traceJson,
+            ContextResult:              context,
+            ToolsPromptTemplate:        toolsPromptTemplate,
+            RetrospectivePrompt:        catalog.RetrospectivePrompt,
+            RetrospectivePromptVersion: catalog.RetrospectivePromptVersion,
+            Questions:                  reconciled,
+            Model:                      model,
+            ForceTools:                 forceTools
         );
     }
 
@@ -445,8 +466,8 @@ public static class EvalService {
 
         // Soft-drop of {KNOWN_PATTERNS}: the prompt templates no longer carry
         // the placeholder, so the value here is inert — passed as empty string
-        // for parameter-signature compatibility with BuildQuestionPrompt /
-        // BuildToolsQuestionPrompt callers (still public API).
+        // for parameter-signature compatibility with the still-public
+        // BuildToolsQuestionPrompt caller.
         const string patterns = "";
 
         // Capture ClaudeCliRunner diagnostics (exit code, stdout preview)
@@ -465,8 +486,12 @@ public static class EvalService {
             // on demand. ctx.ForceTools additionally routes EVERY question
             // here (not just the NeedsTools four) when the session's trace is
             // too large to embed — see PrepareAsync's size gate.
+            // AI-9 Phase 3 — the reconciled question's Prompt is the RENDERED
+            // text-path prompt; the tools template substitutes {QUESTION_TEXT}
+            // from question.Prompt, so feed it the RAW catalog text instead.
             var prompt = BuildToolsQuestionPrompt(
-                ctx.ToolsPromptTemplate, ctx.SessionId, ctx.EvalRunId, question, patterns);
+                ctx.ToolsPromptTemplate, ctx.SessionId, ctx.EvalRunId,
+                question with { Prompt = question.RawText ?? question.Prompt }, patterns);
 
             var commandPath = ResolveJudgeCommandPath();
             var mcpConfig   = BuildJudgeMcpConfig(commandPath, ctx.SessionId, baseUrl);
@@ -485,9 +510,10 @@ public static class EvalService {
                 ct:             ct
             );
         } else {
-            // Text-only path (default): unchanged from pre-DEV-1486.
-            var prompt = BuildQuestionPrompt(ctx.PromptTemplate, ctx.SessionId, ctx.EvalRunId,
-                question, ctx.TraceJson, patterns);
+            // Text-only path (default). AI-9 Phase 3: the prompt is the catalog's
+            // server-RENDERED prompt carried on the reconciled question — fill the
+            // runtime placeholders and strip any residual {CACHE_BOUNDARY}.
+            var prompt = BuildTextQuestionPrompt(question, ctx.SessionId, ctx.EvalRunId, ctx.TraceJson);
 
             result = await ClaudeCliRunner.RunAsync(
                 prompt,
@@ -550,7 +576,7 @@ public static class EvalService {
 
     // ── Phase 3: Finalize ──────────────────────────────────────────────────
 
-    public static async Task<SessionEvalCompletedPayloadV2?> FinalizeAsync(
+    public static async Task<SessionEvalCompletedPayloadV3?> FinalizeAsync(
             EvalContext                        ctx,
             HttpClient                         httpClient,
             string                             baseUrl,
@@ -565,8 +591,9 @@ public static class EvalService {
             return null;
         }
 
-        // 4. Aggregate per-category + overall scores. AI-795 T18: V2 payload
-        //    with structured RetrospectiveSuggestion items.
+        // 4. Aggregate per-category + overall scores. AI-9 Phase 3: V3 payload —
+        //    each verdict is stamped with its catalog prompt version; the
+        //    retrospective prompt version is stamped below from ctx.
         var aggregate = Aggregate(verdicts, ctx.EvalRunId, model, ctx.Questions);
 
         // FactsUsed stays empty: nothing was injected into the judge prompt,
@@ -586,19 +613,24 @@ public static class EvalService {
         // won't match (latent for UUID sessions, visible for
         // meta-session slugs — see DEV-1484 final review).
         var retrospective = await RunRetrospectiveAsync(
-            evalRunId: ctx.EvalRunId,
-            sessionId: ctx.SessionId,
-            model:     model,
-            baseUrl:   baseUrl,
-            aggregate: aggregate,
-            verdicts:  verdicts,
-            observer:  observer,
-            ct:        ct
+            evalRunId:           ctx.EvalRunId,
+            sessionId:           ctx.SessionId,
+            model:               model,
+            baseUrl:             baseUrl,
+            aggregate:           aggregate,
+            verdicts:            verdicts,
+            retrospectivePrompt: ctx.RetrospectivePrompt,
+            traceJson:           ctx.TraceJson,
+            observer:            observer,
+            ct:                  ct
         );
         aggregate = aggregate with { Retrospective = retrospective };
 
-        // 6. Persist the aggregate to the server via the V2 route.
-        var ok = await PersistAggregateV2Async(httpClient, baseUrl, ctx.EncodedSessionId, aggregate, observer, ct);
+        // AI-9 Phase 3 — stamp the catalog retrospective prompt version.
+        aggregate = aggregate with { RetrospectivePromptVersion = ctx.RetrospectivePromptVersion };
+
+        // 6. Persist the aggregate to the server via the V3 route.
+        var ok = await PersistAggregateV3Async(httpClient, baseUrl, ctx.EncodedSessionId, aggregate, observer, ct);
         if (!ok) return null;
 
         observer.OnFinished(aggregate);
@@ -648,33 +680,89 @@ public static class EvalService {
         return true;
     }
 
+    /// <summary>
+    /// Persists a V3 aggregate to <c>POST /api/sessions/{id}/evals/v3</c>
+    /// (AI-9 Phase 3 — carries per-question + retrospective prompt versions).
+    /// Public seam for the daemon's wire-format contract test, mirroring
+    /// <see cref="PersistAggregateV2Async"/>.
+    /// </summary>
+    public static async Task<bool> PersistAggregateV3Async(
+            HttpClient                    httpClient,
+            string                        baseUrl,
+            string                        encodedSessionId,
+            SessionEvalCompletedPayloadV3 aggregate,
+            IEvalObserver                 observer,
+            CancellationToken             ct
+        ) {
+        var       postUrl     = $"{baseUrl}/api/sessions/{encodedSessionId}/evals/v3";
+        var       payloadJson = JsonSerializer.Serialize(aggregate, CapacitorJsonContext.Default.SessionEvalCompletedPayloadV3);
+        using var httpContent = new StringContent(payloadJson, Encoding.UTF8, "application/json");
+
+        try {
+            using var postResp = await httpClient.PostWithRetryAsync(postUrl, httpContent, ct: ct);
+            if (!postResp.IsSuccessStatusCode) {
+                observer.OnFailed($"failed to persist eval result: HTTP {(int)postResp.StatusCode}");
+                return false;
+            }
+        } catch (HttpRequestException ex) {
+            observer.OnFailed($"server unreachable for POST: {ex.Message}");
+            return false;
+        }
+
+        return true;
+    }
+
     // ── Prompt construction ────────────────────────────────────────────────
 
-    // Per-question judges are text-only by default; the four DEV-1486 tagged
-    // questions (NeedsTools=true) opt into the MCP tool surface via
-    // BuildToolsQuestionPrompt + the tools branch of RunQuestionAsync.
-    public static string BuildQuestionPrompt(
-            string          template,
-            string          sessionId,
-            string          evalRunId,
-            EvalQuestionDto question,
-            string          traceJson,
-            string          knownPatterns
+    /// <summary>
+    /// AI-9 Phase 3 — build the run question list FROM the catalog, preserving the
+    /// order of <paramref name="selectedIds"/>. Each result carries the catalog's
+    /// rendered <see cref="EvalQuestionDto.Prompt"/> (text path), raw
+    /// <see cref="EvalQuestionDto.RawText"/> (tools path), <see cref="EvalQuestionDto.PromptVersion"/>,
+    /// and <see cref="EvalQuestionDto.NeedsTools"/>. Throws if a selected id is not in
+    /// the catalog (the run must judge exactly what the catalog defines).
+    /// </summary>
+    public static IReadOnlyList<EvalQuestionDto> ReconcileQuestions(
+            IReadOnlyList<string> selectedIds,
+            EvalCatalogDto        catalog
+        ) {
+        var byId = catalog.Questions.ToDictionary(q => q.Id, StringComparer.Ordinal);
+        var result = new List<EvalQuestionDto>(selectedIds.Count);
+        foreach (var id in selectedIds) {
+            if (!byId.TryGetValue(id, out var c))
+                throw new ArgumentException($"selected question id '{id}' is not in the eval catalog");
+            result.Add(new EvalQuestionDto {
+                Category      = c.Category,
+                Id            = c.Id,
+                Text          = c.Title,
+                Prompt        = c.Prompt,        // RENDERED — text path uses directly
+                RawText       = c.QuestionText,  // RAW — tools path substitutes this
+                NeedsTools    = c.NeedsTools,
+                PromptVersion = c.PromptVersion
+            });
+        }
+        return result;
+    }
+
+    /// <summary>Text-path prompt: the catalog rendered prompt with runtime placeholders
+    /// filled and any residual {CACHE_BOUNDARY} stripped (the server runner fills it;
+    /// the CLI judge has no cache boundary).</summary>
+    public static string BuildTextQuestionPrompt(
+            EvalQuestionDto question, string sessionId, string evalRunId, string traceJson
         ) =>
-        template
-            .Replace("{SESSION_ID}",     sessionId)
-            .Replace("{EVAL_RUN_ID}",    evalRunId)
-            .Replace("{CATEGORY}",       question.Category)
-            .Replace("{QUESTION_ID}",    question.Id)
-            .Replace("{QUESTION_TEXT}",  question.Prompt)
-            .Replace("{TRACE_JSON}",     traceJson)
-            .Replace("{KNOWN_PATTERNS}", knownPatterns);
+        question.Prompt
+            .Replace("{CACHE_BOUNDARY}", "")
+            .Replace("{SESSION_ID}",  sessionId)
+            .Replace("{EVAL_RUN_ID}", evalRunId)
+            .Replace("{CATEGORY}",    question.Category)
+            .Replace("{QUESTION_ID}", question.Id)
+            .Replace("{TRACE_JSON}",  traceJson);
 
     /// <summary>
-    /// Builds the tools-enabled per-question prompt (DEV-1486). Mirrors
-    /// <see cref="BuildQuestionPrompt"/> but omits <c>{TRACE_JSON}</c> — the
-    /// judge pulls session details on demand via MCP instead of reading them
-    /// from an embedded compacted trace.
+    /// Builds the tools-enabled per-question prompt (DEV-1486). Mirrors the
+    /// text-path <see cref="BuildTextQuestionPrompt"/> but omits <c>{TRACE_JSON}</c>
+    /// — the judge pulls session details on demand via MCP instead of reading
+    /// them from an embedded compacted trace.
     /// </summary>
     public static string BuildToolsQuestionPrompt(
             string          template,
@@ -691,32 +779,32 @@ public static class EvalService {
             .Replace("{QUESTION_TEXT}",  question.Prompt)
             .Replace("{KNOWN_PATTERNS}", knownPatterns);
 
-    static readonly string RetrospectivePromptTemplate =
-        EmbeddedResources.Load("prompt-eval-retrospective.txt");
-
     /// <summary>
-    /// Builds the retrospective synthesis prompt from the three placeholders
-    /// the judge needs: session metadata, per-question verdicts, and retained
-    /// patterns from prior evals in this repo. The prompt file itself is
-    /// loaded once at startup.
+    /// Builds the retrospective synthesis prompt from the catalog-rendered
+    /// template (AI-9 Phase 3 — was a static embedded field) and the
+    /// placeholders the judge needs: session metadata, per-question verdicts,
+    /// retained patterns from prior evals in this repo, and the compacted trace.
     ///
     /// <para>
-    /// Per DEV-1484 the compacted trace is no longer embedded — the judge
-    /// pulls recap/errors/transcript slices on demand via the MCP tools
-    /// configured on the <c>ClaudeCliRunner.RunAsync</c> call. The
-    /// <c>{TRACE_JSON}</c> placeholder was removed from the template so no
-    /// substitution is needed here.
+    /// SF#1 — the server retro template carries a <c>{TRACE_JSON}</c>
+    /// placeholder the CLI's embedded one lacked. The daemon already fetched the
+    /// trace (<see cref="EvalContext.TraceJson"/>) for the text path, so it fills
+    /// the placeholder with the real trace rather than blanking it. The retro
+    /// judge still has the MCP tool surface for on-demand investigation.
     /// </para>
     /// </summary>
     public static string BuildRetrospectivePrompt(
+            string template,           // AI-9 Phase 3 — from catalog (was static embedded field)
             string sessionMeta,
             string verdictsJson,
-            string knownPatterns
+            string knownPatterns,
+            string traceJson           // SF#1 — the daemon HAS the trace; fill it, don't blank it
         ) =>
-        RetrospectivePromptTemplate
+        template
             .Replace("{SESSION_META}",   sessionMeta)
             .Replace("{VERDICTS_JSON}",  verdictsJson)
-            .Replace("{KNOWN_PATTERNS}", knownPatterns);
+            .Replace("{KNOWN_PATTERNS}", knownPatterns)
+            .Replace("{TRACE_JSON}",     traceJson);
 
     /// <summary>
     /// Formats a per-category list of retained facts as a bulleted block for
@@ -1015,13 +1103,26 @@ public static class EvalService {
 
     // ── Aggregation ────────────────────────────────────────────────────────
 
-    public static SessionEvalCompletedPayloadV2 Aggregate(
+    public static SessionEvalCompletedPayloadV3 Aggregate(
             IReadOnlyList<EvalQuestionVerdict> verdicts,
             string                             evalRunId,
             string                             model,
             IReadOnlyList<EvalQuestionDto>     questions
         ) {
-        var byCategory = verdicts
+        // AI-9 Phase 3 — stamp each verdict with its catalog prompt version
+        // (from the reconciled questions) before grouping, so the V3 payload
+        // carries per-question prompt provenance.
+        var versionByQuestion = questions
+            .Where(q => q.PromptVersion is not null)
+            .ToDictionary(q => q.Id, q => q.PromptVersion!, StringComparer.Ordinal);
+
+        var stamped = verdicts
+            .Select(v => versionByQuestion.TryGetValue(v.QuestionId, out var ver)
+                ? v with { PromptVersion = ver }
+                : v)
+            .ToList();
+
+        var byCategory = stamped
             .GroupBy(v => v.Category)
             .Select(g => {
                 var avg = (int)Math.Round(g.Average(v => v.Score));
@@ -1043,12 +1144,13 @@ public static class EvalService {
         var summary = $"Evaluated {verdicts.Count}/{questions.Count} questions "
             + $"across {byCategory.Count} categories. Overall: {overall}/5 ({VerdictForScore(overall)}).";
 
-        return new SessionEvalCompletedPayloadV2 {
+        return new SessionEvalCompletedPayloadV3 {
             EvalRunId    = evalRunId,
             JudgeModel   = model,
             Categories   = byCategory,
             OverallScore = overall,
             Summary      = summary
+            // RetrospectivePromptVersion + Retrospective filled by FinalizeAsync
         };
     }
 
@@ -1086,8 +1188,10 @@ public static class EvalService {
             string                             sessionId,
             string                             model,
             string                             baseUrl,
-            SessionEvalCompletedPayloadV2      aggregate,
+            SessionEvalCompletedPayloadV3      aggregate,
             IReadOnlyList<EvalQuestionVerdict> verdicts,
+            string                             retrospectivePrompt,
+            string                             traceJson,
             IEvalObserver                      observer,
             CancellationToken                  ct
         ) {
@@ -1104,7 +1208,10 @@ public static class EvalService {
         // Soft-drop of {KNOWN_PATTERNS}: template no longer has the
         // placeholder, so the retrospective prompt builder receives an
         // empty knownPatterns string and the replace becomes a no-op.
-        var prompt = BuildRetrospectivePrompt(sessionMeta, verdictsJson, knownPatterns: "");
+        // AI-9 Phase 3: template comes from the catalog and {TRACE_JSON} is
+        // filled with the daemon's already-fetched trace (SF#1).
+        var prompt = BuildRetrospectivePrompt(
+            retrospectivePrompt, sessionMeta, verdictsJson, knownPatterns: "", traceJson);
 
         // DEV-1484: instead of embedding the compacted trace (which blew
         // past Sonnet's 200K-token window on real sessions), launch a
@@ -1234,7 +1341,7 @@ public static class EvalService {
         public void OnRetrospectiveFailed(string reason) =>
             Safe(() => inner.OnRetrospectiveFailed(reason), nameof(OnRetrospectiveFailed));
 
-        public void OnFinished(SessionEvalCompletedPayloadV2 aggregate) =>
+        public void OnFinished(SessionEvalCompletedPayloadV3 aggregate) =>
             Safe(() => inner.OnFinished(aggregate), nameof(OnFinished));
 
         public void OnFailed(string reason) =>
