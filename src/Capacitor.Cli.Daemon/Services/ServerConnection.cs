@@ -475,6 +475,22 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public virtual Task AgentStatusChangedAsync(string agentId, string status, string? sessionId)
         => _hub.InvokeAsync("AgentStatusChanged", new AgentStatusChanged(agentId, status, sessionId), cancellationToken: _ct);
 
+    /// <summary>
+    /// Best-effort: tell the server the model a hosted agent actually resolved to at launch
+    /// (e.g. the value Codex read from <c>~/.codex/config.toml</c> when dispatched with the
+    /// "default" sentinel) so the UI can display the real model. Fire-and-forget over the
+    /// persistent connection; swallowed when the connected server is older and has no
+    /// <c>ReportAgentResolvedModel</c> hub method (missing-method / dispatch errors), so a
+    /// mixed-version rollout never surfaces this as a failure.
+    /// </summary>
+    public virtual async Task ReportAgentResolvedModelAsync(string agentId, string model) {
+        try {
+            await _hub.SendAsync("ReportAgentResolvedModel", agentId, model, cancellationToken: _ct);
+        } catch (Exception ex) {
+            LogReportResolvedModelFailed(ex, agentId);
+        }
+    }
+
     public virtual Task AgentUnregisteredAsync(string agentId)
         => _hub.InvokeAsync("AgentUnregistered", new AgentUnregistered(agentId), cancellationToken: _ct);
 
@@ -756,6 +772,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to update repo paths on server")]
     partial void LogRepoPathUpdateFailed(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report resolved model for agent {AgentId} (server may not support it)")]
+    partial void LogReportResolvedModelFailed(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Hub method '{Method}' handler threw — invocation dropped")]
     partial void LogHandlerThrew(Exception ex, string method);

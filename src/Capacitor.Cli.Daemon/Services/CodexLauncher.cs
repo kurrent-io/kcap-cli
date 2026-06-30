@@ -74,18 +74,21 @@ internal sealed partial class CodexLauncher(
             ctx.Worktree.Path,
             "--sandbox",
             "workspace-write",
-            // Hosted Codex agents run unattended → never pause for approval (writes stay confined
-            // by the workspace-write sandbox). NOTE: review-flow reviewers and interactive rendered
-            // agents are BOTH LaunchKind.Default, so this is unconditional for now; per-kind scoping
-            // (LaunchKind.ReviewFlow) is a coordinated server+CLI follow-up.
+            // Review-flow reviewers (LaunchKind.ReviewFlow) run unattended → never pause for
+            // approval (writes stay confined by the workspace-write sandbox). Interactive rendered
+            // agents keep the default on-request approval so the user stays in the loop.
             "--ask-for-approval",
-            "never",
-            // No MCP servers: stops the reviewer recursively invoking kcap-flows' start_review_flow
-            // (the kcap-review-flows skill would otherwise trigger a nested review flow). The agent
-            // works from its prompt + read-only file inspection.
-            "-c",
-            "mcp_servers={}"
+            ctx.IsReviewFlow ? "never" : "on-request"
         };
+
+        // Review-flow reviewers run with NO MCP servers: stops the reviewer recursively invoking
+        // kcap-flows' start_review_flow (the kcap-review-flows skill would otherwise trigger a
+        // nested review flow). The reviewer works from its prompt + read-only file inspection.
+        // Interactive agents keep their configured MCP servers.
+        if (ctx.IsReviewFlow) {
+            args.Add("-c");
+            args.Add("mcp_servers={}");
+        }
 
         // "default" is the no-override sentinel from the flow/agent dispatch. Passing it as
         // `-m default` is rejected by Codex on a ChatGPT account ("The 'default' model is not

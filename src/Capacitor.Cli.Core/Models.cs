@@ -1,1047 +1,660 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
+using Eventuous;
 
-namespace Capacitor.Cli.Core;
+namespace Capacitor;
 
-record TranscriptBatch {
-    [JsonPropertyName("session_id")]
-    public required string SessionId { get; init; }
+// --- Enums ---
 
-    [JsonPropertyName("agent_id")]
-    public string? AgentId { get; init; }
-
-    [JsonPropertyName("lines")]
-    public required string[] Lines { get; init; }
-
-    [JsonPropertyName("line_numbers")]
-    public int[]? LineNumbers { get; init; }
-
-    [JsonPropertyName("repository")]
-    public RepositoryPayload? Repository { get; init; }
-
-    // Routes the server's INormalizerSelector to CodexNormalizer when "codex".
-    // Null/absent → server treats the batch as Claude (default). Omitted on the
-    // wire when null so older servers (pre-#576) keep deserialising the batch
-    // unchanged — the server-side record had no vendor field before that PR.
-    [JsonPropertyName("vendor")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Vendor { get; init; }
+[JsonConverter(typeof(JsonStringEnumConverter<SessionStartSource>))]
+public enum SessionStartSource {
+    Startup,
+    Resume,
+    Clear,
+    Compact
 }
 
-record ErrorEntry(
-        string         SessionId,
-        string?        SessionSlug,
-        string?        AgentId,
-        int            EventNumber,
-        string?        ToolName,
-        string         Error,
-        DateTimeOffset Timestamp
-    );
+[JsonConverter(typeof(SessionEndReasonConverter))]
+public enum SessionEndReason {
+    Clear,
+    Logout,
 
-record RecapEntry(
-        string         Type,
-        string?        SessionId,
-        string?        AgentId,
-        string?        AgentType,
-        string         Content,
-        string?        FilePath,
-        DateTimeOffset Timestamp
-    );
+    [JsonStringEnumMemberName("prompt_input_exit")]
+    PromptInputExit,
 
-record RepositoryPayload {
-    [JsonPropertyName("user_name")]
-    public string? UserName { get; init; }
+    [JsonStringEnumMemberName("end_turn")]
+    EndTurn,
 
-    [JsonPropertyName("user_email")]
-    public string? UserEmail { get; init; }
+    [JsonStringEnumMemberName("bypass_permissions_disabled")]
+    BypassPermissionsDisabled,
 
-    [JsonPropertyName("remote_url")]
-    public string? RemoteUrl { get; init; }
+    /// <summary>
+    /// Daemon-driven stop: the user clicked Stop on a hosted agent and claude
+    /// did not fire its own session-end hook within the graceful window.
+    /// </summary>
+    [JsonStringEnumMemberName("agent_stopped")]
+    AgentStopped,
 
-    [JsonPropertyName("owner")]
-    public string? Owner { get; init; }
+    /// <summary>
+    /// Daemon observed claude exiting without firing session-end (crash, force-kill,
+    /// natural exit on SIGTERM where claude didn't run its hooks).
+    /// </summary>
+    [JsonStringEnumMemberName("agent_exited")]
+    AgentExited,
 
-    [JsonPropertyName("repo_name")]
-    public string? RepoName { get; init; }
+    /// <summary>
+    /// Local watcher observed its parent coding-agent process disappear without firing
+    /// session-end (terminal closed, crash, force-kill). Watcher self-terminates and
+    /// POSTs session-end with this reason so the session doesn't stay "active" forever.
+    /// </summary>
+    [JsonStringEnumMemberName("parent_exited")]
+    ParentExited,
 
-    [JsonPropertyName("branch")]
-    public string? Branch { get; init; }
+    /// <summary>
+    /// Local watcher observed the Codex rollout file go idle (no writes within the
+    /// configured timeout window) and synthesised a session-end with this reason.
+    /// </summary>
+    [JsonStringEnumMemberName("idle_timeout")]
+    IdleTimeout,
 
-    [JsonPropertyName("pr_number")]
-    public int? PrNumber { get; init; }
-
-    [JsonPropertyName("pr_title")]
-    public string? PrTitle { get; init; }
-
-    [JsonPropertyName("pr_url")]
-    public string? PrUrl { get; init; }
-
-    [JsonPropertyName("pr_head_ref")]
-    public string? PrHeadRef { get; init; }
+    Other
 }
 
-record GitCacheEntry {
-    [JsonPropertyName("user_name")]
-    public string? UserName { get; init; }
-
-    [JsonPropertyName("user_email")]
-    public string? UserEmail { get; init; }
-
-    [JsonPropertyName("remote_url")]
-    public string? RemoteUrl { get; init; }
-
-    [JsonPropertyName("owner")]
-    public string? Owner { get; init; }
-
-    [JsonPropertyName("repo_name")]
-    public string? RepoName { get; init; }
-
-    [JsonPropertyName("cached_at")]
-    public DateTimeOffset CachedAt { get; init; }
-}
-
-class WatchState {
-    public int                LinesProcessed     { get; set; }
-    public RepositoryPayload? Repository         { get; set; }
-    public RepositoryPayload? LastSentRepository { get; set; }
-    public DateTimeOffset     LastRepoDetection  { get; set; }
-    public bool               InitialTitleSent   { get; set; }
-    public bool               TitleGenerated     { get; set; }
-    public int                TitleAttempts      { get; set; }
-    public bool               TitleInFlight      { get; set; }
-    public string?            FirstUserText      { get; set; }
-    public bool               FullFileScanDone   { get; set; }
-    public string?            FirstAssistantText { get; set; }
-    public int                EventCount         { get; set; }
-
-    // Buffering: hold transcript lines until threshold is reached to avoid polluting
-    // the server with short-lived sessions (e.g. <local-command-caveat> prompts)
-    public List<string> BufferedLines       { get; } = [];
-    public List<int>    BufferedLineNumbers { get; } = [];
-    public int          LinesReadAhead      { get; set; } // file position while buffering
-    public bool         ThresholdReached    { get; set; }
-
-    // Last wall-clock time new transcript content was observed on the rollout file.
-    // Drives the Codex idle-timeout fallback (see WatchCommand.ShouldEndOnIdle).
-    // Initialized when the watcher starts; updated in DrainNewLines on new lines.
-    public DateTimeOffset LastActivityAt { get; set; } = DateTimeOffset.UtcNow;
-
-    // Tracks Codex tool-call call_ids that are currently in flight (started but
-    // not yet finished). A function_call/custom_tool_call response_item adds the
-    // call_id; its matching _output removes it. While this set is non-empty, the
-    // idle-end check is suppressed: a long-running shell command or custom tool can
-    // legitimately produce no new rollout lines for >60 min between its start and
-    // output lines (the tool is still running). No hard ceiling: if the tool hangs
-    // forever but the Codex process is still alive, the parent-exit watchdog will
-    // eventually fire and end the session — adding a ceiling here would be YAGNI.
-    public HashSet<string> PendingCodexToolCalls { get; } = new(StringComparer.Ordinal);
-
-    public const int TranscriptThreshold = 10;
-}
-
-record SessionTitlePayload {
-    [JsonPropertyName("session_id")]
-    public required string SessionId { get; init; }
-
-    [JsonPropertyName("title")]
-    public required string Title { get; init; }
-
-    [JsonPropertyName("model")]
-    public string? Model { get; init; }
-
-    [JsonPropertyName("input_tokens")]
-    public long InputTokens { get; init; }
-
-    [JsonPropertyName("output_tokens")]
-    public long OutputTokens { get; init; }
-
-    [JsonPropertyName("cache_read_tokens")]
-    public long CacheReadTokens { get; init; }
-
-    [JsonPropertyName("cache_write_tokens")]
-    public long CacheWriteTokens { get; init; }
-}
-
-record WhatsDonePayload {
-    [JsonPropertyName("session_id")]
-    public required string SessionId { get; init; }
-
-    [JsonPropertyName("content")]
-    public required string Content { get; init; }
-
-    [JsonPropertyName("model")]
-    public string? Model { get; init; }
-
-    [JsonPropertyName("input_tokens")]
-    public long InputTokens { get; init; }
-
-    [JsonPropertyName("output_tokens")]
-    public long OutputTokens { get; init; }
-
-    [JsonPropertyName("cache_read_tokens")]
-    public long CacheReadTokens { get; init; }
-
-    [JsonPropertyName("cache_write_tokens")]
-    public long CacheWriteTokens { get; init; }
-}
-
-record RepoRecapEntry(
-        string          SessionId,
-        string?         Slug,
-        string?         Title,
-        DateTimeOffset  StartedAt,
-        DateTimeOffset? EndedAt,
-        string          Summary
-    );
-
-// ── Eval command types — see DEV-1433 ─────────────────────────────────────
-
-// Response shape from GET /api/sessions/{id}/eval-context. Only the fields
-// the CLI needs; the server emits more that we don't parse (agent tagging,
-// per-tool truncation breakdown, etc.) and System.Text.Json ignores them.
-public record EvalContextEntry {
-    [JsonPropertyName("kind")]
-    public required string Kind { get; init; }
-
-    [JsonPropertyName("timestamp")]
-    public required DateTimeOffset Timestamp { get; init; }
-
-    [JsonPropertyName("text")]
-    public string? Text { get; init; }
-
-    [JsonPropertyName("tool")]
-    public string? Tool { get; init; }
-}
-
-public record EvalContextCompactionSummary {
-    [JsonPropertyName("threshold_bytes")]
-    public required int ThresholdBytes { get; init; }
-
-    [JsonPropertyName("entries")]
-    public required int Entries { get; init; }
-
-    [JsonPropertyName("tool_results_total")]
-    public required int ToolResultsTotal { get; init; }
-
-    [JsonPropertyName("tool_results_truncated")]
-    public required int ToolResultsTruncated { get; init; }
-
-    [JsonPropertyName("bytes_saved")]
-    public required long BytesSaved { get; init; }
-}
-
-public record EvalContextResult {
-    [JsonPropertyName("session_id")]
-    public required string SessionId { get; init; }
-
-    [JsonPropertyName("session_chain")]
-    public required List<string> SessionChain { get; init; }
-
-    [JsonPropertyName("trace")]
-    public required List<EvalContextEntry> Trace { get; init; }
-
-    [JsonPropertyName("compaction")]
-    public required EvalContextCompactionSummary Compaction { get; init; }
-}
-
-/// <summary>
-/// Wire-format DTO for a single eval question served by
-/// <c>GET /api/eval/questions</c>. Mirrors the shape of
-/// <c>Kurrent.Capacitor.EvalQuestionMetadata.Question</c> on the server —
-/// the CLI cannot reference the Shared library (standalone submodule),
-/// so the shape is duplicated here.
-/// </summary>
-public record EvalQuestionDto {
-    [JsonPropertyName("category")]
-    public required string Category { get; init; }
-
-    [JsonPropertyName("id")]
-    public required string Id { get; init; }
-
-    [JsonPropertyName("text")]
-    public required string Text { get; init; }
-
-    [JsonPropertyName("prompt")]
-    public required string Prompt { get; init; }
-
-    // DEV-1486: server-owned flag that opts this question into tools-enabled
-    // judging. Defaults to false so older servers that don't send the field
-    // keep producing text-only judge runs.
-    [JsonPropertyName("needs_tools")]
-    public bool NeedsTools { get; init; }
-
-    // AI-9 Phase 3 — the catalog prompt version this question's rendered prompt
-    // ran against. Null on the back-compat /api/eval/questions alias (which does
-    // not emit it) and on older servers; populated only by /api/eval/catalog.
-    [JsonPropertyName("prompt_version")]
-    public string? PromptVersion { get; init; }
-
-    // AI-9 Phase 3 — RAW question text from the catalog, used by the tools path
-    // (the embedded tools template substitutes this into {QUESTION_TEXT}). Null on
-    // the alias / older servers. Distinct from Prompt, which on a reconciled
-    // text-path question holds the server-RENDERED prompt.
-    [JsonPropertyName("raw_text")]
-    public string? RawText { get; init; }
-}
-
-/// <summary>
-/// Wire-format DTO for <c>GET /api/eval/catalog</c> (AI-9 Phase 3). Carries the
-/// server-rendered retrospective prompt + its version, and the active questions
-/// with raw text + server-rendered prompt + per-question prompt version +
-/// needs_tools. There is NO top-level question template — the daemon uses each
-/// question's rendered <c>Prompt</c> directly. The daemon fetches this once per
-/// run and reconciles its run question list from it. Mirrors the server's Phase-2
-/// EvalCatalogResponse shape (the CLI cannot reference the server library — shape
-/// is duplicated).
-/// </summary>
-public record EvalCatalogDto {
-    [JsonPropertyName("retrospective_prompt")]
-    public required string RetrospectivePrompt { get; init; }
-
-    [JsonPropertyName("retrospective_prompt_version")]
-    public required string RetrospectivePromptVersion { get; init; }
-
-    [JsonPropertyName("questions")]
-    public List<EvalCatalogQuestionDto> Questions { get; init; } = [];
-}
-
-/// <summary>A single active question from <c>GET /api/eval/catalog</c>.</summary>
-public record EvalCatalogQuestionDto {
-    [JsonPropertyName("category")]
-    public required string Category { get; init; }
-
-    [JsonPropertyName("id")]
-    public required string Id { get; init; }
-
-    [JsonPropertyName("title")]
-    public required string Title { get; init; }
-
-    [JsonPropertyName("question_text")]
-    public required string QuestionText { get; init; }   // RAW (tools path)
-
-    [JsonPropertyName("prompt")]
-    public required string Prompt { get; init; }         // server-rendered (text path)
-
-    [JsonPropertyName("prompt_version")]
-    public required string PromptVersion { get; init; }
-
-    // SHOULD-FIX (round 2): `required` so a Phase-2 response that OMITS needs_tools
-    // fails deserialization loudly rather than silently defaulting false (which would
-    // route a tools question to the text path). System.Text.Json enforces `required`
-    // members — a missing `needs_tools` throws JsonException. See the missing-field test.
-    [JsonPropertyName("needs_tools")]
-    public required bool NeedsTools { get; init; }
-}
-
-// Per-question verdict returned by each judge invocation. Matches the server
-// event shape in SessionMetadataEvents.cs. `Evidence` is optional — judges
-// may omit it when there's nothing specific to quote.
-public record EvalQuestionVerdict {
-    [JsonPropertyName("category")]
-    public required string Category { get; init; }
-
-    [JsonPropertyName("question_id")]
-    public required string QuestionId { get; init; }
-
-    [JsonPropertyName("score")]
-    public required int Score { get; init; }
-
-    [JsonPropertyName("verdict")]
-    public required string Verdict { get; init; }
-
-    [JsonPropertyName("finding")]
-    public required string Finding { get; init; }
-
-    [JsonPropertyName("evidence")]
-    public string? Evidence { get; init; }
-
-    [JsonPropertyName("recommendation")]
-    public string? Recommendation { get; init; }
-
-    // DEV-1486: tool-call count for tools-enabled judges. Null for text-only
-    // questions. Populated from the claude CLI's num_turns field minus 1
-    // (the final StructuredOutput turn). Shipped back to the server so the
-    // dashboard can surface actual budget spent per question.
-    [JsonPropertyName("tools_used")]
-    public int? ToolsUsed { get; init; }
-
-    // AI-9 Phase 3 — catalog prompt version stamped at aggregation time before
-    // POSTing the V3 payload. Null until Aggregate fills it from the catalog.
-    [JsonPropertyName("prompt_version")]
-    public string? PromptVersion { get; init; }
-}
-
-public record EvalCategoryResult {
-    [JsonPropertyName("name")]
-    public required string Name { get; init; }
-
-    [JsonPropertyName("score")]
-    public required int Score { get; init; }
-
-    [JsonPropertyName("verdict")]
-    public required string Verdict { get; init; }
-
-    [JsonPropertyName("questions")]
-    public List<EvalQuestionVerdict> Questions { get; init; } = [];
-}
-
-public record EvalRetrospective {
-    [JsonPropertyName("overall")]
-    public required string OverallSummary { get; init; }
-
-    [JsonPropertyName("strengths")]
-    public List<string> Strengths { get; init; } = [];
-
-    [JsonPropertyName("issues")]
-    public List<string> Issues { get; init; } = [];
-
-    [JsonPropertyName("suggestions")]
-    public List<string> Suggestions { get; init; } = [];
-}
-
-// Cross-eval memory — DEV-1434 / DEV-1438. Judges may optionally emit a
-// retain_fact when they spot a cross-cutting pattern; the CLI POSTs it to
-// the session-scoped endpoint and the server derives repo scope from the
-// session (facts live on JudgeFacts-repo-{repoHash}-{category} streams).
-// Facts accumulated on the same repo by any team member are fetched at
-// eval startup and injected into each judge's prompt as "known patterns".
-record JudgeFactPayload {
-    [JsonPropertyName("category")]
-    public required string Category { get; init; }
-
-    [JsonPropertyName("fact")]
-    public required string Fact { get; init; }
-
-    [JsonPropertyName("source_eval_run_id")]
-    public required string SourceEvalRunId { get; init; }
-}
-
-public record JudgeFact {
-    [JsonPropertyName("category")]
-    public required string Category { get; init; }
-
-    // Nullable for backward compat with older servers that don't return this field.
-    [JsonPropertyName("fact_hash")]
-    public string? FactHash { get; init; }
-
-    [JsonPropertyName("fact")]
-    public required string Fact { get; init; }
-
-    // Nullable for backward compat with older servers that don't return this field.
-    [JsonPropertyName("retainer_github_id")]
-    public long? RetainerGitHubId { get; init; }
-
-    [JsonPropertyName("source_session_id")]
-    public required string SourceSessionId { get; init; }
-
-    [JsonPropertyName("source_eval_run_id")]
-    public required string SourceEvalRunId { get; init; }
-
-    [JsonPropertyName("retained_at")]
-    public required DateTimeOffset RetainedAt { get; init; }
-}
-
-// Snapshot of a judge fact at eval time. Sent in the facts_used field of
-// SessionEvalCompletedPayload so the server can persist which facts were
-// in scope when the eval ran, even if the live judge_facts pool is later
-// modified (muted, deleted, replaced).
-public record EvalFactSnapshotPayload {
-    [JsonPropertyName("category")]
-    public required string Category { get; init; }
-
-    [JsonPropertyName("fact_hash")]
-    public required string FactHash { get; init; }
-
-    [JsonPropertyName("fact")]
-    public required string Fact { get; init; }
-
-    [JsonPropertyName("retainer_github_id")]
-    public required long RetainerGitHubId { get; init; }
-
-    [JsonPropertyName("source_session_id")]
-    public required string SourceSessionId { get; init; }
-
-    [JsonPropertyName("source_eval_run_id")]
-    public required string SourceEvalRunId { get; init; }
-
-    [JsonPropertyName("retained_at")]
-    public required DateTimeOffset RetainedAt { get; init; }
-}
-
-// Posted to POST /api/sessions/{id}/evals. The server fills evaluated_at.
-public record SessionEvalCompletedPayload {
-    [JsonPropertyName("eval_run_id")]
-    public required string EvalRunId { get; init; }
-
-    [JsonPropertyName("judge_model")]
-    public required string JudgeModel { get; init; }
-
-    [JsonPropertyName("categories")]
-    public List<EvalCategoryResult> Categories { get; init; } = [];
-
-    [JsonPropertyName("overall_score")]
-    public required int OverallScore { get; init; }
-
-    [JsonPropertyName("summary")]
-    public required string Summary { get; init; }
-
-    [JsonPropertyName("retrospective")]
-    public EvalRetrospective? Retrospective { get; init; }
-
-    [JsonPropertyName("facts_used")]
-    public List<EvalFactSnapshotPayload> FactsUsed { get; init; } = [];
-}
-
-// V2 retrospective types — structured suggestions with audience tag.
-// Mirror of server-side RetrospectiveSuggestion / EvalRetrospectiveV2 /
-// SessionEvalCompletedPayloadV2 in Capacitor.Server.Core.
-// Wire shape must stay 1:1 with the server so the V2 POST route deserializes
-// correctly (snake_case field names enforced by [JsonPropertyName] below).
-
-public record RetrospectiveSuggestion {
-    [JsonPropertyName("text")]     public required string Text     { get; init; }
-    [JsonPropertyName("audience")] public required string Audience { get; init; } // "agent" | "human"
-}
-
-public record EvalRetrospectiveV2 {
-    // Backing fields coerce an explicit JSON `null` to an empty list so a
-    // judge response like `"strengths": null` deserializes to an empty list
-    // rather than a null field, keeping downstream code null-safe.
-
-    [JsonPropertyName("overall")]
-    public required string OverallSummary { get; init; }
-
-    [JsonPropertyName("strengths")]
-    public List<string> Strengths { get; init => field = value ?? []; } = [];
-
-    [JsonPropertyName("issues")]
-    public List<string> Issues { get; init => field = value ?? []; } = [];
-
-    [JsonPropertyName("suggestions")]
-    public List<RetrospectiveSuggestion> Suggestions { get; init => field = value ?? []; } = [];
-}
-
-// Posted to POST /api/sessions/{id}/evals/v2.
-// Differs from SessionEvalCompletedPayload only in Retrospective type.
-public record SessionEvalCompletedPayloadV2 {
-    [JsonPropertyName("eval_run_id")]
-    public required string EvalRunId { get; init; }
-
-    [JsonPropertyName("judge_model")]
-    public required string JudgeModel { get; init; }
-
-    [JsonPropertyName("categories")]
-    public List<EvalCategoryResult> Categories { get; init; } = [];
-
-    [JsonPropertyName("overall_score")]
-    public required int OverallScore { get; init; }
-
-    [JsonPropertyName("summary")]
-    public required string Summary { get; init; }
-
-    [JsonPropertyName("retrospective")]
-    public EvalRetrospectiveV2? Retrospective { get; init; }
-
-    [JsonPropertyName("facts_used")]
-    public List<EvalFactSnapshotPayload> FactsUsed { get; init; } = [];
-}
-
-// Posted to POST /api/sessions/{id}/evals/v3 (AI-9 Phase 3). Differs from V2 by
-// adding retrospective_prompt_version; the per-question version rides on each
-// EvalQuestionVerdict.PromptVersion. Wire shape must stay 1:1 with the server's
-// SessionEvalCompletedPayloadV3 in Capacitor.Server.
-public record SessionEvalCompletedPayloadV3 {
-    [JsonPropertyName("eval_run_id")]
-    public required string EvalRunId { get; init; }
-
-    [JsonPropertyName("judge_model")]
-    public required string JudgeModel { get; init; }
-
-    [JsonPropertyName("categories")]
-    public List<EvalCategoryResult> Categories { get; init; } = [];
-
-    [JsonPropertyName("overall_score")]
-    public required int OverallScore { get; init; }
-
-    [JsonPropertyName("summary")]
-    public required string Summary { get; init; }
-
-    [JsonPropertyName("retrospective")]
-    public EvalRetrospectiveV2? Retrospective { get; init; }
-
-    [JsonPropertyName("retrospective_prompt_version")]
-    public string? RetrospectivePromptVersion { get; init; }
-
-    [JsonPropertyName("facts_used")]
-    public List<EvalFactSnapshotPayload> FactsUsed { get; init; } = [];
-}
-
-enum HistorySessionStatus { New, Partial, AlreadyLoaded }
-
-class SessionMetadata {
-    public string?         Cwd            { get; set; }
-    public string?         Model          { get; set; }
-    public string?         Slug           { get; set; }
-    public string?         SessionId      { get; set; }
-    public DateTimeOffset? FirstTimestamp { get; set; }
-    public DateTimeOffset? LastTimestamp  { get; set; }
-}
-
-static partial class GitUrlParser {
-    public static (string? Owner, string? RepoName) ParseRemoteUrl(string? url) {
-        if (url is null) {
-            return (null, null);
-        }
-
-        var sshMatch = SshRegex().Match(url);
-
-        if (sshMatch.Success) {
-            return (sshMatch.Groups["owner"].Value, sshMatch.Groups["repo"].Value);
-        }
-
-        var httpsMatch = HttpsRegex().Match(url);
-
-        return httpsMatch.Success
-            ? (httpsMatch.Groups["owner"].Value, httpsMatch.Groups["repo"].Value)
-            : (null, null);
+/// <summary>Falls back to <see cref="SessionEndReason.Other"/> for unknown reason strings.</summary>
+public class SessionEndReasonConverter : JsonConverter<SessionEndReason> {
+    static readonly JsonStringEnumConverter<SessionEndReason> Inner           = new();
+    static readonly JsonSerializerOptions                     FallbackOptions = new();
+
+    static SessionEndReasonConverter() {
+        FallbackOptions.Converters.Add(Inner);
     }
 
-    [GeneratedRegex(@"https?://[^/]+/(?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$")]
-    internal static partial Regex HttpsRegex();
+    public override SessionEndReason Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) {
+        // Clone the reader so a failed parse doesn't consume the token
+        var readerCopy = reader;
 
-    [GeneratedRegex(@"git@[\w.-]+:(?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$")]
-    internal static partial Regex SshRegex();
+        try {
+            var value = JsonSerializer.Deserialize<SessionEndReason>(ref readerCopy, FallbackOptions);
+            reader = readerCopy; // advance the real reader on success
+
+            return value;
+        } catch (JsonException) {
+            reader.Skip(); // skip the unknown token
+
+            return SessionEndReason.Other;
+        }
+    }
+
+    public override void Write(Utf8JsonWriter writer, SessionEndReason value, JsonSerializerOptions options) {
+        JsonSerializer.Serialize(writer, value, FallbackOptions);
+    }
 }
 
-public record RepoEntry {
-    [JsonPropertyName("path")]
-    public required string Path { get; init; }
-
-    [JsonPropertyName("last_used")]
-    public required DateTimeOffset LastUsed { get; init; }
+public enum SessionStatus {
+    Active,
+    Ended
 }
 
-public sealed record CurationApplyItem {
-    [JsonPropertyName("category")]      public string?               Category     { get; init; }
-    [JsonPropertyName("cluster_id")]    public string?               ClusterId    { get; init; }
-    [JsonPropertyName("promoted_text")] public string?               PromotedText { get; init; }
-    [JsonPropertyName("target_kinds")]  public IReadOnlyList<string>? TargetKinds { get; init; }
-    [JsonPropertyName("status")]        public string?               Status       { get; init; }
+public enum DashboardTab {
+    Agents,
+    Sessions,
+    Analytics,
+    Facts,
+    Curation,
+    Evals
 }
 
-public sealed record CurationApplyResponse {
-    [JsonPropertyName("repo_hash")] public string?                      RepoHash { get; init; }
-    [JsonPropertyName("items")]     public IReadOnlyList<CurationApplyItem>? Items { get; init; }
+// --- Transcript entry ---
+
+public record TranscriptEntry {
+    [JsonPropertyName("type")]
+    public string? Type { get; init; }
+
+    [JsonPropertyName("uuid")]
+    public string? Uuid { get; init; }
+
+    [JsonPropertyName("parentUuid")]
+    public string? ParentUuid { get; init; }
+
+    [JsonPropertyName("sessionId")]
+    public string? SessionId { get; init; }
+
+    [JsonPropertyName("timestamp")]
+    public string? Timestamp { get; init; }
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? ExtensionData { get; init; }
 }
 
-[JsonSerializable(typeof(List<RecapEntry>))]
-[JsonSerializable(typeof(List<RepoRecapEntry>))]
-[JsonSerializable(typeof(EvalContextResult))]
-[JsonSerializable(typeof(EvalQuestionDto))]
-[JsonSerializable(typeof(EvalQuestionDto[]))]
-[JsonSerializable(typeof(EvalQuestionVerdict))]
-[JsonSerializable(typeof(IReadOnlyList<EvalQuestionVerdict>))]
-[JsonSerializable(typeof(EvalRetrospective))]
-[JsonSerializable(typeof(SessionEvalCompletedPayload))]
-[JsonSerializable(typeof(RetrospectiveSuggestion))]
-[JsonSerializable(typeof(EvalRetrospectiveV2))]
-[JsonSerializable(typeof(SessionEvalCompletedPayloadV2))]
-[JsonSerializable(typeof(JudgeFactPayload))]
-[JsonSerializable(typeof(List<JudgeFact>))]
-[JsonSerializable(typeof(EvalFactSnapshotPayload))]
-[JsonSerializable(typeof(List<EvalFactSnapshotPayload>))]
-[JsonSerializable(typeof(EvalCatalogDto))]
-[JsonSerializable(typeof(EvalCatalogQuestionDto))]
-[JsonSerializable(typeof(SessionEvalCompletedPayloadV3))]
-[JsonSerializable(typeof(List<ErrorEntry>))]
-[JsonSerializable(typeof(RepositoryPayload))]
-[JsonSerializable(typeof(GitCacheEntry))]
-[JsonSerializable(typeof(TranscriptBatch))]
-[JsonSerializable(typeof(SessionTitlePayload))]
-[JsonSerializable(typeof(WhatsDonePayload))]
-[JsonSerializable(typeof(Auth.StoredTokens))]
-[JsonSerializable(typeof(Auth.AuthDiscoveryResponse))]
-[JsonSerializable(typeof(Auth.TokenExchangeRequest))]
-[JsonSerializable(typeof(Auth.TokenExchangeResponse))]
-[JsonSerializable(typeof(Auth.AuthErrorResponse))]
-[JsonSerializable(typeof(Auth.RefreshTokenRequest))]
-[JsonSerializable(typeof(Auth.GitHubDeviceCodeResponse))]
-[JsonSerializable(typeof(Auth.GitHubTokenResponse))]
-[JsonSerializable(typeof(Auth.GitHubCodeExchangeRequest))]
-[JsonSerializable(typeof(Auth.WorkOSAuthResponse))]
-[JsonSerializable(typeof(Auth.WorkOSUserInfo))]
-[JsonSerializable(typeof(Auth.ProxyConfigResponse))]
-[JsonSerializable(typeof(Auth.DiscoveredTenant[]))]
-[JsonSerializable(typeof(LaunchAgentCommand))]
-[JsonSerializable(typeof(ReviewLaunchInfo))]
-[JsonSerializable(typeof(LaunchKind))]
-[JsonSerializable(typeof(FindRepoForRemoteRequest))]
-[JsonSerializable(typeof(RefreshAgentWorktreeCommand))]
-[JsonSerializable(typeof(RefreshAgentWorktreeResult))]
-[JsonSerializable(typeof(SendInputCommand))]
-[JsonSerializable(typeof(ResizeTerminalCommand))]
-[JsonSerializable(typeof(PrepareEvalCommand))]
-[JsonSerializable(typeof(RunQuestionCommand))]
-[JsonSerializable(typeof(FinalizeEvalCommand))]
-[JsonSerializable(typeof(CancelEvalCommand))]
-[JsonSerializable(typeof(PrepareResult))]
-[JsonSerializable(typeof(QuestionResult))]
-[JsonSerializable(typeof(FinalizeResult))]
-[JsonSerializable(typeof(EvalStarted))]
-[JsonSerializable(typeof(EvalQuestionStarted))]
-[JsonSerializable(typeof(EvalQuestionCompleted))]
-[JsonSerializable(typeof(EvalQuestionFailed))]
-[JsonSerializable(typeof(EvalFinished))]
-[JsonSerializable(typeof(EvalFailed))]
-[JsonSerializable(typeof(EvalRetrospectiveStarted))]
-[JsonSerializable(typeof(EvalRetrospectiveCompleted))]
-[JsonSerializable(typeof(EvalRetrospectiveFailed))]
-[JsonSerializable(typeof(DaemonConnect))]
-[JsonSerializable(typeof(AgentRegistered))]
-[JsonSerializable(typeof(AgentStatusChanged))]
-[JsonSerializable(typeof(AgentUnregistered))]
-[JsonSerializable(typeof(LaunchFailed))]
-[JsonSerializable(typeof(TerminalOutput))]
-[JsonSerializable(typeof(AgentRunStarted))]
-[JsonSerializable(typeof(AgentRunStopped))]
-[JsonSerializable(typeof(AgentRunHeartbeat))]
-[JsonSerializable(typeof(PermissionDecision))]
-[JsonSerializable(typeof(HostedPermissionRequest))]
-[JsonSerializable(typeof(PermissionResolution))]
-[JsonSerializable(typeof(EndAgentSessionResult))]
-[JsonSerializable(typeof(int))]
-[JsonSerializable(typeof(string))]
-[JsonSerializable(typeof(string[]))]
-[JsonSerializable(typeof(RepoEntry[]))]
-[JsonSerializable(typeof(CurationApplyResponse))]
-[JsonSerializable(typeof(CurationApplyItem))]
-// UseStringEnumConverter=true matches the server's SignalR JSON protocol, which
-// serialises enums (e.g. LaunchKind) as camelCase strings. Without it the
-// source-gen LaunchKind JsonTypeInfo defaults to numeric and silently drops the
-// invocation — the daemon receives "kind": "review" / "default" and the
-// LaunchAgent handler never fires (DEV-1665).
-[JsonSourceGenerationOptions(
-    PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
-    UseStringEnumConverter = true
-)]
-partial class CapacitorJsonContext : JsonSerializerContext;
+// --- Shared model types ---
 
-/// <summary>
-/// Decision returned by the server's <c>RequestPermission</c> SignalR hub method.
-/// Mirrors <c>PermissionResponseEntry</c> on the server side. ApplyPermissions /
-/// UpdatedInput are typed as <see cref="JsonElement"/> so the daemon can relay
-/// them verbatim into Claude's hook decision payload without the server having
-/// to know about the hook wire shape.
-/// </summary>
-public readonly record struct PermissionDecision(
-        string       Behavior,
-        JsonElement? ApplyPermissions,
-        JsonElement? UpdatedInput
+public record SessionSummary {
+    public required string          SessionId         { get; init; }
+    public          string?         Slug              { get; init; }
+    public          string?         Title             { get; init; }
+    public          string?         Model             { get; init; }
+    public          string?         Vendor            { get; init; }
+    public          string?         Cwd               { get; init; }
+    public          SessionStatus   Status            { get; init; }
+    public          DateTimeOffset  StartedAt         { get; init; }
+    public          DateTimeOffset? EndedAt           { get; init; }
+    public          TimeSpan?       Duration          { get; init; }
+    public          int             EventCount        { get; init; }
+    public          string?         PreviousSessionId { get; init; }
+    public          string?         NextSessionId     { get; init; }
+    public          string?         RepoBranch        { get; init; }
+    public          string?         RepoOwner         { get; init; }
+    public          string?         RepoName          { get; init; }
+    public          int?            PrNumber          { get; init; }
+    public          string?         PrUrl             { get; init; }
+    public          string?         PrTitle           { get; init; }
+    public          string?         GitUserName       { get; init; }
+    public          string?         GitUserEmail      { get; init; }
+    public          string?         HomeDir           { get; init; }
+    public          DateTimeOffset? LastEventAt       { get; init; }
+    public          SessionStats?   Stats             { get; init; }
+    public          string?         OwnerUserId       { get; init; }
+    public          string?         Visibility        { get; init; }
+    public          string?         DefaultVisibility { get; init; }
+
+    /// <summary>AI-1081: overall eval score (0–5) for this session, or null if not evaluated.
+    /// Populated only by the ended-sessions read query; serialized as <c>eval_score</c>.</summary>
+    public          int?            EvalScore         { get; init; }
+
+    public List<SessionRepositoryInfo>  Repositories  { get; init; } = [];
+    public List<SessionPullRequestInfo> PullRequests  { get; init; } = [];
+}
+
+public record SessionRepositoryInfo {
+    public required string         RepoHash    { get; init; }
+    public required string         Owner       { get; init; }
+    public required string         RepoName    { get; init; }
+    public          string?        Branch      { get; init; }
+    public          bool           IsPrimary   { get; init; }
+    public          DateTimeOffset FirstSeenAt { get; init; }
+}
+
+public record SessionPullRequestInfo {
+    public required string  RepoHash { get; init; }
+    public required string  Owner    { get; init; }
+    public required string  RepoName { get; init; }
+    public required int     Number   { get; init; }
+    public          string? Url      { get; init; }
+    public          string? Title    { get; init; }
+    public          string? HeadRef  { get; init; }
+}
+
+public record AgentSummary {
+    public required string          AgentId     { get; init; }
+    public          string?         AgentType   { get; init; }
+    public          string?         SessionId   { get; init; }
+    public          SessionStatus   Status      { get; init; }
+    public          DateTimeOffset  StartedAt   { get; init; }
+    public          DateTimeOffset? EndedAt     { get; init; }
+    public          int             EventCount  { get; init; }
+    public          DateTimeOffset? LastEventAt { get; init; }
+    public          SessionStats?   Stats       { get; init; }
+}
+
+public record RepositorySummary {
+    public required string         RepoHash         { get; init; }
+    public required string         Owner            { get; init; }
+    public required string         RepoName         { get; init; }
+    public          List<string>   Slugs            { get; init; } = [];
+    public          int            MetaSessionCount { get; init; }
+    public          DateTimeOffset LatestActivity   { get; init; }
+}
+
+public record PendingInput(
+        string         SessionId,
+        string         AgentId,
+        string         AgentType,
+        string         EventUuid,
+        JsonElement    ToolInput,
+        DateTimeOffset DetectedAt,
+        // The elicitation tool call's CallId. Inline-result vendors (Gemini) carry
+        // no parentUuid on the result, so resolution correlates by this instead (AI-1050).
+        string?        CallId = null
+    );
+
+public record PendingNotification(string SessionId, string NotificationType, string Message, DateTimeOffset DetectedAt);
+
+public record StreamEvent {
+    public required string         EventType   { get; init; }
+    public required DateTimeOffset Timestamp   { get; init; }
+    public          object?        Payload     { get; init; } // Typed event record from Eventuous TypeMap
+    public          Metadata?      Metadata    { get; init; }
+    public          long           EventNumber { get; init; } = -1;
+}
+
+public class SessionData {
+    public required string            SessionId         { get; init; }
+    public          string?           Slug              { get; set; }
+    public          string?           Title             { get; set; }
+    public          string?           Model             { get; set; }
+    public          string?           Vendor            { get; set; }
+    public          string?           Cwd               { get; set; }
+    public          SessionStatus     Status            { get; set; } = SessionStatus.Active;
+    public          DateTimeOffset    StartedAt         { get; set; }
+    public          DateTimeOffset?   EndedAt           { get; set; }
+    public          string?           PreviousSessionId { get; set; }
+    public          string?           NextSessionId     { get; set; }
+    public          string?           PlanContent       { get; set; }
+    public          string?           WhatsDoneContent  { get; set; }
+    public          string?           RepoBranch        { get; set; }
+    public          string?           RepoOwner         { get; set; }
+    public          string?           RepoName          { get; set; }
+    public          int?              PrNumber          { get; set; }
+    public          string?           PrTitle           { get; set; }
+    public          string?           PrUrl             { get; set; }
+    public          string?           GitUserName       { get; set; }
+    public          string?           GitUserEmail      { get; set; }
+    public          string?           HomeDir           { get; set; }
+    public          long              LastEventNumber   { get; set; } = -1;
+    public          List<StreamEvent> Events            { get; set; } = [];
+}
+
+// --- Repository info ---
+
+public record RepositoryInfo {
+    public string?          UserName    { get; init; }
+    public string?          UserEmail   { get; init; }
+    public string?          RemoteUrl   { get; init; }
+    public string?          Owner       { get; init; }
+    public string?          RepoName    { get; init; }
+    public string?          Branch      { get; init; }
+    public PullRequestInfo? PullRequest { get; init; }
+}
+
+public record PullRequestInfo {
+    [JsonPropertyName("number")]
+    public int Number { get; init; }
+
+    [JsonPropertyName("title")]
+    public string? Title { get; init; }
+
+    [JsonPropertyName("url")]
+    public string? Url { get; init; }
+
+    [JsonPropertyName("headRefName")]
+    public string? HeadRefName { get; init; }
+}
+
+public record AgentInstanceInfo(
+        string         AgentId,
+        string?        SessionId,
+        string         Status,
+        string?        Prompt,
+        string?        Model,
+        string?        Effort,
+        string?        RepoPath,
+        bool           ClientConnected,
+        DateTimeOffset RegisteredAt,
+        string?        RepoOwner       = null,
+        string?        RepoName        = null,
+        int?           PrNumber        = null,
+        string?        PrUrl           = null,
+        string?        PrTitle         = null,
+        string?        FailureReason   = null,
+        string?        OwnerUserId     = null,
+        string?        VisibilityMode  = null,
+        IReadOnlyList<AccessGrant>? Grants = null,
+        string?        Vendor          = null,
+        DateTimeOffset? EndedAt        = null
+    ) {
+    public string? RepoHash => RepoOwner is not null && RepoName is not null
+        ? RepoHashHelper.ComputeRepoHash(RepoOwner, RepoName)
+        : null;
+}
+
+public class AgentRunStats {
+    public long InputTokens  { get; init; }
+    public long OutputTokens { get; init; }
+    public int  FilesCreated { get; init; }
+    public int  FilesUpdated { get; init; }
+    public int  LinesAdded   { get; init; }
+    public int  LinesRemoved { get; init; }
+    public int  ToolCalls    { get; init; }
+    public int  ToolErrors   { get; init; }
+}
+
+public record DaemonInfo(
+        string         Name,
+        string         Platform,
+        string[]       RepoPaths,
+        int            MaxAgents,
+        int            ActiveAgents,
+        bool           Connected,
+        DateTimeOffset ConnectedAt,
+        string         OwnerUserId      = "",
+        string?        Version          = null,
+        string[]?      SupportedVendors = null
     );
 
 /// <summary>
-/// Single-argument payload for the <c>RequestPermission2</c> hub invocation (AI-864). SignalR
-/// binds hub-method arguments by count, so a record keeps the arity fixed at 1 and lets the wire
-/// contract gain fields without breaking mixed-version servers. Mirrors the server-side record of
-/// the same name in Capacitor.Server; property names must stay in sync (snake_case on the wire).
+/// One row in the "Review this PR" daemon picker. A single daemon may
+/// contribute multiple matches if the user has the repo cloned in more than
+/// one location.
 /// </summary>
-public readonly record struct HostedPermissionRequest(
-        string       SessionId,
-        string?      ToolName,
-        JsonElement? ToolInput,
-        JsonElement? Suggestions
-    );
+public readonly record struct DaemonRepoMatch(
+    string DaemonName,
+    string RepoPath
+);
 
 /// <summary>
-/// Payload of the <c>PermissionResolved</c> server→client push (AI-864): the user's decision for a
-/// hosted-agent permission request, correlated by <see cref="RequestId"/>. A single record (not
-/// positional args) so the push contract can gain fields without breaking mixed-version daemons —
-/// SignalR binds by argument count. Mirrors the server-side record of the same name.
+/// One row of "this daemon was contacted but couldn't tell us about its
+/// checkouts". Distinct from "no match found" — this surfaces outdated
+/// daemons (no <c>FindRepoForRemote</c> handler), probe timeouts, and
+/// unexpected SignalR errors so the UI can prompt the user to restart or
+/// upgrade rather than silently showing the empty-state message.
 /// </summary>
-public readonly record struct PermissionResolution(
-        string             RequestId,
-        PermissionDecision Decision
-    );
+public readonly record struct DaemonProbeFailure(
+    string DaemonName,
+    string Reason
+);
 
-/// <summary>Commands sent from the server to daemon clients via SignalR.</summary>
-public readonly record struct LaunchAgentCommand(
-        string            AgentId,
-        string?           Prompt,
-        string            Model,
-        string?           Effort,
-        string            RepoPath,
-        string[]?         Tools,
-        string[]?         AttachmentIds,
-        string            Vendor,
-        LaunchKind        Kind    = LaunchKind.Default,
-        ReviewLaunchInfo? Review  = null,
-        string?           BaseRef = null
-    );
+/// <summary>
+/// Combined output of "Review this PR" daemon discovery: matched checkouts
+/// plus per-daemon probe failures. Either list may be empty independently —
+/// no matches and no failures means the user has no clones of the repo on
+/// any connected daemon; no matches but failures present means at least one
+/// daemon is misbehaving (typically outdated).
+/// </summary>
+public record DaemonRepoDiscovery(
+    IReadOnlyList<DaemonRepoMatch>    Matches,
+    IReadOnlyList<DaemonProbeFailure> Failures
+);
+
+/// <summary>
+/// User-facing reason strings for <see cref="DaemonProbeFailure"/>. Centralised
+/// so the server-direct (Blazor) and SignalR-hub paths produce identical text.
+/// </summary>
+public static class DaemonProbeFailureReasons {
+    public const string Outdated =
+        "Daemon couldn't respond — likely outdated. Update kapacitor and restart `kcap agent start`.";
+
+    public static string Timeout(TimeSpan timeout) =>
+        $"Daemon didn't respond within {timeout.TotalSeconds:0}s.";
+}
 
 /// <summary>
 /// Discriminator for daemon launch commands. <see cref="Default"/> preserves
 /// the existing prompt-driven launch; <see cref="Review"/> uses
-/// <see cref="ReviewLaunchInfo"/> + <c>BaseRef</c> to drive a hosted PR review.
+/// <see cref="ReviewLaunchInfo"/> + <c>BaseRef</c> to drive a hosted PR review;
+/// <see cref="ReviewFlow"/> (AI-1089) marks the durable agent-review-flow
+/// reviewer so the daemon can scope autonomous behaviour (e.g. the Codex
+/// launcher's <c>never</c> approval + empty <c>mcp_servers</c>) to it without
+/// affecting interactive launches.
+///
+/// <para>Wire values are explicit and MUST stay in lockstep with the CLI's
+/// <c>LaunchKind</c> enum (<c>Default=0, Review=1, ReviewFlow=2</c>). The value
+/// crosses the SignalR boundary as a camelCase enum-name string, but the
+/// numeric values are pinned so a rename on either side is caught rather than
+/// silently rebinding to the wrong kind.</para>
 /// </summary>
 public enum LaunchKind {
-    Default = 0,
-    Review  = 1
+    Default    = 0,
+    Review     = 1,
+    ReviewFlow = 2
 }
 
+/// <summary>PR identifier carried by review-kind launches.</summary>
 public readonly record struct ReviewLaunchInfo(
-        string Owner,
-        string Repo,
-        int    PrNumber
-    );
+    string Owner,
+    string Repo,
+    int    PrNumber
+);
 
-/// <summary>
-/// Server → daemon probe asking "which of these candidate paths are a local
-/// checkout of <c>owner/repo</c>?". The daemon merges the candidates with its
-/// own knowledge, walks each up to a git root, validates origin, and returns
-/// the confirmed roots.
-/// </summary>
-public readonly record struct FindRepoForRemoteRequest(
-        string   Owner,
-        string   Repo,
-        string[] CandidatePaths
-    );
-
-/// <summary>
-/// Server → daemon command to sync the source repo's current working-tree state (tracked +
-/// untracked non-ignored files) into the reviewer agent's daemon-created worktree, so the
-/// reviewer sees Claude's latest uncommitted changes before a code-review follow-up round.
-/// Wire keys (snake_case): <c>agent_id</c>, <c>source_repo_root</c>, <c>exclude_paths</c>.
-/// </summary>
-public readonly record struct RefreshAgentWorktreeCommand(
-        string   AgentId,
-        string   SourceRepoRoot,
-        string[] ExcludePaths
-    );
-
-/// <summary>
-/// Daemon reply to <see cref="RefreshAgentWorktreeCommand"/>. <see cref="Success"/> is
-/// <c>false</c> when a guard prevented the sync or the sync itself threw; <see cref="Error"/>
-/// carries the reason. Wire keys: <c>success</c>, <c>error</c>.
-/// </summary>
-public readonly record struct RefreshAgentWorktreeResult(
-        bool    Success,
-        string? Error
-    );
-
-public readonly record struct SendInputCommand(
-        string    AgentId,
-        string    Text,
-        string[]? AttachmentIds
-    );
-
-public readonly record struct ResizeTerminalCommand(
-        string AgentId,
-        int    Cols,
-        int    Rows
-    );
-
-/// <summary>
-/// Commands sent from daemon clients to the server via SignalR.
-///
-/// <para><c>InstanceId</c> is a fresh GUID generated at daemon process startup
-/// and held only in memory (also written to the daemon's per-name flock
-/// file content for diagnostics). The server uses it to distinguish a
-/// legitimate reconnect of the same daemon (new SignalR connectionId, same
-/// instance) from a different daemon process claiming the same
-/// <c>(owner, name)</c> slot. Pre-AI-630 daemons sent no <c>InstanceId</c>;
-/// the server still accepts them under a legacy-displacement fallback.</para>
-///
-/// <para><c>Version</c> is the daemon binary's
-/// <c>AssemblyInformationalVersion</c>. Logged on connect and surfaced on
-/// the server's <c>DaemonInfo</c> so the dashboard can show what version
-/// each connected daemon is running.</para>
-/// </summary>
-public readonly record struct DaemonConnect(
-        string    Name,
-        string    Platform,
-        string[]  RepoPaths,
-        int       MaxAgents,
-        string[]  LiveAgentIds,
-        string?   InstanceId       = null,
-        string?   Version          = null,
-        string[]? SupportedVendors = null
-    );
-
-public readonly record struct AgentRegistered(
-        string  AgentId,
-        string? Prompt,
-        string? Model,
-        string? Effort,
-        string? RepoPath
-    );
-
-public readonly record struct AgentStatusChanged(
-        string  AgentId,
-        string  Status,
-        string? SessionId
-    );
-
-public readonly record struct AgentUnregistered(string AgentId);
-
-public readonly record struct LaunchFailed(
-        string AgentId,
-        string Reason
-    );
-
-public readonly record struct TerminalOutput(
-        string AgentId,
-        string Base64Data
-    );
-
-// ── Per-question eval dispatch (DEV-1463 PR 2) ────────────────────────────
-// Plain PascalCase records — no [JsonPropertyName] attrs — so they round-trip
-// via SignalR's default JSON protocol with the matching server-side records.
-// Inner DTOs (EvalQuestionDto, EvalQuestionVerdict) carry their own snake_case
-// [JsonPropertyName] attrs which agree on both ends (see server's
-// EvalQuestionMetadata.Question and SessionMetadataEvents.EvalQuestionVerdict).
-
-/// <summary>Server → daemon: prepare an eval run. Daemon fetches + caches context, returns counts.</summary>
-public readonly record struct PrepareEvalCommand(
-        string                         EvalRunId,
-        string                         SessionId,
-        string                         Model,
-        bool                           Chain,
-        int?                           ThresholdBytes,
-        IReadOnlyList<EvalQuestionDto> Questions
-    );
-
-/// <summary>Server → daemon: run a single judge question against the cached context.</summary>
-public readonly record struct RunQuestionCommand(
-        string          EvalRunId,
-        EvalQuestionDto Question,
-        int             Index,
-        int             Total
-    );
-
-/// <summary>Server → daemon: aggregate verdicts, run retrospective, persist final result.</summary>
-public readonly record struct FinalizeEvalCommand(
-        string                             EvalRunId,
-        IReadOnlyList<EvalQuestionVerdict> Verdicts,
-        string                             Model
-    );
-
-/// <summary>Server → daemon: discard any cached context for this run (e.g. dashboard aborted).</summary>
-public readonly record struct CancelEvalCommand(string EvalRunId);
-
-/// <summary>Daemon → server: prepare-phase result.</summary>
-public readonly record struct PrepareResult(
-        bool    Success,
-        string? Error,
-        string? CanonicalSessionId,
-        int     TraceEntries,
-        int     TraceChars,
-        int     ToolResultsTotal,
-        int     ToolResultsTruncated,
-        long    BytesSaved
-    );
-
-/// <summary>Daemon → server: per-question judge result.</summary>
-public readonly record struct QuestionResult(
-        bool                 Success,
-        EvalQuestionVerdict? Verdict,
-        string?              Error,
-        long                 InputTokens,
-        long                 OutputTokens
-    );
-
-/// <summary>Daemon → server: finalize-phase result including the aggregate to persist.</summary>
-public readonly record struct FinalizeResult(
-        bool                         Success,
-        string?                      Error,
-        SessionEvalCompletedPayload? Aggregate
-    );
-
-/// <summary>Daemon → server: eval has fetched context and is about to run the first judge.</summary>
-public readonly record struct EvalStarted(
-        string EvalRunId,
-        string SessionId,
-        string JudgeModel,
-        int    TotalQuestions
-    );
-
-/// <summary>Daemon → server: a judge question started running. Emitted before each claude invocation so the dashboard can show which question is currently in flight even when earlier ones failed.</summary>
-public readonly record struct EvalQuestionStarted(
-        string EvalRunId,
-        string SessionId,
-        int    Index,
-        int    Total,
-        string Category,
-        string QuestionId
-    );
-
-/// <summary>Daemon → server: a judge question completed with a verdict.</summary>
-public readonly record struct EvalQuestionCompleted(
-        string EvalRunId,
-        string SessionId,
-        int    Index,
-        int    Total,
-        string Category,
-        string QuestionId,
-        int    Score,
-        string Verdict
-    );
-
-/// <summary>Daemon → server: a judge question failed (claude returned no/unparseable result, timed out, or emitted an out-of-range score). The overall eval continues to the next question.</summary>
-public readonly record struct EvalQuestionFailed(
-        string EvalRunId,
-        string SessionId,
-        int    Index,
-        int    Total,
-        string Category,
-        string QuestionId,
-        string Reason
-    );
-
-/// <summary>Daemon → server: eval run finished end-to-end and aggregate has been persisted.</summary>
-public readonly record struct EvalFinished(
-        string EvalRunId,
-        string SessionId,
-        int    OverallScore,
-        string Summary
-    );
-
-/// <summary>Daemon → server: eval run failed before producing an aggregate.</summary>
-public readonly record struct EvalFailed(string EvalRunId, string SessionId, string Reason);
-
-/// <summary>Daemon → server: retrospective pass is about to start (all category judges have completed).</summary>
-public readonly record struct EvalRetrospectiveStarted(string SessionId, string EvalRunId);
-
-/// <summary>Daemon → server: retrospective pass produced a summary and has been folded into the aggregate.</summary>
-public readonly record struct EvalRetrospectiveCompleted(string SessionId, string EvalRunId);
-
-/// <summary>Daemon → server: retrospective pass failed; the aggregate is still persisted without a retrospective.</summary>
-public readonly record struct EvalRetrospectiveFailed(string SessionId, string EvalRunId, string Reason);
-
-/// <summary>Agent run events posted to the server HTTP API.</summary>
-public record AgentRunStarted(
-        string? Prompt,
-        string? Model,
-        string? Effort,
-        string? RepoPath,
-        string? WorktreePath,
-        string  Vendor
-    );
-
-public record AgentRunStopped(string? Reason, int? ExitCode);
-
-public record AgentRunHeartbeat(string? SessionId);
-
-/// <summary>
-/// Returned by the server's <c>EndAgentSession</c> SignalR hub method. Mirrors the
-/// server-side record of the same name. SessionId is surfaced because the daemon
-/// only knows agentId — it can't spawn <c>kcap generate-whats-done</c> without
-/// the sessionId, which the server resolves via FindAgentSessionIdAsync.
-/// </summary>
-public record EndAgentSessionResult {
-    [JsonPropertyName("generate_whats_done")]
-    public bool GenerateWhatsDone { get; init; }
-
-    [JsonPropertyName("session_id")]
-    public string? SessionId { get; init; }
+public record AgentRunSummary {
+    public required string          AgentId       { get; init; }
+    public          string?         SessionId     { get; init; }
+    public          string?         Prompt        { get; init; }
+    public          string?         Model         { get; init; }
+    public          string?         RepoPath      { get; init; }
+    public          string?         WorktreePath  { get; init; }
+    public          string?         Status        { get; init; } // "running", "completed", "failed"
+    public          DateTimeOffset  StartedAt     { get; init; }
+    public          DateTimeOffset? EndedAt       { get; init; }
+    public          DateTimeOffset  LastHeartbeat { get; init; }
+    public          AgentRunStats?  Stats         { get; init; }
 }
+
+// --- Judge-fact moderation DTOs (DEV-1442) ---
+
+public record SoftDeleteJudgeFactPayload {
+    [JsonPropertyName("reason")]
+    public string? Reason { get; init; }
+}
+
+public record JudgeFactListItem {
+    [JsonPropertyName("category")]             public required string         Category { get; init; }
+    [JsonPropertyName("fact_hash")]            public required string         FactHash { get; init; }
+    [JsonPropertyName("fact")]                 public required string         Fact { get; init; }
+    [JsonPropertyName("occurrence_count")]     public required long           OccurrenceCount { get; init; }
+    [JsonPropertyName("retainer_user_id")]     public required string         RetainerUserId { get; init; }
+    [JsonPropertyName("retainer_username")]    public          string?        RetainerUsername { get; init; }
+    [JsonPropertyName("retainer_display_name")]public          string?        RetainerDisplayName { get; init; }
+    [JsonPropertyName("source_session_id")]    public required string         SourceSessionId { get; init; }
+    [JsonPropertyName("source_session_slug")]  public          string?        SourceSessionSlug { get; init; }
+    [JsonPropertyName("source_eval_run_id")]   public required string         SourceEvalRunId { get; init; }
+    [JsonPropertyName("retained_at")]          public required DateTimeOffset RetainedAt { get; init; }
+    [JsonPropertyName("muted_for_caller")]     public required bool           MutedForCaller { get; init; }
+    [JsonPropertyName("can_moderate")]         public required bool           CanModerate { get; init; }
+}
+
+// AI-1014 — Evals tab cross-repo list row (sessions LEFT JOIN eval_summaries + retained-fact count).
+public record EvalListRow {
+    [JsonPropertyName("session_id")]          public required string          SessionId        { get; init; }
+    [JsonPropertyName("slug")]                public          string?         Slug             { get; init; }
+    [JsonPropertyName("title")]               public          string?         Title            { get; init; }
+    [JsonPropertyName("repo_hash")]           public          string?         RepoHash         { get; init; }
+    [JsonPropertyName("repo_owner")]          public          string?         RepoOwner        { get; init; }
+    [JsonPropertyName("repo_name")]           public          string?         RepoName         { get; init; }
+    [JsonPropertyName("vendor")]              public          string?         Vendor           { get; init; }
+    [JsonPropertyName("ended_at")]            public          DateTimeOffset? EndedAt          { get; init; }
+    [JsonPropertyName("event_count")]         public required int             EventCount       { get; init; }
+    [JsonPropertyName("has_eval")]            public required bool            HasEval          { get; init; }
+    [JsonPropertyName("latest_eval_run_id")]  public          string?         LatestEvalRunId  { get; init; }
+    [JsonPropertyName("overall_score")]       public          int?            OverallScore     { get; init; }
+    [JsonPropertyName("evaluated_at")]        public          DateTimeOffset? EvaluatedAt      { get; init; }
+    [JsonPropertyName("retained_fact_count")] public required int             RetainedFactCount { get; init; }
+}
+
+// AI-1014 — a single durable fact the latest eval run contributed (detail pane).
+public record EvalRetainedFactRow {
+    [JsonPropertyName("category")]   public required string  Category  { get; init; }
+    [JsonPropertyName("fact_text")]  public required string  FactText  { get; init; }
+    [JsonPropertyName("cluster_id")] public          string? ClusterId { get; init; }
+}
+
+// AI-55 — per-eval-run facts-used response (snapshot enriched with current mute/delete state)
+public record EvalFactsUsedResponse {
+    [JsonPropertyName("repo_hash")]
+    public string? RepoHash { get; init; }
+
+    [JsonPropertyName("can_moderate")]
+    public required bool CanModerate { get; init; }
+
+    [JsonPropertyName("categories")]
+    public List<EvalFactsUsedCategory> Categories { get; init; } = [];
+}
+
+public record EvalFactsUsedCategory {
+    [JsonPropertyName("category")] public required string               Category { get; init; }
+    [JsonPropertyName("facts")]    public          List<EvalFactsUsedRow> Facts  { get; init; } = [];
+}
+
+public record EvalFactsUsedRow {
+    [JsonPropertyName("fact_hash")]                public required string          FactHash            { get; init; }
+    [JsonPropertyName("fact")]                     public required string          Fact                { get; init; }
+    [JsonPropertyName("retainer_user_id")]         public required string          RetainerUserId      { get; init; }
+    [JsonPropertyName("retainer_username")]        public          string?         RetainerUsername    { get; init; }
+    [JsonPropertyName("retainer_display_name")]    public          string?         RetainerDisplayName { get; init; }
+    [JsonPropertyName("source_session_id")]        public required string          SourceSessionId     { get; init; }
+    [JsonPropertyName("source_session_slug")]      public          string?         SourceSessionSlug   { get; init; }
+    [JsonPropertyName("retained_at")]              public required DateTimeOffset  RetainedAt          { get; init; }
+    [JsonPropertyName("is_muted_by_caller")]       public required bool            IsMutedByCaller     { get; init; }
+    [JsonPropertyName("is_deleted")]               public required bool            IsDeleted           { get; init; }
+    [JsonPropertyName("deleted_by_user_id")]       public          string?         DeletedByUserId     { get; init; }
+    [JsonPropertyName("deleted_by_username")]      public          string?         DeletedByUsername   { get; init; }
+    [JsonPropertyName("deleted_by_display_name")]  public          string?         DeletedByDisplayName { get; init; }
+    [JsonPropertyName("deleted_at")]               public          DateTimeOffset? DeletedAt           { get; init; }
+}
+
+public record JudgeFactDeletionItem {
+    [JsonPropertyName("category")]              public required string         Category { get; init; }
+    [JsonPropertyName("fact_hash")]             public required string         FactHash { get; init; }
+    [JsonPropertyName("fact")]                  public required string         Fact { get; init; }
+    [JsonPropertyName("deleted_by_user_id")]    public required string         DeletedByUserId { get; init; }
+    [JsonPropertyName("deleted_by_username")]   public          string?        DeletedByUsername { get; init; }
+    [JsonPropertyName("deleted_by_display_name")]public         string?        DeletedByDisplayName { get; init; }
+    [JsonPropertyName("retainer_user_id")]      public required string         RetainerUserId { get; init; }
+    [JsonPropertyName("reason")]                public          string?        Reason { get; init; }
+    [JsonPropertyName("deleted_at")]            public required DateTimeOffset DeletedAt { get; init; }
+    [JsonPropertyName("can_moderate")]          public required bool           CanModerate { get; init; }
+}
+
+public record JudgeFactSuppressionItem {
+    [JsonPropertyName("scope_id")]              public required string         ScopeId { get; init; }
+    [JsonPropertyName("category")]              public required string         Category { get; init; }
+    [JsonPropertyName("candidate_fact_hash")]   public required string         CandidateFactHash { get; init; }
+    [JsonPropertyName("matched_fact_hash")]     public required string         MatchedFactHash { get; init; }
+    [JsonPropertyName("similarity")]            public required double         Similarity { get; init; }
+    [JsonPropertyName("retainer_user_id")]      public required string         RetainerUserId { get; init; }
+    [JsonPropertyName("retainer_username")]     public          string?        RetainerUsername { get; init; }
+    [JsonPropertyName("retainer_display_name")] public          string?        RetainerDisplayName { get; init; }
+    [JsonPropertyName("source_session_id")]     public required string         SourceSessionId { get; init; }
+    [JsonPropertyName("source_session_slug")]   public          string?        SourceSessionSlug { get; init; }
+    [JsonPropertyName("source_eval_run_id")]    public required string         SourceEvalRunId { get; init; }
+    [JsonPropertyName("strategy")]              public required string         Strategy { get; init; }
+    [JsonPropertyName("suppressed_at")]         public required DateTimeOffset SuppressedAt { get; init; }
+}
+
+// DEV-1471 — cross-session eval trend view. Returned by
+// GET /api/repositories/{hash}/eval-trends.
+public record EvalTrendResponse {
+    [JsonPropertyName("repo_hash")]          public required string                       RepoHash          { get; init; }
+    [JsonPropertyName("sessions_evaluated")] public required int                          SessionsEvaluated { get; init; }
+    [JsonPropertyName("window_start")]       public required DateTimeOffset?              WindowStart       { get; init; }
+    [JsonPropertyName("window_end")]         public required DateTimeOffset?              WindowEnd         { get; init; }
+    [JsonPropertyName("category_trends")]    public required List<EvalCategoryTrend>      CategoryTrends    { get; init; }
+    [JsonPropertyName("repeat_findings")]    public required List<EvalRepeatFinding>      RepeatFindings    { get; init; }
+    [JsonPropertyName("aggregated_facts")]   public required List<EvalAggregatedFact>     AggregatedFacts   { get; init; }
+}
+
+public record EvalCategoryTrend {
+    [JsonPropertyName("category")]      public required string                Category     { get; init; }
+    [JsonPropertyName("average_score")] public required double                AverageScore { get; init; }
+    [JsonPropertyName("points")]        public required List<EvalScorePoint>  Points       { get; init; }
+}
+
+public record EvalScorePoint {
+    [JsonPropertyName("session_id")]   public required string         SessionId   { get; init; }
+    [JsonPropertyName("session_slug")] public          string?        SessionSlug { get; init; }
+    [JsonPropertyName("evaluated_at")] public required DateTimeOffset EvaluatedAt { get; init; }
+    [JsonPropertyName("score")]        public required double         Score       { get; init; }
+}
+
+public record EvalRepeatFinding {
+    [JsonPropertyName("category")]            public required string       Category          { get; init; }
+    [JsonPropertyName("question_id")]         public required string       QuestionId        { get; init; }
+    [JsonPropertyName("question_text")]       public required string       QuestionText      { get; init; }
+    [JsonPropertyName("occurrence_count")]    public required int          OccurrenceCount   { get; init; }
+    [JsonPropertyName("window_size")]         public required int          WindowSize        { get; init; }
+    [JsonPropertyName("example_session_ids")] public required List<string> ExampleSessionIds { get; init; }
+}
+
+public record EvalAggregatedFact {
+    [JsonPropertyName("category")]          public required string         Category        { get; init; }
+    [JsonPropertyName("fact")]              public required string         Fact            { get; init; }
+    [JsonPropertyName("occurrence_count")]  public required long           OccurrenceCount { get; init; }
+    [JsonPropertyName("retained_at")]       public required DateTimeOffset RetainedAt      { get; init; }
+    [JsonPropertyName("source_session_id")] public required string         SourceSessionId { get; init; }
+}
+
+// --- Curation queue DTOs (DEV-1677) ---
+
+public sealed record CurationItem(
+    [property: JsonPropertyName("category")]                 string         Category,
+    [property: JsonPropertyName("cluster_id")]               string         ClusterId,
+    [property: JsonPropertyName("representative_fact_hash")] string         RepresentativeFactHash,
+    [property: JsonPropertyName("best_representative")]      string         BestRepresentative,
+    [property: JsonPropertyName("weight")]                   long           Weight,
+    // AI-10 — same as Weight, but with read-time exponential decay applied
+    // (half-life = Evals:GuidelineInjection:DecayHalfLifeDays). Surfaced so the
+    // curation UI can show curators a freshness cue alongside raw weight.
+    [property: JsonPropertyName("effective_weight")]         double         EffectiveWeight,
+    [property: JsonPropertyName("member_count")]             int            MemberCount,
+    [property: JsonPropertyName("first_seen")]               DateTimeOffset? FirstSeen,
+    [property: JsonPropertyName("last_seen")]                DateTimeOffset? LastSeen,
+    [property: JsonPropertyName("status")]                   string         Status,
+    [property: JsonPropertyName("decided_at")]               DateTimeOffset? DecidedAt,
+    [property: JsonPropertyName("decided_by_user_id")]       string?        DecidedByUserId,
+    [property: JsonPropertyName("promoted_text")]            string?        PromotedText,
+    [property: JsonPropertyName("target_kinds")]             IReadOnlyList<string> TargetKinds,
+    [property: JsonPropertyName("reason")]                   string?        Reason,
+    // AI-3 — raw weight at the moment of promotion. NULL unless this row's
+    // status is 'promoted'. The curation UI uses (Weight - PrePromotionWeight)
+    // to drive the regressions lane: positive delta = guideline didn't prevent
+    // recurrence post-promotion.
+    [property: JsonPropertyName("pre_promotion_weight")]     long?          PrePromotionWeight
+);
+
+public sealed record CurationQueueResponse(
+    [property: JsonPropertyName("repo_hash")] string             RepoHash,
+    [property: JsonPropertyName("items")]     List<CurationItem> Items
+);
+
+public sealed record CurationMember(
+    [property: JsonPropertyName("member_fact_hash")]  string         MemberFactHash,
+    [property: JsonPropertyName("fact_text")]         string         FactText,
+    [property: JsonPropertyName("occurrence_count")]  long           OccurrenceCount,
+    [property: JsonPropertyName("source_session_id")] string         SourceSessionId,
+    [property: JsonPropertyName("first_seen")]        DateTimeOffset FirstSeen,
+    [property: JsonPropertyName("last_seen")]         DateTimeOffset LastSeen
+);
+
+public sealed record CurationAuditEntryDto(
+    [property: JsonPropertyName("log_position")]     long           LogPosition,
+    [property: JsonPropertyName("action")]           string         Action,
+    [property: JsonPropertyName("text")]             string?        Text,
+    [property: JsonPropertyName("target_kinds")]     IReadOnlyList<string> TargetKinds,
+    [property: JsonPropertyName("reason")]           string?        Reason,
+    // actor_github_id stays for wire back-compat — derived from the canonical id,
+    // 0 for actors without a GitHub identity (WorkOS users, Phase 2). actor_user_id
+    // is the canonical id and the field forward consumers should prefer.
+    [property: JsonPropertyName("actor_github_id")]  long           ActorGitHubId,
+    [property: JsonPropertyName("actor_user_id")]    string?        ActorUserId,
+    [property: JsonPropertyName("occurred_at")]      DateTimeOffset OccurredAt
+);
+
+public sealed record CurationClusterDetailDto(
+    [property: JsonPropertyName("item")]    CurationItem                Item,
+    [property: JsonPropertyName("members")] List<CurationMember>        Members,
+    [property: JsonPropertyName("history")] List<CurationAuditEntryDto> History
+);
+
+internal record PromoteClusterPayload {
+    [JsonPropertyName("text")]         public required string   Text        { get; init; }
+    [JsonPropertyName("target_kinds")] public required string[] TargetKinds { get; init; }
+}
+
+internal record DismissClusterPayload {
+    [JsonPropertyName("reason")] public string? Reason { get; init; }
+}
+
+public sealed record RepoGuidelineSettingsResponse(
+    [property: JsonPropertyName("repo_hash")]              string          RepoHash,
+    [property: JsonPropertyName("auto_inject_uncurated")]  bool            AutoInjectUncurated,
+    [property: JsonPropertyName("updated_at")]             DateTimeOffset? UpdatedAt,
+    [property: JsonPropertyName("updated_by_user_id")]     string?         UpdatedByUserId
+);
+
+// AI-1016 — effective per-repo settings (override + resolved global default for the UI placeholder).
+public sealed record RepoSettingsResponse(
+    [property: JsonPropertyName("repo_hash")]              string RepoHash,
+    [property: JsonPropertyName("guideline_min_weight")]   int?   GuidelineMinWeight,
+    [property: JsonPropertyName("auto_eval_enabled")]      bool   AutoEvalEnabled,
+    [property: JsonPropertyName("default_min_weight")]     int    DefaultMinWeight,
+    [property: JsonPropertyName("server_runner_configured")] bool ServerRunnerConfigured
+);

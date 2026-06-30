@@ -64,6 +64,7 @@ internal sealed record LauncherContext(
         string?                           Effort,
         string[]?                         Tools,
         bool                              IsReview,
+        bool                              IsReviewFlow,
         ReviewLaunchInfo?                 Review,
         ReviewLaunchBuilder.ReviewLaunch? ReviewLaunch
     ) {

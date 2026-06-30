@@ -73,6 +73,29 @@ public static class CodexConfigToml {
         Update(configPath ?? DefaultConfigPath, root => MutateTrust(root, worktreePath), out error);
 
     /// <summary>
+    /// Reads the top-level <c>model = "…"</c> key from <c>~/.codex/config.toml</c>
+    /// (or <paramref name="configPath"/>), honouring <c>CODEX_HOME</c> via
+    /// <see cref="CodexPaths.Home"/>. Returns null when the file is missing, unreadable,
+    /// has no top-level <c>model</c> key, or the value isn't a string — so callers can
+    /// fall back to the dispatched model. Read-only; never throws.
+    /// </summary>
+    public static string? ReadTopLevelModel(string? configPath = null) {
+        var path = configPath ?? DefaultConfigPath;
+
+        if (!File.Exists(path)) return null;
+
+        try {
+            var root = TomlSerializer.Deserialize(File.ReadAllText(path), _tomlTypeInfo.TableInfo);
+
+            return root is not null && root.TryGetValue("model", out var v) && v is string s && !string.IsNullOrWhiteSpace(s)
+                ? s
+                : null;
+        } catch {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Builds the Codex proxy allowlist from a set of Capacitor server URLs (the
     /// active one plus every configured profile). Any host under <c>kcap.ai</c>
     /// collapses to a single <c>**.kcap.ai</c> wildcard — it matches the apex and
