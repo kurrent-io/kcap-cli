@@ -59,6 +59,9 @@ record RepositoryPayload {
     [JsonPropertyName("remote_url")]
     public string? RemoteUrl { get; init; }
 
+    [JsonPropertyName("host")]
+    public string? Host { get; init; }
+
     [JsonPropertyName("owner")]
     public string? Owner { get; init; }
 
@@ -90,6 +93,12 @@ record GitCacheEntry {
 
     [JsonPropertyName("remote_url")]
     public string? RemoteUrl { get; init; }
+
+    [JsonPropertyName("host")]
+    public string? Host { get; init; }
+
+    [JsonPropertyName("schema_version")]
+    public int SchemaVersion { get; init; }
 
     [JsonPropertyName("owner")]
     public string? Owner { get; init; }

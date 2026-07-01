@@ -4,10 +4,15 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.Cli;
 
 static class RepositoryDetection {
+    // Bump whenever the cached shape/derivation changes so stale entries are ignored.
+    // v2: added Host + provider-aware parsing.
+    internal const int CacheSchemaVersion = 2;
+
     public static async Task<string> EnrichWithRepositoryInfo(string json, TimeSpan? budget = null) {
         try {
             var node = JsonNode.Parse(json);
@@ -41,6 +46,7 @@ static class RepositoryDetection {
             if (repo.UserName is not null) repoNode["user_name"]    = repo.UserName;
             if (repo.UserEmail is not null) repoNode["user_email"]  = repo.UserEmail;
             if (repo.RemoteUrl is not null) repoNode["remote_url"]  = repo.RemoteUrl;
+            if (repo.Host is not null) repoNode["host"]             = repo.Host;
             if (repo.Owner is not null) repoNode["owner"]           = repo.Owner;
             if (repo.RepoName is not null) repoNode["repo_name"]    = repo.RepoName;
             if (repo.Branch is not null) repoNode["branch"]         = repo.Branch;
@@ -83,7 +89,7 @@ static class RepositoryDetection {
             // Try loading cached base info
             var cache = LoadCache(cwd);
 
-            string? userName, userEmail, remoteUrl, owner, repoName, branch;
+            string? userName, userEmail, remoteUrl, owner, repoName, branch, host;
 
             // Always detect branch fresh — it changes frequently during a session
             var branchTask = RunCommandAsync("git", "branch --show-current", cwd, gitCap);
@@ -94,6 +100,7 @@ static class RepositoryDetection {
                 remoteUrl = cache.RemoteUrl;
                 owner     = cache.Owner;
                 repoName  = cache.RepoName;
+                host      = cache.Host;
                 branch    = await branchTask;
             } else {
                 // Run git commands in parallel
@@ -114,17 +121,20 @@ static class RepositoryDetection {
                 }
 
                 (owner, repoName) = GitUrlParser.ParseRemoteUrl(remoteUrl);
+                host = remoteUrl is null ? null : RemoteMatcher.ExtractHost(remoteUrl);
 
                 // Save to cache (without branch — it's always detected fresh)
                 SaveCache(
                     cwd,
                     new() {
-                        UserName  = userName,
-                        UserEmail = userEmail,
-                        RemoteUrl = remoteUrl,
-                        Owner     = owner,
-                        RepoName  = repoName,
-                        CachedAt  = DateTimeOffset.UtcNow
+                        UserName      = userName,
+                        UserEmail     = userEmail,
+                        RemoteUrl     = remoteUrl,
+                        Owner         = owner,
+                        RepoName      = repoName,
+                        Host          = host,
+                        SchemaVersion = CacheSchemaVersion,
+                        CachedAt      = DateTimeOffset.UtcNow
                     }
                 );
             }
@@ -163,6 +173,7 @@ static class RepositoryDetection {
                 UserName  = userName,
                 UserEmail = userEmail,
                 RemoteUrl = remoteUrl,
+                Host      = host,
                 Owner     = owner,
                 RepoName  = repoName,
                 Branch    = branch,
@@ -225,7 +236,7 @@ static class RepositoryDetection {
             var json  = File.ReadAllText(path);
             var entry = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.GitCacheEntry);
 
-            if (entry is null) {
+            if (entry is null || entry.SchemaVersion != CacheSchemaVersion) {
                 return null;
             }
 
