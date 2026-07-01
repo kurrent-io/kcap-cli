@@ -153,8 +153,18 @@ static class RepositoryDetection {
                 ghCap = TimeSpan.FromSeconds(Math.Min(2, Math.Max(0, remainingBudget.TotalSeconds)));
             }
 
-            if (ghCap > TimeSpan.Zero) {
-                var pr = await GitHubPrDetector.DetectAsync(cwd, ghCap, DefaultRunner);
+            // Effective provider budget: the post-git remainder when the caller passed a budget
+            // (only ClaudeHookCommand does), else the historical 2s cap. Covers probe + detector.
+            var providerCap = ghCap;
+
+            if (providerCap > TimeSpan.Zero && host is not null) {
+                var kind = await GitProviderRouter.ResolveAsync(host, cwd, providerCap, DefaultRunner);
+                var pr = kind switch {
+                    GitProviderKind.GitHub => await GitHubPrDetector.DetectAsync(cwd, providerCap, DefaultRunner),
+                    GitProviderKind.GitLab when owner is not null && repoName is not null
+                        => await GitLabPrDetector.DetectAsync(host, owner, repoName, branch, cwd, providerCap, DefaultRunner),
+                    _ => null
+                };
 
                 if (pr is not null) {
                     prNumber  = pr.Number;
