@@ -48,10 +48,9 @@ mcp flows:
       get_review_flow_status Get the status and last result of a flow.
       close_review_flow      Close a completed review flow.
 
-  Add it explicitly if you want it:
-
-    Claude Code:
-      claude mcp add kcap-flows -- kcap mcp flows
+  Claude Code auto-registers `kcap-flows` via the plugin's `.mcp.json`
+  (installed by `kcap setup`), so no manual step is needed there. Add it
+  manually only for Codex:
 
     Codex (CLI or desktop app) — add to ~/.codex/config.toml:
       [mcp_servers.kcap-flows]
@@ -67,7 +66,9 @@ INSTALL
   / `kcap plugin install --codex` write them into `~/.codex/config.toml`),
   so no manual `claude mcp add` or TOML edit is needed. Enabling the kcap
   plugin through Codex's native `codex plugin add` also provides them via
-  the plugin's `.codex-mcp.json` descriptor.
+  the plugin's `.codex-mcp.json` descriptor. `kcap-flows` is auto-registered
+  for Claude Code only — it launches a paid hosted reviewer, so on Codex it
+  stays manual (see `mcp flows` above).
 
   `kcap-judge` is not auto-registered. Add it explicitly if you
   want it:

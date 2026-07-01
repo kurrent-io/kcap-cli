@@ -119,7 +119,7 @@ Open the server URL in your browser. The dashboard shows repositories, sessions,
 
 The `kcap mcp sessions` stdio server lets coding agents search and recall past Capacitor sessions without leaving the chat. `kcap setup` **registers it (with `kcap-review`) for both Claude Code and Codex CLI** — no manual `claude mcp add` or TOML edit. For Claude Code it's carried by the plugin's `.mcp.json`; for Codex CLI, `kcap setup` / `kcap plugin install --codex` write it into `~/.codex/config.toml`. The server is repo-aware: `cd` into a project before spawning your agent and `search_sessions` defaults to that repo's sessions.
 
-The `kcap mcp flows` stdio server lets agents start and interact with AI-powered review flows. Add it manually via `claude mcp add kcap-flows -- kcap mcp flows`. See the [Flows MCP server](#flows-mcp-server-for-agents) section for details.
+The `kcap mcp flows` stdio server lets agents start and interact with AI-powered review flows. The plugin **auto-registers it for Claude Code** (Codex stays manual). See the [Flows MCP server](#flows-mcp-server-for-agents) section for details.
 
 ## What it records
 
@@ -293,16 +293,14 @@ The server is repo-aware — it resolves the current working directory to a repo
 kcap mcp flows
 ```
 
-Stdio MCP server that lets coding agents start and interact with AI-powered review flows directly from within a session. Add it explicitly to your agent setup:
+Stdio MCP server that lets coding agents start and interact with AI-powered review flows directly from within a session. The Kurrent Capacitor plugin **auto-registers it for Claude Code** (via `.mcp.json`), so there's nothing to do after `kcap setup` — the flows server derives the target repo from its launch working directory, and Claude Code always runs inside the repo, so one registration works for every repo. It's registered even with no daemon connected; the tools simply stay inert (and `start_review_flow` returns an error) until a daemon with the repo is available.
 
-```bash
-# Claude Code
-claude mcp add kcap-flows -- kcap mcp flows
+For Codex, `kcap-flows` stays manual — unlike the read-only `sessions` / `review` servers (which `kcap setup` registers in `config.toml`), it launches a paid hosted reviewer, so it isn't auto-registered. Add it to `~/.codex/config.toml`:
 
-# Codex (CLI or desktop app) — add to ~/.codex/config.toml:
-# [mcp_servers.kcap-flows]
-# command = "kcap"           # use an absolute path (e.g. /opt/homebrew/bin/kcap) for the
-# args    = ["mcp", "flows"] # desktop app, which launches MCP servers without your shell PATH
+```toml
+[mcp_servers.kcap-flows]
+command = "kcap"           # use an absolute path (e.g. /opt/homebrew/bin/kcap) for the
+args    = ["mcp", "flows"] # desktop app, which launches MCP servers without your shell PATH
 ```
 
 It provides four tools:
@@ -312,7 +310,7 @@ It provides four tools:
 - **`get_review_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow.
 - **`close_review_flow`** — mark a completed review flow as closed.
 
-Requires `kcap login`. The server creates an authenticated HTTP client at startup and posts to the Capacitor server's `/api/flows/*` endpoints.
+Requires `kcap login` **and a running daemon with this repo checked out** — the server discovers a connected daemon to launch the hosted Codex reviewer, and `start_review_flow` errors if none (or more than one) matches. The server creates an authenticated HTTP client at startup and posts to the Capacitor server's `/api/flows/*` endpoints.
 
 ### Curate guidelines
 

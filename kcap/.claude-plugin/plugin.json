@@ -1,5 +1,5 @@
 {
   "name": "kcap",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Records and visualizes Claude Code sessions via kcap CLI hooks"
 }
