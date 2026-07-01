@@ -112,6 +112,21 @@ public class RemoteMatcherTests {
     }
 
     [Test]
+    public async Task ExtractHost_https_with_port_strips_port() {
+        await Assert.That(RemoteMatcher.ExtractHost("https://ghe.corp.com:8443/org/repo.git")).IsEqualTo("ghe.corp.com");
+    }
+
+    [Test]
+    public async Task ExtractHost_ssh_proto_with_port_strips_port() {
+        await Assert.That(RemoteMatcher.ExtractHost("ssh://git@gitlab.corp.com:2222/org/repo.git")).IsEqualTo("gitlab.corp.com");
+    }
+
+    [Test]
+    public async Task NormalizeRemoteUrl_https_with_port_drops_port() {
+        await Assert.That(RemoteMatcher.NormalizeRemoteUrl("https://ghe.corp.com:8443/org/repo.git")).IsEqualTo("ghe.corp.com/org/repo");
+    }
+
+    [Test]
     public async Task PathAfterHost_strips_leading_host_segment() {
         await Assert.That(RemoteMatcher.PathAfterHost("github.com/kurrent-io/kcap")).IsEqualTo("kurrent-io/kcap");
         await Assert.That(RemoteMatcher.PathAfterHost("gitlab.com/group/project")).IsEqualTo("group/project");

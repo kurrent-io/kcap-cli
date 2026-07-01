@@ -159,19 +159,24 @@ static class RepositoryDetection {
             var providerCap = ghCap;
 
             if (providerCap > TimeSpan.Zero && host is not null) {
-                var kind = await GitProviderRouter.ResolveAsync(host, cwd, providerCap, DefaultRunner);
-                var pr = kind switch {
-                    GitProviderKind.GitHub => await GitHubPrDetector.DetectAsync(cwd, providerCap, DefaultRunner),
-                    GitProviderKind.GitLab when owner is not null && repoName is not null
-                        => await GitLabPrDetector.DetectAsync(host, owner, repoName, branch, cwd, providerCap, DefaultRunner),
-                    _ => null
-                };
+                var provSw = Stopwatch.StartNew();
+                var kind   = await GitProviderRouter.ResolveAsync(host, cwd, providerCap, DefaultRunner);
+                var detectCap = providerCap - provSw.Elapsed; // combined ceiling: probe + detector
 
-                if (pr is not null) {
-                    prNumber  = pr.Number;
-                    prTitle   = pr.Title;
-                    prUrl     = pr.Url;
-                    prHeadRef = pr.HeadRef;
+                if (detectCap > TimeSpan.Zero) {
+                    var pr = kind switch {
+                        GitProviderKind.GitHub => await GitHubPrDetector.DetectAsync(cwd, detectCap, DefaultRunner),
+                        GitProviderKind.GitLab when owner is not null && repoName is not null
+                            => await GitLabPrDetector.DetectAsync(host, owner, repoName, branch, cwd, detectCap, DefaultRunner),
+                        _ => null
+                    };
+
+                    if (pr is not null) {
+                        prNumber  = pr.Number;
+                        prTitle   = pr.Title;
+                        prUrl     = pr.Url;
+                        prHeadRef = pr.HeadRef;
+                    }
                 }
             }
 

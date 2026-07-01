@@ -106,9 +106,9 @@ public static partial class RemoteMatcher {
     [GeneratedRegex(@"^git@(?<host>[\w.-]+):(?<path>.+)$")]
     private static partial Regex SshRemoteRegex();
 
-    [GeneratedRegex(@"^ssh://(?:[^@]+@)?(?<host>[\w.-]+)/(?<path>.+)$")]
+    [GeneratedRegex(@"^ssh://(?:[^@]+@)?(?<host>[\w.-]+)(?::\d+)?/(?<path>.+)$")]
     private static partial Regex SshProtoRemoteRegex();
 
-    [GeneratedRegex(@"^https?://(?:[^@]+@)?(?<host>[\w.-]+)/(?<path>.+)$")]
+    [GeneratedRegex(@"^https?://(?:[^@]+@)?(?<host>[\w.-]+)(?::\d+)?/(?<path>.+)$")]
     private static partial Regex HttpsRemoteRegex();
 }
