@@ -24,26 +24,47 @@ static class McpFlowsServer {
             // best-effort; proceed with null
         }
 
-        // Defer the authenticated-client creation until the first tools/call. Under the
-        // plugin's auto-register manifest (AI-1056), Claude Code spawns `kcap mcp flows` for
-        // every session, so an eager CreateAuthenticatedClientAsync — which does a GET
-        // /auth/config round-trip + token load, and prints a re-auth hint to stderr when not
-        // logged in — would charge every session that work even when the agent never invokes a
-        // flows tool. initialize / tools/list need no auth, so startup stays local-only.
-        // Mirrors McpSessionsServer.
-        //
-        // The InfiniteTimeSpan timeout (AI-1061) is applied to the lazily-created client: the
-        // review-flow endpoints long-poll (start_review_flow / submit_review_round block
-        // server-side up to ~10 min while the reviewer runs). The default 100s timeout would
-        // abort the POST, which the server sees as a cancel and tears the reviewer down — so no
-        // review could complete. The server's FlowResultWaiter and the harness MCP tool timeout
-        // bound the wait instead, mirroring PermissionRequestCommand / CodexHookCommand.
-        var clientLazy = new Lazy<Task<HttpClient>>(async () => {
-            var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
-            client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
+        // Validate the server_url shape once, locally (pure string check — no network, token,
+        // or stderr). Used to fail gracefully instead of hard-exiting mid-request (below).
+        var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
 
-            return client;
-        });
+        // The authenticated client is created on the first tools/call, not at startup: kcap-flows
+        // auto-registers (AI-1056), so Claude Code spawns `kcap mcp flows` for every session —
+        // deferring keeps startup local-only (no GET /auth/config, token load, or stderr re-auth
+        // hint) for sessions that never invoke a flows tool. Created on demand into a nullable
+        // field (rather than a Lazy<Task>) so a transient creation failure leaves it null and the
+        // next call retries, instead of a faulted task sticking for the rest of the session. Safe
+        // without locking: the stdio loop handles one request at a time.
+        HttpClient? client = null;
+
+        // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request. An
+        // unusable server_url would otherwise reach EnsureAbsolute inside the auth-client factory,
+        // which hard-exits the process (Environment.Exit(2)) mid-request; and an unexpected
+        // failure would bubble out of the loop. Return a JSON-RPC tool error in both cases so the
+        // server keeps serving.
+        async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
+            if (!urlOk)
+                return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
+
+            try {
+                if (client is null) {
+                    client = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
+                    // AI-1061: the review-flow endpoints long-poll (start_review_flow /
+                    // submit_review_round block server-side up to ~10 min while the reviewer runs).
+                    // The default 100s timeout would abort the POST, which the server sees as a
+                    // cancel and tears the reviewer down — so disable the client-side deadline and
+                    // let the server's FlowResultWaiter + the harness MCP tool timeout bound it.
+                    client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
+                }
+
+                return await HandleToolCallAsync(callId, callRequest, client, baseUrl, cwd, repoRoot, repoInfo);
+            } catch (Exception ex) {
+                // Unexpected: log the detail to stderr (not to the client, which could leak local
+                // paths from IO errors) and return a generic tool error, keeping the loop alive.
+                await Console.Error.WriteLineAsync($"kcap mcp flows: unexpected error handling tools/call: {ex}");
+                return BuildToolResult(callId, "Error: internal error handling the request.", isError: true);
+            }
+        }
 
         await using var stdin  = Console.OpenStandardInput();
         await using var stdout = Console.OpenStandardOutput();
@@ -74,15 +95,15 @@ static class McpFlowsServer {
                 var response = method switch {
                     "initialize" => BuildInitializeResponse(id),
                     "tools/list" => BuildToolsListResponse(id, tools),
-                    "tools/call" => await HandleToolCallAsync(id, request, await clientLazy.Value, baseUrl, cwd, repoRoot, repoInfo),
+                    "tools/call" => await DispatchToolCallAsync(id, request),
                     _            => BuildErrorResponse(id, -32601, $"Method not found: {method}")
                 };
 
                 await writer.WriteLineAsync(response);
             }
         } finally {
-            if (clientLazy.IsValueCreated) {
-                try { (await clientLazy.Value).Dispose(); } catch {
+            if (client is not null) {
+                try { client.Dispose(); } catch {
                     /* swallow — best-effort cleanup */
                 }
             }
