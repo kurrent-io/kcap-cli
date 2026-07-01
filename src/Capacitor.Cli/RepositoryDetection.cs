@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli;
 
@@ -12,6 +13,8 @@ static class RepositoryDetection {
     // Bump whenever the cached shape/derivation changes so stale entries are ignored.
     // v2: added Host + provider-aware parsing.
     internal const int CacheSchemaVersion = 2;
+
+    internal static CommandRunner DefaultRunner => RunCommandAsync;
 
     public static async Task<string> EnrichWithRepositoryInfo(string json, TimeSpan? budget = null) {
         try {
@@ -151,21 +154,13 @@ static class RepositoryDetection {
             }
 
             if (ghCap > TimeSpan.Zero) {
-                try {
-                    var prJson = await RunCommandAsync("gh", "pr view --json number,title,url,headRefName", cwd, ghCap);
+                var pr = await GitHubPrDetector.DetectAsync(cwd, ghCap, DefaultRunner);
 
-                    if (prJson is not null) {
-                        var prNode = JsonNode.Parse(prJson);
-
-                        if (prNode is JsonObject prObj) {
-                            prNumber  = prObj["number"]?.GetValue<int>();
-                            prTitle   = prObj["title"]?.GetValue<string>();
-                            prUrl     = prObj["url"]?.GetValue<string>();
-                            prHeadRef = prObj["headRefName"]?.GetValue<string>();
-                        }
-                    }
-                } catch {
-                    // PR detection is best-effort
+                if (pr is not null) {
+                    prNumber  = pr.Number;
+                    prTitle   = pr.Title;
+                    prUrl     = pr.Url;
+                    prHeadRef = pr.HeadRef;
                 }
             }
 
