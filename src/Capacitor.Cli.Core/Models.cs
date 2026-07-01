@@ -59,6 +59,9 @@ record RepositoryPayload {
     [JsonPropertyName("remote_url")]
     public string? RemoteUrl { get; init; }
 
+    [JsonPropertyName("host")]
+    public string? Host { get; init; }
+
     [JsonPropertyName("owner")]
     public string? Owner { get; init; }
 
@@ -90,6 +93,12 @@ record GitCacheEntry {
 
     [JsonPropertyName("remote_url")]
     public string? RemoteUrl { get; init; }
+
+    [JsonPropertyName("host")]
+    public string? Host { get; init; }
+
+    [JsonPropertyName("schema_version")]
+    public int SchemaVersion { get; init; }
 
     [JsonPropertyName("owner")]
     public string? Owner { get; init; }
@@ -600,6 +609,12 @@ static partial class GitUrlParser {
             return (sshMatch.Groups["owner"].Value, sshMatch.Groups["repo"].Value);
         }
 
+        var sshProtoMatch = SshProtoRegex().Match(url);
+
+        if (sshProtoMatch.Success) {
+            return (sshProtoMatch.Groups["owner"].Value, sshProtoMatch.Groups["repo"].Value);
+        }
+
         var httpsMatch = HttpsRegex().Match(url);
 
         return httpsMatch.Success
@@ -612,6 +627,9 @@ static partial class GitUrlParser {
 
     [GeneratedRegex(@"git@[\w.-]+:(?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$")]
     internal static partial Regex SshRegex();
+
+    [GeneratedRegex(@"ssh://(?:[^@/]+@)?[^/]+/(?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$")]
+    internal static partial Regex SshProtoRegex();
 }
 
 public record RepoEntry {

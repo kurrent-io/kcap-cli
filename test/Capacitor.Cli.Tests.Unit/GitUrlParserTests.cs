@@ -43,6 +43,24 @@ public class GitUrlParserTests {
     }
 
     [Test]
+    [Arguments("ssh://git@gitlab.com/group/project.git", "group", "project")]
+    [Arguments("ssh://git@gitlab.corp.com:2222/org/repo.git", "org", "repo")]
+    public async Task ParseRemoteUrl_SshProtoUrls_ReturnsOwnerAndRepo(string url, string expectedOwner, string expectedRepo) {
+        var (owner, repoName) = GitUrlParser.ParseRemoteUrl(url);
+
+        await Assert.That(owner).IsEqualTo(expectedOwner);
+        await Assert.That(repoName).IsEqualTo(expectedRepo);
+    }
+
+    [Test]
+    public async Task ParseRemoteUrl_SshProtoUrl_NestedGroup_ReturnsBothNull() {
+        var (owner, repoName) = GitUrlParser.ParseRemoteUrl("ssh://git@gitlab.com/group/sub/project.git");
+
+        await Assert.That(owner).IsNull();
+        await Assert.That(repoName).IsNull();
+    }
+
+    [Test]
     public async Task ParseRemoteUrl_Null_ReturnsBothNull() {
         var (owner, repoName) = GitUrlParser.ParseRemoteUrl(null);
 

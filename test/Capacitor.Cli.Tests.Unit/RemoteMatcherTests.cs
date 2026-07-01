@@ -95,4 +95,41 @@ public class RemoteMatcherTests {
 
         await Assert.That(result).IsEqualTo("contoso");
     }
+
+    [Test]
+    public async Task ExtractHost_from_ssh_and_https() {
+        await Assert.That(RemoteMatcher.ExtractHost("git@github.com:kurrent-io/kcap.git")).IsEqualTo("github.com");
+        await Assert.That(RemoteMatcher.ExtractHost("https://gitlab.com/group/project.git")).IsEqualTo("gitlab.com");
+        await Assert.That(RemoteMatcher.ExtractHost("ssh://git@ghe.corp.com/team/app")).IsEqualTo("ghe.corp.com");
+        await Assert.That(RemoteMatcher.ExtractHost("not a url")).IsNull();
+    }
+
+    [Test]
+    public async Task ExtractHost_lowercases_mixed_case_host() {
+        // gh/glab auth host keys are lowercase, and GitProviderRouter compares hosts
+        // case-sensitively, so a mixed-case remote host must be canonicalized here.
+        await Assert.That(RemoteMatcher.ExtractHost("git@GitHub.com:o/r.git")).IsEqualTo("github.com");
+    }
+
+    [Test]
+    public async Task ExtractHost_https_with_port_strips_port() {
+        await Assert.That(RemoteMatcher.ExtractHost("https://ghe.corp.com:8443/org/repo.git")).IsEqualTo("ghe.corp.com");
+    }
+
+    [Test]
+    public async Task ExtractHost_ssh_proto_with_port_strips_port() {
+        await Assert.That(RemoteMatcher.ExtractHost("ssh://git@gitlab.corp.com:2222/org/repo.git")).IsEqualTo("gitlab.corp.com");
+    }
+
+    [Test]
+    public async Task NormalizeRemoteUrl_https_with_port_drops_port() {
+        await Assert.That(RemoteMatcher.NormalizeRemoteUrl("https://ghe.corp.com:8443/org/repo.git")).IsEqualTo("ghe.corp.com/org/repo");
+    }
+
+    [Test]
+    public async Task PathAfterHost_strips_leading_host_segment() {
+        await Assert.That(RemoteMatcher.PathAfterHost("github.com/kurrent-io/kcap")).IsEqualTo("kurrent-io/kcap");
+        await Assert.That(RemoteMatcher.PathAfterHost("gitlab.com/group/project")).IsEqualTo("group/project");
+        await Assert.That(RemoteMatcher.PathAfterHost("nohostonly")).IsNull();
+    }
 }

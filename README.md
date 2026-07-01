@@ -86,6 +86,8 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 
 > **Keep the daemon running:** `kcap daemon start -d` stops when the process dies (a crash, or an OS memory-pressure kill — macOS jetsam / Linux OOM). To auto-restart it and start it at login, install it as a per-user service: `kcap daemon service install`. See [Daemon](#daemon).
 
+> **PR/MR auto-tagging is best-effort:** sessions on a branch with an open pull/merge request are automatically tagged with it, using the provider's own CLI — `gh` for GitHub and GitHub Enterprise, `glab` for GitLab. Neither is required to use kcap; if the matching CLI isn't installed or authenticated for the repo's host, the session is simply left untagged (no error, no retry).
+
 ### 3. Import existing sessions (optional)
 
 ```bash
@@ -266,9 +268,11 @@ Expect ~1-3 minutes total depending on the model and session size — judges run
 kcap review <pr-url-or-owner/repo#number>
 ```
 
+Accepts a GitHub PR URL (`https://github.com/owner/repo/pull/123`, any host including GitHub Enterprise), a GitLab MR URL (`https://gitlab.com/owner/repo/-/merge_requests/123`), or the shorthand `owner/repo#123`. Only single-level `owner/repo` namespaces are supported — GitLab's nested groups (e.g. `group/subgroup/repo`) aren't recognized yet.
+
 Launches a Claude Code session equipped with MCP tools that query the implementation transcripts. Reviewers can ask *why* code was changed, understand design decisions, check what alternatives were considered, and verify test coverage — all grounded in what actually happened during development.
 
-The same MCP server (`kcap-review`) is also auto-registered by the Kurrent Capacitor plugin and available in any Claude Code session, not just ones launched via `kcap review`. Each PR-scoped tool (`get_pr_summary`, `list_pr_files`, `get_file_context`, `search_context`, `list_sessions`) accepts an optional `pr` argument — pass `"owner/repo#123"` or a GitHub PR URL to review any PR from any branch. When omitted, the server falls back to the PR passed at startup (set by `kcap review <pr>`) or to git auto-detection against the current branch. `get_transcript` keys off `session_id` and doesn't need a `pr` argument.
+The same MCP server (`kcap-review`) is also auto-registered by the Kurrent Capacitor plugin and available in any Claude Code session, not just ones launched via `kcap review`. Each PR-scoped tool (`get_pr_summary`, `list_pr_files`, `get_file_context`, `search_context`, `list_sessions`) accepts an optional `pr` argument — pass `"owner/repo#123"` or a GitHub/GitLab URL to review any PR from any branch. When omitted, the server falls back to the PR passed at startup (set by `kcap review <pr>`) or to git auto-detection against the current branch. `get_transcript` keys off `session_id` and doesn't need a `pr` argument.
 
 ### Sessions MCP server (for agents)
 
