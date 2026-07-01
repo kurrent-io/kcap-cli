@@ -78,10 +78,7 @@ internal sealed partial class CodexLauncher(
             "on-request"
         };
 
-        if (!string.IsNullOrEmpty(ctx.Model)) {
-            args.Add("-m");
-            args.Add(ctx.Model);
-        }
+        AppendModel(args, ctx.Model);
 
         var effort = ctx.Effort;
 
@@ -128,16 +125,28 @@ internal sealed partial class CodexLauncher(
         args.Add("-c");
         args.Add($"mcp_servers.{serverName}.env={{{envList}}}");
 
-        if (!string.IsNullOrEmpty(ctx.Model)) {
-            args.Add("-m");
-            args.Add(ctx.Model);
-        }
+        AppendModel(args, ctx.Model);
 
         args.Add("--no-alt-screen");
         args.Add("--");
         args.Add(launch.SystemPrompt);
 
         return new([.. args], McpConfigPath: null);
+    }
+
+    /// Append `-m <model>` unless the model is empty or the vendor-neutral sentinel
+    /// "default". The server sends "default" to mean "use the vendor's own default
+    /// model"; Claude accepts `--model default` but Codex has no such model and rejects
+    /// `-m default` on ChatGPT/subscription accounts (HTTP 400, AI-1114). Omitting -m
+    /// lets Codex fall back to its configured/account default — mirroring how the
+    /// "auto" effort sentinel is dropped so the CLI picks its own default.
+    static void AppendModel(List<string> args, string? model) {
+        if (string.IsNullOrEmpty(model) || string.Equals(model, "default", StringComparison.OrdinalIgnoreCase)) {
+            return;
+        }
+
+        args.Add("-m");
+        args.Add(model);
     }
 
     /// Encode a value as a TOML basic string: wrap in double quotes and escape
