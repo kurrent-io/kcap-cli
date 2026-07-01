@@ -385,7 +385,7 @@ kcap daemon start                   # start in foreground (defaults --name to yo
 kcap daemon start -d                # start in background (daemonize)
 kcap daemon start --name laptop -d  # run multiple daemons on the same machine by giving each a unique name
 kcap daemon status                  # list all running daemons
-kcap daemon status --name laptop    # show status of a specific daemon
+kcap daemon status --name laptop    # show status of a specific daemon (incl. its running version)
 kcap daemon stop --name laptop      # stop just that one
 kcap daemon stop --yes              # stop all running daemons unattended (otherwise prompts on multi)
 kcap daemon restart --name laptop              # restart now if idle; refuses while agents/evals run
@@ -397,7 +397,14 @@ kcap daemon doctor --clean          # also remove stale lock/pid files (held ent
 
 `KCAP_DAEMON_NAME` overrides the active profile's daemon name (superseded by an explicit `--name` flag).
 
-**Updating:** after `kcap update`, a running daemon on macOS/Linux detects the new binary and restarts itself once it's **idle** (no running hosted agents and no in-flight eval) — service-managed daemons exit so the supervisor relaunches the new binary; background (`-d`) daemons re-spawn themselves. `kcap daemon status` shows a pending restart; `kcap daemon restart --force` applies it now. On **Windows**, stop the daemon (`kcap daemon stop` / `kcap daemon service stop`) before `kcap update` — a running daemon locks its binary, so the update can't replace it (the launcher detects this and aborts with instructions).
+For a running daemon, `kcap daemon status` reports the **version the daemon process is actually running** (read from a marker the daemon writes at startup, not the CLI's own version) — so you can confirm whether a self-update has taken effect:
+
+```
+Daemon 'laptop': running (PID 12345)
+  version: 0.8.12
+```
+
+**Updating:** after `kcap update`, a running daemon on macOS/Linux detects the new binary and restarts itself once it's **idle** (no running hosted agents and no in-flight eval) — service-managed daemons exit so the supervisor relaunches the new binary; background (`-d`) daemons re-spawn themselves. `kcap daemon status` shows the running version (above) plus any pending restart, so you can tell the update apart from an as-yet-unrestarted daemon; `kcap daemon restart --force` applies it now. On **Windows**, stop the daemon (`kcap daemon stop` / `kcap daemon service stop`) before `kcap update` — a running daemon locks its binary, so the update can't replace it (the launcher detects this and aborts with instructions).
 
 #### Run it as a service (auto-restart)
 

@@ -314,6 +314,7 @@ public static class DaemonCommands {
             if (!IsOurDaemon(entry.Pid, entry.StartToken)) {
                 Console.Out.WriteLine($"Daemon '{name}' was not running (stale PID file).");
                 File.Delete(DaemonLockPaths.PidPath(name));
+                DaemonVersionMarker.Delete(name);
 
                 return 0;
             }
@@ -325,9 +326,15 @@ public static class DaemonCommands {
             Console.Out.WriteLine($"Daemon '{name}' was not running.");
         }
 
+        // Clean up the daemon's on-disk markers. The kill above is a SIGKILL, so
+        // the daemon's own Dispose cleanup never runs — the CLI must remove the
+        // PID file and the version marker itself (they were written together at
+        // startup and track the same "live under this name" fact).
         try { File.Delete(DaemonLockPaths.PidPath(name)); } catch {
             /* best-effort */
         }
+
+        DaemonVersionMarker.Delete(name);
 
         return 0;
     }
@@ -437,6 +444,11 @@ public static class DaemonCommands {
             } else if (IsOurDaemon(entry.Pid, entry.StartToken)) {
                 await Console.Out.WriteLineAsync($"Daemon '{name}': running (PID {entry.Pid})");
 
+                // Version of the *running* daemon (from the marker it wrote at
+                // startup), so the user can confirm a self-update took effect.
+                if (DaemonVersionMarker.TryRead(name) is { } version)
+                    await Console.Out.WriteLineAsync($"  version: {CapacitorVersion.Display(version)}");
+
                 if (DaemonRestartMarker.TryRead(name) is { } marker)
                     await Console.Out.WriteLineAsync($"  {marker.Describe()}");
             } else {
@@ -445,6 +457,8 @@ public static class DaemonCommands {
                 try { File.Delete(DaemonLockPaths.PidPath(name)); } catch {
                     /* best-effort */
                 }
+
+                DaemonVersionMarker.Delete(name);
             }
 
             if (manager is not null) {
@@ -548,6 +562,8 @@ public static class DaemonCommands {
                         try { File.Delete(DaemonLockPaths.RestartPendingPath(name)); } catch {
                             /* best-effort */
                         }
+
+                        DaemonVersionMarker.Delete(name);
                     }
 
                     break;
@@ -569,6 +585,8 @@ public static class DaemonCommands {
                         try { File.Delete(DaemonLockPaths.RestartPendingPath(name)); } catch {
                             /* best-effort */
                         }
+
+                        DaemonVersionMarker.Delete(name);
                     }
 
                     break;
