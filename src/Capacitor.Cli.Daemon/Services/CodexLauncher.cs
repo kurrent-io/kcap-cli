@@ -90,14 +90,7 @@ internal sealed partial class CodexLauncher(
             args.Add("mcp_servers={}");
         }
 
-        // "default" is the no-override sentinel from the flow/agent dispatch. Passing it as
-        // `-m default` is rejected by Codex on a ChatGPT account ("The 'default' model is not
-        // supported when using Codex with a ChatGPT account") and silently yields an empty turn.
-        // Omit -m so Codex uses the model from ~/.codex/config.toml (mirrors the effort=="auto" case).
-        if (!string.IsNullOrEmpty(ctx.Model) && !string.Equals(ctx.Model, "default", StringComparison.OrdinalIgnoreCase)) {
-            args.Add("-m");
-            args.Add(ctx.Model);
-        }
+        AddModelArg(args, ctx.Model);
 
         var effort = ctx.Effort;
 
@@ -115,6 +108,19 @@ internal sealed partial class CodexLauncher(
         }
 
         return new([.. args], McpConfigPath: null);
+    }
+
+    /// Append `-m <model>` unless the model is empty or the "default" no-override sentinel.
+    /// "default" is the sentinel from the flow/agent dispatch; passing it as `-m default` is
+    /// rejected by Codex on a ChatGPT account ("The 'default' model is not supported when using
+    /// Codex with a ChatGPT account") and silently yields an empty turn. Omitting -m makes Codex
+    /// use the model from ~/.codex/config.toml (mirrors the effort=="auto" case). Shared by both
+    /// the default and review launch paths so the sentinel is honored in either.
+    static void AddModelArg(List<string> args, string? model) {
+        if (!string.IsNullOrEmpty(model) && !string.Equals(model, "default", StringComparison.OrdinalIgnoreCase)) {
+            args.Add("-m");
+            args.Add(model);
+        }
     }
 
     /// Review launch: inject the same kcap-review MCP server Claude gets, but via
@@ -144,10 +150,7 @@ internal sealed partial class CodexLauncher(
         args.Add("-c");
         args.Add($"mcp_servers.{serverName}.env={{{envList}}}");
 
-        if (!string.IsNullOrEmpty(ctx.Model)) {
-            args.Add("-m");
-            args.Add(ctx.Model);
-        }
+        AddModelArg(args, ctx.Model);
 
         args.Add("--no-alt-screen");
         args.Add("--");

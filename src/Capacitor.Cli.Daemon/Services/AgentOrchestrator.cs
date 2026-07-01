@@ -406,9 +406,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // Report the resolved model so the server can display the real model the agent
             // is running (the dispatched `model` may be the "default" no-override sentinel,
-            // in which case Codex picks the model from ~/.codex/config.toml). Best-effort:
-            // never let a report failure break the launch.
-            ReportResolvedModel(agentId, cmd.Vendor, model);
+            // in which case Codex picks the model from ~/.codex/config.toml). The hub contract
+            // (ReportAgentResolvedModel) is Codex-only and the resolution via CodexConfigToml is
+            // Codex-specific, so gate the call on vendor — Claude/other agents never call the hub.
+            // Best-effort: never let a report failure break the launch.
+            if (string.Equals(cmd.Vendor, "codex", StringComparison.OrdinalIgnoreCase)) {
+                ReportResolvedModel(agentId, cmd.Vendor, model);
+            }
         } catch (Exception ex) {
             LogLaunchFailed(ex, agentId);
 
@@ -447,10 +451,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>
     /// Best-effort: report the model the agent will actually run to the server so the UI can
-    /// show the real model instead of the dispatched value. The dispatched <paramref name="model"/>
-    /// may be the "default" no-override sentinel (or empty), in which case Codex resolves the model
-    /// from <c>~/.codex/config.toml</c> — we resolve the same value here. Non-Codex vendors report
-    /// the dispatched model verbatim. Never throws: a resolve/report failure must not break launch.
+    /// show the real model instead of the dispatched value. Codex-only — the hub contract
+    /// (ReportAgentResolvedModel) and the config resolution are Codex-specific, so the caller
+    /// gates this on <c>vendor == "codex"</c>. The dispatched <paramref name="model"/> may be
+    /// the "default" no-override sentinel (or empty), in which case Codex resolves the model from
+    /// <c>~/.codex/config.toml</c> — we resolve the same value here. Never throws: a resolve/report
+    /// failure must not break launch.
     /// </summary>
     void ReportResolvedModel(string agentId, string vendor, string model) {
         try {
