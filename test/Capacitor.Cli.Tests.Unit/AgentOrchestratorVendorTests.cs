@@ -146,6 +146,43 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
     }
 
+    // AI-1124: the orchestrator's unattended-launch guard (UnattendedLaunchPolicy.RejectionReason)
+    // must actually be wired into HandleLaunchAgent — reject a review-flow launch whose vendor
+    // can't run unattended, and do it before any worktree/PTY side effects.
+    [Test]
+    public async Task Unattended_review_flow_launch_is_rejected_for_vendor_without_unattended_support() {
+        var server     = new CaptureServerConnection();
+        var ptyFactory = new SpyPtyProcessFactory();
+        var claudeSpy  = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude") { SupportsUnattended = false };
+
+        var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
+
+        await using var orch = BuildOrchestrator(server, ptyFactory, launchers);
+
+        var cmd = new LaunchAgentCommand(
+            AgentId: "agent-unattended",
+            Prompt: "review this",
+            Model: "opus",
+            Effort: null,
+            RepoPath: "/tmp/does-not-matter",
+            Tools: null,
+            AttachmentIds: null,
+            Vendor: "claude",
+            Kind: LaunchKind.ReviewFlow
+        );
+
+        await orch.HandleLaunchAgentForTest(cmd);
+
+        await Assert.That(server.LaunchFailedCalls.Count).IsEqualTo(1);
+        await Assert.That(server.LaunchFailedCalls[0].AgentId).IsEqualTo("agent-unattended");
+        await Assert.That(server.LaunchFailedCalls[0].Reason).Contains("unattended");
+
+        // Rejected before any worktree/PTY side effects.
+        await Assert.That(claudeSpy.PrepareCalls).IsEqualTo(0);
+        await Assert.That(claudeSpy.BuildArgsCalls).IsEqualTo(0);
+        await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
+    }
+
     [Test]
     public async Task Launch_with_vendor_claude_calls_claude_launcher() {
         var (repoPath, cleanup) = CreateGitRepo();
@@ -504,9 +541,9 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     sealed class SpyHostedAgentLauncher(string vendor, string cliPath) : IHostedAgentLauncher {
-        public string Vendor  { get; } = vendor;
-        public string CliPath { get; } = cliPath;
-        public bool   SupportsUnattended => true;
+        public string Vendor             { get; } = vendor;
+        public string CliPath            { get; } = cliPath;
+        public bool   SupportsUnattended { get; init; } = true;
 
         public int        PrepareCalls   { get; private set; }
         public int        BuildArgsCalls { get; private set; }
