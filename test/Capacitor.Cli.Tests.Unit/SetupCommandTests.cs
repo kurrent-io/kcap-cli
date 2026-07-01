@@ -122,6 +122,10 @@ public class SetupCommandTests {
     }
 
     [Test]
+    // Touches the process-wide AppConfig.GetConfigPath() (config.json). Share the
+    // TokenStoreProfileTests serialization key so it can't run concurrently with tests
+    // that reset/read that same shared config (e.g. TokenStoreProfileTests cleanup).
+    [NotInParallel(nameof(TokenStoreProfileTests))]
     public async Task Setup_save_profile_config_round_trips_active_profile() {
         // Smoke-check that the discovery-path SetupCommand can save and reload the active
         // profile after MergeProfiles has set it to a non-"default" name. The full discovery
