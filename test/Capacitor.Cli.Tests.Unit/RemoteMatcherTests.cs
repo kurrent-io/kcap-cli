@@ -95,4 +95,19 @@ public class RemoteMatcherTests {
 
         await Assert.That(result).IsEqualTo("contoso");
     }
+
+    [Test]
+    public async Task ExtractHost_from_ssh_and_https() {
+        await Assert.That(RemoteMatcher.ExtractHost("git@github.com:kurrent-io/kcap.git")).IsEqualTo("github.com");
+        await Assert.That(RemoteMatcher.ExtractHost("https://gitlab.com/group/project.git")).IsEqualTo("gitlab.com");
+        await Assert.That(RemoteMatcher.ExtractHost("ssh://git@ghe.corp.com/team/app")).IsEqualTo("ghe.corp.com");
+        await Assert.That(RemoteMatcher.ExtractHost("not a url")).IsNull();
+    }
+
+    [Test]
+    public async Task PathAfterHost_strips_leading_host_segment() {
+        await Assert.That(RemoteMatcher.PathAfterHost("github.com/kurrent-io/kcap")).IsEqualTo("kurrent-io/kcap");
+        await Assert.That(RemoteMatcher.PathAfterHost("gitlab.com/group/project")).IsEqualTo("group/project");
+        await Assert.That(RemoteMatcher.PathAfterHost("nohostonly")).IsNull();
+    }
 }

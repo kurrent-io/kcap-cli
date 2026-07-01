@@ -44,6 +44,21 @@ public static partial class RemoteMatcher {
         return null;
     }
 
+    /// <summary>Host of a raw git remote URL (e.g. "github.com"), or null if unrecognized.</summary>
+    public static string? ExtractHost(string url) {
+        var normalized = NormalizeRemoteUrl(url);
+        if (normalized is null) return null;
+        var slash = normalized.IndexOf('/');
+        return slash <= 0 ? null : normalized[..slash];
+    }
+
+    /// <summary>The "owner/repo" tail of a normalized "host/owner/path" string, or null.</summary>
+    public static string? PathAfterHost(string normalized) {
+        if (string.IsNullOrEmpty(normalized)) return null;
+        var slash = normalized.IndexOf('/');
+        return slash <= 0 || slash == normalized.Length - 1 ? null : normalized[(slash + 1)..];
+    }
+
     static string StripGitSuffix(string path) =>
         path.EndsWith(".git", StringComparison.OrdinalIgnoreCase)
             ? path[..^4]
