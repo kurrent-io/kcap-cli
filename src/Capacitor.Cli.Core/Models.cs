@@ -716,6 +716,10 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(RepoEntry[]))]
 [JsonSerializable(typeof(CurationApplyResponse))]
 [JsonSerializable(typeof(CurationApplyItem))]
+[JsonSerializable(typeof(Auth.ProvisionRequest))]
+[JsonSerializable(typeof(Auth.ProvisionResponse))]
+[JsonSerializable(typeof(Auth.AvailabilityResponse))]
+[JsonSerializable(typeof(Auth.StatusResponse))]
 // UseStringEnumConverter=true matches the server's SignalR JSON protocol, which
 // serialises enums (e.g. LaunchKind) as camelCase strings. Without it the
 // source-gen LaunchKind JsonTypeInfo defaults to numeric and silently drops the

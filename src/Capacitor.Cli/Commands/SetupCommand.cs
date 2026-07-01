@@ -422,8 +422,14 @@ public static class SetupCommand {
         var provider = OAuthLoginFlow.ChooseDiscoveryProvider(args, isInteractive: !HeadlessEnvironment.IsHeadless());
 
         if (provider == AuthProvider.WorkOS) {
+            // Offer inline tenant creation only in an interactive session; headless
+            // setup keeps the legacy "ask your admin" dead-end (provisioner is null).
+            ITenantProvisioner? provisioner = HeadlessEnvironment.IsHeadless()
+                ? null
+                : new SpectreTenantProvisioner(new TenantProvisioningClient(new HttpClient()), ProvisioningEndpoint.Url);
+
             var exit = await WorkOSDiscovery.RunWithLiveAuthAsync(
-                AuthProxyEndpoint.Url, proxyConfig, proxyClient, new SpectreTenantPicker());
+                AuthProxyEndpoint.Url, proxyConfig, proxyClient, new SpectreTenantPicker(), provisioner);
             if (exit != 0) return null;
 
             // WorkOSDiscovery saved + activated the picked profile; continue setup against it.
