@@ -1,0 +1,194 @@
+using System.Diagnostics;
+using System.Text.Json.Nodes;
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+using WireMock.Server;
+
+namespace Capacitor.Cli.Tests.Integration;
+
+/// <summary>
+/// End-to-end stdio JSON-RPC tests for <c>kcap mcp review</c>. Spawns the freshly-built CLI
+/// binary against a WireMock-stubbed Capacitor server (via <c>KCAP_URL</c>) with an isolated
+/// config dir (<c>KCAP_CONFIG_DIR</c>). Mirrors the harness in
+/// <see cref="McpFlowsServerTests"/> / <see cref="McpSessionsServerTests"/>.
+/// </summary>
+public class McpReviewServerTests : IDisposable {
+    readonly WireMockServer _server           = WireMockServer.Start();
+    readonly string         _cfgDir           = Path.Combine(Path.GetTempPath(), $"kcap-review-cfg-{Guid.NewGuid():N}");
+    readonly string         _cwdDir           = Path.Combine(Path.GetTempPath(), $"kcap-review-cwd-{Guid.NewGuid():N}");
+    readonly List<Process>  _spawnedProcesses = [];
+
+    public McpReviewServerTests() {
+        Directory.CreateDirectory(_cfgDir);
+        Directory.CreateDirectory(_cwdDir);
+        InitGitRepo(_cwdDir);
+    }
+
+    public void Dispose() {
+        foreach (var p in _spawnedProcesses) {
+            try {
+                if (!p.HasExited) p.Kill(entireProcessTree: true);
+                p.Dispose();
+            } catch {
+                // best-effort cleanup
+            }
+        }
+
+        _server.Stop();
+        try { Directory.Delete(_cfgDir, recursive: true); } catch { /* best effort */ }
+        try { Directory.Delete(_cwdDir, recursive: true); } catch { /* best effort */ }
+    }
+
+    static void InitGitRepo(string dir) {
+        RunGit(dir, "init");
+        RunGit(dir, "remote add origin https://github.com/test-owner/test-repo.git");
+    }
+
+    static void RunGit(string cwd, string args) {
+        using var p = Process.Start(new ProcessStartInfo("git", args) {
+            WorkingDirectory       = cwd,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false
+        })!;
+        p.WaitForExit(5000);
+    }
+
+    static string GetCliBinaryPath() {
+        var asmDir      = Path.GetDirectoryName(typeof(McpReviewServerTests).Assembly.Location)!;
+        var binDir      = Path.GetDirectoryName(asmDir)!;
+        var config      = Path.GetFileName(binDir);
+        var testBin     = Path.GetDirectoryName(binDir)!;
+        var testProjDir = Path.GetDirectoryName(testBin)!;
+        var testRoot    = Path.GetDirectoryName(testProjDir)!;
+        var repoRoot    = Path.GetDirectoryName(testRoot)!;
+        var binaryName  = OperatingSystem.IsWindows() ? "kcap.exe" : "kcap";
+        return Path.Combine(repoRoot, "src", "Capacitor.Cli", "bin", config, "net10.0", binaryName);
+    }
+
+    /// <summary>Spawns <c>kcap mcp review</c> (argless / auto PR-detection) against WireMock.</summary>
+    Process SpawnMcpServer(string provider = "None") {
+        _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody($$"""{"provider":"{{provider}}"}"""));
+
+        var binary = GetCliBinaryPath();
+
+        if (!File.Exists(binary)) {
+            throw new FileNotFoundException(
+                $"kcap binary not found at {binary}. Build it first: " +
+                "dotnet build src/Capacitor.Cli/Capacitor.Cli.csproj",
+                binary
+            );
+        }
+
+        var psi = new ProcessStartInfo(binary, "mcp review") {
+            RedirectStandardInput  = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false,
+            CreateNoWindow         = true,
+            WorkingDirectory       = _cwdDir,
+            Environment = {
+                ["KCAP_URL"]        = _server.Url!,
+                ["KCAP_CONFIG_DIR"] = _cfgDir
+            }
+        };
+
+        var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start kcap process");
+        _spawnedProcesses.Add(process);
+        return process;
+    }
+
+    static async Task<JsonObject> SendRequest(Process proc, JsonObject request, TimeSpan? timeout = null) {
+        await proc.StandardInput.WriteLineAsync(request.ToJsonString());
+        await proc.StandardInput.FlushAsync();
+
+        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(15));
+        var line      = await proc.StandardOutput.ReadLineAsync(cts.Token);
+
+        if (line is null) {
+            var stderr = await proc.StandardError.ReadToEndAsync();
+            throw new InvalidOperationException($"MCP server closed stdout without responding. Stderr: {stderr}");
+        }
+
+        return JsonNode.Parse(line)?.AsObject()
+            ?? throw new InvalidOperationException($"Could not parse response as JSON object: {line}");
+    }
+
+    static async Task ShutdownAsync(Process proc) {
+        try { proc.StandardInput.Close(); } catch { /* already closed */ }
+        try {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await proc.WaitForExitAsync(cts.Token);
+        } catch {
+            try { proc.Kill(entireProcessTree: true); } catch { /* best effort */ }
+        }
+    }
+
+    static JsonObject InitializeRequest(int id) => new() {
+        ["jsonrpc"] = "2.0",
+        ["id"]      = id,
+        ["method"]  = "initialize",
+        ["params"]  = new JsonObject()
+    };
+
+    static JsonObject ToolsListRequest(int id) => new() {
+        ["jsonrpc"] = "2.0",
+        ["id"]      = id,
+        ["method"]  = "tools/list",
+        ["params"]  = new JsonObject()
+    };
+
+    [Test]
+    public async Task Initialize_returns_kcap_review_server_info() {
+        using var proc = SpawnMcpServer();
+        try {
+            var response = await SendRequest(proc, InitializeRequest(1));
+
+            await Assert.That(response["id"]?.GetValue<int>()).IsEqualTo(1);
+            var result = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["serverInfo"]?["name"]?.GetValue<string>()).IsEqualTo("kcap-review");
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    [Test]
+    public async Task Tools_list_returns_review_tools() {
+        using var proc = SpawnMcpServer();
+        try {
+            var response = await SendRequest(proc, ToolsListRequest(2));
+
+            var tools = response["result"]?["tools"]?.AsArray();
+            await Assert.That(tools).IsNotNull();
+
+            var names = tools!.Select(t => t?["name"]?.GetValue<string>()).ToHashSet();
+            await Assert.That(names.Contains("get_pr_summary")).IsTrue();
+            await Assert.That(names.Contains("get_transcript")).IsTrue();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
+    /// Regression: kcap-review auto-registers via the plugin manifest, so Claude Code / Codex
+    /// spawn `kcap mcp review` for every session. initialize / tools/list must stay local-only —
+    /// the authenticated client (and its GET /auth/config round-trip + re-auth stderr hint) is
+    /// created lazily on the first tools/call, so sessions that never use a review tool pay
+    /// nothing. Mirrors McpSessionsServer / McpFlowsServer.
+    /// </summary>
+    [Test]
+    public async Task Initialize_and_tools_list_do_not_consult_auth() {
+        using var proc = SpawnMcpServer(provider: "GitHub");
+        try {
+            await SendRequest(proc, InitializeRequest(1));
+            await SendRequest(proc, ToolsListRequest(2));
+
+            var authHits = _server.FindLogEntries(Request.Create().WithPath("/auth/config").UsingGet());
+            await Assert.That(authHits.Count).IsEqualTo(0);
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+}
