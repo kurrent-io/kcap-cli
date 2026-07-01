@@ -1,3 +1,0 @@
-Baseline: Tests.Unit 2056/2056 green
-Task 1: complete (5255cd5e, controller-verified vs plan + Tests.Unit 2062/2062)
-Task 2: complete (92b8cbd5, controller-verified placement + Tests.Unit 2065/2065)
