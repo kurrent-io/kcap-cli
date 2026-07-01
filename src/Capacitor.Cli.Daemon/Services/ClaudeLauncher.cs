@@ -13,11 +13,18 @@ internal sealed partial class ClaudeLauncher(
 
     public string Vendor  => "claude";
     public string CliPath => config.ClaudePath;
+    public bool   SupportsUnattended => true;
 
     public bool IsAvailable() => CliResolver.Exists(CliPath);
 
     static readonly Lock                  TrustWriteLock   = new();
     static readonly JsonSerializerOptions IndentedJsonOpts = new() { WriteIndented = true };
+
+    // Strict + empty MCP config: --strict-mcp-config makes this authoritative (ignores
+    // ~/.claude.json and project .mcp.json), and the empty map loads zero servers — so an
+    // unattended review-flow reviewer cannot recursively invoke kcap-flows. Emitted as a
+    // constant string (not a built JsonNode) to stay AOT-safe.
+    const string EmptyMcpConfig = """{"mcpServers":{}}""";
 
     public void Prepare(LauncherContext ctx) {
         // A borrowed cwd is the user's own, already-trusted, already-configured repo — do
@@ -77,6 +84,18 @@ internal sealed partial class ClaudeLauncher(
                 args.Add(ctx.Model);
             }
         } else {
+            // Review-flow reviewers (LaunchKind.ReviewFlow) run unattended: no permission
+            // prompts (writes stay confined to the daemon-owned, throwaway worktree) and NO
+            // MCP servers, so the reviewer can't recursively start a nested review flow.
+            // Interactive (Default) agents keep prompts + their configured MCP servers.
+            if (ctx.IsReviewFlow) {
+                args.Add("--permission-mode");
+                args.Add("bypassPermissions");
+                args.Add("--strict-mcp-config");
+                args.Add("--mcp-config");
+                args.Add(EmptyMcpConfig);
+            }
+
             if (!string.IsNullOrEmpty(ctx.Effort)) {
                 args.Add("--effort");
                 args.Add(ctx.Effort);

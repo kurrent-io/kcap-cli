@@ -13,6 +13,7 @@ internal sealed partial class CodexLauncher(
     ) : IHostedAgentLauncher {
     public string Vendor  => "codex";
     public string CliPath => config.CodexPath;
+    public bool   SupportsUnattended => true;
 
     public bool IsAvailable() => CliResolver.Exists(CliPath);
 

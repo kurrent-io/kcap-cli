@@ -506,6 +506,7 @@ public partial class AgentOrchestratorVendorTests {
     sealed class SpyHostedAgentLauncher(string vendor, string cliPath) : IHostedAgentLauncher {
         public string Vendor  { get; } = vendor;
         public string CliPath { get; } = cliPath;
+        public bool   SupportsUnattended => true;
 
         public int        PrepareCalls   { get; private set; }
         public int        BuildArgsCalls { get; private set; }
