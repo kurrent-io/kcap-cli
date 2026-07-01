@@ -32,32 +32,36 @@ static class McpReviewServer {
 
         var tools = BuildToolsList();
 
-        // Defer the authenticated-client creation until the first tools/call. kcap-review
-        // auto-registers via the plugin manifest, so Claude Code (and Codex) spawn
-        // `kcap mcp review` for every session; an eager CreateAuthenticatedClientAsync — which
-        // does a GET /auth/config round-trip + token load, and prints a re-auth hint to stderr
-        // when not logged in — would charge every session that work even when no review tool is
-        // invoked. initialize / tools/list need no auth, so startup stays local-only. Mirrors
-        // McpSessionsServer / McpFlowsServer.
-        var clientLazy = new Lazy<Task<HttpClient>>(() => HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl));
-
         // Validate the server_url shape once, locally (pure string check — no network, token,
         // or stderr). Used to fail gracefully instead of hard-exiting mid-request (below).
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
 
-        // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request.
-        // An unusable server_url would otherwise reach EnsureAbsolute inside the lazy
-        // auth-client factory, which hard-exits the process (Environment.Exit(2)) mid-request;
-        // and an unexpected client-creation/token failure would bubble out of the loop. Return
-        // a JSON-RPC tool error in both cases so the server keeps serving.
+        // The authenticated client is created on the first tools/call, not at startup:
+        // kcap-review auto-registers, so Claude Code (and Codex) spawn `kcap mcp review` for
+        // every session — deferring keeps startup local-only (no GET /auth/config, token load,
+        // or stderr re-auth hint) for sessions that never invoke a review tool. Created on demand
+        // into a nullable field (rather than a Lazy<Task>) so a transient creation failure leaves
+        // it null and the next call retries, instead of a faulted task sticking for the rest of
+        // the session. Safe without locking: the stdio loop handles one request at a time.
+        HttpClient? client = null;
+
+        // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request. An
+        // unusable server_url would otherwise reach EnsureAbsolute inside the auth-client factory,
+        // which hard-exits the process (Environment.Exit(2)) mid-request; and an unexpected
+        // failure would bubble out of the loop. Return a JSON-RPC tool error in both cases so the
+        // server keeps serving.
         async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
             if (!urlOk)
                 return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
             try {
-                return await HandleToolCallAsync(callId, callRequest, await clientLazy.Value, baseUrl, sessionDefault);
+                client ??= await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
+                return await HandleToolCallAsync(callId, callRequest, client, baseUrl, sessionDefault);
             } catch (Exception ex) {
-                return BuildToolResult(callId, $"Error: {ex.Message}", isError: true);
+                // Unexpected: log the detail to stderr (not to the client, which could leak local
+                // paths from IO errors) and return a generic tool error, keeping the loop alive.
+                await Console.Error.WriteLineAsync($"kcap mcp review: unexpected error handling tools/call: {ex}");
+                return BuildToolResult(callId, "Error: internal error handling the request.", isError: true);
             }
         }
 
@@ -97,8 +101,8 @@ static class McpReviewServer {
                 await writer.WriteLineAsync(response);
             }
         } finally {
-            if (clientLazy.IsValueCreated) {
-                try { (await clientLazy.Value).Dispose(); } catch {
+            if (client is not null) {
+                try { client.Dispose(); } catch {
                     /* swallow — best-effort cleanup */
                 }
             }
