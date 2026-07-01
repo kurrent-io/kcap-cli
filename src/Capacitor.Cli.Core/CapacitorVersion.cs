@@ -23,9 +23,16 @@ public static class CapacitorVersion {
     /// markers and other machine-consumed identifiers that must match across
     /// installers exactly.
     /// </summary>
-    public static string CurrentDisplay() {
-        var v    = Current();
-        var plus = v.IndexOf('+');
-        return plus >= 0 ? v[..plus] : v;
+    public static string CurrentDisplay() => Display(Current());
+
+    /// <summary>
+    /// Strips the <c>+buildmetadata</c> suffix from an arbitrary version string
+    /// so the raw commit SHA from MinVer's semver doesn't leak into user-facing
+    /// output. Used for <see cref="CurrentDisplay"/> and to render another
+    /// process's reported version (e.g. the daemon's, on <c>kcap daemon status</c>).
+    /// </summary>
+    public static string Display(string version) {
+        var plus = version.IndexOf('+');
+        return plus >= 0 ? version[..plus] : version;
     }
 }

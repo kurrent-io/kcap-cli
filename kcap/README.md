@@ -122,7 +122,7 @@ kcap/
   .codex-plugin/
     plugin.json          — Codex manifest (refs ./.codex-mcp.json)
   .mcp.json              — Claude MCP servers (camelCase mcpServers shape)
-  .codex-mcp.json        — Codex MCP servers (snake_case mcp_servers shape)
+  .codex-mcp.json        — Codex plugin MCP servers (also camelCase mcpServers shape)
   hooks/
     hooks.json           — Hook definitions for all Claude lifecycle events
   skills/

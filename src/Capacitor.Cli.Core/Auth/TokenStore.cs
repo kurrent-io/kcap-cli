@@ -50,21 +50,71 @@ public static class TokenStore {
         return Path.Combine(TokenDir, $"{profile}.json");
     }
 
+    enum TokenFileState { Missing, Unusable, Loaded }
+
+    // Reads a token file, distinguishing a genuinely-absent file (Missing — a pre-upgrade
+    // install may still warrant the legacy fallback) from a present-but-unparseable one
+    // (Unusable — corrupt/empty/hand-edited → "not authenticated", never resurrect stale
+    // legacy creds). A corrupt file degrades to "run kcap login" instead of throwing
+    // JsonException out of every command, hook, the daemon, and MCP; the next successful
+    // login/refresh overwrites it. FileNotFound/DirectoryNotFound (a logout deleting the
+    // file mid-read) is Missing, not a crash — but real IO/permission faults still
+    // propagate and must not be masked as unauthenticated.
+    static async Task<(TokenFileState State, StoredTokens? Tokens)> ReadTokenFileAsync(string path) {
+        string json;
+        try {
+            json = await File.ReadAllTextAsync(path);
+        } catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) {
+            return (TokenFileState.Missing, null);
+        }
+
+        try {
+            var tokens = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.StoredTokens);
+            return tokens is null ? (TokenFileState.Unusable, null) : (TokenFileState.Loaded, tokens);
+        } catch (JsonException) {
+            return (TokenFileState.Unusable, null);
+        }
+    }
+
     // ── Profile-aware overloads ──────────────────────────────────────────────
 
     public static async Task<StoredTokens?> LoadAsync(string profile) {
-        var path = ProfileTokenPath(profile);
-        if (!File.Exists(path)) return null;
-        var json = await File.ReadAllTextAsync(path);
-        return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.StoredTokens);
+        // Missing and Unusable both mean "no usable creds for this profile" → null.
+        var (_, tokens) = await ReadTokenFileAsync(ProfileTokenPath(profile));
+        return tokens;
     }
 
     public static async Task SaveAsync(string profile, StoredTokens tokens) {
         Directory.CreateDirectory(TokenDir);
         var path     = ProfileTokenPath(profile);
-        var tempPath = $"{path}.tmp";
-        await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(tokens, CapacitorJsonContext.Default.StoredTokens));
-        File.Move(tempPath, path, overwrite: true);
+        // Unique per write so concurrent writers (hooks/watcher/daemon/MCP/login share this
+        // store) never write the same temp file and splice each other's bytes. The atomic
+        // File.Move then publishes one complete document, last-writer-wins.
+        var tempPath = $"{path}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+
+        // Create the temp owner-only from the very first byte. A chmod *after* writing would
+        // leave a window where the token secret exists group/world-readable under the process
+        // umask (and a crash in that window leaks a readable temp). UnixCreateMode applies the
+        // mode at creation; it is ignored on Windows, so set it only on Unix. The rename then
+        // carries 0600 onto the final file.
+        var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write, Share = FileShare.None };
+        if (!OperatingSystem.IsWindows()) {
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        }
+
+        try {
+            await using (var stream = new FileStream(tempPath, options))
+            await using (var writer = new StreamWriter(stream)) {
+                await writer.WriteAsync(JsonSerializer.Serialize(tokens, CapacitorJsonContext.Default.StoredTokens));
+            }
+            await ReplaceWithRetryAsync(tempPath, path);
+        } finally {
+            // Success renames the temp away; only a failed write/move leaves it. Unlike the
+            // old shared name, a leaked unique temp never gets reused, so clean it up.
+            if (File.Exists(tempPath)) {
+                try { File.Delete(tempPath); } catch { /* best-effort */ }
+            }
+        }
 
         if (!OperatingSystem.IsWindows()) {
             File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
@@ -76,22 +126,71 @@ public static class TokenStore {
         }
     }
 
+    // Atomically publish the completed temp over the target. On POSIX rename() is atomic and
+    // tolerant of a concurrent writer holding the target open, so this succeeds first try. On
+    // Windows the replace opens the target with exclusive sharing (the default), so when peers
+    // (hooks/watcher/daemon/MCP/login share this store) publish the same profile at once the
+    // loser hits ACCESS_DENIED / a sharing violation (UnauthorizedAccessException or IOException)
+    // — a transient collision, not a real fault. Retry a bounded number of times with a short
+    // backoff; a genuine, persistent failure (e.g. the target is a directory) still surfaces by
+    // rethrowing after the budget is spent. File.Move(overwrite: true) is atomic on NTFS, so a
+    // reader only ever sees the old or the new complete document, never a splice.
+    const int ReplaceMaxAttempts   = 5;
+    const int ReplaceBackoffBaseMs = 20;
+
+    static async Task ReplaceWithRetryAsync(string tempPath, string path) {
+        for (var attempt = 1; ; attempt++) {
+            try {
+                File.Move(tempPath, path, overwrite: true);
+                return;
+            } catch (Exception ex) when ((ex is UnauthorizedAccessException or IOException)
+                                         && attempt < ReplaceMaxAttempts) {
+                // Linear backoff (20/40/60/80ms) to let the peer holding the target close it.
+                await Task.Delay(ReplaceBackoffBaseMs * attempt);
+            }
+        }
+    }
+
     public static void Delete(string profile) {
         var path = ProfileTokenPath(profile);
         if (File.Exists(path)) File.Delete(path);
+        SweepLeakedTemps(profile);
+    }
+
+    // Best-effort removal of temp files leaked by a crash between write and move
+    // ({profile}.json.{pid}.{guid}.tmp) — these carry token secrets. Pass a profile to
+    // scope to that profile's temps, or null to sweep all (logout). Matched by filename
+    // prefix (not a glob) so a profile name containing a wildcard char can't widen it.
+    static void SweepLeakedTemps(string? profile = null) {
+        if (!Directory.Exists(TokenDir)) return;
+        var prefix = profile is null ? null : $"{profile}.json.";
+        try {
+            foreach (var tmp in Directory.EnumerateFiles(TokenDir, "*.tmp")) {
+                if (prefix is null || Path.GetFileName(tmp).StartsWith(prefix, StringComparison.Ordinal)) {
+                    try { File.Delete(tmp); } catch { /* best-effort */ }
+                }
+            }
+        } catch { /* best-effort */ }
     }
 
     // ── Legacy (profile-resolving) overloads ────────────────────────────────
 
     public static async Task<StoredTokens?> LoadAsync() {
-        var profile    = await ResolveActiveProfileAsync();
-        var perProfile = await LoadAsync(profile);
-        if (perProfile is not null) return perProfile;
+        var profile           = await ResolveActiveProfileAsync();
+        var (state, tokens)   = await ReadTokenFileAsync(ProfileTokenPath(profile));
 
-        // Fall back to legacy single-file layout for pre-upgrade installs
-        if (!File.Exists(LegacyTokenPath)) return null;
-        var json = await File.ReadAllTextAsync(LegacyTokenPath);
-        return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.StoredTokens);
+        if (state == TokenFileState.Loaded) return tokens;
+
+        // Only a genuinely-absent per-profile file means "pre-upgrade install" and
+        // warrants the legacy single-file fallback. A present-but-corrupt active file is
+        // "not authenticated" — do NOT resurrect stale credentials from a legacy file
+        // whose best-effort deletion previously failed.
+        if (state == TokenFileState.Missing) {
+            var (_, legacy) = await ReadTokenFileAsync(LegacyTokenPath);
+            return legacy;
+        }
+
+        return null; // Unusable (corrupt) active profile
     }
 
     public static async Task SaveAsync(StoredTokens tokens) {
@@ -111,6 +210,9 @@ public static class TokenStore {
                 }
             } catch { /* best-effort */ }
         }
+
+        // Also remove any leaked temps (they carry token secrets) so logout leaves nothing behind.
+        SweepLeakedTemps();
 
         return Task.CompletedTask;
     }

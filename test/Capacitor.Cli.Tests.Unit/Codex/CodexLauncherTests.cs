@@ -12,9 +12,10 @@ public class CodexLauncherTests {
         new(new DaemonConfig { CodexPath = "codex" }, NullLogger<CodexLauncher>.Instance);
 
     static LauncherContext NewCtx(
-        string? prompt = null,
-        string  model  = "gpt-5.3-codex",
-        string? effort = null
+        string? prompt       = null,
+        string  model        = "gpt-5.3-codex",
+        string? effort       = null,
+        bool    isReviewFlow = false
     ) => new(
         AgentId: "a-1",
         SourceRepoPath: "/tmp/repo",
@@ -24,17 +25,30 @@ public class CodexLauncherTests {
         Effort: effort,
         Tools: null,
         IsReview: false,
+        IsReviewFlow: isReviewFlow,
         Review: null,
         ReviewLaunch: null
     );
 
     [Test]
-    public async Task BuildArgs_includes_workspace_write_sandbox_and_on_request_approval() {
-        var args = NewLauncher().BuildArgs(NewCtx()).Args;
+    public async Task BuildArgs_uses_never_approval_for_hosted_codex() {
+        var args = NewLauncher().BuildArgs(NewCtx(isReviewFlow: true)).Args;
         await Assert.That(args).Contains("--sandbox");
         await Assert.That(args).Contains("workspace-write");
         await Assert.That(args).Contains("--ask-for-approval");
+        await Assert.That(args).Contains("never");
+        await Assert.That(args).DoesNotContain("on-request");
+    }
+
+    [Test]
+    public async Task BuildArgs_uses_on_request_and_keeps_mcp_for_default_kind() {
+        // Interactive (non review-flow) hosted Codex agents stay user-in-the-loop:
+        // on-request approval and their configured MCP servers (no mcp_servers={} clear).
+        var args = NewLauncher().BuildArgs(NewCtx()).Args;
+        await Assert.That(args).Contains("--ask-for-approval");
         await Assert.That(args).Contains("on-request");
+        await Assert.That(args).DoesNotContain("never");
+        await Assert.That(string.Join(' ', args)).DoesNotContain("mcp_servers={}");
     }
 
     [Test]
@@ -89,6 +103,23 @@ public class CodexLauncherTests {
         var mIdx = Array.IndexOf(args, "-m");
         await Assert.That(mIdx).IsGreaterThan(-1);
         await Assert.That(args[mIdx + 1]).IsEqualTo("gpt-5.4");
+    }
+
+    [Test]
+    public async Task BuildArgs_omits_model_when_default_sentinel() {
+        var args = NewLauncher().BuildArgs(NewCtx(model: "default")).Args;
+        await Assert.That(Array.IndexOf(args, "-m")).IsEqualTo(-1);
+        await Assert.That(args).DoesNotContain("default");
+    }
+
+    [Test]
+    public async Task BuildArgs_clears_mcp_servers() {
+        var args   = NewLauncher().BuildArgs(NewCtx(isReviewFlow: true)).Args;
+        var joined = string.Join(' ', args);
+        await Assert.That(joined).Contains("mcp_servers={}");
+        var cIdx = Array.IndexOf(args, "-c");
+        await Assert.That(cIdx).IsGreaterThan(-1);
+        await Assert.That(args[cIdx + 1]).IsEqualTo("mcp_servers={}");
     }
 
     [Test]
@@ -248,6 +279,7 @@ public class CodexLauncherTests {
         Effort: null,
         Tools: null,
         IsReview: false,
+        IsReviewFlow: false,
         Review: null,
         ReviewLaunch: null
     );
@@ -267,6 +299,7 @@ public class CodexLauncherTests {
             Effort: null,
             Tools: null,
             IsReview: true,
+            IsReviewFlow: false,
             Review: new ReviewLaunchInfo("acme", "widgets", 42),
             ReviewLaunch: new ReviewLaunchBuilder.ReviewLaunch(McpConfigPath: null, SystemPrompt: prompt, Mcp: mcp));
     }
@@ -323,6 +356,7 @@ public class CodexLauncherTests {
             Effort: null,
             Tools: null,
             IsReview: true,
+            IsReviewFlow: false,
             Review: new ReviewLaunchInfo("acme", "widgets", 42),
             ReviewLaunch: new ReviewLaunchBuilder.ReviewLaunch(McpConfigPath: null, SystemPrompt: "p", Mcp: mcp));
 

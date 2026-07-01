@@ -1,5 +1,5 @@
 {
-  "mcp_servers": {
+  "mcpServers": {
     "kcap-review": {
       "command": "kcap",
       "args": ["mcp", "review"]

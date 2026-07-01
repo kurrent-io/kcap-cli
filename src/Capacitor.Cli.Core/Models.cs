@@ -716,6 +716,10 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(RepoEntry[]))]
 [JsonSerializable(typeof(CurationApplyResponse))]
 [JsonSerializable(typeof(CurationApplyItem))]
+[JsonSerializable(typeof(Auth.ProvisionRequest))]
+[JsonSerializable(typeof(Auth.ProvisionResponse))]
+[JsonSerializable(typeof(Auth.AvailabilityResponse))]
+[JsonSerializable(typeof(Auth.StatusResponse))]
 // UseStringEnumConverter=true matches the server's SignalR JSON protocol, which
 // serialises enums (e.g. LaunchKind) as camelCase strings. Without it the
 // source-gen LaunchKind JsonTypeInfo defaults to numeric and silently drops the
@@ -782,11 +786,15 @@ public readonly record struct LaunchAgentCommand(
 /// <summary>
 /// Discriminator for daemon launch commands. <see cref="Default"/> preserves
 /// the existing prompt-driven launch; <see cref="Review"/> uses
-/// <see cref="ReviewLaunchInfo"/> + <c>BaseRef</c> to drive a hosted PR review.
+/// <see cref="ReviewLaunchInfo"/> + <c>BaseRef</c> to drive a hosted PR review;
+/// <see cref="ReviewFlow"/> (AI-1089) marks a durable agent-review-flow reviewer, which the
+/// daemon runs unattended (never approval + no MCP). The value crosses the CLI↔server wire, so
+/// it MUST stay Default=0, Review=1, ReviewFlow=2.
 /// </summary>
 public enum LaunchKind {
-    Default = 0,
-    Review  = 1
+    Default    = 0,
+    Review     = 1,
+    ReviewFlow = 2
 }
 
 public readonly record struct ReviewLaunchInfo(

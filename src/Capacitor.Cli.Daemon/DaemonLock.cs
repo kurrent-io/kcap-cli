@@ -26,27 +26,34 @@ internal sealed class DaemonLock : IDisposable {
     readonly FileStream _stream;
     readonly string     _pidPath;
     readonly string     _lockPath;
+    readonly string     _versionPath;
     bool                _disposed;
 
     public string InstanceId { get; }
 
-    DaemonLock(FileStream stream, string lockPath, string pidPath, string instanceId) {
-        _stream    = stream;
-        _lockPath  = lockPath;
-        _pidPath   = pidPath;
-        InstanceId = instanceId;
+    DaemonLock(FileStream stream, string lockPath, string pidPath, string versionPath, string instanceId) {
+        _stream      = stream;
+        _lockPath    = lockPath;
+        _pidPath     = pidPath;
+        _versionPath = versionPath;
+        InstanceId   = instanceId;
     }
 
     /// <summary>
     /// Try to acquire the per-name lock for <paramref name="daemonName"/>.
     /// Returns null when another live daemon already holds the lock — the
     /// caller should print a "name in use" message and exit with code 2.
+    ///
+    /// <para>When <paramref name="version"/> is supplied, also writes the
+    /// freely-readable <c>&lt;name&gt;.version</c> marker so <c>kcap daemon
+    /// status</c> can report the running daemon's version.</para>
     /// </summary>
-    public static DaemonLock? TryAcquire(string daemonName) {
+    public static DaemonLock? TryAcquire(string daemonName, string? version = null) {
         DaemonLockPaths.EnsureDirectory();
 
-        var lockPath = DaemonLockPaths.LockPath(daemonName);
-        var pidPath  = DaemonLockPaths.PidPath(daemonName);
+        var lockPath    = DaemonLockPaths.LockPath(daemonName);
+        var pidPath     = DaemonLockPaths.PidPath(daemonName);
+        var versionPath = DaemonLockPaths.VersionPath(daemonName);
 
         FileStream stream;
 
@@ -78,19 +85,28 @@ internal sealed class DaemonLock : IDisposable {
             throw;
         }
 
-        return new DaemonLock(stream, lockPath, pidPath, instanceId);
+        // Overwrite (atomically) any stale version marker with ours. A successor
+        // of a restart-after-update lands here and refreshes it to the new
+        // binary's version. Best-effort and OUTSIDE the fatal try above: the
+        // marker is observability-only (`kcap daemon status`), so an IO failure
+        // writing it must never abort acquisition the way a lock/pid failure does.
+        if (version is not null) {
+            try { DaemonVersionMarker.Write(daemonName, version); } catch { /* best-effort */ }
+        }
+
+        return new DaemonLock(stream, lockPath, pidPath, versionPath, instanceId);
     }
 
     /// <summary>
-    /// Like <see cref="TryAcquire(string)"/> but retries until <paramref name="awaitTimeout"/>
+    /// Like <see cref="TryAcquire(string, string?)"/> but retries until <paramref name="awaitTimeout"/>
     /// elapses — used by a self-respawned successor (<c>--await-lock</c>) to wait out the
     /// outgoing daemon's flock instead of exiting with code 2 on the first contended attempt.
     /// </summary>
-    public static DaemonLock? TryAcquire(string daemonName, TimeSpan awaitTimeout) {
+    public static DaemonLock? TryAcquire(string daemonName, TimeSpan awaitTimeout, string? version = null) {
         var deadline = DateTime.UtcNow + awaitTimeout;
 
         while (true) {
-            if (TryAcquire(daemonName) is { } locked) return locked;
+            if (TryAcquire(daemonName, version) is { } locked) return locked;
             if (DateTime.UtcNow >= deadline) return null;
             Thread.Sleep(100);
         }
@@ -128,10 +144,17 @@ internal sealed class DaemonLock : IDisposable {
         // Delete the PID file only if it still points to our own PID. A
         // legitimate successor daemon that ran while we were disposing
         // would have already rewritten the file to its own PID, and an
-        // unconditional Delete here would orphan their entry.
-        try {
-            if (PidFileMatchesCurrentProcess(_pidPath)) File.Delete(_pidPath);
-        } catch { /* best-effort */ }
+        // unconditional Delete here would orphan their entry. The version
+        // marker follows the SAME ownership guard: if a successor has taken
+        // over the name it has already written its own version marker, so
+        // deleting here would clobber the successor's fresh value.
+        bool ours;
+        try { ours = PidFileMatchesCurrentProcess(_pidPath); } catch { ours = false; }
+
+        if (ours) {
+            try { File.Delete(_pidPath); } catch { /* best-effort */ }
+            try { File.Delete(_versionPath); } catch { /* best-effort */ }
+        }
     }
 
     static bool PidFileMatchesCurrentProcess(string pidPath) {

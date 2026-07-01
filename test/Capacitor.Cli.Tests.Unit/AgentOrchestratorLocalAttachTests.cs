@@ -22,7 +22,7 @@ public partial class AgentOrchestratorVendorTests {
     static DaemonConfig LauncherCfg() => new() { Name = "t", ServerUrl = "http://127.0.0.1:1" };
 
     static LauncherContext CtxFor(string path)
-        => new("a", path, new WorktreeInfo(path, "", path, IsStandalone: true), null, "", null, null, false, null, null) {
+        => new("a", path, new WorktreeInfo(path, "", path, IsStandalone: true), null, "", null, null, false, false, null, null) {
             Work = WorkLocation.BorrowedCwd
         };
 

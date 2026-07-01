@@ -592,6 +592,74 @@ public class PluginCommandCodexInstallIntegrationTests {
         await Assert.That(stderr).Contains("Cannot install Codex plugin");
     }
 
+    [Test]
+    public async Task InstallCodex_registers_mcp_servers_in_config_toml() {
+        using var fakeHome   = new TempDir();
+        using var pluginRoot = new TempDir();
+        PlantFakePlugin(pluginRoot.Path);
+
+        var exit = await PluginCommand.HandleAsync(
+            ["plugin", "install", "--codex"], TestEnv(fakeHome.Path, pluginRoot.Path));
+        await Assert.That(exit).IsEqualTo(0);
+
+        var configPath = Path.Combine(fakeHome.Path, ".codex", "config.toml");
+        var toml       = await File.ReadAllTextAsync(configPath);
+        await Assert.That(toml).Contains("[mcp_servers.kcap-review]");
+        await Assert.That(toml).Contains("[mcp_servers.kcap-sessions]");
+    }
+
+    [Test]
+    public async Task RemoveCodex_user_scope_removes_mcp_servers_preserving_user_entries() {
+        using var fakeHome = new TempDir();
+        var configPath = SeedCodexConfigWithKcapServers(fakeHome.Path);
+
+        var exit = await PluginCommand.HandleAsync(
+            ["plugin", "remove", "--codex"], TestEnv(fakeHome.Path));
+        await Assert.That(exit).IsEqualTo(0);
+
+        var toml = await File.ReadAllTextAsync(configPath);
+        await Assert.That(toml).DoesNotContain("kcap-review");
+        await Assert.That(toml).DoesNotContain("kcap-sessions");
+        await Assert.That(toml).Contains("my-tool"); // user's server preserved
+    }
+
+    [Test]
+    public async Task RemoveCodex_project_scope_leaves_user_global_mcp_servers() {
+        // Regression: a project-scoped uninstall must NOT strip the user-global
+        // kcap MCP servers, which every other repo relies on.
+        using var fakeHome = new TempDir();
+        var configPath = SeedCodexConfigWithKcapServers(fakeHome.Path);
+        var before     = await File.ReadAllTextAsync(configPath);
+
+        var exit = await PluginCommand.HandleAsync(
+            ["plugin", "remove", "--codex", "--project"], TestEnv(fakeHome.Path));
+        await Assert.That(exit).IsEqualTo(0);
+
+        // config.toml is untouched — the user-global servers survive.
+        await Assert.That(await File.ReadAllTextAsync(configPath)).IsEqualTo(before);
+    }
+
+    static string SeedCodexConfigWithKcapServers(string fakeHome) {
+        var codexDir = Path.Combine(fakeHome, ".codex");
+        Directory.CreateDirectory(codexDir);
+        var configPath = Path.Combine(codexDir, "config.toml");
+        File.WriteAllText(configPath,
+            """
+            [mcp_servers.kcap-review]
+            command = "kcap"
+            args = ["mcp", "review"]
+
+            [mcp_servers.kcap-sessions]
+            command = "kcap"
+            args = ["mcp", "sessions"]
+
+            [mcp_servers.my-tool]
+            command = "my-tool"
+            args = ["serve"]
+            """);
+        return configPath;
+    }
+
     static void PlantFakePlugin(string pluginRoot) {
         var skillsSrc = Path.Combine(pluginRoot, "skills");
         Directory.CreateDirectory(skillsSrc);
