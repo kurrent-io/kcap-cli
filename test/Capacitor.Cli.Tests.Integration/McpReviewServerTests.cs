@@ -66,8 +66,12 @@ public class McpReviewServerTests : IDisposable {
         return Path.Combine(repoRoot, "src", "Capacitor.Cli", "bin", config, "net10.0", binaryName);
     }
 
-    /// <summary>Spawns <c>kcap mcp review</c> (argless / auto PR-detection) against WireMock.</summary>
-    Process SpawnMcpServer(string provider = "None") {
+    /// <summary>
+    /// Spawns <c>kcap mcp review</c> (argless / auto PR-detection) against WireMock.
+    /// <paramref name="urlOverride"/> replaces the WireMock URL (used to exercise the
+    /// invalid-server_url path).
+    /// </summary>
+    Process SpawnMcpServer(string provider = "None", string? urlOverride = null) {
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody($$"""{"provider":"{{provider}}"}"""));
 
@@ -89,7 +93,7 @@ public class McpReviewServerTests : IDisposable {
             CreateNoWindow         = true,
             WorkingDirectory       = _cwdDir,
             Environment = {
-                ["KCAP_URL"]        = _server.Url!,
+                ["KCAP_URL"]        = urlOverride ?? _server.Url!,
                 ["KCAP_CONFIG_DIR"] = _cfgDir
             }
         };
@@ -187,6 +191,39 @@ public class McpReviewServerTests : IDisposable {
 
             var authHits = _server.FindLogEntries(Request.Create().WithPath("/auth/config").UsingGet());
             await Assert.That(authHits.Count).IsEqualTo(0);
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
+    /// A scheme-less server_url would otherwise reach EnsureAbsolute inside the lazy auth-client
+    /// factory and hard-exit the process (Environment.Exit(2)) mid-request. The startup URL
+    /// guard turns it into a graceful JSON-RPC tool error, and the server keeps serving.
+    /// </summary>
+    [Test]
+    public async Task Tool_call_with_invalid_server_url_returns_error_and_server_survives() {
+        using var proc = SpawnMcpServer(urlOverride: "not-a-valid-url");
+        try {
+            await SendRequest(proc, InitializeRequest(1));
+
+            var call = new JsonObject {
+                ["jsonrpc"] = "2.0",
+                ["id"]      = 2,
+                ["method"]  = "tools/call",
+                ["params"]  = new JsonObject {
+                    ["name"]      = "get_pr_summary",
+                    ["arguments"] = new JsonObject()
+                }
+            };
+            var response = await SendRequest(proc, call);
+            var result   = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["isError"]?.GetValue<bool>()).IsTrue();
+
+            // Server survived the bad request — a follow-up still gets a response.
+            var again = await SendRequest(proc, ToolsListRequest(3));
+            await Assert.That(again["result"]?["tools"]).IsNotNull();
         } finally {
             await ShutdownAsync(proc);
         }
