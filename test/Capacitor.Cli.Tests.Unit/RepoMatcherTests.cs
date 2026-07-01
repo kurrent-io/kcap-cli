@@ -144,6 +144,16 @@ public class RepoMatcherTests {
     }
 
     [Test]
+    public async Task FindAsync_MatchingGitlabOrigin_ReturnsRoot() {
+        var repo = MakeTempRepo("git@gitlab.com:group/project.git");
+        try {
+            var result = await NewMatcher().FindAsync("group", "project", [repo], CancellationToken.None);
+
+            await Assert.That(result).Contains(Path.GetFullPath(repo));
+        } finally { Directory.Delete(repo, true); }
+    }
+
+    [Test]
     public async Task FindAsync_AllowedRepoPathsContributesCandidates() {
         var repo = MakeTempRepo("https://github.com/contoso/widgets.git");
         try {

@@ -13,7 +13,10 @@ namespace Capacitor.Cli.Daemon.Services;
 ///      plus the <see cref="DaemonConfig.AllowedRepoPaths"/> allowlist — and dedupes.
 ///   3. For each candidate it verifies the path exists on disk, walks up to the
 ///      nearest <c>.git</c> root, reads <c>origin</c>, and matches against
-///      <c>owner/repo</c>.
+///      <c>owner/repo</c>. Matching is host-agnostic: only the trailing
+///      <c>owner/repo</c> segment of the normalized remote is compared, so a
+///      GitHub, GitLab, Bitbucket, etc. origin all match the same way it's
+///      done for the host-agnostic <c>repo_hash</c>.
 ///   4. All confirmed git roots are returned (the user picks which one to review on).
 ///
 /// Normalized origin URLs are cached for <see cref="CacheTtl"/> per path to avoid
@@ -27,7 +30,7 @@ internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> log
     readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
 
     public async Task<string[]> FindAsync(string owner, string repo, string[] serverCandidates, CancellationToken ct) {
-        var target = $"github.com/{owner}/{repo}";
+        var target = $"{owner}/{repo}";
 
         var candidates = await MergeCandidatesAsync(serverCandidates);
         var matches    = new List<string>();
@@ -54,7 +57,8 @@ internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> log
                     continue;
                 }
 
-                if (string.Equals(remote, target, StringComparison.OrdinalIgnoreCase)) {
+                if (RemoteMatcher.PathAfterHost(remote) is { } path
+                    && string.Equals(path, target, StringComparison.OrdinalIgnoreCase)) {
                     matches.Add(root);
                 }
             } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
