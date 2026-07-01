@@ -25,14 +25,41 @@ static class McpReviewServer {
     public static Task<int> RunAutoAsync(string baseUrl) => RunCoreAsync(baseUrl, null);
 
     static async Task<int> RunCoreAsync(string baseUrl, PrIdentity? startupDefault) {
-        using var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
-
         // Compute the session default once: explicit startup args win; otherwise
-        // try git auto-detect. Result is cached for the lifetime of the server
+        // try git auto-detect (local). Result is cached for the lifetime of the server
         // and used as the fallback when a tool call doesn't carry an explicit `pr`.
         var sessionDefault = startupDefault ?? await DetectPrFromGitAsync();
 
         var tools = BuildToolsList();
+
+        // Defer the authenticated-client creation until the first tools/call. kcap-review
+        // auto-registers via the plugin manifest, so Claude Code (and Codex) spawn
+        // `kcap mcp review` for every session; an eager CreateAuthenticatedClientAsync — which
+        // does a GET /auth/config round-trip + token load, and prints a re-auth hint to stderr
+        // when not logged in — would charge every session that work even when no review tool is
+        // invoked. initialize / tools/list need no auth, so startup stays local-only. Mirrors
+        // McpSessionsServer / McpFlowsServer.
+        var clientLazy = new Lazy<Task<HttpClient>>(() => HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl));
+
+        // Validate the server_url shape once, locally (pure string check — no network, token,
+        // or stderr). Used to fail gracefully instead of hard-exiting mid-request (below).
+        var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
+
+        // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request.
+        // An unusable server_url would otherwise reach EnsureAbsolute inside the lazy
+        // auth-client factory, which hard-exits the process (Environment.Exit(2)) mid-request;
+        // and an unexpected client-creation/token failure would bubble out of the loop. Return
+        // a JSON-RPC tool error in both cases so the server keeps serving.
+        async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
+            if (!urlOk)
+                return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
+
+            try {
+                return await HandleToolCallAsync(callId, callRequest, await clientLazy.Value, baseUrl, sessionDefault);
+            } catch (Exception ex) {
+                return BuildToolResult(callId, $"Error: {ex.Message}", isError: true);
+            }
+        }
 
         await using var stdin  = Console.OpenStandardInput();
         await using var stdout = Console.OpenStandardOutput();
@@ -40,33 +67,41 @@ static class McpReviewServer {
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        while (await reader.ReadLineAsync() is { } line) {
-            if (string.IsNullOrWhiteSpace(line)) continue;
+        try {
+            while (await reader.ReadLineAsync() is { } line) {
+                if (string.IsNullOrWhiteSpace(line)) continue;
 
-            JsonObject? request;
+                JsonObject? request;
 
-            try {
-                request = JsonNode.Parse(line)?.AsObject();
-            } catch {
-                continue; // skip malformed JSON
+                try {
+                    request = JsonNode.Parse(line)?.AsObject();
+                } catch {
+                    continue; // skip malformed JSON
+                }
+
+                if (request is null) continue;
+
+                var id     = request["id"];
+                var method = request["method"]?.GetValue<string>();
+
+                // Notifications have no id — don't send a response
+                if (id is null) continue;
+
+                var response = method switch {
+                    "initialize" => BuildInitializeResponse(id),
+                    "tools/list" => BuildToolsListResponse(id, tools),
+                    "tools/call" => await DispatchToolCallAsync(id, request),
+                    _            => BuildErrorResponse(id, -32601, $"Method not found: {method}")
+                };
+
+                await writer.WriteLineAsync(response);
             }
-
-            if (request is null) continue;
-
-            var id     = request["id"];
-            var method = request["method"]?.GetValue<string>();
-
-            // Notifications have no id — don't send a response
-            if (id is null) continue;
-
-            var response = method switch {
-                "initialize" => BuildInitializeResponse(id),
-                "tools/list" => BuildToolsListResponse(id, tools),
-                "tools/call" => await HandleToolCallAsync(id, request, client, baseUrl, sessionDefault),
-                _            => BuildErrorResponse(id, -32601, $"Method not found: {method}")
-            };
-
-            await writer.WriteLineAsync(response);
+        } finally {
+            if (clientLazy.IsValueCreated) {
+                try { (await clientLazy.Value).Dispose(); } catch {
+                    /* swallow — best-effort cleanup */
+                }
+            }
         }
 
         return 0;

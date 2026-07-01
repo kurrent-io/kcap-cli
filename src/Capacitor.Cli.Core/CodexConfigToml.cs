@@ -25,6 +25,20 @@ public static class CodexConfigToml {
     static string DefaultConfigPath => Path.Combine(CodexPaths.Home(), "config.toml");
 
     /// <summary>
+    /// The kcap MCP servers auto-registered for Codex CLI in <c>~/.codex/config.toml</c>.
+    /// Codex reads MCP servers from the snake_case <c>[mcp_servers]</c> TOML table — note
+    /// this is NOT the camelCase <c>mcpServers</c> key used by the Claude/Codex plugin
+    /// *descriptor* JSON. <c>kcap-flows</c> is intentionally excluded: it launches a paid
+    /// hosted reviewer and stays Claude-only (AI-1056).
+    /// </summary>
+    static readonly (string Name, string[] Args)[] KcapMcpServers = [
+        ("kcap-review",   ["mcp", "review"]),
+        ("kcap-sessions", ["mcp", "sessions"])
+    ];
+
+    const string McpServerCommand = "kcap";
+
+    /// <summary>
     /// AI-794 — enable network access for Codex's <c>workspace-write</c> sandbox so
     /// kcap skills (which shell out to <c>kcap …</c>) can reach the Capacitor server.
     /// Codex blocks all sandbox network by default; a constrained
@@ -71,6 +85,49 @@ public static class CodexConfigToml {
     /// </summary>
     internal static Change TrustWorktree(string worktreePath, out Exception? error, string? configPath = null) =>
         Update(configPath ?? DefaultConfigPath, root => MutateTrust(root, worktreePath), out error);
+
+    /// <summary>
+    /// Registers the kcap MCP servers (<c>kcap-review</c>, <c>kcap-sessions</c>) under the
+    /// top-level <c>[mcp_servers]</c> table of <c>~/.codex/config.toml</c> (or
+    /// <paramref name="configPath"/>) so Codex CLI picks them up with no manual TOML edit.
+    /// Idempotent, and non-destructive: an entry that already exists (a prior registration
+    /// or a user customization such as an absolute-path <c>command</c>) is left untouched;
+    /// only missing servers are added. User-defined <c>mcp_servers</c> entries are preserved.
+    /// </summary>
+    public static Change RegisterKcapMcpServers(string? configPath = null) =>
+        Update(configPath ?? DefaultConfigPath, MutateRegisterMcpServers, out _);
+
+    /// <summary>
+    /// Removes the kcap-owned MCP server entries (<c>kcap-review</c>, <c>kcap-sessions</c>)
+    /// from <c>~/.codex/config.toml</c> (or <paramref name="configPath"/>). Only those names
+    /// are touched; user-defined servers are preserved. Drops the <c>[mcp_servers]</c> table
+    /// entirely when removing them empties it, so uninstall leaves no bare table behind.
+    /// </summary>
+    public static Change UnregisterKcapMcpServers(string? configPath = null) =>
+        Update(configPath ?? DefaultConfigPath, MutateUnregisterMcpServers, out _);
+
+    /// <summary>
+    /// Reads the top-level <c>model = "…"</c> key from <c>~/.codex/config.toml</c>
+    /// (or <paramref name="configPath"/>), honouring <c>CODEX_HOME</c> via
+    /// <see cref="CodexPaths.Home"/>. Returns null when the file is missing, unreadable,
+    /// has no top-level <c>model</c> key, or the value isn't a string — so callers can
+    /// fall back to the dispatched model. Read-only; never throws.
+    /// </summary>
+    public static string? ReadTopLevelModel(string? configPath = null) {
+        var path = configPath ?? DefaultConfigPath;
+
+        if (!File.Exists(path)) return null;
+
+        try {
+            var root = TomlSerializer.Deserialize(File.ReadAllText(path), _tomlTypeInfo.TableInfo);
+
+            return root is not null && root.TryGetValue("model", out var v) && v is string s && !string.IsNullOrWhiteSpace(s)
+                ? s
+                : null;
+        } catch {
+            return null;
+        }
+    }
 
     /// <summary>
     /// Builds the Codex proxy allowlist from a set of Capacitor server URLs (the
@@ -183,6 +240,57 @@ public static class CodexConfigToml {
         entry["trust_level"] = "trusted";
 
         return true;
+    }
+
+    static bool MutateRegisterMcpServers(TomlTable root) {
+        // If `mcp_servers` exists but isn't a table, refuse rather than let GetOrAddTable
+        // replace it — that would silently destroy the user's value and break the
+        // non-destructive contract. Update() turns this throw into Change.Failed, so the
+        // caller warns instead. (A non-table `mcp_servers` is an invalid Codex config, but
+        // we still won't clobber it.)
+        if (root.TryGetValue("mcp_servers", out var existing) && existing is not TomlTable)
+            throw new InvalidOperationException(
+                "~/.codex/config.toml has a non-table `mcp_servers` value; refusing to overwrite it.");
+
+        var servers = GetOrAddTable(root, "mcp_servers");
+        var changed = false;
+
+        foreach (var (name, args) in KcapMcpServers) {
+            // Never clobber an existing entry: a prior kcap registration is already
+            // correct, and a user may have customized it (e.g. an absolute-path command
+            // for a GUI host). Only create the server when it's missing entirely.
+            if (servers.ContainsKey(name)) continue;
+
+            var entry = new TomlTable {
+                ["command"] = McpServerCommand,
+                ["args"]    = ToTomlArray(args)
+            };
+            servers[name] = entry;
+            changed        = true;
+        }
+
+        return changed;
+    }
+
+    static bool MutateUnregisterMcpServers(TomlTable root) {
+        if (!root.TryGetValue("mcp_servers", out var sObj) || sObj is not TomlTable servers) return false;
+
+        var changed = false;
+
+        foreach (var (name, _) in KcapMcpServers)
+            if (servers.Remove(name)) changed = true;
+
+        // Don't leave a bare [mcp_servers] behind if we emptied it.
+        if (servers.Count == 0 && root.Remove("mcp_servers")) changed = true;
+
+        return changed;
+    }
+
+    static TomlArray ToTomlArray(string[] values) {
+        var arr = new TomlArray();
+        foreach (var v in values) arr.Add(v);
+
+        return arr;
     }
 
     static bool MutateNetworkAccess(TomlTable root, IReadOnlyCollection<string> allowDomains) {

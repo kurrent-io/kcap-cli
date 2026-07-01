@@ -196,6 +196,93 @@ public class DaemonLockTests {
         }
     }
 
+    /// <summary>
+    /// The daemon writes its version to a freely-readable <c>&lt;name&gt;.version</c>
+    /// marker at acquisition so <c>kcap daemon status</c> (a separate process) can
+    /// report the running daemon's version without contending with the exclusive flock.
+    /// </summary>
+    [Test]
+    public async Task TryAcquire_WritesVersionMarker() {
+        var dir = CreateScratchDir();
+
+        try {
+            using var l = DaemonLock.TryAcquire("alpha", "0.4.11+sha.abc1234");
+            await Assert.That(l).IsNotNull();
+
+            await Assert.That(DaemonVersionMarker.TryRead("alpha")).IsEqualTo("0.4.11+sha.abc1234");
+        } finally {
+            Restore();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The version marker is observability-only (for <c>kcap daemon status</c>),
+    /// so a failure to write it must never abort lock acquisition / daemon startup
+    /// — unlike the correctness-critical flock and PID file.
+    /// </summary>
+    [Test]
+    public async Task TryAcquire_StillSucceeds_WhenVersionMarkerWriteFails() {
+        var dir = CreateScratchDir();
+
+        try {
+            // Plant a directory where the marker file would go, so the atomic
+            // move in DaemonVersionMarker.Write throws.
+            System.IO.Directory.CreateDirectory(DaemonLockPaths.VersionPath("alpha"));
+
+            using var l = DaemonLock.TryAcquire("alpha", "0.4.11");
+
+            await Assert.That(l).IsNotNull();
+            await Assert.That(l!.InstanceId).IsNotEmpty();
+        } finally {
+            Restore();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Dispose_DeletesVersionMarker_WhenPidStillOurs() {
+        var dir = CreateScratchDir();
+
+        try {
+            var l = DaemonLock.TryAcquire("alpha", "0.4.11")!;
+            await Assert.That(File.Exists(DaemonLockPaths.VersionPath("alpha"))).IsTrue();
+
+            l.Dispose();
+
+            await Assert.That(File.Exists(DaemonLockPaths.VersionPath("alpha"))).IsFalse();
+        } finally {
+            Restore();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Detached-respawn race: once a successor has rewritten the PID file with its
+    /// own PID (and its own version marker), the disposing daemon must not delete
+    /// the marker — same ownership guard as the PID file — or the successor's fresh
+    /// version would be clobbered.
+    /// </summary>
+    [Test]
+    public async Task Dispose_DoesNotDeleteVersionMarker_IfPidPointsToSomeoneElse() {
+        var dir = CreateScratchDir();
+
+        try {
+            var l = DaemonLock.TryAcquire("alpha", "0.4.10")!;
+
+            // Simulate the successor: it rewrote both the PID file and the version marker.
+            File.WriteAllText(DaemonLockPaths.PidPath("alpha"), "99999\n637999999999999999");
+            DaemonVersionMarker.Write("alpha", "0.4.11");
+
+            l.Dispose();
+
+            await Assert.That(DaemonVersionMarker.TryRead("alpha")).IsEqualTo("0.4.11");
+        } finally {
+            Restore();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Test]
     public async Task TryAcquire_AfterStaleLockFileLeftBehind_StillAcquires() {
         var dir = CreateScratchDir();

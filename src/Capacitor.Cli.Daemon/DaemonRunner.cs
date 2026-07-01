@@ -136,14 +136,19 @@ public static partial class DaemonRunner {
             return 1;
         }
 
+        // Resolve our version before acquiring the lock so DaemonLock can stamp
+        // it into the freely-readable <name>.version marker that `kcap daemon
+        // status` reads to report the running daemon's version.
+        config.Version = ResolveDaemonVersion();
+
         // Acquire the per-name flock that prevents another daemon from
         // running under the same name on this machine. The lock content is
         // a fresh instance id that we'll also send over DaemonConnect so
         // the server can refuse a second daemon claiming the same
         // (owner, name) slot (AI-630).
         var daemonLock = awaitLock
-            ? DaemonLock.TryAcquire(config.Name, TimeSpan.FromSeconds(5))
-            : DaemonLock.TryAcquire(config.Name);
+            ? DaemonLock.TryAcquire(config.Name, TimeSpan.FromSeconds(5), config.Version)
+            : DaemonLock.TryAcquire(config.Name, config.Version);
 
         if (daemonLock is null) {
             await Console.Error.WriteLineAsync(
@@ -155,7 +160,6 @@ public static partial class DaemonRunner {
         }
 
         config.InstanceId = daemonLock.InstanceId;
-        config.Version    = ResolveDaemonVersion();
 
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(daemonLock);

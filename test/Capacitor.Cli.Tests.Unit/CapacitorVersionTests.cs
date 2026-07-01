@@ -18,4 +18,13 @@ public class CapacitorVersionTests {
         await Assert.That(CapacitorVersion.Current())
             .IsEqualTo(AgentsSkillsInstaller.CurrentVersion());
     }
+
+    [Test]
+    [Arguments("0.4.11+sha.abc1234", "0.4.11")]
+    [Arguments("0.4.11", "0.4.11")]
+    [Arguments("unknown", "unknown")]
+    [Arguments("1.2.3-preview.4+build.5", "1.2.3-preview.4")]
+    public async Task Display_strips_build_metadata(string input, string expected) {
+        await Assert.That(CapacitorVersion.Display(input)).IsEqualTo(expected);
+    }
 }

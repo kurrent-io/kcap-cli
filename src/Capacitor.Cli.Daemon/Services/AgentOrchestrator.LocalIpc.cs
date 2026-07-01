@@ -40,7 +40,7 @@ internal partial class AgentOrchestrator {
 
             var ctx = new LauncherContext(
                 agentId, cwd, worktree, Prompt: null, Model: "", Effort: null,
-                Tools: null, IsReview: false, Review: null, ReviewLaunch: null
+                Tools: null, IsReview: false, IsReviewFlow: false, Review: null, ReviewLaunch: null
             ) {
                 Work = work
             };

@@ -53,8 +53,12 @@ AWS Kiro CLI via ~/.kiro/ or the kiro/kiro-cli binary on PATH; Pi (badlogic/pi-m
 via ~/.pi/ or the pi binary on PATH; SST OpenCode via ~/.config/opencode/ (or
 ~/.local/share/opencode/) or the opencode binary on PATH. One yes/no prompt is
 shown per detected agent. Hooks are installed user-wide (Pi and OpenCode install
-a plugin/extension rather than a hooks file). For project-scope or post-setup
-re-installs, use:
+a plugin/extension rather than a hooks file).
+
+When you sign in with Kurrent's hosted auth and have no tenant yet, setup can
+create one for you (organization name + workspace slug) and wait for it to go live.
+
+For project-scope or post-setup re-installs, use:
 
   kcap plugin install [--codex] [--cursor] [--copilot] [--gemini] [--kiro] [--pi] [--opencode] [--project]
 

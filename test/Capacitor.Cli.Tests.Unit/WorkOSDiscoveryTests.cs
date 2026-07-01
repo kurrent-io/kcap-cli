@@ -97,4 +97,58 @@ public class WorkOSDiscoveryTests {
 
         await Assert.That(exit).IsEqualTo(1);
     }
+
+    [Test]
+    public async Task RunAsync_provisions_when_no_tenants_and_provisioner_creates() {
+        var proxyConfig = new ProxyConfigResponse { WorkOSClientId = "client_d" };
+        var proxy = Substitute.For<IAuthProxyClient>();
+        proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
+             .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.None)));
+
+        var provisioner = Substitute.For<ITenantProvisioner>();
+        provisioner.OfferCreateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                   .Returns(Task.FromResult(ProvisionOffer.Created(
+                       new ProvisionedTenant("org_new", "acme", "Acme Inc", "https://acme.kcap.ai"))));
+
+        var orgless  = new WorkOSAuthResponse { User = new() { Id = "user_x", FirstName = "Ada" }, AccessToken = "acc", RefreshToken = "rt" };
+        var switched = new WorkOSAuthResponse { User = new() { Id = "user_x" }, OrganizationId = "org_new", AccessToken = "acc2", RefreshToken = "rt2" };
+
+        var exit = await WorkOSDiscovery.RunAsync(
+            "https://auth.kcap.ai", proxyConfig, proxy, Substitute.For<ITenantPicker>(),
+            orglessLogin: ()     => Task.FromResult<WorkOSAuthResponse?>(orgless),
+            orgSwitch:    (_, _) => Task.FromResult<WorkOSAuthResponse?>(switched),
+            provisioner:  provisioner);
+
+        await Assert.That(exit).IsEqualTo(0);
+
+        var stored = await TokenStore.LoadAsync("acme");
+        await Assert.That(stored).IsNotNull();
+        await Assert.That(stored!.AccessToken).IsEqualTo("acc2");
+
+        var cfg = await AppConfig.LoadProfileConfig();
+        await Assert.That(cfg.ActiveProfile).IsEqualTo("acme");
+        await Assert.That(cfg.Profiles["acme"].ServerUrl).IsEqualTo("https://acme.kcap.ai");
+    }
+
+    [Test]
+    public async Task RunAsync_returns_1_without_legacy_error_when_provisioner_declines() {
+        var proxy = Substitute.For<IAuthProxyClient>();
+        proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
+             .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.None)));
+
+        var provisioner = Substitute.For<ITenantProvisioner>();
+        provisioner.OfferCreateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                   .Returns(Task.FromResult(ProvisionOffer.Declined));
+
+        var switchCalled = false;
+        var exit = await WorkOSDiscovery.RunAsync(
+            "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
+            proxy, Substitute.For<ITenantPicker>(),
+            ()     => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
+            (_, _) => { switchCalled = true; return Task.FromResult<WorkOSAuthResponse?>(null); },
+            provisioner: provisioner);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(switchCalled).IsFalse();
+    }
 }

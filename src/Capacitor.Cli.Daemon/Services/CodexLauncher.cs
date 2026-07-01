@@ -74,11 +74,23 @@ internal sealed partial class CodexLauncher(
             ctx.Worktree.Path,
             "--sandbox",
             "workspace-write",
+            // Review-flow reviewers (LaunchKind.ReviewFlow) run unattended → never pause for
+            // approval (writes stay confined by the workspace-write sandbox). Interactive rendered
+            // agents keep the default on-request approval so the user stays in the loop.
             "--ask-for-approval",
-            "on-request"
+            ctx.IsReviewFlow ? "never" : "on-request"
         };
 
-        AppendModel(args, ctx.Model);
+        // Review-flow reviewers run with NO MCP servers: stops the reviewer recursively invoking
+        // kcap-flows' start_review_flow (the kcap-review-flows skill would otherwise trigger a
+        // nested review flow). The reviewer works from its prompt + read-only file inspection.
+        // Interactive agents keep their configured MCP servers.
+        if (ctx.IsReviewFlow) {
+            args.Add("-c");
+            args.Add("mcp_servers={}");
+        }
+
+        AddModelArg(args, ctx.Model);
 
         var effort = ctx.Effort;
 
@@ -96,6 +108,19 @@ internal sealed partial class CodexLauncher(
         }
 
         return new([.. args], McpConfigPath: null);
+    }
+
+    /// Append `-m <model>` unless the model is empty or the "default" no-override sentinel.
+    /// "default" is the sentinel from the flow/agent dispatch; passing it as `-m default` is
+    /// rejected by Codex on a ChatGPT account ("The 'default' model is not supported when using
+    /// Codex with a ChatGPT account") and silently yields an empty turn. Omitting -m makes Codex
+    /// use the model from ~/.codex/config.toml (mirrors the effort=="auto" case). Shared by both
+    /// the default and review launch paths so the sentinel is honored in either.
+    static void AddModelArg(List<string> args, string? model) {
+        if (!string.IsNullOrEmpty(model) && !string.Equals(model, "default", StringComparison.OrdinalIgnoreCase)) {
+            args.Add("-m");
+            args.Add(model);
+        }
     }
 
     /// Review launch: inject the same kcap-review MCP server Claude gets, but via
@@ -125,28 +150,13 @@ internal sealed partial class CodexLauncher(
         args.Add("-c");
         args.Add($"mcp_servers.{serverName}.env={{{envList}}}");
 
-        AppendModel(args, ctx.Model);
+        AddModelArg(args, ctx.Model);
 
         args.Add("--no-alt-screen");
         args.Add("--");
         args.Add(launch.SystemPrompt);
 
         return new([.. args], McpConfigPath: null);
-    }
-
-    /// Append `-m <model>` unless the model is empty or the vendor-neutral sentinel
-    /// "default". The server sends "default" to mean "use the vendor's own default
-    /// model"; Claude accepts `--model default` but Codex has no such model and rejects
-    /// `-m default` on ChatGPT/subscription accounts (HTTP 400, AI-1114). Omitting -m
-    /// lets Codex fall back to its configured/account default — mirroring how the
-    /// "auto" effort sentinel is dropped so the CLI picks its own default.
-    static void AppendModel(List<string> args, string? model) {
-        if (string.IsNullOrEmpty(model) || string.Equals(model, "default", StringComparison.OrdinalIgnoreCase)) {
-            return;
-        }
-
-        args.Add("-m");
-        args.Add(model);
     }
 
     /// Encode a value as a TOML basic string: wrap in double quotes and escape

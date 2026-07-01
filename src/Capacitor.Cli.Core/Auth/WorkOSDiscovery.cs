@@ -19,7 +19,8 @@ public static class WorkOSDiscovery {
     /// directly with fakes.
     /// </summary>
     public static Task<int> RunWithLiveAuthAsync(
-            string proxyUrl, ProxyConfigResponse proxyConfig, IAuthProxyClient proxy, ITenantPicker picker) {
+            string proxyUrl, ProxyConfigResponse proxyConfig, IAuthProxyClient proxy, ITenantPicker picker,
+            ITenantProvisioner? provisioner = null) {
         var clientId = proxyConfig.WorkOSClientId ?? "";
 
         return RunAsync(proxyUrl, proxyConfig, proxy, picker,
@@ -27,7 +28,8 @@ public static class WorkOSDiscovery {
             orgSwitch: async (refreshToken, organizationId) => {
                 using var http = new HttpClient();
                 return await OAuthLoginFlow.SwitchWorkOSOrgAsync(http, WorkOSApiBase, clientId, refreshToken, organizationId);
-            });
+            },
+            provisioner: provisioner);
     }
 
     public static async Task<int> RunAsync(
@@ -36,7 +38,8 @@ public static class WorkOSDiscovery {
             IAuthProxyClient                                proxy,
             ITenantPicker                                   picker,
             Func<Task<WorkOSAuthResponse?>>                 orglessLogin,
-            Func<string, string, Task<WorkOSAuthResponse?>> orgSwitch) {    // args: refreshToken, organizationId
+            Func<string, string, Task<WorkOSAuthResponse?>> orgSwitch,     // args: refreshToken, organizationId
+            ITenantProvisioner?                             provisioner = null) {
         if (string.IsNullOrEmpty(proxyConfig.WorkOSClientId)) {
             await Console.Error.WriteLineAsync("This server isn't configured for WorkOS sign-in.");
 
@@ -63,9 +66,27 @@ public static class WorkOSDiscovery {
         }
 
         if (result.Tenants.Length == 0) {
-            await Console.Error.WriteLineAsync("No Capacitor tenants are linked to your account. Ask your admin to invite you.");
+            if (provisioner is null) {
+                await Console.Error.WriteLineAsync("No Capacitor tenants are linked to your account. Ask your admin to invite you.");
 
-            return 1;
+                return 1;
+            }
+
+            var offer = await provisioner.OfferCreateAsync(auth.AccessToken);
+            if (offer.Status != ProvisionOfferStatus.Created || offer.Tenant is null) {
+                // Declined / InProgress / Failed — the provisioner already printed the
+                // outcome-appropriate message; don't stack the legacy dead-end on top.
+                return 1;
+            }
+
+            var created = new DiscoveredTenant {
+                Provider       = AuthProvider.WorkOS,
+                OrganizationId = offer.Tenant.OrganizationId,
+                Slug           = offer.Tenant.Slug,
+                DisplayName    = offer.Tenant.DisplayName,
+                Origin         = offer.Tenant.Origin
+            };
+            return await SwitchAndSaveAsync(created, [created], auth, proxyConfig.WorkOSClientId!, orgSwitch);
         }
 
         var picked = result.Tenants.Length == 1 ? result.Tenants[0] : picker.Pick(result.Tenants);
@@ -75,6 +96,17 @@ public static class WorkOSDiscovery {
             return 1;
         }
 
+        return await SwitchAndSaveAsync(picked, result.Tenants, auth, proxyConfig.WorkOSClientId!, orgSwitch);
+    }
+
+    // Org-switch into the chosen tenant, persist its profile + org-bound tokens.
+    // Shared by the picked-tenant path and the freshly-provisioned-tenant path.
+    static async Task<int> SwitchAndSaveAsync(
+            DiscoveredTenant                                picked,
+            DiscoveredTenant[]                              tenants,
+            WorkOSAuthResponse                              auth,
+            string                                          clientId,
+            Func<string, string, Task<WorkOSAuthResponse?>> orgSwitch) {
         if (string.IsNullOrEmpty(picked.OrganizationId)) {
             await Console.Error.WriteLineAsync($"Tenant {picked.Label} is missing an organization id; cannot complete sign-in.");
 
@@ -93,7 +125,7 @@ public static class WorkOSDiscovery {
         var username = OAuthLoginFlow.WorkOSDisplayName(auth.User);
 
         var cfg = await AppConfig.LoadProfileConfig();
-        cfg = TenantDiscovery.MergeProfiles(cfg, result.Tenants, picked);
+        cfg = TenantDiscovery.MergeProfiles(cfg, tenants, picked);
         await AppConfig.SaveProfileConfig(cfg);
 
         await TokenStore.SaveAsync(
@@ -104,7 +136,7 @@ public static class WorkOSDiscovery {
                 ExpiresAt      = TokenStore.JwtExpiry(switched.AccessToken),
                 GitHubUsername = username,
                 Provider       = AuthProvider.WorkOS,
-                ClientId       = proxyConfig.WorkOSClientId
+                ClientId       = clientId
             });
 
         await Console.Out.WriteLineAsync($"Logged in as {username} → {picked.Label}");

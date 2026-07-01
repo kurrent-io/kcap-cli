@@ -7,7 +7,8 @@ Subcommands:
   stop [--name N] [--yes] Stop a running daemon (prompts on multi unless --yes)
   restart [--name N]      Restart the daemon (now if idle; --when-idle queues;
                           --force overrides while busy)
-  status [--name N]       Show daemon status (lists all when --name omitted)
+  status [--name N]       Show daemon status, incl. the running daemon's
+                          version (lists all when --name omitted)
   logs                    Show recent daemon log output
   doctor [--clean]        Diagnose lock-file state, optionally clean stale entries
   service <action>        Manage the OS service (launchd/systemd/Scheduled Task)
@@ -36,8 +37,10 @@ Options for restart:
   --force                 Restart now even if busy (running agents are torn down).
 
 Updating: after `kcap update`, a running daemon on macOS/Linux detects the new
-binary and restarts itself when idle. `kcap daemon status` shows a pending restart.
-On Windows, stop the daemon before `kcap update` (a running daemon locks its binary).
+binary and restarts itself when idle. `kcap daemon status` reports the running
+daemon's version plus any pending restart, so you can confirm a self-update took
+effect. On Windows, stop the daemon before `kcap update` (a running daemon locks
+its binary).
 
 Options for doctor:
   --clean                 Remove stale entries (lock files whose holder is

@@ -238,6 +238,27 @@ public class McpFlowsServerTests : IDisposable {
     }
 
     /// <summary>
+    /// Regression (AI-1056): kcap-flows auto-registers via the Claude plugin, so Claude Code
+    /// spawns `kcap mcp flows` for every session. initialize / tools/list must stay local-only —
+    /// the authenticated client (and its GET /auth/config round-trip + re-auth stderr hint) is
+    /// created lazily on the first tools/call, so sessions that never use a flows tool pay
+    /// nothing. Mirrors McpSessionsServer.
+    /// </summary>
+    [Test]
+    public async Task Initialize_and_tools_list_do_not_consult_auth() {
+        using var proc = SpawnMcpServer(provider: "GitHub");
+        try {
+            await SendRequest(proc, InitializeRequest(1));
+            await SendRequest(proc, ToolsListRequest(2));
+
+            var authHits = _server.FindLogEntries(Request.Create().WithPath("/auth/config").UsingGet());
+            await Assert.That(authHits.Count).IsEqualTo(0);
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
     /// Core scenario: verifies that start_review_flow posts to /api/flows/review/start,
     /// that the POST body includes the resolved requester context (requesting_repo_root = git root,
     /// requesting_session_id from KCAP_SESSION_ID), and that the MCP tool response surfaces
