@@ -7,4 +7,5 @@ Arguments:
 
 Examples:
   kcap review https://github.com/owner/repo/pull/123
+  kcap review https://gitlab.com/owner/repo/-/merge_requests/123
   kcap review owner/repo#123

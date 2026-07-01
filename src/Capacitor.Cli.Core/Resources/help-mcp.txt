@@ -19,8 +19,8 @@ Options for review:
 
 Per-tool PR override: each PR-scoped tool (`get_pr_summary`,
 `list_pr_files`, `get_file_context`, `search_context`, `list_sessions`)
-accepts an optional `pr` argument (`"owner/repo#123"` or a GitHub URL),
-so a single MCP server can answer about any PR from any branch.
+accepts an optional `pr` argument (`"owner/repo#123"` or a GitHub/GitLab
+URL), so a single MCP server can answer about any PR from any branch.
 
 Resolution order per tool call: tool `pr` arg → startup `--owner/--repo/--pr`
 → git auto-detect from current branch. `get_transcript` keys off

@@ -10,8 +10,9 @@ static class ReviewCommand {
         if (!PrRefParser.TryParse(prIdentifier, out var owner, out var repo, out var prNumber)) {
             await Console.Error.WriteLineAsync($"Could not parse PR identifier: {prIdentifier}");
             await Console.Error.WriteLineAsync("Expected formats:");
-            await Console.Error.WriteLineAsync("  URL:       https://github.com/owner/repo/pull/123");
-            await Console.Error.WriteLineAsync("  Shorthand: owner/repo#123");
+            await Console.Error.WriteLineAsync("  GitHub URL:  https://github.com/owner/repo/pull/123");
+            await Console.Error.WriteLineAsync("  GitLab URL:  https://gitlab.com/owner/repo/-/merge_requests/123");
+            await Console.Error.WriteLineAsync("  Shorthand:   owner/repo#123");
 
             return 1;
         }
