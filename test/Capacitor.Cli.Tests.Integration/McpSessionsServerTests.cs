@@ -69,7 +69,7 @@ public class McpSessionsServerTests : IDisposable {
     /// resolution entirely; "GitHub" forces token-store consultation so the unauthenticated
     /// path can be exercised.
     /// </summary>
-    Process SpawnMcpServer(string provider = "None") {
+    Process SpawnMcpServer(string provider = "None", string? urlOverride = null) {
         // Auth discovery stub — primed before spawn so the child sees a response when it asks.
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody($$"""{"provider":"{{provider}}"}"""));
@@ -92,7 +92,7 @@ public class McpSessionsServerTests : IDisposable {
             CreateNoWindow         = true,
             WorkingDirectory       = _cwdDir,
             Environment = {
-                ["KCAP_URL"]        = _server.Url!,
+                ["KCAP_URL"]        = urlOverride ?? _server.Url!,
                 ["KCAP_CONFIG_DIR"] = _cfgDir
             }
         };
@@ -101,6 +101,30 @@ public class McpSessionsServerTests : IDisposable {
         _spawnedProcesses.Add(process);
 
         return process;
+    }
+
+    /// <summary>
+    /// A scheme-less server_url would otherwise reach EnsureAbsolute inside the lazy auth-client
+    /// factory and hard-exit the process (Environment.Exit(2)) mid-request. The startup URL
+    /// guard turns it into a graceful JSON-RPC tool error, and the server keeps serving.
+    /// </summary>
+    [Test]
+    public async Task Tool_call_with_invalid_server_url_returns_error_and_server_survives() {
+        using var proc = SpawnMcpServer(urlOverride: "not-a-valid-url");
+        try {
+            await SendRequest(proc, InitializeRequest(1));
+
+            var response = await SendRequest(proc, ToolsCallRequest(2, "search_sessions", new JsonObject { ["query"] = "x" }));
+            var result   = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["isError"]?.GetValue<bool>()).IsTrue();
+
+            // Server survived the bad request — a follow-up still gets a response.
+            var again = await SendRequest(proc, ToolsListRequest(3));
+            await Assert.That(again["result"]?["tools"]).IsNotNull();
+        } finally {
+            await ShutdownAsync(proc);
+        }
     }
 
     static async Task<JsonObject> SendRequest(Process proc, JsonObject request, TimeSpan? timeout = null) {

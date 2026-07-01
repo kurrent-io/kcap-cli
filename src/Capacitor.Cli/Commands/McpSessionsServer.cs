@@ -25,6 +25,26 @@ static class McpSessionsServer {
         // don't need auth, so we keep startup local-only.
         var clientLazy = new Lazy<Task<HttpClient>>(() => HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl));
 
+        // Validate the server_url shape once, locally (pure string check — no network, token,
+        // or stderr). Used to fail gracefully instead of hard-exiting mid-request (below).
+        var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
+
+        // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request. An
+        // unusable server_url would otherwise reach EnsureAbsolute inside the lazy auth-client
+        // factory, which hard-exits the process (Environment.Exit(2)) mid-request; and an
+        // unexpected client-creation/token failure would bubble out of the loop. Return a
+        // JSON-RPC tool error in both cases so the server keeps serving.
+        async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
+            if (!urlOk)
+                return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
+
+            try {
+                return await HandleToolCallAsync(callId, callRequest, await clientLazy.Value, baseUrl, cwdRepoHash);
+            } catch (Exception ex) {
+                return BuildToolResult(callId, $"Error: {ex.Message}", isError: true);
+            }
+        }
+
         await using var stdin  = Console.OpenStandardInput();
         await using var stdout = Console.OpenStandardOutput();
         using var       reader = new StreamReader(stdin, Encoding.UTF8);
@@ -54,7 +74,7 @@ static class McpSessionsServer {
                 var response = method switch {
                     "initialize" => BuildInitializeResponse(id),
                     "tools/list" => BuildToolsListResponse(id, tools),
-                    "tools/call" => await HandleToolCallAsync(id, request, await clientLazy.Value, baseUrl, cwdRepoHash),
+                    "tools/call" => await DispatchToolCallAsync(id, request),
                     _            => BuildErrorResponse(id, -32601, $"Method not found: {method}")
                 };
 
