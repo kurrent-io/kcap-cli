@@ -504,7 +504,6 @@ public static class DaemonCommands {
             var pidPath  = DaemonLockPaths.PidPath(name);
 
             var hasLock = File.Exists(lockPath);
-            File.Exists(pidPath);
 
             string? instanceId = null;
 
@@ -550,9 +549,13 @@ public static class DaemonCommands {
                     break;
                 }
                 case null: {
-                    // No .lock file at all but a .pid is present — orphan.
+                    // No .lock file at all — leftover pid and/or marker files
+                    // with no live daemon. Describe what's actually present
+                    // (a version-marker-only orphan is common now that every
+                    // start writes one) rather than always blaming the pid file.
                     staleCount++;
-                    await Console.Out.WriteLineAsync($"  {name,-20}  STALE    instance=(none)   (orphan pid file, no lock)");
+                    var leftovers = File.Exists(pidPath) ? "orphan pid file, no lock" : "marker-only, no lock/pid";
+                    await Console.Out.WriteLineAsync($"  {name,-20}  STALE    instance=(none)   ({leftovers})");
 
                     if (clean) {
                         try { File.Delete(pidPath); } catch {

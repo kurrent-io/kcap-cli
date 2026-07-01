@@ -80,14 +80,18 @@ internal sealed class DaemonLock : IDisposable {
             stream.Flush();
 
             WritePidFile(pidPath);
-
-            // Overwrite (atomically) any stale version marker with ours. A
-            // successor of a restart-after-update lands here and refreshes it
-            // to the new binary's version.
-            if (version is not null) DaemonVersionMarker.Write(daemonName, version);
         } catch {
             stream.Dispose();
             throw;
+        }
+
+        // Overwrite (atomically) any stale version marker with ours. A successor
+        // of a restart-after-update lands here and refreshes it to the new
+        // binary's version. Best-effort and OUTSIDE the fatal try above: the
+        // marker is observability-only (`kcap daemon status`), so an IO failure
+        // writing it must never abort acquisition the way a lock/pid failure does.
+        if (version is not null) {
+            try { DaemonVersionMarker.Write(daemonName, version); } catch { /* best-effort */ }
         }
 
         return new DaemonLock(stream, lockPath, pidPath, versionPath, instanceId);

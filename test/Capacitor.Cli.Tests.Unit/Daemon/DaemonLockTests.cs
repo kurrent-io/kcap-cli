@@ -216,6 +216,30 @@ public class DaemonLockTests {
         }
     }
 
+    /// <summary>
+    /// The version marker is observability-only (for <c>kcap daemon status</c>),
+    /// so a failure to write it must never abort lock acquisition / daemon startup
+    /// — unlike the correctness-critical flock and PID file.
+    /// </summary>
+    [Test]
+    public async Task TryAcquire_StillSucceeds_WhenVersionMarkerWriteFails() {
+        var dir = CreateScratchDir();
+
+        try {
+            // Plant a directory where the marker file would go, so the atomic
+            // move in DaemonVersionMarker.Write throws.
+            System.IO.Directory.CreateDirectory(DaemonLockPaths.VersionPath("alpha"));
+
+            using var l = DaemonLock.TryAcquire("alpha", "0.4.11");
+
+            await Assert.That(l).IsNotNull();
+            await Assert.That(l!.InstanceId).IsNotEmpty();
+        } finally {
+            Restore();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Test]
     public async Task Dispose_DeletesVersionMarker_WhenPidStillOurs() {
         var dir = CreateScratchDir();
