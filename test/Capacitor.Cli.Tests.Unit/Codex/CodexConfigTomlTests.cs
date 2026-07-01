@@ -297,6 +297,20 @@ public class CodexConfigTomlTests {
     }
 
     [Test]
+    public async Task RegisterKcapMcpServers_non_table_mcp_servers_is_failure_not_clobber() {
+        // A non-table `mcp_servers` value must not be silently replaced (honours the
+        // non-destructive contract) — register fails and leaves the file untouched.
+        var path = TempConfig();
+        const string content = "mcp_servers = \"oops\"\n";
+        File.WriteAllText(path, content);
+
+        var change = CodexConfigToml.RegisterKcapMcpServers(path);
+
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Failed);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(content);
+    }
+
+    [Test]
     public async Task RegisterKcapMcpServers_malformed_config_is_not_overwritten() {
         var path = TempConfig();
         const string garbage = "{{{ not valid TOML";

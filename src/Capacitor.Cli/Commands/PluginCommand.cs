@@ -510,10 +510,14 @@ public static class PluginCommand {
             await env.Stdout.WriteLineAsync($"Codex hooks removed ({scope}: {hooksPath})");
         }
 
-        // Remove the kcap MCP server entries we wrote to config.toml. These are kcap-owned
-        // (unlike the sandbox network policy, which is the user's security posture and is
-        // deliberately left in place on uninstall).
-        var mcpChange = CodexConfigToml.UnregisterKcapMcpServers(env.CodexConfigTomlPath);
+        // Remove the kcap MCP server entries we wrote to config.toml. These live in the
+        // user-scoped ~/.codex/config.toml, so ONLY a user-scope uninstall removes them — a
+        // project-scope remove must not nuke the user-global servers that every other repo
+        // relies on. (Mirrors the sandbox network policy, which is user-global and also
+        // deliberately left in place on remove.)
+        var mcpChange = scope == "user"
+            ? CodexConfigToml.UnregisterKcapMcpServers(env.CodexConfigTomlPath)
+            : CodexConfigToml.Change.Unchanged;
         var mcpFailed = mcpChange == CodexConfigToml.Change.Failed;
 
         if (mcpChange == CodexConfigToml.Change.Updated) {

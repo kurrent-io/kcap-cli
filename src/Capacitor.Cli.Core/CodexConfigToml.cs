@@ -243,6 +243,15 @@ public static class CodexConfigToml {
     }
 
     static bool MutateRegisterMcpServers(TomlTable root) {
+        // If `mcp_servers` exists but isn't a table, refuse rather than let GetOrAddTable
+        // replace it — that would silently destroy the user's value and break the
+        // non-destructive contract. Update() turns this throw into Change.Failed, so the
+        // caller warns instead. (A non-table `mcp_servers` is an invalid Codex config, but
+        // we still won't clobber it.)
+        if (root.TryGetValue("mcp_servers", out var existing) && existing is not TomlTable)
+            throw new InvalidOperationException(
+                "~/.codex/config.toml has a non-table `mcp_servers` value; refusing to overwrite it.");
+
         var servers = GetOrAddTable(root, "mcp_servers");
         var changed = false;
 
