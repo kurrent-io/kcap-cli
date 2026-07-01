@@ -27,8 +27,11 @@ public class RepositoryDetectionCacheTests {
         await Assert.That(back.SchemaVersion).IsEqualTo(RepositoryDetection.CacheSchemaVersion);
     }
 
+    // Exercises the real best-effort detection path (calls DetectRepositoryAsync, which
+    // shells out to the real `glab` if present) and asserts only glab-independent base
+    // info. PR fields are intentionally not asserted because glab may be absent/unauthenticated.
     [Test]
-    public async Task Detects_gitlab_repo_base_info_without_glab() {
+    public async Task Detects_gitlab_repo_base_info() {
         var repo = MakeTempRepo("git@gitlab.com:group/project.git");
         try {
             var payload = await RepositoryDetection.DetectRepositoryAsync(repo);

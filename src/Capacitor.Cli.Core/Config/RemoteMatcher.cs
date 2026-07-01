@@ -49,7 +49,7 @@ public static partial class RemoteMatcher {
         var normalized = NormalizeRemoteUrl(url);
         if (normalized is null) return null;
         var slash = normalized.IndexOf('/');
-        return slash <= 0 ? null : normalized[..slash];
+        return slash <= 0 ? null : normalized[..slash].ToLowerInvariant();
     }
 
     /// <summary>The "owner/repo" tail of a normalized "host/owner/path" string, or null.</summary>

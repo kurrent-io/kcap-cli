@@ -72,6 +72,7 @@ static class RepositoryDetection {
     static bool RepoPayloadEquals(RepositoryPayload a, RepositoryPayload b) =>
         a.Owner     == b.Owner
      && a.RepoName  == b.RepoName
+     && a.Host      == b.Host
      && a.Branch    == b.Branch
      && a.PrNumber  == b.PrNumber
      && a.PrUrl     == b.PrUrl

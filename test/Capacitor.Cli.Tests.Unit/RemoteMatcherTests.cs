@@ -105,6 +105,13 @@ public class RemoteMatcherTests {
     }
 
     [Test]
+    public async Task ExtractHost_lowercases_mixed_case_host() {
+        // gh/glab auth host keys are lowercase, and GitProviderRouter compares hosts
+        // case-sensitively, so a mixed-case remote host must be canonicalized here.
+        await Assert.That(RemoteMatcher.ExtractHost("git@GitHub.com:o/r.git")).IsEqualTo("github.com");
+    }
+
+    [Test]
     public async Task PathAfterHost_strips_leading_host_segment() {
         await Assert.That(RemoteMatcher.PathAfterHost("github.com/kurrent-io/kcap")).IsEqualTo("kurrent-io/kcap");
         await Assert.That(RemoteMatcher.PathAfterHost("gitlab.com/group/project")).IsEqualTo("group/project");
