@@ -231,6 +231,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var attachmentIds = cmd.AttachmentIds;
         var vendor        = cmd.Vendor;
         var isReview      = cmd.Kind == LaunchKind.Review;
+        var isReviewFlow  = cmd.Kind == LaunchKind.ReviewFlow;
 
         if (cmd.Vendor is not ("claude" or "codex")) {
             await _server.LaunchFailedAsync(cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
@@ -338,6 +339,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 Effort: effort,
                 Tools: tools,
                 IsReview: isReview,
+                IsReviewFlow: isReviewFlow,
                 Review: cmd.Review,
                 ReviewLaunch: isReview && cmd.Review is { } reviewArgs
                     ? await ReviewLaunchBuilder.BuildAsync(cmd.Vendor, _config.CapacitorPath, _config.ServerUrl ?? "", reviewArgs.Owner, reviewArgs.Repo, reviewArgs.PrNumber)
@@ -401,6 +403,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // Start reading output
             _ = ReadAgentOutputAsync(agent);
+
+            // Report the resolved model so the server can display the real model the agent
+            // is running (the dispatched `model` may be the "default" no-override sentinel,
+            // in which case Codex picks the model from ~/.codex/config.toml). The hub contract
+            // (ReportAgentResolvedModel) is Codex-only and the resolution via CodexConfigToml is
+            // Codex-specific, so gate the call on vendor — Claude/other agents never call the hub.
+            // Best-effort: never let a report failure break the launch.
+            if (string.Equals(cmd.Vendor, "codex", StringComparison.OrdinalIgnoreCase)) {
+                ReportResolvedModel(agentId, cmd.Vendor, model);
+            }
         } catch (Exception ex) {
             LogLaunchFailed(ex, agentId);
 
@@ -435,6 +447,42 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             await _server.LaunchFailedAsync(agentId, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Best-effort: report the model the agent will actually run to the server so the UI can
+    /// show the real model instead of the dispatched value. Codex-only — the hub contract
+    /// (ReportAgentResolvedModel) and the config resolution are Codex-specific, so the caller
+    /// gates this on <c>vendor == "codex"</c>. The dispatched <paramref name="model"/> may be
+    /// the "default" no-override sentinel (or empty), in which case Codex resolves the model from
+    /// <c>~/.codex/config.toml</c> — we resolve the same value here. Never throws: a resolve/report
+    /// failure must not break launch.
+    /// </summary>
+    void ReportResolvedModel(string agentId, string vendor, string model) {
+        try {
+            var isDefault = string.IsNullOrEmpty(model) || string.Equals(model, "default", StringComparison.OrdinalIgnoreCase);
+
+            var resolved = isDefault && string.Equals(vendor, "codex", StringComparison.OrdinalIgnoreCase)
+                ? CodexResolvedModel(model)
+                : model;
+
+            if (string.IsNullOrEmpty(resolved)) return;
+
+            _ = _server.ReportAgentResolvedModelAsync(agentId, resolved);
+        } catch (Exception ex) {
+            LogReportResolvedModelFailed(ex, agentId);
+        }
+    }
+
+    /// <summary>
+    /// Reads the top-level <c>model = "…"</c> from <c>~/.codex/config.toml</c> (honouring
+    /// <c>CODEX_HOME</c> via <see cref="CodexPaths"/>); falls back to <paramref name="fallback"/>
+    /// when the file is missing/unreadable or has no top-level model key.
+    /// </summary>
+    static string CodexResolvedModel(string fallback) {
+        var fromConfig = CodexConfigToml.ReadTopLevelModel();
+
+        return string.IsNullOrWhiteSpace(fromConfig) ? fallback : fromConfig;
     }
 
     static readonly TimeSpan GitGuardTimeout = TimeSpan.FromSeconds(10);
@@ -1259,6 +1307,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Launcher Prepare soft-failure for agent {AgentId} (continuing)")]
     partial void LogPrepareSoftFailure(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report resolved model for agent {AgentId} (continuing)")]
+    partial void LogReportResolvedModelFailed(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Failed to launch agent {AgentId}")]
     partial void LogLaunchFailed(Exception ex, string agentId);
