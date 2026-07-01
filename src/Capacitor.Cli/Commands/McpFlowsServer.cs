@@ -13,17 +13,6 @@ namespace Capacitor.Cli.Commands;
 
 static class McpFlowsServer {
     public static async Task<int> RunAsync(string baseUrl) {
-        using var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
-
-        // The review-flow endpoints are long-polls: start_review_flow / submit_review_round
-        // block server-side until the AI reviewer returns findings (FlowResultWaiter allows
-        // up to 10 minutes). The default HttpClient.Timeout (100s) would abort the POST first,
-        // which the server sees as a cancelled request and tears the reviewer down (~2 min) —
-        // so no real review could ever complete (AI-1061). Disable the client-side deadline and
-        // let the server's FlowResultWaiter and the harness MCP tool timeout bound the wait,
-        // mirroring the long-poll clients in PermissionRequestCommand / CodexHookCommand.
-        client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
-
         var cwd      = Directory.GetCurrentDirectory();
         var repoRoot = GitRepository.FindRoot(cwd);
         var tools    = BuildToolsList();
@@ -35,39 +24,68 @@ static class McpFlowsServer {
             // best-effort; proceed with null
         }
 
+        // Defer the authenticated-client creation until the first tools/call. Under the
+        // plugin's auto-register manifest (AI-1056), Claude Code spawns `kcap mcp flows` for
+        // every session, so an eager CreateAuthenticatedClientAsync — which does a GET
+        // /auth/config round-trip + token load, and prints a re-auth hint to stderr when not
+        // logged in — would charge every session that work even when the agent never invokes a
+        // flows tool. initialize / tools/list need no auth, so startup stays local-only.
+        // Mirrors McpSessionsServer.
+        //
+        // The InfiniteTimeSpan timeout (AI-1061) is applied to the lazily-created client: the
+        // review-flow endpoints long-poll (start_review_flow / submit_review_round block
+        // server-side up to ~10 min while the reviewer runs). The default 100s timeout would
+        // abort the POST, which the server sees as a cancel and tears the reviewer down — so no
+        // review could complete. The server's FlowResultWaiter and the harness MCP tool timeout
+        // bound the wait instead, mirroring PermissionRequestCommand / CodexHookCommand.
+        var clientLazy = new Lazy<Task<HttpClient>>(async () => {
+            var client = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
+            client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
+
+            return client;
+        });
+
         await using var stdin  = Console.OpenStandardInput();
         await using var stdout = Console.OpenStandardOutput();
         using var       reader = new StreamReader(stdin, Encoding.UTF8);
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        while (await reader.ReadLineAsync() is { } line) {
-            if (string.IsNullOrWhiteSpace(line)) continue;
+        try {
+            while (await reader.ReadLineAsync() is { } line) {
+                if (string.IsNullOrWhiteSpace(line)) continue;
 
-            JsonObject? request;
+                JsonObject? request;
 
-            try {
-                request = JsonNode.Parse(line)?.AsObject();
-            } catch {
-                continue;
+                try {
+                    request = JsonNode.Parse(line)?.AsObject();
+                } catch {
+                    continue;
+                }
+
+                if (request is null) continue;
+
+                var id     = request["id"];
+                var method = request["method"]?.GetValue<string>();
+
+                // Notifications have no id — don't send a response
+                if (id is null) continue;
+
+                var response = method switch {
+                    "initialize" => BuildInitializeResponse(id),
+                    "tools/list" => BuildToolsListResponse(id, tools),
+                    "tools/call" => await HandleToolCallAsync(id, request, await clientLazy.Value, baseUrl, cwd, repoRoot, repoInfo),
+                    _            => BuildErrorResponse(id, -32601, $"Method not found: {method}")
+                };
+
+                await writer.WriteLineAsync(response);
             }
-
-            if (request is null) continue;
-
-            var id     = request["id"];
-            var method = request["method"]?.GetValue<string>();
-
-            // Notifications have no id — don't send a response
-            if (id is null) continue;
-
-            var response = method switch {
-                "initialize" => BuildInitializeResponse(id),
-                "tools/list" => BuildToolsListResponse(id, tools),
-                "tools/call" => await HandleToolCallAsync(id, request, client, baseUrl, cwd, repoRoot, repoInfo),
-                _            => BuildErrorResponse(id, -32601, $"Method not found: {method}")
-            };
-
-            await writer.WriteLineAsync(response);
+        } finally {
+            if (clientLazy.IsValueCreated) {
+                try { (await clientLazy.Value).Dispose(); } catch {
+                    /* swallow — best-effort cleanup */
+                }
+            }
         }
 
         return 0;
