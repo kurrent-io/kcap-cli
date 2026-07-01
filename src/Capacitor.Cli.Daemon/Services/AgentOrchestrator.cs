@@ -245,6 +245,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
+        // AI-1124: fail an unattended (review-flow) launch fast when the selected vendor's
+        // launcher can't run unattended — before creating a worktree, so there's nothing to
+        // clean up. Both shipped launchers support it; this guards future vendors.
+        if (UnattendedLaunchPolicy.RejectionReason(launcher, isReviewFlow) is { } unattendedRejection) {
+            await _server.LaunchFailedAsync(cmd.AgentId, unattendedRejection);
+
+            return;
+        }
+
         WorktreeInfo? worktree      = null;
         string?       mcpConfigPath = null;
 
