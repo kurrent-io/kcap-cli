@@ -79,4 +79,35 @@ public class TenantProvisioningClientTests {
         await Assert.That(status!.State).IsEqualTo("active");
         await Assert.That(status.WorkosOrgId).IsEqualTo("org_live");
     }
+
+    [Test]
+    public async Task CheckAvailabilityAsync_returns_null_on_non_json_body() {
+        using var server = WireMockServer.Start();
+        // 200 but an unreadable body (proxy/error page) must degrade to null, not throw.
+        server.Given(Request.Create().WithPath("/api/signup/availability").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithBody("<html>not json</html>").WithHeader("Content-Type", "application/json"));
+
+        using var http = new HttpClient();
+        var client = new TenantProvisioningClient(http);
+
+        var avail = await client.CheckAvailabilityAsync(server.Urls[0], "tok", "acme", CancellationToken.None);
+        await Assert.That(avail).IsNull();
+    }
+
+    [Test]
+    public async Task ProvisionAsync_returns_status_zero_on_transport_failure() {
+        // Start then stop the server so the connection is refused — a transport failure
+        // must degrade to StatusCode 0 (caller maps to a failed offer), never throw.
+        var server = WireMockServer.Start();
+        var url = server.Urls[0];
+        server.Stop();
+
+        using var http = new HttpClient();
+        var client = new TenantProvisioningClient(http);
+
+        var outcome = await client.ProvisionAsync(url, "tok", "Acme", "acme", CancellationToken.None);
+        await Assert.That(outcome.StatusCode).IsEqualTo(0);
+        await Assert.That(outcome.Body).IsNull();
+    }
 }

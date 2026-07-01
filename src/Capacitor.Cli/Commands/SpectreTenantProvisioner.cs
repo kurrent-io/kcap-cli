@@ -45,6 +45,9 @@ public sealed class SpectreTenantProvisioner(TenantProvisioningClient client, st
             case 409:
                 AnsiConsole.MarkupLine($"  [red]✗[/] {Reason409(outcome.Body?.Reason, slug)}");
                 return ProvisionOffer.Failed;
+            case 0:
+                AnsiConsole.MarkupLine("  [red]✗[/] Couldn't reach the provisioning service. Check your connection and try again.");
+                return ProvisionOffer.Failed;
             default:
                 AnsiConsole.MarkupLine($"  [red]✗[/] Provisioning failed (HTTP {outcome.StatusCode}). Try again later.");
                 return ProvisionOffer.Failed;
