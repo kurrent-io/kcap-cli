@@ -73,6 +73,19 @@ New `authenticateBearer(request, env): Promise<SessionResult | null>`:
    validation **off**, matching how the `kcap-server` auth proxy already
    validates these exact tokens (`DiscoverTenantsWorkOSEndpoint.cs`). Invalid →
    `{ ok: false, status: 401 }`.
+
+   **Load-bearing invariant (must hold or bearer auth breaks):** the CLI's
+   org-less token is minted by the auth proxy's WorkOS client id
+   (`proxyConfig.WorkOSClientId` from `auth.kcap.ai/config`;
+   `WorkOSDiscovery.cs:23-26`). JWKS is scoped per client id, so kcap-web can
+   only verify that token if its own `WORKOS_CLIENT_ID` **equals** the auth
+   proxy's WorkOS client id. Today both are the same shared production AuthKit
+   Application (`client_01KTVSZN2HXGP8NFH0S0HA8PAV`:
+   `kcap-web/wrangler.jsonc:83` == the auth-proxy's `AuthProxy__WorkOS__ClientId`
+   in `kcap-deployments`). This invariant is documented next to the verification
+   code; if the two apps ever split WorkOS clients, this endpoint must gain a
+   dedicated discovery-token client id to fetch the right JWKS. No new env var is
+   added *because* the invariant holds.
 3. Extract `sub` (WorkOS user id) → `workos.userManagement.getUser(sub)` →
    `{ id, email, emailVerified, firstName, lastName }`. Reuse the existing
    `verified()` mapper; `!emailVerified` → `{ ok: false, status: 403 }`.
@@ -92,7 +105,19 @@ state machine, GitHub dispatch, trial guard, disposable-email block, owner
 scoping (`row.owner_user_id === user.id`), the entire browser cookie flow.
 
 **Config:** no new env vars — `WORKOS_CLIENT_ID`, `WORKOS_API_KEY` already
-present in `Env` (`src/server/env.ts`).
+present in `Env` (`src/server/env.ts`) — **conditional on the client-id
+invariant above**.
+
+**Backend response change — `workosOrgId` (mandatory).** The CLI must org-switch
+into the newly created WorkOS org after provisioning, which requires the org id
+(`WorkOSDiscovery.cs:78,86`). The current `ProvisionResult`/status bodies omit
+it. Add an additive `workosOrgId: string` field to the **`active`** responses:
+- `runProvision` `200 { slug, state: "active", url, workosOrgId }`
+  (`row.workos_org_id`)
+- `handleStatus` active body `{ state: "active", url, workosOrgId }`
+This is backward-compatible for the browser flow (extra field, ignored by the
+web client). The `202 provisioning` body is unchanged (the CLI only needs the id
+once `active`). kcap-web unit tests assert the field is present on `active`.
 
 **Tests (kcap-web):** `authenticateBearer` matrix — valid token, expired token,
 bad signature, unverified email (403), and no `Authorization` header falling
@@ -107,30 +132,53 @@ unit-testable.
 
 ```csharp
 public interface ITenantProvisioner {
-    // Interactive: prompt → provision → poll. Returns the new tenant, or null
-    // if the user declines or provisioning fails.
-    Task<ProvisionedTenant?> OfferCreateAsync(string workosAccessToken, CancellationToken ct);
+    // Interactive: prompt → provision → poll. The provisioner OWNS all
+    // user-facing messaging for its outcomes (see below); the caller must not
+    // print a second, conflicting message.
+    Task<ProvisionOffer> OfferCreateAsync(string workosAccessToken, CancellationToken ct);
 }
+
+// Richer than a nullable tenant so the caller can distinguish "the user said no"
+// from "we started provisioning but it isn't live yet" from "it failed" — each
+// needs different follow-up, and none should surface the generic
+// "ask your admin to invite you" dead-end (finding 5).
+public enum ProvisionOfferStatus { Created, Declined, InProgress, Failed }
+
+public sealed record ProvisionOffer(
+    ProvisionOfferStatus Status,
+    ProvisionedTenant?   Tenant);   // non-null iff Status == Created
 
 public sealed record ProvisionedTenant(
     string OrganizationId, string Slug, string DisplayName, string Origin);
 ```
 
-Flow change inside `RunAsync`:
+Flow change inside `RunAsync` (zero-tenant branch):
 
-- Zero tenants **and** a provisioner is injected **and** interactive → call
-  `OfferCreateAsync`.
-  - On a returned `ProvisionedTenant`: treat it exactly like a *picked* tenant —
-    reuse the existing `orgSwitch(auth.RefreshToken!, OrganizationId)` closure to
-    get an org-bound token, then `MergeProfiles` + `SaveProfileConfig` +
+- **No provisioner injected** (headless / other call sites) → keep today's
+  "No Capacitor tenants … ask your admin to invite you" error + exit 1.
+  Unchanged.
+- **Provisioner injected** → call `OfferCreateAsync`. The provisioner has
+  already printed the outcome-appropriate message, so the caller does **not**
+  print the legacy error; it only maps status → next step:
+  - `Created` → treat `Tenant` exactly like a *picked* tenant: reuse the
+    existing `orgSwitch(auth.RefreshToken!, Tenant.OrganizationId)` closure for
+    an org-bound token, then `MergeProfiles` + `SaveProfileConfig` +
     `TokenStore.SaveAsync` (same code as the picked-tenant path). Print
     "Logged in as {user} → {DisplayName}". Return 0.
-  - On `null` (declined / failed) **or** no provisioner (headless): keep today's
-    error message + exit 1.
-- Wire through `RunWithLiveAuthAsync` (production) with a real
-  `SpectreTenantProvisioner`; unit tests inject a fake. `--no-prompt` / headless
-  passes no provisioner (or the provisioner short-circuits on
-  `HeadlessEnvironment.IsHeadless()`), so behavior is unchanged.
+  - `Declined` → return 1 silently (user chose not to create; provisioner
+    already acknowledged, no error spam).
+  - `InProgress` (poll cap hit) → return 1; provisioner already printed
+    "still provisioning; re-run `kcap setup {slug}` when ready".
+  - `Failed` → return 1; provisioner already printed the failure reason.
+
+**Call-site wiring (explicit — finding 4).** `RunWithLiveAuthAsync` and
+`RunAsync` gain an optional `ITenantProvisioner? provisioner = null` parameter.
+Only **`kcap setup`** passes a real `SpectreTenantProvisioner`
+(`SetupCommand.RunDiscoveryAsync`, `SetupCommand.cs:424-425`). **`kcap login
+--discover`** (`Program.cs:719-721`) passes `null`, so its behavior is
+unchanged — tenant creation is a `setup` affordance, not a `login` one. (Login
+can opt in later by passing a provisioner; the seam already supports it.) Unit
+tests inject a fake provisioner directly into `RunAsync`.
 
 The CLI already holds the **org-less** WorkOS access token (`auth.AccessToken`)
 and refresh token (`auth.RefreshToken`) at this point in `RunAsync`, so no extra
@@ -143,10 +191,23 @@ refresh token drives the post-provision org-switch into the new org.
 
 - `GET  /api/signup/availability?slug=` → `{ available: bool, reason?: string }`
 - `POST /api/signup/provision` body `{ orgName, slug, tier: "free" }`
-  → `202 { slug, state: "provisioning" }` | `200 { slug, state: "active", url }`
+  → `202 { slug, state: "provisioning" }`
+  | `200 { slug, state: "active", url, workosOrgId }`
   | `400 { reason: "invalid"|"blocked"|"disposable_email" }`
   | `409 { reason: "taken"|"owned_by_other"|"trial_exists" }`
-- `GET  /api/signup/status?slug=` → `{ state: "reserved"|"provisioning"|"active"|"failed", url? }`
+- `GET  /api/signup/status?slug=`
+  → `{ state: "reserved"|"provisioning"|"active"|"failed", url?, workosOrgId? }`
+  (`workosOrgId` present only when `active`)
+
+**JSON contract is camelCase, but `CapacitorJsonContext` is globally
+`SnakeCaseLower` (`Models.cs:725`) — so every request/response record MUST carry
+explicit `[JsonPropertyName("...")]` on every field** (finding 1). Without it the
+request serializes as `org_name`, which kcap-web rejects as `400 invalid`
+(`provision.ts:131`). This mirrors the existing `WorkOSAuthResponse` /
+`DiscoveredTenant` records, which already annotate every property for the same
+reason. **Add raw-wire tests** asserting the serialized request contains
+`"orgName"` (not `org_name`) and that responses deserialize from the literal
+camelCase names (`workosOrgId`, `available`, `reason`, `state`, `url`).
 
 `ProvisioningEndpoint`: `const string DefaultUrl = "https://capacitor.kurrent.io"`,
 env override `KCAP_SIGNUP_URL` for dev/preview — same pattern as
@@ -158,7 +219,7 @@ remains the source of truth (provision re-validates).
 **Interactive UX** — `SpectreTenantProvisioner` in `Capacitor.Cli/Commands`:
 
 1. "No Capacitor tenant is linked to your account. Create one now? [Y/n]" — no →
-   return null (falls back to the existing error path).
+   return `Declined` (caller exits 1 silently; no legacy error).
 2. Prompt **Organization name** (e.g. "Acme Inc").
 3. Derive a default **slug** from the name (lowercase, strip diacritics,
    non-alphanumeric → `-`, collapse repeats, trim to ≤40 chars). Show it, let the
@@ -171,18 +232,15 @@ remains the source of truth (provision re-validates).
    sensible, otherwise abort with guidance.
 7. On `202`/`200`, poll `GET /status` every ~4s with a spinner ("Provisioning
    acme.kcap.ai — this can take a few minutes"). CLI cap ~10 min (server budget
-   is 15 min). On timeout: print "still provisioning; re-run `kcap setup acme`
-   when it's ready" and return null. On `active`: return the `ProvisionedTenant`
-   (`OrganizationId` from the provision response's tenant / a follow-up lookup,
-   `Slug`, `DisplayName` = org name, `Origin` = `url`). On `failed`: show the
-   reason, suggest retry, return null.
-
-> Note on `OrganizationId`: the org-switch needs the new WorkOS org id. The
-> `/provision` and `/status` responses currently return `{ slug, state, url }`
-> but not `workos_org_id`. Implementation must obtain the org id — preferred:
-> add `workosOrgId` to the `active` status/provision response body (small,
-> backward-compatible additive field), consumed by the CLI. This is called out
-> as an implementation detail to resolve in the plan.
+   is 15 min).
+   - `active` → return `ProvisionOffer(Created, tenant)` where
+     `OrganizationId = workosOrgId` (from the `active` provision/status body —
+     now a mandatory field), `Slug`, `DisplayName = org name`, `Origin = url`.
+   - poll cap hit while still `provisioning` → print "still provisioning; re-run
+     `kcap setup acme` when it's ready" and return `InProgress`.
+   - `failed` → print the reason, suggest retry, return `Failed`.
+   Any 400/409 that can't be re-prompted, or a network error → print guidance,
+   return `Failed`.
 
 **After provisioning (back in `WorkOSDiscovery.RunAsync`):** identical to the
 picked-tenant path — `orgSwitch` → `MergeProfiles` → save config + tokens →
@@ -191,11 +249,22 @@ normally against the new `https://{slug}.kcap.ai`.
 
 ## Testing
 
-- **kcap-cli unit:** `TenantProvisioningClient` against WireMock — availability
-  shapes; `202 → poll → active`; `409`/`400` handling; poll timeout.
-  `WorkOSDiscovery.RunAsync` with a fake provisioner — zero-tenant →
-  provisioned → switch/save path; declined → error/exit-1; headless → error.
-- **kcap-web unit:** `authenticateBearer` matrix (above).
+- **kcap-cli — wire contract:** raw-serialization test that the `/provision`
+  request body contains the literal `"orgName"` (not `org_name`) and `"tier"`;
+  deserialization tests parsing literal camelCase responses including
+  `"workosOrgId"`. Guards against the global `SnakeCaseLower` policy (finding 1).
+- **kcap-cli — client:** `TenantProvisioningClient` against WireMock —
+  availability shapes; `202 → poll → active` (asserts `workosOrgId` flows into
+  `ProvisionedTenant.OrganizationId`); `409`/`400` handling; poll-cap timeout.
+- **kcap-cli — discovery wiring:** `WorkOSDiscovery.RunAsync` with a fake
+  provisioner — `Created` → org-switch/save path (uses `OrganizationId`);
+  `Declined`/`InProgress`/`Failed` → exit 1, **no** legacy "ask your admin"
+  message; **no provisioner (headless)** → legacy error preserved.
+  A test asserting `kcap login --discover`'s call site passes no provisioner
+  (behavior unchanged, finding 4).
+- **kcap-web unit:** `authenticateBearer` matrix (valid/expired/bad-sig/
+  unverified-email/no-header→cookie-fallback); `active` provision + status
+  bodies include `workosOrgId` (finding 2).
 - **AOT:** `dotnet publish -c Release` clean of IL3050/IL2026; new records in
   the source-gen JSON context.
 
@@ -215,9 +284,19 @@ same PR — not just the help text.)
 - GitHub-App self-service provisioning.
 - Any change to the web browser signup flow (cookie path is untouched).
 
-## Open implementation detail (resolve in the plan)
+## Resolved contract decisions (from spec review)
 
-- **Surfacing `workos_org_id` to the CLI** so it can org-switch into the new
-  org. Preferred: add an additive `workosOrgId` field to the `active`
-  provision/status response in `kcap-web`. Confirm whether an alternative
-  (deriving via a discover-tenants call after provisioning) is preferable.
+- **`workosOrgId`**: mandatory additive field on the `active`
+  provision/status responses in kcap-web; the CLI reads it to org-switch. (Not
+  an open question — see the backend response change in Part A.)
+- **Client-id invariant**: kcap-web `WORKOS_CLIENT_ID` == the auth-proxy WorkOS
+  client id; bearer verification depends on it. Documented at the verification
+  site. (Part A.)
+- **JSON property names**: explicit `[JsonPropertyName]` on every CLI
+  request/response record + raw-wire tests, because `CapacitorJsonContext` is
+  globally `SnakeCaseLower`. (Part B.)
+- **Call-site wiring**: `setup` only; `kcap login --discover` passes no
+  provisioner and is unchanged. (Part B.)
+- **Outcome messaging**: `ProvisionOffer{Created,Declined,InProgress,Failed}`;
+  the provisioner owns messaging, the caller never prints the legacy dead-end
+  when a provisioner ran. (Part B.)
