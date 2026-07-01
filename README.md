@@ -117,7 +117,7 @@ Open the server URL in your browser. The dashboard shows repositories, sessions,
 
 ### Sessions and Flows MCP servers for agents
 
-The `kcap mcp sessions` stdio server lets coding agents search and recall past Capacitor sessions without leaving the chat. The Kurrent Capacitor plugin (installed by `kcap setup`) **auto-registers it for both Claude Code and Codex CLI** — no manual `claude mcp add` or TOML edit. The server is repo-aware: `cd` into a project before spawning your agent and `search_sessions` defaults to that repo's sessions.
+The `kcap mcp sessions` stdio server lets coding agents search and recall past Capacitor sessions without leaving the chat. `kcap setup` **registers it (with `kcap-review`) for both Claude Code and Codex CLI** — no manual `claude mcp add` or TOML edit. For Claude Code it's carried by the plugin's `.mcp.json`; for Codex CLI, `kcap setup` / `kcap plugin install --codex` write it into `~/.codex/config.toml`. The server is repo-aware: `cd` into a project before spawning your agent and `search_sessions` defaults to that repo's sessions.
 
 The `kcap mcp flows` stdio server lets agents start and interact with AI-powered review flows. Add it manually via `claude mcp add kcap-flows -- kcap mcp flows`. See the [Flows MCP server](#flows-mcp-server-for-agents) section for details.
 
@@ -276,9 +276,9 @@ The same MCP server (`kcap-review`) is also auto-registered by the Kurrent Capac
 kcap mcp sessions
 ```
 
-Stdio MCP server that exposes past Capacitor sessions to coding agents (Claude Code, Codex) so they can search and recall prior work without leaving the chat. The Kurrent Capacitor plugin auto-registers it for both Claude Code (via `.mcp.json`) and Codex CLI (via `.codex-plugin/plugin.json` → `.codex-mcp.json`), so there's nothing extra to do after `kcap setup`. If you installed the kcap plugin via Codex's native plugin manager (rather than `kcap setup` / `kcap plugin install --codex`), the MCP server is still auto-registered, but you'll also want to run `kcap plugin install --codex` to get hooks and agent skills.
+Stdio MCP server that exposes past Capacitor sessions to coding agents (Claude Code, Codex) so they can search and recall prior work without leaving the chat. **Claude Code:** auto-registered via the plugin's `.mcp.json`. **Codex CLI:** `kcap setup` / `kcap plugin install --codex` register it (alongside `kcap-review`) directly in `~/.codex/config.toml` under `[mcp_servers]`, so there's nothing extra to do — launch Codex from your repo directory so the server resolves the right repo. Enabling the kcap plugin through Codex's native plugin manager (`codex plugin add`) also provides them via the plugin's `.codex-mcp.json` descriptor.
 
-It provides three tools:
+It provides four tools:
 
 - **`search_sessions`** — free-text search over past sessions (and subagent transcripts) in the current repo. Pass `repo: "all"` to search across every repo you can see, or `repo: "owner/name"` for a different one. Filter by `author` / `author_github_id`. Returns ranked hits with `session_id`, snippet, and (for transcript hits) `hit_event_index` + `agent_id` for drilling in.
 - **`get_session_summary`** — concise `summary_text` + `plan` for a session. Use this to orient before reading the transcript.

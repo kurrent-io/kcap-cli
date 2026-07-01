@@ -45,7 +45,8 @@ internal static class CodingAgentsStep {
             Func<string /*agentJsonPath*/, bool>?                     InstallKiroHooks = null,
             Func<string /*extensionPath*/, bool>?                     InstallPiExtension = null,
             Func<string /*pluginPath*/, bool>?                        InstallOpenCodeExtension = null,
-            Func<CodexConfigToml.Change>?                            EnableCodexNetworkAccess = null
+            Func<CodexConfigToml.Change>?                            EnableCodexNetworkAccess = null,
+            Func<CodexConfigToml.Change>?                            RegisterCodexMcp = null
         );
 
     internal record Result(
@@ -58,7 +59,8 @@ internal static class CodingAgentsStep {
             bool KiroHooksInstalled = false,
             bool PiExtensionInstalled = false,
             bool OpenCodeExtensionInstalled = false,
-            bool CodexNetworkAccessApplied = false
+            bool CodexNetworkAccessApplied = false,
+            bool CodexMcpRegistered = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -88,6 +90,7 @@ internal static class CodingAgentsStep {
         var codexHooksInstalled   = HandleCodexHooks(options, detected, paths, installers, prompt, writeLine);
         var codexSkillsInstalled  = codexHooksInstalled && HandleCodexSkills(paths, installers, writeLine);
         var codexNetworkApplied   = HandleCodexNetworkAccess(options, paths, installers, prompt, writeLine, codexHooksInstalled);
+        var codexMcpRegistered    = HandleCodexMcp(paths, installers, writeLine, codexHooksInstalled);
         var cursorHooksInstalled  = HandleCursorHooks(options, detected, paths, installers, prompt, writeLine);
         var copilotHooksInstalled = HandleCopilotHooks(options, detected, paths, installers, prompt, writeLine);
         var geminiHooksInstalled  = HandleGeminiHooks(options, detected, paths, installers, prompt, writeLine);
@@ -110,7 +113,8 @@ internal static class CodingAgentsStep {
                 kiroHooksInstalled,
                 piExtensionInstalled,
                 openCodeExtensionInstalled,
-                codexNetworkApplied
+                codexNetworkApplied,
+                codexMcpRegistered
             )
         );
     }
@@ -505,6 +509,40 @@ internal static class CodingAgentsStep {
                 return false;
             default:
                 writeLine($"  [yellow]⚠[/] Could not update {configPath} — enable Codex sandbox network access manually (see README).");
+
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Registers the kcap MCP servers (kcap-review, kcap-sessions) in
+    /// <c>~/.codex/config.toml</c> via <see cref="Installers.RegisterCodexMcp"/> so Codex
+    /// CLI picks them up with no manual TOML edit. Gated on Codex hooks installing — the
+    /// same "full Codex integration" trigger as skills. No prompt: registration is
+    /// non-destructive (only adds missing kcap servers) and mirrors how the Claude plugin
+    /// auto-registers its MCP servers. <c>kcap-flows</c> stays Claude-only (AI-1056).
+    /// </summary>
+    static bool HandleCodexMcp(
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           codexHooksInstalled
+        ) {
+        if (!codexHooksInstalled || installers.RegisterCodexMcp is null) return false;
+
+        var configPath = Markup.Escape(paths.CodexConfigTomlPath);
+
+        switch (installers.RegisterCodexMcp()) {
+            case CodexConfigToml.Change.Updated:
+                writeLine($"  [green]✓[/] Codex MCP servers registered: kcap-review, kcap-sessions ([dim]{configPath}[/])");
+
+                return true;
+            case CodexConfigToml.Change.Unchanged:
+                writeLine("  [dim]· Codex MCP servers already registered — no change needed[/]");
+
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not register Codex MCP servers in {configPath} — see README to add them manually.");
 
                 return false;
         }

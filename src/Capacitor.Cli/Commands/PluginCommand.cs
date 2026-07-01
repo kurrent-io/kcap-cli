@@ -420,6 +420,13 @@ public static class PluginCommand {
         if (!args.Contains("--skip-codex-network-access"))
             await EnableCodexNetworkAccessAsync(env);
 
+        // Register the kcap MCP servers in ~/.codex/config.toml so Codex CLI picks them up
+        // with no manual TOML edit (the plugin descriptor path alone isn't enough — many
+        // users never run `codex plugin add`). Non-destructive + idempotent. `kcap-flows`
+        // stays Claude-only (AI-1056). The --if-installed refresh returns earlier, so npm
+        // postinstall never touches config.toml here.
+        await RegisterCodexMcpServersAsync(env);
+
         if (scope == "project") {
             await env.Stdout.WriteLineAsync(
                 "Note: Codex requires the project's .codex directory to be trusted. " +
@@ -460,6 +467,26 @@ public static class PluginCommand {
         }
     }
 
+    /// <summary>
+    /// Registers the kcap MCP servers (kcap-review, kcap-sessions) in
+    /// <c>~/.codex/config.toml</c> so Codex CLI loads them without a manual TOML edit.
+    /// Never fails the install: a write error is a warning, not an error code.
+    /// </summary>
+    static async Task RegisterCodexMcpServersAsync(PluginEnvironment env) {
+        switch (CodexConfigToml.RegisterKcapMcpServers(env.CodexConfigTomlPath)) {
+            case CodexConfigToml.Change.Updated:
+                await env.Stdout.WriteLineAsync($"Codex MCP servers registered: kcap-review, kcap-sessions ({env.CodexConfigTomlPath}).");
+                break;
+            case CodexConfigToml.Change.Unchanged:
+                await env.Stdout.WriteLineAsync("Codex MCP servers already registered — no change needed.");
+                break;
+            default:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not register Codex MCP servers in {env.CodexConfigTomlPath} — see README to add them manually.");
+                break;
+        }
+    }
+
     static async Task<int> RemoveCodex(string[] args, PluginEnvironment env) {
         var scope = args.Contains("--project") ? "project" : "user";
 
@@ -483,6 +510,18 @@ public static class PluginCommand {
             await env.Stdout.WriteLineAsync($"Codex hooks removed ({scope}: {hooksPath})");
         }
 
+        // Remove the kcap MCP server entries we wrote to config.toml. These are kcap-owned
+        // (unlike the sandbox network policy, which is the user's security posture and is
+        // deliberately left in place on uninstall).
+        var mcpChange = CodexConfigToml.UnregisterKcapMcpServers(env.CodexConfigTomlPath);
+        var mcpFailed = mcpChange == CodexConfigToml.Change.Failed;
+
+        if (mcpChange == CodexConfigToml.Change.Updated) {
+            await env.Stdout.WriteLineAsync($"Codex MCP servers removed ({env.CodexConfigTomlPath})");
+        } else if (mcpFailed) {
+            await env.Stderr.WriteLineAsync($"Could not update {env.CodexConfigTomlPath} to remove Codex MCP servers.");
+        }
+
         var agents = AgentsSkillsInstaller.Remove(env.AgentsSkillsDir);
 
         if (agents.RemovedAny) {
@@ -491,13 +530,13 @@ public static class PluginCommand {
 
         var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(env.LegacyCodexSkills);
 
-        if (hooksFailed || agents.HadErrors || legacy.HadErrors) {
+        if (hooksFailed || mcpFailed || agents.HadErrors || legacy.HadErrors) {
             await env.Stdout.WriteLineAsync("Removal incomplete — see errors above.");
 
             return 1;
         }
 
-        if (!hooksRemoved && !agents.RemovedAny && !legacy.RemovedAny) {
+        if (!hooksRemoved && mcpChange != CodexConfigToml.Change.Updated && !agents.RemovedAny && !legacy.RemovedAny) {
             await env.Stdout.WriteLineAsync("Nothing to remove — hooks and skills were not installed.");
         }
 
