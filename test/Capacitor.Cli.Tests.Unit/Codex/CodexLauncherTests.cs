@@ -106,9 +106,23 @@ public class CodexLauncherTests {
     }
 
     [Test]
-    public async Task BuildArgs_omits_model_when_default_sentinel() {
-        var args = NewLauncher().BuildArgs(NewCtx(model: "default")).Args;
-        await Assert.That(Array.IndexOf(args, "-m")).IsEqualTo(-1);
+    [Arguments("default")]
+    [Arguments("Default")]
+    [Arguments("DEFAULT")]
+    public async Task BuildArgs_omits_model_when_default_sentinel(string model) {
+        // "default" is a vendor-neutral sentinel meaning "use the vendor's own default
+        // model". Codex has no such model — `-m default` fails on ChatGPT accounts
+        // (AI-1114). Omit -m so Codex falls back to its configured default.
+        var args = NewLauncher().BuildArgs(NewCtx(model: model)).Args;
+        await Assert.That(args).DoesNotContain("-m");
+        await Assert.That(args).DoesNotContain(model);
+    }
+
+    [Test]
+    public async Task BuildArgs_review_omits_model_when_default_sentinel() {
+        var ctx  = NewReviewCtx("Review PR acme/widgets#42", "/opt/kcap", "https://srv", model: "default");
+        var args = NewLauncher().BuildArgs(ctx).Args;
+        await Assert.That(args).DoesNotContain("-m");
         await Assert.That(args).DoesNotContain("default");
     }
 
@@ -284,7 +298,7 @@ public class CodexLauncherTests {
         ReviewLaunch: null
     );
 
-    static LauncherContext NewReviewCtx(string prompt, string cliPath, string baseUrl) {
+    static LauncherContext NewReviewCtx(string prompt, string cliPath, string baseUrl, string model = "gpt-5.3-codex") {
         var mcp = new ReviewLaunchBuilder.ReviewMcpServer(
             Command: cliPath,
             Args: ["mcp", "review", "--owner", "acme", "--repo", "widgets", "--pr", "42"],
@@ -295,7 +309,7 @@ public class CodexLauncherTests {
             SourceRepoPath: "/tmp/repo",
             Worktree: new WorktreeInfo(Path: "/tmp/wt", Branch: "wt-branch", SourceRepo: "/tmp/repo"),
             Prompt: null,
-            Model: "gpt-5.3-codex",
+            Model: model,
             Effort: null,
             Tools: null,
             IsReview: true,
