@@ -201,4 +201,168 @@ public class CodexConfigTomlTests {
         await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Failed);
         await Assert.That(File.ReadAllText(path)).IsEqualTo(garbage);
     }
+
+    // ── RegisterKcapMcpServers ───────────────────────────────────────────────
+
+    static string[] ArgsOf(TomlTable server) =>
+        ((TomlArray)server["args"]).Select(v => (string)v!).ToArray();
+
+    [Test]
+    public async Task RegisterKcapMcpServers_on_missing_config_writes_both_servers() {
+        var path = TempConfig();
+
+        var change = CodexConfigToml.RegisterKcapMcpServers(path);
+
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Updated);
+
+        var servers = (TomlTable)ReadToml(path)["mcp_servers"];
+        var review  = (TomlTable)servers["kcap-review"];
+        var sessions = (TomlTable)servers["kcap-sessions"];
+
+        await Assert.That((string)review["command"]).IsEqualTo("kcap");
+        await Assert.That(ArgsOf(review)).IsEquivalentTo(new[] { "mcp", "review" });
+        await Assert.That((string)sessions["command"]).IsEqualTo("kcap");
+        await Assert.That(ArgsOf(sessions)).IsEquivalentTo(new[] { "mcp", "sessions" });
+    }
+
+    [Test]
+    public async Task RegisterKcapMcpServers_emits_snake_case_mcp_servers_table() {
+        // Codex config.toml uses the snake_case `mcp_servers` table — NOT the
+        // camelCase `mcpServers` key the plugin *descriptor* JSON requires.
+        var path = TempConfig();
+
+        CodexConfigToml.RegisterKcapMcpServers(path);
+
+        var text = File.ReadAllText(path);
+        await Assert.That(text).Contains("[mcp_servers.kcap-review]");
+        await Assert.That(text).Contains("[mcp_servers.kcap-sessions]");
+        await Assert.That(text).DoesNotContain("mcpServers");
+    }
+
+    [Test]
+    public async Task RegisterKcapMcpServers_is_idempotent() {
+        var path = TempConfig();
+
+        var first  = CodexConfigToml.RegisterKcapMcpServers(path);
+        var second = CodexConfigToml.RegisterKcapMcpServers(path);
+
+        await Assert.That(first).IsEqualTo(CodexConfigToml.Change.Updated);
+        await Assert.That(second).IsEqualTo(CodexConfigToml.Change.Unchanged);
+    }
+
+    [Test]
+    public async Task RegisterKcapMcpServers_preserves_user_config_and_servers() {
+        var path = TempConfig();
+        File.WriteAllText(path,
+            """
+            model = "gpt-5.5"
+
+            [mcp_servers.my-tool]
+            command = "my-tool"
+            args = ["serve"]
+            """);
+
+        var change = CodexConfigToml.RegisterKcapMcpServers(path);
+
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Updated);
+
+        var root    = ReadToml(path);
+        await Assert.That((string)root["model"]).IsEqualTo("gpt-5.5");
+
+        var servers = (TomlTable)root["mcp_servers"];
+        await Assert.That((string)((TomlTable)servers["my-tool"])["command"]).IsEqualTo("my-tool"); // user's preserved
+        await Assert.That(servers.ContainsKey("kcap-review")).IsTrue();
+        await Assert.That(servers.ContainsKey("kcap-sessions")).IsTrue();
+    }
+
+    [Test]
+    public async Task RegisterKcapMcpServers_does_not_clobber_existing_kcap_entry() {
+        // A user who set an absolute-path command (e.g. for a GUI host) must keep it.
+        var path = TempConfig();
+        File.WriteAllText(path,
+            """
+            [mcp_servers.kcap-sessions]
+            command = "/opt/homebrew/bin/kcap"
+            args = ["mcp", "sessions"]
+            """);
+
+        var change = CodexConfigToml.RegisterKcapMcpServers(path);
+
+        // kcap-review added; kcap-sessions left as-is → overall Updated.
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Updated);
+
+        var servers = (TomlTable)ReadToml(path)["mcp_servers"];
+        await Assert.That((string)((TomlTable)servers["kcap-sessions"])["command"]).IsEqualTo("/opt/homebrew/bin/kcap");
+        await Assert.That((string)((TomlTable)servers["kcap-review"])["command"]).IsEqualTo("kcap");
+    }
+
+    [Test]
+    public async Task RegisterKcapMcpServers_non_table_mcp_servers_is_failure_not_clobber() {
+        // A non-table `mcp_servers` value must not be silently replaced (honours the
+        // non-destructive contract) — register fails and leaves the file untouched.
+        var path = TempConfig();
+        const string content = "mcp_servers = \"oops\"\n";
+        File.WriteAllText(path, content);
+
+        var change = CodexConfigToml.RegisterKcapMcpServers(path);
+
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Failed);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(content);
+    }
+
+    [Test]
+    public async Task RegisterKcapMcpServers_malformed_config_is_not_overwritten() {
+        var path = TempConfig();
+        const string garbage = "{{{ not valid TOML";
+        File.WriteAllText(path, garbage);
+
+        var change = CodexConfigToml.RegisterKcapMcpServers(path);
+
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Failed);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(garbage);
+    }
+
+    // ── UnregisterKcapMcpServers ─────────────────────────────────────────────
+
+    [Test]
+    public async Task UnregisterKcapMcpServers_removes_kcap_entries_and_drops_empty_table() {
+        var path = TempConfig();
+        CodexConfigToml.RegisterKcapMcpServers(path);
+
+        var change = CodexConfigToml.UnregisterKcapMcpServers(path);
+
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Updated);
+        await Assert.That(ReadToml(path).ContainsKey("mcp_servers")).IsFalse();
+    }
+
+    [Test]
+    public async Task UnregisterKcapMcpServers_preserves_user_servers() {
+        var path = TempConfig();
+        File.WriteAllText(path,
+            """
+            [mcp_servers.my-tool]
+            command = "my-tool"
+            args = ["serve"]
+            """);
+        CodexConfigToml.RegisterKcapMcpServers(path);
+
+        var change = CodexConfigToml.UnregisterKcapMcpServers(path);
+
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Updated);
+
+        var servers = (TomlTable)ReadToml(path)["mcp_servers"];
+        await Assert.That(servers.ContainsKey("my-tool")).IsTrue();
+        await Assert.That(servers.ContainsKey("kcap-review")).IsFalse();
+        await Assert.That(servers.ContainsKey("kcap-sessions")).IsFalse();
+    }
+
+    [Test]
+    public async Task UnregisterKcapMcpServers_is_noop_when_absent() {
+        var path = TempConfig();
+        File.WriteAllText(path, """model = "gpt-5.5" """);
+
+        var change = CodexConfigToml.UnregisterKcapMcpServers(path);
+
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Unchanged);
+    }
 }

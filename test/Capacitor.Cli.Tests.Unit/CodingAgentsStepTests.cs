@@ -331,6 +331,70 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
+    public async Task Codex_mcp_registered_when_hooks_installed() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CodexMcpRegistered).IsTrue();
+        await Assert.That(calls.RegisterCodexMcpCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("MCP servers registered"));
+    }
+
+    [Test]
+    public async Task Codex_mcp_unchanged_when_already_registered() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { RegisterCodexMcpReturns = CodexConfigToml.Change.Unchanged };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.RegisterCodexMcpCalled).IsTrue();
+        await Assert.That(result.CodexMcpRegistered).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("already registered"));
+    }
+
+    [Test]
+    public async Task Codex_mcp_not_registered_when_hooks_fail() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CodexHooksReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CodexHooksInstalled).IsFalse();
+        await Assert.That(calls.RegisterCodexMcpCalled).IsFalse();
+        await Assert.That(result.CodexMcpRegistered).IsFalse();
+    }
+
+    [Test]
+    public async Task Codex_mcp_registration_failure_emits_warning() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { RegisterCodexMcpReturns = CodexConfigToml.Change.Failed };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.RegisterCodexMcpCalled).IsTrue();
+        await Assert.That(result.CodexMcpRegistered).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not register Codex MCP"));
+    }
+
+    [Test]
     public async Task Codex_network_access_not_attempted_when_hooks_fail() {
         var sink     = new Sink();
         var calls    = new InstallerCalls { CodexHooksReturns = false };
@@ -1046,6 +1110,9 @@ public class CodingAgentsStepTests {
         public bool                   EnableCodexNetworkCalled  { get; private set; }
         public CodexConfigToml.Change EnableCodexNetworkReturns { get; set; } = CodexConfigToml.Change.Updated;
 
+        public bool                   RegisterCodexMcpCalled  { get; private set; }
+        public CodexConfigToml.Change RegisterCodexMcpReturns { get; set; } = CodexConfigToml.Change.Updated;
+
         public Installers AsInstallers() => new(
             InstallClaudePlugin: (s, p) => {
                 ClaudeCalled = true;
@@ -1115,6 +1182,11 @@ public class CodingAgentsStepTests {
                 EnableCodexNetworkCalled = true;
 
                 return EnableCodexNetworkReturns;
+            },
+            RegisterCodexMcp: () => {
+                RegisterCodexMcpCalled = true;
+
+                return RegisterCodexMcpReturns;
             }
         );
     }

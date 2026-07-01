@@ -263,7 +263,8 @@ public static class SetupCommand {
             InstallKiroHooks:       PluginCommand.InstallKiroHooks,
             InstallPiExtension:     PiExtensionInstaller.Install,
             InstallOpenCodeExtension: OpenCodeExtensionInstaller.Install,
-            EnableCodexNetworkAccess: () => CodexConfigToml.EnableNetworkAccess(codexAllowDomains));
+            EnableCodexNetworkAccess: () => CodexConfigToml.EnableNetworkAccess(codexAllowDomains),
+            RegisterCodexMcp:         () => CodexConfigToml.RegisterKcapMcpServers());
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
