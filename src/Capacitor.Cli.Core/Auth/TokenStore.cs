@@ -107,7 +107,7 @@ public static class TokenStore {
             await using (var writer = new StreamWriter(stream)) {
                 await writer.WriteAsync(JsonSerializer.Serialize(tokens, CapacitorJsonContext.Default.StoredTokens));
             }
-            File.Move(tempPath, path, overwrite: true);
+            await ReplaceWithRetryAsync(tempPath, path);
         } finally {
             // Success renames the temp away; only a failed write/move leaves it. Unlike the
             // old shared name, a leaked unique temp never gets reused, so clean it up.
@@ -123,6 +123,31 @@ public static class TokenStore {
         // Migration: remove the pre-upgrade single-file token if it still exists
         if (File.Exists(LegacyTokenPath)) {
             try { File.Delete(LegacyTokenPath); } catch { /* best-effort */ }
+        }
+    }
+
+    // Atomically publish the completed temp over the target. On POSIX rename() is atomic and
+    // tolerant of a concurrent writer holding the target open, so this succeeds first try. On
+    // Windows the replace opens the target with exclusive sharing (the default), so when peers
+    // (hooks/watcher/daemon/MCP/login share this store) publish the same profile at once the
+    // loser hits ACCESS_DENIED / a sharing violation (UnauthorizedAccessException or IOException)
+    // — a transient collision, not a real fault. Retry a bounded number of times with a short
+    // backoff; a genuine, persistent failure (e.g. the target is a directory) still surfaces by
+    // rethrowing after the budget is spent. File.Move(overwrite: true) is atomic on NTFS, so a
+    // reader only ever sees the old or the new complete document, never a splice.
+    const int ReplaceMaxAttempts   = 5;
+    const int ReplaceBackoffBaseMs = 20;
+
+    static async Task ReplaceWithRetryAsync(string tempPath, string path) {
+        for (var attempt = 1; ; attempt++) {
+            try {
+                File.Move(tempPath, path, overwrite: true);
+                return;
+            } catch (Exception ex) when ((ex is UnauthorizedAccessException or IOException)
+                                         && attempt < ReplaceMaxAttempts) {
+                // Linear backoff (20/40/60/80ms) to let the peer holding the target close it.
+                await Task.Delay(ReplaceBackoffBaseMs * attempt);
+            }
         }
     }
 
