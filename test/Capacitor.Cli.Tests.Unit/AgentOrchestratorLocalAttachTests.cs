@@ -78,7 +78,7 @@ public partial class AgentOrchestratorVendorTests {
             // the Work=BorrowedCwd guard must prevent that.
             var agent = new AgentInstance(
                 "local-1", null, "", null, repoPath, "claude",
-                new StubPtyProcess(), new WorktreeInfo(repoPath, "", repoPath, IsStandalone: true), new CancellationTokenSource()
+                new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo(repoPath, "", repoPath, IsStandalone: true), new CancellationTokenSource()
             ) {
                 IsPrivate = true,
                 Work      = WorkLocation.BorrowedCwd
@@ -104,7 +104,7 @@ public partial class AgentOrchestratorVendorTests {
 
             var agent = new AgentInstance(
                 "owned-1", null, "", null, dir.FullName, "claude",
-                new StubPtyProcess(), new WorktreeInfo(dir.FullName, "", dir.FullName, IsStandalone: true), new CancellationTokenSource()
+                new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo(dir.FullName, "", dir.FullName, IsStandalone: true), new CancellationTokenSource()
             ) {
                 Work = WorkLocation.OwnedWorktree
             };
@@ -158,7 +158,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var pub = new AgentInstance("pub-1", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false };
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false };
         await orch.RegisterAgentForTestAsync(pub);
         await Assert.That(server.Calls).Contains(nameof(ServerConnection.AgentRegisteredAsync));
 
@@ -172,7 +172,7 @@ public partial class AgentOrchestratorVendorTests {
         var privServer = new TripwireServerConnection();
         await using var privOrch = BuildOrchestrator(privServer, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         var priv = new AgentInstance("priv-1", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true };
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true };
         await privOrch.RegisterAgentForTestAsync(priv);
         await Assert.That(privServer.Calls.Count).IsEqualTo(0);
     }
@@ -214,7 +214,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.RegisterAgentForTest(new AgentInstance("reg-1", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
             IsPrivate = false, Status = "Running", CurrentCols = 73, CurrentRows = 19
         });
 
@@ -229,7 +229,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-2", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
             IsPrivate = false, Status = "Running", CurrentCols = 80, CurrentRows = 24
         };
         orch.RegisterAgentForTest(agent);
@@ -248,7 +248,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-3", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
             IsPrivate = false, Status = "Running", CurrentCols = 80, CurrentRows = 24
         };
         // A local client reports 80×24; the web viewer wants 120×40.
@@ -269,7 +269,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-4", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
             IsPrivate = false, Status = "Running", CurrentCols = 200, CurrentRows = 50
         };
         agent.ClientDims[new FakeTerminalSink()] = new AgentInstance.Dim(200, 50);
@@ -288,7 +288,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-5", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
             IsPrivate = false, Status = "Running", CurrentCols = 150, CurrentRows = 40
         };
         agent.ClientDims[new FakeTerminalSink()] = new AgentInstance.Dim(150, 40);
@@ -312,7 +312,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-6", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
             IsPrivate = false, Status = "Running", CurrentCols = 120, CurrentRows = 40
         };
         agent.ClientDims[new FakeTerminalSink()] = new AgentInstance.Dim(120, 40);
@@ -333,7 +333,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("priv-2", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
             IsPrivate = true, Status = "Running", CurrentCols = 80, CurrentRows = 24
         };
         orch.RegisterAgentForTest(agent);
@@ -389,9 +389,9 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.RegisterAgentForTest(new AgentInstance("pub-1", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false, Status = "Running" });
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false, Status = "Running" });
         orch.RegisterAgentForTest(new AgentInstance("priv-1", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true, Status = "Running" });
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true, Status = "Running" });
 
         var ids = server.GetLiveAgentIds!();
 
@@ -414,7 +414,7 @@ public partial class AgentOrchestratorVendorTests {
             orch = BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
             orch.RegisterAgentForTest(new AgentInstance(
                 "agent-xyz", null, "", null, "/tmp/repo", "claude",
-                new StubPtyProcess(), new WorktreeInfo("/tmp/repo", "", "/tmp/repo"), new CancellationTokenSource()
+                new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/tmp/repo", "", "/tmp/repo"), new CancellationTokenSource()
             ) {
                 IsPrivate = true, Work = WorkLocation.BorrowedCwd, Status = "Running"
             });

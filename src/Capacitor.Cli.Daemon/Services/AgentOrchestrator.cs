@@ -14,14 +14,14 @@ using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
 
-public record AgentInstance(
+internal record AgentInstance(
         string                  Id,
         string?                 Prompt,
         string                  Model,
         string?                 Effort,
         string                  RepoPath,
         string                  Vendor,
-        IPtyProcess             Process,
+        IHostedAgentRuntime     Runtime,
         WorktreeInfo            Worktree,
         CancellationTokenSource ReadCts
     ) {
@@ -393,13 +393,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 env["KCAP_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
             }
 
-            var process = _ptyFactory.Spawn(launcher.CliPath, args, worktree.Path, env, HostedPtyCols, HostedPtyRows);
+            var pty     = _ptyFactory.Spawn(launcher.CliPath, args, worktree.Path, env, HostedPtyCols, HostedPtyRows);
+            var runtime = new PtyHostedAgentRuntime(cmd.Vendor, pty);
 
-            LogAgentSpawned(agentId, process.Pid, worktree.Path, launcher.CliPath);
+            LogAgentSpawned(agentId, pty.Pid, worktree.Path, launcher.CliPath);
 
             var cts = new CancellationTokenSource();
 
-            var agent = new AgentInstance(agentId, prompt, model, effort, repoPath, cmd.Vendor, process, worktree, cts) {
+            var agent = new AgentInstance(agentId, prompt, model, effort, repoPath, cmd.Vendor, runtime, worktree, cts) {
                 McpConfigPath = mcpConfigPath,
                 CurrentCols   = HostedPtyCols,
                 CurrentRows   = HostedPtyRows
@@ -435,7 +436,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                             effort,
                             repoPath,
                             cmd.Vendor,
-                            NoopPtyProcess.Instance,
+                            new PtyHostedAgentRuntime(cmd.Vendor, NoopPtyProcess.Instance),
                             worktree,
                             new CancellationTokenSource()
                         ) {
@@ -549,7 +550,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(agent.ReadCts.Token, _shutdownCts.Token);
 
         try {
-            await foreach (var data in agent.Process.ReadOutputAsync(agent.ReadCts.Token)) {
+            await foreach (var data in agent.Runtime.ReadOutputAsync(agent.ReadCts.Token)) {
                 agent.LastOutputAt      = DateTime.UtcNow;
                 agent.HasReceivedOutput = true;
 
@@ -607,11 +608,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         try {
             // PTY output can end before waitpid reports the child as exited.
             // Wait briefly for the process to finalize so we get a real exit code.
-            await agent.Process.WaitForExitAsync(TimeSpan.FromSeconds(5));
+            await agent.Runtime.WaitForExitAsync(TimeSpan.FromSeconds(5));
 
-            var exitCode = agent.Process.ExitCode;
+            var exitCode = agent.Runtime.ExitCode;
 
-            var status = agent.Process.HasExited
+            var status = agent.Runtime.HasExited
                 ? exitCode is null or 0 ? "Completed" : "Failed"
                 : "Failed";
 
@@ -748,10 +749,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // command buffer instead of a submit. HandleSendInput uses the same split
             // pattern; matching it here makes the graceful path actually fire.
             try {
-                await agent.Process.WriteAsync("/exit");
-                await Task.Delay(50);
-                await agent.Process.WriteAsync("\r");
-                await agent.Process.WaitForExitAsync(GracefulExitWait);
+                await agent.Runtime.RequestGracefulStopAsync();
+                await agent.Runtime.WaitForExitAsync(GracefulExitWait);
             } catch (Exception ex) {
                 LogGracefulExitFailed(ex, agentId);
             }
@@ -760,7 +759,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // so a graceful-exit *timeout* doesn't throw. Check HasExited explicitly
             // so we can tell from logs whether the graceful path is actually working
             // in production or if claude is consistently being SIGTERMed instead.
-            if (!agent.Process.HasExited) {
+            if (!agent.Runtime.HasExited) {
                 LogGracefulExitTimedOut(agentId, GracefulExitWait.TotalSeconds);
             }
 
@@ -775,7 +774,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // teardown, and is idempotent: if claude already fired its own session-end
             // during the graceful window above, the backstop call is a server-side no-op.
             await agent.ReadCts.CancelAsync();
-            await agent.Process.TerminateAsync(TimeSpan.FromSeconds(10));
+            await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(10));
         } catch (Exception ex) {
             LogStopError(ex, agentId);
         }
@@ -857,10 +856,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
         }
 
-        // Split text and Enter with delay (Claude CLI needs separate writes)
-        await agent.Process.WriteAsync(message);
-        await Task.Delay(50);
-        await agent.Process.WriteAsync("\r");
+        await agent.Runtime.SendUserInputAsync(message);
     }
 
     async Task HandleSendSpecialKey(string agentId, string key) {
@@ -870,11 +866,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (agent.IsPrivate) return; // server-origin key ignored for private agents
 
-        var bytes = SpecialKeyMap.ToBytes(key);
-
-        if (bytes.Length > 0) {
-            await agent.Process.WriteAsync(bytes);
-        }
+        await agent.Runtime.SendSpecialKeyAsync(key);
     }
 
     async Task<List<string>> DownloadAttachmentsAsync(string worktreePath, string[] attachmentIds) {
@@ -1153,7 +1145,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // Detect agents stuck in "Starting" with no output
                 if (agent.Status                         == "Starting" &&
                     DateTime.UtcNow - agent.LastOutputAt > StartupTimeout) {
-                    LogAgentStuck(agent.Id, (DateTime.UtcNow - agent.LastOutputAt).TotalSeconds, agent.Process.Pid, agent.Process.HasExited);
+                    LogAgentStuck(agent.Id, (DateTime.UtcNow - agent.LastOutputAt).TotalSeconds, agent.Runtime.Pid, agent.Runtime.HasExited);
                     _ = HandleStopAgent(agent.Id);
 
                     continue;
@@ -1192,11 +1184,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         // Wake any attached local clients blocked on the user's stdin so they can flush the
         // last output and send Exited (the agent is going away). The exit code is already
-        // captured on agent.Process, so disposing it below doesn't lose it.
+        // captured on agent.Runtime, so disposing it below doesn't lose it.
         try { await agent.ExitedCts.CancelAsync(); } catch { /* best-effort */ }
 
         // Each cleanup step is best-effort so later steps still run
-        try { await agent.Process.DisposeAsync(); } catch (Exception ex) { LogCleanupStepFailed(ex, "disposing process", agentId); }
+        try { await agent.Runtime.DisposeAsync(); } catch (Exception ex) { LogCleanupStepFailed(ex, "disposing process", agentId); }
 
         if (_launchers.TryGetValue(agent.Vendor, out var launcher)) {
             try { launcher.Cleanup(agent); } catch (Exception ex) { LogCleanupStepFailed(ex, "launcher.Cleanup", agentId); }
@@ -1228,7 +1220,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         foreach (var agent in _agents.Values.Where(a => a.Status is "Starting" or "Running")) {
             try {
                 await agent.ReadCts.CancelAsync();
-                await agent.Process.TerminateAsync(TimeSpan.FromSeconds(5));
+                await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(5));
             } catch {
                 /* best-effort */
             }

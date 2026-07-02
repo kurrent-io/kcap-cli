@@ -108,7 +108,7 @@ public partial class AgentOrchestratorVendorTests {
 
         orch.RegisterAgentForTest(new AgentInstance(
             "agent-rereg", null, "", null, "/tmp", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/tmp", "", "/tmp", IsStandalone: true), new CancellationTokenSource()
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/tmp", "", "/tmp", IsStandalone: true), new CancellationTokenSource()
         ));
 
         // The orchestrator wires ReRegisterAgentsHook in its ctor; invoking it runs the same
