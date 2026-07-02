@@ -683,6 +683,43 @@ public class CursorImportSourceTests {
         var tNode = JsonNode.Parse(subTranscript.Body)!;
         await Assert.That(tNode["session_id"]!.GetValue<string>()).IsEqualTo(parentId);
         await Assert.That(tNode["agent_id"]!.GetValue<string>()).IsEqualTo(childId);
+
+        // Full SubagentStopHook shape (review finding): the server binds all fields.
+        var stopNode = JsonNode.Parse(bodies.First(b => b.Path == "/hooks/subagent-stop").Body)!;
+        await Assert.That(stopNode["session_id"]!.GetValue<string>()).IsEqualTo(parentId);
+        await Assert.That(stopNode["agent_id"]!.GetValue<string>()).IsEqualTo(childId);
+        await Assert.That(stopNode["stop_hook_active"]).IsNotNull();
+        await Assert.That(stopNode["agent_transcript_path"]!.GetValue<string>().EndsWith(".jsonl")).IsTrue();
+        await Assert.That(stopNode["last_assistant_message"]).IsNotNull();
+    }
+
+    [Test]
+    public async Task parent_import_fails_when_a_subagent_transcript_post_is_rejected() {
+        // Review finding (fail-closed): a rejected child transcript POST must abort the parent
+        // import (return Failed) BEFORE the parent session-end, so a re-run repairs it — rather
+        // than posting subagent-stop + session-end over a child whose transcript wasn't accepted.
+        using var fx = new ProjectsDirFixture();
+        var (parentId, childId, classified, src) = await SetupParentChildAsync(fx);
+        var parentClass = classified.Single(c => c.SessionId == parentId);
+
+        var posted = new List<string>();
+        using var handler = new StubHandler(
+            getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+            postCapture: (req, body) => {
+                var path = req.RequestUri!.AbsolutePath;
+                posted.Add(path);
+                // Reject only the subagent transcript (agent_id present).
+                if (path == "/hooks/transcript" && JsonNode.Parse(body)!["agent_id"] is not null)
+                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            });
+        using var client = new HttpClient(handler);
+
+        var outcome = await src.ImportSessionAsync(parentClass, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+        // The parent's session-end must NOT be posted after a failed child transcript.
+        await Assert.That(posted).DoesNotContain("/hooks/session-end/cursor");
     }
 
     [Test]

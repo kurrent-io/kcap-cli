@@ -77,6 +77,55 @@ public class CursorSubagentCorrelatorTests {
         await Assert.That(links.ContainsKey("cccccccccccccccccccccccccccccccc")).IsFalse();
     }
 
+    [Test]
+    public async Task duplicate_task_prompt_resolves_to_a_stable_parent_regardless_of_input_order() {
+        // Review finding: two parents issuing the same Task prompt must resolve to the SAME
+        // parent across runs (input arrives in filesystem-discovery order, which isn't stable).
+        // The correlator orders by session id, so the lowest id wins deterministically.
+        using var fx = new CorrelatorFixture();
+        const string prompt = "shared prompt";
+        var p1    = fx.Add("11111111111111111111111111111111", ParentTranscript(prompt, "typeA"));
+        var p2    = fx.Add("99999999999999999999999999999999", ParentTranscript(prompt, "typeB"));
+        var child = fx.Add("22222222222222222222222222222222", ChildTranscript(prompt));
+
+        var forward = CursorSubagentCorrelator.Correlate([
+            ("11111111111111111111111111111111", p1),
+            ("99999999999999999999999999999999", p2),
+            ("22222222222222222222222222222222", child),
+        ]);
+        var reversed = CursorSubagentCorrelator.Correlate([
+            ("22222222222222222222222222222222", child),
+            ("99999999999999999999999999999999", p2),
+            ("11111111111111111111111111111111", p1),
+        ]);
+
+        // Same parent (the lowest session id) both ways.
+        await Assert.That(forward["22222222222222222222222222222222"].ParentSessionId).IsEqualTo("11111111111111111111111111111111");
+        await Assert.That(reversed["22222222222222222222222222222222"].ParentSessionId).IsEqualTo("11111111111111111111111111111111");
+    }
+
+    [Test]
+    public async Task a_bad_transcript_entry_is_skipped_without_aborting_correlation() {
+        // Review finding: a bad transcript entry must not break correlation (which would abort
+        // ClassifyAsync for the whole import). A non-file path is skipped by the File.Exists
+        // guard; genuine read errors are additionally swallowed by the per-session try/catch.
+        using var fx = new CorrelatorFixture();
+        const string prompt = "explore it";
+        var parent = fx.Add("11111111111111111111111111111111", ParentTranscript(prompt));
+        var child  = fx.Add("22222222222222222222222222222222", ChildTranscript(prompt));
+        var badDir = Path.Combine(fx.Root, "not-a-file.jsonl");
+        Directory.CreateDirectory(badDir); // a directory, not a readable transcript file
+
+        var links = CursorSubagentCorrelator.Correlate([
+            ("33333333333333333333333333333333", badDir),
+            ("11111111111111111111111111111111", parent),
+            ("22222222222222222222222222222222", child),
+        ]);
+
+        // Valid pair still correlated; no throw.
+        await Assert.That(links["22222222222222222222222222222222"].ParentSessionId).IsEqualTo("11111111111111111111111111111111");
+    }
+
     sealed class CorrelatorFixture : IDisposable {
         public string Root { get; } = Path.Combine(Path.GetTempPath(), $"kcap-correlator-{Guid.NewGuid():N}");
 

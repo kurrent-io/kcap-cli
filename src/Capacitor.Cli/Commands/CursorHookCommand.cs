@@ -117,9 +117,12 @@ public static class CursorHookCommand {
             // `cwd`) can't be used — detect from workspace_roots[0] instead. Bounded by
             // the remaining dispatcher budget; fail-open (git detection is cached).
             if (eventName == "sessionStart") {
-                var workspaceRoot = node["workspace_roots"] is JsonArray roots && roots.Count > 0
-                    ? roots[0]?.GetValue<string>()
-                    : null;
+                // Safe extract: workspace_roots[0] may be absent or a non-string; GetValue<string>
+                // would throw and (via the outer catch) drop the whole sessionStart hook.
+                string? workspaceRoot = null;
+                if (node["workspace_roots"] is JsonArray roots && roots.Count > 0
+                 && roots[0] is JsonValue wv && wv.TryGetValue<string>(out var wr))
+                    workspaceRoot = wr;
                 if (!string.IsNullOrEmpty(workspaceRoot)) {
                     var remaining = budgetTotal - sw.Elapsed;
                     if (remaining > TimeSpan.Zero) {

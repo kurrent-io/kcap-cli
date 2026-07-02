@@ -33,9 +33,19 @@ public static class CursorSubagentCorrelator {
     ) {
         var scanned = new List<(string Sid, string? FirstUserHash, List<(string Hash, string? SubType)> Tasks)>();
 
-        foreach (var (sid, path) in sessions) {
+        // Order by session id so "first writer wins" (below) is deterministic — the caller
+        // feeds us filesystem-discovery order, which is not stable across runs; without a
+        // stable tie-break, a duplicate Task prompt could route the same child under a
+        // different parent on re-run and defeat idempotency.
+        foreach (var (sid, path) in sessions.OrderBy(s => s.SessionId, StringComparer.Ordinal)) {
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
-            scanned.Add((sid, ScanFirstUserHash(path, out var tasks), tasks));
+            try {
+                var firstHash = ScanFirstUserHash(path, out var tasks);
+                scanned.Add((sid, firstHash, tasks));
+            } catch {
+                // A single unreadable/locked transcript must not abort correlation (which would
+                // abort ClassifyAsync for the whole import) — skip it and correlate the rest.
+            }
         }
 
         // promptHash → (parentSessionId, subagentType). First writer wins on the (rare)

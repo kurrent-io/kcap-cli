@@ -485,23 +485,32 @@ internal sealed class CursorImportSource : IImportSource {
         }
 
         try {
+            // failOnError: fail-closed like the parent lifecycle — a rejected/failed child
+            // transcript POST must abort so the parent import fails and a re-run repairs it,
+            // rather than leaving an empty completed subagent while reporting success.
             await SessionImporter.SendTranscriptBatches(
-                httpClient: ctx.HttpClient,
-                baseUrl:    ctx.BaseUrl,
-                sessionId:  parentSessionId,
-                filePath:   child.TranscriptPath,
-                agentId:    agentId,
-                startLine:  startLine,
-                vendor:     Vendor);
+                httpClient:  ctx.HttpClient,
+                baseUrl:     ctx.BaseUrl,
+                sessionId:   parentSessionId,
+                filePath:    child.TranscriptPath,
+                agentId:     agentId,
+                startLine:   startLine,
+                vendor:      Vendor,
+                failOnError: true);
         } catch {
             return false;
         }
 
+        // Full SubagentStopHook shape (mirrors the Gemini/OpenCode builders) — the server
+        // binds all fields, so an incomplete body can be rejected before HandleSubagentStop.
         return await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-stop", new JsonObject {
-            ["hook_event_name"] = "subagent_stop",
-            ["session_id"]      = parentSessionId,
-            ["agent_id"]        = agentId,
-            ["agent_type"]      = subagentType,
+            ["hook_event_name"]        = "subagent_stop",
+            ["session_id"]             = parentSessionId,
+            ["agent_id"]               = agentId,
+            ["agent_type"]             = subagentType,
+            ["stop_hook_active"]       = false,
+            ["agent_transcript_path"]  = child.TranscriptPath,
+            ["last_assistant_message"] = "",
         }, ct);
     }
 
