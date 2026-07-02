@@ -49,6 +49,17 @@ public class ClaudeLauncherReviewFlowTests {
     }
 
     [Test]
+    public async Task Review_flow_launch_disallows_the_agent_subagent_tool() {
+        // Subagents don't inherit --mcp-config, so a spawned Agent could re-read ambient
+        // MCP (incl. user-scoped kcap-flows) and recursively start a flow. Block it.
+        var args = NewLauncher().BuildArgs(NewCtx(isReviewFlow: true)).Args;
+
+        await Assert.That(args).Contains("--disallowedTools");
+        var i = Array.IndexOf(args, "--disallowedTools");
+        await Assert.That(args[i + 1]).IsEqualTo("Agent");
+    }
+
+    [Test]
     public async Task Review_flow_launch_still_passes_model_and_prompt() {
         var args = NewLauncher().BuildArgs(NewCtx(isReviewFlow: true, prompt: "the prompt", model: "opus")).Args;
 
@@ -65,6 +76,7 @@ public class ClaudeLauncherReviewFlowTests {
         await Assert.That(args).DoesNotContain("--permission-mode");
         await Assert.That(args).DoesNotContain("--strict-mcp-config");
         await Assert.That(args).DoesNotContain("--mcp-config");
+        await Assert.That(args).DoesNotContain("--disallowedTools");
     }
 
     [Test]

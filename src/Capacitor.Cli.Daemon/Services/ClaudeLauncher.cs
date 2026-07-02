@@ -94,6 +94,14 @@ internal sealed partial class ClaudeLauncher(
                 args.Add("--strict-mcp-config");
                 args.Add("--mcp-config");
                 args.Add(EmptyMcpConfig);
+                // Disallow the built-in Agent (subagent) tool. Subagents do NOT inherit
+                // --mcp-config (see ClaudeCliRunner), so a spawned subagent would re-read the
+                // ambient user/project MCP config — which on a flows-enabled machine includes
+                // the user-scoped kcap-flows server — and could recursively start a nested
+                // flow, escaping the empty-MCP boundary above. The reviewer keeps Read/Grep/
+                // Bash etc.; it just can't fan out subagents.
+                args.Add("--disallowedTools");
+                args.Add("Agent");
             }
 
             if (!string.IsNullOrEmpty(ctx.Effort)) {
