@@ -615,15 +615,9 @@ public class CursorImportSourceTests {
         await Assert.That(startNode["repository"]).IsNull();
     }
 
-    [Test]
-    public async Task subagent_child_is_imported_under_parent_agentsubsession_not_as_standalone() {
-        // AI-1153: a Cursor subagent runs as its own session/transcript. When its first
-        // user_query matches a parent's Task prompt, the importer must route it under the
-        // parent's AgentSubsession stream (subagent-start + transcript-with-agent_id +
-        // subagent-stop) and NOT emit a standalone session-start (which would create a
-        // separate top-level session card).
-        using var fx = new ProjectsDirFixture();
-
+    // Builds a parent (Task prompt) + child (first user_query == prompt) session pair in the
+    // same workspace and returns their (parentId, childId, discovered, classified).
+    async Task<(string ParentId, string ChildId, IReadOnlyList<ImportCommand.SessionClassification> Classified, CursorImportSource Src)> SetupParentChildAsync(ProjectsDirFixture fx) {
         const string prompt = "EXPLORE the repo and report back";
         var childUserText = System.Text.Json.JsonSerializer.Serialize("<user_query>\n" + prompt + "\n</user_query>");
         var taskPrompt    = System.Text.Json.JsonSerializer.Serialize(prompt);
@@ -636,45 +630,80 @@ public class CursorImportSourceTests {
             "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}\n");
 
         var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
-
         using var getHandler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
         using var getClient  = new HttpClient(getHandler);
+        var discovered = await src.DiscoverAsync(Filters(), CancellationToken.None);
+        var classified = await src.ClassifyAsync(discovered, Ctx(getClient, minLines: 1), CancellationToken.None);
+        return ("11111111111111111111111111111111", "22222222222222222222222222222222", classified, src);
+    }
 
-        var discovered  = await src.DiscoverAsync(Filters(), CancellationToken.None);
-        var classified  = await src.ClassifyAsync(discovered, Ctx(getClient, minLines: 1), CancellationToken.None);
+    [Test]
+    public async Task parent_import_nests_subagent_child_before_its_own_session_end() {
+        // AI-1153: the PARENT's import ingests its subagent child under the parent's
+        // AgentSubsession stream (subagent-start + transcript-with-agent_id + subagent-stop),
+        // and — critically — BEFORE the parent's own session-end, so a late subagent-start
+        // can't reactivate the ended parent (review finding on ordering).
+        using var fx = new ProjectsDirFixture();
+        var (parentId, childId, classified, src) = await SetupParentChildAsync(fx);
 
-        const string parentId = "11111111111111111111111111111111";
-        const string childId  = "22222222222222222222222222222222";
+        var parentClass = classified.Single(c => c.SessionId == parentId);
+        // Parent classification carries its children; parent is not itself a child.
+        await Assert.That(parentClass.SourceMeta!.ContainsKey("SubagentChildren")).IsTrue();
+        await Assert.That(parentClass.SourceMeta!.ContainsKey("IsSubagentChild")).IsFalse();
 
-        var childClass = classified.Single(c => c.SessionId == childId);
-        // Correlator stamped the parent link onto the child classification.
-        await Assert.That((string)childClass.SourceMeta!["ParentSessionId"]!).IsEqualTo(parentId);
-
-        var posted = new List<(string Path, string Body)>();
-        using var postHandler = new StubHandler(postCapture: (req, body) => {
-            posted.Add((req.RequestUri!.AbsolutePath, body));
-            return new HttpResponseMessage(HttpStatusCode.OK);
-        });
+        var posted = new List<string>();
+        var bodies = new List<(string Path, string Body)>();
+        using var postHandler = new StubHandler(
+            getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound), // subsession watermark → New
+            postCapture: (req, body) => { posted.Add(req.RequestUri!.AbsolutePath); bodies.Add((req.RequestUri!.AbsolutePath, body)); return new HttpResponseMessage(HttpStatusCode.OK); });
         using var postClient = new HttpClient(postHandler);
 
-        var outcome = await src.ImportSessionAsync(childClass, new ImportContext(postClient, "http://localhost", ForcePrivate: false), CancellationToken.None);
-
+        var outcome = await src.ImportSessionAsync(parentClass, new ImportContext(postClient, "http://localhost", ForcePrivate: false), CancellationToken.None);
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
-        // Routed as a subagent: no standalone session-start/-end for the child.
-        await Assert.That(posted.Select(p => p.Path)).DoesNotContain("/hooks/session-start/cursor");
-        await Assert.That(posted.Select(p => p.Path)).DoesNotContain("/hooks/session-end/cursor");
-        await Assert.That(posted.Select(p => p.Path)).Contains("/hooks/subagent-start");
-        await Assert.That(posted.Select(p => p.Path)).Contains("/hooks/subagent-stop");
-        await Assert.That(posted.Select(p => p.Path)).Contains("/hooks/transcript");
 
-        var startNode = JsonNode.Parse(posted.First(p => p.Path == "/hooks/subagent-start").Body)!;
+        // Parent lifecycle + the child's subagent lifecycle are all present.
+        await Assert.That(posted).Contains("/hooks/session-start/cursor");
+        await Assert.That(posted).Contains("/hooks/session-end/cursor");
+        await Assert.That(posted).Contains("/hooks/subagent-start");
+        await Assert.That(posted).Contains("/hooks/subagent-stop");
+
+        // Ordering guard (the review finding): subagent-start/-stop must precede the parent's session-end.
+        var endIdx        = posted.IndexOf("/hooks/session-end/cursor");
+        var subStartIdx   = posted.IndexOf("/hooks/subagent-start");
+        var subStopIdx    = posted.LastIndexOf("/hooks/subagent-stop");
+        await Assert.That(subStartIdx >= 0 && subStartIdx < endIdx).IsTrue();
+        await Assert.That(subStopIdx  >= 0 && subStopIdx  < endIdx).IsTrue();
+
+        var startNode = JsonNode.Parse(bodies.First(b => b.Path == "/hooks/subagent-start").Body)!;
         await Assert.That(startNode["session_id"]!.GetValue<string>()).IsEqualTo(parentId);
         await Assert.That(startNode["agent_id"]!.GetValue<string>()).IsEqualTo(childId);
         await Assert.That(startNode["agent_type"]!.GetValue<string>()).IsEqualTo("generalPurpose");
 
-        var transcriptNode = JsonNode.Parse(posted.First(p => p.Path == "/hooks/transcript").Body)!;
-        await Assert.That(transcriptNode["session_id"]!.GetValue<string>()).IsEqualTo(parentId);
-        await Assert.That(transcriptNode["agent_id"]!.GetValue<string>()).IsEqualTo(childId);
+        var subTranscript = bodies.First(b => b.Path == "/hooks/transcript" && JsonNode.Parse(b.Body)!["agent_id"] is not null);
+        var tNode = JsonNode.Parse(subTranscript.Body)!;
+        await Assert.That(tNode["session_id"]!.GetValue<string>()).IsEqualTo(parentId);
+        await Assert.That(tNode["agent_id"]!.GetValue<string>()).IsEqualTo(childId);
+    }
+
+    [Test]
+    public async Task subagent_child_import_is_a_noop_handled_by_the_parent() {
+        // A child's own routed import must no-op (Skipped) — the parent imports it. Otherwise
+        // the child would create a standalone top-level session AND post subagent lifecycle
+        // out of order with the parent.
+        using var fx = new ProjectsDirFixture();
+        var (parentId, childId, classified, src) = await SetupParentChildAsync(fx);
+
+        var childClass = classified.Single(c => c.SessionId == childId);
+        await Assert.That(childClass.SourceMeta!.ContainsKey("IsSubagentChild")).IsTrue();
+
+        var posted = new List<string>();
+        using var postHandler = new StubHandler(postCapture: (req, body) => { posted.Add(req.RequestUri!.AbsolutePath); return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var postClient = new HttpClient(postHandler);
+
+        var outcome = await src.ImportSessionAsync(childClass, new ImportContext(postClient, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Skipped);
+        await Assert.That(posted.Count).IsEqualTo(0); // nothing posted — the parent owns this child
     }
 
     [Test]

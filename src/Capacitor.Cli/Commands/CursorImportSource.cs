@@ -197,14 +197,25 @@ internal sealed class CursorImportSource : IImportSource {
         var hasExcludes  = ctx.ExcludedRepos is { Count: > 0 };
 
         // AI-1153: correlate subagent (child) sessions to their parent by prompt-hash across
-        // all discovered transcripts. A child is then ingested under the parent's
-        // AgentSubsession stream (subagent-start → transcript-with-agent_id → subagent-stop)
-        // rather than as a separate top-level session.
-        var subagentLinks = CursorSubagentCorrelator.Correlate(
-            sessions.Select(s => (
-                s.SessionId,
-                s.SourceMeta!.TryGetValue("TranscriptPath", out var tp) && tp is string p ? p : ""
-            )));
+        // all discovered transcripts. A child is ingested under the parent's AgentSubsession
+        // stream *by the parent's own import* (subagent-start → transcript-with-agent_id →
+        // subagent-stop, before the parent's session-end) rather than as a separate top-level
+        // session. Doing it inside the parent import guarantees the parent's SessionEnded stays
+        // the last event on its stream — a subagent-start posted after a parallel parent's
+        // session-end would reactivate the ended parent (SubagentStarted is a reactivation event).
+        var pathBySession = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var s in sessions)
+            pathBySession[s.SessionId] = s.SourceMeta!.TryGetValue("TranscriptPath", out var tp) && tp is string p ? p : "";
+
+        var subagentLinks    = CursorSubagentCorrelator.Correlate(pathBySession.Select(kv => (kv.Key, kv.Value)));
+        var childrenByParent = new Dictionary<string, List<CursorSubagentChild>>(StringComparer.Ordinal);
+        foreach (var (childId, lnk) in subagentLinks) {
+            if (!childrenByParent.TryGetValue(lnk.ParentSessionId, out var kids)) {
+                kids = [];
+                childrenByParent[lnk.ParentSessionId] = kids;
+            }
+            kids.Add(new CursorSubagentChild(childId, pathBySession.GetValueOrDefault(childId, ""), lnk.SubagentType));
+        }
 
         foreach (var s in sessions) {
             var transcriptPath = (string)s.SourceMeta!["TranscriptPath"]!;
@@ -297,12 +308,7 @@ internal sealed class CursorImportSource : IImportSource {
                 ExcludedRepoKey = excludedRepoKey,
                 ExcludedPathKey = excludedPathKey,
                 TotalLines      = nonBlankCount,
-                SourceMeta      = subagentLinks.TryGetValue(s.SessionId, out var link)
-                    ? new Dictionary<string, object?>(s.SourceMeta!) {
-                        ["ParentSessionId"] = link.ParentSessionId,
-                        ["SubagentType"]    = link.SubagentType,
-                    }
-                    : s.SourceMeta,
+                SourceMeta      = StampSubagentMeta(s.SourceMeta!, s.SessionId, subagentLinks, childrenByParent),
             });
         }
 
@@ -314,11 +320,10 @@ internal sealed class CursorImportSource : IImportSource {
             ImportContext                       ctx,
             CancellationToken                   ct
         ) {
-        // AI-1153: a correlated subagent child is ingested under its parent's
-        // AgentSubsession stream instead of as a standalone top-level session.
-        if (classification.SourceMeta!.TryGetValue("ParentSessionId", out var parentObj)
-         && parentObj is string parentSessionId && !string.IsNullOrEmpty(parentSessionId)) {
-            return await ImportSubagentAsync(classification, parentSessionId, ctx, ct);
+        // AI-1153: a correlated subagent child is imported by its parent (below), under the
+        // parent's AgentSubsession stream — never as a standalone top-level session.
+        if (classification.SourceMeta!.TryGetValue("IsSubagentChild", out var scObj) && scObj is true) {
+            return ImportOutcome.Skipped;
         }
 
         var transcriptPath = (string)classification.SourceMeta!["TranscriptPath"]!;
@@ -383,6 +388,19 @@ internal sealed class CursorImportSource : IImportSource {
             return ImportOutcome.Failed;
         }
 
+        // AI-1153: import this parent's subagent children BEFORE its session-end, so the
+        // parent's SessionEnded remains the last event on its stream. A subagent-start
+        // (reactivation event) appended after the parent's SessionEnded would flip the
+        // ended parent back to Active. Hard-fail on child failure (same contract as the
+        // parent lifecycle) so a re-run — idempotent via deterministic ids — repairs it.
+        if (classification.SourceMeta!.TryGetValue("SubagentChildren", out var kidsObj)
+         && kidsObj is List<CursorSubagentChild> children) {
+            foreach (var child in children) {
+                if (!await SendSubagentLifecycleAsync(classification.SessionId, child, ctx, ct))
+                    return ImportOutcome.Failed;
+            }
+        }
+
         // sessionEnd: same hard-fail contract — if it can't be appended, the
         // session would otherwise look perpetually "active" in the read-model.
         var durationMs = createdUtc is { } c && modifiedUtc is { } m && m >= c
@@ -399,28 +417,52 @@ internal sealed class CursorImportSource : IImportSource {
         return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
     }
 
-    /// <summary>
-    /// AI-1153: ingest a Cursor subagent child under its parent's <c>AgentSubsession</c>
-    /// stream. Mirrors <c>SessionImporter.SendAgentLifecycle</c>: <c>subagent-start</c>
-    /// (session_id=parent, agent_id=child) → transcript batches routed with
-    /// <c>agent_id</c>=child → <c>subagent-stop</c>. No standalone session-start/-end is
-    /// emitted for the child, so it never becomes a top-level session card. Sends from
-    /// line 0 — idempotent via deterministic ids + server dedup.
-    /// </summary>
-    async Task<ImportOutcome> ImportSubagentAsync(
-            ImportCommand.SessionClassification classification,
-            string                              parentSessionId,
-            ImportContext                       ctx,
-            CancellationToken                   ct
-        ) {
-        var transcriptPath = (string)classification.SourceMeta!["TranscriptPath"]!;
-        if (!File.Exists(transcriptPath)) return ImportOutcome.Failed;
+    /// <summary>A Cursor subagent child correlated to a parent: its own session id (used as the
+    /// AgentSubsession agent id), its transcript path, and the parent's declared subagent_type.</summary>
+    internal sealed record CursorSubagentChild(string SessionId, string TranscriptPath, string? SubagentType);
 
-        var agentId      = classification.SessionId; // the child session id doubles as the subagent id
-        var subagentType = classification.SourceMeta.TryGetValue("SubagentType", out var stObj)
-                        && stObj is string st && !string.IsNullOrEmpty(st)
-            ? st
-            : "task";
+    /// <summary>
+    /// Stamps subagent correlation onto a session's SourceMeta (SourceMeta is read-only, so a
+    /// child/parent gets a fresh copy). Children carry <c>IsSubagentChild</c> so their own
+    /// import no-ops; parents carry <c>SubagentChildren</c> so they import them inline.
+    /// </summary>
+    static IReadOnlyDictionary<string, object?> StampSubagentMeta(
+        IReadOnlyDictionary<string, object?>                       src,
+        string                                                     sessionId,
+        Dictionary<string, CursorSubagentCorrelator.SubagentLink>  links,
+        Dictionary<string, List<CursorSubagentChild>>              childrenByParent
+    ) {
+        var isChild = links.ContainsKey(sessionId);
+        var hasKids = childrenByParent.TryGetValue(sessionId, out var kids);
+        if (!isChild && !hasKids) return src;
+
+        var d = new Dictionary<string, object?>(src);
+        if (isChild) d["IsSubagentChild"]  = true;
+        if (hasKids) d["SubagentChildren"] = kids;
+        return d;
+    }
+
+    /// <summary>
+    /// AI-1153: ingest one Cursor subagent child under its parent's <c>AgentSubsession</c>
+    /// stream. Mirrors <c>SessionImporter.SendAgentLifecycle</c>: <c>subagent-start</c>
+    /// (session_id=parent, agent_id=child) → transcript batches routed with <c>agent_id</c>=child
+    /// (resumed from the subsession watermark so re-imports don't repost the whole child) →
+    /// <c>subagent-stop</c>. Called from the parent's <see cref="ImportSessionAsync"/> BEFORE the
+    /// parent's session-end. Returns false on a hard failure (start/transcript/stop POST failed);
+    /// a missing child transcript is skipped non-fatally. No standalone session lifecycle is
+    /// emitted for the child, so it never becomes a top-level session card.
+    /// </summary>
+    async Task<bool> SendSubagentLifecycleAsync(
+            string            parentSessionId,
+            CursorSubagentChild child,
+            ImportContext     ctx,
+            CancellationToken ct
+        ) {
+        if (string.IsNullOrEmpty(child.TranscriptPath) || !File.Exists(child.TranscriptPath))
+            return true; // missing child transcript — skip, non-fatal
+
+        var agentId      = child.SessionId; // the child session id doubles as the subagent id
+        var subagentType = string.IsNullOrEmpty(child.SubagentType) ? "task" : child.SubagentType!;
 
         // subagent-start on the parent stream (creates AgentSubsession-{parent}-{child}).
         var startOk = await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-start", new JsonObject {
@@ -428,33 +470,39 @@ internal sealed class CursorImportSource : IImportSource {
             ["session_id"]      = parentSessionId,
             ["agent_id"]        = agentId,
             ["agent_type"]      = subagentType,
-            ["transcript_path"] = transcriptPath,
+            ["transcript_path"] = child.TranscriptPath,
         }, ct);
-        if (!startOk) return ImportOutcome.Failed;
+        if (!startOk) return false;
 
-        int sent;
+        // Resume from the subsession watermark (AgentSubsession-{parent}-{child}) so a re-import
+        // doesn't repost the full child transcript every time. Fail-open to a full send.
+        var startLine = 0;
         try {
-            sent = await SessionImporter.SendTranscriptBatches(
+            if (await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, parentSessionId, ct, agentId) is { } last)
+                startLine = last + 1;
+        } catch {
+            startLine = 0;
+        }
+
+        try {
+            await SessionImporter.SendTranscriptBatches(
                 httpClient: ctx.HttpClient,
                 baseUrl:    ctx.BaseUrl,
                 sessionId:  parentSessionId,
-                filePath:   transcriptPath,
+                filePath:   child.TranscriptPath,
                 agentId:    agentId,
-                startLine:  0,
+                startLine:  startLine,
                 vendor:     Vendor);
         } catch {
-            return ImportOutcome.Failed;
+            return false;
         }
 
-        var stopOk = await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-stop", new JsonObject {
+        return await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-stop", new JsonObject {
             ["hook_event_name"] = "subagent_stop",
             ["session_id"]      = parentSessionId,
             ["agent_id"]        = agentId,
             ["agent_type"]      = subagentType,
         }, ct);
-        if (!stopOk) return ImportOutcome.Failed;
-
-        return sent > 0 ? ImportOutcome.Loaded : ImportOutcome.Skipped;
     }
 
     internal static JsonObject BuildSessionStartPayload(
@@ -569,8 +617,12 @@ internal sealed class CursorImportSource : IImportSource {
         return (lastIdx, count);
     }
 
-    static async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct) {
-        using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct: ct);
+    static async Task<int?> FetchServerLastLineAsync(HttpClient http, string baseUrl, string sessionId, CancellationToken ct, string? agentId = null) {
+        // agentId set → probe the AgentSubsession-{sessionId}-{agentId} watermark (AI-1153).
+        var url = string.IsNullOrEmpty(agentId)
+            ? $"{baseUrl}/api/sessions/{sessionId}/last-line"
+            : $"{baseUrl}/api/sessions/{sessionId}/last-line?agentId={Uri.EscapeDataString(agentId)}";
+        using var resp = await http.GetWithRetryAsync(url, ct: ct);
 
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
