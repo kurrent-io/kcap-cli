@@ -139,6 +139,7 @@ static class McpSessionsServer {
                 "get_session_summary"    => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildSummaryUrl(baseUrl, arguments))),
                 "get_session_transcript" => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildTranscriptUrl(baseUrl, arguments))),
                 "get_turn"               => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildTurnDetailUrl(baseUrl, arguments))),
+                "list_turns"             => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildTurnsUrl(baseUrl, arguments))),
                 _                        => throw new ArgumentException($"Unknown tool: {toolName}")
             };
 
@@ -242,6 +243,13 @@ static class McpSessionsServer {
         }
 
         return $"{baseUrl}/api/sessions/{Uri.EscapeDataString(id)}/turns/{turnIndex}";
+    }
+
+    internal static string BuildTurnsUrl(string baseUrl, JsonObject? args) {
+        var id = args?["session_id"]?.GetValue<string>()
+         ?? throw new ArgumentException("Missing required argument: session_id");
+
+        return $"{baseUrl}/api/sessions/{Uri.EscapeDataString(id)}/turns";
     }
 
     static string BuildTranscriptUrl(string baseUrl, JsonObject? args) {
@@ -518,6 +526,15 @@ static class McpSessionsServer {
                     ["turn_index"] = new("integer", "Zero-based turn index.")
                 },
                 ["session_id", "turn_index"]
+            )
+        ),
+        new(
+            "list_turns",
+            "List all turns of a past session with their prose summaries. A turn is one user message and the assistant's full response up to the next user message. Returns per turn: turn_index, prose (1-3 sentence summary; may be null for trivial/older turns), user_prompt, tools, files, and token counts. Use this to map a session turn by turn, then call get_turn(session_id, turn_index) for one turn's full transcript, or get_session_summary for the whole-session narrative.",
+            new(
+                "object",
+                new() { ["session_id"] = new("string", "Session ID (from search_sessions or get_session_summary).") },
+                ["session_id"]
             )
         )
     ];

@@ -260,6 +260,33 @@ public class McpSessionsServerTests {
         await Assert.That(ok).IsFalse();
     }
 
+    [Test]
+    public async Task BuildTurnsUrl_builds_session_turns_url() {
+        var url = McpSessionsServer.BuildTurnsUrl(
+            "http://srv",
+            new JsonObject { ["session_id"] = "abc-123" }
+        );
+
+        await Assert.That(url).IsEqualTo("http://srv/api/sessions/abc-123/turns");
+    }
+
+    [Test]
+    public async Task BuildTurnsUrl_escapes_session_id() {
+        var url = McpSessionsServer.BuildTurnsUrl(
+            "http://srv",
+            new JsonObject { ["session_id"] = "a/b c" }
+        );
+
+        await Assert.That(url).IsEqualTo("http://srv/api/sessions/a%2Fb%20c/turns");
+    }
+
+    [Test]
+    public async Task BuildTurnsUrl_throws_when_session_id_missing() {
+        var ex = Assert.Throws<ArgumentException>(() => McpSessionsServer.BuildTurnsUrl("http://srv", new JsonObject()));
+
+        await Assert.That(ex!.Message).Contains("session_id");
+    }
+
     // BuildTranscriptUrl is private; reach it via the public test entry point HandleToolCallForTests
     // would round-trip through HTTP, so instead we use reflection for narrow per-builder coverage.
     static string InvokeBuildTranscriptUrl(string baseUrl, JsonObject args) {
