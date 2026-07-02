@@ -123,6 +123,8 @@ The `kcap mcp sessions` stdio server lets coding agents search and recall past C
 
 The `kcap mcp flows` stdio server lets agents start and interact with AI-powered review flows. The plugin **auto-registers it for Claude Code** (Codex stays manual). See the [Flows MCP server](#flows-mcp-server-for-agents) section for details.
 
+The `kcap mcp memory` stdio server lets agents search, save, and update durable team memories — preferences, feedback, project facts, and references scoped to you, your team, or the org. The plugin **auto-registers it for Claude Code** (via `.mcp.json`) and for Codex's native plugin loader (via `.codex-mcp.json`). See the [Memory MCP server](#memory-mcp-server-for-agents) section for details.
+
 ## What it records
 
 Once set up, Capacitor runs silently in the background. Every Claude Code (and Codex CLI, if you installed those hooks) session is captured automatically:
@@ -315,6 +317,25 @@ It provides four tools:
 - **`close_review_flow`** — mark a completed review flow as closed.
 
 Requires `kcap login` **and a running daemon with this repo checked out** — the server discovers a connected daemon to launch the hosted reviewer (Codex for the built-in `spec-review`/`code-review` flows; the vendor is chosen by the flow definition), and `start_review_flow` errors if none (or more than one) matches. The server creates an authenticated HTTP client at startup and posts to the Capacitor server's `/api/flows/*` endpoints.
+
+### Memory MCP server (for agents)
+
+```bash
+kcap mcp memory
+```
+
+Stdio MCP server that lets coding agents search, save, and update durable "memories" — short, reusable notes (preferences, feedback, project facts, references) scoped to you, your team, or the whole org, so lessons learned in one session are available in the next. **Claude Code:** auto-registered via the plugin's `.mcp.json`. **Codex:** available via the plugin's `.codex-mcp.json` descriptor for Codex's native plugin loader.
+
+It provides six tools:
+
+- **`search_memories`** — hybrid semantic + keyword search over memories visible to you (your own, your teams', and org-wide). Agents are told to call this before saving a new memory.
+- **`get_memory`** — fetch a memory's full content by id or slug.
+- **`save_memory`** — save a new memory with an `audience` (`user`, `team`, or `org`), `slug`, `description`, `content`, and `kind`. Scoped to the current repo by default; pass `global: true` to save it repo-independent, or `machine_specific: true` (user audience only) to tag it to this machine.
+- **`update_memory`** — update an existing memory's description, content, and/or kind.
+- **`rescope_memory`** — change a memory's audience, e.g. promote a personal memory to the team or org.
+- **`archive_memory`** — soft-delete a memory.
+
+The server is repo- and machine-aware: it resolves the current working directory to a repo hash and the local persisted machine id at startup, and uses both to scope `save_memory` and to bias `search_memories` / `get_memory` results.
 
 ### Curate guidelines
 

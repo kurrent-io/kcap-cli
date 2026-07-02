@@ -15,6 +15,12 @@
       "args": ["mcp", "flows"],
       "cwd": "${CLAUDE_PROJECT_DIR}",
       "description": "Structured AI review flows — start_review_flow, submit_review_round, get_review_flow_status, close_review_flow. Launches a hosted reviewer agent through your daemon; requires `kcap login` and a running daemon with this repo checked out (the tools are inert otherwise)."
+    },
+    "kcap-memory": {
+      "command": "kcap",
+      "args": ["mcp", "memory"],
+      "cwd": "${CLAUDE_PROJECT_DIR}",
+      "description": "Team memory — search, read, and save durable learnings scoped to you, your team, or the org."
     }
   }
 }

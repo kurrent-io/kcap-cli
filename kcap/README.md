@@ -31,6 +31,21 @@ PR review context tools. Each PR-scoped tool accepts an optional `pr` argument (
 | `list_sessions` | Sessions that contributed to the PR | optional |
 | `get_transcript` | Full transcript of a specific session | n/a (keys off `session_id`) |
 
+### `kcap-memory`
+
+Search, save, and update durable team memories — preferences, feedback, project facts, and references scoped to you, your team, or the org.
+
+| Tool | Description |
+|------|-------------|
+| `search_memories` | Hybrid semantic + keyword search over memories visible to you |
+| `get_memory` | Fetch a memory's full content by id or slug |
+| `save_memory` | Save a new memory (`audience`, `slug`, `description`, `content`, `kind`); scoped to the cwd repo unless `global: true` |
+| `update_memory` | Update an existing memory's description/content/kind |
+| `rescope_memory` | Change a memory's audience (e.g. promote user → team/org) |
+| `archive_memory` | Soft-delete a memory |
+
+Repo- and machine-aware: it resolves the cwd to a repo hash and the local persisted machine id at startup to scope saves and bias search results.
+
 `kcap mcp judge` is intentionally not auto-registered. Add it with `claude mcp add kcap-judge -- kcap mcp judge` if you want it.
 
 **Hooks** — Automatically captures session activity and forwards it to the Kurrent Capacitor server:
