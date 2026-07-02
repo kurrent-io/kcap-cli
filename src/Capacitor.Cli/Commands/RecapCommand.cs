@@ -117,7 +117,7 @@ static class RecapCommand {
             return 0;
         }
 
-        return full ? PrintFull(entries, chain) : PrintSummary(entries, chain);
+        return full ? PrintFull(entries, chain) : await PrintSummaryWithOutline(baseUrl, httpClient, entries, chain, sessionId);
     }
 
     static int PrintSummary(List<RecapEntry> entries, bool chain) {
@@ -158,6 +158,78 @@ static class RecapCommand {
         Console.Error.WriteLine("Use `kcap recap --full` for the complete transcript.");
 
         return 0;
+    }
+
+    static async Task<int> PrintSummaryWithOutline(
+            string baseUrl, HttpClient httpClient, List<RecapEntry> entries, bool chain, string sessionId
+        ) {
+        var summaries = entries.Where(e => e.Type is "whats_done" or "plan").ToList();
+
+        // Distinct session ids to render, in first-seen order. Non-chain: just the requested id.
+        var sessionIds = chain
+            ? entries.Select(e => e.SessionId).OfType<string>().Distinct().ToList()
+            : [sessionId];
+
+        var printedAnything = false;
+
+        foreach (var sid in sessionIds) {
+            if (chain) {
+                Console.Out.WriteLine($"# Session {sid}");
+                Console.Out.WriteLine();
+            }
+
+            // Summary section for this session (plan + whats_done), reusing the existing types.
+            foreach (var entry in summaries.Where(e => !chain || e.SessionId == sid)) {
+                switch (entry.Type) {
+                    case "plan":
+                        Console.Out.WriteLine("## Plan");
+                        Console.Out.WriteLine(entry.Content);
+                        Console.Out.WriteLine();
+                        printedAnything = true;
+
+                        break;
+                    case "whats_done":
+                        Console.Out.WriteLine("## Summary");
+                        Console.Out.WriteLine(entry.Content);
+                        Console.Out.WriteLine();
+                        printedAnything = true;
+
+                        break;
+                }
+            }
+
+            // Turn outline for this session.
+            var outline = await FetchTurnOutline(baseUrl, httpClient, sid);
+
+            if (outline.Length > 0) {
+                Console.Out.WriteLine(outline);
+                printedAnything = true;
+            }
+        }
+
+        if (!printedAnything) {
+            Console.Out.WriteLine("No summary or turns available yet. Use `kcap recap --full` to see the raw transcript.");
+
+            return 0;
+        }
+
+        Console.Out.WriteLine($"→ kcap recap --get-turn <N>{(chain ? " <sessionId>" : "")} for one turn's full detail");
+
+        return 0;
+    }
+
+    /// <summary>GETs /turns for one session and renders the outline block, or "" on any non-success.</summary>
+    static async Task<string> FetchTurnOutline(string baseUrl, HttpClient httpClient, string sessionId) {
+        try {
+            var resp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/turns");
+
+            if (!resp.IsSuccessStatusCode) return "";
+
+            return FormatTurnOutline(await resp.Content.ReadAsStringAsync());
+        } catch (HttpRequestException) {
+            // Outline is best-effort enrichment on top of the summary — never fail recap on it.
+            return "";
+        }
     }
 
     static int PrintFull(List<RecapEntry> entries, bool chain) {
@@ -321,19 +393,8 @@ static class RecapCommand {
                 ? $"(turn {turnIndex})"
                 : userPrompt.Length > 80 ? userPrompt[..80] + "…" : userPrompt;
 
-            var tools = "—";
-
-            if (turn.TryGetProperty("tools", out var toolsEl) && toolsEl.ValueKind == JsonValueKind.Array) {
-                var names = new List<string>();
-
-                foreach (var t in toolsEl.EnumerateArray()) {
-                    if (t.TryGetProperty("name", out var n) && n.GetString() is { Length: > 0 } nm) {
-                        names.Add(nm);
-                    }
-                }
-
-                if (names.Count > 0) tools = string.Join(", ", names.Distinct());
-            }
+            var toolNames = ExtractToolNames(turn);
+            var tools     = toolNames.Count > 0 ? string.Join(", ", toolNames) : "—";
 
             var files  = turn.TryGetProperty("files", out var f) && f.ValueKind == JsonValueKind.Array ? f.GetArrayLength() : 0;
             var tokens = turn.TryGetProperty("total_tokens", out var tk) ? tk.GetInt64() : 0;
@@ -487,4 +548,63 @@ static class RecapCommand {
 
     static string GetTraceString(JsonElement el, string prop) =>
         el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+
+    /// <summary>Distinct tool names for a turn JSON object, in first-seen order.</summary>
+    internal static List<string> ExtractToolNames(JsonElement turn) {
+        var names = new List<string>();
+
+        if (turn.TryGetProperty("tools", out var toolsEl) && toolsEl.ValueKind == JsonValueKind.Array) {
+            foreach (var t in toolsEl.EnumerateArray()) {
+                if (t.TryGetProperty("name", out var n) && n.GetString() is { Length: > 0 } nm && !names.Contains(nm)) {
+                    names.Add(nm);
+                }
+            }
+        }
+
+        return names;
+    }
+
+    /// <summary>
+    /// Renders the `## Turns` outline block for a session: one line per turn, using the turn's
+    /// prose summary when present, otherwise a truncated user-prompt excerpt + tool/file metadata.
+    /// Returns "" for a missing/empty/non-array payload so the caller can skip the section.
+    /// </summary>
+    internal static string FormatTurnOutline(string turnsJson) {
+        using var doc = JsonDocument.Parse(turnsJson);
+
+        if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() == 0) {
+            return "";
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("## Turns");
+
+        foreach (var turn in doc.RootElement.EnumerateArray()) {
+            sb.AppendLine(FormatOutlineLine(turn));
+        }
+
+        return sb.ToString();
+    }
+
+    static string FormatOutlineLine(JsonElement turn) {
+        var index = turn.TryGetProperty("turn_index", out var ti) ? ti.GetInt32() : -1;
+        var prose = turn.TryGetProperty("prose", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+
+        if (!string.IsNullOrWhiteSpace(prose)) {
+            return $"{index,3}  {prose!.Trim()}";
+        }
+
+        var prompt  = turn.TryGetProperty("user_prompt", out var up) && up.ValueKind == JsonValueKind.String ? up.GetString() ?? "" : "";
+        var excerpt = prompt.Length == 0 ? "(no prompt)" : prompt.Length > 80 ? prompt[..80] + "…" : prompt;
+
+        var toolNames = ExtractToolNames(turn);
+        var fileCount = turn.TryGetProperty("files", out var f) && f.ValueKind == JsonValueKind.Array ? f.GetArrayLength() : 0;
+
+        var parts = new List<string>();
+        if (toolNames.Count > 0) parts.Add(string.Join(", ", toolNames));
+        if (fileCount > 0) parts.Add($"{fileCount} files");
+        var meta = parts.Count > 0 ? $"  [{string.Join(" · ", parts)}]" : "";
+
+        return $"{index,3}  {excerpt}{meta}";
+    }
 }
