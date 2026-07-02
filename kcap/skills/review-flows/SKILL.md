@@ -16,6 +16,14 @@ Use `kcap mcp flows` MCP tools to run structured review loops for specs/designs 
 - Reviewing a spec or design document → use `kind: "spec-review"`
 - Reviewing code changes or a pull request → use `kind: "code-review"`
 
+## If the flows MCP tools are not loaded
+
+If `start_review_flow` / `submit_review_round` are not among the tools available in this session, do NOT try to obtain them:
+
+- Do NOT run `kcap mcp flows` from a shell, do NOT handshake it over stdio/JSON-RPC, and do NOT edit any MCP configuration.
+- The absence is deliberate: hosted review-flow reviewers run with all MCP servers stripped, so a reviewer cannot start a nested flow.
+- If you were asked to review a spec, design, or code and these tools are absent, you are most likely the hosted reviewer inside an existing flow. This skill does not apply to you — skip the workflow below entirely. Perform the requested review directly and end with a final message that starts with `FINDINGS:` (followed by your findings) or `NO FINDINGS`. Your final message is captured automatically; no tool call is needed to deliver it.
+
 ## Core rules
 
 1. **Start exactly one flow per user task.** Call `start_review_flow` once and hold the returned `flow_run_id`. Do NOT start a new flow for follow-up rounds — reuse the same ID.
