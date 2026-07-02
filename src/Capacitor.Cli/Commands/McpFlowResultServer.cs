@@ -60,17 +60,31 @@ static class McpFlowResultServer {
             if (!urlOk)
                 return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
-            var paramsNode = callRequest["params"]?.AsObject();
-            var toolName   = paramsNode?["name"]?.GetValue<string>();
-            var arguments  = paramsNode?["arguments"]?.AsObject();
-
-            if (toolName is null)
-                return BuildErrorResponse(callId, -32602, "Missing params.name");
-
-            if (toolName != "submit_review_result")
-                return BuildToolResult(callId, $"Error: Unknown tool: {toolName}", isError: true);
-
             try {
+                // Params extraction stays INSIDE the guard: a malformed tools/call (params
+                // not an object, name not a string) must yield a JSON-RPC error, not throw
+                // past the loop and kill the reviewer's only result-submission tool
+                // (Qodo review on #240; matches McpFlowsServer/McpReviewServer structure).
+                JsonObject? paramsNode;
+                string?     toolName;
+                JsonObject? arguments;
+
+                try {
+                    paramsNode = callRequest["params"]?.AsObject();
+                    toolName   = paramsNode?["name"]?.GetValue<string>();
+                    arguments  = paramsNode?["arguments"]?.AsObject();
+                } catch (InvalidOperationException) {
+                    return BuildErrorResponse(callId, -32602, "Invalid params");
+                } catch (FormatException) {
+                    return BuildErrorResponse(callId, -32602, "Invalid params");
+                }
+
+                if (toolName is null)
+                    return BuildErrorResponse(callId, -32602, "Missing params.name");
+
+                if (toolName != "submit_review_result")
+                    return BuildToolResult(callId, $"Error: Unknown tool: {toolName}", isError: true);
+
                 client ??= await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
 
                 var (text, isError) = await SubmitCoreAsync(
