@@ -10,8 +10,7 @@
     },
     "kcap-memory": {
       "command": "kcap",
-      "args": ["mcp", "memory"],
-      "cwd": "${CLAUDE_PROJECT_DIR}"
+      "args": ["mcp", "memory"]
     }
   }
 }
