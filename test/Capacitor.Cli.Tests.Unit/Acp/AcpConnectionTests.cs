@@ -271,6 +271,72 @@ public class AcpConnectionTests {
     }
 
     [Test]
+    public async Task Wrong_typed_field_in_well_formed_JSON_is_skipped_and_loop_still_delivers_next_valid_frame() {
+        await using var harness = new Harness();
+        using var       cts     = new CancellationTokenSource();
+        var              runTask = harness.Connection.RunAsync(cts.Token);
+
+        var tcs = new TaskCompletionSource<AcpNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Connection.OnNotification += n => tcs.TrySetResult(n);
+
+        // Well-formed JSON, but `method` is a number instead of a string — parses fine via
+        // JsonDocument.Parse, then throws InvalidOperationException out of GetString() during
+        // shape-dispatch. Also probe an error frame with a non-integer `code` for the same class
+        // of bug (FormatException out of GetInt32()).
+        await harness.WriteFrameToConnectionAsync("""{"jsonrpc":"2.0","id":1,"method":123}""");
+        await harness.WriteFrameToConnectionAsync(
+            """{"jsonrpc":"2.0","id":2,"error":{"code":"oops","message":"bad"}}"""
+        );
+        await harness.WriteFrameToConnectionAsync(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"still-alive"}}"""
+        );
+
+        var notification = await tcs.Task.WaitAsync(HangGuard);
+        await Assert.That(notification.Params!.Value.GetProperty("sessionId").GetString()).IsEqualTo("still-alive");
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
+    }
+
+    [Test]
+    public async Task Server_request_with_string_id_echoes_the_same_string_id_verbatim() {
+        await using var harness = new Harness();
+        using var       cts     = new CancellationTokenSource();
+        var              runTask = harness.Connection.RunAsync(cts.Token);
+
+        harness.Connection.OnServerRequest = (request, _) => {
+            var result = JsonSerializer.SerializeToElement(new { content = "file contents" });
+            return Task.FromResult<object?>(result);
+        };
+
+        await harness.WriteFrameToConnectionAsync(
+            """{"jsonrpc":"2.0","id":"agent-generated-string-id","method":"fs/read_text_file","params":{}}"""
+        );
+
+        var frame = await harness.ReadFrameFromConnectionAsync();
+        using var doc = JsonDocument.Parse(frame);
+        var idElement = doc.RootElement.GetProperty("id");
+        await Assert.That(idElement.ValueKind).IsEqualTo(JsonValueKind.String);
+        await Assert.That(idElement.GetString()).IsEqualTo("agent-generated-string-id");
+        await Assert.That(doc.RootElement.GetProperty("result").GetProperty("content").GetString())
+            .IsEqualTo("file contents");
+
+        // Confirm the loop is still alive after handling the string-id request: a subsequent valid
+        // frame must still be delivered (guards against a naive long-forcing implementation that
+        // would throw on the string id and silently wedge the read loop).
+        var tcs = new TaskCompletionSource<AcpNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Connection.OnNotification += n => tcs.TrySetResult(n);
+        await harness.WriteFrameToConnectionAsync(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"still-alive"}}"""
+        );
+        var notification = await tcs.Task.WaitAsync(HangGuard);
+        await Assert.That(notification.Params!.Value.GetProperty("sessionId").GetString()).IsEqualTo("still-alive");
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
+    }
+
+    [Test]
     public async Task NotifyAsync_writes_notification_frame_without_id() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();

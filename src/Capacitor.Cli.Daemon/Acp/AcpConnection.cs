@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// <see cref="AcpError"/>). Thrown by <see cref="AcpConnection.RequestAsync"/> when the agent
 /// answers a request with an error instead of a result.
 /// </summary>
-public sealed class AcpRpcException : Exception {
+internal sealed class AcpRpcException : Exception {
     public int          Code      { get; }
     public JsonElement? ErrorData { get; }
 
@@ -50,7 +50,7 @@ public sealed class AcpRpcException : Exception {
 /// call on the client side (removes the correlation entry and faults the awaiter); it does not by
 /// itself tell the agent to stop working.
 /// </summary>
-public sealed class AcpConnection : IAsyncDisposable {
+internal sealed class AcpConnection : IAsyncDisposable {
     readonly Stream                                                  _writeStream;
     readonly Stream                                                  _readStream;
     readonly ILogger                                                 _logger;
@@ -157,35 +157,55 @@ public sealed class AcpConnection : IAsyncDisposable {
             return;
         }
 
-        using (doc) {
-            var root = doc.RootElement;
+        // Diagnostics captured up front (cheap ValueKind reads, never the actual method/id/params
+        // VALUES) so the catch below can log them without touching `doc` after it may already have
+        // been disposed by the `using` block.
+        var methodKind = "<absent>";
+        var idKind     = "<absent>";
 
-            if (root.ValueKind != JsonValueKind.Object) {
-                _logger.LogDebug("ACP: skipping non-object frame (kind={Kind})", root.ValueKind);
-                return;
+        try {
+            using (doc) {
+                var root = doc.RootElement;
+
+                if (root.ValueKind != JsonValueKind.Object) {
+                    _logger.LogDebug("ACP: skipping non-object frame (kind={Kind})", root.ValueKind);
+                    return;
+                }
+
+                var hasId     = root.TryGetProperty("id", out var idElement);
+                var hasMethod = root.TryGetProperty("method", out var methodElement);
+                var hasResult = root.TryGetProperty("result", out var resultElement);
+                var hasError  = root.TryGetProperty("error", out var errorElement);
+
+                methodKind = hasMethod ? methodElement.ValueKind.ToString() : "<absent>";
+                idKind     = hasId ? idElement.ValueKind.ToString() : "<absent>";
+
+                if (hasId && (hasResult || hasError) && !hasMethod) {
+                    HandleResponse(idElement, hasResult ? resultElement : null, hasError ? errorElement : null);
+                    return;
+                }
+
+                if (hasMethod && hasId) {
+                    await HandleServerRequestAsync(root, idElement, methodElement, ct).ConfigureAwait(false);
+                    return;
+                }
+
+                if (hasMethod && !hasId) {
+                    HandleNotification(root, methodElement);
+                    return;
+                }
+
+                _logger.LogDebug("ACP: skipping frame with unrecognized shape");
             }
-
-            var hasId     = root.TryGetProperty("id", out var idElement);
-            var hasMethod = root.TryGetProperty("method", out var methodElement);
-            var hasResult = root.TryGetProperty("result", out var resultElement);
-            var hasError  = root.TryGetProperty("error", out var errorElement);
-
-            if (hasId && (hasResult || hasError) && !hasMethod) {
-                HandleResponse(idElement, hasResult ? resultElement : null, hasError ? errorElement : null);
-                return;
-            }
-
-            if (hasMethod && hasId) {
-                await HandleServerRequestAsync(root, idElement, methodElement, ct).ConfigureAwait(false);
-                return;
-            }
-
-            if (hasMethod && !hasId) {
-                HandleNotification(root, methodElement);
-                return;
-            }
-
-            _logger.LogDebug("ACP: skipping frame with unrecognized shape");
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            // A well-formed JSON frame can still have a field of the wrong JSON type (e.g. a numeric
+            // `method` or a string `error.code`), which throws InvalidOperationException/FormatException
+            // out of GetString()/GetInt32()/etc. after the parse already succeeded. This must not take
+            // down the read loop — every pending and future RequestAsync call depends on it staying
+            // alive — so we log the frame's shape only (never params/result/content, which may carry
+            // sensitive payloads) and skip the bad frame. OperationCanceledException is rethrown so
+            // loop-cancellation shutdown stays clean.
+            _logger.LogDebug(ex, "ACP: skipping frame with wrong-typed field (method.kind={MethodKind}, id.kind={IdKind})", methodKind, idKind);
         }
     }
 
