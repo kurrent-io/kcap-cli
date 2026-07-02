@@ -471,6 +471,7 @@ internal sealed class CursorImportSource : IImportSource {
             ["agent_id"]        = agentId,
             ["agent_type"]      = subagentType,
             ["transcript_path"] = child.TranscriptPath,
+            ["cwd"]             = "", // wire-shape parity with SendAgentLifecycle / other vendors
         }, ct);
         if (!startOk) return false;
 
@@ -508,6 +509,8 @@ internal sealed class CursorImportSource : IImportSource {
             ["session_id"]             = parentSessionId,
             ["agent_id"]               = agentId,
             ["agent_type"]             = subagentType,
+            ["transcript_path"]        = child.TranscriptPath,
+            ["cwd"]                    = "", // wire-shape parity with SendAgentLifecycle / other vendors
             ["stop_hook_active"]       = false,
             ["agent_transcript_path"]  = child.TranscriptPath,
             ["last_assistant_message"] = "",

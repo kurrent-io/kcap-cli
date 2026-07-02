@@ -78,10 +78,10 @@ public class CursorSubagentCorrelatorTests {
     }
 
     [Test]
-    public async Task duplicate_task_prompt_resolves_to_a_stable_parent_regardless_of_input_order() {
-        // Review finding: two parents issuing the same Task prompt must resolve to the SAME
-        // parent across runs (input arrives in filesystem-discovery order, which isn't stable).
-        // The correlator orders by session id, so the lowest id wins deterministically.
+    public async Task ambiguous_prompt_across_two_parents_yields_no_link_regardless_of_input_order() {
+        // Review finding: if two DISTINCT parents issue the same Task prompt, the linkage is
+        // genuinely ambiguous — the correlator must NOT guess a parent (which could misattribute
+        // the child). It drops the link entirely, deterministically, in any input order.
         using var fx = new CorrelatorFixture();
         const string prompt = "shared prompt";
         var p1    = fx.Add("11111111111111111111111111111111", ParentTranscript(prompt, "typeA"));
@@ -99,9 +99,27 @@ public class CursorSubagentCorrelatorTests {
             ("11111111111111111111111111111111", p1),
         ]);
 
-        // Same parent (the lowest session id) both ways.
-        await Assert.That(forward["22222222222222222222222222222222"].ParentSessionId).IsEqualTo("11111111111111111111111111111111");
-        await Assert.That(reversed["22222222222222222222222222222222"].ParentSessionId).IsEqualTo("11111111111111111111111111111111");
+        // No link either way — ambiguous prompt is not attributed to a guessed parent.
+        await Assert.That(forward.ContainsKey("22222222222222222222222222222222")).IsFalse();
+        await Assert.That(reversed.ContainsKey("22222222222222222222222222222222")).IsFalse();
+    }
+
+    [Test]
+    public async Task same_parent_tasking_a_prompt_twice_is_not_ambiguous() {
+        // A single parent issuing the same Task prompt more than once must still link its child —
+        // only DISTINCT parents make a prompt ambiguous.
+        using var fx = new CorrelatorFixture();
+        const string prompt = "explore twice";
+        var parent = fx.Add("11111111111111111111111111111111",
+            ParentTranscript(prompt) + "\n" + TaskLine(prompt, "generalPurpose"));
+        var child  = fx.Add("22222222222222222222222222222222", ChildTranscript(prompt));
+
+        var links = CursorSubagentCorrelator.Correlate([
+            ("11111111111111111111111111111111", parent),
+            ("22222222222222222222222222222222", child),
+        ]);
+
+        await Assert.That(links["22222222222222222222222222222222"].ParentSessionId).IsEqualTo("11111111111111111111111111111111");
     }
 
     [Test]

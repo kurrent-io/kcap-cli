@@ -33,10 +33,9 @@ public static class CursorSubagentCorrelator {
     ) {
         var scanned = new List<(string Sid, string? FirstUserHash, List<(string Hash, string? SubType)> Tasks)>();
 
-        // Order by session id so "first writer wins" (below) is deterministic — the caller
-        // feeds us filesystem-discovery order, which is not stable across runs; without a
-        // stable tie-break, a duplicate Task prompt could route the same child under a
-        // different parent on re-run and defeat idempotency.
+        // Deterministic iteration order — the caller feeds filesystem-discovery order, which
+        // isn't stable across runs. (Cross-parent prompt collisions are handled explicitly as
+        // "ambiguous" below rather than by picking a first writer.)
         foreach (var (sid, path) in sessions.OrderBy(s => s.SessionId, StringComparer.Ordinal)) {
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
             try {
@@ -48,16 +47,25 @@ public static class CursorSubagentCorrelator {
             }
         }
 
-        // promptHash → (parentSessionId, subagentType). First writer wins on the (rare)
-        // case of two parents Tasking an identical prompt.
+        // promptHash → parent. If the SAME prompt is Tasked by two DISTINCT parents the linkage
+        // is genuinely ambiguous (the data can't tell which parent owns a matching child), so we
+        // record the collision and drop the link rather than misattribute the child to a guessed
+        // parent. A single parent Tasking the same prompt more than once is NOT ambiguous.
         var parentByPrompt = new Dictionary<string, (string Parent, string? SubType)>(StringComparer.Ordinal);
+        var ambiguous      = new HashSet<string>(StringComparer.Ordinal);
         foreach (var s in scanned)
-            foreach (var (hash, subType) in s.Tasks)
-                parentByPrompt.TryAdd(hash, (s.Sid, subType));
+            foreach (var (hash, subType) in s.Tasks) {
+                if (parentByPrompt.TryGetValue(hash, out var existing)) {
+                    if (!string.Equals(existing.Parent, s.Sid, StringComparison.Ordinal))
+                        ambiguous.Add(hash);
+                } else {
+                    parentByPrompt[hash] = (s.Sid, subType);
+                }
+            }
 
         var links = new Dictionary<string, SubagentLink>(StringComparer.Ordinal);
         foreach (var s in scanned) {
-            if (s.FirstUserHash is null) continue;
+            if (s.FirstUserHash is null || ambiguous.Contains(s.FirstUserHash)) continue;
             if (parentByPrompt.TryGetValue(s.FirstUserHash, out var p)
              && !string.Equals(p.Parent, s.Sid, StringComparison.Ordinal)) {
                 links[s.Sid] = new SubagentLink(p.Parent, p.SubType);
