@@ -61,6 +61,35 @@ public class RecapOutlineTests {
     }
 
     [Test]
+    public async Task FormatTurnOutline_collapses_internal_newlines_to_single_line() {
+        // prose carries a real newline (the \n is a JSON escape, decoded to U+000A by the parser).
+        const string turns = """
+            [ {"turn_index":7,"user_prompt":"p","prose":"first line\nsecond line","tools":[],"files":[]} ]
+            """;
+
+        var outline = RecapCommand.FormatTurnOutline(turns);
+
+        // The turn must render on exactly one line: the internal newline is collapsed, not passed
+        // through as a wrapped, unindented second line that breaks the outline's alignment.
+        var turnLine = outline.Split('\n', StringSplitOptions.RemoveEmptyEntries).Single(l => l.Contains("first line"));
+
+        await Assert.That(turnLine).DoesNotContain("\n");
+        await Assert.That(turnLine).Contains("second line");
+        await Assert.That(turnLine.TrimStart()).StartsWith("7");
+    }
+
+    [Test]
+    public async Task FormatTurnOutline_returns_empty_when_turn_index_is_wrong_type() {
+        // Well-formed JSON array, but turn_index is a string — GetInt32() throws
+        // InvalidOperationException, which must degrade to "" rather than crash recap.
+        const string turns = """
+            [ {"turn_index":"0","user_prompt":"p","prose":"x","tools":[],"files":[]} ]
+            """;
+
+        await Assert.That(RecapCommand.FormatTurnOutline(turns)).IsEqualTo("");
+    }
+
+    [Test]
     public async Task ExtractToolNames_dedupes_and_preserves_order() {
         using var doc = System.Text.Json.JsonDocument.Parse(
             """{"tools":[{"name":"Edit"},{"name":"Bash"},{"name":"Edit"}]}""");

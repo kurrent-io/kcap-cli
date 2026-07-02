@@ -532,18 +532,9 @@ static class RecapCommand {
     /// Returns "" for a missing/empty/non-array payload so the caller can skip the section.
     /// </summary>
     internal static string FormatTurnOutline(string turnsJson) {
-        JsonDocument doc;
-
         try {
-            doc = JsonDocument.Parse(turnsJson);
-        } catch (JsonException) {
-            // Empty/truncated body, or a non-JSON page (e.g. a proxy 200 with an HTML error).
-            // The outline is best-effort enrichment, so treat unparseable input as "nothing to show"
-            // — same contract as the empty/non-array case below — rather than crashing recap.
-            return "";
-        }
+            using var doc = JsonDocument.Parse(turnsJson);
 
-        using (doc) {
             if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() == 0) {
                 return "";
             }
@@ -556,6 +547,15 @@ static class RecapCommand {
             }
 
             return sb.ToString();
+        } catch (JsonException) {
+            // Empty/truncated body, or a non-JSON page (e.g. a proxy 200 with an HTML error).
+            // The outline is best-effort enrichment, so treat unparseable input as "nothing to show"
+            // — same contract as the empty/non-array case above — rather than crashing recap.
+            return "";
+        } catch (InvalidOperationException) {
+            // Well-formed JSON array, but a field arrives as the wrong type (e.g. turn_index as a
+            // JSON string) so GetInt32()/GetString() throw. Degrade to summary-only, never crash.
+            return "";
         }
     }
 
@@ -564,10 +564,11 @@ static class RecapCommand {
         var prose = turn.TryGetProperty("prose", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
 
         if (!string.IsNullOrWhiteSpace(prose)) {
-            return $"{index,3}  {prose!.Trim()}";
+            return $"{index,3}  {CollapseWhitespace(prose!)}";
         }
 
-        var prompt  = turn.TryGetProperty("user_prompt", out var up) && up.ValueKind == JsonValueKind.String ? up.GetString() ?? "" : "";
+        var raw     = turn.TryGetProperty("user_prompt", out var up) && up.ValueKind == JsonValueKind.String ? up.GetString() ?? "" : "";
+        var prompt  = CollapseWhitespace(raw);
         var excerpt = prompt.Length == 0 ? "(no prompt)" : prompt.Length > 80 ? prompt[..80] + "…" : prompt;
 
         var toolNames = ExtractToolNames(turn);
@@ -580,4 +581,12 @@ static class RecapCommand {
 
         return $"{index,3}  {excerpt}{meta}";
     }
+
+    /// <summary>
+    /// Collapses all runs of internal whitespace (spaces, tabs, newlines) to single spaces and trims
+    /// the ends, so a multi-line prose/prompt stays on one outline line. AOT-safe (no runtime Regex):
+    /// splitting on null splits on all Unicode whitespace, RemoveEmptyEntries drops the gaps.
+    /// </summary>
+    static string CollapseWhitespace(string s) =>
+        string.Join(" ", s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }
