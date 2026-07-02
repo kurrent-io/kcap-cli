@@ -137,6 +137,75 @@ public class CodexLauncherTests {
     }
 
     [Test]
+    public async Task Review_flow_clears_then_whitelists_only_the_flow_result_server() {
+        var config = new DaemonConfig { CodexPath = "codex", CapacitorPath = "/opt/kcap", ServerUrl = "https://t.example" };
+        var launcher = new CodexLauncher(config, NullLogger<CodexLauncher>.Instance);
+        var ctx = new LauncherContext(
+            AgentId: "agent-xyz",
+            SourceRepoPath: "/tmp/repo",
+            Worktree: new WorktreeInfo(Path: "/tmp/wt", Branch: "wt-branch", SourceRepo: "/tmp/repo"),
+            Prompt: null,
+            Model: "gpt-5.3-codex",
+            Effort: null,
+            Tools: null,
+            IsReview: false,
+            IsReviewFlow: true,
+            Review: null,
+            ReviewLaunch: null
+        );
+
+        var args = launcher.BuildArgs(ctx).Args;
+
+        var clearIdx = Array.IndexOf(args, "mcp_servers={}");
+        await Assert.That(clearIdx).IsGreaterThanOrEqualTo(0);
+
+        var dotted = args.Where(a => a.StartsWith("mcp_servers.", StringComparison.Ordinal)).ToArray();
+        await Assert.That(dotted.Length).IsEqualTo(3);
+        await Assert.That(dotted.All(a => a.StartsWith("mcp_servers.kcap-flow-result.", StringComparison.Ordinal))).IsTrue();
+
+        // Clear-then-whitelist ORDER: the bare table reset must come BEFORE every dotted override,
+        // otherwise the dotted overrides merge into the user's config.toml table.
+        foreach (var d in dotted) {
+            await Assert.That(Array.IndexOf(args, d)).IsGreaterThan(clearIdx);
+        }
+
+        var command = dotted.Single(a => a.Contains(".command="));
+        await Assert.That(command).Contains("/opt/kcap");
+        var argsOverride = dotted.Single(a => a.Contains(".args="));
+        await Assert.That(argsOverride).Contains("mcp");
+        await Assert.That(argsOverride).Contains("flow-result");
+        var env = dotted.Single(a => a.Contains(".env="));
+        await Assert.That(env).Contains("KCAP_URL");
+        await Assert.That(env).Contains("https://t.example");
+        await Assert.That(env).Contains("KCAP_FLOW_AGENT_ID");
+        await Assert.That(env).Contains("agent-xyz");
+    }
+
+    [Test]
+    public async Task Review_flow_without_server_url_injects_no_servers() {
+        var config = new DaemonConfig { CodexPath = "codex", CapacitorPath = "/opt/kcap", ServerUrl = "" };
+        var launcher = new CodexLauncher(config, NullLogger<CodexLauncher>.Instance);
+        var ctx = new LauncherContext(
+            AgentId: "agent-xyz",
+            SourceRepoPath: "/tmp/repo",
+            Worktree: new WorktreeInfo(Path: "/tmp/wt", Branch: "wt-branch", SourceRepo: "/tmp/repo"),
+            Prompt: null,
+            Model: "gpt-5.3-codex",
+            Effort: null,
+            Tools: null,
+            IsReview: false,
+            IsReviewFlow: true,
+            Review: null,
+            ReviewLaunch: null
+        );
+
+        var args = launcher.BuildArgs(ctx).Args;
+
+        await Assert.That(args).Contains("mcp_servers={}");
+        await Assert.That(args.Any(a => a.StartsWith("mcp_servers.", StringComparison.Ordinal))).IsFalse();
+    }
+
+    [Test]
     public async Task Prepare_overlays_codex_settings_dir_from_source_repo() {
         var sourceRepo = Directory.CreateTempSubdirectory("kcap-codexlauncher-src-").FullName;
         var worktree = Directory.CreateTempSubdirectory("kcap-codexlauncher-wt-").FullName;
