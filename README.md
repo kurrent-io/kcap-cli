@@ -314,7 +314,7 @@ It provides four tools:
 - **`get_review_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow.
 - **`close_review_flow`** — mark a completed review flow as closed.
 
-Requires `kcap login` **and a running daemon with this repo checked out** — the server discovers a connected daemon to launch the hosted Codex reviewer, and `start_review_flow` errors if none (or more than one) matches. The server creates an authenticated HTTP client at startup and posts to the Capacitor server's `/api/flows/*` endpoints.
+Requires `kcap login` **and a running daemon with this repo checked out** — the server discovers a connected daemon to launch the hosted reviewer (Codex for the built-in `spec-review`/`code-review` flows; the vendor is chosen by the flow definition), and `start_review_flow` errors if none (or more than one) matches. The server creates an authenticated HTTP client at startup and posts to the Capacitor server's `/api/flows/*` endpoints.
 
 ### Curate guidelines
 

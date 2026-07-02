@@ -26,6 +26,16 @@ internal interface IHostedAgentLauncher {
     bool IsAvailable();
 
     /// <summary>
+    /// Whether this vendor's launcher can host a fully UNATTENDED agent
+    /// (LaunchKind.ReviewFlow): one that runs to completion with no human in
+    /// the loop — no tool-permission prompts — and cannot recursively invoke
+    /// flow-starting MCP tools. The orchestrator refuses an unattended launch
+    /// for a vendor that returns <c>false</c> (AI-1124). Both shipped launchers
+    /// support it; a future vendor (e.g. Gemini, AI-899) may not.
+    /// </summary>
+    bool SupportsUnattended { get; }
+
+    /// <summary>
     /// Per-vendor preparation BEFORE the PTY is spawned. Implementations:
     ///   • Overlay vendor-specific settings dir from source repo into worktree
     ///   • Pre-trust the worktree path in the vendor's config file

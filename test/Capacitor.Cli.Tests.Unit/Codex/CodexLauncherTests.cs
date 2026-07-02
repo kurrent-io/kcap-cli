@@ -380,4 +380,9 @@ public class CodexLauncherTests {
         await Assert.That(joined).Contains("\"line1\\nline2\"");
         await Assert.That(joined).Contains("mcp_servers.kcap-review.env={KCAP_URL=\"https://srv\\r/x\"}");
     }
+
+    [Test]
+    public async Task Codex_launcher_supports_unattended() {
+        await Assert.That(NewLauncher().SupportsUnattended).IsTrue();
+    }
 }
