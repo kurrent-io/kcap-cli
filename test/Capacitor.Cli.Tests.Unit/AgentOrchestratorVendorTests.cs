@@ -146,6 +146,36 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
     }
 
+    // Qodo review on #234: a null Vendor (SignalR boundary — non-null annotation not enforced) must
+    // emit LaunchFailed, NOT throw ArgumentNullException from the dictionary lookup (which SafeInvoke
+    // would swallow, dropping the launch silently).
+    [Test]
+    public async Task Launch_with_null_vendor_emits_launch_failed_and_does_not_throw() {
+        var server     = new CaptureServerConnection();
+        var ptyFactory = new SpyPtyProcessFactory();
+        var launchers  = new Dictionary<string, IHostedAgentLauncher>();
+
+        await using var orch = BuildOrchestrator(server, ptyFactory, launchers);
+
+        var cmd = new LaunchAgentCommand(
+            AgentId: "agent-null-vendor",
+            Prompt: "hi",
+            Model: "opus",
+            Effort: null,
+            RepoPath: "/tmp/does-not-matter",
+            Tools: null,
+            AttachmentIds: null,
+            Vendor: null!
+        );
+
+        await orch.HandleLaunchAgentForTest(cmd);
+
+        await Assert.That(server.LaunchFailedCalls.Count).IsEqualTo(1);
+        await Assert.That(server.LaunchFailedCalls[0].AgentId).IsEqualTo("agent-null-vendor");
+        await Assert.That(server.LaunchFailedCalls[0].Reason).Contains("Unknown vendor");
+        await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
+    }
+
     // AI-1124: the orchestrator's unattended-launch guard (UnattendedLaunchPolicy.RejectionReason)
     // must actually be wired into HandleLaunchAgent — reject a review-flow launch whose vendor
     // can't run unattended, and do it before any worktree/PTY side effects.

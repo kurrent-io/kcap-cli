@@ -232,7 +232,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var isReview      = cmd.Kind == LaunchKind.Review;
         var isReviewFlow  = cmd.Kind == LaunchKind.ReviewFlow;
 
-        if (!_launchers.TryGetValue(cmd.Vendor, out var launcher)) {
+        // Guard for a null/blank vendor before the dictionary lookup: LaunchAgentCommand crosses
+        // the SignalR boundary where the non-null annotation isn't enforced, and Dictionary
+        // .TryGetValue(null) throws ArgumentNullException — which SafeInvoke would swallow, dropping
+        // the launch with no LaunchFailed reaching the server. (The removed vendor allowlist used to
+        // absorb this incidentally.)
+        if (string.IsNullOrWhiteSpace(cmd.Vendor) || !_launchers.TryGetValue(cmd.Vendor, out var launcher)) {
             await _server.LaunchFailedAsync(cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
 
             return;
