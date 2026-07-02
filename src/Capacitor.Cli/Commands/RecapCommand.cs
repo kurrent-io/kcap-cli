@@ -126,9 +126,7 @@ static class RecapCommand {
         var summaries = entries.Where(e => e.Type is "whats_done" or "plan").ToList();
 
         // Distinct session ids to render, in first-seen order. Non-chain: just the requested id.
-        var sessionIds = chain
-            ? entries.Select(e => e.SessionId).OfType<string>().Distinct().ToList()
-            : [sessionId];
+        var sessionIds = chain ? DistinctSessionIds(entries) : [sessionId];
 
         var printedAnything = false;
 
@@ -177,6 +175,10 @@ static class RecapCommand {
 
         return 0;
     }
+
+    /// <summary>Session ids present in recap entries, first-seen order, nulls dropped.</summary>
+    internal static List<string> DistinctSessionIds(List<RecapEntry> entries) =>
+        entries.Select(e => e.SessionId).OfType<string>().Distinct().ToList();
 
     /// <summary>GETs /turns for one session and renders the outline block, or "" on any non-success.</summary>
     static async Task<string> FetchTurnOutline(string baseUrl, HttpClient httpClient, string sessionId) {

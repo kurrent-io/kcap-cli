@@ -1,4 +1,6 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -65,6 +67,22 @@ public class RecapOutlineTests {
 
         var names = RecapCommand.ExtractToolNames(doc.RootElement);
 
-        await Assert.That(names).IsEquivalentTo(new List<string> { "Edit", "Bash" });
+        await Assert.That(names).IsEquivalentTo(new List<string> { "Edit", "Bash" }, CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task DistinctSessionIds_preserves_first_seen_order_and_drops_nulls() {
+        var now     = DateTimeOffset.UtcNow;
+        var entries = new List<RecapEntry> {
+            new("whats_done", "A", null, null, "sa", null, now),
+            new("plan",       "A", null, null, "pa", null, now),
+            new("whats_done", null, null, null, "orphan", null, now),
+            new("whats_done", "B", null, null, "sb", null, now),
+            new("plan",       "A", null, null, "pa2", null, now),
+        };
+
+        var ids = RecapCommand.DistinctSessionIds(entries);
+
+        await Assert.That(ids).IsEquivalentTo(new List<string> { "A", "B" }, CollectionOrdering.Matching);
     }
 }
