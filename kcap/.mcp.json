@@ -14,7 +14,7 @@
       "command": "kcap",
       "args": ["mcp", "flows"],
       "cwd": "${CLAUDE_PROJECT_DIR}",
-      "description": "Structured AI review flows — start_review_flow, submit_review_round, get_review_flow_status, close_review_flow. Launches a hosted reviewer agent through your daemon; requires `kcap login` and a running daemon with this repo checked out (the tools are inert otherwise)."
+      "description": "Structured AI review flows — start_review_flow, submit_review_round, get_review_flow_status, close_review_flow. Launches a SEPARATE hosted reviewer agent through your daemon and iterates to sign-off; requires `kcap login` and a running daemon with this repo checked out (the tools are inert otherwise). Use only when the user explicitly asks for a review flow / to submit for review — for an ordinary 'review my PR' or 'code review' request, review directly and do not call these tools."
     }
   }
 }
