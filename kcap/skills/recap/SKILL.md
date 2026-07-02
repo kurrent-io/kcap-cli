@@ -15,7 +15,7 @@ description: >-
   kcap-sessions MCP tools.
 ---
 
-> **For agents:** When the `kcap-sessions` MCP server is available, prefer its tools (`search_sessions`, `get_session_summary`, `get_session_transcript`) for retrieving past sessions. This CLI-wrapped skill remains a fallback for shell use and when MCP isn't installed.
+> **For agents:** When the `kcap-sessions` MCP server is available, prefer its tools (`search_sessions`, `get_session_summary`, `list_turns`, `get_turn`, `get_session_transcript`) for retrieving past sessions. This CLI-wrapped skill remains a fallback for shell use and when MCP isn't installed.
 
 # Session Recap
 
@@ -26,7 +26,7 @@ Retrieve session history recorded by Kurrent Capacitor. Supports single-session 
 **IMPORTANT:** Always use the `kcap recap` CLI command. Do NOT call the HTTP API directly via `curl`, `WebFetch`, or `HttpClient` — the CLI handles formatting, error handling, and server URL resolution.
 
 ```bash
-# Current session summary (default — concise AI-generated overview)
+# Current session summary + per-turn outline (default)
 kcap recap
 
 # Full transcript (all prompts, responses, file changes)
@@ -41,10 +41,17 @@ kcap recap --chain --full
 # Recent session summaries for the current repository
 kcap recap --repo
 
+# Compact per-turn metadata index (no prose)
+kcap recap --per-turn
+
+# One turn's full transcript, drilling down from the outline
+kcap recap --get-turn <N>
+
 # Explicit session ID (overrides env var)
 kcap recap <sessionId>
 kcap recap --full <sessionId>
 kcap recap --chain <sessionId>
+kcap recap --get-turn <N> <sessionId>
 ```
 
 `kcap recap` resolves the current session id from the environment when the host agent CLI exposes one. If no session id is available, pass it explicitly: `kcap recap <sessionId>`.
@@ -61,14 +68,35 @@ Returns AI-generated summaries from the most recent ended sessions in the curren
 
 **Progressive disclosure:** Start with `--repo` for the overview. If a specific session's summary is relevant, drill into it with `kcap recap --full <sessionId>` to get the complete transcript. This avoids loading full transcripts for all sessions into context.
 
-## Default Output (Summary)
+## Default Output
 
-Shows the plan (if any) and an AI-generated summary with:
-- **Context** — why the work was done
-- **Key decisions** — trade-offs and design choices that matter for future work
-- **Unfinished/Risks** — anything deferred or left incomplete
+`kcap recap` (no flags) prints, in order:
 
-If no summary is available (e.g., active session), a hint is shown to use `--full`.
+1. **`## Plan`** — the plan captured for the session, if any.
+2. **`## Summary`** — an AI-generated narrative covering:
+   - **Context** — why the work was done
+   - **Key decisions** — trade-offs and design choices that matter for future work
+   - **Unfinished/Risks** — anything deferred or left incomplete
+3. **`## Turns`** — an outline with one line per turn:
+   - If the turn has a prose summary, that summary (1-3 sentences).
+   - Otherwise, a truncated user-prompt excerpt plus tool/file metadata (tool names, file count).
+4. A closing pointer: `→ kcap recap --get-turn <N> [sessionId]` for one turn's full detail.
+
+A session that has turns but no summary yet (generation hasn't run, or an ended session has no `whats_done`/`plan` entry) still shows the `## Turns` outline — only the plan/summary blocks are skipped. If there's neither a summary nor any turns (e.g. an active session with no recorded turns), recap prints a hint to use `--full` instead.
+
+With `--chain`, this same summary + outline is rendered per session under a `# Session <id>` header, oldest first.
+
+## Turn-by-turn drill-down
+
+Once you've read the `## Turns` outline, fetch one turn's complete transcript (user prompt, tool calls + results, assistant text):
+
+```bash
+kcap recap --get-turn <N> [sessionId]
+```
+
+For a plain metadata index instead of the outline (turn #, prompt excerpt, tool names, file count, token count, time range — no prose), use `kcap recap --per-turn [sessionId]`.
+
+**MCP agents:** call `list_turns` to get a session's full turn map (`turn_index`, `prose`, `user_prompt`, `tools`, `files`, token counts), then `get_turn(session_id, turn_index)` for one turn's full transcript. Use `get_session_summary` for the whole-session narrative instead of drilling into individual turns.
 
 ## Full Output (`--full`)
 
@@ -85,8 +113,10 @@ When using `--chain`, sessions are separated by `# Session <id>` headers, and ag
 ## When to Use Each Flag
 
 - **`--repo`** (`kcap recap --repo`) — recent session summaries across the repo (start here for "what did we do recently?")
-- **No flags** (`kcap recap`) — quick context on the current session
-- **`--full`** (`kcap recap --full`) — when you need exact prompts, responses, or file contents from a specific session
+- **No flags** (`kcap recap`) — summary + per-turn outline for the current session
+- **`--per-turn`** (`kcap recap --per-turn`) — compact metadata index per turn (prompt excerpt, tools, files, tokens, time), no prose
+- **`--get-turn <N>`** (`kcap recap --get-turn <N>`) — one turn's full transcript, drilling down from the outline or the per-turn index
+- **`--full`** (`kcap recap --full`) — whole transcript: exact prompts, responses, and file contents for a specific session
 - **`--chain`** (`kcap recap --chain`) — understanding the full history of a task that spanned multiple sessions
 - **`--chain --full`** — complete transcript across all continuations
 
@@ -97,7 +127,7 @@ The `KCAP_URL` environment variable overrides the default server URL (`http://lo
 ## Tips
 
 - **For "what have we been working on?"** — use `--repo` first, then drill into specific sessions.
-- Start with the default summary. Only use `--full` when you need specific details.
+- Start with the default summary + turn outline. Drill into a specific turn with `--get-turn <N>` before reaching for `--full`.
 - When continuing work from a previous session, use `--chain` to get summaries across continuations.
 - Summarize key decisions and changes for the user rather than echoing the full recap output verbatim.
 - The `kcap` CLI must be available on PATH (typically installed at `~/.local/bin/kcap`).
