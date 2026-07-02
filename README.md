@@ -175,10 +175,10 @@ If you run `kcap setup` outside any git working tree, it still completes — hoo
 
 ### Session recap
 
-By default, shows a concise AI-generated summary — why the work was done, key decisions, and anything left unfinished. Use `--full` for the complete transcript with all prompts, responses, and file changes.
+By default, shows a concise AI-generated summary — why the work was done, key decisions, and anything left unfinished — followed by a per-turn outline (one prose line per turn) and a `--get-turn <N>` pointer for drilling into any turn. Use `--full` for the complete transcript with all prompts, responses, and file changes.
 
 ```bash
-kcap recap <sessionId>              # summary (default)
+kcap recap <sessionId>              # summary + per-turn outline (default)
 kcap recap --full <sessionId>       # full transcript
 kcap recap --chain <sessionId>      # summaries across continuation chain
 kcap recap --chain --full <sessionId>  # full transcript across chain

@@ -49,6 +49,16 @@ public class RecapOutlineTests {
     }
 
     [Test]
+    public async Task FormatTurnOutline_returns_empty_for_non_json_body() {
+        await Assert.That(RecapCommand.FormatTurnOutline("not json")).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task FormatTurnOutline_returns_empty_for_empty_body() {
+        await Assert.That(RecapCommand.FormatTurnOutline("")).IsEqualTo("");
+    }
+
+    [Test]
     public async Task ExtractToolNames_dedupes_and_preserves_order() {
         using var doc = System.Text.Json.JsonDocument.Parse(
             """{"tools":[{"name":"Edit"},{"name":"Bash"},{"name":"Edit"}]}""");

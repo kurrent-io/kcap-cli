@@ -120,46 +120,6 @@ static class RecapCommand {
         return full ? PrintFull(entries, chain) : await PrintSummaryWithOutline(baseUrl, httpClient, entries, chain, sessionId);
     }
 
-    static int PrintSummary(List<RecapEntry> entries, bool chain) {
-        var summaries = entries.Where(e => e.Type is "whats_done" or "plan").ToList();
-
-        if (summaries.Count == 0) {
-            Console.Out.WriteLine("No summary available yet. Use `kcap recap --full` to see the raw transcript.");
-
-            return 0;
-        }
-
-        string? currentSessionId = null;
-
-        foreach (var entry in summaries) {
-            if (chain && entry.SessionId != currentSessionId) {
-                currentSessionId = entry.SessionId;
-                Console.Out.WriteLine($"# Session {currentSessionId}");
-                Console.Out.WriteLine();
-            }
-
-            switch (entry.Type) {
-                case "plan":
-                    Console.Out.WriteLine("## Plan");
-                    Console.Out.WriteLine(entry.Content);
-                    Console.Out.WriteLine();
-
-                    break;
-
-                case "whats_done":
-                    Console.Out.WriteLine("## Summary");
-                    Console.Out.WriteLine(entry.Content);
-                    Console.Out.WriteLine();
-
-                    break;
-            }
-        }
-
-        Console.Error.WriteLine("Use `kcap recap --full` for the complete transcript.");
-
-        return 0;
-    }
-
     static async Task<int> PrintSummaryWithOutline(
             string baseUrl, HttpClient httpClient, List<RecapEntry> entries, bool chain, string sessionId
         ) {
@@ -570,20 +530,31 @@ static class RecapCommand {
     /// Returns "" for a missing/empty/non-array payload so the caller can skip the section.
     /// </summary>
     internal static string FormatTurnOutline(string turnsJson) {
-        using var doc = JsonDocument.Parse(turnsJson);
+        JsonDocument doc;
 
-        if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() == 0) {
+        try {
+            doc = JsonDocument.Parse(turnsJson);
+        } catch (JsonException) {
+            // Empty/truncated body, or a non-JSON page (e.g. a proxy 200 with an HTML error).
+            // The outline is best-effort enrichment, so treat unparseable input as "nothing to show"
+            // — same contract as the empty/non-array case below — rather than crashing recap.
             return "";
         }
 
-        var sb = new StringBuilder();
-        sb.AppendLine("## Turns");
+        using (doc) {
+            if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() == 0) {
+                return "";
+            }
 
-        foreach (var turn in doc.RootElement.EnumerateArray()) {
-            sb.AppendLine(FormatOutlineLine(turn));
+            var sb = new StringBuilder();
+            sb.AppendLine("## Turns");
+
+            foreach (var turn in doc.RootElement.EnumerateArray()) {
+                sb.AppendLine(FormatOutlineLine(turn));
+            }
+
+            return sb.ToString();
         }
-
-        return sb.ToString();
     }
 
     static string FormatOutlineLine(JsonElement turn) {
