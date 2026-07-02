@@ -38,7 +38,9 @@ public class PtyHostedAgentRuntimeTests {
 
         await runtime.SendUserInputAsync("hello world");
 
-        await Assert.That(pty.StringWrites).IsEquivalentTo(new List<string> { "hello world", "\r" });
+        await Assert.That(pty.StringWrites.Count).IsEqualTo(2);
+        await Assert.That(pty.StringWrites[0]).IsEqualTo("hello world");
+        await Assert.That(pty.StringWrites[1]).IsEqualTo("\r");
     }
 
     [Test]
@@ -48,7 +50,9 @@ public class PtyHostedAgentRuntimeTests {
 
         await runtime.RequestGracefulStopAsync();
 
-        await Assert.That(pty.StringWrites).IsEquivalentTo(new List<string> { "/exit", "\r" });
+        await Assert.That(pty.StringWrites.Count).IsEqualTo(2);
+        await Assert.That(pty.StringWrites[0]).IsEqualTo("/exit");
+        await Assert.That(pty.StringWrites[1]).IsEqualTo("\r");
     }
 
     [Test]
@@ -61,7 +65,8 @@ public class PtyHostedAgentRuntimeTests {
         await runtime.SendSpecialKeyAsync("Enter");
 
         await Assert.That(pty.ByteWrites.Count).IsEqualTo(1);
-        await Assert.That(pty.ByteWrites[0]).IsEquivalentTo(new byte[] { 0x0d });
+        await Assert.That(pty.ByteWrites[0].Length).IsEqualTo(1);
+        await Assert.That(pty.ByteWrites[0][0]).IsEqualTo((byte)0x0d);
     }
 
     [Test]
@@ -83,7 +88,10 @@ public class PtyHostedAgentRuntimeTests {
         await runtime.SendRawInputAsync(data);
 
         await Assert.That(pty.ByteWrites.Count).IsEqualTo(1);
-        await Assert.That(pty.ByteWrites[0]).IsEquivalentTo(data);
+        await Assert.That(pty.ByteWrites[0].Length).IsEqualTo(data.Length);
+        await Assert.That(pty.ByteWrites[0][0]).IsEqualTo(data[0]);
+        await Assert.That(pty.ByteWrites[0][1]).IsEqualTo(data[1]);
+        await Assert.That(pty.ByteWrites[0][2]).IsEqualTo(data[2]);
     }
 
     [Test]
