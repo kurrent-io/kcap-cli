@@ -229,18 +229,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var repoPath      = cmd.RepoPath;
         var tools         = cmd.Tools;
         var attachmentIds = cmd.AttachmentIds;
-        var vendor        = cmd.Vendor;
         var isReview      = cmd.Kind == LaunchKind.Review;
         var isReviewFlow  = cmd.Kind == LaunchKind.ReviewFlow;
 
-        if (cmd.Vendor is not ("claude" or "codex")) {
-            await _server.LaunchFailedAsync(cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
-
-            return;
-        }
-
         if (!_launchers.TryGetValue(cmd.Vendor, out var launcher)) {
-            await _server.LaunchFailedAsync(cmd.AgentId, $"No launcher registered for vendor: {cmd.Vendor}");
+            await _server.LaunchFailedAsync(cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
 
             return;
         }
