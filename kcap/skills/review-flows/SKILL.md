@@ -28,6 +28,18 @@ Once the user has explicitly opted into a flow (see above), pick the `kind`:
 - Spec or design document → `kind: "spec-review"`
 - Code changes or a pull request → `kind: "code-review"`
 
+## Prerequisites
+
+A flow hands your work to a **hosted reviewer** the daemon launches for you (its vendor and model come from the flow definition — you don't pick or configure the reviewer). For `start_review_flow` to succeed, two things must be true:
+
+1. You are logged in (`kcap login`).
+2. A `kcap` daemon is running with **this** repo checked out — that daemon hosts the reviewer.
+
+If `start_review_flow` errors, do **not** retry blindly — the two cases differ:
+
+- **No daemon** — tell the user to start one with the target repo checked out (`kcap daemon start -d`), then start the flow again.
+- **Ambiguous match** ("multiple daemons/checkouts match this repo") — retrying won't help: the tool exposes no `daemon_name`/`repo_path`, so it can't disambiguate when several checkouts of the repo are registered (e.g. multiple git worktrees). Surface this to the user rather than looping (tracked in AI-1112).
+
 ## If the flows MCP tools are not loaded
 
 If `start_review_flow` / `submit_review_round` are not among the tools available in this session, do NOT try to obtain them:
