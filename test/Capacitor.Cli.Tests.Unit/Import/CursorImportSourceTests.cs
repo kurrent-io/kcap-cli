@@ -520,6 +520,164 @@ public class CursorImportSourceTests {
     }
 
     [Test]
+    public async Task import_session_attaches_repository_from_detected_workspace_repo() {
+        // AI-1152: the import/backfill path must attach a `repository` node to the
+        // synthetic sessionStart so historical Cursor sessions emit RepositoryDetected
+        // server-side and group under their repo (not just "All repos"). Detected from
+        // the workspace folder via the repo detector (git remote parse).
+        using var fx    = new ProjectsDirFixture();
+        var       jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n{}\n");
+
+        var src = new CursorImportSource(
+            fx.ProjectsDir,
+            fx.WorkspaceStorageDir,
+            repoDetector: _ => Task.FromResult<RepositoryPayload?>(
+                new RepositoryPayload {
+                    Owner     = "kurrent-io",
+                    RepoName  = "kcap-server",
+                    Branch    = "main",
+                    RemoteUrl = "git@github.com:kurrent-io/kcap-server.git",
+                }
+            )
+        );
+
+        var posted = new List<(string Path, string Body)>();
+        using var handler = new StubHandler(
+            postCapture: (req, body) => {
+                posted.Add((req.RequestUri!.AbsolutePath, body));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        );
+        using var client = new HttpClient(handler);
+
+        var classification = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.New,
+            Vendor     = "cursor",
+            SourceMeta = new Dictionary<string, object?> {
+                ["TranscriptPath"]  = jsonl,
+                ["WorkspaceFolder"] = "/Users/me/dev/proj",
+            },
+        };
+
+        await src.ImportSessionAsync(classification, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        var startNode = JsonNode.Parse(posted.First(p => p.Path == "/hooks/session-start/cursor").Body)!;
+        var repo      = startNode["repository"];
+        await Assert.That(repo).IsNotNull();
+        await Assert.That(repo!["owner"]!.GetValue<string>()).IsEqualTo("kurrent-io");
+        await Assert.That(repo!["repo_name"]!.GetValue<string>()).IsEqualTo("kcap-server");
+    }
+
+    [Test]
+    public async Task import_session_omits_repository_when_workspace_repo_undetected() {
+        // Fail-open: non-git workspace (detector returns null) → no repository node,
+        // session stays unattributed rather than erroring.
+        using var fx    = new ProjectsDirFixture();
+        var       jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
+
+        var src = new CursorImportSource(
+            fx.ProjectsDir,
+            fx.WorkspaceStorageDir,
+            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null)
+        );
+
+        var posted = new List<(string Path, string Body)>();
+        using var handler = new StubHandler(
+            postCapture: (req, body) => {
+                posted.Add((req.RequestUri!.AbsolutePath, body));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        );
+        using var client = new HttpClient(handler);
+
+        var classification = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.New,
+            Vendor     = "cursor",
+            SourceMeta = new Dictionary<string, object?> {
+                ["TranscriptPath"]  = jsonl,
+                ["WorkspaceFolder"] = "/Users/me/dev/proj",
+            },
+        };
+
+        await src.ImportSessionAsync(classification, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        var startNode = JsonNode.Parse(posted.First(p => p.Path == "/hooks/session-start/cursor").Body)!;
+        await Assert.That(startNode["repository"]).IsNull();
+    }
+
+    [Test]
+    public async Task subagent_child_is_imported_under_parent_agentsubsession_not_as_standalone() {
+        // AI-1153: a Cursor subagent runs as its own session/transcript. When its first
+        // user_query matches a parent's Task prompt, the importer must route it under the
+        // parent's AgentSubsession stream (subagent-start + transcript-with-agent_id +
+        // subagent-stop) and NOT emit a standalone session-start (which would create a
+        // separate top-level session card).
+        using var fx = new ProjectsDirFixture();
+
+        const string prompt = "EXPLORE the repo and report back";
+        var childUserText = System.Text.Json.JsonSerializer.Serialize("<user_query>\n" + prompt + "\n</user_query>");
+        var taskPrompt    = System.Text.Json.JsonSerializer.Serialize(prompt);
+
+        fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111",
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"go\"}]}}\n" +
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Task\",\"input\":{\"description\":\"d\",\"prompt\":" + taskPrompt + ",\"subagent_type\":\"generalPurpose\"}}]}}\n");
+        fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222",
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":" + childUserText + "}]}}\n" +
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        using var getHandler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
+        using var getClient  = new HttpClient(getHandler);
+
+        var discovered  = await src.DiscoverAsync(Filters(), CancellationToken.None);
+        var classified  = await src.ClassifyAsync(discovered, Ctx(getClient, minLines: 1), CancellationToken.None);
+
+        const string parentId = "11111111111111111111111111111111";
+        const string childId  = "22222222222222222222222222222222";
+
+        var childClass = classified.Single(c => c.SessionId == childId);
+        // Correlator stamped the parent link onto the child classification.
+        await Assert.That((string)childClass.SourceMeta!["ParentSessionId"]!).IsEqualTo(parentId);
+
+        var posted = new List<(string Path, string Body)>();
+        using var postHandler = new StubHandler(postCapture: (req, body) => {
+            posted.Add((req.RequestUri!.AbsolutePath, body));
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        using var postClient = new HttpClient(postHandler);
+
+        var outcome = await src.ImportSessionAsync(childClass, new ImportContext(postClient, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
+        // Routed as a subagent: no standalone session-start/-end for the child.
+        await Assert.That(posted.Select(p => p.Path)).DoesNotContain("/hooks/session-start/cursor");
+        await Assert.That(posted.Select(p => p.Path)).DoesNotContain("/hooks/session-end/cursor");
+        await Assert.That(posted.Select(p => p.Path)).Contains("/hooks/subagent-start");
+        await Assert.That(posted.Select(p => p.Path)).Contains("/hooks/subagent-stop");
+        await Assert.That(posted.Select(p => p.Path)).Contains("/hooks/transcript");
+
+        var startNode = JsonNode.Parse(posted.First(p => p.Path == "/hooks/subagent-start").Body)!;
+        await Assert.That(startNode["session_id"]!.GetValue<string>()).IsEqualTo(parentId);
+        await Assert.That(startNode["agent_id"]!.GetValue<string>()).IsEqualTo(childId);
+        await Assert.That(startNode["agent_type"]!.GetValue<string>()).IsEqualTo("generalPurpose");
+
+        var transcriptNode = JsonNode.Parse(posted.First(p => p.Path == "/hooks/transcript").Body)!;
+        await Assert.That(transcriptNode["session_id"]!.GetValue<string>()).IsEqualTo(parentId);
+        await Assert.That(transcriptNode["agent_id"]!.GetValue<string>()).IsEqualTo(childId);
+    }
+
+    [Test]
     public async Task import_session_omits_workspace_roots_when_cwd_unresolved() {
         using var fx    = new ProjectsDirFixture();
         var       jsonl = fx.AddSession("unknown-workspace", "11111111-1111-1111-1111-111111111111", "{}\n");

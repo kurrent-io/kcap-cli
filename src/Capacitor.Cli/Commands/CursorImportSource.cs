@@ -196,6 +196,16 @@ internal sealed class CursorImportSource : IImportSource {
         var repoCache    = new Dictionary<string, string?>(StringComparer.Ordinal); // cwd → "owner/repo" or null
         var hasExcludes  = ctx.ExcludedRepos is { Count: > 0 };
 
+        // AI-1153: correlate subagent (child) sessions to their parent by prompt-hash across
+        // all discovered transcripts. A child is then ingested under the parent's
+        // AgentSubsession stream (subagent-start → transcript-with-agent_id → subagent-stop)
+        // rather than as a separate top-level session.
+        var subagentLinks = CursorSubagentCorrelator.Correlate(
+            sessions.Select(s => (
+                s.SessionId,
+                s.SourceMeta!.TryGetValue("TranscriptPath", out var tp) && tp is string p ? p : ""
+            )));
+
         foreach (var s in sessions) {
             var transcriptPath = (string)s.SourceMeta!["TranscriptPath"]!;
 
@@ -287,7 +297,12 @@ internal sealed class CursorImportSource : IImportSource {
                 ExcludedRepoKey = excludedRepoKey,
                 ExcludedPathKey = excludedPathKey,
                 TotalLines      = nonBlankCount,
-                SourceMeta      = s.SourceMeta,
+                SourceMeta      = subagentLinks.TryGetValue(s.SessionId, out var link)
+                    ? new Dictionary<string, object?>(s.SourceMeta!) {
+                        ["ParentSessionId"] = link.ParentSessionId,
+                        ["SubagentType"]    = link.SubagentType,
+                    }
+                    : s.SourceMeta,
             });
         }
 
@@ -299,6 +314,13 @@ internal sealed class CursorImportSource : IImportSource {
             ImportContext                       ctx,
             CancellationToken                   ct
         ) {
+        // AI-1153: a correlated subagent child is ingested under its parent's
+        // AgentSubsession stream instead of as a standalone top-level session.
+        if (classification.SourceMeta!.TryGetValue("ParentSessionId", out var parentObj)
+         && parentObj is string parentSessionId && !string.IsNullOrEmpty(parentSessionId)) {
+            return await ImportSubagentAsync(classification, parentSessionId, ctx, ct);
+        }
+
         var transcriptPath = (string)classification.SourceMeta!["TranscriptPath"]!;
 
         if (!File.Exists(transcriptPath)) return ImportOutcome.Failed;
@@ -309,6 +331,20 @@ internal sealed class CursorImportSource : IImportSource {
 
         var (createdUtc, modifiedUtc) = TryGetTranscriptTimes(transcriptPath);
 
+        // AI-1152: detect the repo from the workspace folder so the synthetic
+        // sessionStart carries a `repository` node → server emits RepositoryDetected
+        // and the (historical/backfilled) session groups under its repo. Fail-open:
+        // a non-git workspace or detection error leaves it null and unattributed.
+        JsonObject? repositoryNode = null;
+        if (workspaceFolder is not null) {
+            try {
+                var repo = await _repoDetector(workspaceFolder);
+                if (repo is not null) repositoryNode = RepositoryDetection.BuildRepositoryNode(repo);
+            } catch {
+                repositoryNode = null;
+            }
+        }
+
         // sessionStart MUST succeed before transcript advances the server
         // watermark — otherwise a transient lifecycle failure plus a successful
         // transcript would leave the session permanently lifecycle-less
@@ -318,7 +354,7 @@ internal sealed class CursorImportSource : IImportSource {
         // (canonical event ids are deterministic — AI-731).
         var startOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-start/cursor",
-            BuildSessionStartPayload(classification.SessionId, workspaceFolder, transcriptPath, createdUtc),
+            BuildSessionStartPayload(classification.SessionId, workspaceFolder, transcriptPath, createdUtc, repositoryNode),
             ct);
         if (!startOk) return ImportOutcome.Failed;
 
@@ -363,8 +399,67 @@ internal sealed class CursorImportSource : IImportSource {
         return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
     }
 
-    static JsonObject BuildSessionStartPayload(
-        string sessionId, string? workspaceFolder, string transcriptPath, DateTimeOffset? startedAt
+    /// <summary>
+    /// AI-1153: ingest a Cursor subagent child under its parent's <c>AgentSubsession</c>
+    /// stream. Mirrors <c>SessionImporter.SendAgentLifecycle</c>: <c>subagent-start</c>
+    /// (session_id=parent, agent_id=child) → transcript batches routed with
+    /// <c>agent_id</c>=child → <c>subagent-stop</c>. No standalone session-start/-end is
+    /// emitted for the child, so it never becomes a top-level session card. Sends from
+    /// line 0 — idempotent via deterministic ids + server dedup.
+    /// </summary>
+    async Task<ImportOutcome> ImportSubagentAsync(
+            ImportCommand.SessionClassification classification,
+            string                              parentSessionId,
+            ImportContext                       ctx,
+            CancellationToken                   ct
+        ) {
+        var transcriptPath = (string)classification.SourceMeta!["TranscriptPath"]!;
+        if (!File.Exists(transcriptPath)) return ImportOutcome.Failed;
+
+        var agentId      = classification.SessionId; // the child session id doubles as the subagent id
+        var subagentType = classification.SourceMeta.TryGetValue("SubagentType", out var stObj)
+                        && stObj is string st && !string.IsNullOrEmpty(st)
+            ? st
+            : "task";
+
+        // subagent-start on the parent stream (creates AgentSubsession-{parent}-{child}).
+        var startOk = await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-start", new JsonObject {
+            ["hook_event_name"] = "subagent_start",
+            ["session_id"]      = parentSessionId,
+            ["agent_id"]        = agentId,
+            ["agent_type"]      = subagentType,
+            ["transcript_path"] = transcriptPath,
+        }, ct);
+        if (!startOk) return ImportOutcome.Failed;
+
+        int sent;
+        try {
+            sent = await SessionImporter.SendTranscriptBatches(
+                httpClient: ctx.HttpClient,
+                baseUrl:    ctx.BaseUrl,
+                sessionId:  parentSessionId,
+                filePath:   transcriptPath,
+                agentId:    agentId,
+                startLine:  0,
+                vendor:     Vendor);
+        } catch {
+            return ImportOutcome.Failed;
+        }
+
+        var stopOk = await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-stop", new JsonObject {
+            ["hook_event_name"] = "subagent_stop",
+            ["session_id"]      = parentSessionId,
+            ["agent_id"]        = agentId,
+            ["agent_type"]      = subagentType,
+        }, ct);
+        if (!stopOk) return ImportOutcome.Failed;
+
+        return sent > 0 ? ImportOutcome.Loaded : ImportOutcome.Skipped;
+    }
+
+    internal static JsonObject BuildSessionStartPayload(
+        string sessionId, string? workspaceFolder, string transcriptPath, DateTimeOffset? startedAt,
+        JsonObject? repository = null
     ) {
         var payload = new JsonObject {
             ["hook_event_name"]     = "sessionStart",
@@ -374,6 +469,11 @@ internal sealed class CursorImportSource : IImportSource {
         };
         if (workspaceFolder is not null) {
             payload["workspace_roots"] = new JsonArray(workspaceFolder);
+        }
+        // AI-1152: git-detected repo (owner/repo/branch/...) so the server emits
+        // RepositoryDetected for historical/backfilled Cursor sessions.
+        if (repository is not null) {
+            payload["repository"] = repository;
         }
         // AI-739: server prefers started_at over UtcNow when present, so
         // historical sessions surface with their real start time. Use an
