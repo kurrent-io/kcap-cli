@@ -93,7 +93,10 @@ internal sealed partial class ClaudeLauncher(
                 args.Add("bypassPermissions");
                 args.Add("--strict-mcp-config");
                 args.Add("--mcp-config");
-                args.Add(EmptyMcpConfig);
+                // AI-1139: the strict config now whitelists exactly the kcap-flow-result
+                // submission server; the empty map remains the fallback when the daemon has
+                // no server URL / kcap path configured.
+                args.Add(BuildReviewFlowMcpConfig(ctx));
                 // Disallow the built-in Agent (subagent) tool. Subagents do NOT inherit
                 // --mcp-config (see ClaudeCliRunner), so a spawned subagent would re-read the
                 // ambient user/project MCP config — which on a flows-enabled machine includes
@@ -121,6 +124,30 @@ internal sealed partial class ClaudeLauncher(
         }
 
         return new LaunchArgs(args.ToArray(), mcpConfigPath);
+    }
+
+    /// <summary>AI-1139: strict whitelist for review-flow reviewers — exactly the
+    /// kcap-flow-result submission server, or the empty map when the daemon has no server
+    /// URL / kcap path (zero servers is the recursion-safe default). Built via JsonNode
+    /// string casts — JsonValue.Create / collection expressions lower to generic Add&lt;T&gt;
+    /// and trip NativeAOT (IL3050).</summary>
+    string BuildReviewFlowMcpConfig(LauncherContext ctx) {
+        if (string.IsNullOrWhiteSpace(config.ServerUrl) || string.IsNullOrWhiteSpace(config.CapacitorPath)) return EmptyMcpConfig;
+
+        var argsNode = new JsonArray();
+        argsNode.Add((JsonNode?)"mcp");
+        argsNode.Add((JsonNode?)"flow-result");
+
+        var server = new JsonObject {
+            ["command"] = (JsonNode?)config.CapacitorPath,
+            ["args"]    = argsNode,
+            ["env"]     = new JsonObject {
+                ["KCAP_URL"]            = (JsonNode?)config.ServerUrl,
+                ["KCAP_FLOW_AGENT_ID"] = (JsonNode?)ctx.AgentId
+            }
+        };
+
+        return new JsonObject { ["mcpServers"] = new JsonObject { ["kcap-flow-result"] = server } }.ToJsonString();
     }
 
     /// Claude needs no mandatory daemon-level flags (cwd is set via forkpty chdir), so a
