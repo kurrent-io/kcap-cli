@@ -183,7 +183,9 @@ static class RecapCommand {
     /// <summary>GETs /turns for one session and renders the outline block, or "" on any non-success.</summary>
     static async Task<string> FetchTurnOutline(string baseUrl, HttpClient httpClient, string sessionId) {
         try {
-            var resp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/turns");
+            // Escape the id — session ids can be free-form slugs; matches the MCP BuildTurnsUrl path.
+            using var resp = await httpClient.GetWithRetryAsync(
+                $"{baseUrl}/api/sessions/{Uri.EscapeDataString(sessionId)}/turns");
 
             if (!resp.IsSuccessStatusCode) return "";
 
