@@ -132,11 +132,14 @@ static class McpFlowsServer {
         try {
             var apiRoot = baseUrl.TrimEnd('/');
 
-            // start_review_flow and submit_review_round may need async poll — handle separately.
-            if (toolName is "start_review_flow" or "submit_review_round") {
-                using var postResponse = toolName == "start_review_flow"
-                    ? await SendWithRefreshRetryAsync(client, c => StartReviewFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo))
-                    : await SendWithRefreshRetryAsync(client, c => SubmitReviewRoundAsync(c, apiRoot, arguments));
+            // The start/submit tools (and their generic aliases) may need async poll — handle separately.
+            if (toolName is "start_review_flow" or "start_flow" or "submit_review_round" or "send_to_participant") {
+                using var postResponse = toolName switch {
+                    "start_review_flow"   => await SendWithRefreshRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind")),
+                    "start_flow"          => await SendWithRefreshRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id")),
+                    "submit_review_round" => await SendWithRefreshRetryAsync(client, c => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true)),
+                    _                     => await SendWithRefreshRetryAsync(client, c => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: ParseAsyncArg(arguments)))
+                };
 
                 var postBody = await postResponse.Content.ReadAsStringAsync();
 
@@ -146,14 +149,14 @@ static class McpFlowsServer {
                 if (!postResponse.IsSuccessStatusCode)
                     return BuildToolResult(id, $"Error: HTTP {(int)postResponse.StatusCode} — {postBody}", isError: true);
 
-                var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody);
+                var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody, toolName);
                 return BuildToolResult(id, payload, isError);
             }
 
             using var httpResponse = toolName switch {
-                "get_review_flow_status" => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildFlowUrl(apiRoot, arguments))),
-                "close_review_flow"      => await SendWithRefreshRetryAsync(client, c => c.PostAsync(BuildFlowUrl(apiRoot, arguments) + "/close", null)),
-                _                        => throw new ArgumentException($"Unknown tool: {toolName}")
+                "get_review_flow_status" or "get_flow_status" => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildFlowUrl(apiRoot, arguments))),
+                "close_review_flow"      or "close_flow"      => await SendWithRefreshRetryAsync(client, c => c.PostAsync(BuildFlowUrl(apiRoot, arguments) + "/close", null)),
+                _                                             => throw new ArgumentException($"Unknown tool: {toolName}")
             };
 
             var body = await httpResponse.Content.ReadAsStringAsync();
@@ -167,9 +170,9 @@ static class McpFlowsServer {
             }
 
             var statusPayload = toolName switch {
-                "get_review_flow_status" => FormatStatusResponse(body),
-                "close_review_flow"      => FormatCloseResponse(body),
-                _                        => FormatRoundResponse(body)
+                "get_review_flow_status" or "get_flow_status" => FormatStatusResponse(body),
+                "close_review_flow"      or "close_flow"      => FormatCloseResponse(body),
+                _                                             => FormatRoundResponse(body)
             };
 
             return BuildToolResult(id, statusPayload);
@@ -205,15 +208,21 @@ static class McpFlowsServer {
         return await send(client);
     }
 
-    static async Task<System.Net.Http.HttpResponseMessage> StartReviewFlowAsync(
+    /// <summary>
+    /// Posts to POST /api/flows/review/start. Shared by start_review_flow (reads the flow
+    /// kind from the "kind" arg) and its generic alias start_flow (reads it from
+    /// "definition_id" — the server treats kind == definition id, AI-1126 phase C).
+    /// </summary>
+    static async Task<System.Net.Http.HttpResponseMessage> StartFlowAsync(
             HttpClient         client,
             string             apiRoot,
             JsonObject?        arguments,
             string             cwd,
             string?            repoRoot,
-            RepositoryPayload? repoInfo
+            RepositoryPayload? repoInfo,
+            string             kindArgName
         ) {
-        var kind         = GetRequiredArg(arguments, "kind");
+        var kind         = GetRequiredArg(arguments, kindArgName);
         var targetKind   = GetRequiredArg(arguments, "target_kind");
         var targetRef    = GetRequiredArg(arguments, "target_ref");
         var targetTitle  = GetRequiredArg(arguments, "target_title");
@@ -247,23 +256,32 @@ static class McpFlowsServer {
         );
     }
 
-    static Task<System.Net.Http.HttpResponseMessage> SubmitReviewRoundAsync(
+    /// <summary>
+    /// Posts to POST /api/flows/{id}/rounds. Shared by submit_review_round (reads the round
+    /// context from the "context" arg, never sends a participant) and its generic alias
+    /// send_to_participant (reads context from "message" and always sends a participant,
+    /// which the server validates against the flow definition).
+    /// </summary>
+    static Task<System.Net.Http.HttpResponseMessage> SubmitRoundAsync(
             HttpClient  client,
             string      apiRoot,
-            JsonObject? arguments
+            JsonObject? arguments,
+            string      contextArgName,
+            string?     participant,
+            bool        async
         ) {
         var flowRunId    = arguments?["flow_run_id"]?.GetValue<string>();
-        var context      = GetRequiredArg(arguments, "context");
+        var context      = GetRequiredArg(arguments, contextArgName);
         var instructions = arguments?["instructions"]?.GetValue<string>();
 
         if (string.IsNullOrWhiteSpace(flowRunId)) {
             throw new ArgumentException(
                 "Missing required argument: flow_run_id. " +
-                "Pass the flow_run_id returned by start_review_flow."
+                "Pass the flow_run_id returned by start_review_flow or start_flow."
             );
         }
 
-        var body = new SubmitReviewRoundDto(Context: context, Instructions: instructions, Async: true);
+        var body = new SubmitReviewRoundDto(Context: context, Instructions: instructions, Async: async, Participant: participant);
 
         return client.PostAsync(
             $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}/rounds",
@@ -293,8 +311,11 @@ static class McpFlowsServer {
     const int MaxTransientRetries = 5;
 
     /// <summary>If the POST already carries a terminal result (old/blocking server), return it.
-    /// Otherwise poll GET /api/flows/{id} until the started round is terminal (AI-1061).</summary>
-    static async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody) {
+    /// Otherwise poll GET /api/flows/{id} until the started round is terminal (AI-1061).
+    /// <paramref name="toolName"/> is the tool that initiated the round (one of
+    /// start_review_flow/submit_review_round/start_flow/send_to_participant) — threaded through
+    /// so the graceful-cap timeout message can point back at the matching status tool.</summary>
+    static async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody, string toolName) {
         var node      = JsonNode.Parse(postBody)?.AsObject();
         var status    = node?["status"]?.GetValue<string>();
         var flowRunId = node?["flow_run_id"]?.GetValue<string>();
@@ -303,10 +324,17 @@ static class McpFlowsServer {
         if (status != "running" || flowRunId is null || roundNum is null)
             return new(FormatRoundResponse(postBody), false); // terminal-in-POST (old server) or unparseable
 
-        return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value);
+        return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value, toolName);
     }
 
-    static async Task<PollResult> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber) {
+    /// <summary>Tool family that started the round determines which status tool the graceful-cap
+    /// message points callers back to: the review aliases (start_review_flow/submit_review_round)
+    /// suggest get_review_flow_status; the generic tools (start_flow/send_to_participant) suggest
+    /// get_flow_status. Both hit the exact same endpoint, so this only affects wording.</summary>
+    static string StatusToolNameFor(string toolName) =>
+        toolName is "start_review_flow" or "submit_review_round" ? "get_review_flow_status" : "get_flow_status";
+
+    static async Task<PollResult> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber, string toolName) {
         var url                   = $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
         var pollStartedAt         = DateTimeOffset.UtcNow;
         var deadline              = pollStartedAt + PollCap;
@@ -383,9 +411,10 @@ static class McpFlowsServer {
         }
 
         // Genuine 8-min cap: round still legitimately running.
+        var statusToolName = StatusToolNameFor(toolName);
         return new(
-            $"Review still running for flow_run_id {flowRunId} (round {roundNumber}). " +
-            "Call get_review_flow_status to retrieve the result when ready.",
+            $"Flow still running for flow_run_id {flowRunId} (round {roundNumber}). " +
+            $"Call {statusToolName} to retrieve the result when ready.",
             false
         );
     }
@@ -505,6 +534,21 @@ static class McpFlowsServer {
         return value ?? throw new ArgumentException($"Missing required argument: {name}");
     }
 
+    /// <summary>
+    /// Parses the optional "async" argument for send_to_participant. A missing key and an
+    /// explicit JSON null both surface as a null JsonNode from the indexer (JsonNode has no
+    /// "null" leaf type), so both default to true — matching submit_review_round's hardcoded
+    /// Async: true. A JSON boolean is used as-is. Anything else (e.g. an LLM caller passing the
+    /// string "yes") throws ArgumentException, which HandleToolCallAsync's catch turns into a
+    /// clean tool error instead of an uncaught GetValue&lt;bool&gt;() crash.
+    /// </summary>
+    static bool ParseAsyncArg(JsonObject? arguments) =>
+        arguments?["async"] switch {
+            null                                              => true,
+            JsonValue v when v.TryGetValue<bool>(out var b) => b,
+            _                                                 => throw new ArgumentException("Invalid argument: async must be a boolean")
+        };
+
     static string BuildInitializeResponse(JsonNode id) =>
         ToResponse<McpInitResult>(
             id,
@@ -591,6 +635,62 @@ static class McpFlowsServer {
                 },
                 ["flow_run_id"]
             )
+        ),
+        new(
+            "start_flow",
+            "Start a new agent flow from the server's flow-definition catalog. This hands the work to a SEPARATE hosted agent and iterates to sign-off — it is NOT how you do the work yourself. " +
+            "Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. " +
+            "Returns a flow_run_id that identifies this flow run — save it to call send_to_participant or get_flow_status later.",
+            new(
+                "object",
+                new() {
+                    ["definition_id"] = new("string", "Flow definition id from the catalog (e.g. 'code-review', or a custom definition)."),
+                    ["target_kind"]    = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
+                    ["target_ref"]     = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
+                    ["target_title"]   = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
+                    ["context"]        = new("string", "Background context for the agent: what to focus on, constraints, definition of done."),
+                    ["instructions"]   = new("string", "Optional additional instructions for the agent."),
+                    ["mode"]           = new("string", "Optional. Pass 'context-only' to have the agent treat the submitted context/diff as authoritative rather than reading the repository. By default the agent runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the work in the actual source; passing 'context-only' opts out of that.")
+                },
+                ["definition_id", "target_kind", "target_ref", "target_title", "context"]
+            )
+        ),
+        new(
+            "send_to_participant",
+            "Send a follow-up message to a participant in an existing flow. Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback.",
+            new(
+                "object",
+                new() {
+                    ["flow_run_id"]  = new("string", "Flow run ID returned by start_flow."),
+                    ["participant"]  = new("string", "The participant role to send to. Phase D flows have a single participant: 'reviewer'."),
+                    ["message"]      = new("string", "Updated context or response to the participant's previous findings."),
+                    ["instructions"] = new("string", "Optional instructions for this round."),
+                    ["async"]        = new("boolean", "Optional. Defaults to true.")
+                },
+                ["flow_run_id", "participant", "message"]
+            )
+        ),
+        new(
+            "get_flow_status",
+            "Get the current status of a flow run: running, waiting, completed, or failed. Also surfaces the last result kind and result text.",
+            new(
+                "object",
+                new() {
+                    ["flow_run_id"] = new("string", "Flow run ID returned by start_flow.")
+                },
+                ["flow_run_id"]
+            )
+        ),
+        new(
+            "close_flow",
+            "Close a flow run, marking it as complete. Call this after the work is done and the findings have been addressed.",
+            new(
+                "object",
+                new() {
+                    ["flow_run_id"] = new("string", "Flow run ID returned by start_flow.")
+                },
+                ["flow_run_id"]
+            )
         )
     ];
 }
@@ -614,9 +714,16 @@ record StartReviewFlowDto(
     [property: JsonPropertyName("async")]                  bool    Async
 );
 
-/// <summary>CLI-side DTO for POST /api/flows/{flowRunId}/rounds — mirrors the server's SubmitReviewRoundRequest.</summary>
+/// <summary>
+/// CLI-side DTO for POST /api/flows/{flowRunId}/rounds — mirrors the server's SubmitReviewRoundRequest.
+/// Participant is optional (AI-1126 D-b): the review alias (submit_review_round) always leaves it
+/// null, which the WhenWritingNull context config omits from the wire entirely, keeping the alias
+/// byte-compatible with servers that predate the field. The generic alias (send_to_participant)
+/// always supplies it; the server validates it against the flow definition.
+/// </summary>
 record SubmitReviewRoundDto(
     [property: JsonPropertyName("context")]      string  Context,
     [property: JsonPropertyName("instructions")] string? Instructions,
-    [property: JsonPropertyName("async")]        bool    Async
+    [property: JsonPropertyName("async")]        bool    Async,
+    [property: JsonPropertyName("participant")]  string? Participant = null
 );

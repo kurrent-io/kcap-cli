@@ -121,7 +121,7 @@ Open the server URL in your browser. The dashboard shows repositories, sessions,
 
 The `kcap mcp sessions` stdio server lets coding agents search and recall past Capacitor sessions without leaving the chat. `kcap setup` **registers it (with `kcap-review`) for both Claude Code and Codex CLI** — no manual `claude mcp add` or TOML edit. For Claude Code it's carried by the plugin's `.mcp.json`; for Codex CLI, `kcap setup` / `kcap plugin install --codex` write it into `~/.codex/config.toml`. The server is repo-aware: `cd` into a project before spawning your agent and `search_sessions` defaults to that repo's sessions.
 
-The `kcap mcp flows` stdio server lets agents start and interact with AI-powered review flows. The plugin **auto-registers it for Claude Code** (Codex stays manual). See the [Flows MCP server](#flows-mcp-server-for-agents) section for details.
+The `kcap mcp flows` stdio server lets agents start and interact with AI-powered agent flows — any flow-definition catalog entry, not just reviews. The plugin **auto-registers it for Claude Code** (Codex stays manual). See the [Flows MCP server](#flows-mcp-server-for-agents) section for details.
 
 The `kcap mcp flow-result` stdio server is the reviewer-side counterpart: the daemon injects it into hosted review-flow reviewer sessions so they can submit their result. It is not meant to be registered or run manually — see [Flow-result MCP server](#flow-result-mcp-server-hosted-reviewers).
 
@@ -303,9 +303,9 @@ The server is repo-aware — it resolves the current working directory to a repo
 kcap mcp flows
 ```
 
-Stdio MCP server that lets coding agents start and interact with AI-powered review flows directly from within a session. The Kurrent Capacitor plugin **auto-registers it for Claude Code** (via `.mcp.json`), so there's nothing to do after `kcap setup` — the flows server derives the target repo from its launch working directory, and Claude Code always runs inside the repo, so one registration works for every repo. It's registered even with no daemon connected; the tools simply stay inert (and `start_review_flow` returns an error) until a daemon with the repo is available.
+Stdio MCP server that lets coding agents start and interact with AI-powered agent flows — any entry in the server's flow-definition catalog, not just reviews — directly from within a session. The Kurrent Capacitor plugin **auto-registers it for Claude Code** (via `.mcp.json`), so there's nothing to do after `kcap setup` — the flows server derives the target repo from its launch working directory, and Claude Code always runs inside the repo, so one registration works for every repo. It's registered even with no daemon connected; the tools simply stay inert (and `start_flow` returns an error) until a daemon with the repo is available.
 
-For Codex, `kcap-flows` stays manual — unlike the `sessions` / `review` / `memory` servers (which `kcap setup` registers in `config.toml`), it launches a paid hosted reviewer, so it isn't auto-registered. Add it to `~/.codex/config.toml`:
+For Codex, `kcap-flows` stays manual — unlike the `sessions` / `review` / `memory` servers (which `kcap setup` registers in `config.toml`), it launches a paid hosted participant, so it isn't auto-registered. Add it to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.kcap-flows]
@@ -313,14 +313,16 @@ command = "kcap"           # use an absolute path (e.g. /opt/homebrew/bin/kcap) 
 args    = ["mcp", "flows"] # desktop app, which launches MCP servers without your shell PATH
 ```
 
-It provides four tools:
+It provides four generic tools:
 
-- **`start_review_flow`** — start a new review flow (`spec-review` or `code-review`). Provide `kind`, `target_kind`, `target_ref`, `target_title`, and `context`. Requester context (session ID, cwd, repo root, owner, name) is resolved automatically from the environment. Returns a `flow_run_id`. Optional `mode`: by default, when the daemon runs on the same machine, the reviewer works in a worktree mirrored from your working tree — **uncommitted and untracked changes included** — so it grounds the review in your actual in-progress source; pass `mode="context-only"` to opt out and have the reviewer treat only the submitted context as authoritative.
-- **`submit_review_round`** — submit a follow-up round to an existing flow with updated context or a response to the reviewer's findings. Returns the new round's findings.
-- **`get_review_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow.
-- **`close_review_flow`** — mark a completed review flow as closed.
+- **`start_flow`** — start a new flow from the server's flow-definition catalog. Provide `definition_id` (e.g. `spec-review`, `code-review`, or a custom definition), `target_kind`, `target_ref`, `target_title`, and `context`. Requester context (session ID, cwd, repo root, owner, name) is resolved automatically from the environment. Returns a `flow_run_id`. Optional `mode`: by default, when the daemon runs on the same machine, the participant works in a worktree mirrored from your working tree — **uncommitted and untracked changes included** — so it grounds the work in your actual in-progress source; pass `mode="context-only"` to opt out and have the participant treat only the submitted context as authoritative.
+- **`send_to_participant`** — send a follow-up message to a participant (e.g. `"reviewer"`, the only participant Phase D definitions currently define) in an existing flow with updated context or a response to prior findings. Returns the new round's findings.
+- **`get_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow run.
+- **`close_flow`** — mark a completed flow run as closed.
 
-Requires `kcap login` **and a running daemon with this repo checked out** — the server discovers a connected daemon to launch the hosted reviewer (Codex for the built-in `spec-review`/`code-review` flows; the vendor is chosen by the flow definition), and `start_review_flow` errors if none (or more than one) matches. The server creates an authenticated HTTP client at startup and posts to the Capacitor server's `/api/flows/*` endpoints.
+The four review tools — **`start_review_flow`**, **`submit_review_round`**, **`get_review_flow_status`**, **`close_review_flow`** — are aliases of the generic tools above, kept byte-compatible for existing callers: `start_review_flow`'s `kind` maps to `start_flow`'s `definition_id`, and `submit_review_round`'s `context` maps to `send_to_participant`'s `message` with no `participant` argument (the flow's single reviewer is targeted implicitly). New integrations should prefer the generic tools; the review tools stay best for a plain "review my PR" / "start a review flow" ask.
+
+Requires `kcap login` **and a running daemon with this repo checked out** — the server discovers a connected daemon to launch the hosted participant (Codex for the built-in `spec-review`/`code-review` flows; the vendor is chosen by the flow definition), and `start_flow` errors if none (or more than one) matches. The server creates an authenticated HTTP client at startup and posts to the Capacitor server's `/api/flows/*` endpoints.
 
 ### Flow-result MCP server (hosted reviewers)
 
