@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Acp;
 
@@ -8,14 +9,63 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// terminate/wait semantics of <c>Pty.Unix.UnixPtyProcess</c>/<c>WinPtyProcess</c> (SIGTERM-then-kill
 /// via <see cref="Process.Kill(bool)"/>, bounded waits that return silently on timeout) but owns no
 /// terminal I/O — stdin/stdout carry ACP JSON-RPC frames, consumed by <see cref="AcpConnection"/>.
+///
+/// Also owns a background drain of the child's redirected stderr. <c>cursor-agent</c> is spawned
+/// with <c>RedirectStandardError = true</c> (see <see cref="Services.AcpHostedAgentRuntimeFactory"/>),
+/// and nothing else ever reads that stream — if we didn't drain it here, the OS pipe buffer (~64KB)
+/// would eventually fill and cursor-agent would block on its next stderr write, deadlocking a long
+/// session. The drain loop reads lines until EOF (process exit) or cancellation and logs them at
+/// Debug so cursor-agent diagnostics are still captured, just not on the critical path.
 /// </summary>
-internal sealed class AcpChildProcess(Process process) : IAcpProcess {
+internal sealed class AcpChildProcess : IAcpProcess {
+    readonly Process                 _process;
+    readonly ILogger                 _logger;
+    readonly CancellationTokenSource _stderrDrainCts = new();
+    readonly Task                    _stderrDrainTask;
+
     int _disposed;
+
+    public AcpChildProcess(Process process, ILogger logger) {
+        _process = process;
+        _logger  = logger;
+
+        // Fire-and-forget from the ctor's perspective — DisposeAsync cancels and (best-effort)
+        // awaits it. Never let this task fault unobserved; DrainStderrAsync swallows everything
+        // it can anticipate on shutdown.
+        _stderrDrainTask = DrainStderrAsync(_stderrDrainCts.Token);
+    }
+
+    /// <summary>
+    /// Continuously reads <see cref="Process.StandardError"/> until EOF (the process exited and
+    /// closed the pipe) or <paramref name="ct"/> fires, logging each non-empty line at Debug. This
+    /// exists purely to keep the stderr pipe drained — see the type-level doc for why an undrained
+    /// stderr pipe can deadlock <c>cursor-agent</c>. Never throws: any exception here would become
+    /// an unobserved-task-exception on process teardown, and none of the failure modes below need
+    /// anything more than "stop draining".
+    /// </summary>
+    async Task DrainStderrAsync(CancellationToken ct) {
+        try {
+            while (!ct.IsCancellationRequested) {
+                var line = await _process.StandardError.ReadLineAsync(ct).ConfigureAwait(false);
+
+                if (line is null) break; // EOF — process exited and closed the stream.
+
+                if (line.Length > 0)
+                    _logger.LogDebug("cursor-agent stderr: {Line}", line);
+            }
+        } catch (OperationCanceledException) {
+            // Disposal requested the drain stop — expected, not an error.
+        } catch (IOException) {
+            // Pipe torn down (process killed mid-read) — expected on teardown.
+        } catch (ObjectDisposedException) {
+            // Stream disposed out from under us (process.Dispose() raced the read) — expected.
+        }
+    }
 
     public int Pid {
         get {
             try {
-                return process.HasExited ? 0 : process.Id;
+                return _process.HasExited ? 0 : _process.Id;
             } catch {
                 // Process already disposed/exited under us — never let a PID read throw.
                 return 0;
@@ -26,7 +76,7 @@ internal sealed class AcpChildProcess(Process process) : IAcpProcess {
     public bool HasExited {
         get {
             try {
-                return process.HasExited;
+                return _process.HasExited;
             } catch {
                 return true;
             }
@@ -36,7 +86,7 @@ internal sealed class AcpChildProcess(Process process) : IAcpProcess {
     public int? ExitCode {
         get {
             try {
-                return process.HasExited ? process.ExitCode : null;
+                return _process.HasExited ? _process.ExitCode : null;
             } catch {
                 return null;
             }
@@ -49,12 +99,12 @@ internal sealed class AcpChildProcess(Process process) : IAcpProcess {
                 using var cts = new CancellationTokenSource(t);
 
                 try {
-                    await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+                    await _process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
                 } catch (OperationCanceledException) {
                     // Timed out — return silently, matching IPtyProcess's contract.
                 }
             } else {
-                await process.WaitForExitAsync().ConfigureAwait(false);
+                await _process.WaitForExitAsync().ConfigureAwait(false);
             }
         } catch {
             // Process already exited/disposed — nothing to wait for.
@@ -63,9 +113,9 @@ internal sealed class AcpChildProcess(Process process) : IAcpProcess {
 
     public async Task TerminateAsync(TimeSpan? timeout = null) {
         try {
-            if (process.HasExited) return;
+            if (_process.HasExited) return;
 
-            process.Kill(entireProcessTree: true);
+            _process.Kill(entireProcessTree: true);
         } catch {
             // Already exited/disposed, or the kill raced the exit — either way there's
             // nothing left to terminate.
@@ -80,18 +130,33 @@ internal sealed class AcpChildProcess(Process process) : IAcpProcess {
             return;
 
         try {
-            if (!process.HasExited)
-                process.Kill(entireProcessTree: true);
+            if (!_process.HasExited)
+                _process.Kill(entireProcessTree: true);
         } catch {
             // Best-effort — already exited or inaccessible.
         }
 
+        // Stop the stderr drain. The process is being killed anyway, so this is a bounded,
+        // best-effort wait — never let a stuck drain hang dispose.
         try {
-            process.Dispose();
+            await _stderrDrainCts.CancelAsync().ConfigureAwait(false);
         } catch {
             // Best-effort.
         }
 
-        await Task.CompletedTask;
+        try {
+            await _stderrDrainTask.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+        } catch {
+            // Timed out or faulted — DrainStderrAsync already swallows its expected exceptions,
+            // so this is just a safety net; never let dispose hang or throw on it.
+        }
+
+        _stderrDrainCts.Dispose();
+
+        try {
+            _process.Dispose();
+        } catch {
+            // Best-effort.
+        }
     }
 }

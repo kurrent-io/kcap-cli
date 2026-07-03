@@ -37,9 +37,10 @@ internal sealed class AcpHostedAgentRuntimeFactory(DaemonConfig config, ILoggerF
 
         var connLogger    = loggerFactory.CreateLogger<AcpConnection>();
         var runtimeLogger = loggerFactory.CreateLogger<AcpHostedAgentRuntime>();
+        var processLogger = loggerFactory.CreateLogger<AcpChildProcess>();
 
         var connection = new AcpConnection(process.StandardInput.BaseStream, process.StandardOutput.BaseStream, connLogger);
-        var acpProcess = new AcpChildProcess(process);
+        var acpProcess = new AcpChildProcess(process, processLogger);
         var runtime    = new AcpHostedAgentRuntime(connection, acpProcess, runtimeLogger);
 
         try {

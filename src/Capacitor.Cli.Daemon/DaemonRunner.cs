@@ -200,14 +200,16 @@ public static partial class DaemonRunner {
         // Cursor (no IHostedAgentLauncher — Cursor never went through the PTY launcher contract).
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new PtyHostedAgentRuntimeFactory(
-                sp.GetServices<IHostedAgentLauncher>().Single(l => l.Vendor == "claude"),
+                sp.GetServices<IHostedAgentLauncher>().SingleOrDefault(l => l.Vendor == "claude")
+                    ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'claude'"),
                 sp.GetRequiredService<IPtyProcessFactory>(),
                 sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new PtyHostedAgentRuntimeFactory(
-                sp.GetServices<IHostedAgentLauncher>().Single(l => l.Vendor == "codex"),
+                sp.GetServices<IHostedAgentLauncher>().SingleOrDefault(l => l.Vendor == "codex")
+                    ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'codex'"),
                 sp.GetRequiredService<IPtyProcessFactory>(),
                 sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>()
             )

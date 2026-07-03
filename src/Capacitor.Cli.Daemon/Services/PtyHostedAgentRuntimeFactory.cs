@@ -30,6 +30,13 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
 
     public bool IsAvailable() => launcher.IsAvailable();
 
+    /// <remarks>
+    /// <paramref name="ct"/> is accepted for interface parity with <see cref="IHostedAgentRuntimeFactory"/>
+    /// but is not observed on this path — <c>Prepare</c>, <c>BuildArgs</c>, and the PTY spawn are all
+    /// synchronous/uncancellable, matching the pre-refactor behavior this factory was extracted from
+    /// (not a regression introduced here). A caller should not assume cancelling <paramref name="ct"/>
+    /// aborts an in-flight PTY launch.
+    /// </remarks>
     public async Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
         var launcherCtx = new LauncherContext(
             AgentId: ctx.AgentId,
