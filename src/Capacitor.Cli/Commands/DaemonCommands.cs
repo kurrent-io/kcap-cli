@@ -318,6 +318,20 @@ public static class DaemonCommands {
         }
 
         if (ReadPidFile(name) is not { } entry) {
+            // ReadPidFile returns null for BOTH an absent file and a present-but-
+            // unparseable one (empty/partial — e.g. a mid-write SIGKILL; it no
+            // longer unlinks the latter, AI-1155). `stop` is an explicit cleanup
+            // path, so distinguish them: remove a corrupt/empty file here (the
+            // user asked to stop this daemon, and it's the leftover hard-death
+            // breadcrumb), but report cleanly when the file is genuinely absent.
+            if (File.Exists(DaemonLockPaths.PidPath(name))) {
+                Console.Out.WriteLine($"Daemon '{name}' was not running (removed unusable PID file).");
+                try { File.Delete(DaemonLockPaths.PidPath(name)); } catch { /* best-effort */ }
+                DaemonVersionMarker.Delete(name);
+
+                return 0;
+            }
+
             Console.Error.WriteLine($"No daemon '{name}' running (no PID file found).");
 
             return 1;
