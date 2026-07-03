@@ -65,8 +65,12 @@ public class AntigravityPathsTests {
     [Test]
     public async Task ConversationDbFromTranscript_resolves_the_sibling_db() {
         var transcript = AntigravityPaths.TranscriptFullPath("abc-123-def", home: "/h", geminiCliHome: P);
-        await Assert.That(AntigravityPaths.ConversationDbFromTranscript(transcript))
-            .IsEqualTo(AntigravityPaths.ConversationDb("abc-123-def", home: "/h", geminiCliHome: P));
+        // GetFullPath normalizes separators so the assertion isn't brittle across OSes:
+        // ConversationDbFromTranscript walks up with GetDirectoryName (which canonicalizes
+        // separators on Windows) while ConversationDb builds via Path.Combine — same file,
+        // possibly different separator style in the raw string.
+        await Assert.That(Path.GetFullPath(AntigravityPaths.ConversationDbFromTranscript(transcript)!))
+            .IsEqualTo(Path.GetFullPath(AntigravityPaths.ConversationDb("abc-123-def", home: "/h", geminiCliHome: P)));
     }
 
     [Test]
