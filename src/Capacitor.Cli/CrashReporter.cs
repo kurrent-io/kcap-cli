@@ -52,18 +52,27 @@ internal static class CrashReporter {
     /// already failing, possibly with a closed stderr pipe (detached process).
     /// </summary>
     public static void Record(string? command, Exception ex) {
+        string? writtenPath = null;
         try {
             var path = PathHelpers.ConfigPath("crash.log");
+            // Ensure the config dir exists — on a fresh install it may not yet, and
+            // PathHelpers.ConfigPath only combines paths (doesn't create them).
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             TrimIfLarge(path);
             File.AppendAllText(path, FormatEntry(command, ex, DateTimeOffset.UtcNow));
+            writtenPath = path;
         } catch {
-            // Disk full, dir missing, permissions — nothing useful to do while crashing.
+            // Disk full, permissions — nothing useful to do while crashing.
         }
 
         try {
+            // Report the actual resolved path (honours KCAP_CONFIG_DIR) and only
+            // claim it was logged when the write actually succeeded.
+            var where = writtenPath is null ? "crash log unavailable" : $"logged to {writtenPath}";
             Console.Error.WriteLine(
                 $"[kcap] {(string.IsNullOrEmpty(command) ? "command" : command)} failed: "
-              + $"{ex.GetType().Name}: {ex.Message} (logged to ~/.config/kcap/crash.log)");
+              + $"{ex.GetType().Name}: {ex.Message} ({where})");
         } catch {
             // stderr may be a broken pipe on a detached process.
         }
