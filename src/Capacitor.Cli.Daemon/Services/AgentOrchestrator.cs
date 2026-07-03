@@ -137,6 +137,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly IHttpClientFactory                                _httpClientFactory;
     readonly LocalPermissionBridge                             _permissionBridge;
     readonly IReadOnlyDictionary<string, IHostedAgentLauncher> _launchers;
+    readonly IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> _runtimeFactories;
     readonly ILogger<AgentOrchestrator>                        _logger;
 
     // Hosted-agent PTYs are spawned at a fixed size and never resized. The daemon
@@ -184,6 +185,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             IHttpClientFactory                                httpClientFactory,
             LocalPermissionBridge                             permissionBridge,
             IReadOnlyDictionary<string, IHostedAgentLauncher> launchers,
+            IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> runtimeFactories,
             IHostApplicationLifetime                          lifetime,
             ILogger<AgentOrchestrator>                        logger
         ) {
@@ -196,6 +198,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _httpClientFactory = httpClientFactory;
         _permissionBridge  = permissionBridge;
         _launchers         = launchers;
+        _runtimeFactories  = runtimeFactories;
         _logger            = logger;
 
         // Wire up server commands
@@ -237,16 +240,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // .TryGetValue(null) throws ArgumentNullException — which SafeInvoke would swallow, dropping
         // the launch with no LaunchFailed reaching the server. (The removed vendor allowlist used to
         // absorb this incidentally.)
-        if (string.IsNullOrWhiteSpace(cmd.Vendor) || !_launchers.TryGetValue(cmd.Vendor, out var launcher)) {
+        if (string.IsNullOrWhiteSpace(cmd.Vendor) || !_runtimeFactories.TryGetValue(cmd.Vendor, out var runtimeFactory)) {
             await _server.LaunchFailedAsync(cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
 
             return;
         }
 
         // AI-1124: fail an unattended (review-flow) launch fast when the selected vendor's
-        // launcher can't run unattended — before creating a worktree, so there's nothing to
-        // clean up. Both shipped launchers support it; this guards future vendors.
-        if (UnattendedLaunchPolicy.RejectionReason(launcher, isReviewFlow) is { } unattendedRejection) {
+        // runtime can't run unattended — before creating a worktree, so there's nothing to
+        // clean up. Both shipped PTY launchers support it; this guards future vendors (and the
+        // ACP/Cursor runtime, which does not).
+        if (UnattendedLaunchPolicy.RejectionReason(cmd.Vendor, runtimeFactory.SupportsUnattended, isReviewFlow) is { } unattendedRejection) {
             await _server.LaunchFailedAsync(cmd.AgentId, unattendedRejection);
 
             return;
@@ -337,8 +341,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
 
-            var launcherCtx = new LauncherContext(
+            var runtimeCtx = new RuntimeStartContext(
                 AgentId: agentId,
+                Vendor: cmd.Vendor,
                 SourceRepoPath: repoPath,
                 Worktree: worktree,
                 Prompt: prompt,
@@ -348,13 +353,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 IsReview: isReview,
                 IsReviewFlow: isReviewFlow,
                 Review: cmd.Review,
-                ReviewLaunch: isReview && cmd.Review is { } reviewArgs
-                    ? await ReviewLaunchBuilder.BuildAsync(cmd.Vendor, _config.CapacitorPath, _config.ServerUrl ?? "", reviewArgs.Owner, reviewArgs.Repo, reviewArgs.PrNumber)
-                    : null
+                Cols: HostedPtyCols,
+                Rows: HostedPtyRows,
+                ServerUrl: _config.ServerUrl,
+                DaemonBridgeUrl: _permissionBridge.BaseUrl
             );
 
+            HostedRuntimeStart start;
+
             try {
-                launcher.Prepare(launcherCtx);
+                start = await runtimeFactory.StartAsync(runtimeCtx, _shutdownCts.Token);
             } catch (CodexHooksNotInstalledException ex) {
                 await _server.LaunchFailedAsync(agentId, ex.Message);
 
@@ -364,39 +372,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
 
                 return;
-            } catch (Exception ex) {
-                LogPrepareSoftFailure(ex, agentId);
             }
 
-            var launchArgs = launcher.BuildArgs(launcherCtx);
-            var args       = launchArgs.Args;
-            mcpConfigPath = launchArgs.McpConfigPath;
+            mcpConfigPath = start.McpConfigPath;
+            var runtime = start.Runtime;
 
-            var env = new Dictionary<string, string> {
-                ["KCAP_RENDERED_AGENT"] = "1",
-                ["KCAP_AGENT_ID"]       = agentId
-            };
-
-            if (!string.IsNullOrEmpty(_config.ServerUrl)) {
-                env["KCAP_URL"] = _config.ServerUrl;
-            }
-
-            // Tell the spawned Claude's permission-request hook where to find this
-            // daemon's local SignalR bridge. Bypasses Cloudflare's HTTP timeout on
-            // the server's /hooks/permission-request long-poll. CLI falls back to
-            // KCAP_URL if this var is absent (e.g. older CLI builds).
-            if (_permissionBridge.BaseUrl is { } bridgeUrl) {
-                env["KCAP_DAEMON_URL"] = bridgeUrl;
-            }
-
-            if (isReview && cmd.Review is { } reviewEnv) {
-                env["KCAP_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
-            }
-
-            var pty     = _ptyFactory.Spawn(launcher.CliPath, args, worktree.Path, env, HostedPtyCols, HostedPtyRows);
-            var runtime = new PtyHostedAgentRuntime(cmd.Vendor, pty);
-
-            LogAgentSpawned(agentId, pty.Pid, worktree.Path, launcher.CliPath);
+            LogAgentSpawned(agentId, runtime.Pid, worktree.Path, runtimeFactory.Vendor);
 
             var cts = new CancellationTokenSource();
 
@@ -1265,8 +1246,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Information, Message = "Launching agent {AgentId} for {Repo} (effort={Effort}, model={Model})")]
     partial void LogLaunching(string agentId, string repo, string effort, string model);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId} spawned (PID={Pid}, worktree={Worktree}, claude={ClaudePath})")]
-    partial void LogAgentSpawned(string agentId, int pid, string worktree, string claudePath);
+    [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId} spawned (PID={Pid}, worktree={Worktree}, vendor={Vendor})")]
+    partial void LogAgentSpawned(string agentId, int pid, string worktree, string vendor);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId} exited with code {ExitCode}")]
     partial void LogAgentExited(string agentId, int? exitCode);
@@ -1303,9 +1284,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error {Step} for agent {AgentId}")]
     partial void LogCleanupStepFailed(Exception ex, string step, string agentId);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Launcher Prepare soft-failure for agent {AgentId} (continuing)")]
-    partial void LogPrepareSoftFailure(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report resolved model for agent {AgentId} (continuing)")]
     partial void LogReportResolvedModelFailed(Exception ex, string agentId);

@@ -75,6 +75,13 @@ public partial class AgentOrchestratorVendorTests {
         var httpFactory      = new StubHttpClientFactory();
         var permissionBridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance);
 
+        // Mirror DaemonRunner's DI wiring: one PtyHostedAgentRuntimeFactory per registered launcher,
+        // all sharing the same (spied) IPtyProcessFactory so SpyPtyProcessFactory's
+        // SpawnCalls/LastCommand assertions stay valid through the runtime-selection seam.
+        IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> runtimeFactories = launchers.Values
+            .Select(l => (IHostedAgentRuntimeFactory) new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance))
+            .ToDictionary(f => f.Vendor);
+
         return new AgentOrchestrator(
             config,
             server,
@@ -84,6 +91,7 @@ public partial class AgentOrchestratorVendorTests {
             httpFactory,
             permissionBridge,
             launchers,
+            runtimeFactories,
             new StubHostLifetime(),
             NullLogger<AgentOrchestrator>.Instance
         );

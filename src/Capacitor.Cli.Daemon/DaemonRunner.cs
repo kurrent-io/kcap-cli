@@ -190,6 +190,21 @@ public static partial class DaemonRunner {
             sp.GetServices<IHostedAgentLauncher>().ToDictionary(l => l.Vendor)
         );
 
+        // Runtime-selection seam (AI-684 Task 10): one IHostedAgentRuntimeFactory per vendor,
+        // wrapping each registered PTY launcher above. AgentOrchestrator selects by vendor from the
+        // resulting dictionary instead of driving Prepare/BuildArgs/Spawn inline.
+        builder.Services.AddSingleton<IReadOnlyDictionary<string, IHostedAgentRuntimeFactory>>(sp => {
+            var ptyFactory = sp.GetRequiredService<IPtyProcessFactory>();
+            var logger     = sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>();
+
+            IEnumerable<IHostedAgentRuntimeFactory> factories = [
+                .. sp.GetServices<IHostedAgentLauncher>()
+                    .Select(l => new PtyHostedAgentRuntimeFactory(l, ptyFactory, logger))
+            ];
+
+            return factories.ToDictionary(f => f.Vendor);
+        });
+
         builder.Services.AddSingleton<AgentOrchestrator>();
         builder.Services.AddSingleton<EvalContextCache>();
         builder.Services.AddSingleton<EvalRunner>();
