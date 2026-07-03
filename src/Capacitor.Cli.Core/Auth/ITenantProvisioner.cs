@@ -18,5 +18,9 @@ public sealed record ProvisionOffer(ProvisionOfferStatus Status, ProvisionedTena
 public interface ITenantProvisioner {
     // Interactive: prompt -> provision -> poll. Returns Created (with the tenant)
     // on success; Declined/InProgress/Failed otherwise.
-    Task<ProvisionOffer> OfferCreateAsync(string workosAccessToken, CancellationToken ct = default);
+    //
+    // Takes a token source rather than a bare access token: provisioning + polling can run
+    // for minutes, outliving WorkOS's ~5-minute access-token TTL, so each server call pulls a
+    // freshly-refreshed token via the source (see WorkOSTokenSource).
+    Task<ProvisionOffer> OfferCreateAsync(WorkOSTokenSource tokens, CancellationToken ct = default);
 }

@@ -114,6 +114,39 @@ public class OAuthFlowTests {
     }
 
     [Test]
+    public async Task RefreshWorkOSToken_posts_org_less_refresh_grant_and_returns_token() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/user_management/authenticate").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """{"user":{"id":"user_x"},"access_token":"acc","refresh_token":"rt2"}"""));
+        using var http = new HttpClient();
+
+        var auth = await OAuthLoginFlow.RefreshWorkOSTokenAsync(http, server.Urls[0], "client_d", "rt1");
+
+        await Assert.That(auth!.AccessToken).IsEqualTo("acc");
+        await Assert.That(auth.RefreshToken).IsEqualTo("rt2");
+
+        var body = server.FindLogEntries(Request.Create().WithPath("/user_management/authenticate").UsingPost())[0].RequestMessage.Body!;
+        await Assert.That(body).Contains("refresh_token=rt1");
+        await Assert.That(body).DoesNotContain("organization_id");
+    }
+
+    [Test]
+    public async Task RefreshWorkOSToken_returns_null_on_transport_failure() {
+        // A network/timeout blip during a mid-poll refresh must degrade to null, not throw and
+        // abort provisioning. Start then stop the server so the connection is refused.
+        var server = WireMockServer.Start();
+        var url = server.Urls[0];
+        server.Stop();
+
+        using var http = new HttpClient();
+
+        var auth = await OAuthLoginFlow.RefreshWorkOSTokenAsync(http, url, "client_d", "rt1");
+
+        await Assert.That(auth).IsNull();
+    }
+
+    [Test]
     public async Task GitHubBrowser_exchanges_code_and_returns_access_token() {
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/code-exchange").UsingPost())

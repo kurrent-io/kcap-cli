@@ -10,6 +10,13 @@ namespace Capacitor.Cli.Core.Auth;
 // offer. Not serialized — no JSON context entry.
 public sealed record ProvisionOutcome(int StatusCode, ProvisionResponse? Body);
 
+// Result of a status GET: HTTP status + parsed body. Surfacing the status (rather than
+// collapsing everything to a nullable body) lets the poll distinguish "still provisioning"
+// (200) from auth/ownership failures (401/403/404) and transport blips (0), instead of
+// treating them all as "keep waiting" and spinning silently. StatusCode 0 = transport/parse
+// failure. Not serialized — no JSON context entry.
+public sealed record StatusOutcome(int StatusCode, StatusResponse? Body);
+
 // Talks to kcap-web /api/signup/* with a WorkOS bearer access token. All calls
 // are best-effort: transport / timeout / parse failures degrade to null
 // (availability/status) or StatusCode 0 (provision) rather than throwing, so a
@@ -50,15 +57,19 @@ public sealed class TenantProvisioningClient(HttpClient http) {
         }
     }
 
-    public async Task<StatusResponse?> GetStatusAsync(
+    public async Task<StatusOutcome> GetStatusAsync(
             string baseUrl, string token, string slug, CancellationToken ct) {
         try {
             using var req = Get($"{baseUrl}/api/signup/status?slug={Uri.EscapeDataString(slug)}", token);
             using var resp = await http.SendAsync(req, ct);
-            if (!resp.IsSuccessStatusCode) return null;
-            return await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.StatusResponse, ct);
+            if (!resp.IsSuccessStatusCode) return new((int)resp.StatusCode, null);
+
+            StatusResponse? body = null;
+            try { body = await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.StatusResponse, ct); }
+            catch (Exception e) when (IsTransient(e)) { /* 2xx with empty/non-JSON body — leave null */ }
+            return new((int)resp.StatusCode, body);
         } catch (Exception e) when (IsTransient(e)) {
-            return null;
+            return new(0, null); // transport failure — caller treats as transient, keeps waiting
         }
     }
 
