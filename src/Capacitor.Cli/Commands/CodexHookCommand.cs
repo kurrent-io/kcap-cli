@@ -15,12 +15,13 @@ namespace Capacitor.Cli.Commands;
 /// <remarks>
 /// Wire contract (Codex event → server route):
 ///   SessionStart      → POST /hooks/session-start/codex
-///   Stop              → no server POST. Codex fires Stop at every turn end,
-///                       not session end (AI-648). Session-end is owned by the
-///                       watcher's parent-PID monitor (AI-647 — see
-///                       WatchCommand.PostSessionEndOnParentExitAsync).
-///                       HandleStop only refreshes watcher liveness and emits
-///                       {"continue":true} so Codex's hook parser is satisfied.
+///   Stop              → POST /hooks/stop (best-effort, 2s cap, swallow-all).
+///                       Codex fires Stop at every turn end, not session end
+///                       (AI-648); session-end stays owned by the watcher's
+///                       parent-PID monitor (AI-647). The POST lets the server
+///                       emit the idle-wait marker that clears the chat
+///                       "working" indicator. HandleStop also refreshes watcher
+///                       liveness and emits {"continue":true} for Codex's parser.
 ///   PermissionRequest → in a daemon-launched hosted agent (KCAP_DAEMON_URL set), bounce
 ///                       through the daemon's LocalPermissionBridge and wait for the dashboard's
 ///                       decision (fail-closed on bridge errors: deny + exit nonzero). Otherwise:
@@ -213,8 +214,10 @@ static class CodexHookCommand {
         // the watcher after turn 1 and mismark multi-turn sessions as ended
         // before they actually finish.
         //
-        // Symmetric with Claude's stop/notification branch in Program.cs —
-        // we just keep the watcher alive in case it crashed mid-session.
+        // We keep the watcher alive (in case it crashed mid-session) AND
+        // best-effort POST /hooks/stop so the server can emit the idle-wait
+        // marker that clears the chat "working" indicator (symmetric with
+        // Claude's stop hook).
         var sessionId  = TryGetString(node, "session_id");
         var transcript = TryGetString(node, "transcript_path");
         var cwd        = TryGetString(node, "cwd");
@@ -225,6 +228,8 @@ static class CodexHookCommand {
                 agentId: null, sessionIdOverride: null, cwd: cwd,
                 skipTitle: false, vendor: "codex"
             );
+
+            await PostBestEffortAsync(baseUrl, "stop", node, TimeSpan.FromSeconds(2));
         }
 
         // AI-635: Codex's stop-hook output parser rejects empty stdout as
@@ -252,22 +257,17 @@ static class CodexHookCommand {
         // hosted-agent UI decision. With Codex's 30 s hook timeout, the hook
         // process is killed long before the server returns (AI-636).
         //
-        // Single 2 s deadline covers BOTH the /auth/config discovery inside
-        // CreateAuthenticatedClientAsync and the /hooks/permission-record POST.
+        // Single 2 s deadline covers BOTH the /auth/config discovery and the
+        // /hooks/permission-record POST inside PostBestEffortAsync.
         // Without bounding discovery too, a server that accepts the TCP
         // connection but stalls on /auth/config can burn the full HttpClient
         // default (100 s) before we even start the POST, blowing past Codex's
         // 30 s hook timeout. Passing baseUrl also keeps discovery targeted at
         // the server we're about to POST to, not the
         // AppConfig.ResolvedServerUrl / KCAP_URL / localhost:5108 fallback.
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        try {
-            using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, cts.Token);
-            using var content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _       = await client.PostAsync($"{baseUrl}/hooks/permission-record", content, cts.Token);
-        } catch {
-            // Best-effort — recording must never block Codex's approval prompt.
-        }
+        // Recording must never block Codex's approval prompt — see
+        // PostBestEffortAsync for the shared swallow-all/cap behavior.
+        await PostBestEffortAsync(baseUrl, "permission-record", node, TimeSpan.FromSeconds(2));
 
         // Empty hookSpecificOutput → Codex treats it as "no decision" and runs
         // its normal approval flow. See
@@ -332,6 +332,41 @@ static class CodexHookCommand {
         } catch (HttpRequestException ex) {
             HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
             return 1;
+        }
+    }
+
+    /// <summary>
+    /// Best-effort POST of <paramref name="node"/> to <c>/hooks/{endpoint}</c>, capped at
+    /// <paramref name="cap"/> and swallowing every failure — it must never block, throw, or
+    /// terminate the caller. The single deadline covers both /auth/config discovery and the POST.
+    /// Callers that must satisfy Codex's stdout contract write their JSON output AFTER awaiting this.
+    /// </summary>
+    static async Task PostBestEffortAsync(string baseUrl, string endpoint, JsonNode node, TimeSpan cap) {
+        // A blank or non-absolute baseUrl would trip EnsureAbsolute deep inside auth discovery,
+        // which calls Environment.Exit(2) — uncatchable, and would bypass the caller's stdout/exit
+        // contract. Bail silently before we can reach it.
+        if (string.IsNullOrWhiteSpace(baseUrl) || !HttpClientExtensions.IsAcceptableUrl(baseUrl)) {
+            return;
+        }
+
+        using var cts = new CancellationTokenSource(cap);
+
+        try {
+            // Use the status-returning variant, NOT CreateAuthenticatedClientAsync: the latter writes
+            // "Not authenticated" / "expired" to stderr, which a per-turn Stop would spam. Stay quiet
+            // and skip the POST when there's no usable auth (still swallow-all).
+            var (client, status) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl, cts.Token);
+
+            using (client) {
+                if (status is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) {
+                    return;
+                }
+
+                using var content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
+                using var _       = await client.PostAsync($"{baseUrl}/hooks/{endpoint}", content, cts.Token);
+            }
+        } catch {
+            // Best-effort — must never block or fail the caller.
         }
     }
 
