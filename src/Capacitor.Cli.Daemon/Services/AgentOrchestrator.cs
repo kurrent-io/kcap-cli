@@ -36,6 +36,16 @@ public record AgentInstance(
     public string? McpConfigPath { get; set; }
 
     /// <summary>
+    /// AI-1163 follow-up: the requester's repo root the launch-time worktree mirror copied from
+    /// (<see cref="LaunchAgentCommand.SyncFromRepoRoot"/>). Non-null only for a mirror-requester
+    /// review-flow reviewer. The reviewer process stays alive across rounds (to keep its context),
+    /// so its daemon-created worktree would otherwise stay frozen at the round-1 snapshot; keeping
+    /// the source here lets each subsequent round re-mirror the requester's <i>current</i> working
+    /// tree, so files created/edited while addressing findings reach the running reviewer.
+    /// </summary>
+    public string? SyncSourceRepoRoot { get; init; }
+
+    /// <summary>
     /// Reason string sent to the server when ending the AgentSession. Defaults to
     /// "agent_exited" (claude exited on its own); HandleStopAgent flips it to
     /// "agent_stopped" so a user-initiated stop is still attributed correctly even
@@ -408,9 +418,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var cts = new CancellationTokenSource();
 
             var agent = new AgentInstance(agentId, prompt, model, effort, repoPath, cmd.Vendor, process, worktree, cts) {
-                McpConfigPath = mcpConfigPath,
-                CurrentCols   = HostedPtyCols,
-                CurrentRows   = HostedPtyRows
+                McpConfigPath      = mcpConfigPath,
+                SyncSourceRepoRoot = string.IsNullOrEmpty(cmd.SyncFromRepoRoot) ? null : cmd.SyncFromRepoRoot,
+                CurrentCols        = HostedPtyCols,
+                CurrentRows        = HostedPtyRows
             };
             _agents[agentId] = agent;
 
@@ -855,6 +866,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (agent.IsPrivate) return; // server-origin input ignored for private agents
 
+        // AI-1163 follow-up: for a mirror-requester review-flow reviewer, re-mirror the requester's
+        // current working tree into the (still-running) reviewer worktree BEFORE delivering this
+        // round, so it sees files created/edited since the previous round rather than the frozen
+        // round-1 snapshot. No-op for every other agent. See TryReSyncWorktreeForRoundAsync.
+        await TryReSyncWorktreeForRoundAsync(agent);
+
         var message = text;
 
         if (attachmentIds is { Length: > 0 }) {
@@ -1037,6 +1054,44 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             await _worktreeManager.SyncFromSourceAsync(sourceRepoRoot, worktreePath, [], _shutdownCts.Token);
         } catch (Exception ex) {
             LogRefreshWorktreeFailed(ex, agentId, sourceRepoRoot, worktreePath);
+        }
+    }
+
+    /// <summary>
+    /// Worktree paths the daemon writes at launch — downloaded attachments, the overlaid vendor
+    /// config, and the generated MCP config — that are NOT part of the requester's git working
+    /// tree. Excluded from the per-round re-mirror so <see cref="WorktreeManager.SyncFromSourceAsync"/>'s
+    /// delete phase (which removes anything not in the source's <c>git ls-files</c> enumeration)
+    /// can't wipe the reviewer's own setup. The launch-time mirror needs no such list because it
+    /// runs before these are written.
+    /// </summary>
+    static readonly string[] DaemonManagedWorktreeExcludes = [".attached", ".claude", ".codex", ".mcp.json"];
+
+    /// <summary>
+    /// AI-1163 follow-up: re-mirror the requester's current working tree into a review-flow
+    /// reviewer's worktree before a follow-up round is delivered. The reviewer process stays alive
+    /// across rounds (to keep its context), so its daemon-created worktree would otherwise stay
+    /// frozen at the round-1 snapshot and never pick up files the requester created/edited while
+    /// addressing findings. No-op unless the agent was launched with a mirror source
+    /// (<see cref="AgentInstance.SyncSourceRepoRoot"/>) and owns its worktree — a borrowed cwd is the
+    /// requester's own checkout and is never mutated. Daemon-validated (same origin, allowlisted,
+    /// resolves) + best-effort: any failure is logged and swallowed so it never blocks or fails
+    /// round delivery.
+    /// </summary>
+    async Task TryReSyncWorktreeForRoundAsync(AgentInstance agent) {
+        if (agent.SyncSourceRepoRoot is not { } source) return;
+        if (agent.Work != WorkLocation.OwnedWorktree)    return;
+
+        try {
+            if (!await IsAllowedSyncSourceAsync(source, agent.RepoPath)) {
+                LogRoundResyncSkipped(agent.Id, source, "source not on the allowlist, not found on this host, or not a checkout of the same repo");
+
+                return;
+            }
+
+            await _worktreeManager.SyncFromSourceAsync(source, agent.Worktree.Path, DaemonManagedWorktreeExcludes, _shutdownCts.Token);
+        } catch (Exception ex) {
+            LogRefreshWorktreeFailed(ex, agent.Id, source, agent.Worktree.Path);
         }
     }
 
@@ -1429,6 +1484,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Launch-time worktree sync skipped for agent {AgentId} (source={Source}): {Reason}")]
     partial void LogLaunchSyncSkipped(string agentId, string source, string reason);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Per-round worktree re-sync skipped for agent {AgentId} (source={Source}): {Reason}")]
+    partial void LogRoundResyncSkipped(string agentId, string source, string reason);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to persist repo path for agent {AgentId}")]
     partial void LogRepoPathPersistFailed(Exception ex, string agentId);

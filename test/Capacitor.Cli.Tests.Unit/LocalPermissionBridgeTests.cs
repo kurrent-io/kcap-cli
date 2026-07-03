@@ -430,6 +430,66 @@ public class LocalPermissionBridgeTests {
         }
     }
 
+    // AI-1139 follow-up: a review-flow reviewer's own result-submission tool must be auto-approved
+    // by the bridge WITHOUT surfacing a user prompt. Codex fires a PermissionRequest for the MCP
+    // tool call even under `--ask-for-approval never`, and its hook bridges here; without this the
+    // unattended reviewer blocks on a decision it can never get.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Codex_flow_result_submission_is_auto_approved_without_a_server_round_trip() {
+        var (bridge, server) = CreateBridge((_, _, _, _, _) =>
+            // If the bridge ever consults the server for this tool the test should fail loudly:
+            // deny so an accidental round-trip can't masquerade as an allow.
+            Task.FromResult(new PermissionDecision("deny", null, null))
+        );
+
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+
+            using var client = CreateClient();
+
+            var payload = new {
+                session_id = "abc",
+                tool_name  = "mcp__kcap_flow_result__submit_review_result",
+                tool_input = new { kind = "clean" }
+            };
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/codex/permission-request", JsonContent.Create(payload));
+
+            await Assert.That((int)response.StatusCode).IsEqualTo(200);
+
+            // Short-circuited entirely — the server hub was never asked.
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+
+            var       body     = await response.Content.ReadAsStringAsync();
+            using var doc      = JsonDocument.Parse(body);
+            var       decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
+            await Assert.That(decision.GetProperty("behavior").GetString()).IsEqualTo("allow");
+        } finally {
+            await bridge.DisposeAsync();
+        }
+    }
+
+    // Regression guard: an ordinary tool still goes through the server (no over-broad auto-approve).
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Non_flow_result_tool_still_consults_the_server() {
+        var (bridge, server) = CreateBridge((_, _, _, _, _) =>
+            Task.FromResult(new PermissionDecision("allow", null, null))
+        );
+
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+
+            using var client = CreateClient();
+
+            var payload = new { session_id = "abc", tool_name = "Bash", tool_input = new { command = "ls" } };
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/codex/permission-request", JsonContent.Create(payload));
+
+            await Assert.That((int)response.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(1);
+        } finally {
+            await bridge.DisposeAsync();
+        }
+    }
+
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task Claude_cli_hook_post_target_lands_at_new_url() {
         // Verify that the bridge accepts POSTs at the /{token}/claude/permission-request URL
