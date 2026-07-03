@@ -25,6 +25,11 @@ public record ProfileConfig {
     /// </summary>
     [JsonPropertyName("cwd_remap")]
     public CwdRemap[] CwdRemap { get; init; } = [];
+
+    // AI-1134: stable machine identity for machine-tagged memories. Generated once by
+    // MachineIdProvider; never rotated (rotation orphans previously tagged memories).
+    [JsonPropertyName("machine_id")]
+    public string? MachineId { get; init; }
 }
 
 public record CwdRemap {

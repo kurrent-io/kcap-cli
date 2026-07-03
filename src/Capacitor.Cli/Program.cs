@@ -291,12 +291,13 @@ switch (command) {
     }
     case "mcp": {
         if (args.Length < 2) {
-            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result …");
+            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory …");
             Console.Error.WriteLine("  kcap mcp review [--owner <owner> --repo <repo> --pr <number>]");
             Console.Error.WriteLine("  kcap mcp judge --session <sessionId>");
             Console.Error.WriteLine("  kcap mcp sessions");
             Console.Error.WriteLine("  kcap mcp flows");
             Console.Error.WriteLine("  kcap mcp flow-result   (launched by the daemon for hosted reviewers)");
+            Console.Error.WriteLine("  kcap mcp memory");
 
             return 1;
         }
@@ -332,6 +333,8 @@ switch (command) {
                 return await McpFlowsServer.RunAsync(baseUrl!);
             case "flow-result":
                 return await McpFlowResultServer.RunAsync(baseUrl!);
+            case "memory":
+                return await McpMemoryServer.RunAsync(baseUrl!);
             default:
                 Console.Error.WriteLine($"Unknown mcp subcommand: {args[1]}");
 

@@ -56,6 +56,7 @@ MCP servers (stdio):
   mcp judge --session <id>           Per-session judge tools
   mcp sessions                       Search/inspect past sessions from agents
   mcp flows                          Start and manage review flows from agents
+  mcp memory                         Team memory tools (search, get, save, update, rescope, archive)
 
 Plugin:
   plugin install [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--skills]   Register hooks/skills (Claude default; flag picks the vendor)

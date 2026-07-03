@@ -195,20 +195,21 @@ public class McpSessionsServerTests : IDisposable {
     }
 
     [Test]
-    public async Task Tools_list_returns_four_tools_with_correct_names() {
+    public async Task Tools_list_returns_five_tools_with_correct_names() {
         using var proc = SpawnMcpServer();
         try {
             var response = await SendRequest(proc, ToolsListRequest(2));
 
             var tools = response["result"]?["tools"]?.AsArray();
             await Assert.That(tools).IsNotNull();
-            await Assert.That(tools!.Count).IsEqualTo(4);
+            await Assert.That(tools!.Count).IsEqualTo(5);
 
             var names = tools.Select(t => t?["name"]?.GetValue<string>()).ToHashSet();
             await Assert.That(names.Contains("search_sessions")).IsTrue();
             await Assert.That(names.Contains("get_session_summary")).IsTrue();
             await Assert.That(names.Contains("get_session_transcript")).IsTrue();
             await Assert.That(names.Contains("get_turn")).IsTrue();
+            await Assert.That(names.Contains("list_turns")).IsTrue();
         } finally {
             await ShutdownAsync(proc);
         }
