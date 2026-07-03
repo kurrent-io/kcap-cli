@@ -464,6 +464,50 @@ public class McpFlowsServerTests : IDisposable {
     }
 
     /// <summary>
+    /// A non-boolean JSON "async" (e.g. an LLM caller passing the string "yes") must NOT crash
+    /// the request with an uncaught GetValue&lt;bool&gt;() exception — it must surface as a clean
+    /// isError:true tool result, and the stdio loop must stay alive for the next request (Qodo
+    /// finding, AI-1126 D-b). No WireMock stub is needed: the bad arg is rejected before any HTTP
+    /// call is made, mirroring Submit_review_round_without_flow_run_id_returns_error above.
+    /// </summary>
+    [Test]
+    public async Task Send_to_participant_non_boolean_async_returns_clean_error() {
+        using var proc = SpawnMcpServer();
+        try {
+            var args = new JsonObject {
+                ["flow_run_id"] = "flow-bad-async",
+                ["participant"] = "reviewer",
+                ["message"]     = "ctx",
+                ["async"]       = "yes"
+            };
+
+            var response = await SendRequest(proc, ToolsCallRequest(51, "send_to_participant", args));
+
+            var result = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["isError"]?.GetValue<bool>()).IsTrue();
+
+            var text = result["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(text).IsNotNull();
+            await Assert.That(text!.Contains("async must be a boolean")).IsTrue();
+
+            // No POST should have fired — the bad arg is rejected before the HTTP call.
+            var hits = _server.FindLogEntries(Request.Create().WithPath("/api/flows/flow-bad-async/rounds").UsingPost());
+            await Assert.That(hits.Count).IsEqualTo(0);
+
+            // The stdio loop must still be alive: a follow-up request gets a normal response.
+            var followUp = await SendRequest(proc, ToolsCallRequest(52, "submit_review_round", new JsonObject {
+                ["context"] = "no flow id, expect a clean error too"
+            }));
+            var followUpResult = followUp["result"]?.AsObject();
+            await Assert.That(followUpResult).IsNotNull();
+            await Assert.That(followUpResult!["isError"]?.GetValue<bool>()).IsTrue();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
     /// The review alias must stay byte-compatible with old servers that don't know about
     /// "participant" — the field is null-omitted, so the POST body must not carry the key at all.
     /// </summary>

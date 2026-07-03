@@ -138,7 +138,7 @@ static class McpFlowsServer {
                     "start_review_flow"   => await SendWithRefreshRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind")),
                     "start_flow"          => await SendWithRefreshRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id")),
                     "submit_review_round" => await SendWithRefreshRetryAsync(client, c => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true)),
-                    _                     => await SendWithRefreshRetryAsync(client, c => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: arguments?["async"]?.GetValue<bool>() ?? true))
+                    _                     => await SendWithRefreshRetryAsync(client, c => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: ParseAsyncArg(arguments)))
                 };
 
                 var postBody = await postResponse.Content.ReadAsStringAsync();
@@ -149,7 +149,7 @@ static class McpFlowsServer {
                 if (!postResponse.IsSuccessStatusCode)
                     return BuildToolResult(id, $"Error: HTTP {(int)postResponse.StatusCode} — {postBody}", isError: true);
 
-                var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody);
+                var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody, toolName);
                 return BuildToolResult(id, payload, isError);
             }
 
@@ -311,8 +311,11 @@ static class McpFlowsServer {
     const int MaxTransientRetries = 5;
 
     /// <summary>If the POST already carries a terminal result (old/blocking server), return it.
-    /// Otherwise poll GET /api/flows/{id} until the started round is terminal (AI-1061).</summary>
-    static async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody) {
+    /// Otherwise poll GET /api/flows/{id} until the started round is terminal (AI-1061).
+    /// <paramref name="toolName"/> is the tool that initiated the round (one of
+    /// start_review_flow/submit_review_round/start_flow/send_to_participant) — threaded through
+    /// so the graceful-cap timeout message can point back at the matching status tool.</summary>
+    static async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody, string toolName) {
         var node      = JsonNode.Parse(postBody)?.AsObject();
         var status    = node?["status"]?.GetValue<string>();
         var flowRunId = node?["flow_run_id"]?.GetValue<string>();
@@ -321,10 +324,17 @@ static class McpFlowsServer {
         if (status != "running" || flowRunId is null || roundNum is null)
             return new(FormatRoundResponse(postBody), false); // terminal-in-POST (old server) or unparseable
 
-        return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value);
+        return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value, toolName);
     }
 
-    static async Task<PollResult> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber) {
+    /// <summary>Tool family that started the round determines which status tool the graceful-cap
+    /// message points callers back to: the review aliases (start_review_flow/submit_review_round)
+    /// suggest get_review_flow_status; the generic tools (start_flow/send_to_participant) suggest
+    /// get_flow_status. Both hit the exact same endpoint, so this only affects wording.</summary>
+    static string StatusToolNameFor(string toolName) =>
+        toolName is "start_review_flow" or "submit_review_round" ? "get_review_flow_status" : "get_flow_status";
+
+    static async Task<PollResult> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber, string toolName) {
         var url                   = $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
         var pollStartedAt         = DateTimeOffset.UtcNow;
         var deadline              = pollStartedAt + PollCap;
@@ -401,9 +411,10 @@ static class McpFlowsServer {
         }
 
         // Genuine 8-min cap: round still legitimately running.
+        var statusToolName = StatusToolNameFor(toolName);
         return new(
-            $"Review still running for flow_run_id {flowRunId} (round {roundNumber}). " +
-            "Call get_review_flow_status to retrieve the result when ready.",
+            $"Flow still running for flow_run_id {flowRunId} (round {roundNumber}). " +
+            $"Call {statusToolName} to retrieve the result when ready.",
             false
         );
     }
@@ -522,6 +533,21 @@ static class McpFlowsServer {
         var value = arguments?[name]?.GetValue<string>();
         return value ?? throw new ArgumentException($"Missing required argument: {name}");
     }
+
+    /// <summary>
+    /// Parses the optional "async" argument for send_to_participant. A missing key and an
+    /// explicit JSON null both surface as a null JsonNode from the indexer (JsonNode has no
+    /// "null" leaf type), so both default to true — matching submit_review_round's hardcoded
+    /// Async: true. A JSON boolean is used as-is. Anything else (e.g. an LLM caller passing the
+    /// string "yes") throws ArgumentException, which HandleToolCallAsync's catch turns into a
+    /// clean tool error instead of an uncaught GetValue&lt;bool&gt;() crash.
+    /// </summary>
+    static bool ParseAsyncArg(JsonObject? arguments) =>
+        arguments?["async"] switch {
+            null                                              => true,
+            JsonValue v when v.TryGetValue<bool>(out var b) => b,
+            _                                                 => throw new ArgumentException("Invalid argument: async must be a boolean")
+        };
 
     static string BuildInitializeResponse(JsonNode id) =>
         ToResponse<McpInitResult>(
