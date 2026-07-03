@@ -358,6 +358,115 @@ public partial class AgentOrchestratorVendorTests {
         }
     }
 
+    // AI-684 Fix B/E (PR #244 review, BLOCKER): a runtime whose ReadOutputAsync never yields a byte
+    // (ACP/cursor) must NOT wait for the orchestrator's on-first-chunk Starting→Running flip — that
+    // flip lives in ReadAgentOutputAsync and only fires on an output CHUNK, which never arrives for
+    // such a runtime. Before the fix this left the agent stuck in "Starting" (eventually auto-
+    // stopped by the heartbeat's stuck-Starting timeout) and, worse, the runtime's ReadOutputAsync
+    // completing immediately made FinalizeAgentRunAsync run right after launch and misclassify the
+    // still-live agent as a startup failure. This test proves: (1) the agent flips to "Running"
+    // synchronously within HandleLaunchAgent, before any output; (2) it is NOT finalized-as-Failed
+    // while still live (the fake's ReadOutputAsync stays open exactly like the real ACP runtime).
+    [Test]
+    public async Task Launch_of_a_no_terminal_output_runtime_flips_to_Running_immediately_and_is_not_finalized_as_failed() {
+        var (repoPath, cleanup) = CreateGitRepo();
+
+        try {
+            var server     = new CaptureServerConnection();
+            var ptyFactory = new SpyPtyProcessFactory();
+            var cursorSpy  = new SpyHostedAgentRuntimeFactory("cursor") { EmitsTerminalOutput = false };
+
+            var launchers = new Dictionary<string, IHostedAgentLauncher>();
+
+            await using var orch = BuildOrchestrator(
+                server,
+                ptyFactory,
+                launchers,
+                allowedRepoPath: repoPath,
+                extraRuntimeFactories: [cursorSpy]
+            );
+
+            var cmd = new LaunchAgentCommand(
+                AgentId: "agent-acp-live",
+                Prompt: "do work",
+                Model: "auto",
+                Effort: null,
+                RepoPath: repoPath,
+                Tools: null,
+                AttachmentIds: null,
+                Vendor: "cursor"
+            );
+
+            await orch.HandleLaunchAgentForTest(cmd);
+
+            // Flipped to Running synchronously within the launch call itself — no output chunk
+            // was ever produced (the fake's ReadOutputAsync blocks on ExitGate, exactly like the
+            // real ACP runtime blocks on process-exit/ct).
+            await Assert.That(server.StatusChangedCalls).Contains(("agent-acp-live", "Running"));
+
+            // Give the (fire-and-forget) read loop / finalize path a moment to run if it were
+            // (incorrectly) going to — before the fix, ReadOutputAsync completing immediately
+            // would have driven FinalizeAgentRunAsync to run right here and mark the agent Failed.
+            await Task.Delay(200);
+
+            await Assert.That(server.StatusChangedCalls).DoesNotContain(("agent-acp-live", "Failed"));
+            await Assert.That(server.StatusChangedCalls).DoesNotContain(("agent-acp-live", "Completed"));
+            await Assert.That(server.LaunchFailedCalls.Count).IsEqualTo(0);
+
+            // Cleanly finish the still-live agent so the harness doesn't leak an ExitGate-blocked
+            // read loop past the test.
+            await orch.HandleStopAgentForTest("agent-acp-live");
+        } finally {
+            cleanup();
+        }
+    }
+
+    // Companion test: the existing PTY on-first-chunk Starting→Running flip must remain exactly
+    // unchanged for a runtime with EmitsTerminalOutput=true — the new immediate-flip branch in
+    // HandleLaunchAgent must not fire for it.
+    [Test]
+    public async Task Launch_of_a_terminal_output_runtime_does_not_flip_to_Running_before_the_first_output_chunk() {
+        var (repoPath, cleanup) = CreateGitRepo();
+
+        try {
+            var server     = new CaptureServerConnection();
+            var ptyFactory = new SpyPtyProcessFactory();
+            var cursorSpy  = new SpyHostedAgentRuntimeFactory("cursor") { EmitsTerminalOutput = true };
+
+            var launchers = new Dictionary<string, IHostedAgentLauncher>();
+
+            await using var orch = BuildOrchestrator(
+                server,
+                ptyFactory,
+                launchers,
+                allowedRepoPath: repoPath,
+                extraRuntimeFactories: [cursorSpy]
+            );
+
+            var cmd = new LaunchAgentCommand(
+                AgentId: "agent-terminal-live",
+                Prompt: "do work",
+                Model: "auto",
+                Effort: null,
+                RepoPath: repoPath,
+                Tools: null,
+                AttachmentIds: null,
+                Vendor: "cursor"
+            );
+
+            await orch.HandleLaunchAgentForTest(cmd);
+
+            // No output chunk was ever produced (ExitGate is still open) — must NOT have flipped
+            // to Running yet, preserving the existing PTY on-first-chunk contract exactly.
+            await Task.Delay(100);
+            await Assert.That(server.StatusChangedCalls).DoesNotContain(("agent-terminal-live", "Running"));
+
+            await orch.HandleStopAgentForTest("agent-terminal-live");
+        } finally {
+            cleanup();
+        }
+    }
+
     [Test]
     public async Task Launch_review_kind_with_vendor_codex_is_accepted_and_reaches_review_validation() {
         // A git repo with NO origin remote: a Codex review now passes the vendor
@@ -675,8 +784,15 @@ public partial class AgentOrchestratorVendorTests {
         public string Vendor             { get; } = vendor;
         public bool   SupportsUnattended { get; init; }
 
+        /// <summary>Threaded onto the <see cref="FakeHostedAgentRuntime"/> this factory returns —
+        /// defaults to <c>false</c> (ACP-shaped) matching this factory's original "cursor" use, but
+        /// settable so a test can exercise the PTY-shaped (<c>true</c>) lifecycle branch too.</summary>
+        public bool EmitsTerminalOutput { get; init; }
+
         public int     StartCalls  { get; private set; }
         public string? LastAgentId { get; private set; }
+
+        public FakeHostedAgentRuntime? LastRuntime { get; private set; }
 
         public bool IsAvailable() => true;
 
@@ -684,24 +800,37 @@ public partial class AgentOrchestratorVendorTests {
             StartCalls++;
             LastAgentId = ctx.AgentId;
 
-            return Task.FromResult(new HostedRuntimeStart(new FakeHostedAgentRuntime(vendor), McpConfigPath: null));
+            var runtime = new FakeHostedAgentRuntime(vendor, EmitsTerminalOutput);
+            LastRuntime = runtime;
+
+            return Task.FromResult(new HostedRuntimeStart(runtime, McpConfigPath: null));
         }
     }
 
     /// <summary>No-op <see cref="IHostedAgentRuntime"/> returned by <see cref="SpyHostedAgentRuntimeFactory"/>
     /// so the orchestrator's post-launch RegisterAgentAsync/ReadAgentOutputAsync run against a
-    /// harmless stand-in instead of a real PTY or ACP connection.</summary>
-    sealed class FakeHostedAgentRuntime(string vendor) : IHostedAgentRuntime {
-        public string Vendor    => vendor;
-        public int    Pid       => 0;
-        public bool   HasExited => true;
-        public int?   ExitCode  => 0;
+    /// harmless stand-in instead of a real PTY or ACP connection. <see cref="ReadOutputAsync"/>
+    /// blocks until <see cref="ExitGate"/> is released (or <c>ct</c> cancels) rather than completing
+    /// immediately, mirroring the real ACP runtime's "stay open until the process exits" contract —
+    /// this lets AI-684 Fix B/E tests observe orchestrator state (e.g. Status flips to "Running")
+    /// WHILE the agent is still live, before ever driving it to completion.</summary>
+    sealed class FakeHostedAgentRuntime(string vendor, bool emitsTerminalOutput) : IHostedAgentRuntime {
+        public string Vendor              => vendor;
+        public int    Pid                 => 0;
+        public bool   HasExited           => ExitGate.Task.IsCompleted;
+        public int?   ExitCode            => 0;
+        public bool   EmitsTerminalOutput => emitsTerminalOutput;
 
-#pragma warning disable CS1998
+        /// <summary>Released by a test to simulate the hosted process exiting.</summary>
+        public TaskCompletionSource ExitGate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
+            var ctTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using var reg = ct.Register(() => ctTcs.TrySetResult());
+            await Task.WhenAny(ExitGate.Task, ctTcs.Task).ConfigureAwait(false);
+
             yield break;
         }
-#pragma warning restore CS1998
 
         public Task SendUserInputAsync(string    text) => Task.CompletedTask;
         public Task SendSpecialKeyAsync(string    key) => Task.CompletedTask;
@@ -709,7 +838,12 @@ public partial class AgentOrchestratorVendorTests {
         public void Resize(ushort                 cols, ushort rows) { }
         public Task RequestGracefulStopAsync() => Task.CompletedTask;
         public Task WaitForExitAsync(TimeSpan?    timeout = null) => Task.CompletedTask;
-        public Task TerminateAsync(TimeSpan?      timeout = null) => Task.CompletedTask;
+
+        public Task TerminateAsync(TimeSpan? timeout = null) {
+            ExitGate.TrySetResult();
+
+            return Task.CompletedTask;
+        }
 
         public ValueTask DisposeAsync() => default;
     }
@@ -836,8 +970,16 @@ public partial class AgentOrchestratorVendorTests {
                 : Task.CompletedTask;
         }
 
-        public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId)
-            => Task.CompletedTask;
+        /// <summary>(AgentId, Status) pairs passed to every AgentStatusChangedAsync call, in
+        /// call order — lets a test assert on the exact lifecycle transitions the orchestrator
+        /// drove (e.g. AI-684 Fix B/E's immediate Running flip for a no-terminal runtime).</summary>
+        public List<(string AgentId, string Status)> StatusChangedCalls { get; } = [];
+
+        public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) {
+            lock (StatusChangedCalls) StatusChangedCalls.Add((agentId, status));
+
+            return Task.CompletedTask;
+        }
 
         /// <summary>Invoked when AgentUnregisteredAsync runs — the last step of
         /// CleanupAgentAsync, so a useful signal that local cleanup completed.</summary>

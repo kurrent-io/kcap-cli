@@ -1,4 +1,6 @@
 // src/Capacitor.Cli.Daemon/Services/AcpHostedAgentRuntime.cs
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
@@ -29,6 +31,13 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
     readonly Channel<AcpSessionUpdate> _updates = Channel.CreateUnbounded<AcpSessionUpdate>(
         new UnboundedChannelOptions { SingleReader = false, SingleWriter = true });
 
+    // Tracks every session/prompt turn fired as untracked-by-the-caller background work (the
+    // initial prompt from StartAsync, plus every SendUserInputAsync) so DisposeAsync can wait for
+    // them to wind down and so a fault never becomes an unobserved task exception. A
+    // ConcurrentDictionary-as-set (value is unused) rather than a List so concurrent
+    // SendUserInputAsync calls can register/remove their own task without a lock.
+    readonly ConcurrentDictionary<Task, byte> _backgroundPromptTasks = new();
+
     Task    _connectionRunTask = Task.CompletedTask;
     string? _sessionId;
     int     _disposed;
@@ -41,10 +50,11 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
         _connection.OnNotification += HandleNotification;
     }
 
-    public string Vendor    => "cursor";
-    public int    Pid       => _process.Pid;
-    public bool   HasExited => _process.HasExited;
-    public int?   ExitCode  => _process.ExitCode;
+    public string Vendor              => "cursor";
+    public int    Pid                 => _process.Pid;
+    public bool   HasExited           => _process.HasExited;
+    public int?   ExitCode            => _process.ExitCode;
+    public bool   EmitsTerminalOutput => false;
 
     /// <summary>
     /// Reduced <c>session/update</c> notifications, in arrival order. Unbounded so a mapper that
@@ -55,13 +65,15 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
 
     /// <summary>
     /// Performs the ACP handshake: starts the connection's read loop, then
-    /// <c>initialize</c> → <c>session/new</c> (with the absolute <paramref name="cwd"/>) →, if
-    /// <paramref name="initialPrompt"/> is non-empty, <c>session/prompt</c>. Not part of
-    /// <see cref="IHostedAgentRuntime"/> — called directly by the Task 10 factory (and by tests)
-    /// once the connection/process are constructed. A failed handshake surfaces a clear exception
-    /// (never hangs): the read loop is started before any request is sent, and every request goes
-    /// through <see cref="AcpConnection.RequestAsync"/>, which itself never hangs past
-    /// <paramref name="ct"/> cancellation.
+    /// <c>initialize</c> → <c>session/new</c> (with the absolute <paramref name="cwd"/>). If
+    /// <paramref name="initialPrompt"/> is non-empty, fires the initial <c>session/prompt</c> as
+    /// tracked background work (see <see cref="FireAndTrackPromptAsync"/>) and returns as soon as
+    /// the session is established — it does NOT await that prompt turn to completion (AI-684 Fix
+    /// E). Not part of <see cref="IHostedAgentRuntime"/> — called directly by the Task 10 factory
+    /// (and by tests) once the connection/process are constructed. A failed handshake surfaces a
+    /// clear exception (never hangs): the read loop is started before any request is sent, and
+    /// every request goes through <see cref="AcpConnection.RequestAsync"/>, which itself never
+    /// hangs past <paramref name="ct"/> cancellation.
     /// </summary>
     public async Task StartAsync(string cwd, string? initialPrompt, CancellationToken ct) {
         _connectionRunTask = RunConnectionLoopAsync(_cts.Token);
@@ -87,12 +99,39 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
                 throw new InvalidOperationException("ACP session/new response did not contain a sessionId.");
 
             _sessionId = sessionId;
-
-            if (!string.IsNullOrEmpty(initialPrompt))
-                await SendPromptAsync(initialPrompt, ct).ConfigureAwait(false);
         } catch (Exception ex) when (ex is not OperationCanceledException) {
-            throw new InvalidOperationException("ACP handshake (initialize/session-new/session-prompt) failed.", ex);
+            throw new InvalidOperationException("ACP handshake (initialize/session-new) failed.", ex);
         }
+
+        // The session is established (initialize + session/new both completed) — the caller
+        // (orchestrator) can now treat this agent as live. Fire the initial turn without awaiting
+        // it: a real ACP turn can run arbitrarily long, and blocking StartAsync on it would delay
+        // agent registration/stoppability for the whole turn (AI-684 Fix E). Completion is
+        // observed via the Updates channel, not this method's return.
+        if (!string.IsNullOrEmpty(initialPrompt))
+            FireAndTrackPromptAsync(initialPrompt);
+    }
+
+    /// <summary>
+    /// Fires a <c>session/prompt</c> turn as tracked, untracked-by-the-caller background work:
+    /// registers the task in <see cref="_backgroundPromptTasks"/> (removing itself on completion)
+    /// so <see cref="DisposeAsync"/> can wait for in-flight turns to wind down, and swallows/logs
+    /// any fault so it never becomes an unobserved task exception. Used by both
+    /// <see cref="StartAsync"/> (initial prompt) and <see cref="SendUserInputAsync"/> (follow-up
+    /// turns) — neither caller may block on turn completion; that's what <see cref="Updates"/> is
+    /// for.
+    /// </summary>
+    void FireAndTrackPromptAsync(string text) {
+        Task? task = null;
+
+        task = SendPromptAsync(text, _cts.Token).ContinueWith(t => {
+            _backgroundPromptTasks.TryRemove(task!, out _);
+
+            if (t.IsFaulted)
+                _logger.LogDebug(t.Exception, "ACP: background session/prompt turn faulted.");
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+        _backgroundPromptTasks[task] = 0;
     }
 
     async Task RunConnectionLoopAsync(CancellationToken ct) {
@@ -107,17 +146,43 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
         }
     }
 
-    public IAsyncEnumerable<byte[]> ReadOutputAsync(CancellationToken ct = default) => EmptyOutputAsync();
+    /// <summary>
+    /// Never yields a byte — ACP stdout is protocol traffic, never terminal output (no terminal
+    /// capability until AI-687). Crucially, this must NOT complete until the process exits or
+    /// <paramref name="ct"/> cancels (AI-684 Fix B/E): <see cref="AgentOrchestrator.ReadAgentOutputAsync"/>
+    /// treats the enumerable ending as "the agent's output stream ended" and finalizes the agent —
+    /// for a PTY that's a real signal (the CLI exited), but the old implementation here
+    /// (<c>yield break</c> on the first call) made a LIVE ACP agent look like it had already
+    /// finished, so the orchestrator immediately finalized it as failed. Staying open for the
+    /// process's whole lifetime means the orchestrator's read loop parks harmlessly (yielding
+    /// nothing) instead of ending prematurely; <see cref="IHostedAgentRuntime.EmitsTerminalOutput"/>
+    /// tells the orchestrator not to use this stream for the Starting→Running/startup-failure
+    /// signals it uses for PTY runtimes.
+    /// </summary>
+    public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
+        var exitTask = _process.WaitForExitAsync(); // completes on process exit (AcpChildProcess swallows faults)
+        var ctTcs    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    static async IAsyncEnumerable<byte[]> EmptyOutputAsync() {
-        // No terminal until AI-687 — ACP stdout is protocol traffic, never terminal output.
-        await Task.CompletedTask;
+        await using var reg = ct.Register(() => ctTcs.TrySetResult());
+
+        await Task.WhenAny(exitTask, ctTcs.Task).ConfigureAwait(false);
+
         yield break;
     }
 
+    /// <summary>
+    /// Sends a follow-up <c>session/prompt</c> for hosted-UI text input (server <c>SendInput</c>).
+    /// Returns as soon as the request is WRITTEN to the wire — it does NOT await the turn's
+    /// <c>stopReason</c> response (AI-684 Fix E): a real turn can run arbitrarily long, and the
+    /// pre-fix behavior (awaiting the full round trip) blocked this call — and therefore the
+    /// orchestrator's <c>HandleSendInput</c> — for the whole turn. Turn completion is observed via
+    /// <see cref="Updates"/>, not this method's return.
+    /// </summary>
     public Task SendUserInputAsync(string text) {
         RequireSessionId();
-        return SendPromptAsync(text, CancellationToken.None);
+        FireAndTrackPromptAsync(text);
+
+        return Task.CompletedTask;
     }
 
     async Task SendPromptAsync(string text, CancellationToken ct) {
@@ -230,6 +295,18 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
 
         await _cts.CancelAsync().ConfigureAwait(false);
         _updates.Writer.TryComplete();
+
+        // Every background session/prompt turn (StartAsync's initial prompt, and each
+        // SendUserInputAsync) is keyed off _cts.Token via AcpConnection.RequestAsync's own
+        // cancellation registration, so cancelling _cts above already unblocks each one — this is
+        // just a bounded wait for them to actually finish removing themselves from the tracking set
+        // (FireAndTrackPromptAsync's continuation already swallows/logs any fault, so nothing here
+        // can throw or need re-observing).
+        try {
+            await Task.WhenAll(_backgroundPromptTasks.Keys).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        } catch {
+            // Best-effort — a stuck background turn must never hang dispose.
+        }
 
         try {
             await _connectionRunTask.ConfigureAwait(false);

@@ -23,6 +23,20 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
     int? ExitCode { get; }
 
     /// <summary>
+    /// True when <see cref="ReadOutputAsync"/> yields real terminal bytes that the orchestrator's
+    /// read loop can use as a liveness/lifecycle signal — <c>true</c> for <see cref="PtyHostedAgentRuntime"/>
+    /// (Claude/Codex), <c>false</c> for the ACP runtime (its stdout is protocol traffic, never
+    /// terminal output, so <see cref="ReadOutputAsync"/> never yields any bytes at all).
+    /// <see cref="AgentOrchestrator"/> uses this to pick between two lifecycle strategies (PR #244
+    /// review, Fix B/E): a PTY runtime's Starting→Running flip and startup-failure heuristic both
+    /// key off the FIRST output chunk / the output stream ending, which never happens for a
+    /// no-terminal ACP runtime — without this flag an ACP agent would flip Running only once it
+    /// exits (i.e. never while live) and get misclassified as a startup failure on every normal
+    /// exit.
+    /// </summary>
+    bool EmitsTerminalOutput { get; }
+
+    /// <summary>
     /// Terminal byte stream consumed by the orchestrator read loop. PTY runtimes yield real
     /// terminal output; the ACP runtime yields an empty stream until AI-687 adds a terminal
     /// capability (ACP stdout is protocol traffic, never terminal output).

@@ -96,6 +96,18 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
         _promptScripts.Enqueue((updateNotifications, result));
 
     /// <summary>
+    /// When set, every <c>session/prompt</c> request's RESPONSE (not the queued updates, if any) is
+    /// held back until <paramref name="gate"/> completes — the fake still records the call
+    /// immediately (so <see cref="ReceivedCalls"/> observes it right away), it just doesn't answer.
+    /// Models a real agent mid-turn: used by AI-684 Fix E tests to prove
+    /// <c>AcpHostedAgentRuntime.StartAsync</c>/<c>SendUserInputAsync</c> return promptly WITHOUT
+    /// waiting for the turn's <c>stopReason</c> response, instead of the pre-fix behavior where
+    /// both awaited the full round trip. Set to <see langword="null"/> (the default) to answer
+    /// immediately as usual.
+    /// </summary>
+    public TaskCompletionSource? HoldPromptResponses { get; set; }
+
+    /// <summary>
     /// The fake's read loop: parses newline-delimited JSON-RPC frames arriving from the connection
     /// under test (its simulated stdin) and dispatches <c>initialize</c> / <c>session/new</c> /
     /// <c>session/prompt</c> / <c>session/cancel</c>. Must be started explicitly by the test (e.g.
@@ -171,6 +183,9 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
         foreach (var update in updates)
             await WriteRawFrameAsync(update, ct).ConfigureAwait(false);
+
+        if (HoldPromptResponses is { } gate)
+            await gate.Task.ConfigureAwait(false);
 
         await WriteResponseAsync(id, result, ct).ConfigureAwait(false);
     }

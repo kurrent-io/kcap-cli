@@ -391,6 +391,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             await RegisterAgentAsync(agent);
 
+            // A runtime with no terminal output (ACP/cursor) has no output-chunk signal to flip
+            // Starting→Running on — ReadAgentOutputAsync's read loop never yields a byte for such
+            // a runtime, so without this the agent would sit in "Starting" until the heartbeat's
+            // StartupTimeout auto-stops it as stuck (AI-684 Fix B/E). Flip to Running immediately:
+            // the runtime factory's StartAsync already completed the ACP initialize/session-new
+            // handshake by the time we get here, so the session really is established. PTY
+            // runtimes are unaffected — they keep the existing on-first-chunk flip in
+            // ReadAgentOutputAsync unchanged.
+            if (!runtime.EmitsTerminalOutput) {
+                agent.Status            = "Running";
+                agent.HasReceivedOutput = true;
+                if (!agent.IsPrivate) _ = _server.AgentStatusChangedAsync(agent.Id, "Running", agent.SessionId);
+            }
+
             // Start reading output
             _ = ReadAgentOutputAsync(agent);
 
@@ -612,7 +626,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // flagged as a launch failure. HasReceivedOutput guards
                 // against a no-output process whose CreatedAt/LastOutputAt
                 // initializers happened to straddle a long pause.
-                if (IsStartupFailure(agent.CreatedAt, agent.LastOutputAt, agent.HasReceivedOutput)) {
+                //
+                // This whole heuristic is output-stream-centric and only applies to a runtime
+                // whose ReadOutputAsync yields real terminal bytes (PTY). A no-terminal runtime
+                // (ACP/cursor) never has output to key off, so gate the check on
+                // EmitsTerminalOutput — such a runtime is Completed/Failed purely by exit code
+                // (AI-684 Fix B/E), never misclassified as a startup failure just for having
+                // produced no output.
+                if (agent.Runtime.EmitsTerminalOutput && IsStartupFailure(agent.CreatedAt, agent.LastOutputAt, agent.HasReceivedOutput)) {
                     var output = ExtractTerminalText(agent.OutputBuffer);
 
                     var reason = !string.IsNullOrWhiteSpace(output)
