@@ -335,15 +335,30 @@ git commit -m "ci: publish prerelease tags to the npm beta dist-tag, document re
 
 ---
 
-### Task 3: `update_channel` config field
+### Task 3: `update_channel` config field (on the v2 `Profile`)
+
+> **Design correction (2026-07-03):** the live config is v2 profile-based. Update
+> settings belong on the per-profile `Profile` record (which already has
+> `update_check`, `ProfileConfig.cs:74`), read via `AppConfig.GetActiveProfileAsync()`
+> and persisted via `AppConfig.SaveProfileConfig`. The legacy flat `CapacitorConfig`
+> (read by `AppConfig.Load()`) is v1-only and effectively dead for real users, so
+> `update_channel` must NOT go there.
 
 **Files:**
-- Modify: `src/Capacitor.Cli.Core/Config/AppConfig.cs:7-22` (`CapacitorConfig` record)
+- Modify: `src/Capacitor.Cli.Core/Config/ProfileConfig.cs` (`Profile` record — add `UpdateChannel` right after `UpdateCheck` at `:74-75`)
 - Test: `test/Capacitor.Cli.Tests.Unit/UpdateChannelConfigTests.cs`
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `CapacitorConfig.UpdateChannel` — `public string UpdateChannel { get; init; } = "latest";`, JSON name `update_channel`.
+- Produces: `Profile.UpdateChannel` — `public string UpdateChannel { get; init; } = "latest";`, JSON name `update_channel`.
+
+**Note on STJ source-gen defaults:** the source-generated context does NOT apply the
+`= "latest"` member-initializer when the property is absent from the JSON — an absent
+`update_channel` deserializes to `null`, not `"latest"` (same quirk the existing
+`DefaultVisibility ?? "org_public"` normalization works around). So the "default"
+test must assert on direct construction (`new Profile().UpdateChannel == "latest"`),
+and Task 4's read site must apply `?? "latest"` explicitly. The round-trip test sets
+the value explicitly on both sides and does not depend on the default path.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -358,45 +373,54 @@ using TUnit.Core;
 namespace Capacitor.Cli.Tests.Unit;
 
 public class UpdateChannelConfigTests {
+    // Default asserted via direct construction: STJ source-gen does NOT apply the
+    // `= "latest"` member-initializer for a property absent from the JSON, so a
+    // Deserialize("{}") would yield null here — that is expected, and Task 4's read
+    // site applies `?? "latest"`. This test verifies the record default itself.
     [Test]
-    public async Task Defaults_to_latest_when_absent() {
-        var cfg = JsonSerializer.Deserialize("{}", ConfigJsonContext.Default.CapacitorConfig)!;
-        await Assert.That(cfg.UpdateChannel).IsEqualTo("latest");
+    public async Task Defaults_to_latest_on_new_profile() {
+        await Assert.That(new Profile().UpdateChannel).IsEqualTo("latest");
     }
 
+    // Round-trip through the SAME serialization context the profile config uses on
+    // disk (ProfileConfigJsonContext[Indented]). Confirm the exact context type names
+    // by reading ProfileConfig.cs — SaveProfileConfig uses
+    // ProfileConfigJsonContextIndented.Default.ProfileConfig; there is a matching
+    // non-indented ProfileConfigJsonContext for reads.
     [Test]
-    public async Task Round_trips_beta() {
-        var json = JsonSerializer.Serialize(
-            new CapacitorConfig { UpdateChannel = "beta" },
-            ConfigJsonContext.Default.CapacitorConfig);
-        await Assert.That(json).Contains("\"update_channel\": \"beta\"");
-        var back = JsonSerializer.Deserialize(json, ConfigJsonContext.Default.CapacitorConfig)!;
-        await Assert.That(back.UpdateChannel).IsEqualTo("beta");
+    public async Task Round_trips_beta_through_profile_config() {
+        var config = new ProfileConfig {
+            Profiles = new() { ["default"] = new Profile { UpdateChannel = "beta" } }
+        };
+        var json = JsonSerializer.Serialize(config, ProfileConfigJsonContext.Default.ProfileConfig);
+        await Assert.That(json).Contains("update_channel");
+        await Assert.That(json).Contains("beta");
+        var back = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.ProfileConfig)!;
+        await Assert.That(back.Profiles["default"].UpdateChannel).IsEqualTo("beta");
     }
 }
 ```
 
-Note: `ConfigJsonContext` is `internal`. If the test project can't see it, add
-`[assembly: InternalsVisibleTo("Capacitor.Cli.Tests.Unit")]` to
-`src/Capacitor.Cli.Core/` (an `AssemblyInfo.cs` or via `<InternalsVisibleTo>` in the
-csproj) — check whether it already exists first (the repo already uses it for
-`DaemonLockPaths`). The non-indented context emits `"update_channel":"beta"` without
-the space; if the assertion fails on spacing, assert `.Contains("update_channel")`
-and `.Contains("beta")` separately.
+Note: the profile serialization contexts are `internal`. `Capacitor.Cli.Core` already
+has `<InternalsVisibleTo Include="Capacitor.Cli.Tests.Unit" />` in its csproj (verified
+in Task 3's investigation), so no change needed. If `ProfileConfigJsonContext` is named
+differently, use the exact name from `ProfileConfig.cs`.
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj --treenode-filter "/*/*/UpdateChannelConfigTests/*"`
-Expected: FAIL — `CapacitorConfig` has no `UpdateChannel`.
+Expected: FAIL — `Profile` has no `UpdateChannel`.
 
-- [ ] **Step 3: Add the property**
+- [ ] **Step 3: Add the property to `Profile`**
 
-In `src/Capacitor.Cli.Core/Config/AppConfig.cs`, inside `record CapacitorConfig`, after the `UpdateCheck` property (`:15`):
+In `src/Capacitor.Cli.Core/Config/ProfileConfig.cs`, inside `record Profile`, right after the `UpdateCheck` property (`:74-75`):
 
 ```csharp
     [JsonPropertyName("update_channel")]
     public string UpdateChannel { get; init; } = "latest";
 ```
+
+Do NOT add it to `CapacitorConfig`.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -406,8 +430,8 @@ Expected: PASS (2 tests).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/Capacitor.Cli.Core/Config/AppConfig.cs test/Capacitor.Cli.Tests.Unit/UpdateChannelConfigTests.cs
-git commit -m "feat(config): add opt-in update_channel (default latest)"
+git add src/Capacitor.Cli.Core/Config/ProfileConfig.cs test/Capacitor.Cli.Tests.Unit/UpdateChannelConfigTests.cs
+git commit -m "feat(config): add opt-in update_channel on v2 Profile (default latest)"
 ```
 
 ---
@@ -419,7 +443,7 @@ git commit -m "feat(config): add opt-in update_channel (default latest)"
 - Test: `test/Capacitor.Cli.Tests.Unit/UpdateChannelResolveTests.cs`
 
 **Interfaces:**
-- Consumes: `PrereleaseSemver.IsNewer` (Task 1); `CapacitorConfig.UpdateChannel` (Task 3).
+- Consumes: `PrereleaseSemver.IsNewer` (Task 1); `Profile.UpdateChannel` (Task 3), read via `AppConfig.GetActiveProfileAsync()` and persisted via `AppConfig.SaveProfileConfig`.
 - Produces:
   - `internal static string UpdateCommand.ResolveChannel(string[] args, string? configuredChannel)` — returns `"beta"` if `--beta` in args, `"latest"` if `--stable` in args, else `configuredChannel` if non-empty, else `"latest"`.
   - The `--check` JSON gains `["channel"]` and `["install_tag"]` (both the resolved channel string) — consumed by the launcher in Task 5.
@@ -504,18 +528,29 @@ Delete the old `static readonly string CachePath = ...` field (replaced by `Cach
     static bool IsNewer(string? latest, string? current) => PrereleaseSemver.IsNewer(latest, current);
 ```
 
-(d) In `HandleAsync`, resolve the channel and, when `--beta`/`--stable` was passed
-explicitly (i.e. a channel change), persist it to config. At the top of `HandleAsync`:
+(d) In `HandleAsync`, resolve the channel from the ACTIVE v2 profile and, when
+`--beta`/`--stable` was passed explicitly, persist it onto that profile via the v2
+saver. At the top of `HandleAsync`:
 
 ```csharp
-        var config    = await AppConfig.Load();
-        var channel   = ResolveChannel(args, config?.UpdateChannel);
+        var profile   = await AppConfig.GetActiveProfileAsync();
+        var channel   = ResolveChannel(args, profile?.UpdateChannel);
         var checkOnly = args.Contains("--check");
 
-        // Persist an explicit channel switch so future auto-updates track it.
-        if ((args.Contains("--beta") || args.Contains("--stable"))
-         && config is not null && config.UpdateChannel != channel) {
-            await AppConfig.Save(config with { UpdateChannel = channel });
+        // Persist an explicit channel switch onto the active profile so future
+        // auto-updates track it. Update the profile inside ProfileConfig and save
+        // the whole v2 config via SaveProfileConfig — NEVER write a flat
+        // CapacitorConfig, which would overwrite the user's v2 profile config.
+        if (args.Contains("--beta") || args.Contains("--stable")) {
+            var pc         = await AppConfig.LoadProfileConfig();
+            var activeName = pc.ActiveProfile;
+            if (pc.Profiles.TryGetValue(activeName, out var active)
+             && active.UpdateChannel != channel) {
+                var profiles = new Dictionary<string, Profile>(pc.Profiles) {
+                    [activeName] = active with { UpdateChannel = channel }
+                };
+                await AppConfig.SaveProfileConfig(pc with { Profiles = profiles });
+            }
         }
 ```
 
@@ -532,13 +567,13 @@ the `--check` JSON object:
             };
 ```
 
-And in `PrintUpdateHintIfAvailable`, resolve the channel from config
-(`ResolveChannel([], config?.UpdateChannel)`) and pass it to `CheckForUpdateAsync`.
+And in `PrintUpdateHintIfAvailable`, resolve the channel from the active profile:
+`var profile = await AppConfig.GetActiveProfileAsync(); var channel = ResolveChannel([], profile?.UpdateChannel);` and pass it to `CheckForUpdateAsync`. Do NOT change how the
+existing `update_check` gate is read (it reads the legacy `AppConfig.Load()` and is a
+known pre-existing issue — out of scope here; note it for follow-up).
 
-Note on `AppConfig.Save`: use the existing config-save entry point. If the only saver
-is `SaveProfileConfig(ProfileConfig)` and `CapacitorConfig` has no direct saver, add a
-`public static Task Save(CapacitorConfig)` that writes via `ConfigJsonContextIndented`
-to the config path `AppConfig.Load` reads from — mirror the existing load path exactly.
+No new `AppConfig.Save` method is needed — persistence goes through the existing
+`AppConfig.SaveProfileConfig`.
 
 - [ ] **Step 4: Run to verify unit tests pass**
 
@@ -571,7 +606,7 @@ Expected: no output.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/Capacitor.Cli/Commands/UpdateCommand.cs src/Capacitor.Cli.Core/Config/AppConfig.cs test/Capacitor.Cli.Tests.Unit/UpdateChannelResolveTests.cs test/Capacitor.Cli.Tests.Integration/UpdateChannelQueryTests.cs
+git add src/Capacitor.Cli/Commands/UpdateCommand.cs test/Capacitor.Cli.Tests.Unit/UpdateChannelResolveTests.cs test/Capacitor.Cli.Tests.Integration/UpdateChannelQueryTests.cs
 git commit -m "feat(update): channel-aware update check (--beta/--stable), prerelease-aware comparison"
 ```
 
