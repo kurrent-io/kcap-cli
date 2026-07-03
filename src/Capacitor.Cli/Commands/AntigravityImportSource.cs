@@ -257,9 +257,9 @@ internal sealed class AntigravityImportSource : IImportSource {
                 // so we only post stop when start truly re-marked the agent, and a re-import retries
                 // otherwise (AI-1160 review).
                 if (await PostHookAsync(client, baseUrl, "subagent-start",
-                        BuildSubagentPayload("subagent_start", rootId, childId, childTranscript, strict: true), ct))
+                        BuildSubagentStartPayload(rootId, childId, childTranscript, strict: true), ct))
                     await PostHookAsync(client, baseUrl, "subagent-stop",
-                        BuildSubagentPayload("subagent_stop", rootId, childId, childTranscript, strict: true), ct);
+                        BuildSubagentStopPayload(rootId, childId, childTranscript, strict: true), ct);
 
                 continue;
             }
@@ -272,7 +272,7 @@ internal sealed class AntigravityImportSource : IImportSource {
 
             // Fail-closed: no content unless the subagent registered first.
             if (!await PostHookAsync(client, baseUrl, "subagent-start",
-                    BuildSubagentPayload("subagent_start", rootId, childId, childTranscript), ct))
+                    BuildSubagentStartPayload(rootId, childId, childTranscript), ct))
                 continue;
 
             try {
@@ -286,7 +286,7 @@ internal sealed class AntigravityImportSource : IImportSource {
             }
 
             await PostHookAsync(client, baseUrl, "subagent-stop",
-                BuildSubagentPayload("subagent_stop", rootId, childId, childTranscript), ct);
+                BuildSubagentStopPayload(rootId, childId, childTranscript), ct);
         }
     }
 
@@ -307,18 +307,40 @@ internal sealed class AntigravityImportSource : IImportSource {
         return p;
     }
 
-    static JsonObject BuildSubagentPayload(string eventName, string parentSid, string agentId, string transcriptPath, bool strict = false) {
+    // strict=true makes the server return non-2xx when the lifecycle write itself fails, rather
+    // than a fail-open 200 — so a caller that gates on the POST result learns the server actually
+    // recorded the event (AI-1160 review).
+
+    static JsonObject BuildSubagentStartPayload(string parentSid, string agentId, string transcriptPath, bool strict = false) {
         var p = new JsonObject {
-            ["hook_event_name"] = eventName,
+            ["hook_event_name"] = "subagent_start",
             ["session_id"]      = parentSid,
             ["agent_id"]        = agentId,
             ["agent_type"]      = "subagent",
             ["transcript_path"] = transcriptPath,
             ["cwd"]             = "",
         };
-        // strict=true makes the server return non-2xx when the lifecycle write itself fails,
-        // rather than a fail-open 200 — so a caller that gates on the POST result learns the
-        // server actually recorded the event (AI-1160 review).
+        if (strict) p["strict"] = true;
+        return p;
+    }
+
+    // The stop route binds SubagentStopHook, whose REQUIRED fields include stop_hook_active,
+    // agent_transcript_path, and last_assistant_message. Omitting them makes the server reject the
+    // body at binding (before HandleSubagentStop runs), so strict is never honored and PostHookAsync
+    // returns false — the repair would then loop start→failed-stop forever. Send the full shape,
+    // mirroring GeminiSubagentDiscovery.BuildStopPayload (AI-1160 review).
+    static JsonObject BuildSubagentStopPayload(string parentSid, string agentId, string transcriptPath, bool strict = false) {
+        var p = new JsonObject {
+            ["hook_event_name"]        = "subagent_stop",
+            ["session_id"]             = parentSid,
+            ["agent_id"]               = agentId,
+            ["agent_type"]             = "subagent",
+            ["transcript_path"]        = transcriptPath,
+            ["cwd"]                    = "",
+            ["stop_hook_active"]       = false,
+            ["agent_transcript_path"]  = transcriptPath,
+            ["last_assistant_message"] = "",
+        };
         if (strict) p["strict"] = true;
         return p;
     }

@@ -203,6 +203,14 @@ public class AntigravityImportTests : IDisposable {
         // (the server otherwise 200s even when RecordAgentStartAsync rolls back the active mark).
         var startBody = _server.LogEntries.Single(e => e.RequestMessage.Path == "/hooks/subagent-start").RequestMessage.Body!;
         await Assert.That(startBody).Contains("\"strict\":true");
+
+        // The strict stop payload MUST carry the full SubagentStopHook shape, else the server
+        // rejects it at binding before strict is honored (the repair would loop forever).
+        var stopBody = _server.LogEntries.Single(e => e.RequestMessage.Path == "/hooks/subagent-stop").RequestMessage.Body!;
+        await Assert.That(stopBody).Contains("\"strict\":true");
+        await Assert.That(stopBody).Contains("\"stop_hook_active\"");
+        await Assert.That(stopBody).Contains("\"agent_transcript_path\"");
+        await Assert.That(stopBody).Contains("\"last_assistant_message\"");
     }
 
     [Test]
