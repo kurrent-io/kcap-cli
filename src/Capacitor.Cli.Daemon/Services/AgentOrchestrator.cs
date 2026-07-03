@@ -369,7 +369,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ReviewLaunch: isReview && cmd.Review is { } reviewArgs
                     ? await ReviewLaunchBuilder.BuildAsync(cmd.Vendor, _config.CapacitorPath, _config.ServerUrl ?? "", reviewArgs.Owner, reviewArgs.Repo, reviewArgs.PrNumber)
                     : null
-            );
+            ) {
+                McpAllowlist = cmd.McpAllowlist
+            };
 
             try {
                 launcher.Prepare(launcherCtx);

@@ -81,6 +81,13 @@ internal sealed record LauncherContext(
     /// <summary>Owned worktree (daemon-created) vs borrowed cwd (the user's own checkout).
     /// Borrowed-cwd launches skip repo-mutating <c>Prepare()</c> steps.</summary>
     public WorkLocation Work { get; init; } = WorkLocation.OwnedWorktree;
+
+    /// <summary>AI-1126 D-c: the review-flow definition's MCP allowlist, carried verbatim from
+    /// <see cref="Capacitor.Cli.Core.LaunchAgentCommand.McpAllowlist"/>. Launchers resolve each
+    /// name against the kcap-owned MCP registry and materialize matching servers into the vendor's
+    /// MCP config, stripping any flow-starting server regardless of listing. Null/local-spawn
+    /// launches (e.g. <c>kcap run-agent</c>) never set this.</summary>
+    public string[]? McpAllowlist { get; init; }
 }
 
 internal readonly record struct LaunchArgs(string[] Args, string? McpConfigPath);
