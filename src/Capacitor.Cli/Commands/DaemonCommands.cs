@@ -465,13 +465,14 @@ public static class DaemonCommands {
                 if (DaemonRestartMarker.TryRead(name) is { } marker)
                     await Console.Out.WriteLineAsync($"  {marker.Describe()}");
             } else {
+                // AI-1155: report the stale PID file but do NOT delete it. Its
+                // presence is now the durable hard-death signal the next daemon
+                // reads to log the unclean-exit breadcrumb (DaemonLock); a passive
+                // `status` read that removed it would give that breadcrumb a false
+                // negative (run status after a SIGKILL, lose the trace). Cleanup of
+                // stale entries stays with the explicit paths — `daemon stop` and
+                // `daemon doctor --clean`.
                 await Console.Out.WriteLineAsync($"Daemon '{name}': not running (stale PID file)");
-
-                try { File.Delete(DaemonLockPaths.PidPath(name)); } catch {
-                    /* best-effort */
-                }
-
-                DaemonVersionMarker.Delete(name);
             }
 
             if (manager is not null) {
