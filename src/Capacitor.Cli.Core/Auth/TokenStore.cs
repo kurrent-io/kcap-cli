@@ -305,9 +305,9 @@ public static class TokenStore {
     // parse failures (return null → Failed); a genuine IO fault reading the token or config
     // can still propagate and is caught by the daemon's total tick.
     public static async Task<ProactiveRefreshOutcome> RefreshIfExpiringAsync(TimeSpan window) {
-        // Resolve the active profile once and thread it through both the read and the lock, so
-        // a profile switch mid-call can't make us refresh one profile's token under another's
-        // lock (GetValidTokensAsync re-resolves; this is deliberately tighter).
+        // Resolve the active profile once and thread it through the read and the lock; the lock
+        // helper also persists under this same profile, so a profile switch mid-call can't make us
+        // refresh — or write — one profile's token under another profile's lock.
         var profile = await ResolveActiveProfileAsync();
         var tokens  = await LoadAsync(profile);
 
@@ -331,7 +331,7 @@ public static class TokenStore {
     // may have just rotated it), refresh only if it is still due per `needsRefresh`, persist,
     // release. If the lock can't be acquired within the deadline, fall back to whatever a peer
     // persisted.
-    static async Task<StoredTokens?> RefreshWithCrossProcessLockAsync(
+    internal static async Task<StoredTokens?> RefreshWithCrossProcessLockAsync(
             string                                  profile,
             StoredTokens                            current,
             Func<StoredTokens, Task<StoredTokens?>> refresh,
@@ -369,7 +369,31 @@ public static class TokenStore {
         try {
             var latest = await LoadAsync(profile) ?? current;
 
-            return needsRefresh(latest) ? await refresh(latest) : latest;
+            // A peer refreshed while we waited for the lock (the persisted token changed) and its
+            // result is still valid → don't refresh again, even if the fresh token is still inside
+            // the proactive window. A short-lived / JwtExpiry-fallback token would otherwise be
+            // double-rotated (and double the endpoint traffic) right after a peer just rotated it.
+            // The reactive path is unaffected: its needsRefresh is IsExpired, already false here.
+            if (latest.AccessToken != current.AccessToken && !latest.IsExpired) {
+                return latest;
+            }
+
+            if (!needsRefresh(latest)) {
+                return latest;
+            }
+
+            var refreshed = await refresh(latest);
+
+            // Persist under THIS profile's lock. The refresh delegates deliberately do NOT persist
+            // themselves — they used the active-profile-resolving SaveAsync(StoredTokens) overload,
+            // so an active-profile switch mid-refresh could write this profile's rotated token into
+            // a different profile's file (without that profile's lock). Saving here, under the lock,
+            // with the profile we locked, closes that hole for both callers.
+            if (refreshed is not null) {
+                await SaveAsync(profile, refreshed);
+            }
+
+            return refreshed;
         } finally {
             // Close the stream to release the OS lock, but DON'T delete the file: on Unix a
             // waiter can acquire the old inode between dispose and delete, then the unlink lets
@@ -444,14 +468,13 @@ public static class TokenStore {
                 return null;
             }
 
-            var refreshed = tokens with {
+            // Persistence is the caller's responsibility (RefreshWithCrossProcessLockAsync saves
+            // under the locked profile). Returning without saving keeps a rotated token from being
+            // written to the wrong profile if the active profile changes mid-refresh.
+            return tokens with {
                 AccessToken = json.AccessToken,
                 ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(json.ExpiresIn)
             };
-
-            await SaveAsync(refreshed);
-
-            return refreshed;
         } catch {
             return null;
         }
@@ -491,15 +514,14 @@ public static class TokenStore {
                 return null;
             }
 
-            var refreshed = tokens with {
+            // Persistence is the caller's responsibility (RefreshWithCrossProcessLockAsync saves
+            // under the locked profile) — see RefreshGitHubAsync. WorkOS rotates the refresh token
+            // on use, so writing under the wrong profile would be especially damaging.
+            return tokens with {
                 AccessToken = json.AccessToken,
                 ExpiresAt = JwtExpiry(json.AccessToken),
                 RefreshToken = json.RefreshToken ?? tokens.RefreshToken
             };
-
-            await SaveAsync(refreshed);
-
-            return refreshed;
         } catch {
             return null;
         }
