@@ -232,6 +232,16 @@ static class McpMemoryServer {
         var global          = args?["global"]?.GetValue<bool>() == true;
         var machineSpecific = args?["machine_specific"]?.GetValue<bool>() == true;
 
+        // Fail closed rather than silently broadening scope: a null cwdRepoHash with global not
+        // explicitly requested would otherwise be sent to the server as repo_hash: null, which the
+        // server treats as a GLOBAL (all-repos) memory. Likewise a null machineId with
+        // machine_specific: true would otherwise save an untagged (visible-to-everyone) memory.
+        if (!global && cwdRepoHash is null)
+            throw new ArgumentException("Cannot resolve the current repository — run from a git checkout or pass global: true for a repo-independent memory.");
+
+        if (machineSpecific && machineId is null)
+            throw new ArgumentException("Machine id unavailable — cannot save a machine-specific memory on this host.");
+
         return new JsonObject {
             ["audience"]          = Req("audience"),
             ["slug"]              = Req("slug"),
@@ -241,6 +251,7 @@ static class McpMemoryServer {
             ["team"]              = args?["team"]?.GetValue<string>(),
             ["repo_hash"]         = global ? null : cwdRepoHash,
             ["machine_tag"]       = machineSpecific ? machineId : null,
+            ["machine_context"]   = machineId,
             ["source_session_id"] = null,
             ["harness"]           = "mcp"
         };
@@ -340,7 +351,7 @@ static class McpMemoryServer {
                 ["id_or_slug"] = new("string", "Memory id (32 hex) or slug.")
             }, ["id_or_slug"])),
         new("save_memory",
-            "Save a durable learning to the server. audience: 'user' (private), 'team', or 'org' (everyone). Prefer update_memory when the result reports a nearDuplicate.",
+            "Save a durable learning to the server. audience: 'user' (private), 'team', or 'org' (everyone). Saves are repo-scoped by default (to the cwd's git checkout); if the current repo can't be resolved, pass global: true for a repo-independent memory, or the save fails. Prefer update_memory when the result reports a nearDuplicate.",
             new("object", new() {
                 ["audience"]         = new("string", "user | team | org"),
                 ["slug"]             = new("string", "kebab-case identifier, unique within the audience+repo pool"),
@@ -348,7 +359,7 @@ static class McpMemoryServer {
                 ["content"]          = new("string", "Full memory body (max 64 KiB)"),
                 ["kind"]             = new("string", "preference | feedback | project | reference"),
                 ["team"]             = new("string", "Team name or id — required for audience 'team' if you are in several teams"),
-                ["global"]           = new("boolean", "true = not tied to the current repo (default: scoped to cwd repo)"),
+                ["global"]           = new("boolean", "true = not tied to the current repo (required if not run from a git checkout; default: scoped to cwd repo)"),
                 ["machine_specific"] = new("boolean", "true = only relevant on this machine (user audience only)")
             }, ["audience", "slug", "description", "content", "kind"])),
         new("update_memory",

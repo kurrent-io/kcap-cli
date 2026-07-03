@@ -42,6 +42,37 @@ public class McpMemoryServerTests {
     }
 
     [Test]
+    public async Task Save_body_throws_without_repo_context_unless_global() {
+        var argsWithoutGlobal = Args("""{"audience":"org","slug":"s","description":"d","content":"c","kind":"feedback"}""");
+
+        await Assert.That(() => McpMemoryServer.BuildSaveBody(argsWithoutGlobal, null, "mach-1"))
+            .Throws<ArgumentException>();
+
+        var argsWithGlobal = Args("""{"audience":"org","slug":"s","description":"d","content":"c","kind":"feedback","global":true}""");
+        var body           = McpMemoryServer.BuildSaveBody(argsWithGlobal, null, "mach-1");
+
+        await Assert.That(body["repo_hash"]).IsNull();
+    }
+
+    [Test]
+    public async Task Save_body_throws_for_machine_specific_without_machine_id() {
+        var args = Args("""{"audience":"user","slug":"s","description":"d","content":"c","kind":"preference","global":true,"machine_specific":true}""");
+
+        await Assert.That(() => McpMemoryServer.BuildSaveBody(args, "abc123", null))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task Save_body_always_carries_machine_context() {
+        var body = McpMemoryServer.BuildSaveBody(
+            Args("""{"audience":"org","slug":"s","description":"d","content":"c","kind":"feedback"}"""),
+            "abc123", "mach-1");
+
+        await Assert.That(body["machine_context"]!.GetValue<string>()).IsEqualTo("mach-1");
+        await Assert.That(body["machine_tag"]).IsNull();
+    }
+
+    [Test]
     public async Task Get_url_escapes_slug_and_carries_context() {
         var url = McpMemoryServer.BuildGetUrl("http://x", Args("""{"id_or_slug":"my-slug"}"""), "abc123", "mach-1");
 
