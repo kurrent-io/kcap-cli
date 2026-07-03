@@ -125,7 +125,7 @@ The `kcap mcp flows` stdio server lets agents start and interact with AI-powered
 
 The `kcap mcp flow-result` stdio server is the reviewer-side counterpart: the daemon injects it into hosted review-flow reviewer sessions so they can submit their result. It is not meant to be registered or run manually — see [Flow-result MCP server](#flow-result-mcp-server-hosted-reviewers).
 
-The `kcap mcp memory` stdio server lets agents search, save, and update durable team memories — preferences, feedback, project facts, and references scoped to you, your team, or the org. The plugin **auto-registers it for Claude Code** (via `.mcp.json`) and for Codex's native plugin loader (via `.codex-mcp.json`). See the [Memory MCP server](#memory-mcp-server-for-agents) section for details.
+The `kcap mcp memory` stdio server lets agents search, save, and update durable team memories — preferences, feedback, project facts, and references scoped to you, your team, or the org. `kcap setup` **auto-registers it for both Claude Code** (via the plugin's `.mcp.json`) **and Codex CLI** (in `~/.codex/config.toml`, alongside `kcap-sessions` / `kcap-review`); Codex's native plugin loader also picks it up via `.codex-mcp.json`. See the [Memory MCP server](#memory-mcp-server-for-agents) section for details.
 
 ## What it records
 
@@ -303,7 +303,7 @@ kcap mcp flows
 
 Stdio MCP server that lets coding agents start and interact with AI-powered review flows directly from within a session. The Kurrent Capacitor plugin **auto-registers it for Claude Code** (via `.mcp.json`), so there's nothing to do after `kcap setup` — the flows server derives the target repo from its launch working directory, and Claude Code always runs inside the repo, so one registration works for every repo. It's registered even with no daemon connected; the tools simply stay inert (and `start_review_flow` returns an error) until a daemon with the repo is available.
 
-For Codex, `kcap-flows` stays manual — unlike the read-only `sessions` / `review` servers (which `kcap setup` registers in `config.toml`), it launches a paid hosted reviewer, so it isn't auto-registered. Add it to `~/.codex/config.toml`:
+For Codex, `kcap-flows` stays manual — unlike the `sessions` / `review` / `memory` servers (which `kcap setup` registers in `config.toml`), it launches a paid hosted reviewer, so it isn't auto-registered. Add it to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.kcap-flows]
@@ -334,7 +334,7 @@ Stdio MCP server the **daemon injects into hosted review-flow reviewer sessions*
 kcap mcp memory
 ```
 
-Stdio MCP server that lets coding agents search, save, and update durable "memories" — short, reusable notes (preferences, feedback, project facts, references) scoped to you, your team, or the whole org, so lessons learned in one session are available in the next. **Claude Code:** auto-registered via the plugin's `.mcp.json`. **Codex:** available via the plugin's `.codex-mcp.json` descriptor for Codex's native plugin loader.
+Stdio MCP server that lets coding agents search, save, and update durable "memories" — short, reusable notes (preferences, feedback, project facts, references) scoped to you, your team, or the whole org, so lessons learned in one session are available in the next. **Claude Code:** auto-registered via the plugin's `.mcp.json`. **Codex CLI:** `kcap setup` / `kcap plugin install --codex` register it in `~/.codex/config.toml` (alongside `kcap-sessions` / `kcap-review`), so there's nothing extra to do; enabling the plugin through Codex's native `codex plugin add` also provides it via the `.codex-mcp.json` descriptor.
 
 It provides six tools:
 
