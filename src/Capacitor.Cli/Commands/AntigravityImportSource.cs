@@ -249,10 +249,17 @@ internal sealed class AntigravityImportSource : IImportSource {
                 // already-active is a no-op) so the following stop clears it and appends the
                 // (idempotent, deterministic) SubagentCompleted. Child content is not re-sent
                 // (AI-1160 review).
+                //
+                // strict=true on BOTH: the server's start endpoint returns a fail-open 200 even
+                // when RecordAgentStartAsync throws and rolls back the active mark, so a non-strict
+                // start would be treated as success and the following stop would silently no-op
+                // (no active agent → no SubagentCompleted). strict surfaces the failure as non-2xx,
+                // so we only post stop when start truly re-marked the agent, and a re-import retries
+                // otherwise (AI-1160 review).
                 if (await PostHookAsync(client, baseUrl, "subagent-start",
-                        BuildSubagentPayload("subagent_start", rootId, childId, childTranscript), ct))
+                        BuildSubagentPayload("subagent_start", rootId, childId, childTranscript, strict: true), ct))
                     await PostHookAsync(client, baseUrl, "subagent-stop",
-                        BuildSubagentPayload("subagent_stop", rootId, childId, childTranscript), ct);
+                        BuildSubagentPayload("subagent_stop", rootId, childId, childTranscript, strict: true), ct);
 
                 continue;
             }
@@ -300,8 +307,8 @@ internal sealed class AntigravityImportSource : IImportSource {
         return p;
     }
 
-    static JsonObject BuildSubagentPayload(string eventName, string parentSid, string agentId, string transcriptPath) =>
-        new() {
+    static JsonObject BuildSubagentPayload(string eventName, string parentSid, string agentId, string transcriptPath, bool strict = false) {
+        var p = new JsonObject {
             ["hook_event_name"] = eventName,
             ["session_id"]      = parentSid,
             ["agent_id"]        = agentId,
@@ -309,6 +316,12 @@ internal sealed class AntigravityImportSource : IImportSource {
             ["transcript_path"] = transcriptPath,
             ["cwd"]             = "",
         };
+        // strict=true makes the server return non-2xx when the lifecycle write itself fails,
+        // rather than a fail-open 200 — so a caller that gates on the POST result learns the
+        // server actually recorded the event (AI-1160 review).
+        if (strict) p["strict"] = true;
+        return p;
+    }
 
     static async Task<bool> PostHookAsync(HttpClient client, string baseUrl, string route, JsonObject payload, CancellationToken ct) {
         try {

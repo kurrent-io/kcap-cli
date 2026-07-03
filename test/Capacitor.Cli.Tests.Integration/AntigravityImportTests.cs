@@ -198,6 +198,11 @@ public class AntigravityImportTests : IDisposable {
         await Assert.That(posts.Contains("/hooks/transcript")).IsFalse();
         // Ordering: start precedes stop so the server has the active mark when stop lands.
         await Assert.That(posts.IndexOf("/hooks/subagent-start")).IsLessThan(posts.IndexOf("/hooks/subagent-stop"));
+
+        // Repair lifecycle POSTs are strict, so a server-side start failure surfaces as non-2xx
+        // (the server otherwise 200s even when RecordAgentStartAsync rolls back the active mark).
+        var startBody = _server.LogEntries.Single(e => e.RequestMessage.Path == "/hooks/subagent-start").RequestMessage.Body!;
+        await Assert.That(startBody).Contains("\"strict\":true");
     }
 
     [Test]
