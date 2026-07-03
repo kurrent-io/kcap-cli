@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Antigravity;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Copilot;
@@ -33,6 +34,7 @@ public static class SetupCommand {
         var skipKiroFlag     = args.Contains("--skip-kiro-hooks");
         var skipPiFlag       = args.Contains("--skip-pi-hooks");
         var skipOpenCodeFlag = args.Contains("--skip-opencode-hooks");
+        var skipAntigravityFlag = args.Contains("--skip-antigravity-hooks");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
@@ -208,7 +210,10 @@ public static class SetupCommand {
             Pi:      PiPaths.IsInstalled() || AgentDetector.IsInstalled("pi"),
             // OpenCode keeps config under ~/.config/opencode + data under
             // ~/.local/share/opencode; the PATH probe covers fresh installs.
-            OpenCode: OpenCodePaths.IsInstalled() || AgentDetector.IsInstalled("opencode"));
+            OpenCode: OpenCodePaths.IsInstalled() || AgentDetector.IsInstalled("opencode"),
+            // Antigravity (GUI IDE) keeps state under ~/.gemini/antigravity; the PATH
+            // probe covers a CLI/fresh install that hasn't created it yet.
+            Antigravity: AntigravityPaths.IsInstalled() || AgentDetector.IsInstalled("antigravity"));
 
         // gitRoot is guaranteed non-null here when legacyProjectScope is true (the early
         // guard at the top of HandleAsync returns 1 otherwise).
@@ -225,6 +230,7 @@ public static class SetupCommand {
             SkipKiro:    skipKiroFlag,
             SkipPi:      skipPiFlag,
             SkipOpenCode: skipOpenCodeFlag,
+            SkipAntigravity: skipAntigravityFlag,
             NoPrompt:    noPrompt,
             SkipCodexNetworkAccess: skipCodexNetworkFlag);
 
@@ -249,6 +255,7 @@ public static class SetupCommand {
             KiroHooksPath:        KiroPaths.KcapAgentJson(),
             PiExtensionPath:      PiPaths.KcapExtension(),
             OpenCodeExtensionPath: OpenCodePaths.KcapPlugin(),
+            AntigravityHooksPath: AntigravityPaths.GlobalHooksJson(),
             CodexConfigTomlPath:  Path.Combine(CodexPaths.Home(), "config.toml"));
 
         var stepInstallers = new CodingAgentsStep.Installers(
@@ -263,6 +270,7 @@ public static class SetupCommand {
             InstallKiroHooks:       PluginCommand.InstallKiroHooks,
             InstallPiExtension:     PiExtensionInstaller.Install,
             InstallOpenCodeExtension: OpenCodeExtensionInstaller.Install,
+            InstallAntigravityHooks:  PluginCommand.InstallAntigravityHooks,
             EnableCodexNetworkAccess: () => CodexConfigToml.EnableNetworkAccess(codexAllowDomains),
             RegisterCodexMcp:         () => CodexConfigToml.RegisterKcapMcpServers());
 
