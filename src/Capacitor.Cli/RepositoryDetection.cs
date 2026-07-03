@@ -244,8 +244,14 @@ static class RepositoryDetection {
         var kind  = await GitProviderRouter.ResolveAsync(host, cwd, providerCap, run);
 
         // The remainder after the probe — NOT the full providerCap. Passing providerCap here would
-        // let a slow probe + a full-length detector overrun the caller's deadline.
-        var detectCap = providerCap - Stopwatch.GetElapsedTime(start, getTs());
+        // let a slow probe + a full-length detector overrun the caller's deadline. Clamp the elapsed
+        // time to >= 0 so a non-monotonic timestamp seam can never inflate detectCap past providerCap
+        // (the invariant is "detector budget <= providerCap, always"). Production uses the monotonic
+        // Stopwatch.GetTimestamp, so this only hardens the injectable test seam.
+        var elapsed = Stopwatch.GetElapsedTime(start, getTs());
+        if (elapsed < TimeSpan.Zero) elapsed = TimeSpan.Zero;
+
+        var detectCap = providerCap - elapsed;
         if (detectCap <= TimeSpan.Zero) return null;
 
         return kind switch {

@@ -58,4 +58,27 @@ public class ProviderBudgetSplitTests {
         await Assert.That(detectorRan).IsFalse();
         await Assert.That(pr).IsNull();
     }
+
+    [Test]
+    public async Task Non_monotonic_timestamp_never_inflates_the_detector_budget() {
+        var providerCap = TimeSpan.FromSeconds(2);
+
+        // A misbehaving timestamp seam that goes BACKWARDS (end < start) would make GetElapsedTime
+        // negative and, unclamped, push detectCap above providerCap. The clamp must keep the
+        // detector budget within the shared ceiling.
+        var calls = 0;
+        long Timestamp() => calls++ == 0 ? Stopwatch.Frequency : 0L; // start high, end low → negative elapsed
+
+        TimeSpan? detectorCap = null;
+        CommandRunner run = (cmd, _, _, cap) => {
+            if (cmd == "glab") { detectorCap = cap; return Task.FromResult<string?>("[]"); }
+            return Task.FromResult<string?>("{}");
+        };
+
+        await RepositoryDetection.ResolveAndDetectPrAsync(
+            "git.example.com", "owner", "repo", "main", "/cwd", providerCap, run, Timestamp);
+
+        await Assert.That(detectorCap).IsNotNull();
+        await Assert.That(detectorCap!.Value).IsLessThanOrEqualTo(providerCap); // never exceeds the ceiling
+    }
 }
