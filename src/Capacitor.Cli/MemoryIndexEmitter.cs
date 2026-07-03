@@ -48,7 +48,11 @@ static class MemoryIndexEmitter {
 
             if (string.IsNullOrWhiteSpace(slug) || string.IsNullOrWhiteSpace(description)) continue;
 
-            var line = $"- {slug}: {description}";
+            // Collapse any internal whitespace — including newlines — to single spaces so a
+            // description keeps to one bullet. The server validates descriptions as single-line,
+            // but the injected block feeds an LLM's context, so the CLI must not depend on that:
+            // a stray '\n' would otherwise split one memory across lines and distort the grouping.
+            var line = $"- {OneLine(slug)}: {OneLine(description)}";
             switch (audience) {
                 case "org":  org.Add(line);  break;
                 case "team": team.Add(line); break;
@@ -78,4 +82,8 @@ static class MemoryIndexEmitter {
         sb.AppendLine($"### {heading}");
         foreach (var l in lines) sb.AppendLine(l);
     }
+
+    // Collapse all whitespace runs (spaces, tabs, CR/LF) to single spaces and trim, so any
+    // value renders as one line. Splitting on null splits on Unicode whitespace.
+    static string OneLine(string s) => string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }

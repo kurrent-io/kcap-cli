@@ -759,8 +759,14 @@ public static class ClaudeHookCommand {
     // ── AI-1165: SessionStart team-memory index injection ────────────────────────
     //
     // Best-effort fetch of GET /api/memories/index for the current repo + machine.
-    // Everything here is fail-open: a failure, non-2xx, timeout, or unresolved repo/
-    // machine yields null, and MemoryIndexEmitter.BuildFragment(null, …) emits nothing.
+    // Fail-open on a failure / non-2xx / timeout → null, and
+    // MemoryIndexEmitter.BuildFragment(null, …) emits nothing.
+    //
+    // Unresolved repo/machine is NOT an error: the query params are simply omitted, which the
+    // server's scope predicate (`repo_hash IS NULL OR repo_hash = @repo`, likewise machine_tag)
+    // narrows to the caller's GLOBAL, machine-agnostic memories — exactly the repo-independent
+    // subset that should surface everywhere (e.g. a session outside any git repo). It never
+    // returns another repo's repo-scoped memories, so the result stays correctly scoped.
 
     static async Task<JsonNode?> TryFetchMemoryIndexAsync(HttpClient client, string baseUrl, string? sessionCwd, long processStart) {
         try {

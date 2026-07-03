@@ -162,6 +162,21 @@ public class MemoryIndexEmitterTests {
     }
 
     [Test]
+    public async Task Collapses_newlines_in_description_to_keep_one_line_per_memory() {
+        // The server validates descriptions single-line, but the CLI must not depend on that:
+        // a stray newline would otherwise split one memory across bullets and distort grouping.
+        var index = new JsonArray(
+            new JsonObject { ["slug"] = "multi", ["audience"] = "org", ["description"] = "line one\nline two\r\n\tline three" }
+        );
+
+        var fragment = MemoryIndexEmitter.BuildFragment(index, disabled: false)!;
+
+        await Assert.That(fragment).Contains("- multi: line one line two line three");
+        // Exactly one bullet — the description did not spill onto extra lines.
+        await Assert.That(fragment.Split('\n').Count(l => l.StartsWith("- ", StringComparison.Ordinal))).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task Fragment_is_not_a_json_envelope() {
         var fragment = MemoryIndexEmitter.BuildFragment(Index(("x", "org", "y")), disabled: false)!;
 
