@@ -401,6 +401,7 @@ public static class DaemonCommands {
 
         using (held) {
             try { File.Delete(DaemonLockPaths.PidPath(name)); } catch { /* best-effort */ }
+            try { File.Delete(DaemonLockPaths.RestartPendingPath(name)); } catch { /* best-effort */ }
             DaemonVersionMarker.Delete(name);
         }
 
@@ -627,29 +628,29 @@ public static class DaemonCommands {
                     await Console.Out.WriteLineAsync($"  {name,-20}  STALE    instance=(none)   ({leftovers})");
 
                     if (clean) {
-                        try { File.Delete(pidPath); } catch {
-                            /* best-effort */
-                        }
-
-                        try { File.Delete(DaemonLockPaths.RestartPendingPath(name)); } catch {
-                            /* best-effort */
-                        }
-
-                        DaemonVersionMarker.Delete(name);
+                        // No lock file now, but a `daemon start` could be creating
+                        // one this instant. Delete the orphan markers under the
+                        // flock (TryCleanupMarkersUnderLock acquires it first), so
+                        // if a start wins the race we skip rather than unlink its
+                        // fresh PID.
+                        TryCleanupMarkersUnderLock(name);
                     }
 
                     break;
                 }
                 default: {
-                    await probe.DisposeAsync();
                     staleCount++;
                     await Console.Out.WriteLineAsync($"  {name,-20}  STALE    instance={instancePrefix}  (no holder)");
 
                     if (clean) {
-                        try { File.Delete(lockPath); } catch {
-                            /* best-effort */
-                        }
-
+                        // Delete the daemon-owned markers WHILE still holding the
+                        // probe's flock (AI-1155): a concurrent `daemon start` must
+                        // take this same flock, so it can't slip a live daemon in
+                        // and have us unlink its fresh PID. Do NOT delete the lock
+                        // file — unlinking it (even while holding it) lets a later
+                        // start create a new lock inode and acquire a SECOND
+                        // independent flock at the same path (AI-630). Leave it;
+                        // it's inert and the next start reuses it.
                         try { File.Delete(pidPath); } catch {
                             /* best-effort */
                         }
@@ -660,6 +661,8 @@ public static class DaemonCommands {
 
                         DaemonVersionMarker.Delete(name);
                     }
+
+                    await probe.DisposeAsync();
 
                     break;
                 }
