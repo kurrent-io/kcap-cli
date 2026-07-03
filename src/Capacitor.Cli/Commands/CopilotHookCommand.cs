@@ -168,8 +168,11 @@ static class CopilotHookCommand {
             return 0;
         }
 
-        var exit = await PostHookAsync(baseUrl, "session-start/copilot", enriched);
-        if (exit != 0) return exit;
+        var outcome = await PostHookAsync(baseUrl, "session-start/copilot", enriched);
+
+        // Failed keeps the prior non-zero exit; AuthLapsed exits cleanly (no error banner). Either
+        // way skip the watcher — on a lapse its POSTs would 401 too.
+        if (outcome != HookPostOutcome.Posted) return outcome == HookPostOutcome.Failed ? 1 : 0;
 
         await EnsureWatcherAsync(baseUrl, dashedSessionId, sessionId, node, cwd);
         return 0;
@@ -237,7 +240,8 @@ static class CopilotHookCommand {
             forwarded["agent_host_id"] = agentHostId;
         }
 
-        return await PostHookAsync(baseUrl, "session-end/copilot", forwarded.ToJsonString());
+        // AuthLapsed / Posted → clean exit (0); a real failure keeps the prior non-zero exit.
+        return await PostHookAsync(baseUrl, "session-end/copilot", forwarded.ToJsonString()) == HookPostOutcome.Failed ? 1 : 0;
     }
 
     static async Task<int> HandleAgentStop(string baseUrl, JsonNode node, string dashedSessionId, string sessionId, string? cwd) {
@@ -278,9 +282,14 @@ static class CopilotHookCommand {
         // path so a stalled server can't block Copilot's loop.
         using var cts = new CancellationTokenSource(NotificationPostBudget);
         try {
-            using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, cts.Token);
-            using var content = new StringContent(forwarded.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _       = await client.PostAsync($"{baseUrl}/hooks/notification", content, cts.Token);
+            // Status-returning variant (not CreateAuthenticatedClientAsync, which writes a
+            // per-turn "expired" line to stderr): on a lapse, stay quiet and skip the doomed POST.
+            var (client, status) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl, cts.Token);
+            using (client) {
+                if (AgentHookPoster.IsAuthLapsed(status)) return 0;
+                using var content = new StringContent(forwarded.ToJsonString(), Encoding.UTF8, "application/json");
+                using var _       = await client.PostAsync($"{baseUrl}/hooks/notification", content, cts.Token);
+            }
         } catch {
             // Recording must never fail the hook.
         }
@@ -322,24 +331,11 @@ static class CopilotHookCommand {
         return File.Exists(legacy) ? legacy : current;
     }
 
-    static async Task<int> PostHookAsync(string baseUrl, string endpoint, string body) {
-        using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync();
-        using var content = new StringContent(body, Encoding.UTF8, "application/json");
-
-        try {
-            var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{endpoint}", content);
-
-            if (!resp.IsSuccessStatusCode) {
-                Console.Error.WriteLine($"[kcap] copilot-hook {endpoint}: HTTP {(int)resp.StatusCode}");
-                return 1;
-            }
-
-            return 0;
-        } catch (HttpRequestException ex) {
-            HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
-            return 1;
-        }
-    }
+    // Shared auth-aware recording POST: skips the doomed POST (and the misleading per-turn
+    // "HTTP 401" stderr line) when auth has lapsed, reporting AuthLapsed so the caller exits
+    // cleanly instead of erroring. See AgentHookPoster.
+    static Task<HookPostOutcome> PostHookAsync(string baseUrl, string endpoint, string body)
+        => AgentHookPoster.PostAsync(baseUrl, endpoint, body, "copilot-hook");
 
     static string? GetArg(string[] args, string flag) {
         var idx = Array.IndexOf(args, flag);
