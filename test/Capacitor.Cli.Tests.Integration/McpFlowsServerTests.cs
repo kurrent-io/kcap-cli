@@ -406,6 +406,64 @@ public class McpFlowsServerTests : IDisposable {
     }
 
     /// <summary>
+    /// send_to_participant declares an optional "async" arg (kept for symmetry with
+    /// submit_review_round's own Async field) — pin that it actually flows through onto the
+    /// wire. Stubs a terminal (non-"running") POST response so ResolveRoundResultAsync takes
+    /// the no-poll path and no GET calls happen.
+    /// </summary>
+    [Test]
+    public async Task Send_to_participant_async_false_posts_async_false() {
+        const string flowRunId = "flow-generic-async-false";
+
+        var stubbedResponse = $$"""
+            {
+              "flow_run_id": "{{flowRunId}}",
+              "round_id": "round-2",
+              "round_number": 2,
+              "status": "completed",
+              "result_kind": "FINDINGS",
+              "result_text": "sync round result",
+              "reviewer_agent_id": null,
+              "reviewer_session_id": null
+            }
+            """;
+
+        _server.Given(Request.Create().WithPath($"/api/flows/{flowRunId}/rounds").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(stubbedResponse));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var args = new JsonObject {
+                ["flow_run_id"] = flowRunId,
+                ["participant"] = "reviewer",
+                ["message"]     = "ctx2",
+                ["async"]       = false
+            };
+
+            var response = await SendRequest(proc, ToolsCallRequest(51, "send_to_participant", args));
+
+            var result = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["isError"]?.GetValue<bool>()).IsNotEqualTo(true);
+
+            var hits = _server.FindLogEntries(Request.Create().WithPath($"/api/flows/{flowRunId}/rounds").UsingPost());
+            await Assert.That(hits.Count).IsEqualTo(1);
+
+            var bodyNode = JsonNode.Parse(hits[0].RequestMessage.Body ?? "")?.AsObject();
+            await Assert.That(bodyNode).IsNotNull();
+            await Assert.That(bodyNode!["async"]?.GetValue<bool>()).IsFalse();
+            await Assert.That(bodyNode["context"]?.GetValue<string>()).IsEqualTo("ctx2");
+            await Assert.That(bodyNode["participant"]?.GetValue<string>()).IsEqualTo("reviewer");
+
+            // No polling should have happened — the POST response was already terminal.
+            var getHits = _server.FindLogEntries(Request.Create().WithPath($"/api/flows/{flowRunId}").UsingGet());
+            await Assert.That(getHits.Count).IsEqualTo(0);
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
     /// The review alias must stay byte-compatible with old servers that don't know about
     /// "participant" — the field is null-omitted, so the POST body must not carry the key at all.
     /// </summary>

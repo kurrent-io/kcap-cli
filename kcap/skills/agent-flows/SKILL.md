@@ -51,13 +51,14 @@ If `start_flow` / `send_to_participant` are not among the tools available in thi
 5. **If participant output is unclear or requires user input**, pause and ask the user before proceeding.
 6. **Never start a nested flow.** If you are the hosted participant (see above), do not call these tools yourself.
 7. **Single participant.** In Phase D every flow definition has exactly one participant, `reviewer`. `send_to_participant` with any other `participant` value is rejected by the server, which names the valid participant in its error.
+8. **For a code review flow (`definition_id: "code-review"`), do NOT ask the participant to run tests.** CI covers test execution; participant feedback is on correctness, design, and adherence to conventions.
 
 ## Guardrail errors
 
 The server enforces per-run budgets; watch for these in tool error responses:
 
 - **`400` containing `max_rounds (N) reached for this run — close the flow.`** — the run is still **open**, it's just hit its round cap. Stop submitting further rounds, summarize what you have, and call `close_flow`.
-- **`400` containing `budget_exceeded: …`** — the run has **already failed** and the participant agent has stopped. Report this to the user; do NOT retry and do NOT call `close_flow` — the run is already terminal and the participant already stopped, so closing is a no-op that only muddies the event stream.
+- **`400` containing `budget_exceeded: …`** — the run has **already failed** and the participant agent has stopped. Report this to the user; do NOT retry and do NOT call `close_flow` — closing a failed run overwrites the failure status in the read model (the projector flips `failed` → `closed`), hiding what went wrong.
 - **A round that exceeds the definition's `round_timeout`** lands as a terminal **`unclear`** round, with the timeout explained in its result text — if you check round status programmatically, look for `unclear` and read the text for the timeout reason. The run itself stays open — you may submit another round or close the flow.
 - **Idle runs are auto-reaped** after the definition's `idle_ttl` (server default 24h). Don't rely on this — always call `close_flow` yourself once you're done, whether the outcome was clean or you're abandoning the task.
 
