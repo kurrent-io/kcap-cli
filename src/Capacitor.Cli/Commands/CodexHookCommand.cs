@@ -15,12 +15,13 @@ namespace Capacitor.Cli.Commands;
 /// <remarks>
 /// Wire contract (Codex event → server route):
 ///   SessionStart      → POST /hooks/session-start/codex
-///   Stop              → no server POST. Codex fires Stop at every turn end,
-///                       not session end (AI-648). Session-end is owned by the
-///                       watcher's parent-PID monitor (AI-647 — see
-///                       WatchCommand.PostSessionEndOnParentExitAsync).
-///                       HandleStop only refreshes watcher liveness and emits
-///                       {"continue":true} so Codex's hook parser is satisfied.
+///   Stop              → POST /hooks/stop (best-effort, 2s cap, swallow-all).
+///                       Codex fires Stop at every turn end, not session end
+///                       (AI-648); session-end stays owned by the watcher's
+///                       parent-PID monitor (AI-647). The POST lets the server
+///                       emit the idle-wait marker that clears the chat
+///                       "working" indicator. HandleStop also refreshes watcher
+///                       liveness and emits {"continue":true} for Codex's parser.
 ///   PermissionRequest → in a daemon-launched hosted agent (KCAP_DAEMON_URL set), bounce
 ///                       through the daemon's LocalPermissionBridge and wait for the dashboard's
 ///                       decision (fail-closed on bridge errors: deny + exit nonzero). Otherwise:
@@ -213,8 +214,10 @@ static class CodexHookCommand {
         // the watcher after turn 1 and mismark multi-turn sessions as ended
         // before they actually finish.
         //
-        // Symmetric with Claude's stop/notification branch in Program.cs —
-        // we just keep the watcher alive in case it crashed mid-session.
+        // We keep the watcher alive (in case it crashed mid-session) AND
+        // best-effort POST /hooks/stop so the server can emit the idle-wait
+        // marker that clears the chat "working" indicator (symmetric with
+        // Claude's stop hook).
         var sessionId  = TryGetString(node, "session_id");
         var transcript = TryGetString(node, "transcript_path");
         var cwd        = TryGetString(node, "cwd");
@@ -225,6 +228,8 @@ static class CodexHookCommand {
                 agentId: null, sessionIdOverride: null, cwd: cwd,
                 skipTitle: false, vendor: "codex"
             );
+
+            await PostStopBestEffortAsync(baseUrl, node);
         }
 
         // AI-635: Codex's stop-hook output parser rejects empty stdout as
@@ -332,6 +337,27 @@ static class CodexHookCommand {
         } catch (HttpRequestException ex) {
             HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
             return 1;
+        }
+    }
+
+    /// <summary>
+    /// Best-effort POST of the Codex Stop payload to <c>/hooks/stop</c>. Codex
+    /// fires Stop at every turn end; the server marks the session waiting and,
+    /// after a short debounce, emits the idle-wait marker that clears the chat
+    /// "working" indicator. Capped at 2s and swallows every failure — a slow or
+    /// unreachable server must never hang the local Codex terminal or break the
+    /// hook's stdout contract. The single deadline covers both /auth/config
+    /// discovery inside CreateAuthenticatedClientAsync and the POST itself.
+    /// </summary>
+    static async Task PostStopBestEffortAsync(string baseUrl, JsonNode node) {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        try {
+            using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, cts.Token);
+            using var content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
+            using var _       = await client.PostAsync($"{baseUrl}/hooks/stop", content, cts.Token);
+        } catch {
+            // Best-effort — the idle marker is nice-to-have; never block the hook.
         }
     }
 
