@@ -520,6 +520,239 @@ public class CursorImportSourceTests {
     }
 
     [Test]
+    public async Task import_session_attaches_repository_from_detected_workspace_repo() {
+        // AI-1152: the import/backfill path must attach a `repository` node to the
+        // synthetic sessionStart so historical Cursor sessions emit RepositoryDetected
+        // server-side and group under their repo (not just "All repos"). Detected from
+        // the workspace folder via the repo detector (git remote parse).
+        using var fx    = new ProjectsDirFixture();
+        var       jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n{}\n");
+
+        var src = new CursorImportSource(
+            fx.ProjectsDir,
+            fx.WorkspaceStorageDir,
+            repoDetector: _ => Task.FromResult<RepositoryPayload?>(
+                new RepositoryPayload {
+                    Owner     = "kurrent-io",
+                    RepoName  = "kcap-server",
+                    Branch    = "main",
+                    RemoteUrl = "git@github.com:kurrent-io/kcap-server.git",
+                }
+            )
+        );
+
+        var posted = new List<(string Path, string Body)>();
+        using var handler = new StubHandler(
+            postCapture: (req, body) => {
+                posted.Add((req.RequestUri!.AbsolutePath, body));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        );
+        using var client = new HttpClient(handler);
+
+        var classification = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.New,
+            Vendor     = "cursor",
+            SourceMeta = new Dictionary<string, object?> {
+                ["TranscriptPath"]  = jsonl,
+                ["WorkspaceFolder"] = "/Users/me/dev/proj",
+            },
+        };
+
+        await src.ImportSessionAsync(classification, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        var startNode = JsonNode.Parse(posted.First(p => p.Path == "/hooks/session-start/cursor").Body)!;
+        var repo      = startNode["repository"];
+        await Assert.That(repo).IsNotNull();
+        await Assert.That(repo!["owner"]!.GetValue<string>()).IsEqualTo("kurrent-io");
+        await Assert.That(repo!["repo_name"]!.GetValue<string>()).IsEqualTo("kcap-server");
+    }
+
+    [Test]
+    public async Task import_session_omits_repository_when_workspace_repo_undetected() {
+        // Fail-open: non-git workspace (detector returns null) → no repository node,
+        // session stays unattributed rather than erroring.
+        using var fx    = new ProjectsDirFixture();
+        var       jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
+
+        var src = new CursorImportSource(
+            fx.ProjectsDir,
+            fx.WorkspaceStorageDir,
+            repoDetector: _ => Task.FromResult<RepositoryPayload?>(null)
+        );
+
+        var posted = new List<(string Path, string Body)>();
+        using var handler = new StubHandler(
+            postCapture: (req, body) => {
+                posted.Add((req.RequestUri!.AbsolutePath, body));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        );
+        using var client = new HttpClient(handler);
+
+        var classification = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.New,
+            Vendor     = "cursor",
+            SourceMeta = new Dictionary<string, object?> {
+                ["TranscriptPath"]  = jsonl,
+                ["WorkspaceFolder"] = "/Users/me/dev/proj",
+            },
+        };
+
+        await src.ImportSessionAsync(classification, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        var startNode = JsonNode.Parse(posted.First(p => p.Path == "/hooks/session-start/cursor").Body)!;
+        await Assert.That(startNode["repository"]).IsNull();
+    }
+
+    // Builds a parent (Task prompt) + child (first user_query == prompt) session pair in the
+    // same workspace and returns their (parentId, childId, discovered, classified).
+    async Task<(string ParentId, string ChildId, IReadOnlyList<ImportCommand.SessionClassification> Classified, CursorImportSource Src)> SetupParentChildAsync(ProjectsDirFixture fx) {
+        const string prompt = "EXPLORE the repo and report back";
+        var childUserText = System.Text.Json.JsonSerializer.Serialize("<user_query>\n" + prompt + "\n</user_query>");
+        var taskPrompt    = System.Text.Json.JsonSerializer.Serialize(prompt);
+
+        fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111",
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"go\"}]}}\n" +
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Task\",\"input\":{\"description\":\"d\",\"prompt\":" + taskPrompt + ",\"subagent_type\":\"generalPurpose\"}}]}}\n");
+        fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222",
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":" + childUserText + "}]}}\n" +
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+        using var getHandler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
+        using var getClient  = new HttpClient(getHandler);
+        var discovered = await src.DiscoverAsync(Filters(), CancellationToken.None);
+        var classified = await src.ClassifyAsync(discovered, Ctx(getClient, minLines: 1), CancellationToken.None);
+        return ("11111111111111111111111111111111", "22222222222222222222222222222222", classified, src);
+    }
+
+    [Test]
+    public async Task parent_import_nests_subagent_child_before_its_own_session_end() {
+        // AI-1153: the PARENT's import ingests its subagent child under the parent's
+        // AgentSubsession stream (subagent-start + transcript-with-agent_id + subagent-stop),
+        // and — critically — BEFORE the parent's own session-end, so a late subagent-start
+        // can't reactivate the ended parent (review finding on ordering).
+        using var fx = new ProjectsDirFixture();
+        var (parentId, childId, classified, src) = await SetupParentChildAsync(fx);
+
+        var parentClass = classified.Single(c => c.SessionId == parentId);
+        // Parent classification carries its children; parent is not itself a child.
+        await Assert.That(parentClass.SourceMeta!.ContainsKey("SubagentChildren")).IsTrue();
+        await Assert.That(parentClass.SourceMeta!.ContainsKey("IsSubagentChild")).IsFalse();
+
+        var posted = new List<string>();
+        var bodies = new List<(string Path, string Body)>();
+        using var postHandler = new StubHandler(
+            getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound), // subsession watermark → New
+            postCapture: (req, body) => { posted.Add(req.RequestUri!.AbsolutePath); bodies.Add((req.RequestUri!.AbsolutePath, body)); return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var postClient = new HttpClient(postHandler);
+
+        var outcome = await src.ImportSessionAsync(parentClass, new ImportContext(postClient, "http://localhost", ForcePrivate: false), CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
+
+        // Parent lifecycle + the child's subagent lifecycle are all present.
+        await Assert.That(posted).Contains("/hooks/session-start/cursor");
+        await Assert.That(posted).Contains("/hooks/session-end/cursor");
+        await Assert.That(posted).Contains("/hooks/subagent-start");
+        await Assert.That(posted).Contains("/hooks/subagent-stop");
+
+        // Ordering guard (the review finding): subagent-start/-stop must precede the parent's session-end.
+        var endIdx        = posted.IndexOf("/hooks/session-end/cursor");
+        var subStartIdx   = posted.IndexOf("/hooks/subagent-start");
+        var subStopIdx    = posted.LastIndexOf("/hooks/subagent-stop");
+        await Assert.That(subStartIdx >= 0 && subStartIdx < endIdx).IsTrue();
+        await Assert.That(subStopIdx  >= 0 && subStopIdx  < endIdx).IsTrue();
+
+        var startNode = JsonNode.Parse(bodies.First(b => b.Path == "/hooks/subagent-start").Body)!;
+        await Assert.That(startNode["session_id"]!.GetValue<string>()).IsEqualTo(parentId);
+        await Assert.That(startNode["agent_id"]!.GetValue<string>()).IsEqualTo(childId);
+        await Assert.That(startNode["agent_type"]!.GetValue<string>()).IsEqualTo("generalPurpose");
+        // HookBase-required fields (server binding rejects the hook without them) + fail-closed.
+        await Assert.That(startNode["cwd"]).IsNotNull();
+        await Assert.That(startNode["transcript_path"]).IsNotNull();
+        await Assert.That(startNode["strict"]!.GetValue<bool>()).IsTrue();
+
+        var subTranscript = bodies.First(b => b.Path == "/hooks/transcript" && JsonNode.Parse(b.Body)!["agent_id"] is not null);
+        var tNode = JsonNode.Parse(subTranscript.Body)!;
+        await Assert.That(tNode["session_id"]!.GetValue<string>()).IsEqualTo(parentId);
+        await Assert.That(tNode["agent_id"]!.GetValue<string>()).IsEqualTo(childId);
+        // Strict so server-side normalization failures fail the import, not just HTTP errors.
+        await Assert.That(tNode["strict"]!.GetValue<bool>()).IsTrue();
+
+        // Full SubagentStopHook + HookBase shape (review finding): the server binds all fields.
+        var stopNode = JsonNode.Parse(bodies.First(b => b.Path == "/hooks/subagent-stop").Body)!;
+        await Assert.That(stopNode["session_id"]!.GetValue<string>()).IsEqualTo(parentId);
+        await Assert.That(stopNode["agent_id"]!.GetValue<string>()).IsEqualTo(childId);
+        await Assert.That(stopNode["cwd"]).IsNotNull();
+        await Assert.That(stopNode["transcript_path"]).IsNotNull();
+        await Assert.That(stopNode["stop_hook_active"]).IsNotNull();
+        await Assert.That(stopNode["agent_transcript_path"]!.GetValue<string>().EndsWith(".jsonl")).IsTrue();
+        await Assert.That(stopNode["last_assistant_message"]).IsNotNull();
+        await Assert.That(stopNode["strict"]!.GetValue<bool>()).IsTrue();
+    }
+
+    [Test]
+    public async Task parent_import_fails_when_a_subagent_transcript_post_is_rejected() {
+        // Review finding (fail-closed): a rejected child transcript POST must abort the parent
+        // import (return Failed) BEFORE the parent session-end, so a re-run repairs it — rather
+        // than posting subagent-stop + session-end over a child whose transcript wasn't accepted.
+        using var fx = new ProjectsDirFixture();
+        var (parentId, childId, classified, src) = await SetupParentChildAsync(fx);
+        var parentClass = classified.Single(c => c.SessionId == parentId);
+
+        var posted = new List<string>();
+        using var handler = new StubHandler(
+            getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+            postCapture: (req, body) => {
+                var path = req.RequestUri!.AbsolutePath;
+                posted.Add(path);
+                // Reject only the subagent transcript (agent_id present).
+                if (path == "/hooks/transcript" && JsonNode.Parse(body)!["agent_id"] is not null)
+                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            });
+        using var client = new HttpClient(handler);
+
+        var outcome = await src.ImportSessionAsync(parentClass, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+        // The parent's session-end must NOT be posted after a failed child transcript.
+        await Assert.That(posted).DoesNotContain("/hooks/session-end/cursor");
+    }
+
+    [Test]
+    public async Task subagent_child_import_is_a_noop_handled_by_the_parent() {
+        // A child's own routed import must no-op (Skipped) — the parent imports it. Otherwise
+        // the child would create a standalone top-level session AND post subagent lifecycle
+        // out of order with the parent.
+        using var fx = new ProjectsDirFixture();
+        var (parentId, childId, classified, src) = await SetupParentChildAsync(fx);
+
+        var childClass = classified.Single(c => c.SessionId == childId);
+        await Assert.That(childClass.SourceMeta!.ContainsKey("IsSubagentChild")).IsTrue();
+
+        var posted = new List<string>();
+        using var postHandler = new StubHandler(postCapture: (req, body) => { posted.Add(req.RequestUri!.AbsolutePath); return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var postClient = new HttpClient(postHandler);
+
+        var outcome = await src.ImportSessionAsync(childClass, new ImportContext(postClient, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Skipped);
+        await Assert.That(posted.Count).IsEqualTo(0); // nothing posted — the parent owns this child
+    }
+
+    [Test]
     public async Task import_session_omits_workspace_roots_when_cwd_unresolved() {
         using var fx    = new ProjectsDirFixture();
         var       jsonl = fx.AddSession("unknown-workspace", "11111111-1111-1111-1111-111111111111", "{}\n");

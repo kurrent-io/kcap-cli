@@ -535,7 +535,10 @@ static class SessionImporter {
             LineNumbers = [.. lineNumbers],
             // Default vendor "claude" stays absent on the wire to match older servers; the
             // explicit "codex" tag is what flips the server to CodexNormalizer.
-            Vendor = vendor == "claude" ? null : vendor
+            Vendor = vendor == "claude" ? null : vendor,
+            // Fail-closed callers (failOnError) also want server-side normalization failures to
+            // surface as non-2xx (server only does so when Strict), not just transport/HTTP errors.
+            Strict = failOnError
         };
 
         var       json    = JsonSerializer.Serialize(batch, CapacitorJsonContext.Default.TranscriptBatch);

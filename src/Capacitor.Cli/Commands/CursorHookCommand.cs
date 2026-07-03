@@ -111,6 +111,28 @@ public static class CursorHookCommand {
 
             if (sessionId is not null && DisabledSessions.IsDisabled(sessionId)) return 0;
 
+            // AI-1152: attach a `repository` node on sessionStart so the session groups
+            // under its repo in the sidebar. Cursor payloads carry `workspace_roots`
+            // rather than `cwd`, so the generic EnrichWithRepositoryInfo (which reads
+            // `cwd`) can't be used — detect from workspace_roots[0] instead. Bounded by
+            // the remaining dispatcher budget; fail-open (git detection is cached).
+            if (eventName == "sessionStart") {
+                // Safe extract: workspace_roots[0] may be absent or a non-string; GetValue<string>
+                // would throw and (via the outer catch) drop the whole sessionStart hook.
+                string? workspaceRoot = null;
+                if (node["workspace_roots"] is JsonArray roots && roots.Count > 0
+                 && roots[0] is JsonValue wv && wv.TryGetValue<string>(out var wr))
+                    workspaceRoot = wr;
+                if (!string.IsNullOrEmpty(workspaceRoot)) {
+                    var remaining = budgetTotal - sw.Elapsed;
+                    if (remaining > TimeSpan.Zero) {
+                        node = JsonNode.Parse(
+                            await RepositoryDetection.EnrichWithRepositoryInfoFromCwd(node.ToJsonString(), workspaceRoot, remaining)
+                        ) ?? node;
+                    }
+                }
+            }
+
             var normalized = node.ToJsonString();
 
             if (sessionId is not null) {
