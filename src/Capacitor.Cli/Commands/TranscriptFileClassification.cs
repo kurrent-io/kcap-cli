@@ -193,7 +193,8 @@ internal static class TranscriptFileClassification {
 
             if (cwd is not null) {
                 if (excludedRepos is { Length: > 0 }) {
-                    var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
+                    // Classification only needs owner/repo for the exclusion key — skip PR detection.
+                    var repo = await RepositoryDetection.DetectRepositoryAsync(cwd, detectPullRequest: false);
 
                     if (repo?.Owner is not null && repo.RepoName is not null) {
                         var key = $"{repo.Owner}/{repo.RepoName}";

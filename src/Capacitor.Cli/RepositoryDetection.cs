@@ -113,8 +113,15 @@ static class RepositoryDetection {
      && a.UserName  == b.UserName
      && a.UserEmail == b.UserEmail;
 
-    public static async Task<RepositoryPayload?> DetectRepositoryAsync(string cwd, TimeSpan? budget = null) {
+    // detectPullRequest=false skips the live PR/MR provider detection (the `gh pr view` / `glab api`
+    // round-trip) while still resolving base repo info (owner/repo/user/branch/host). Bulk import
+    // passes false: it never emits PR fields, so that per-cwd round-trip is pure wasted latency
+    // (AI-1122). `run` is an injectable command runner (defaults to the real process spawner) so the
+    // git/provider spawns are unit-testable.
+    public static async Task<RepositoryPayload?> DetectRepositoryAsync(
+            string cwd, TimeSpan? budget = null, bool detectPullRequest = true, CommandRunner? run = null) {
         if (budget is { } b0 && b0 <= TimeSpan.Zero) return null;
+        run ??= DefaultRunner;
         try {
             // Bound the git/gh probes by the remaining hook budget so a slow repo never
             // overruns the deadline. When no budget is set, keep the historical 5s/2s caps.
@@ -129,7 +136,7 @@ static class RepositoryDetection {
             string? userName, userEmail, remoteUrl, owner, repoName, branch, host;
 
             // Always detect branch fresh — it changes frequently during a session
-            var branchTask = RunCommandAsync("git", "branch --show-current", cwd, gitCap);
+            var branchTask = run("git", "branch --show-current", cwd, gitCap);
 
             if (cache is not null) {
                 userName  = cache.UserName;
@@ -141,9 +148,9 @@ static class RepositoryDetection {
                 branch    = await branchTask;
             } else {
                 // Run git commands in parallel
-                var userNameTask  = RunCommandAsync("git", "config user.name", cwd, gitCap);
-                var userEmailTask = RunCommandAsync("git", "config user.email", cwd, gitCap);
-                var remoteUrlTask = RunCommandAsync("git", "remote get-url origin", cwd, gitCap);
+                var userNameTask  = run("git", "config user.name", cwd, gitCap);
+                var userEmailTask = run("git", "config user.email", cwd, gitCap);
+                var remoteUrlTask = run("git", "remote get-url origin", cwd, gitCap);
 
                 await Task.WhenAll(userNameTask, userEmailTask, remoteUrlTask, branchTask);
 
@@ -191,16 +198,16 @@ static class RepositoryDetection {
             // (only ClaudeHookCommand does), else the historical 2s cap. Covers probe + detector.
             var providerCap = ghCap;
 
-            if (providerCap > TimeSpan.Zero && host is not null) {
+            if (detectPullRequest && providerCap > TimeSpan.Zero && host is not null) {
                 var provSw = Stopwatch.StartNew();
-                var kind   = await GitProviderRouter.ResolveAsync(host, cwd, providerCap, DefaultRunner);
+                var kind   = await GitProviderRouter.ResolveAsync(host, cwd, providerCap, run);
                 var detectCap = providerCap - provSw.Elapsed; // combined ceiling: probe + detector
 
                 if (detectCap > TimeSpan.Zero) {
                     var pr = kind switch {
-                        GitProviderKind.GitHub => await GitHubPrDetector.DetectAsync(cwd, detectCap, DefaultRunner),
+                        GitProviderKind.GitHub => await GitHubPrDetector.DetectAsync(cwd, detectCap, run),
                         GitProviderKind.GitLab when owner is not null && repoName is not null
-                            => await GitLabPrDetector.DetectAsync(host, owner, repoName, branch, cwd, detectCap, DefaultRunner),
+                            => await GitLabPrDetector.DetectAsync(host, owner, repoName, branch, cwd, detectCap, run),
                         _ => null
                     };
 
