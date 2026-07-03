@@ -49,6 +49,10 @@ The CLI is compiled with NativeAOT — fast startup, no runtime dependency.
 > works regardless of the install-script gate. (You can also re-run `kcap plugin
 > install [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--skills] --if-installed` manually.)
 
+> **Internal-tenant testers:** opt into pre-release builds with `kcap update
+> --beta`; everyone else should stay on the default stable channel. See
+> [`kcap update`](#other-commands) below.
+
 ### 2. Run setup
 
 ```bash
@@ -785,15 +789,26 @@ kcap whoami         # show current authenticated user
 kcap login          # authenticate via OAuth (browser flow by default)
 kcap login --device # force device-code flow (use in SSH / headless envs)
 kcap update         # upgrade the CLI and refresh agent plugins (npm-global installs)
+kcap update --beta  # switch to the beta channel and update to the latest beta
+kcap update --stable # switch back to the stable channel (the default)
 kcap logout         # delete stored tokens
 ```
 
 > `kcap update` is the one-step upgrade for npm-global installs: it checks the
-> registry, runs `npm install -g @kurrent/kcap@latest`, then refreshes your
+> registry, runs `npm install -g @kurrent/kcap@<tag>`, then refreshes your
 > opted-in agent plugins — so it picks up new skills/hooks even when your package
 > manager blocks install scripts. It exits early if you're already up to date,
 > and tells you what to run instead for non-npm installs (e.g. Homebrew). Use
 > `kcap update --check` for a machine-readable `{current, latest, newer}` probe.
+>
+> **Beta channel (opt-in):** `kcap update --beta` switches the active profile to
+> the beta release channel (npm dist-tag `beta`) and updates to the latest beta
+> immediately. The choice is **persisted per profile**, so subsequent `kcap
+> update` runs — and the passive stderr "update available" hint — keep tracking
+> beta until you run `kcap update --stable`. A fresh config defaults to the
+> **stable** channel (npm dist-tag `latest`); beta is strictly opt-in. Beta
+> releases correspond to server versions rolled out to internal tenants first,
+> so most users should stay on stable.
 
 The v1 config format stored `server_url` as a bare host name without a
 scheme. If `kcap` crashes with `An invalid request URI was provided`

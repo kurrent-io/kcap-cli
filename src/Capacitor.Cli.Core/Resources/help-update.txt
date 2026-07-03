@@ -1,14 +1,23 @@
 kcap update — Upgrade the CLI and refresh agent plugins
 
-Usage: kcap update [--check]
+Usage: kcap update [--check] [--beta | --stable]
 
-For npm-global installs, upgrades to the latest published version
-(npm install -g @kurrent/kcap@latest) and then refreshes your opted-in
-agent plugins (skills, Codex/Cursor/Copilot hooks, Claude plugin). This
-works even when your package manager blocks install scripts. Exits early
-if already up to date. For non-npm installs (e.g. Homebrew), prints the
-command to run instead.
+For npm-global installs, upgrades to the latest published version on your
+active release channel (npm install -g @kurrent/kcap@<tag>) and then
+refreshes your opted-in agent plugins (skills, Codex/Cursor/Copilot hooks,
+Claude plugin). This works even when your package manager blocks install
+scripts. Exits early if already up to date. For non-npm installs (e.g.
+Homebrew), prints the command to run instead.
 
 Options:
-  --check   Print a machine-readable {current, latest, newer} JSON line
-            and exit without upgrading.
+  --check    Print a machine-readable {current, latest, newer} JSON line
+             and exit without upgrading.
+  --beta     Switch to the beta release channel and update to the latest
+             beta. The choice is persisted for the active profile, so
+             future kcap update runs (and the passive "update available"
+             hint) keep tracking beta until you pass --stable.
+  --stable   Switch back to the stable channel. This is the default for
+             a fresh profile.
+
+Beta releases correspond to server versions rolled out to internal
+tenants first. Most users should stay on the default stable channel.
