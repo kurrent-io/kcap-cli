@@ -630,13 +630,17 @@ static partial class GitUrlParser {
             : (null, null);
     }
 
-    [GeneratedRegex(@"https?://[^/]+/(?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$")]
+    // owner is greedy (`.+`) so a nested GitLab namespace (group/subgroup/...) is
+    // captured whole, with repo as the final path segment. AI-1121 / §6b.
+    [GeneratedRegex(@"https?://[^/]+/(?<owner>.+)/(?<repo>[^/]+?)(?:\.git)?$")]
     internal static partial Regex HttpsRegex();
 
-    [GeneratedRegex(@"git@[\w.-]+:(?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$")]
+    // Anchored: a greedy multi-segment owner would otherwise let this match the
+    // "git@host:port" inside an ssh:// URL and steal it from SshProtoRegex.
+    [GeneratedRegex(@"^git@[\w.-]+:(?<owner>.+)/(?<repo>[^/]+?)(?:\.git)?$")]
     internal static partial Regex SshRegex();
 
-    [GeneratedRegex(@"ssh://(?:[^@/]+@)?[^/]+/(?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$")]
+    [GeneratedRegex(@"ssh://(?:[^@/]+@)?[^/]+/(?<owner>.+)/(?<repo>[^/]+?)(?:\.git)?$")]
     internal static partial Regex SshProtoRegex();
 }
 
