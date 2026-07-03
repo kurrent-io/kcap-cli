@@ -59,4 +59,18 @@ public class AntigravityPathsTests {
             if (Directory.Exists(home)) Directory.Delete(home, recursive: true);
         }
     }
+
+    // AI-1158 review (C2): the watcher sees a dashless session id but must resolve the
+    // real (dashed) conversation's sibling gen_metadata db from the transcript path.
+    [Test]
+    public async Task ConversationDbFromTranscript_resolves_the_sibling_db() {
+        var transcript = AntigravityPaths.TranscriptFullPath("abc-123-def", home: "/h", geminiCliHome: P);
+        await Assert.That(AntigravityPaths.ConversationDbFromTranscript(transcript))
+            .IsEqualTo(AntigravityPaths.ConversationDb("abc-123-def", home: "/h", geminiCliHome: P));
+    }
+
+    [Test]
+    public async Task ConversationDbFromTranscript_returns_null_for_an_unexpected_path() {
+        await Assert.That(AntigravityPaths.ConversationDbFromTranscript("foo.jsonl")).IsNull();
+    }
 }

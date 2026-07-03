@@ -49,8 +49,12 @@ public class AntigravitySessionStartTests : IDisposable {
 
     [Test, NotInParallel("AppConfig_FileState")]
     public async Task PreInvocation_posts_session_start_with_profile_visibility() {
-        const string convId = "agtestsess1";
-        NeutralizeWatcherSpawn(convId);
+        // Antigravity conversation ids are dashed UUIDs; the CLI must canonicalize to the
+        // dashless form for session_id + the watcher key + disable (matching `kcap watch`),
+        // so everything resolves to ONE stream.
+        const string convId  = "ag-test-sess-0001";
+        const string dashless = "agtestsess0001";
+        NeutralizeWatcherSpawn(dashless);
 
         await AppConfig.SaveProfileConfig(new ProfileConfig {
             ActiveProfile = "work",
@@ -83,7 +87,8 @@ public class AntigravitySessionStartTests : IDisposable {
         await Assert.That(requests.Count).IsEqualTo(1);
 
         var body = JsonNode.Parse(requests[0].RequestMessage.Body!)!;
-        await Assert.That(body["session_id"]?.GetValue<string>()).IsEqualTo(convId);
+        // session_id is the DASHLESS canonical form, not the raw dashed conversationId.
+        await Assert.That(body["session_id"]?.GetValue<string>()).IsEqualTo(dashless);
         await Assert.That(body["hook_event_name"]?.GetValue<string>()).IsEqualTo("sessionStart");
         await Assert.That(body["antigravity_version"]?.GetValue<string>()).IsEqualTo("2.2.1");
         await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("private");

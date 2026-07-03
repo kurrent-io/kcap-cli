@@ -41,6 +41,29 @@ public static class AntigravityPaths {
     public static string ConversationDb(string conversationId, string? home = null, string? geminiCliHome = null)
         => Path.Combine(Root(home, geminiCliHome), "conversations", $"{conversationId}.db");
 
+    /// <summary>
+    /// The gen_metadata db that is a sibling of a conversation's <c>transcript_full.jsonl</c>.
+    /// Derives the real (dashed) conversation id from the transcript path — the brain-dir name
+    /// — so callers holding only the transcript path (e.g. the watcher, which sees a canonical
+    /// dashless session id) still resolve the correct <c>conversations/&lt;id&gt;.db</c>. Returns
+    /// null when the path doesn't match the expected
+    /// <c>&lt;root&gt;/brain/&lt;id&gt;/.system_generated/logs/transcript_full.jsonl</c> shape.
+    /// </summary>
+    public static string? ConversationDbFromTranscript(string transcriptPath) {
+        // …/brain/<id>/.system_generated/logs/transcript_full.jsonl
+        var logsDir = Path.GetDirectoryName(transcriptPath);                 // …/logs
+        var sysGen  = Path.GetDirectoryName(logsDir);                        // …/.system_generated
+        var convDir = Path.GetDirectoryName(sysGen);                         // …/<id>
+        var brain   = Path.GetDirectoryName(convDir);                        // …/brain
+        var root    = Path.GetDirectoryName(brain);                          // …/antigravity
+        if (convDir is null || root is null) return null;
+
+        var convId = Path.GetFileName(convDir);
+        if (string.IsNullOrEmpty(convId)) return null;
+
+        return Path.Combine(root, "conversations", $"{convId}.db");
+    }
+
     /// <summary>Global hooks config the kcap plugin installs into: <c>&lt;cli-root&gt;/hooks.json</c>.</summary>
     public static string GlobalHooksJson(string? home = null, string? geminiCliHome = null)
         => Path.Combine(CliRoot(home, geminiCliHome), "hooks.json");

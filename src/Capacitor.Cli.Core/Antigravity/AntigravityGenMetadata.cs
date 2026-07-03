@@ -93,10 +93,10 @@ public static class AntigravityGenMetadata {
             if (!TryReadTag(buf, ref i, out var fn, out var wt)) break;
             if (wt == 2) {
                 if (!TryReadVarint(buf, ref i, out var len)) break;
-                var end = i + (int)len;
-                if (end < i || end > buf.Length) break;
-                if (fn == field) { value = buf.Slice(i, (int)len); return true; }
-                i = end;
+                if (len > (ulong)(buf.Length - i)) break; // length past the buffer — malformed
+                var take = (int)len;
+                if (fn == field) { value = buf.Slice(i, take); return true; }
+                i += take;
             } else if (!SkipScalar(buf, ref i, wt)) {
                 break;
             }
@@ -111,12 +111,13 @@ public static class AntigravityGenMetadata {
             if (!TryReadTag(buf, ref i, out var fn, out var wt)) break;
             if (wt == 0) {
                 if (!TryReadVarint(buf, ref i, out var v)) break;
-                if (fn == field) return (long)v;
+                // A token count above long.MaxValue is malformed — return null (absent) rather
+                // than an unchecked ulong→long cast that would surface as a negative count.
+                if (fn == field) return v > long.MaxValue ? null : (long)v;
             } else if (wt == 2) {
                 if (!TryReadVarint(buf, ref i, out var len)) break;
-                var end = i + (int)len;
-                if (end < i || end > buf.Length) break;
-                i = end;
+                if (len > (ulong)(buf.Length - i)) break; // length past the buffer — malformed
+                i += (int)len;
             } else if (!SkipScalar(buf, ref i, wt)) {
                 break;
             }

@@ -158,6 +158,13 @@ static partial class WatchCommand {
 
         var state = new WatchState();
         state.LastActivityAt = DateTimeOffset.UtcNow;
+        // Antigravity posts /hooks/session-start BEFORE the watcher spawns, so the session is
+        // already committed server-side — the below-threshold buffering (which exists to avoid
+        // junk sessions the server hasn't seen) doesn't apply. Treat it as past-threshold from
+        // the start so short conversations stream live and still idle-end + post session-end
+        // (otherwise a <10-line conversation would never reach threshold, never idle-end, and
+        // leave the session Active with the watcher lingering — the IDE process outlives it).
+        if (vendor == "antigravity") state.ThresholdReached = true;
         // Antigravity is a GUI app like the Codex desktop: its shared process never
         // exits per-conversation, so (like Codex) the idle timeout — not a parent-exit
         // watchdog — is the per-conversation session-end path. Its own knob so tenants
@@ -791,12 +798,18 @@ static partial class WatchCommand {
 
             var linesRead = lineIndex;
 
-            // Antigravity keeps per-generation tokens/model in the sibling conversation
-            // .db, not the JSONL; poll for newly-appended gen_metadata rows and stream them
-            // as synthetic USAGE lines (server → AntigravityUsageBackfilledEvent). agentId
-            // is the child conversation id for a subagent watcher, else the session id.
-            if (vendor == "antigravity") {
-                AppendAntigravityUsageLines(state, newLines, newLineNumbers, agentId ?? sessionId);
+            // Antigravity keeps per-generation tokens/model in the sibling conversation .db
+            // (derived from the transcript path — the session id here is the canonical dashless
+            // form, but the transcript path carries the real conversation id), not the JSONL;
+            // poll for newly-appended gen_metadata rows and stream them as synthetic USAGE
+            // lines (server → AntigravityUsageBackfilledEvent). Only outside the below-threshold
+            // buffering phase (a session watcher that hasn't reached threshold buffers without
+            // sending — injecting there would either dupe on re-read or be lost on a flush
+            // failure); subagent watchers (agentId != null) never buffer. The gen watermark
+            // advances only after a successful send (below), so a failed batch re-reads the rows.
+            var antigravityGenMax = -1L;
+            if (vendor == "antigravity" && (agentId is not null || state.ThresholdReached)) {
+                antigravityGenMax = AppendAntigravityUsageLines(state, newLines, newLineNumbers, transcriptPath);
             }
 
             if (newLines.Count > 0) {
@@ -985,6 +998,12 @@ static partial class WatchCommand {
                 // KurrentDB event IDs are deterministic (from transcript UUIDs),
                 // so re-sending is idempotent.
                 state.LinesProcessed = linesRead;
+
+                // Commit the Antigravity gen_metadata watermark ONLY now (after the batch
+                // carrying its USAGE lines landed); a failed send above leaves it unchanged
+                // so the rows re-read next drain instead of being skipped forever.
+                if (antigravityGenMax > state.LastAntigravityGenIdx)
+                    state.LastAntigravityGenIdx = antigravityGenMax;
 
                 if (repoToSend is not null) {
                     state.LastSentRepository = repoToSend;
@@ -1257,20 +1276,29 @@ static partial class WatchCommand {
     // hint — a stable, non-colliding value keeps re-sends idempotent.
     const long AntigravityUsageLineBase = 1_000_000_000L;
 
-    static void AppendAntigravityUsageLines(WatchState state, List<string> newLines, List<int> newLineNumbers, string conversationId) {
+    /// <summary>
+    /// Appends synthetic USAGE lines for gen_metadata rows past the committed watermark, and
+    /// returns the max row idx staged (-1 if none). It does NOT advance the watermark — the
+    /// caller commits it only after the batch send succeeds, so a failed send re-reads the
+    /// rows next drain. The db is the sibling of the transcript (its path carries the real
+    /// conversation id, even when the session id is the canonical dashless form).
+    /// </summary>
+    static long AppendAntigravityUsageLines(WatchState state, List<string> newLines, List<int> newLineNumbers, string transcriptPath) {
+        var maxIdx = -1L;
         try {
-            var dbPath = AntigravityPaths.ConversationDb(conversationId);
-            var rows   = AntigravityGenMetadataDb.ReadUsageLines(dbPath, state.LastAntigravityGenIdx);
+            if (AntigravityPaths.ConversationDbFromTranscript(transcriptPath) is not { } dbPath) return -1L;
+            var rows = AntigravityGenMetadataDb.ReadUsageLines(dbPath, state.LastAntigravityGenIdx);
 
             foreach (var (idx, line) in rows) {
                 newLines.Add(line);
                 newLineNumbers.Add((int)(AntigravityUsageLineBase + idx));
-                if (idx > state.LastAntigravityGenIdx) state.LastAntigravityGenIdx = idx;
+                if (idx > maxIdx) maxIdx = idx;
             }
         } catch (Exception ex) {
             // Cost is always best-effort (AI-728) — never let a db read break the drain.
             Log($"Antigravity usage poll failed: {ex.Message}");
         }
+        return maxIdx;
     }
 
     // ── Kiro extractors (AI-888) ───────────────────────────────────────────

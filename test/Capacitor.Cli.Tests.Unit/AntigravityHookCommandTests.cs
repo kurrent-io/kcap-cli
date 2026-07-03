@@ -25,10 +25,21 @@ public class AntigravityHookCommandTests {
     }
 
     [Test]
-    public async Task Missing_event_returns_error_without_touching_network() {
+    public async Task Missing_event_exits_zero_without_touching_network() {
+        // Control hooks must always exit 0 so Antigravity doesn't treat the hook as failed.
         var rc = await AntigravityHookCommand.Handle(
             "http://127.0.0.1:0", ["hook", "--antigravity"], new StringReader(""));
-        await Assert.That(rc).IsEqualTo(1);
+        await Assert.That(rc).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task PreInvocation_with_non_string_fields_fails_open() {
+        // conversationId as a non-string shape must not throw (GetValue<string> would);
+        // it fails open to a no-op.
+        var rc = await AntigravityHookCommand.Handle(
+            "http://127.0.0.1:0", ["hook", "--antigravity", "PreInvocation"],
+            new StringReader("""{"conversationId":123,"transcriptPath":{"nested":true}}"""));
+        await Assert.That(rc).IsEqualTo(0);
     }
 
     [Test]

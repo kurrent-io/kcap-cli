@@ -70,6 +70,29 @@ public class AntigravityGenMetadataTests {
         await Assert.That(AntigravityGenMetadata.TryDecode(Blob(0, 0, null, "m", null))).IsNull();
     }
 
+    // AI-1158 review (C4): an over-large varint must not surface as a negative token count
+    // via an unchecked ulong→long cast.
+    [Test]
+    public async Task Overlarge_token_varint_does_not_produce_a_negative_count() {
+        // field 2 (input) = a varint above long.MaxValue → treated as absent (0), never negative.
+        var counts     = Concat(VarintRaw(2, ulong.MaxValue), Varint(3, 246));
+        var usageParts = Concat(Ld(4, counts), Ld(19, "m"u8.ToArray()));
+        var blob       = Ld(1, usageParts);
+
+        var row = AntigravityGenMetadata.TryDecode(blob);
+        // output (246) is still valid so the row decodes; input is 0 (rejected), not negative.
+        await Assert.That(row).IsNotNull();
+        await Assert.That(row!.Value.InputTokens).IsGreaterThanOrEqualTo(0L);
+        await Assert.That(row.Value.OutputTokens).IsEqualTo(246L);
+    }
+
+    static byte[] VarintRaw(int field, ulong v) {
+        var b = new List<byte>();
+        WriteVarint(b, (ulong)(field << 3)); // wiretype 0
+        WriteVarint(b, v);
+        return b.ToArray();
+    }
+
     [Test]
     public async Task Usage_line_matches_the_server_contract_shape() {
         var row  = new AntigravityUsageRow("gemini-default", 19360, 246, 16275);
