@@ -356,7 +356,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 Cols: HostedPtyCols,
                 Rows: HostedPtyRows,
                 ServerUrl: _config.ServerUrl,
-                DaemonBridgeUrl: _permissionBridge.BaseUrl
+                DaemonBridgeUrl: _permissionBridge.BaseUrl,
+                CapacitorPath: _config.CapacitorPath
             );
 
             HostedRuntimeStart start;

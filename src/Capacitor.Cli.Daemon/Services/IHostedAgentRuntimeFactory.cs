@@ -49,6 +49,15 @@ internal readonly record struct HostedRuntimeStart(IHostedAgentRuntime Runtime, 
 /// daemon-local state (worktree, review-launch info, permission-bridge URL) after the pre-flight
 /// guards (vendor known, unattended support, repo allowed, worktree created) have already passed.
 /// </summary>
+/// <param name="CapacitorPath">
+/// Absolute path to the <c>kcap</c> binary (<c>DaemonConfig.CapacitorPath</c>) — passed to
+/// <see cref="ReviewLaunchBuilder.BuildAsync"/> as the review-launch MCP server command. This is
+/// deliberately NOT the vendor CLI path (<c>launcher.CliPath</c>): the review agent must run
+/// <c>kcap mcp review</c>, since inside the daemon the running process is <c>kcap-daemon</c> with
+/// no <c>mcp review</c> subcommand of its own, and <c>claude</c>/<c>codex</c> have no such
+/// subcommand at all (PR #244 review, Fix A — a post-refactor regression had passed
+/// <c>launcher.CliPath</c> here instead).
+/// </param>
 internal sealed record RuntimeStartContext(
         string            AgentId,
         string            Vendor,
@@ -64,5 +73,6 @@ internal sealed record RuntimeStartContext(
         ushort            Cols,
         ushort            Rows,
         string?           ServerUrl,
-        string?           DaemonBridgeUrl
+        string?           DaemonBridgeUrl,
+        string            CapacitorPath
     );
