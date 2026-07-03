@@ -39,6 +39,15 @@ function resolveInstallSpec(info) {
   return `@kurrent/kcap@${tag}`;
 }
 
+// Builds the arg list for the `kcap update --check` probe, forwarding only
+// the channel-switch flags (`--beta`/`--stable`) from the user's `kcap update`
+// invocation. Nothing else is forwarded — the probe already supplies `--check`
+// and `--no-update-check` itself, so this is a controlled call.
+function probeArgs(updArgs) {
+  const channelFlags = (updArgs || []).filter((a) => a === "--beta" || a === "--stable");
+  return ["update", "--check", "--no-update-check", ...channelFlags];
+}
+
 // Everything below actually DOES something (resolves the binary, execs it,
 // runs the update flow), so it's guarded to only run when this file is
 // executed directly — not when `require()`d (e.g. by the test).
@@ -89,7 +98,7 @@ if (require.main === module) {
     const checkOnly = updArgs.includes("--check");
     const wantsHelp = updArgs.some((a) => a === "--help" || a === "-h");
     if (process.argv[2] === "update" && !checkOnly && !wantsHelp) {
-      runUpdate(binaryPath); // never returns
+      runUpdate(binaryPath, updArgs); // never returns
     }
   }
 
@@ -110,7 +119,7 @@ if (require.main === module) {
 
 // Performs `kcap update`: upgrade the global npm package, then refresh
 // user-scope skills/hooks. Always exits the process; never returns.
-function runUpdate(binaryPath) {
+function runUpdate(binaryPath, updArgs) {
   // On Windows, `npm` is a .cmd shim; Node refuses to spawn .cmd/.bat directly
   // (2024 command-injection fix), so route npm through a shell there. Our npm
   // args are static, so shell use is safe.
@@ -145,7 +154,7 @@ function runUpdate(binaryPath) {
   // background nudge from racing onto stderr.
   let info = null;
   try {
-    const out  = execFileSync(binaryPath, ["update", "--check", "--no-update-check"], { encoding: "utf8" });
+    const out  = execFileSync(binaryPath, probeArgs(updArgs), { encoding: "utf8" });
     // The probe prints one JSON line; take the last {...} line in case anything
     // else (e.g. a git-remote warning) landed on stdout first.
     const line = out.split(/\r?\n/).reverse().find((l) => l.trim().startsWith("{"));
@@ -229,4 +238,4 @@ function runUpdate(binaryPath) {
   process.exit(0);
 }
 
-module.exports = { resolveInstallSpec };
+module.exports = { resolveInstallSpec, probeArgs };
