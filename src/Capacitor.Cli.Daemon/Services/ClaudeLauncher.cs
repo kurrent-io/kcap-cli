@@ -291,6 +291,17 @@ internal sealed partial class ClaudeLauncher(
         }
     }
 
+    /// <summary>
+    /// Matches Claude Code's <c>projects[]</c> key normalisation: absolute + collapsed, and
+    /// on Windows with forward slashes (Claude runs <c>path.normalize(p).replaceAll("\\","/")</c>).
+    /// Writing the raw Windows path instead makes our pre-trust write invisible to Claude.
+    /// </summary>
+    internal static string NormalizeClaudeProjectKey(string path) {
+        var full = Path.GetFullPath(path);
+
+        return OperatingSystem.IsWindows() ? full.Replace('\\', '/') : full;
+    }
+
     static void TrustWorktreeInClaudeConfig(string worktreePath) {
         // Serialize against concurrent agent launches. ~/.claude.json is shared
         // across the whole user and {worktree}/.claude/settings.local.json is
@@ -312,9 +323,19 @@ internal sealed partial class ClaudeLauncher(
                 root["projects"] = projects;
             }
 
-            if (projects[worktreePath] is not JsonObject entry) {
-                entry                  = [];
-                projects[worktreePath] = entry;
+            // Claude Code keys projects[] by a normalised path, and on Windows that
+            // normalisation converts backslashes to forward slashes (its `path.normalize`
+            // then `.replaceAll("\\","/")`). If we write the raw backslash path here, Claude
+            // looks up the forward-slash key, misses our entry, and shows the "Quick safety
+            // check" trust dialog — the hosted agent then hangs at the prompt forever, never
+            // starts a session, and the UI stays on "Waiting for session to start…" with an
+            // empty terminal (Windows-only; POSIX paths already match). Write under the same
+            // normalised key Claude reads.
+            var trustKey = NormalizeClaudeProjectKey(worktreePath);
+
+            if (projects[trustKey] is not JsonObject entry) {
+                entry              = [];
+                projects[trustKey] = entry;
             }
 
             var alreadyTrusted = entry["hasTrustDialogAccepted"] is JsonValue v && v.TryGetValue<bool>(out var b) && b;
