@@ -263,14 +263,28 @@ internal sealed partial class LocalPermissionBridge(
 
     /// <summary>
     /// True when the permission request is for the review-flow reviewer's result-submission tool
-    /// (kcap-flow-result → <c>submit_review_result</c>). Matched by a substring so it holds across
-    /// vendors regardless of how each prefixes an MCP tool id (Claude sanitizes the server name to
-    /// <c>mcp__kcap_flow_result__submit_review_result</c>; Codex uses its own scheme). The name is
-    /// unique to the kcap-flow-result server — only injected for review-flow reviewers — so a
-    /// substring match cannot collide with an unrelated tool.
+    /// (the <c>kcap-flow-result</c> server's <c>submit_review_result</c>). This auto-approve bypasses
+    /// the server permission boundary, so the match is deliberately precise rather than a loose
+    /// substring: it accepts either the bare tool name (a vendor that passes the raw MCP tool name,
+    /// e.g. Codex) OR a vendor-prefixed id that both names the <c>kcap-flow-result</c> server AND ends
+    /// in the exact tool — e.g. Claude's <c>mcp__kcap_flow_result__submit_review_result</c> (Claude
+    /// sanitizes the hyphens to underscores). Requiring the server token means a coincidental
+    /// "…submit_review_result" exposed by some other MCP server on an interactive hosted agent can't
+    /// slip past the prompt.
     /// </summary>
-    static bool IsFlowResultSubmission(string? toolName) =>
-        toolName is not null && toolName.Contains("submit_review_result", StringComparison.Ordinal);
+    static bool IsFlowResultSubmission(string? toolName) {
+        if (string.IsNullOrEmpty(toolName)) return false;
+
+        // Bare tool name, no server prefix.
+        if (string.Equals(toolName, "submit_review_result", StringComparison.Ordinal)) return true;
+
+        // Vendor-prefixed MCP id: require the flow-result server identity AND the exact tool suffix.
+        var namesFlowResultServer =
+            toolName.Contains("kcap_flow_result", StringComparison.Ordinal) ||
+            toolName.Contains("kcap-flow-result", StringComparison.Ordinal);
+
+        return namesFlowResultServer && toolName.EndsWith("submit_review_result", StringComparison.Ordinal);
+    }
 
     static string BuildHookResponseJson(PermissionDecision decision, string vendor) =>
         vendor switch {

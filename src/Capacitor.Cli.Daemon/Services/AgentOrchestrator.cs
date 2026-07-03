@@ -1068,15 +1068,30 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     static readonly string[] DaemonManagedWorktreeExcludes = [".attached", ".claude", ".codex", ".mcp.json"];
 
     /// <summary>
+    /// Upper bound on the per-round worktree re-mirror (<see cref="TryReSyncWorktreeForRoundAsync"/>).
+    /// The sync blocks round delivery by design (see there), so this caps a pathologically large or
+    /// slow sync: on expiry the round is delivered against a slightly stale mirror rather than
+    /// hanging. Only effective because <see cref="WorktreeManager.SyncFromSourceAsync"/> honours the
+    /// token in its copy/delete loops.
+    /// </summary>
+    static readonly TimeSpan RoundResyncTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// AI-1163 follow-up: re-mirror the requester's current working tree into a review-flow
     /// reviewer's worktree before a follow-up round is delivered. The reviewer process stays alive
     /// across rounds (to keep its context), so its daemon-created worktree would otherwise stay
     /// frozen at the round-1 snapshot and never pick up files the requester created/edited while
-    /// addressing findings. No-op unless the agent was launched with a mirror source
-    /// (<see cref="AgentInstance.SyncSourceRepoRoot"/>) and owns its worktree — a borrowed cwd is the
-    /// requester's own checkout and is never mutated. Daemon-validated (same origin, allowlisted,
-    /// resolves) + best-effort: any failure is logged and swallowed so it never blocks or fails
-    /// round delivery.
+    /// addressing findings.
+    ///
+    /// This runs on the round-delivery path and the caller awaits it on purpose: the reviewer must
+    /// see the updated tree before it starts the new round, so the sync cannot be fire-and-forget.
+    /// It is bounded, though — capped by <see cref="RoundResyncTimeout"/> and cancellable (the
+    /// underlying sync honours the token in its copy/delete loops) — so a stuck or huge sync
+    /// degrades to a slightly stale mirror instead of blocking round delivery indefinitely. No-op
+    /// unless the agent was launched with a mirror source (<see cref="AgentInstance.SyncSourceRepoRoot"/>)
+    /// and owns its worktree — a borrowed cwd is the requester's own checkout and is never mutated.
+    /// Daemon-validated (same origin, allowlisted, resolves); every timeout/validation-skip/error is
+    /// logged and swallowed so a sync problem never fails round delivery.
     /// </summary>
     async Task TryReSyncWorktreeForRoundAsync(AgentInstance agent) {
         if (agent.SyncSourceRepoRoot is not { } source) return;
@@ -1089,7 +1104,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return;
             }
 
-            await _worktreeManager.SyncFromSourceAsync(source, agent.Worktree.Path, DaemonManagedWorktreeExcludes, _shutdownCts.Token);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token);
+            cts.CancelAfter(RoundResyncTimeout);
+
+            await _worktreeManager.SyncFromSourceAsync(source, agent.Worktree.Path, DaemonManagedWorktreeExcludes, cts.Token);
+        } catch (OperationCanceledException) {
+            // Timed out, or the daemon is stopping: deliver the round against whatever synced rather
+            // than blocking on a stuck/huge sync. Best-effort staleness, logged for diagnosis.
+            LogRoundResyncSkipped(agent.Id, source, $"sync exceeded {RoundResyncTimeout.TotalSeconds:0}s or the daemon is stopping");
         } catch (Exception ex) {
             LogRefreshWorktreeFailed(ex, agent.Id, source, agent.Worktree.Path);
         }

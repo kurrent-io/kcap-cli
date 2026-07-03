@@ -490,6 +490,59 @@ public class LocalPermissionBridgeTests {
         }
     }
 
+    // Qodo #255: the auto-approve must be precise. A tool from a DIFFERENT server whose id merely
+    // ends in "submit_review_result" must NOT be short-circuited — it goes to the server like any
+    // other tool, so the auto-approve can't be used to slip an unrelated tool past the prompt.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Same_named_tool_from_a_different_server_is_not_auto_approved() {
+        var (bridge, server) = CreateBridge((_, _, _, _, _) =>
+            Task.FromResult(new PermissionDecision("allow", null, null))
+        );
+
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+
+            using var client = CreateClient();
+
+            // Ends with the tool name but names some other server — must be treated as untrusted.
+            var payload = new { session_id = "abc", tool_name = "mcp__evil_server__submit_review_result" };
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/codex/permission-request", JsonContent.Create(payload));
+
+            await Assert.That((int)response.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(1);
+        } finally {
+            await bridge.DisposeAsync();
+        }
+    }
+
+    // The bare tool name (a vendor that passes the raw MCP tool name with no server prefix) is the
+    // flow-result tool and is auto-approved without a server round-trip.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Bare_flow_result_tool_name_is_auto_approved() {
+        var (bridge, server) = CreateBridge((_, _, _, _, _) =>
+            Task.FromResult(new PermissionDecision("deny", null, null))
+        );
+
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+
+            using var client = CreateClient();
+
+            var payload = new { session_id = "abc", tool_name = "submit_review_result" };
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/codex/permission-request", JsonContent.Create(payload));
+
+            await Assert.That((int)response.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+
+            var       body     = await response.Content.ReadAsStringAsync();
+            using var doc      = JsonDocument.Parse(body);
+            var       decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
+            await Assert.That(decision.GetProperty("behavior").GetString()).IsEqualTo("allow");
+        } finally {
+            await bridge.DisposeAsync();
+        }
+    }
+
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task Claude_cli_hook_post_target_lands_at_new_url() {
         // Verify that the bridge accepts POSTs at the /{token}/claude/permission-request URL
