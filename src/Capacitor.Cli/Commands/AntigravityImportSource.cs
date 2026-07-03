@@ -52,22 +52,21 @@ internal sealed class AntigravityImportSource : IImportSource {
         var result = new List<DiscoveredSession>();
         if (!Directory.Exists(BrainRoot)) return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
 
-        // child -> parent, so we can (a) skip children as top-level roots and (b) attach each
-        // root's children for subagent import. The linkage is complete on disk at import time.
+        // Resolve every conversation to its top-level ancestor: roots (no parent) import as
+        // sessions; ALL transitive descendants (children, grandchildren, …) import as their
+        // root's subagents. Cycle-/non-tree-safe (BuildRootDescendants) so a deep chain isn't
+        // lost and a cycle imports standalone rather than vanishing. Linkage is complete on disk.
         var parentMap = AntigravitySubagents.BuildParentMap(_home, _geminiCliHome);
-        var childrenByParent = parentMap
-            .GroupBy(kv => kv.Value, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.Select(kv => kv.Key).ToList(), StringComparer.Ordinal);
+        var convIds   = Directory.EnumerateDirectories(BrainRoot).Select(Path.GetFileName).OfType<string>().ToList();
+        var byRoot    = AntigravitySubagents.BuildRootDescendants(convIds, parentMap);
 
         var sinceUtc = filters.Since is { } since
             ? new DateTimeOffset(since.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), TimeSpan.Zero)
             : (DateTimeOffset?)null;
 
-        foreach (var brainDir in Directory.EnumerateDirectories(BrainRoot)) {
+        foreach (var (convId, descendants) in byRoot) {
             ct.ThrowIfCancellationRequested();
 
-            var convId = Path.GetFileName(brainDir);
-            if (parentMap.ContainsKey(convId)) continue; // a subagent — imported under its parent
             if (filters.FilterSession is { } fs && !string.Equals(convId, fs, StringComparison.Ordinal)) continue;
 
             var transcript = AntigravityPaths.TranscriptFullPath(convId, _home, _geminiCliHome);
@@ -86,7 +85,7 @@ internal sealed class AntigravityImportSource : IImportSource {
                 FirstTimestamp: firstTimestamp,
                 SourceMeta:     new Dictionary<string, object?> {
                     ["TranscriptPath"] = transcript,
-                    ["Children"]       = childrenByParent.TryGetValue(convId, out var kids) ? kids : new List<string>(),
+                    ["Children"]       = descendants, // all transitive descendants, nested under this root
                 }));
         }
 
@@ -159,10 +158,18 @@ internal sealed class AntigravityImportSource : IImportSource {
 
     public async Task<ImportOutcome> ImportSessionAsync(
             ImportCommand.SessionClassification c, ImportContext ctx, CancellationToken ct) {
-        if (c.Status == ImportCommand.ClassificationStatus.AlreadyLoaded) return ImportOutcome.Skipped;
-
         var transcriptPath = (string)c.SourceMeta!["TranscriptPath"]!;
         if (!File.Exists(transcriptPath)) return ImportOutcome.Failed;
+
+        // An AlreadyLoaded root's parent transcript is fully imported, but a subagent may have
+        // been skipped on a prior run (watermark probe / subagent-start / transcript POST
+        // failure). Children classify independently by their own HWM, so still run a child-repair
+        // pass — complete children are no-ops, incomplete ones resume — then report Skipped.
+        // Without this, a once-skipped child would be lost forever (AI-1160 review).
+        if (c.Status == ImportCommand.ClassificationStatus.AlreadyLoaded) {
+            await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, c.SourceMeta!, ct);
+            return ImportOutcome.Skipped;
+        }
 
         // Lifecycle-before-transcript (mirrors Gemini): a transcript that advances the
         // watermark past a failed lifecycle POST would leave the session lifecycle-less.
@@ -208,17 +215,35 @@ internal sealed class AntigravityImportSource : IImportSource {
             var childTranscript = AntigravityPaths.TranscriptFullPath(childId, _home, _geminiCliHome);
             if (!File.Exists(childTranscript)) continue;
 
-            // Offset above the child's (rootId, agentId) HWM so a repair replays above ingested
-            // content. agentId = raw child conversation id (matches how live child events route).
-            int childOffset;
+            // Where the child's own (rootId, childId) stream is already ingested up to. agentId =
+            // raw child conversation id (matches how live child events route).
+            int? chwm;
             try {
-                var chwm = await FetchServerLastLineAsync(client, baseUrl, rootId, childId, ct);
-                childOffset = chwm is { } v ? checked(v + 1) : 0;
+                chwm = await FetchServerLastLineAsync(client, baseUrl, rootId, childId, ct);
             } catch (OperationCanceledException) {
                 throw;
             } catch {
                 continue; // watermark probe failed for this child — skip it, retry on re-import
             }
+
+            // Compare the server HWM against the child's last IMPORT-RELEVANT line (same gate the
+            // parent uses for AlreadyLoaded): trailing normalizer-skipped steps mustn't force an
+            // endless re-send, and a fully-ingested child is a no-op we skip before touching hooks.
+            int? childLastImportable;
+            try {
+                var (lastNonBlank, lastRelevant, _) = await ReadTranscriptStatsAsync(childTranscript, ct);
+                childLastImportable = lastRelevant ?? lastNonBlank;
+            } catch {
+                continue; // unreadable child transcript — retry on re-import
+            }
+            if (childLastImportable is null) continue;                       // empty child
+            if (chwm is { } done && done >= childLastImportable) continue;   // already fully ingested
+
+            // Resume by FILE POSITION (startLine), numbering surviving lines by their true position
+            // (offset 0) — matching the parent's resume and live capture, so line numbers stay
+            // stable across re-imports. (Content-hashed event ids dedupe already-sent lines, but a
+            // shifted line number would corrupt $lineNumber + the watermark for genuinely-new lines.)
+            var childStartLine = chwm is { } v ? checked(v + 1) : 0;
 
             // Fail-closed: no content unless the subagent registered first.
             if (!await PostHookAsync(client, baseUrl, "subagent-start",
@@ -228,8 +253,7 @@ internal sealed class AntigravityImportSource : IImportSource {
             try {
                 await SessionImporter.SendTranscriptBatches(
                     httpClient: client, baseUrl: baseUrl, sessionId: rootId,
-                    filePath: childTranscript, agentId: childId, startLine: 0, vendor: Vendor,
-                    lineNumberOffset: childOffset);
+                    filePath: childTranscript, agentId: childId, startLine: childStartLine, vendor: Vendor);
             } catch (OperationCanceledException) {
                 throw;
             } catch {

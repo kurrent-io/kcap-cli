@@ -63,6 +63,29 @@ public class AntigravityImportSourceTests {
     }
 
     [Test]
+    public async Task Discover_nests_transitive_descendants_under_the_top_level_root() {
+        var home = NewHome();
+        try {
+            // Chain ROOT ← CHILD ← GRAND. Only ROOT is a session; CHILD *and* GRAND import under it.
+            WriteTranscript(home, "ROOT",  UserLine("2026-07-02T19:00:00Z"));
+            WriteTranscript(home, "CHILD", UserLine("2026-07-02T19:01:00Z"));
+            WriteTranscript(home, "GRAND", UserLine("2026-07-02T19:02:00Z"));
+            WriteMessage(home, owner: "ROOT",  sender: "CHILD", recipient: "ROOT");
+            WriteMessage(home, owner: "CHILD", sender: "GRAND", recipient: "CHILD");
+
+            var source = new AntigravityImportSource(home: home, geminiCliHome: "");
+            var discovered = await source.DiscoverAsync(
+                new DiscoveryFilters(FilterCwd: null, FilterSession: null, Since: null, MinLines: 0),
+                CancellationToken.None);
+
+            await Assert.That(discovered.Count).IsEqualTo(1);
+            await Assert.That(discovered[0].SessionId).IsEqualTo("ROOT");
+            var children = (List<string>)discovered[0].SourceMeta!["Children"]!;
+            await Assert.That(children.OrderBy(x => x).ToList()).IsEquivalentTo(new List<string> { "CHILD", "GRAND" });
+        } finally { Directory.Delete(home, recursive: true); }
+    }
+
+    [Test]
     public async Task Discover_honors_the_session_filter() {
         var home = NewHome();
         try {

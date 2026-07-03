@@ -70,4 +70,67 @@ public class AntigravitySubagentsTests {
             await Assert.That(AntigravitySubagents.BuildParentMap(home: home, geminiCliHome: "").Count).IsEqualTo(0);
         } finally { Directory.Delete(home, recursive: true); }
     }
+
+    [Test]
+    public async Task BuildParentMap_is_deterministic_when_a_child_maps_to_multiple_parents() {
+        var home = NewHome();
+        try {
+            // Pathological non-tree data: C reports to both "Pz" and "Pa". The lexicographically
+            // smallest recipient wins regardless of which message file is enumerated first.
+            MakeBrainDir(home, "Pa"); MakeBrainDir(home, "Pz"); MakeBrainDir(home, "C");
+            WriteMessage(home, owner: "Pz", name: "m1", sender: "C", recipient: "Pz");
+            WriteMessage(home, owner: "Pa", name: "m2", sender: "C", recipient: "Pa");
+
+            var map = AntigravitySubagents.BuildParentMap(home: home, geminiCliHome: "");
+            await Assert.That(map["C"]).IsEqualTo("Pa");
+        } finally { Directory.Delete(home, recursive: true); }
+    }
+
+    [Test]
+    public async Task ResolveTopLevelAncestor_walks_a_deep_chain_to_the_root() {
+        // P ← C ← G : the grandchild resolves to P, not C.
+        var map = new Dictionary<string, string>(StringComparer.Ordinal) { ["C"] = "P", ["G"] = "C" };
+        await Assert.That(AntigravitySubagents.ResolveTopLevelAncestor("G", map)).IsEqualTo("P");
+        await Assert.That(AntigravitySubagents.ResolveTopLevelAncestor("C", map)).IsEqualTo("P");
+        await Assert.That(AntigravitySubagents.ResolveTopLevelAncestor("P", map)).IsEqualTo("P");
+        // An unknown/unlinked conversation is its own root.
+        await Assert.That(AntigravitySubagents.ResolveTopLevelAncestor("X", map)).IsEqualTo("X");
+    }
+
+    [Test]
+    public async Task ResolveTopLevelAncestor_is_cycle_safe() {
+        // A ↔ B cycle: each member resolves to itself rather than looping forever / vanishing.
+        var map = new Dictionary<string, string>(StringComparer.Ordinal) { ["A"] = "B", ["B"] = "A" };
+        await Assert.That(AntigravitySubagents.ResolveTopLevelAncestor("A", map)).IsEqualTo("A");
+        await Assert.That(AntigravitySubagents.ResolveTopLevelAncestor("B", map)).IsEqualTo("B");
+    }
+
+    [Test]
+    public async Task BuildRootDescendants_groups_transitive_descendants_under_each_root() {
+        // Tree: P ← C ← G, and standalone S. Root P owns {C, G}; S owns nothing.
+        var map = new Dictionary<string, string>(StringComparer.Ordinal) { ["C"] = "P", ["G"] = "C" };
+        var byRoot = AntigravitySubagents.BuildRootDescendants(new[] { "P", "C", "G", "S" }, map);
+
+        await Assert.That(byRoot.ContainsKey("P")).IsTrue();
+        await Assert.That(byRoot["P"].OrderBy(x => x).ToList()).IsEquivalentTo(new List<string> { "C", "G" });
+        await Assert.That(byRoot.ContainsKey("S")).IsTrue();
+        await Assert.That(byRoot["S"].Count).IsEqualTo(0);
+        // Children are NOT keys (they import under their root, not as sessions).
+        await Assert.That(byRoot.ContainsKey("C")).IsFalse();
+        await Assert.That(byRoot.ContainsKey("G")).IsFalse();
+    }
+
+    [Test]
+    public async Task BuildRootDescendants_imports_cycle_members_standalone() {
+        // A ↔ B cycle plus a real root R with child C. Cycle members each become their own root
+        // (with no descendants) rather than being lost.
+        var map = new Dictionary<string, string>(StringComparer.Ordinal) { ["A"] = "B", ["B"] = "A", ["C"] = "R" };
+        var byRoot = AntigravitySubagents.BuildRootDescendants(new[] { "A", "B", "R", "C" }, map);
+
+        await Assert.That(byRoot.ContainsKey("A")).IsTrue();
+        await Assert.That(byRoot["A"].Count).IsEqualTo(0);
+        await Assert.That(byRoot.ContainsKey("B")).IsTrue();
+        await Assert.That(byRoot["B"].Count).IsEqualTo(0);
+        await Assert.That(byRoot["R"]).IsEquivalentTo(new List<string> { "C" });
+    }
 }

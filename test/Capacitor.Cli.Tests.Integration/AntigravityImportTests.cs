@@ -103,6 +103,101 @@ public class AntigravityImportTests : IDisposable {
     }
 
     [Test]
+    public async Task ImportSession_AlreadyLoaded_root_repairs_a_missing_child() {
+        WriteTranscript(Root, "build it");
+        WriteTranscript(Child, "sub task");
+        WriteLinkage();
+
+        // Parent (no agentId) fully ingested → AlreadyLoaded; the child (agentId=Child) was never
+        // imported (404). The AlreadyLoaded branch must STILL run the child-repair pass, else a
+        // once-skipped subagent is lost forever (AI-1160 review, finding 1).
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").WithParam("agentId", Child).UsingGet())
+            .AtPriority(1)
+            .RespondWith(Response.Create().WithStatusCode(404));
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .AtPriority(10)
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
+        foreach (var route in new[] {
+            "/hooks/session-start/antigravity", "/hooks/transcript",
+            "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/antigravity"
+        }) {
+            _server.Given(Request.Create().WithPath(route).UsingPost())
+                .RespondWith(Response.Create().WithStatusCode(200));
+        }
+
+        using var client = new HttpClient();
+        var source = new AntigravityImportSource(home: _home, geminiCliHome: "");
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(
+            discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None);
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
+
+        var outcome = await source.ImportSessionAsync(
+            classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Skipped);
+
+        var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST")
+            .Select(e => e.RequestMessage.Path).ToList();
+
+        // The parent is not re-imported (no session-start/-end), but the missing child IS repaired:
+        // subagent-start → child transcript → subagent-stop.
+        await Assert.That(posts.Contains("/hooks/subagent-start")).IsTrue();
+        await Assert.That(posts.Contains("/hooks/subagent-stop")).IsTrue();
+        await Assert.That(posts.Contains("/hooks/session-start/antigravity")).IsFalse();
+        await Assert.That(posts.Contains("/hooks/session-end/antigravity")).IsFalse();
+
+        var childTranscript = _server.LogEntries
+            .Where(e => e.RequestMessage.Path == "/hooks/transcript")
+            .Select(e => e.RequestMessage.Body!).Single();
+        await Assert.That(childTranscript).Contains($"\"agent_id\":\"{Child}\"");
+    }
+
+    [Test]
+    public async Task ImportChildren_resumes_by_line_position_without_shifting_numbers() {
+        WriteTranscript(Root, "build it");
+        WriteTranscript(Child, "sub task");
+        WriteLinkage();
+
+        // Parent not yet imported (404) → New; child partially imported up to line 0 → resume from
+        // file line 1, numbered by TRUE position (1). The pre-fix code fed the HWM as
+        // lineNumberOffset and re-sent the whole file as [1,2] (AI-1160 review, finding 2).
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").WithParam("agentId", Child).UsingGet())
+            .AtPriority(1)
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":0}"""));
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .AtPriority(10)
+            .RespondWith(Response.Create().WithStatusCode(404));
+        foreach (var route in new[] {
+            "/hooks/session-start/antigravity", "/hooks/transcript",
+            "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/antigravity"
+        }) {
+            _server.Given(Request.Create().WithPath(route).UsingPost())
+                .RespondWith(Response.Create().WithStatusCode(200));
+        }
+
+        using var client = new HttpClient();
+        var source = new AntigravityImportSource(home: _home, geminiCliHome: "");
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(
+            discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None);
+
+        await source.ImportSessionAsync(
+            classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        var childTranscript = _server.LogEntries
+            .Where(e => e.RequestMessage.Path == "/hooks/transcript")
+            .Select(e => e.RequestMessage.Body!)
+            .Single(b => b.Contains($"\"agent_id\":\"{Child}\""));
+
+        // Only file line 1 is re-sent, numbered 1 — not the whole file shifted to [1,2].
+        await Assert.That(childTranscript).Contains("\"line_numbers\":[1]");
+    }
+
+    [Test]
     public async Task ImportSession_second_run_is_AlreadyLoaded() {
         WriteTranscript(Root, "build it");
 
