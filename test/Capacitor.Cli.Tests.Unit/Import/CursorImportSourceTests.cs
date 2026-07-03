@@ -21,6 +21,27 @@ public class CursorImportSourceTests {
     }
 
     [Test]
+    public async Task session_start_payload_carries_pr_fields_when_repo_has_a_pr() {
+        // Cursor is the one import source whose synthetic session-start carries a `repository`
+        // node (AI-1152) via BuildRepositoryNode — including pr_* when a PR is detected. Guard
+        // that the payload propagates those fields (a regression dropped them when Cursor's repo
+        // detector was switched to skip PR detection during the import-latency work — AI-1122).
+        var repo = new RepositoryPayload {
+            Owner = "o", RepoName = "r", Host = "github.com", Branch = "main",
+            PrNumber = 7, PrTitle = "t", PrUrl = "https://github.com/o/r/pull/7", PrHeadRef = "main"
+        };
+        var repoNode = RepositoryDetection.BuildRepositoryNode(repo);
+
+        var payload = CursorImportSource.BuildSessionStartPayload(
+            "sid", "/ws", "/t.jsonl", DateTimeOffset.UtcNow, repoNode);
+
+        var repository = payload["repository"] as JsonObject;
+        await Assert.That(repository).IsNotNull();
+        await Assert.That(repository!["pr_number"]!.GetValue<int>()).IsEqualTo(7);
+        await Assert.That(repository["pr_url"]!.GetValue<string>()).IsEqualTo("https://github.com/o/r/pull/7");
+    }
+
+    [Test]
     public async Task is_available_when_projects_dir_exists() {
         using var fx  = new ProjectsDirFixture();
         var       src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
