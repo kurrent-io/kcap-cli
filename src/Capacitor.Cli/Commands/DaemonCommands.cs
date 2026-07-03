@@ -121,25 +121,22 @@ public static class DaemonCommands {
             return 1;
         }
 
-        // The daemon writes its own PID file inside the flock during startup
-        // (DaemonLock.TryAcquire) and deletes it in Dispose. The supervisor no
-        // longer writes it too (AI-1155): a second, out-of-flock writer could
-        // recreate the file after the daemon's clean exit, making the successor's
-        // unclean-exit breadcrumb fire falsely. The daemon is the sole owner.
+        // The daemon owns its PID file end to end (AI-1155): it writes it inside
+        // the flock during startup (DaemonLock.TryAcquire) and deletes it under
+        // the flock in Dispose. The supervisor neither writes nor deletes it.
+        //
+        // We deliberately do NOT delete the PID file when the child exits here. On
+        // a clean exit the daemon already removed it via Dispose, so there's
+        // nothing to clean up; on a hard death (SIGKILL / native abort — Dispose
+        // never runs) the leftover PID file IS the unclean-exit breadcrumb the
+        // next start reads, so deleting it here would erase exactly what this
+        // change exists to preserve. A stale PID from a hard death is harmless:
+        // the kernel released the flock, the next TryAcquire overwrites it (after
+        // logging the breadcrumb), and status/doctor already treat a
+        // dead-PID/foreign-token file as stale.
+        await process.WaitForExitAsync();
 
-        try {
-            await process.WaitForExitAsync();
-
-            return process.ExitCode;
-        } finally {
-            try {
-                if (ReadPidFile(name) is { } current && current.Pid == process.Id) {
-                    File.Delete(DaemonLockPaths.PidPath(name));
-                }
-            } catch {
-                /* best-effort */
-            }
-        }
+        return process.ExitCode;
     }
 
     static int StartDetached(string[] args) {
