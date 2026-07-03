@@ -353,6 +353,38 @@ public class DaemonLockTests {
         }
     }
 
+    /// <summary>
+    /// A stale PID file that is present but can't be read (permissions, transient
+    /// IO) must still count as an unclean prior exit — the file's presence once we
+    /// hold the flock is the signal; parsing the PID is secondary. Returning a
+    /// clean result on a read failure would silently drop a real hard-death.
+    /// </summary>
+    [Test]
+    public async Task TryAcquire_WhenStalePidFilePresentButUnreadable_ReportsUncleanExit_WithNullPid() {
+        if (OperatingSystem.IsWindows()) return; // Unix permission model only
+
+        var dir = CreateScratchDir();
+
+        try {
+            DaemonLockPaths.EnsureDirectory();
+            var pidPath = DaemonLockPaths.PidPath("alpha");
+            File.WriteAllText(pidPath, "777\n");
+            // Write-only for the owner: File.Exists sees it and TryAcquire's
+            // WritePidFile can still overwrite it, but ReadAllText throws (no read
+            // bit), exercising the "present but unreadable" path.
+            File.SetUnixFileMode(pidPath, UnixFileMode.UserWrite);
+
+            using var l = DaemonLock.TryAcquire("alpha");
+            await Assert.That(l).IsNotNull();
+            await Assert.That(l!.PriorExitWasUnclean).IsTrue();
+            await Assert.That(l.PriorHolderPid).IsNull();
+        } finally {
+            Restore();
+            try { File.SetUnixFileMode(DaemonLockPaths.PidPath("alpha"), UnixFileMode.UserRead | UnixFileMode.UserWrite); } catch { /* best-effort */ }
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Test]
     public async Task TryAcquire_OnFreshSlot_ReportsCleanPriorExit() {
         var dir = CreateScratchDir();

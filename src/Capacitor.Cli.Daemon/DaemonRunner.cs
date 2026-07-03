@@ -255,9 +255,12 @@ public static partial class DaemonRunner {
         // releasing its lock, it was SIGKILLed (macOS jetsam/OOM, `kill -9`),
         // lost power, or crashed hard — none of which the dying process can
         // log. Emit a breadcrumb now so the otherwise-silent death is on the
-        // record. Suppressed for a clean restart-after-update handoff, which
-        // uses --await-lock and deletes its PID file on the way out.
-        if (!awaitLock && daemonLock.PriorExitWasUnclean) {
+        // record. This is safe even for a `--await-lock` restart-after-update
+        // handoff: DaemonLock.Dispose now deletes the outgoing daemon's PID
+        // file *before* releasing the flock, so a clean handoff leaves nothing
+        // for us to find — a leftover PID file here is a real hard death (e.g.
+        // the outgoing daemon was OOM-killed mid-handoff) and worth recording.
+        if (daemonLock.PriorExitWasUnclean) {
             LogPriorUncleanExit(logger, config.Name, daemonLock.PriorHolderPid?.ToString() ?? "unknown");
         }
 

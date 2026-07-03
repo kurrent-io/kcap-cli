@@ -133,17 +133,28 @@ internal sealed class DaemonLock : IDisposable {
     /// case we still report unclean but with a null PID.
     /// </summary>
     static (bool unclean, int? pid) InspectPriorHolder(string pidPath) {
+        bool present;
         try {
-            if (!File.Exists(pidPath)) return (false, null);
+            present = File.Exists(pidPath);
+        } catch {
+            // Can't even stat it — don't fabricate a breadcrumb.
+            return (false, null);
+        }
 
+        if (!present) return (false, null);
+
+        // Presence is the unclean-exit signal; parsing the PID is secondary. A
+        // present-but-unreadable file (permissions, transient IO, corruption)
+        // still means the prior holder skipped cleanup — report unclean with an
+        // unknown PID rather than silently masking a real hard-death as clean.
+        try {
             var first = File.ReadAllText(pidPath)
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .FirstOrDefault();
 
             return (true, int.TryParse(first, out var pid) ? pid : null);
         } catch {
-            // Can't read it — don't fabricate a breadcrumb.
-            return (false, null);
+            return (true, null);
         }
     }
 
@@ -177,27 +188,17 @@ internal sealed class DaemonLock : IDisposable {
         if (_disposed) return;
         _disposed = true;
 
-        // Releasing the FileStream releases the kernel-level flock. After
-        // that, a follow-up start with the same name can acquire cleanly.
-        try { _stream.Dispose(); } catch { /* best-effort */ }
-
-        // Do NOT delete the lock file. The kernel flock is what enforces
-        // exclusion; file presence on disk is irrelevant. Deleting it here
-        // races against another daemon that may already have acquired the
-        // path between our Dispose() and the unlink: our `File.Delete`
-        // would unlink the inode they're holding open, and a third daemon
-        // could then create a brand-new `<name>.lock` at the same path
-        // and acquire a SECOND independent flock — defeating the whole
-        // AI-630 guard. `kcap daemon doctor --clean` removes truly
-        // stale files.
-        //
-        // Delete the PID file only if it still points to our own PID. A
-        // legitimate successor daemon that ran while we were disposing
-        // would have already rewritten the file to its own PID, and an
-        // unconditional Delete here would orphan their entry. The version
-        // marker follows the SAME ownership guard: if a successor has taken
-        // over the name it has already written its own version marker, so
-        // deleting here would clobber the successor's fresh value.
+        // AI-1155: delete the PID file (and version marker) BEFORE releasing the
+        // flock, not after. A successor waiting on the lock (`--await-lock`
+        // restart-after-update) can't acquire it until we release below, so by
+        // then our PID file is already gone — it can never observe a leftover PID
+        // file from our *clean* shutdown and misread it as an unclean death.
+        // That makes "PID file present once you hold the flock" an unambiguous
+        // uncatchable-kill signal (see TryAcquire), so the successor's startup
+        // breadcrumb no longer needs to special-case the handoff. Because we
+        // still hold the flock here, no other daemon can have rewritten these
+        // files, so the ownership check below always passes for us — it stays as
+        // defence-in-depth (e.g. a stale PID file we never owned).
         bool ours;
         try { ours = PidFileMatchesCurrentProcess(_pidPath); } catch { ours = false; }
 
@@ -205,6 +206,13 @@ internal sealed class DaemonLock : IDisposable {
             try { File.Delete(_pidPath); } catch { /* best-effort */ }
             try { File.Delete(_versionPath); } catch { /* best-effort */ }
         }
+
+        // Release the kernel-level flock last. Do NOT delete the lock file: the
+        // kernel flock is what enforces exclusion, file presence on disk is
+        // irrelevant, and unlinking it here would race a daemon that acquired the
+        // path between our unlink and a re-create — reopening the AI-630 hole.
+        // `kcap daemon doctor --clean` removes truly stale files.
+        try { _stream.Dispose(); } catch { /* best-effort */ }
     }
 
     static bool PidFileMatchesCurrentProcess(string pidPath) {
