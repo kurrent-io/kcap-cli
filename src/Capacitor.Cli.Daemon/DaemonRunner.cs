@@ -26,6 +26,7 @@ public static partial class DaemonRunner {
 
     public static async Task<int> RunAsync(string[] args) {
         string?    logFile     = null;
+        string?    stderrFile  = null;
         LogLevel?  logLevelArg = null;
         var        config      = new DaemonConfig();
 
@@ -47,6 +48,7 @@ public static partial class DaemonRunner {
         for (var i = 0; i < args.Length - 1; i++) {
             switch (args[i]) {
                 case "--log-file": logFile = args[++i]; break;
+                case "--stderr-file": stderrFile = args[++i]; break;
                 case "--log-level": logLevelArg = ParseLogLevel(args[++i]); break;
                 case "--max-agents" when int.TryParse(args[i + 1], out var n) && n >= 1:
                     config.MaxConcurrentAgents = n;
@@ -58,6 +60,15 @@ public static partial class DaemonRunner {
 
                     return 1;
             }
+        }
+
+        // AI-1155: reopen fds 1/2 onto the capture file BEFORE building the host,
+        // so even a crash during construction lands somewhere. On the detached
+        // launch path the CLI closed our std pipes; without this a runtime/native
+        // fatal message would go to a broken pipe and vanish. No-op under launchd
+        // (StandardErrorPath) and foreground (no --stderr-file passed).
+        if (StdErrCapture.ResolveTarget(stderrFile) is { } capturePath) {
+            StdErrCapture.Apply(capturePath);
         }
 
         // Strip our custom args before passing to host builder
@@ -240,6 +251,16 @@ public static partial class DaemonRunner {
 
         LogDaemonStarting(logger, config.Name, config.ServerUrl);
 
+        // AI-1155: if the previous daemon under this name vanished without
+        // releasing its lock, it was SIGKILLed (macOS jetsam/OOM, `kill -9`),
+        // lost power, or crashed hard — none of which the dying process can
+        // log. Emit a breadcrumb now so the otherwise-silent death is on the
+        // record. Suppressed for a clean restart-after-update handoff, which
+        // uses --await-lock and deletes its PID file on the way out.
+        if (!awaitLock && daemonLock.PriorExitWasUnclean) {
+            LogPriorUncleanExit(logger, config.Name, daemonLock.PriorHolderPid?.ToString() ?? "unknown");
+        }
+
         var lifetime   = host.Services.GetRequiredService<IHostApplicationLifetime>();
         var connection = host.Services.GetRequiredService<ServerConnection>();
 
@@ -351,6 +372,9 @@ public static partial class DaemonRunner {
 
     [LoggerMessage(Level = LogLevel.Information, Message = "kcap daemon '{Name}' starting, connecting to {ServerUrl}")]
     static partial void LogDaemonStarting(ILogger logger, string name, string serverUrl);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Previous '{Name}' daemon (PID {Pid}) exited WITHOUT a graceful shutdown — its lock was left for the kernel to release. That is the signature of an uncatchable kill (macOS jetsam/OOM, `kill -9`), a power loss, or a hard native crash; an in-process signal handler cannot record it. If this recurs, run the daemon as a supervised service (`kcap daemon service install`) so it auto-restarts.")]
+    static partial void LogPriorUncleanExit(ILogger logger, string name, string pid);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Lifetime: ApplicationStopping fired")]
     static partial void LogLifetimeStopping(ILogger logger);

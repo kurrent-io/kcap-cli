@@ -581,6 +581,13 @@ KCAP_DAEMON_LOG_LEVEL=debug kcap daemon    # env var; read directly, works in an
 
 Accepted values: `trace`, `debug`, `information` (default), `warning`, `error`, `critical`, `none`. The `--log-level` flag wins over the env var when both are set. `Debug` is verbose — it also enables the SignalR client's framework logs — so use it for a diagnostic window rather than steady state.
 
+#### Diagnosing a hard death
+
+A daemon killed by an uncatchable `SIGKILL` (macOS **jetsam** / Linux **OOM**, `kill -9`, power loss) or a hard native crash can't log its own exit — the process is gone before any handler runs. Two things help tell those apart from a normal stop:
+
+- **`~/.config/kcap/daemon.out.log`** — a background (`-d`) daemon reopens its stdout/stderr onto this file, so a runtime "Fatal error." dump or native crash message (which bypasses the normal `daemon.log` pipeline) is captured here. A service-managed daemon captures the same output via its service log. An empty file means nothing was written to stderr — i.e. a `SIGKILL`, not a crash.
+- **Startup breadcrumb** — when a daemon starts and finds the previous instance's lock was left for the kernel to release (the signature of an uncatchable kill), it logs a `warning` to `daemon.log` naming the dead PID. If you see this recur, run the daemon as a service (`kcap daemon service install`) so it auto-restarts instead of staying down.
+
 ### Local agents (run-agent / attach / ls)
 
 Start a coding agent from your own terminal that the daemon hosts for you. Because the daemon owns the agent (not your terminal), you can **detach and the agent keeps running**, then **re-attach later** — like `tmux` for your coding agent.

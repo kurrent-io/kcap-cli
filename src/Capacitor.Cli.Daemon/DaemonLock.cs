@@ -31,12 +31,33 @@ internal sealed class DaemonLock : IDisposable {
 
     public string InstanceId { get; }
 
-    DaemonLock(FileStream stream, string lockPath, string pidPath, string versionPath, string instanceId) {
-        _stream      = stream;
-        _lockPath    = lockPath;
-        _pidPath     = pidPath;
-        _versionPath = versionPath;
-        InstanceId   = instanceId;
+    /// <summary>
+    /// True when a PID file for this name was still on disk at the moment we
+    /// acquired the exclusive flock (AI-1155). A graceful shutdown deletes the
+    /// PID file in <see cref="Dispose"/>, so a leftover one means the previous
+    /// holder exited WITHOUT running its cleanup — the signature of an
+    /// uncatchable termination (external <c>SIGKILL</c> from macOS jetsam/OOM
+    /// or <c>kill -9</c>, a power loss, or a hard native crash), none of which
+    /// a signal handler inside the dying process can log. The successor logs a
+    /// startup breadcrumb so the otherwise-silent death leaves a trace.
+    /// </summary>
+    public bool PriorExitWasUnclean { get; }
+
+    /// <summary>
+    /// The PID recorded in the leftover PID file, when <see cref="PriorExitWasUnclean"/>
+    /// is true and the file's first line parsed as an integer; otherwise null.
+    /// </summary>
+    public int? PriorHolderPid { get; }
+
+    DaemonLock(FileStream stream, string lockPath, string pidPath, string versionPath, string instanceId,
+               bool priorExitWasUnclean, int? priorHolderPid) {
+        _stream             = stream;
+        _lockPath           = lockPath;
+        _pidPath            = pidPath;
+        _versionPath        = versionPath;
+        InstanceId          = instanceId;
+        PriorExitWasUnclean = priorExitWasUnclean;
+        PriorHolderPid      = priorHolderPid;
     }
 
     /// <summary>
@@ -70,6 +91,13 @@ internal sealed class DaemonLock : IDisposable {
 
         var instanceId = Guid.NewGuid().ToString("N");
 
+        // AI-1155: inspect any leftover PID file BEFORE WritePidFile overwrites
+        // it. Now that we hold the exclusive flock the prior holder is provably
+        // gone, so a still-present PID file means it never ran Dispose (which
+        // deletes it) — i.e. it died via an uncatchable SIGKILL / crash. Capture
+        // that for the successor's startup breadcrumb.
+        var (priorUnclean, priorPid) = InspectPriorHolder(pidPath);
+
         try {
             // Rewrite the file content with the fresh instance id. Truncate
             // first so a smaller new id doesn't leave trailing bytes from
@@ -94,7 +122,29 @@ internal sealed class DaemonLock : IDisposable {
             try { DaemonVersionMarker.Write(daemonName, version); } catch { /* best-effort */ }
         }
 
-        return new DaemonLock(stream, lockPath, pidPath, versionPath, instanceId);
+        return new DaemonLock(stream, lockPath, pidPath, versionPath, instanceId, priorUnclean, priorPid);
+    }
+
+    /// <summary>
+    /// Reads a leftover PID file (call only while holding the flock, before
+    /// overwriting it). Returns (unclean: whether the file was present at all,
+    /// pid: its parsed first line if any). A present file ⇒ the prior holder
+    /// skipped its cleanup ⇒ unclean exit; the PID may be unparseable, in which
+    /// case we still report unclean but with a null PID.
+    /// </summary>
+    static (bool unclean, int? pid) InspectPriorHolder(string pidPath) {
+        try {
+            if (!File.Exists(pidPath)) return (false, null);
+
+            var first = File.ReadAllText(pidPath)
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault();
+
+            return (true, int.TryParse(first, out var pid) ? pid : null);
+        } catch {
+            // Can't read it — don't fabricate a breadcrumb.
+            return (false, null);
+        }
     }
 
     /// <summary>

@@ -302,4 +302,91 @@ public class DaemonLockTests {
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    /// <summary>
+    /// AI-1155: a daemon that is SIGKILLed (macOS jetsam/OOM, `kill -9`), loses
+    /// power, or crashes natively never runs <see cref="DaemonLock.Dispose"/>, so
+    /// its PID file is left on disk. Once we hold the exclusive flock (proving the
+    /// prior holder is gone), a leftover PID file is the signature of that unclean
+    /// exit — the one thing a signal-handler inside the dying process can never
+    /// record. Surfacing it lets the successor log a startup breadcrumb.
+    /// </summary>
+    [Test]
+    public async Task TryAcquire_WhenPriorHolderLeftStalePidFile_ReportsUncleanExit() {
+        var dir = CreateScratchDir();
+
+        try {
+            // A well-formed PID file from a prior holder that never cleaned up.
+            DaemonLockPaths.EnsureDirectory();
+            File.WriteAllText(DaemonLockPaths.PidPath("alpha"), "424242\n637999999999999999");
+
+            using var l = DaemonLock.TryAcquire("alpha");
+            await Assert.That(l).IsNotNull();
+            await Assert.That(l!.PriorExitWasUnclean).IsTrue();
+            await Assert.That(l.PriorHolderPid).IsEqualTo(424242);
+        } finally {
+            Restore();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// A leftover PID file whose first line isn't a parseable PID still signals an
+    /// unclean prior exit (the file's mere presence after we hold the flock is the
+    /// signal), we just can't name the dead PID.
+    /// </summary>
+    [Test]
+    public async Task TryAcquire_WhenStalePidFileUnparseable_StillReportsUncleanExit_WithNullPid() {
+        var dir = CreateScratchDir();
+
+        try {
+            DaemonLockPaths.EnsureDirectory();
+            File.WriteAllText(DaemonLockPaths.PidPath("alpha"), "not-a-pid\n");
+
+            using var l = DaemonLock.TryAcquire("alpha");
+            await Assert.That(l).IsNotNull();
+            await Assert.That(l!.PriorExitWasUnclean).IsTrue();
+            await Assert.That(l.PriorHolderPid).IsNull();
+        } finally {
+            Restore();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task TryAcquire_OnFreshSlot_ReportsCleanPriorExit() {
+        var dir = CreateScratchDir();
+
+        try {
+            using var l = DaemonLock.TryAcquire("alpha");
+            await Assert.That(l).IsNotNull();
+            await Assert.That(l!.PriorExitWasUnclean).IsFalse();
+            await Assert.That(l.PriorHolderPid).IsNull();
+        } finally {
+            Restore();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// A graceful shutdown runs <see cref="DaemonLock.Dispose"/>, which deletes the
+    /// PID file. The next acquisition must therefore see a clean prior exit — no
+    /// false-positive breadcrumb after a normal stop/restart.
+    /// </summary>
+    [Test]
+    public async Task TryAcquire_AfterCleanDispose_ReportsCleanPriorExit() {
+        var dir = CreateScratchDir();
+
+        try {
+            DaemonLock.TryAcquire("alpha")!.Dispose();
+
+            using var l = DaemonLock.TryAcquire("alpha");
+            await Assert.That(l).IsNotNull();
+            await Assert.That(l!.PriorExitWasUnclean).IsFalse();
+            await Assert.That(l.PriorHolderPid).IsNull();
+        } finally {
+            Restore();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

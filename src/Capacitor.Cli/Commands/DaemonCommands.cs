@@ -190,6 +190,14 @@ public static class DaemonCommands {
         psi.ArgumentList.Add("--log-file");
         psi.ArgumentList.Add(LogPath);
 
+        // AI-1155: we close the daemon's std pipes just below (anti-hang), which
+        // means a runtime/native fatal message written straight to fd 2 would be
+        // lost — the reason hard daemon deaths currently leave no trace. Point the
+        // daemon's fds at a sibling capture file so those messages survive. Same
+        // ".out.log" convention as the launchd unit's StandardErrorPath.
+        psi.ArgumentList.Add("--stderr-file");
+        psi.ArgumentList.Add(Path.ChangeExtension(LogPath, null) + ".out.log");
+
         foreach (var arg in args.Where(a => a is not "-d" and not "--detach")) {
             psi.ArgumentList.Add(arg);
         }
