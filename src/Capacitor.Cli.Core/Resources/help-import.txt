@@ -10,7 +10,8 @@ machine and imports them in a single run. Each agent ships a per-session .jsonl 
   Gemini  — ~/.gemini/tmp/<project>/chats/session-<ISO>-<shortId>.jsonl
   Kiro    — ~/.kiro/sessions/cli/<sid>.jsonl (+ <sid>.json metadata; honours KIRO_HOME)
   Pi      — ~/.pi/agent/sessions/.../<timestamp>_<sid>.jsonl (badlogic/pi-mono)
-kcap walks all seven the same way.
+  Antigravity — ~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript_full.jsonl
+kcap walks all eight the same way.
 
 Usage: kcap import [vendor-filters] [scope] [options]
 
@@ -27,6 +28,7 @@ Vendor filters (additive — pass one or more to restrict the run):
   --kiro                  Import AWS Kiro CLI sessions (~/.kiro/sessions/cli)
   --pi                    Import Pi (badlogic/pi-mono) session transcripts
   --opencode              Import SST OpenCode sessions (~/.local/share/opencode/opencode.db)
+  --antigravity           Import Google Antigravity conversations (~/.gemini/antigravity/brain)
 
 Scope (one of, required for non-interactive use):
   --all                   Import every discovered session
