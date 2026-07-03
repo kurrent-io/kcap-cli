@@ -241,13 +241,18 @@ internal sealed class AntigravityImportSource : IImportSource {
             if (chwm is { } done && done >= childLastImportable) {
                 // Content is fully ingested, but subagent-stop is best-effort below and may have
                 // failed AFTER the content POST on a prior run — leaving the subagent with no
-                // completion event permanently (HWM only tracks content lines, not lifecycle).
-                // Re-post the stop: it's idempotent server-side (deterministic SubagentCompleted
-                // id), so a prior failure is repaired and an already-recorded stop dedupes.
-                // subagent-start is not re-posted — content is fail-closed behind it, so its
-                // presence is implied by the ingested content (AI-1160 review).
-                await PostHookAsync(client, baseUrl, "subagent-stop",
-                    BuildSubagentPayload("subagent_stop", rootId, childId, childTranscript), ct);
+                // completion event (HWM only tracks content lines, not lifecycle). Repair it by
+                // re-posting subagent-start THEN subagent-stop. The server's stop endpoint no-ops
+                // unless the agent is marked active, and that mark is transient in-memory — lost on
+                // a server restart between the failed stop and this re-import. Re-posting start
+                // restores the active mark (idempotent: deterministic SubagentStarted id, and
+                // already-active is a no-op) so the following stop clears it and appends the
+                // (idempotent, deterministic) SubagentCompleted. Child content is not re-sent
+                // (AI-1160 review).
+                if (await PostHookAsync(client, baseUrl, "subagent-start",
+                        BuildSubagentPayload("subagent_start", rootId, childId, childTranscript), ct))
+                    await PostHookAsync(client, baseUrl, "subagent-stop",
+                        BuildSubagentPayload("subagent_stop", rootId, childId, childTranscript), ct);
 
                 continue;
             }

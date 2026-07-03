@@ -155,15 +155,17 @@ public class AntigravityImportTests : IDisposable {
     }
 
     [Test]
-    public async Task ImportChildren_fullyIngestedChild_reposts_idempotent_stop_without_resending_content() {
+    public async Task ImportChildren_fullyIngestedChild_reposts_idempotent_start_and_stop_without_resending_content() {
         WriteTranscript(Root, "build it");
         WriteTranscript(Child, "sub task");
         WriteLinkage();
 
         // Both parent and child are fully ingested (high HWM). The child's CONTENT must not be
-        // re-sent, but subagent-stop is re-posted (idempotent) in case a prior run's stop failed
-        // after content — otherwise the subagent would be left without a completion event forever
-        // (AI-1160 review, finding at :240).
+        // re-sent, but subagent-start THEN subagent-stop are re-posted (both idempotent): the
+        // server's stop no-ops without an active mark, and that mark is lost on a restart, so the
+        // start re-establishes it before the stop appends the completion event. Without this a
+        // prior run's stop that failed after content leaves the subagent uncompleted forever
+        // (AI-1160 review, findings at :240 / :249).
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
         foreach (var route in new[] {
@@ -189,10 +191,13 @@ public class AntigravityImportTests : IDisposable {
         var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST")
             .Select(e => e.RequestMessage.Path).ToList();
 
-        // Completion event repaired, but no content re-send and no re-registration.
+        // Lifecycle repaired (start re-marks active so stop can append completion), but no content
+        // re-send.
+        await Assert.That(posts.Contains("/hooks/subagent-start")).IsTrue();
         await Assert.That(posts.Contains("/hooks/subagent-stop")).IsTrue();
         await Assert.That(posts.Contains("/hooks/transcript")).IsFalse();
-        await Assert.That(posts.Contains("/hooks/subagent-start")).IsFalse();
+        // Ordering: start precedes stop so the server has the active mark when stop lands.
+        await Assert.That(posts.IndexOf("/hooks/subagent-start")).IsLessThan(posts.IndexOf("/hooks/subagent-stop"));
     }
 
     [Test]
