@@ -127,6 +127,55 @@ public class SecretRedactorTests {
     }
 
     [Test]
+    public async Task DoesNotRedact_TaskNotificationTag_MidWordSkMatch() {
+        // AI-1162: the OpenAI `sk-` vendor-token branch matched the `sk-notification` substring
+        // inside "ta·sk-notification", turning Claude Code's injected background-task blocks into
+        // `<ta[REDACTED]> … </ta[REDACTED]>`. The tag is not a secret and must survive verbatim.
+        var line = """
+            {"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>by9prly15</task-id> <tool-use-id>toolu_01BBj6kq3JaFfKHG93BEmqnj</tool-use-id> <status>completed</status> <summary>Background command \"Continue watching server CI\" completed (exit code 0)</summary>\n</task-notification>"}}
+            """.Trim();
+
+        var result = SecretRedactor.RedactLine(line);
+
+        await Assert.That(result).IsEqualTo(line);
+        await Assert.That(result).Contains("<task-notification>");
+        await Assert.That(result).Contains("</task-notification>");
+        await Assert.That(result).DoesNotContain("[REDACTED]");
+    }
+
+    [Test]
+    [Arguments("the disk-usage report shows 80% full")] // "sk-" inside "disk-"
+    [Arguments("run a task-notification handler on completion")]
+    [Arguments("brisk-walking is good; kiosk-mode too")]
+    public async Task DoesNotRedact_SkPrefix_MidWord(string prose) {
+        // The `sk-` prefix must only match at a token boundary, never mid-identifier.
+        var line = $$$"""
+            {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"{{{prose}}}"}]}}
+            """.Trim();
+
+        var result = SecretRedactor.RedactLine(line);
+
+        await Assert.That(result).IsEqualTo(line);
+    }
+
+    [Test]
+    [Arguments("space before: sk-proj-ABCDEFghijklmnop123", "sk-proj-ABCDEFghijklmnop123")]
+    [Arguments("(sk-live_00000000000FAKEFAKE00)", "sk-live_00000000000FAKEFAKE00")]
+    [Arguments("key=sk-test_00000000000FAKEFAKE00 end", "sk-test_00000000000FAKEFAKE00")]
+    public async Task RedactsLine_SkToken_AtBoundary_StillRedacts(string content, string token) {
+        // The boundary fix must NOT weaken redaction of genuine sk- keys preceded by a
+        // non-alphanumeric char (space, punctuation, `=`).
+        var line = $$$"""
+            {"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"{{{content}}}","is_error":false}]}}
+            """.Trim();
+
+        var result = SecretRedactor.RedactLine(line);
+
+        await Assert.That(result).DoesNotContain(token);
+        await Assert.That(result).Contains("[REDACTED]");
+    }
+
+    [Test]
     public async Task RedactsLine_AwsAccessKey_InToolResult() {
         var line = """
             {"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE","is_error":false}]}}
