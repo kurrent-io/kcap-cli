@@ -323,6 +323,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             worktree = await _worktreeManager.CreateAsync(repoPath, baseRef: baseRef);
 
+            // AI-1163: for a mirror-requester review flow the server sends the requester's repo root
+            // in SyncFromRepoRoot. Mirror its live working tree (uncommitted + untracked) into the
+            // fresh worktree BEFORE spawning, so round 1 sees in-progress code rather than committed
+            // HEAD. Daemon-validated + best-effort (see the helper); never fails the launch.
+            if (!string.IsNullOrEmpty(cmd.SyncFromRepoRoot)) {
+                await TrySyncWorktreeAtLaunchAsync(agentId, cmd.SyncFromRepoRoot, repoPath, worktree.Path);
+            }
+
             // Download attachments into worktree (best-effort)
             if (attachmentIds is { Length: > 0 }) {
                 try {
@@ -987,6 +995,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (agent.Work != WorkLocation.OwnedWorktree)
             return new RefreshAgentWorktreeResult(false, "not an owned worktree");
 
+        // AI-1163: daemon-validate that the source is a checkout of the SAME repo before copying.
+        // The server may now pass a requester repo root that is not the daemon's exact checkout path
+        // (e.g. a git worktree), so identity + locality are confirmed here (origin match) rather than
+        // by server-side path equality.
+        if (!await IsAllowedSyncSourceAsync(cmd.SourceRepoRoot, agent.RepoPath))
+            return new RefreshAgentWorktreeResult(false, "source is not an allowed checkout of the same repo");
+
         try {
             await _worktreeManager.SyncFromSourceAsync(
                 cmd.SourceRepoRoot,
@@ -1001,6 +1016,58 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             return new RefreshAgentWorktreeResult(false, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// AI-1163: launch-time worktree sync for a mirror-requester review flow. Mirrors the requester's
+    /// working-tree state (tracked + untracked, gitignore-respected) into the freshly-created reviewer
+    /// worktree before the reviewer process is spawned, so round 1 sees in-progress/uncommitted code.
+    /// Daemon-validated + best-effort: a source that doesn't resolve on this host, is outside the
+    /// repo-path allowlist, or isn't the same repo (origin mismatch) is skipped, leaving the worktree
+    /// at its checked-out HEAD; any failure is logged and swallowed so it never fails the launch.
+    /// </summary>
+    async Task TrySyncWorktreeAtLaunchAsync(string agentId, string sourceRepoRoot, string targetRepoPath, string worktreePath) {
+        try {
+            if (!await IsAllowedSyncSourceAsync(sourceRepoRoot, targetRepoPath)) {
+                LogLaunchSyncSkipped(agentId, sourceRepoRoot, "source not on the allowlist, not found on this host, or not a checkout of the same repo");
+
+                return;
+            }
+
+            await _worktreeManager.SyncFromSourceAsync(sourceRepoRoot, worktreePath, [], _shutdownCts.Token);
+        } catch (Exception ex) {
+            LogRefreshWorktreeFailed(ex, agentId, sourceRepoRoot, worktreePath);
+        }
+    }
+
+    /// <summary>
+    /// AI-1163: daemon-side check that <paramref name="sourceRepoRoot"/> is a safe, valid sync source
+    /// for the reviewer worktree built from <paramref name="targetRepoPath"/>. It must (1) resolve on
+    /// this host, (2) satisfy the daemon's repo-path allowlist — the same policy applied to the launch
+    /// repo, so a server-provided source can't read files from a checkout the operator disallowed
+    /// (no-op when no allowlist is configured), and (3) be a checkout of the SAME repository, which we
+    /// establish by matching the <c>origin</c> remote.
+    ///
+    /// Origin-match is the right identity check here (not a weaker path/`.git` check): review flows
+    /// are only ever discovered and launched for repos with a matching GitHub origin
+    /// (<c>DiscoverDaemonsAsync</c> resolves the daemon by owner/repo <i>from</i> origin, and the
+    /// server requires repo_owner/repo_name), so both sides always have an origin — a no-origin repo
+    /// can't be a flow target. Git worktrees inherit the clone's <c>origin</c>, so a requester working
+    /// in a worktree (whose path differs from the daemon's checkout) still matches.
+    /// </summary>
+    async Task<bool> IsAllowedSyncSourceAsync(string sourceRepoRoot, string targetRepoPath) {
+        if (string.IsNullOrEmpty(sourceRepoRoot) || !Directory.Exists(sourceRepoRoot))
+            return false;
+
+        if (!_config.IsRepoAllowed(sourceRepoRoot))
+            return false;
+
+        var sourceOrigin = await GetOriginRemoteAsync(sourceRepoRoot);
+        var targetOrigin = await GetOriginRemoteAsync(targetRepoPath);
+
+        return sourceOrigin is not null &&
+               targetOrigin is not null &&
+               string.Equals(sourceOrigin, targetOrigin, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -1359,6 +1426,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to refresh worktree for agent {AgentId} (source={Source}, target={Target})")]
     partial void LogRefreshWorktreeFailed(Exception ex, string agentId, string source, string target);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Launch-time worktree sync skipped for agent {AgentId} (source={Source}): {Reason}")]
+    partial void LogLaunchSyncSkipped(string agentId, string source, string reason);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to persist repo path for agent {AgentId}")]
     partial void LogRepoPathPersistFailed(Exception ex, string agentId);

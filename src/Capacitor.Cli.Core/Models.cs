@@ -804,9 +804,17 @@ public readonly record struct LaunchAgentCommand(
         string[]?         Tools,
         string[]?         AttachmentIds,
         string            Vendor,
-        LaunchKind        Kind    = LaunchKind.Default,
-        ReviewLaunchInfo? Review  = null,
-        string?           BaseRef = null
+        LaunchKind        Kind            = LaunchKind.Default,
+        ReviewLaunchInfo? Review          = null,
+        string?           BaseRef         = null,
+        // AI-1163: for a mirror-requester review flow, the requester's repo root. When set, the
+        // daemon syncs its working tree (uncommitted + untracked) into the freshly-created reviewer
+        // worktree BEFORE spawning, so round 1 sees in-progress code — not just committed HEAD. The
+        // daemon validates the source is a checkout of the same repo (origin match) before copying;
+        // a mismatch (e.g. a different machine, where the path doesn't resolve) skips the sync.
+        // Appended last as an optional field so the SignalR positional binding stays wire-compatible
+        // with older daemons/servers.
+        string?           SyncFromRepoRoot = null
     );
 
 /// <summary>

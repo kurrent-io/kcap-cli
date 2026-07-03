@@ -552,7 +552,7 @@ static class McpFlowsServer {
                     ["target_title"] = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
                     ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done."),
                     ["instructions"] = new("string", "Optional additional instructions for the reviewer agent."),
-                    ["mode"]         = new("string", "Optional. Pass 'context-only' to treat the submitted context/diff as authoritative. Required for code-review unless the reviewer runs in your exact repo checkout; omitting it will cause the server to reject the request with an error.")
+                    ["mode"]         = new("string", "Optional. Pass 'context-only' to have the reviewer treat the submitted context/diff as authoritative rather than reading the repository. By default the reviewer runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the review in the actual source; passing 'context-only' opts out of that.")
                 },
                 ["kind", "target_kind", "target_ref", "target_title", "context"]
             )

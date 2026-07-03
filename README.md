@@ -313,7 +313,7 @@ args    = ["mcp", "flows"] # desktop app, which launches MCP servers without you
 
 It provides four tools:
 
-- **`start_review_flow`** — start a new review flow (`spec-review` or `code-review`). Provide `kind`, `target_kind`, `target_ref`, `target_title`, and `context`. Requester context (session ID, cwd, repo root, owner, name) is resolved automatically from the environment. Returns a `flow_run_id`.
+- **`start_review_flow`** — start a new review flow (`spec-review` or `code-review`). Provide `kind`, `target_kind`, `target_ref`, `target_title`, and `context`. Requester context (session ID, cwd, repo root, owner, name) is resolved automatically from the environment. Returns a `flow_run_id`. Optional `mode`: by default, when the daemon runs on the same machine, the reviewer works in a worktree mirrored from your working tree — **uncommitted and untracked changes included** — so it grounds the review in your actual in-progress source; pass `mode="context-only"` to opt out and have the reviewer treat only the submitted context as authoritative.
 - **`submit_review_round`** — submit a follow-up round to an existing flow with updated context or a response to the reviewer's findings. Returns the new round's findings.
 - **`get_review_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow.
 - **`close_review_flow`** — mark a completed review flow as closed.

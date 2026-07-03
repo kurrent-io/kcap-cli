@@ -68,7 +68,7 @@ if FINDINGS:
 
 | Tool | Required args | Optional args | When to call |
 |---|---|---|---|
-| `start_review_flow` | `kind` (`spec-review`\|`code-review`), `target_kind` (what is being reviewed: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title, e.g. spec name or PR title), `context` (background context: what to focus on, constraints, definition of done) | `instructions`, `mode` (`context-only` — required for code-review unless the reviewer runs in your exact repo checkout) | Once, at the start of a review task. |
+| `start_review_flow` | `kind` (`spec-review`\|`code-review`), `target_kind` (what is being reviewed: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title, e.g. spec name or PR title), `context` (background context: what to focus on, constraints, definition of done) | `instructions`, `mode` (`context-only` — optional; by default, on the same machine, the reviewer's worktree is mirrored from your working tree including uncommitted changes, so it reads the actual source. Pass `context-only` to opt out and treat the submitted context as authoritative) | Once, at the start of a review task. |
 | `submit_review_round` | `flow_run_id`, `context` | `instructions` | After addressing findings. Pass the same `flow_run_id` and the updated context. |
 | `get_review_flow_status` | `flow_run_id` | — | Poll or check the current status of a flow (running, waiting, completed, failed). |
 | `close_review_flow` | `flow_run_id` | — | Only after the reviewer returns `NO FINDINGS`. |
@@ -76,14 +76,14 @@ if FINDINGS:
 ## Example (code review)
 
 ```
-# Step 1 — start (all five required args must be provided; mode=context-only is required for code-review)
+# Step 1 — start (all five required args must be provided; on the same machine the reviewer sees
+# your working tree, uncommitted changes included — pass mode="context-only" to opt out)
 start_review_flow(
   kind="code-review",
   target_kind="branch",
   target_ref="feature/add-null-check",
   target_title="Add null check on user input",
-  context="Review the diff on this branch for correctness and adherence to project conventions.",
-  mode="context-only"
+  context="Review the diff on this branch for correctness and adherence to project conventions."
 )
 # → returns flow_run_id, e.g. "flow_abc123"
 # → reviewer returns FINDINGS: missing null check on line 42
