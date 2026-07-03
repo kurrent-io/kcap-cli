@@ -3,6 +3,7 @@ using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.Codex;
 
@@ -518,7 +519,7 @@ public class CodexLauncherTests {
         var argsWith    = launcher.BuildArgs(NewFlowCtx(["not-a-server"])).Args;
         var argsWithout = launcher.BuildArgs(NewFlowCtx(null)).Args;
 
-        await Assert.That(argsWith).IsEquivalentTo(argsWithout);
+        await Assert.That(argsWith).IsEquivalentTo(argsWithout, CollectionOrdering.Matching);
     }
 
     [Test]
@@ -537,7 +538,7 @@ public class CodexLauncherTests {
             "--no-alt-screen"
         ];
 
-        await Assert.That(args).IsEquivalentTo(expected);
+        await Assert.That(args).IsEquivalentTo(expected, CollectionOrdering.Matching);
     }
 
     [Test]
@@ -547,6 +548,6 @@ public class CodexLauncherTests {
         var argsNull  = launcher.BuildArgs(NewFlowCtx(null)).Args;
         var argsEmpty = launcher.BuildArgs(NewFlowCtx([])).Args;
 
-        await Assert.That(argsEmpty).IsEquivalentTo(argsNull);
+        await Assert.That(argsEmpty).IsEquivalentTo(argsNull, CollectionOrdering.Matching);
     }
 }

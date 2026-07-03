@@ -3,6 +3,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -171,7 +172,7 @@ public class ClaudeLauncherReviewFlowTests {
             "--", "review this"
         ];
 
-        await Assert.That(args).IsEquivalentTo(expected);
+        await Assert.That(args).IsEquivalentTo(expected, CollectionOrdering.Matching);
     }
 
     [Test]
@@ -181,6 +182,6 @@ public class ClaudeLauncherReviewFlowTests {
         var argsNull  = launcher.BuildArgs(NewCtx(isReviewFlow: true) with { McpAllowlist = null }).Args;
         var argsEmpty = launcher.BuildArgs(NewCtx(isReviewFlow: true) with { McpAllowlist = [] }).Args;
 
-        await Assert.That(argsEmpty).IsEquivalentTo(argsNull);
+        await Assert.That(argsEmpty).IsEquivalentTo(argsNull, CollectionOrdering.Matching);
     }
 }
