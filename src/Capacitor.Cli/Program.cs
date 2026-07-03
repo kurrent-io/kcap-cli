@@ -77,6 +77,12 @@ if (baseUrl is null && !offlineCommands.Contains(command)) {
     return 1;
 }
 
+// AI-1168: last-resort guard around the whole command dispatch. Without it, any
+// exception a handler doesn't swallow escapes to the NativeAOT runtime, which
+// aborts the process (SIGABRT + a macOS crash report). For a ~1s hook/generator
+// the agent spawns, that was happening dozens of times a day. Record the
+// exception and exit cleanly instead (fail-open for agent-spawned commands).
+try {
 switch (command) {
     case "--version" or "-v": {
         var version = typeof(Program).Assembly
@@ -698,6 +704,11 @@ switch (command) {
 Console.Error.WriteLine($"Unknown command: {command}");
 
 return 1;
+} catch (Exception topLevelEx) {
+    CrashReporter.Record(command, topLevelEx);
+
+    return CrashReporter.ExitCode(command);
+}
 
 static string? GetArg(string[] arguments, string flag) {
     var idx = Array.IndexOf(arguments, flag);

@@ -120,22 +120,40 @@ static class CodexHookCommand {
 
         if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
          && PathExclusion.IsExcluded(TryGetString(node, "cwd"), excludedPaths)) {
-            EmitExclusionAcknowledgment(eventName);
+            EmitFallbackOutput(eventName);
             return 0;
         }
 
-        return eventName switch {
-            "SessionStart"      => await HandleSessionStart(baseUrl, node, activeProfile),
-            "Stop"              => await HandleStop(baseUrl, node),
-            "PermissionRequest" => await HandlePermissionRequest(baseUrl, node),
-            "UserPromptSubmit"
-              or "PreToolUse"
-              or "PostToolUse"  => 0,  // v1: swallow informational events
-            _                   => 0   // unknown — silently ignore
-        };
+        try {
+            return eventName switch {
+                "SessionStart"      => await HandleSessionStart(baseUrl, node, activeProfile),
+                "Stop"              => await HandleStop(baseUrl, node),
+                "PermissionRequest" => await HandlePermissionRequest(baseUrl, node),
+                "UserPromptSubmit"
+                  or "PreToolUse"
+                  or "PostToolUse"  => 0,  // v1: swallow informational events
+                _                   => 0   // unknown — silently ignore
+            };
+        } catch (Exception ex) {
+            // Fail open, but NOT by leaving stdout empty: unlike Claude, Codex's
+            // SessionStart/Stop parser rejects empty output and a missing
+            // PermissionRequest response hangs it. If a handler throws (e.g. an
+            // IO/permission fault while building the authenticated client), the
+            // CLI's top-level guard would exit 0 with empty stdout and Codex would
+            // report "invalid hook output" (AI-1168 review). Emit the
+            // event-appropriate fallback here first, and record for diagnosis.
+            CrashReporter.Record("hook", ex);
+            EmitFallbackOutput(eventName);
+            return 0;
+        }
     }
 
-    static void EmitExclusionAcknowledgment(string eventName) {
+    // Emit the minimal output Codex's parser requires for the given event — the
+    // session-scoped {"continue":true} for SessionStart/Stop, an empty object for
+    // PermissionRequest (so Codex's own approval prompt takes over), nothing for
+    // the swallowed informational events. Used both when we intentionally skip
+    // work (exclusion) and as the fail-open fallback when a handler throws.
+    static void EmitFallbackOutput(string eventName) {
         switch (eventName) {
             case "SessionStart" or "Stop":
                 // Codex's SessionStart/Stop parser rejects empty stdout.
