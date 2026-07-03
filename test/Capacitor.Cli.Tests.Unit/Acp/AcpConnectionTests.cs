@@ -298,6 +298,62 @@ public class AcpConnectionTests {
         await SwallowCancellation(runTask);
     }
 
+    // PR #244 review (Fix D, MAJOR): HandleResponse used to TryRemove the pending TCS FIRST, then
+    // parse error.code/error.message with the throwing GetInt32()/GetString() accessors. A
+    // well-formed-JSON-but-wrong-typed error payload (e.g. "code":"oops") made that parse throw,
+    // DispatchLineAsync's broad catch logged+skipped the frame, and the ALREADY-REMOVED TCS was
+    // never completed — the caller's RequestAsync hung until the connection was disposed. This
+    // test has a REAL pending RequestAsync awaiting id=1 (unlike the malformed-frame test above,
+    // whose id=2 has no pending caller and so never exercised the orphan path) and asserts the
+    // caller faults with AcpRpcException instead of hanging.
+    [Test]
+    public async Task Wrong_typed_error_code_on_a_pending_request_faults_the_caller_instead_of_hanging() {
+        await using var harness = new Harness();
+        using var       cts     = new CancellationTokenSource();
+        var              runTask = harness.Connection.RunAsync(cts.Token);
+
+        var requestTask = harness.Connection.RequestAsync("session/prompt", null, CancellationToken.None);
+        var frame       = await harness.ReadFrameFromConnectionAsync();
+        var id          = JsonDocument.Parse(frame).RootElement.GetProperty("id").GetInt64();
+
+        await harness.WriteFrameToConnectionAsync(
+            $$$"""{"jsonrpc":"2.0","id":{{{id}}},"error":{"code":"oops","message":"x"}}"""
+        );
+
+        // Bounded .WaitAsync: before the fix this would hang for the whole HangGuard and then
+        // throw TimeoutException (masking the real bug) rather than surfacing the RPC error.
+        var ex = await Assert.ThrowsAsync<AcpRpcException>(() => requestTask.WaitAsync(HangGuard));
+        await Assert.That(ex).IsNotNull();
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
+    }
+
+    // Same class of bug, but the `error` value itself is non-object (a JSON string) rather than
+    // having a wrong-typed field inside it — HandleResponse's `errorElement is { } error` pattern
+    // matches ANY non-null JsonElement (including a string), so `error.TryGetProperty(...)` on a
+    // string value must not throw either.
+    [Test]
+    public async Task Non_object_error_payload_on_a_pending_request_faults_the_caller_instead_of_hanging() {
+        await using var harness = new Harness();
+        using var       cts     = new CancellationTokenSource();
+        var              runTask = harness.Connection.RunAsync(cts.Token);
+
+        var requestTask = harness.Connection.RequestAsync("session/prompt", null, CancellationToken.None);
+        var frame       = await harness.ReadFrameFromConnectionAsync();
+        var id          = JsonDocument.Parse(frame).RootElement.GetProperty("id").GetInt64();
+
+        await harness.WriteFrameToConnectionAsync(
+            $$$"""{"jsonrpc":"2.0","id":{{{id}}},"error":"totally-not-an-object"}"""
+        );
+
+        var ex = await Assert.ThrowsAsync<AcpRpcException>(() => requestTask.WaitAsync(HangGuard));
+        await Assert.That(ex).IsNotNull();
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
+    }
+
     [Test]
     public async Task Server_request_with_string_id_echoes_the_same_string_id_verbatim() {
         await using var harness = new Harness();

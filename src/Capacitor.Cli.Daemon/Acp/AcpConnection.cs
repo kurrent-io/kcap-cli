@@ -221,9 +221,31 @@ internal sealed class AcpConnection : IAsyncDisposable {
         }
 
         if (errorElement is { } error) {
-            var code    = error.TryGetProperty("code", out var codeEl) ? codeEl.GetInt32() : 0;
-            var message = error.TryGetProperty("message", out var msgEl) ? msgEl.GetString() ?? "" : "";
-            JsonElement? data = error.TryGetProperty("data", out var dataEl) ? dataEl.Clone() : null;
+            // TryRemove already took the pending TCS above — from here on we MUST complete it,
+            // no matter how malformed `error` turns out to be. A well-formed JSON-RPC frame can
+            // still carry a wrong-typed `error` (a non-object value, or an object whose `code`
+            // isn't a number / whose `message` isn't a string): the old code used the throwing
+            // GetInt32()/GetString() accessors here, and DispatchLineAsync's broad catch would
+            // log+skip the frame — leaving this TCS orphaned and its caller hanging until the
+            // connection disposed. Every read below is TryGetProperty + ValueKind-gated so this
+            // block can never throw (PR #244 review, Fix D).
+            var code = error.ValueKind == JsonValueKind.Object
+                    && error.TryGetProperty("code", out var codeEl)
+                    && codeEl.ValueKind == JsonValueKind.Number
+                    && codeEl.TryGetInt32(out var codeValue)
+                ? codeValue
+                : 0;
+
+            var message = error.ValueKind == JsonValueKind.Object
+                    && error.TryGetProperty("message", out var msgEl)
+                    && msgEl.ValueKind == JsonValueKind.String
+                ? msgEl.GetString() ?? ""
+                : "";
+
+            JsonElement? data = error.ValueKind == JsonValueKind.Object
+                    && error.TryGetProperty("data", out var dataEl)
+                ? dataEl.Clone()
+                : null;
 
             tcs.TrySetException(new AcpRpcException(code, message, data));
             return;
