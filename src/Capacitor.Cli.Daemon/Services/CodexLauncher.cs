@@ -82,13 +82,17 @@ internal sealed partial class CodexLauncher(
             ctx.IsReviewFlow ? "never" : "on-request"
         };
 
-        // Review-flow reviewers run with NO MCP servers: stops the reviewer recursively invoking
-        // kcap-flows' start_review_flow (the kcap-review-flows skill would otherwise trigger a
-        // nested review flow). The reviewer works from its prompt + read-only file inspection.
-        // Interactive agents keep their configured MCP servers.
+        // Review-flow reviewers get exactly ONE MCP server: kcap-flow-result (AI-1139), which can
+        // only submit a result — never start a flow. Clear-then-whitelist, in this order:
+        // the bare `mcp_servers={}` FIRST replaces the entire [mcp_servers] table from
+        // ~/.codex/config.toml; the dotted overrides then insert into the now-empty table.
+        // Dotted overrides alone MERGE into the user's table and would re-expose whatever MCP
+        // servers the user has registered (including a hand-registered kcap-flows with
+        // start_review_flow — the recursion guard would silently vanish).
         if (ctx.IsReviewFlow) {
             args.Add("-c");
             args.Add("mcp_servers={}");
+            AddFlowResultServer(args, ctx);
         }
 
         AddModelArg(args, ctx.Model);
@@ -109,6 +113,22 @@ internal sealed partial class CodexLauncher(
         }
 
         return new([.. args], McpConfigPath: null);
+    }
+
+    /// <summary>AI-1139: registers the reviewer-side result-submission server. Skipped (zero
+    /// servers — the recursion-safe default) when the daemon has no server URL or kcap path;
+    /// the reviewer then falls back to the transcript marker per the prompt contract.</summary>
+    void AddFlowResultServer(List<string> args, LauncherContext ctx) {
+        if (string.IsNullOrWhiteSpace(config.ServerUrl) || string.IsNullOrWhiteSpace(config.CapacitorPath)) return;
+
+        const string name = "kcap-flow-result";
+
+        args.Add("-c");
+        args.Add($"mcp_servers.{name}.command={TomlString(config.CapacitorPath)}");
+        args.Add("-c");
+        args.Add($"mcp_servers.{name}.args=[{TomlString("mcp")},{TomlString("flow-result")}]");
+        args.Add("-c");
+        args.Add($"mcp_servers.{name}.env={{KCAP_URL={TomlString(config.ServerUrl)},KCAP_FLOW_AGENT_ID={TomlString(ctx.AgentId)}}}");
     }
 
     /// Append `-m <model>` unless the model is empty or the "default" no-override sentinel.

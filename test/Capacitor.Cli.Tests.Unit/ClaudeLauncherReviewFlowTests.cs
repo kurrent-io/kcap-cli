@@ -7,8 +7,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit;
 
 public class ClaudeLauncherReviewFlowTests {
-    static ClaudeLauncher NewLauncher() =>
-        new(new DaemonConfig { ClaudePath = "claude" }, NullLogger<ClaudeLauncher>.Instance);
+    static ClaudeLauncher NewLauncher(string? serverUrl = null, string capacitorPath = "kcap") =>
+        new(new DaemonConfig { ClaudePath = "claude", ServerUrl = serverUrl ?? "", CapacitorPath = capacitorPath }, NullLogger<ClaudeLauncher>.Instance);
 
     static LauncherContext NewCtx(bool isReviewFlow, string? prompt = "review this", string model = "sonnet") =>
         new(
@@ -35,17 +35,30 @@ public class ClaudeLauncherReviewFlowTests {
     }
 
     [Test]
-    public async Task Review_flow_launch_loads_no_mcp_servers() {
+    public async Task Review_flow_launch_without_server_url_loads_no_mcp_servers() {
         var args = NewLauncher().BuildArgs(NewCtx(isReviewFlow: true)).Args;
 
         await Assert.That(args).Contains("--strict-mcp-config");
-        await Assert.That(args).Contains("--mcp-config");
-
-        // The --mcp-config value must parse to an empty mcpServers map so the reviewer
-        // cannot recursively invoke kcap-flows.
         var cfgIndex = Array.IndexOf(args, "--mcp-config");
         var parsed   = JsonNode.Parse(args[cfgIndex + 1])!.AsObject();
         await Assert.That(parsed["mcpServers"]!.AsObject().Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Review_flow_launch_loads_exactly_the_flow_result_server() {
+        var args = NewLauncher(serverUrl: "https://t.example", capacitorPath: "/opt/kcap").BuildArgs(NewCtx(isReviewFlow: true)).Args;
+
+        await Assert.That(args).Contains("--strict-mcp-config");
+        var cfgIndex = Array.IndexOf(args, "--mcp-config");
+        var servers  = JsonNode.Parse(args[cfgIndex + 1])!.AsObject()["mcpServers"]!.AsObject();
+
+        await Assert.That(servers.Count).IsEqualTo(1);
+        var flowResult = servers["kcap-flow-result"]!.AsObject();
+        await Assert.That(flowResult["command"]!.GetValue<string>()).IsEqualTo("/opt/kcap");
+        await Assert.That(flowResult["args"]![0]!.GetValue<string>()).IsEqualTo("mcp");
+        await Assert.That(flowResult["args"]![1]!.GetValue<string>()).IsEqualTo("flow-result");
+        await Assert.That(flowResult["env"]!["KCAP_URL"]!.GetValue<string>()).IsEqualTo("https://t.example");
+        await Assert.That(flowResult["env"]!["KCAP_FLOW_AGENT_ID"]!.GetValue<string>()).IsEqualTo("a-1");
     }
 
     [Test]

@@ -43,23 +43,7 @@ static class RepositoryDetection {
                 return json;
             }
 
-            var repoNode = new JsonObject();
-
-#pragma warning disable IDE0011
-            if (repo.UserName is not null) repoNode["user_name"]    = repo.UserName;
-            if (repo.UserEmail is not null) repoNode["user_email"]  = repo.UserEmail;
-            if (repo.RemoteUrl is not null) repoNode["remote_url"]  = repo.RemoteUrl;
-            if (repo.Host is not null) repoNode["host"]             = repo.Host;
-            if (repo.Owner is not null) repoNode["owner"]           = repo.Owner;
-            if (repo.RepoName is not null) repoNode["repo_name"]    = repo.RepoName;
-            if (repo.Branch is not null) repoNode["branch"]         = repo.Branch;
-            if (repo.PrNumber is not null) repoNode["pr_number"]    = repo.PrNumber;
-            if (repo.PrTitle is not null) repoNode["pr_title"]      = repo.PrTitle;
-            if (repo.PrUrl is not null) repoNode["pr_url"]          = repo.PrUrl;
-            if (repo.PrHeadRef is not null) repoNode["pr_head_ref"] = repo.PrHeadRef;
-#pragma warning restore IDE0011
-
-            obj["repository"] = repoNode;
+            obj["repository"] = BuildRepositoryNode(repo);
 
             SaveLastEmitted(cwd, repo);
 
@@ -67,6 +51,55 @@ static class RepositoryDetection {
         } catch {
             return json; // on any error, forward original payload
         }
+    }
+
+    /// <summary>
+    /// cwd-explicit enrichment (AI-1152). Same as <see cref="EnrichWithRepositoryInfo"/> but the
+    /// working directory is supplied by the caller rather than read from a <c>cwd</c> field —
+    /// used by the Cursor hook path, whose payloads carry <c>workspace_roots</c> instead of
+    /// <c>cwd</c>. Always attaches when a repo is detected (no last-emitted dedup): callers use
+    /// this for session-start, where each session needs its own RepositoryDetected event.
+    /// Fail-open: forwards the original payload unchanged on any error or non-git dir.
+    /// </summary>
+    public static async Task<string> EnrichWithRepositoryInfoFromCwd(string json, string cwd, TimeSpan? budget = null) {
+        try {
+            if (string.IsNullOrEmpty(cwd)) return json;
+            if (JsonNode.Parse(json) is not JsonObject obj) return json;
+
+            var repo = await DetectRepositoryAsync(cwd, budget);
+            if (repo is null) return json;
+
+            obj["repository"] = BuildRepositoryNode(repo);
+            return obj.ToJsonString();
+        } catch {
+            return json;
+        }
+    }
+
+    /// <summary>
+    /// Builds the <c>repository</c> JSON node from a detected payload. Only non-null fields are
+    /// emitted so the server-side <c>RepositoryInfoPayload</c> deserialises cleanly. Shared by
+    /// <see cref="EnrichWithRepositoryInfo"/> and <see cref="EnrichWithRepositoryInfoFromCwd"/>,
+    /// and reused by the Cursor import path.
+    /// </summary>
+    public static JsonObject BuildRepositoryNode(RepositoryPayload repo) {
+        var repoNode = new JsonObject();
+
+#pragma warning disable IDE0011
+        if (repo.UserName is not null) repoNode["user_name"]    = repo.UserName;
+        if (repo.UserEmail is not null) repoNode["user_email"]  = repo.UserEmail;
+        if (repo.RemoteUrl is not null) repoNode["remote_url"]  = repo.RemoteUrl;
+        if (repo.Host is not null) repoNode["host"]             = repo.Host;
+        if (repo.Owner is not null) repoNode["owner"]           = repo.Owner;
+        if (repo.RepoName is not null) repoNode["repo_name"]    = repo.RepoName;
+        if (repo.Branch is not null) repoNode["branch"]         = repo.Branch;
+        if (repo.PrNumber is not null) repoNode["pr_number"]    = repo.PrNumber;
+        if (repo.PrTitle is not null) repoNode["pr_title"]      = repo.PrTitle;
+        if (repo.PrUrl is not null) repoNode["pr_url"]          = repo.PrUrl;
+        if (repo.PrHeadRef is not null) repoNode["pr_head_ref"] = repo.PrHeadRef;
+#pragma warning restore IDE0011
+
+        return repoNode;
     }
 
     static bool RepoPayloadEquals(RepositoryPayload a, RepositoryPayload b) =>

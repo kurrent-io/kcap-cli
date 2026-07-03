@@ -123,6 +123,8 @@ The `kcap mcp sessions` stdio server lets coding agents search and recall past C
 
 The `kcap mcp flows` stdio server lets agents start and interact with AI-powered review flows. The plugin **auto-registers it for Claude Code** (Codex stays manual). See the [Flows MCP server](#flows-mcp-server-for-agents) section for details.
 
+The `kcap mcp flow-result` stdio server is the reviewer-side counterpart: the daemon injects it into hosted review-flow reviewer sessions so they can submit their result. It is not meant to be registered or run manually — see [Flow-result MCP server](#flow-result-mcp-server-hosted-reviewers).
+
 The `kcap mcp memory` stdio server lets agents search, save, and update durable team memories — preferences, feedback, project facts, and references scoped to you, your team, or the org. The plugin **auto-registers it for Claude Code** (via `.mcp.json`) and for Codex's native plugin loader (via `.codex-mcp.json`). See the [Memory MCP server](#memory-mcp-server-for-agents) section for details.
 
 ## What it records
@@ -177,10 +179,10 @@ If you run `kcap setup` outside any git working tree, it still completes — hoo
 
 ### Session recap
 
-By default, shows a concise AI-generated summary — why the work was done, key decisions, and anything left unfinished. Use `--full` for the complete transcript with all prompts, responses, and file changes.
+By default, shows a concise AI-generated summary — why the work was done, key decisions, and anything left unfinished — followed by a per-turn outline (one prose line per turn) and a `--get-turn <N>` pointer for drilling into any turn. Use `--full` for the complete transcript with all prompts, responses, and file changes.
 
 ```bash
-kcap recap <sessionId>              # summary (default)
+kcap recap <sessionId>              # summary + per-turn outline (default)
 kcap recap --full <sessionId>       # full transcript
 kcap recap --chain <sessionId>      # summaries across continuation chain
 kcap recap --chain --full <sessionId>  # full transcript across chain
@@ -317,6 +319,14 @@ It provides four tools:
 - **`close_review_flow`** — mark a completed review flow as closed.
 
 Requires `kcap login` **and a running daemon with this repo checked out** — the server discovers a connected daemon to launch the hosted reviewer (Codex for the built-in `spec-review`/`code-review` flows; the vendor is chosen by the flow definition), and `start_review_flow` errors if none (or more than one) matches. The server creates an authenticated HTTP client at startup and posts to the Capacitor server's `/api/flows/*` endpoints.
+
+### Flow-result MCP server (hosted reviewers)
+
+```bash
+kcap mcp flow-result   # launched by the daemon — not meant to be run manually
+```
+
+Stdio MCP server the **daemon injects into hosted review-flow reviewer sessions** (both Claude and Codex reviewers) as their only MCP server. It exposes a single tool, **`submit_review_result`** (`round_token`, `kind: "findings" | "clean"`, `findings`), which posts the reviewer's result to the Capacitor server — the reliable alternative to the transcript-marker fallback. It is deliberately separate from `kcap mcp flows` so an unattended reviewer can never start a nested flow, and it reads its identity from daemon-provided environment (`KCAP_FLOW_AGENT_ID`); run manually it just exits with an explanation. There is nothing to register or configure.
 
 ### Memory MCP server (for agents)
 

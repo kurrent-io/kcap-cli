@@ -1,20 +1,40 @@
 ---
 name: review-flows
 description: >-
-  This skill should be used when the user asks to "review this spec",
-  "review this design", "review my PR", "code review", "get this reviewed",
-  "re-review", "start a review flow", "review flow", "submit for review",
-  or wants structured iterative review with findings and sign-off.
+  This skill should be used ONLY when the user explicitly asks to run a
+  structured review *flow* — e.g. "start a review flow", "submit this for
+  review", "re-review after I address findings", or wants an iterative review
+  loop run by a separate reviewer that continues until sign-off. Do NOT use
+  this skill (and do NOT call the flows MCP tools) for an ordinary review
+  request such as "review my PR", "review this diff/spec/design", or "code
+  review" where the user just wants you to review it yourself — perform that
+  review directly instead.
 ---
 
 # Review Flows
 
-Use `kcap mcp flows` MCP tools to run structured review loops for specs/designs and PR/code work. A review flow submits your work to a reviewer, collects findings, lets you address them, and keeps iterating until the reviewer returns `NO FINDINGS`.
+Use the `kcap mcp flows` MCP tools (`start_review_flow`, `submit_review_round`, …) to run a structured review **flow**: your work is submitted to a **separate, hosted reviewer** agent, which returns findings; you address them and keep iterating until the reviewer returns `NO FINDINGS`. This is a deliberate, heavier workflow — use it only when the user explicitly opts into it.
 
-## When to use
+## When NOT to use this skill / these tools
 
-- Reviewing a spec or design document → use `kind: "spec-review"`
-- Reviewing code changes or a pull request → use `kind: "code-review"`
+These tools do **not** perform a review — they hand the work off to a separate hosted reviewer. If the user simply asked *you* to review something in a normal session — e.g. "review my PR", "review this diff", "code review this", "look over this spec" — just perform the review yourself and report your findings directly. Do **NOT** call `start_review_flow` / `submit_review_round` for an ordinary review request; that would spin up a hosted reviewer the user did not ask for.
+
+Only start a flow when the user explicitly asks for a review *flow* — e.g. "start a review flow", "submit this for review", "get an independent review", or "re-review after I address the findings".
+
+## Choosing the flow kind
+
+Once the user has explicitly opted into a flow (see above), pick the `kind`:
+
+- Spec or design document → `kind: "spec-review"`
+- Code changes or a pull request → `kind: "code-review"`
+
+## If the flows MCP tools are not loaded
+
+If `start_review_flow` / `submit_review_round` are not among the tools available in this session, do NOT try to obtain them:
+
+- Do NOT run `kcap mcp flows` from a shell, do NOT handshake it over stdio/JSON-RPC, and do NOT edit any MCP configuration.
+- The absence is deliberate: hosted review-flow reviewers run with all MCP servers stripped, so a reviewer cannot start a nested flow.
+- If you were asked to review a spec, design, or code and these tools are absent, you are most likely the hosted reviewer inside an existing flow. This skill does not apply to you — skip the workflow below entirely. Perform the requested review directly and end with a final message that starts with `FINDINGS:` (followed by your findings) or `NO FINDINGS`. Your final message is captured automatically; no tool call is needed to deliver it.
 
 ## Core rules
 

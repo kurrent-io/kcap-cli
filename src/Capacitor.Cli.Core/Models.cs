@@ -27,6 +27,14 @@ record TranscriptBatch {
     [JsonPropertyName("vendor")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Vendor { get; init; }
+
+    // When true, the server returns non-2xx if any line in the batch fails to normalize
+    // (HandleTranscript → 500 on batch.Strict && Failed>0), so a fail-closed importer aborts
+    // instead of proceeding over a partially-ingested transcript. Omitted on the wire when
+    // false so older servers keep deserialising unchanged.
+    [JsonPropertyName("strict")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Strict { get; init; }
 }
 
 record ErrorEntry(
