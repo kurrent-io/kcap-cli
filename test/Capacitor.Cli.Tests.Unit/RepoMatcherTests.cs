@@ -154,6 +154,29 @@ public class RepoMatcherTests {
     }
 
     [Test]
+    public async Task FindAsync_MatchingNestedGitlabGroupOrigin_ReturnsRoot() {
+        // AI-1121: a nested namespace owner ("group/sub") must match the full
+        // owner/repo suffix of the normalized remote.
+        var repo = MakeTempRepo("git@gitlab.com:group/sub/project.git");
+        try {
+            var result = await NewMatcher().FindAsync("group/sub", "project", [repo], CancellationToken.None);
+
+            await Assert.That(result).Contains(Path.GetFullPath(repo));
+        } finally { Directory.Delete(repo, true); }
+    }
+
+    [Test]
+    public async Task FindAsync_NestedGroup_WrongSubgroup_ReturnsEmpty() {
+        // A different subgroup with the same project name must NOT match.
+        var repo = MakeTempRepo("git@gitlab.com:group/sub/project.git");
+        try {
+            var result = await NewMatcher().FindAsync("group", "project", [repo], CancellationToken.None);
+
+            await Assert.That(result).IsEmpty();
+        } finally { Directory.Delete(repo, true); }
+    }
+
+    [Test]
     public async Task FindAsync_AllowedRepoPathsContributesCandidates() {
         var repo = MakeTempRepo("https://github.com/contoso/widgets.git");
         try {

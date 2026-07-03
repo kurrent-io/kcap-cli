@@ -32,6 +32,18 @@ public class GitLabPrDetectorTests {
     }
 
     [Test]
+    public async Task Nested_group_encodes_full_project_path() {
+        // AI-1121: a nested namespace owner ("group/sub") must be URL-encoded whole
+        // into the glab project path (group%2Fsub%2Fproj), not left with a raw slash.
+        string? seen = null;
+        CommandRunner fake = (_, args, _, _) => { seen = args; return Task.FromResult<string?>("[]"); };
+
+        await GitLabPrDetector.DetectAsync("gitlab.com", "group/sub", "proj", "feat/x", "/cwd", TimeSpan.FromSeconds(2), fake);
+
+        await Assert.That(seen).Contains("projects/group%2Fsub%2Fproj/merge_requests");
+    }
+
+    [Test]
     public async Task Empty_branch_never_calls_glab_and_returns_null() {
         var called = false;
         CommandRunner fake = (_, _, _, _) => { called = true; return Task.FromResult<string?>("[]"); };
