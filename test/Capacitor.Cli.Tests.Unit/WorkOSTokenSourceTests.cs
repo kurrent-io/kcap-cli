@@ -108,6 +108,40 @@ public class WorkOSTokenSourceTests {
     }
 
     [Test]
+    public async Task GetAsync_degrades_to_existing_token_when_refresh_throws() {
+        var now      = DateTimeOffset.UnixEpoch.AddDays(1);
+        var expiring = JwtWithExp(now.AddSeconds(10));
+
+        // A transient network/JSON failure inside the refresh must not abort the poll — the caller's
+        // next status call still carries this token (and surfaces the eventual 401) instead of crashing.
+        var src = new WorkOSTokenSource(expiring, "rt1",
+            refresh: (_, _) => Task.FromException<WorkOSAuthResponse?>(new HttpRequestException("network down")),
+            now: () => now, margin: TimeSpan.FromSeconds(60));
+
+        var token = await src.GetAsync(CancellationToken.None);
+
+        await Assert.That(token).IsEqualTo(expiring);
+    }
+
+    [Test]
+    public async Task GetAsync_propagates_genuine_cancellation_rather_than_swallowing_it() {
+        var now      = DateTimeOffset.UnixEpoch.AddDays(1);
+        var expiring = JwtWithExp(now.AddSeconds(10));
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var src = new WorkOSTokenSource(expiring, "rt1",
+            refresh: (_, ct) => Task.FromException<WorkOSAuthResponse?>(new OperationCanceledException(ct)),
+            now: () => now, margin: TimeSpan.FromSeconds(60));
+
+        var cancelled = false;
+        try { await src.GetAsync(cts.Token); }
+        catch (OperationCanceledException) { cancelled = true; }
+
+        await Assert.That(cancelled).IsTrue();
+    }
+
+    [Test]
     public async Task GetAsync_without_refresh_token_returns_current_and_never_refreshes() {
         var now      = DateTimeOffset.UnixEpoch.AddDays(1);
         var expiring = JwtWithExp(now.AddSeconds(1));

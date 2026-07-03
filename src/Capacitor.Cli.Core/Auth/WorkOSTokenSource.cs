@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Capacitor.Cli.Core.Auth;
 
 // Keeps a valid WorkOS access token available across a long-running interactive flow.
@@ -39,13 +41,21 @@ public sealed class WorkOSTokenSource {
     public string? CurrentRefreshToken => refreshToken;
 
     // Returns a token expected to be valid for at least `margin`, refreshing first if the current
-    // one is that close to (or past) expiry. A failed refresh degrades to the existing token — the
-    // caller's HTTP call still surfaces the eventual 401 rather than this throwing mid-poll.
+    // one is that close to (or past) expiry. A failed refresh — whether the delegate returns null or
+    // throws a transient network/JSON error — degrades to the existing token so a blip can't abort a
+    // long provisioning poll; the caller's HTTP call still surfaces the eventual 401, and the next
+    // tick retries. A genuine cancellation (via ct) is not swallowed.
     public async Task<string> GetAsync(CancellationToken ct) {
         if (refreshToken is null) return accessToken;
         if (now() < expiresAt - margin) return accessToken;
 
-        var refreshed = await refresh(refreshToken, ct);
+        WorkOSAuthResponse? refreshed;
+        try {
+            refreshed = await refresh(refreshToken, ct);
+        } catch (Exception e) when (IsTransient(e) && !ct.IsCancellationRequested) {
+            return accessToken;
+        }
+
         if (refreshed is { AccessToken.Length: > 0 }) {
             accessToken  = refreshed.AccessToken;
             refreshToken = refreshed.RefreshToken ?? refreshToken;
@@ -54,4 +64,10 @@ public sealed class WorkOSTokenSource {
 
         return accessToken;
     }
+
+    // Network / timeout / unreadable-body failures the refresh degrades on. OperationCanceledException
+    // is included as an HttpClient timeout; a real user/ct cancel is excluded by the caller's
+    // !ct.IsCancellationRequested guard so it still propagates. Mirrors TenantProvisioningClient.
+    static bool IsTransient(Exception e) =>
+        e is HttpRequestException or OperationCanceledException or JsonException or NotSupportedException;
 }
