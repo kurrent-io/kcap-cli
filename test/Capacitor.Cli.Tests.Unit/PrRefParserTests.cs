@@ -101,10 +101,30 @@ public class PrRefParserTests {
     }
 
     [Test]
-    public async Task Gitlab_nested_group_mr_url_is_rejected_in_first_pass() {
-        // Multi-segment namespace deferred (§3/§6b): server routes are /{owner}/{repo}.
-        var ok = PrRefParser.TryParse("https://gitlab.com/group/sub/project/-/merge_requests/42", out _, out _, out _);
-        await Assert.That(ok).IsFalse();
+    public async Task Gitlab_nested_group_mr_url_is_parsed() {
+        // Nested groups supported (§6b / AI-1121): owner is the full namespace path.
+        var ok = PrRefParser.TryParse("https://gitlab.com/group/sub/project/-/merge_requests/42",
+                                      out var owner, out var repo, out var pr);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(owner).IsEqualTo("group/sub");
+        await Assert.That(repo).IsEqualTo("project");
+        await Assert.That(pr).IsEqualTo(42);
+    }
+
+    [Test]
+    public async Task Gitlab_deeply_nested_mr_url_with_suffix_is_parsed() {
+        var ok = PrRefParser.TryParse("https://gitlab.com/a/b/c/proj/-/merge_requests/7/diffs",
+                                      out var owner, out var repo, out var pr);
+        await Assert.That(ok).IsTrue();
+        await Assert.That(owner).IsEqualTo("a/b/c");
+        await Assert.That(repo).IsEqualTo("proj");
+        await Assert.That(pr).IsEqualTo(7);
+    }
+
+    [Test]
+    public async Task Nested_shorthand_is_still_rejected() {
+        // Safety rule preserved: a '/' in the shorthand repo group stays rejected.
+        await Assert.That(PrRefParser.TryParse("group/sub/project#42", out _, out _, out _)).IsFalse();
     }
 
     [Test]
