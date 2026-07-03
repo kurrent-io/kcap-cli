@@ -159,6 +159,17 @@ class WatchState {
     // poll (server dedup by deterministic id is the backstop). -1 = none seen yet.
     public long LastAntigravityGenIdx { get; set; } = -1;
 
+    // Most-recent Antigravity transcript step created_at, stamped onto synthetic USAGE lines
+    // so their backfill event's recency reflects the turn, not the event-store write time.
+    public string? LastAntigravityCreatedAt { get; set; }
+
+    // Antigravity tool calls seen without a matching result step yet (PLANNER_RESPONSE
+    // tool_calls increment; RUN_COMMAND/VIEW_FILE/LIST_DIRECTORY/CODE_ACTION decrement). A
+    // long-running command produces no transcript line between its call and result, so this
+    // suppresses the idle-timeout session-end while a tool is genuinely in flight (mirrors
+    // the Codex PendingCodexToolCalls guard).
+    public int PendingAntigravityToolCalls { get; set; }
+
     public const int TranscriptThreshold = 10;
 }
 

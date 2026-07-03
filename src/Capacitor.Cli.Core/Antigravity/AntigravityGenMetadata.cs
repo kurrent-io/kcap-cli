@@ -68,10 +68,13 @@ public static class AntigravityGenMetadata {
     /// <summary>
     /// The synthetic <c>USAGE</c> transcript line the server's antigravity normalizer maps
     /// to one <c>AntigravityUsageBackfilledEvent</c>. <paramref name="genRow"/> is the
-    /// <c>gen_metadata.idx</c>; including it makes each row's line — and thus the server's
-    /// deterministic event id — unique, so re-emitting a row dedupes while a new row adds.
+    /// <c>gen_metadata.idx</c>; the server derives the event id from (session, gen_row), so a
+    /// re-emitted row dedupes while a new row adds. <paramref name="createdAt"/> anchors the
+    /// event timestamp to the conversation's most-recent transcript step (the row is decoded
+    /// right after the generation that produced that step), so the backfill's recency reflects
+    /// the turn rather than the event-store write time (AI-1157 review, S4).
     /// </summary>
-    public static string ToUsageLine(AntigravityUsageRow row, long genRow) {
+    public static string ToUsageLine(AntigravityUsageRow row, long genRow, string? createdAt = null) {
         var o = new JsonObject {
             ["type"]               = "USAGE",
             ["gen_row"]            = genRow,
@@ -82,6 +85,7 @@ public static class AntigravityGenMetadata {
             ["reasoning_tokens"]   = 0
         };
         if (row.Model is not null) o["model"] = row.Model;
+        if (createdAt is not null) o["created_at"] = createdAt;
         return o.ToJsonString();
     }
 

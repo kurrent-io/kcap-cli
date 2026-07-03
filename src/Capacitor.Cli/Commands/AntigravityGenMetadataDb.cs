@@ -38,18 +38,18 @@ internal sealed class AntigravityGenMetadataDb : IDisposable {
     /// when the db is absent/locked/malformed. <paramref name="afterIdx"/> lets the
     /// watcher stream only newly-appended rows across polls.
     /// </summary>
-    public static IReadOnlyList<(long Idx, string Line)> ReadUsageLines(string dbPath, long afterIdx = -1) {
+    public static IReadOnlyList<(long Idx, string Line)> ReadUsageLines(string dbPath, long afterIdx = -1, string? createdAt = null) {
         if (!File.Exists(dbPath)) return [];
 
         try {
             using var db = new AntigravityGenMetadataDb(dbPath);
-            return db.Query(afterIdx);
+            return db.Query(afterIdx, createdAt);
         } catch {
             return []; // locked / not-a-db / schema drift — cost is best-effort
         }
     }
 
-    List<(long, string)> Query(long afterIdx) {
+    List<(long, string)> Query(long afterIdx, string? createdAt) {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText =
             "SELECT idx, data FROM gen_metadata WHERE idx > $after AND data IS NOT NULL AND length(data) > 0 ORDER BY idx";
@@ -68,7 +68,7 @@ internal sealed class AntigravityGenMetadataDb : IDisposable {
             }
 
             if (AntigravityGenMetadata.TryDecode(blob) is { } row)
-                lines.Add((idx, AntigravityGenMetadata.ToUsageLine(row, idx)));
+                lines.Add((idx, AntigravityGenMetadata.ToUsageLine(row, idx, createdAt)));
         }
         return lines;
     }

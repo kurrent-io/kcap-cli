@@ -70,7 +70,13 @@ public class AntigravityPathsTests {
     }
 
     [Test]
-    public async Task ConversationDbFromTranscript_returns_null_for_an_unexpected_path() {
-        await Assert.That(AntigravityPaths.ConversationDbFromTranscript("foo.jsonl")).IsNull();
+    [Arguments("foo.jsonl")]                                                              // wrong filename, shallow
+    [Arguments("/a/b/c/d/e/transcript_full.jsonl")]                                       // right file, wrong segments
+    [Arguments("/root/brain/id/.system_generated/logs/other.jsonl")]                      // wrong filename
+    [Arguments("/root/brain/id/.system_generated/notlogs/transcript_full.jsonl")]         // wrong "logs" segment
+    [Arguments("/root/brain/id/wrong/logs/transcript_full.jsonl")]                        // wrong ".system_generated"
+    [Arguments("/root/notbrain/id/.system_generated/logs/transcript_full.jsonl")]         // wrong "brain"
+    public async Task ConversationDbFromTranscript_returns_null_for_an_unexpected_path(string path) {
+        await Assert.That(AntigravityPaths.ConversationDbFromTranscript(path)).IsNull();
     }
 }

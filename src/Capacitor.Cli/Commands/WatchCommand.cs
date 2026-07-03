@@ -331,7 +331,11 @@ static partial class WatchCommand {
                         state.LastActivityAt,
                         DateTimeOffset.UtcNow,
                         idleTimeout,
-                        toolInFlight: state.PendingCodexToolCalls.Count > 0)) {
+                        // A tool awaiting its result suppresses idle-end: Codex tracks call_ids,
+                        // Antigravity counts PLANNER_RESPONSE calls vs result steps (AI-1157 review).
+                        toolInFlight: vendor == "antigravity"
+                            ? state.PendingAntigravityToolCalls > 0
+                            : state.PendingCodexToolCalls.Count > 0)) {
                     Log($"{vendor} transcript idle for >{idleTimeout.TotalMinutes:F0}m; ending session (idle_timeout)");
                     idleExit = true;
                     cts.Cancel();
@@ -798,6 +802,17 @@ static partial class WatchCommand {
 
             var linesRead = lineIndex;
 
+            // Track Antigravity in-flight tool calls + the latest step timestamp from this
+            // drain's transcript lines (BEFORE appending USAGE lines, which aren't transcript
+            // steps). The created_at anchors USAGE recency; the pending-call count suppresses a
+            // premature idle session-end while a long command runs (no line between call/result).
+            if (vendor == "antigravity") {
+                foreach (var l in newLines) {
+                    UpdateAntigravityPendingToolCalls(state, l);
+                    if (TryGetAntigravityCreatedAt(l) is { } ca) state.LastAntigravityCreatedAt = ca;
+                }
+            }
+
             // Antigravity keeps per-generation tokens/model in the sibling conversation .db
             // (derived from the transcript path — the session id here is the canonical dashless
             // form, but the transcript path carries the real conversation id), not the JSONL;
@@ -809,7 +824,7 @@ static partial class WatchCommand {
             // advances only after a successful send (below), so a failed batch re-reads the rows.
             var antigravityGenMax = -1L;
             if (vendor == "antigravity" && (agentId is not null || state.ThresholdReached)) {
-                antigravityGenMax = AppendAntigravityUsageLines(state, newLines, newLineNumbers, transcriptPath);
+                antigravityGenMax = AppendAntigravityUsageLines(state, newLines, newLineNumbers, transcriptPath, state.LastAntigravityCreatedAt);
             }
 
             if (newLines.Count > 0) {
@@ -1283,11 +1298,11 @@ static partial class WatchCommand {
     /// rows next drain. The db is the sibling of the transcript (its path carries the real
     /// conversation id, even when the session id is the canonical dashless form).
     /// </summary>
-    static long AppendAntigravityUsageLines(WatchState state, List<string> newLines, List<int> newLineNumbers, string transcriptPath) {
+    static long AppendAntigravityUsageLines(WatchState state, List<string> newLines, List<int> newLineNumbers, string transcriptPath, string? createdAt) {
         var maxIdx = -1L;
         try {
             if (AntigravityPaths.ConversationDbFromTranscript(transcriptPath) is not { } dbPath) return -1L;
-            var rows = AntigravityGenMetadataDb.ReadUsageLines(dbPath, state.LastAntigravityGenIdx);
+            var rows = AntigravityGenMetadataDb.ReadUsageLines(dbPath, state.LastAntigravityGenIdx, createdAt);
 
             foreach (var (idx, line) in rows) {
                 newLines.Add(line);
@@ -1299,6 +1314,41 @@ static partial class WatchCommand {
             Log($"Antigravity usage poll failed: {ex.Message}");
         }
         return maxIdx;
+    }
+
+    /// <summary>
+    /// Tracks Antigravity tool calls in flight from a transcript line: a PLANNER_RESPONSE adds
+    /// its tool_calls count; a result step (RUN_COMMAND/VIEW_FILE/LIST_DIRECTORY/CODE_ACTION)
+    /// removes one. Safe to call for any line — non-matching / malformed lines are ignored — so
+    /// the count reflects whether a (possibly long-running) tool is awaiting its result.
+    /// </summary>
+    internal static void UpdateAntigravityPendingToolCalls(WatchState state, string line) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return;
+
+            switch (root.Str("type")) {
+                case "PLANNER_RESPONSE":
+                    if (root.Arr("tool_calls") is { } calls)
+                        state.PendingAntigravityToolCalls += calls.EnumerateArray().Count(tc => tc.Str("name") is not null);
+                    break;
+                case "RUN_COMMAND" or "VIEW_FILE" or "LIST_DIRECTORY" or "CODE_ACTION":
+                    if (state.PendingAntigravityToolCalls > 0) state.PendingAntigravityToolCalls--;
+                    break;
+            }
+        } catch {
+            // Never break the drain loop on a malformed line.
+        }
+    }
+
+    static string? TryGetAntigravityCreatedAt(string line) {
+        try {
+            using var doc = JsonDocument.Parse(line);
+            return doc.RootElement.ValueKind == JsonValueKind.Object ? doc.RootElement.Str("created_at") : null;
+        } catch {
+            return null;
+        }
     }
 
     // ── Kiro extractors (AI-888) ───────────────────────────────────────────

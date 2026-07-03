@@ -108,4 +108,16 @@ public class AntigravityGenMetadataTests {
         await Assert.That(r.GetProperty("cache_read_tokens").GetInt64()).IsEqualTo(16275L);
         await Assert.That(r.GetProperty("cache_write_tokens").GetInt64()).IsEqualTo(0L);
     }
+
+    [Test]
+    public async Task Usage_line_includes_created_at_anchor_when_provided() {
+        var row  = new AntigravityUsageRow("gemini-default", 100, 10, 0);
+        var line = AntigravityGenMetadata.ToUsageLine(row, genRow: 1, createdAt: "2026-07-02T19:04:57Z");
+        using var doc = JsonDocument.Parse(line);
+        await Assert.That(doc.RootElement.GetProperty("created_at").GetString()).IsEqualTo("2026-07-02T19:04:57Z");
+
+        // Omitted when no anchor is available.
+        var bare = AntigravityGenMetadata.ToUsageLine(row, genRow: 1);
+        await Assert.That(JsonDocument.Parse(bare).RootElement.TryGetProperty("created_at", out _)).IsFalse();
+    }
 }

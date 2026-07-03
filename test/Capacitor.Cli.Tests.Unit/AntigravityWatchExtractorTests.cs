@@ -60,6 +60,36 @@ public class AntigravityWatchExtractorTests {
     }
 
     [Test]
+    public async Task PendingToolCalls_tracks_calls_versus_results_and_suppresses_idle() {
+        var state = new Capacitor.Cli.Core.WatchState();
+
+        // A PLANNER_RESPONSE with two tool_calls → two in flight.
+        WatchCommand.UpdateAntigravityPendingToolCalls(state,
+            """{"type":"PLANNER_RESPONSE","tool_calls":[{"name":"run_command"},{"name":"view_file"}]}""");
+        await Assert.That(state.PendingAntigravityToolCalls).IsEqualTo(2);
+
+        // Each result step clears one.
+        WatchCommand.UpdateAntigravityPendingToolCalls(state, """{"type":"RUN_COMMAND","content":"ran"}""");
+        await Assert.That(state.PendingAntigravityToolCalls).IsEqualTo(1);
+        WatchCommand.UpdateAntigravityPendingToolCalls(state, """{"type":"VIEW_FILE","content":"…"}""");
+        await Assert.That(state.PendingAntigravityToolCalls).IsEqualTo(0);
+        // Never goes negative.
+        WatchCommand.UpdateAntigravityPendingToolCalls(state, """{"type":"RUN_COMMAND","content":"x"}""");
+        await Assert.That(state.PendingAntigravityToolCalls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task ShouldEndOnIdle_suppressed_while_a_tool_is_in_flight() {
+        var now  = DateTimeOffset.UnixEpoch.AddHours(5);
+        var idle = TimeSpan.FromMinutes(60);
+        // Past the idle window, but a tool is in flight → do NOT end (long command running).
+        await Assert.That(WatchCommand.ShouldEndOnIdle(
+            "antigravity", isSessionWatcher: true, thresholdReached: true,
+            lastActivityAt: now - TimeSpan.FromMinutes(61), now: now, idleTimeout: idle,
+            toolInFlight: true)).IsFalse();
+    }
+
+    [Test]
     public async Task ShouldEndOnIdle_fires_for_antigravity_like_codex() {
         var now  = DateTimeOffset.UnixEpoch.AddHours(5);
         var idle = TimeSpan.FromMinutes(60);

@@ -50,13 +50,22 @@ public static class AntigravityPaths {
     /// <c>&lt;root&gt;/brain/&lt;id&gt;/.system_generated/logs/transcript_full.jsonl</c> shape.
     /// </summary>
     public static string? ConversationDbFromTranscript(string transcriptPath) {
-        // …/brain/<id>/.system_generated/logs/transcript_full.jsonl
+        // Require the EXACT shape …/brain/<id>/.system_generated/logs/transcript_full.jsonl —
+        // validate each segment so an unexpected path fails open (returns null) instead of
+        // being mapped to a guessed <root>/conversations/<derived>.db (AI-1157 review).
+        if (!string.Equals(Path.GetFileName(transcriptPath), "transcript_full.jsonl", StringComparison.Ordinal))
+            return null;
+
         var logsDir = Path.GetDirectoryName(transcriptPath);                 // …/logs
         var sysGen  = Path.GetDirectoryName(logsDir);                        // …/.system_generated
         var convDir = Path.GetDirectoryName(sysGen);                         // …/<id>
         var brain   = Path.GetDirectoryName(convDir);                        // …/brain
-        var root    = Path.GetDirectoryName(brain);                          // …/antigravity
-        if (convDir is null || root is null) return null;
+        var root    = Path.GetDirectoryName(brain);                          // …/<root>
+        if (convDir is null || brain is null || root is null) return null;
+
+        if (!string.Equals(Path.GetFileName(logsDir), "logs",              StringComparison.Ordinal)) return null;
+        if (!string.Equals(Path.GetFileName(sysGen),  ".system_generated", StringComparison.Ordinal)) return null;
+        if (!string.Equals(Path.GetFileName(brain),   "brain",             StringComparison.Ordinal)) return null;
 
         var convId = Path.GetFileName(convDir);
         if (string.IsNullOrEmpty(convId)) return null;
