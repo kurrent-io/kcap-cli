@@ -157,7 +157,13 @@ static partial class WatchCommand {
 
         var state = new WatchState();
         state.LastActivityAt = DateTimeOffset.UtcNow;
-        var codexIdleTimeout = ResolveCodexIdleTimeout(Environment.GetEnvironmentVariable("KCAP_CODEX_IDLE_MINUTES"));
+        // Antigravity is a GUI app like the Codex desktop: its shared process never
+        // exits per-conversation, so (like Codex) the idle timeout — not a parent-exit
+        // watchdog — is the per-conversation session-end path. Its own knob so tenants
+        // can tune the two GUIs independently.
+        var idleTimeout = vendor == "antigravity"
+            ? ResolveCodexIdleTimeout(Environment.GetEnvironmentVariable("KCAP_ANTIGRAVITY_IDLE_MINUTES"))
+            : ResolveCodexIdleTimeout(Environment.GetEnvironmentVariable("KCAP_CODEX_IDLE_MINUTES"));
         var idleExit = false;
 
         if (skipTitle) {
@@ -316,9 +322,9 @@ static partial class WatchCommand {
                         state.ThresholdReached,
                         state.LastActivityAt,
                         DateTimeOffset.UtcNow,
-                        codexIdleTimeout,
+                        idleTimeout,
                         toolInFlight: state.PendingCodexToolCalls.Count > 0)) {
-                    Log($"Codex rollout idle for >{codexIdleTimeout.TotalMinutes:F0}m; ending session (idle_timeout)");
+                    Log($"{vendor} transcript idle for >{idleTimeout.TotalMinutes:F0}m; ending session (idle_timeout)");
                     idleExit = true;
                     cts.Cancel();
 
@@ -524,7 +530,7 @@ static partial class WatchCommand {
     /// Used to reject unexpected --vendor input before interpolating into the URL
     /// path (defence-in-depth against path traversal even though the CLI runs locally).
     /// </summary>
-    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode" };
+    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode", "antigravity" };
 
     /// <summary>
     /// Total time budget for the parent-exit session-end POST. Covers /auth/config
@@ -558,10 +564,11 @@ static partial class WatchCommand {
 
     /// <summary>
     /// Whether the watcher should self-terminate and POST session-end because the
-    /// Codex rollout file has gone idle. Pure so the policy is unit-testable.
-    /// Gated to: vendor codex (only vendor whose parent-exit watchdog can't fire
-    /// per-conversation — the desktop app's shared app-server never exits per
-    /// session), session watchers (not subagents), and threshold-reached sessions
+    /// vendor's transcript file has gone idle. Pure so the policy is unit-testable.
+    /// Gated to: the two GUI vendors whose parent-exit watchdog can't fire
+    /// per-conversation — codex (the desktop app's shared app-server never exits per
+    /// session) and antigravity (the IDE process outlives any one conversation) —
+    /// session watchers (not subagents), and threshold-reached sessions
     /// (below-threshold short-lived sessions have no server session to end). Uses
     /// strictly-greater-than so the boundary tick is not yet considered idle.
     /// Also suppressed when a tool call is in flight (<paramref name="toolInFlight"/>
@@ -580,7 +587,7 @@ static partial class WatchCommand {
             TimeSpan       idleTimeout,
             bool           toolInFlight = false
         ) =>
-        vendor == "codex"
+        (vendor == "codex" || vendor == "antigravity")
         && isSessionWatcher
         && thresholdReached
         && now - lastActivityAt > idleTimeout
@@ -1011,6 +1018,7 @@ static partial class WatchCommand {
             "kiro"     => TryExtractKiroAssistantText(line),
             "pi"       => TryExtractPiAssistantText(line),
             "opencode" => TryExtractOpenCodeText(line, "assistant"),
+            "antigravity" => TryExtractAntigravityText(line, "assistant"),
             _          => TryExtractClaudeAssistantText(line)
         };
 
@@ -1132,6 +1140,19 @@ static partial class WatchCommand {
                 return OpenCodeTextParts(root.Arr("parts")) is not null;
             }
 
+            if (vendor == "antigravity") {
+                // Antigravity transcript_full.jsonl lines carry a `type`; only the two
+                // conversational steps count toward the title-event threshold, and only
+                // when they have text (a tool-only PLANNER_RESPONSE or an empty prompt
+                // yields no titleable text). Everything else (RUN_COMMAND, VIEW_FILE,
+                // GENERIC, CHECKPOINT, INVOKE_SUBAGENT, SYSTEM_*) is plumbing.
+                return root.Str("type") switch {
+                    "USER_INPUT"       => TryExtractAntigravityText(line, "user")      is not null,
+                    "PLANNER_RESPONSE" => TryExtractAntigravityText(line, "assistant") is not null,
+                    _                  => false
+                };
+            }
+
             return root.Str("type") is "user" or "assistant";
         } catch {
             return false;
@@ -1145,6 +1166,7 @@ static partial class WatchCommand {
             "kiro"     => TryExtractKiroUserText(line),
             "pi"       => TryExtractPiUserText(line),
             "opencode" => TryExtractOpenCodeText(line, "user"),
+            "antigravity" => TryExtractAntigravityText(line, "user"),
             _          => TryExtractClaudeUserText(line)
         };
 
@@ -1178,6 +1200,46 @@ static partial class WatchCommand {
         }
 
         return pieces.Count > 0 ? string.Join("\n", pieces) : null;
+    }
+
+    // ── Antigravity extractors (AI-1158) ────────────────────────────────────────
+    //
+    // Antigravity writes brain/<id>/.system_generated/logs/transcript_full.jsonl as
+    // {step_index, source, type, status, content, thinking, tool_calls, …} lines.
+    // USER_INPUT (source USER_EXPLICIT) carries the prompt wrapped in
+    // <USER_REQUEST>…</USER_REQUEST> plus trailing <ADDITIONAL_METADATA>/
+    // <USER_SETTINGS_CHANGE> blocks; PLANNER_RESPONSE (source MODEL) carries the
+    // assistant's visible `content`. Mirrors the server's
+    // AntigravityTranscriptNormalizer so watcher titles match ingest.
+    static string? TryExtractAntigravityText(string line, string role) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            var want = role == "user" ? "USER_INPUT" : "PLANNER_RESPONSE";
+            if (root.Str("type") != want) return null;
+
+            if (root.Str("content")?.Trim() is not { Length: > 0 } content) return null;
+
+            return role == "user" ? StripAntigravityUserWrapper(content) : content;
+        } catch {
+            return null;
+        }
+    }
+
+    // Pull the human prompt out of the <USER_REQUEST> envelope, dropping the trailing
+    // metadata blocks Antigravity appends. Falls back to the raw text when no envelope
+    // is present.
+    static string? StripAntigravityUserWrapper(string content) {
+        const string open = "<USER_REQUEST>", close = "</USER_REQUEST>";
+        var start = content.IndexOf(open, StringComparison.Ordinal);
+        if (start < 0) return content;
+
+        start += open.Length;
+        var end   = content.IndexOf(close, start, StringComparison.Ordinal);
+        var inner = (end < 0 ? content[start..] : content[start..end]).Trim();
+
+        return inner.Length > 0 ? inner : null;
     }
 
     // ── Kiro extractors (AI-888) ───────────────────────────────────────────

@@ -563,7 +563,7 @@ switch (command) {
             storedOrg:               storedOrg);
     }
     case "watch" when args.Length < 3:
-        Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex|copilot|gemini|kiro|pi|opencode]");
+        Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex|copilot|gemini|kiro|pi|opencode|antigravity]");
 
         return 1;
     case "watch": {
