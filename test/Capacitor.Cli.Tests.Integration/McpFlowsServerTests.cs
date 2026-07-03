@@ -220,20 +220,336 @@ public class McpFlowsServerTests : IDisposable {
     }
 
     [Test]
-    public async Task Tools_list_returns_four_flow_tools() {
+    public async Task Tools_list_returns_eight_flow_tools() {
         using var proc = SpawnMcpServer();
         try {
             var response = await SendRequest(proc, ToolsListRequest(2));
 
             var tools = response["result"]?["tools"]?.AsArray();
             await Assert.That(tools).IsNotNull();
-            await Assert.That(tools!.Count).IsEqualTo(4);
+            await Assert.That(tools!.Count).IsEqualTo(8);
 
             var names = tools.Select(t => t?["name"]?.GetValue<string>()).ToHashSet();
             await Assert.That(names.Contains("start_review_flow")).IsTrue();
             await Assert.That(names.Contains("submit_review_round")).IsTrue();
             await Assert.That(names.Contains("get_review_flow_status")).IsTrue();
             await Assert.That(names.Contains("close_review_flow")).IsTrue();
+            await Assert.That(names.Contains("start_flow")).IsTrue();
+            await Assert.That(names.Contains("send_to_participant")).IsTrue();
+            await Assert.That(names.Contains("get_flow_status")).IsTrue();
+            await Assert.That(names.Contains("close_flow")).IsTrue();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
+    /// Pins the four review-tool schemas byte-stably: definition_id/participant/message must
+    /// NEVER leak into these schemas — old clients (and old skills) depend on the exact
+    /// property/required sets that shipped before the generic tools were added (AI-1126 D-b).
+    /// </summary>
+    [Test]
+    public async Task Review_tool_schemas_are_unchanged() {
+        using var proc = SpawnMcpServer();
+        try {
+            var response = await SendRequest(proc, ToolsListRequest(2));
+            var tools    = response["result"]?["tools"]?.AsArray();
+            await Assert.That(tools).IsNotNull();
+
+            var byName = tools!.ToDictionary(t => t!["name"]!.GetValue<string>(), t => t!);
+
+            await AssertSchema(
+                byName["start_review_flow"],
+                properties: ["kind", "target_kind", "target_ref", "target_title", "context", "instructions", "mode"],
+                required:   ["kind", "target_kind", "target_ref", "target_title", "context"]
+            );
+
+            await AssertSchema(
+                byName["submit_review_round"],
+                properties: ["flow_run_id", "context", "instructions"],
+                required:   ["flow_run_id", "context"]
+            );
+
+            await AssertSchema(
+                byName["get_review_flow_status"],
+                properties: ["flow_run_id"],
+                required:   ["flow_run_id"]
+            );
+
+            await AssertSchema(
+                byName["close_review_flow"],
+                properties: ["flow_run_id"],
+                required:   ["flow_run_id"]
+            );
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    static async Task AssertSchema(JsonNode tool, string[] properties, string[] required) {
+        var schema = tool["inputSchema"]?.AsObject();
+        await Assert.That(schema).IsNotNull();
+
+        var propNames = schema!["properties"]?.AsObject().Select(kv => kv.Key).ToHashSet() ?? [];
+        var reqNames  = schema["required"]?.AsArray().Select(n => n!.GetValue<string>()).ToHashSet() ?? [];
+
+        await Assert.That(propNames.SetEquals(properties)).IsTrue();
+        await Assert.That(reqNames.SetEquals(required)).IsTrue();
+    }
+
+    /// <summary>
+    /// Generic alias for start_review_flow: definition_id maps onto the wire "kind" field so the
+    /// server (which treats kind == definition id, AI-1126 phase C) doesn't need to know about
+    /// the generic tool name at all.
+    /// </summary>
+    [Test]
+    public async Task Start_flow_posts_kind_from_definition_id() {
+        const string flowRunId = "flow-generic-1";
+
+        var stubbedResponse = $$"""
+            {
+              "flow_run_id": "{{flowRunId}}",
+              "round_id": "round-1",
+              "round_number": 1,
+              "status": "completed",
+              "result_kind": "FINDINGS",
+              "result_text": "generic flow result",
+              "reviewer_agent_id": null,
+              "reviewer_session_id": null
+            }
+            """;
+
+        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(stubbedResponse));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var args = new JsonObject {
+                ["definition_id"] = "my-custom-flow",
+                ["target_kind"]   = "pr",
+                ["target_ref"]    = "https://github.com/x/y/pull/1",
+                ["target_title"]  = "My PR",
+                ["context"]       = "please look at this"
+            };
+
+            var response = await SendRequest(proc, ToolsCallRequest(50, "start_flow", args));
+
+            var result = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["isError"]?.GetValue<bool>()).IsNotEqualTo(true);
+
+            var text = result["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(text).IsNotNull();
+            await Assert.That(text!.Contains($"flow_run_id: {flowRunId}")).IsTrue();
+            await Assert.That(text.Contains("generic flow result")).IsTrue();
+
+            var hits = _server.FindLogEntries(Request.Create().WithPath("/api/flows/review/start").UsingPost());
+            await Assert.That(hits.Count).IsEqualTo(1);
+
+            var bodyNode = JsonNode.Parse(hits[0].RequestMessage.Body ?? "")?.AsObject();
+            await Assert.That(bodyNode).IsNotNull();
+            await Assert.That(bodyNode!["kind"]?.GetValue<string>()).IsEqualTo("my-custom-flow");
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
+    /// send_to_participant is the generic alias for submit_review_round: "message" maps onto the
+    /// wire "context" field and "participant" is a new field the server validates against the
+    /// flow definition (Phase D flows have a single participant: "reviewer").
+    /// </summary>
+    [Test]
+    public async Task Send_to_participant_posts_participant_and_message_as_context() {
+        const string flowRunId = "flow-generic-2";
+
+        var stubbedResponse = $$"""
+            {
+              "flow_run_id": "{{flowRunId}}",
+              "round_id": "round-2",
+              "round_number": 2,
+              "status": "completed",
+              "result_kind": "FINDINGS",
+              "result_text": "round two",
+              "reviewer_agent_id": null,
+              "reviewer_session_id": null
+            }
+            """;
+
+        _server.Given(Request.Create().WithPath($"/api/flows/{flowRunId}/rounds").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(stubbedResponse));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var args = new JsonObject {
+                ["flow_run_id"] = flowRunId,
+                ["participant"] = "reviewer",
+                ["message"]     = "ctx2"
+            };
+
+            var response = await SendRequest(proc, ToolsCallRequest(51, "send_to_participant", args));
+
+            var result = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["isError"]?.GetValue<bool>()).IsNotEqualTo(true);
+
+            var hits = _server.FindLogEntries(Request.Create().WithPath($"/api/flows/{flowRunId}/rounds").UsingPost());
+            await Assert.That(hits.Count).IsEqualTo(1);
+
+            var bodyNode = JsonNode.Parse(hits[0].RequestMessage.Body ?? "")?.AsObject();
+            await Assert.That(bodyNode).IsNotNull();
+            await Assert.That(bodyNode!["context"]?.GetValue<string>()).IsEqualTo("ctx2");
+            await Assert.That(bodyNode["participant"]?.GetValue<string>()).IsEqualTo("reviewer");
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
+    /// The review alias must stay byte-compatible with old servers that don't know about
+    /// "participant" — the field is null-omitted, so the POST body must not carry the key at all.
+    /// </summary>
+    [Test]
+    public async Task Submit_review_round_body_has_no_participant_key() {
+        const string flowRunId = "flow-generic-3";
+
+        var stubbedResponse = $$"""
+            {
+              "flow_run_id": "{{flowRunId}}",
+              "round_id": "round-3",
+              "round_number": 1,
+              "status": "completed",
+              "result_kind": "FINDINGS",
+              "result_text": "ok",
+              "reviewer_agent_id": null,
+              "reviewer_session_id": null
+            }
+            """;
+
+        _server.Given(Request.Create().WithPath($"/api/flows/{flowRunId}/rounds").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(stubbedResponse));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var args = new JsonObject {
+                ["flow_run_id"] = flowRunId,
+                ["context"]     = "addressed all feedback"
+            };
+
+            var response = await SendRequest(proc, ToolsCallRequest(52, "submit_review_round", args));
+            var result   = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["isError"]?.GetValue<bool>()).IsNotEqualTo(true);
+
+            var hits = _server.FindLogEntries(Request.Create().WithPath($"/api/flows/{flowRunId}/rounds").UsingPost());
+            await Assert.That(hits.Count).IsEqualTo(1);
+
+            var body     = hits[0].RequestMessage.Body ?? "";
+            var bodyNode = JsonNode.Parse(body)?.AsObject();
+            await Assert.That(bodyNode).IsNotNull();
+            await Assert.That(bodyNode!.ContainsKey("participant")).IsFalse();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
+    /// Guardrail errors (max_rounds, wrong participant, etc.) come back from the server as a
+    /// ProblemDetails 400 body — it must surface verbatim in the tool's error text, same as the
+    /// review tools do (McpFlowsServer.cs:146-147/165-166/345-347).
+    /// </summary>
+    [Test]
+    public async Task Guardrail_400_body_surfaces_in_tool_error() {
+        const string flowRunId = "flow-generic-4";
+
+        _server.Given(Request.Create().WithPath($"/api/flows/{flowRunId}/rounds").UsingPost())
+            .RespondWith(
+                Response.Create()
+                    .WithStatusCode(400)
+                    .WithHeader("Content-Type", "application/problem+json")
+                    .WithBody("""{"detail":"max_rounds (2) reached for this run — close the flow."}""")
+            );
+
+        using var proc = SpawnMcpServer();
+        try {
+            var args = new JsonObject {
+                ["flow_run_id"] = flowRunId,
+                ["participant"] = "reviewer",
+                ["message"]     = "one more please"
+            };
+
+            var response = await SendRequest(proc, ToolsCallRequest(53, "send_to_participant", args));
+            var result   = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["isError"]?.GetValue<bool>()).IsTrue();
+
+            var text = result["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(text).IsNotNull();
+            await Assert.That(text!.Contains("max_rounds (2)")).IsTrue();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
+    /// get_flow_status / close_flow are pure aliases: they must hit the exact same endpoints as
+    /// get_review_flow_status / close_review_flow (McpFlowsServer.cs dispatch switch).
+    /// </summary>
+    [Test]
+    public async Task Get_flow_status_and_close_flow_hit_same_endpoints_as_review_tools() {
+        const string flowRunId = "flow-generic-5";
+
+        var stubbedStatus = $$"""
+            {
+              "flow_run_id": "{{flowRunId}}",
+              "definition_id": "my-custom-flow",
+              "status": "completed",
+              "target_title": "Generic target",
+              "round_count": 1,
+              "last_result_kind": "APPROVED",
+              "last_result_text": "Looks good."
+            }
+            """;
+
+        _server.Given(Request.Create().WithPath($"/api/flows/{flowRunId}").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(stubbedStatus));
+
+        _server.Given(Request.Create().WithPath($"/api/flows/{flowRunId}/close").UsingPost())
+            .RespondWith(
+                Response.Create()
+                    .WithStatusCode(200)
+                    .WithHeader("Content-Type", "application/json")
+                    .WithBody($$"""{"flow_run_id":"{{flowRunId}}","status":"closed"}""")
+            );
+
+        using var proc = SpawnMcpServer();
+        try {
+            var statusArgs     = new JsonObject { ["flow_run_id"] = flowRunId };
+            var statusResponse = await SendRequest(proc, ToolsCallRequest(54, "get_flow_status", statusArgs));
+            var statusResult   = statusResponse["result"]?.AsObject();
+            await Assert.That(statusResult).IsNotNull();
+            await Assert.That(statusResult!["isError"]?.GetValue<bool>()).IsNotEqualTo(true);
+
+            var statusText = statusResult["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(statusText).IsNotNull();
+            await Assert.That(statusText!.Contains($"flow_run_id: {flowRunId}")).IsTrue();
+            await Assert.That(statusText.Contains("Looks good.")).IsTrue();
+
+            var getHits = _server.FindLogEntries(Request.Create().WithPath($"/api/flows/{flowRunId}").UsingGet());
+            await Assert.That(getHits.Count).IsEqualTo(1);
+
+            var closeArgs     = new JsonObject { ["flow_run_id"] = flowRunId };
+            var closeResponse = await SendRequest(proc, ToolsCallRequest(55, "close_flow", closeArgs));
+            var closeResult   = closeResponse["result"]?.AsObject();
+            await Assert.That(closeResult).IsNotNull();
+            await Assert.That(closeResult!["isError"]?.GetValue<bool>()).IsNotEqualTo(true);
+
+            var closeText = closeResult["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(closeText).IsNotNull();
+            await Assert.That(closeText!.Contains("status: closed")).IsTrue();
+
+            var closeHits = _server.FindLogEntries(Request.Create().WithPath($"/api/flows/{flowRunId}/close").UsingPost());
+            await Assert.That(closeHits.Count).IsEqualTo(1);
         } finally {
             await ShutdownAsync(proc);
         }
