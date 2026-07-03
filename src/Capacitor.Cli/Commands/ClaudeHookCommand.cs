@@ -470,6 +470,16 @@ public static class ClaudeHookCommand {
                 return 0;
             }
 
+            // AI-1165 — kick off the team-memory index fetch in PARALLEL with the hook POST so
+            // it adds no latency to the critical path. Fully best-effort / fail-open: any failure,
+            // a 401, or a budget overrun yields a null fragment and nothing is injected. Started
+            // after the ordering-guard / backlog returns above so a spooled session-start doesn't
+            // pay for a fetch it won't use.
+            var memoryDisabled  = AppConfig.ResolvedProfile?.Profile?.DisableMemoryIndex is true;
+            var memoryIndexTask = memoryDisabled
+                ? Task.FromResult<JsonNode?>(null)
+                : TryFetchMemoryIndexAsync(client, baseUrl, sessionCwd, processStart);
+
             // 2. Single bounded POST — keep resp alive to read the response body for the
             //    context-envelope emission and plan-content POST on success.
             var remaining = HookBudget.Remaining(processStart, "session-start");
@@ -520,8 +530,12 @@ public static class ClaudeHookCommand {
                     var disabled        = AppConfig.ResolvedProfile?.Profile?.DisableSessionGuidelines is true;
                     var lessonsFragment = SessionGuidelinesEmitter.BuildFragment(responseNode, disabled);
                     var nudgeFragment   = VersionNudgeEmitter.BuildFragment(responseNode, CapacitorVersion.CurrentDisplay());
+                    // AI-1165 — join the parallel memory-index fetch, bounded by the remaining
+                    // hook budget so a slow fetch can't delay the hook (fail-open → null).
+                    var memoryFragment  = MemoryIndexEmitter.BuildFragment(
+                        await AwaitMemoryIndexAsync(memoryIndexTask, processStart), memoryDisabled);
 
-                    var envelope = SessionStartAdditionalContext.BuildEnvelope(lessonsFragment, nudgeFragment);
+                    var envelope = SessionStartAdditionalContext.BuildEnvelope(lessonsFragment, nudgeFragment, memoryFragment);
 
                     if (envelope is not null) {
                         Console.WriteLine(envelope);
@@ -740,6 +754,67 @@ public static class ClaudeHookCommand {
         if (value is not null && value.Contains('-')) {
             node[fieldName] = value.Replace("-", "");
         }
+    }
+
+    // ── AI-1165: SessionStart team-memory index injection ────────────────────────
+    //
+    // Best-effort fetch of GET /api/memories/index for the current repo + machine.
+    // Everything here is fail-open: a failure, non-2xx, timeout, or unresolved repo/
+    // machine yields null, and MemoryIndexEmitter.BuildFragment(null, …) emits nothing.
+
+    static async Task<JsonNode?> TryFetchMemoryIndexAsync(HttpClient client, string baseUrl, string? sessionCwd, long processStart) {
+        try {
+            var budget = HookBudget.Remaining(processStart, "session-start");
+            if (budget <= TimeSpan.Zero) return null;
+
+            var repoHash  = await TryResolveRepoHashAsync(sessionCwd);
+            var machineId = await TryResolveMachineIdAsync();
+
+            using var cts  = new CancellationTokenSource(HookBudget.Remaining(processStart, "session-start"));
+            using var resp = await client.GetAsync(BuildMemoryIndexUrl(baseUrl, repoHash, machineId), cts.Token);
+            if (!resp.IsSuccessStatusCode) return null;
+
+            return JsonNode.Parse(await resp.Content.ReadAsStringAsync(cts.Token));
+        } catch {
+            return null; // fail-open — memory injection never breaks the hook
+        }
+    }
+
+    // Bound the join on the parallel fetch by the remaining hook budget so a slow index
+    // fetch can never delay session capture. Timeout or fault → null (nothing injected).
+    static async Task<JsonNode?> AwaitMemoryIndexAsync(Task<JsonNode?> task, long processStart) {
+        try {
+            var budget = HookBudget.Remaining(processStart, "session-start");
+            if (budget <= TimeSpan.Zero) return task.IsCompletedSuccessfully ? task.Result : null;
+
+            return await task.WaitAsync(budget);
+        } catch {
+            return null;
+        }
+    }
+
+    internal static string BuildMemoryIndexUrl(string baseUrl, string? repoHash, string? machineId) {
+        var qs = new List<string>();
+        if (repoHash is not null)  qs.Add($"repo={Uri.EscapeDataString(repoHash)}");
+        if (machineId is not null) qs.Add($"machine={Uri.EscapeDataString(machineId)}");
+
+        return qs.Count > 0 ? $"{baseUrl}/api/memories/index?{string.Join('&', qs)}" : $"{baseUrl}/api/memories/index";
+    }
+
+    static async Task<string?> TryResolveRepoHashAsync(string? sessionCwd) {
+        try {
+            var cwd      = string.IsNullOrWhiteSpace(sessionCwd) ? Directory.GetCurrentDirectory() : sessionCwd;
+            var repoInfo = await RepositoryDetection.DetectRepositoryAsync(cwd);
+            if (repoInfo?.Owner is null || repoInfo.RepoName is null) return null;
+
+            return RepoHashHelper.ComputeRepoHash(repoInfo.Owner, repoInfo.RepoName);
+        } catch {
+            return null;
+        }
+    }
+
+    static async Task<string?> TryResolveMachineIdAsync() {
+        try { return await MachineIdProvider.GetOrCreateAsync(); } catch { return null; }
     }
 
     static string? ReadPlanFile(string slug) {

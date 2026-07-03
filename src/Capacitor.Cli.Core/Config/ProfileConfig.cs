@@ -54,6 +54,14 @@ public record Profile {
     public bool? DisableSessionGuidelines { get; init; }
 
     /// <summary>
+    /// AI-1165 — when true, kcap skips injecting the team-memory index at SessionStart.
+    /// Independent of <see cref="DisableSessionGuidelines"/> so the recurring-lessons and
+    /// memory-index injections can be toggled separately.
+    /// </summary>
+    [JsonPropertyName("disable_memory_index")]
+    public bool? DisableMemoryIndex { get; init; }
+
+    /// <summary>
     /// When true, kcap keeps <c>ANTHROPIC_API_KEY</c> / <c>OPENAI_API_KEY</c>
     /// in the spawn environment for headless agent CLIs (title generation,
     /// summaries, judges). Default <c>false</c> scrubs them so subscription
