@@ -184,6 +184,39 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }
 
+    // Qodo #247: a malformed (scheme-less) server URL must NOT hard-exit via
+    // EnsureAbsolute's Environment.Exit(2) inside the best-effort POST — the hook
+    // must still emit {"continue":true} and return 0. The guard in
+    // PostBestEffortAsync bails before auth discovery (and thus EnsureAbsolute)
+    // is reached.
+    [Test, NotInParallel]
+    public async Task Stop_with_malformed_base_url_still_emits_continue_and_returns_zero() {
+        var payload = """
+                      {
+                        "hook_event_name": "Stop",
+                        "session_id": "abc",
+                        "transcript_path": "/tmp/rollout.jsonl",
+                        "cwd": "/tmp"
+                      }
+                      """;
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+
+        try {
+            Console.SetOut(stdoutWriter);
+            // Scheme-less URL → IsAcceptableUrl is false → PostBestEffortAsync returns
+            // before CreateClientWithAuthStatusAsync/EnsureAbsolute can Environment.Exit.
+            var exit = await CodexHookCommand.Handle("localhost:5108", new StringReader(payload));
+            await Assert.That(exit).IsEqualTo(0);
+
+            var doc = JsonDocument.Parse(stdoutWriter.ToString());
+            await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
+        } finally {
+            Console.SetOut(originalOut);
+        }
+    }
+
     // Globally sequential alongside Stop_is_turn_end_no_op_and_does_not_post_session_end —
     // see that test for why ConsoleSerialGroup alone has been observed to
     // interleave in suite runs and drop captured Console output.

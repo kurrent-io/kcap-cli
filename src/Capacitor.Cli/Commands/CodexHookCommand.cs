@@ -257,8 +257,8 @@ static class CodexHookCommand {
         // hosted-agent UI decision. With Codex's 30 s hook timeout, the hook
         // process is killed long before the server returns (AI-636).
         //
-        // Single 2 s deadline covers BOTH the /auth/config discovery inside
-        // CreateAuthenticatedClientAsync and the /hooks/permission-record POST.
+        // Single 2 s deadline covers BOTH the /auth/config discovery and the
+        // /hooks/permission-record POST inside PostBestEffortAsync.
         // Without bounding discovery too, a server that accepts the TCP
         // connection but stalls on /auth/config can burn the full HttpClient
         // default (100 s) before we even start the POST, blowing past Codex's
@@ -337,18 +337,34 @@ static class CodexHookCommand {
 
     /// <summary>
     /// Best-effort POST of <paramref name="node"/> to <c>/hooks/{endpoint}</c>, capped at
-    /// <paramref name="cap"/> and swallowing every failure. The single deadline covers both
-    /// /auth/config discovery inside CreateAuthenticatedClientAsync and the POST itself, so a
-    /// slow or unreachable server can never hang the caller. Callers that must satisfy Codex's
-    /// stdout contract write their JSON output AFTER awaiting this.
+    /// <paramref name="cap"/> and swallowing every failure — it must never block, throw, or
+    /// terminate the caller. The single deadline covers both /auth/config discovery and the POST.
+    /// Callers that must satisfy Codex's stdout contract write their JSON output AFTER awaiting this.
     /// </summary>
     static async Task PostBestEffortAsync(string baseUrl, string endpoint, JsonNode node, TimeSpan cap) {
+        // A blank or non-absolute baseUrl would trip EnsureAbsolute deep inside auth discovery,
+        // which calls Environment.Exit(2) — uncatchable, and would bypass the caller's stdout/exit
+        // contract. Bail silently before we can reach it.
+        if (string.IsNullOrWhiteSpace(baseUrl) || !HttpClientExtensions.IsAcceptableUrl(baseUrl)) {
+            return;
+        }
+
         using var cts = new CancellationTokenSource(cap);
 
         try {
-            using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, cts.Token);
-            using var content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _       = await client.PostAsync($"{baseUrl}/hooks/{endpoint}", content, cts.Token);
+            // Use the status-returning variant, NOT CreateAuthenticatedClientAsync: the latter writes
+            // "Not authenticated" / "expired" to stderr, which a per-turn Stop would spam. Stay quiet
+            // and skip the POST when there's no usable auth (still swallow-all).
+            var (client, status) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl, cts.Token);
+
+            using (client) {
+                if (status is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) {
+                    return;
+                }
+
+                using var content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
+                using var _       = await client.PostAsync($"{baseUrl}/hooks/{endpoint}", content, cts.Token);
+            }
         } catch {
             // Best-effort — must never block or fail the caller.
         }
