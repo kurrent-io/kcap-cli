@@ -208,21 +208,25 @@ public class CodexConfigTomlTests {
         ((TomlArray)server["args"]).Select(v => (string)v!).ToArray();
 
     [Test]
-    public async Task RegisterKcapMcpServers_on_missing_config_writes_both_servers() {
+    public async Task RegisterKcapMcpServers_on_missing_config_writes_all_servers() {
         var path = TempConfig();
 
         var change = CodexConfigToml.RegisterKcapMcpServers(path);
 
         await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Updated);
 
-        var servers = (TomlTable)ReadToml(path)["mcp_servers"];
-        var review  = (TomlTable)servers["kcap-review"];
+        var servers  = (TomlTable)ReadToml(path)["mcp_servers"];
+        var review   = (TomlTable)servers["kcap-review"];
         var sessions = (TomlTable)servers["kcap-sessions"];
+        var memory   = (TomlTable)servers["kcap-memory"];
 
         await Assert.That((string)review["command"]).IsEqualTo("kcap");
         await Assert.That(ArgsOf(review)).IsEquivalentTo(new[] { "mcp", "review" });
         await Assert.That((string)sessions["command"]).IsEqualTo("kcap");
         await Assert.That(ArgsOf(sessions)).IsEquivalentTo(new[] { "mcp", "sessions" });
+        // AI-1146: kcap-memory is now auto-registered for Codex too.
+        await Assert.That((string)memory["command"]).IsEqualTo("kcap");
+        await Assert.That(ArgsOf(memory)).IsEquivalentTo(new[] { "mcp", "memory" });
     }
 
     [Test]
@@ -236,6 +240,7 @@ public class CodexConfigTomlTests {
         var text = File.ReadAllText(path);
         await Assert.That(text).Contains("[mcp_servers.kcap-review]");
         await Assert.That(text).Contains("[mcp_servers.kcap-sessions]");
+        await Assert.That(text).Contains("[mcp_servers.kcap-memory]");
         await Assert.That(text).DoesNotContain("mcpServers");
     }
 
@@ -273,6 +278,7 @@ public class CodexConfigTomlTests {
         await Assert.That((string)((TomlTable)servers["my-tool"])["command"]).IsEqualTo("my-tool"); // user's preserved
         await Assert.That(servers.ContainsKey("kcap-review")).IsTrue();
         await Assert.That(servers.ContainsKey("kcap-sessions")).IsTrue();
+        await Assert.That(servers.ContainsKey("kcap-memory")).IsTrue();
     }
 
     [Test]
@@ -354,6 +360,7 @@ public class CodexConfigTomlTests {
         await Assert.That(servers.ContainsKey("my-tool")).IsTrue();
         await Assert.That(servers.ContainsKey("kcap-review")).IsFalse();
         await Assert.That(servers.ContainsKey("kcap-sessions")).IsFalse();
+        await Assert.That(servers.ContainsKey("kcap-memory")).IsFalse();
     }
 
     [Test]

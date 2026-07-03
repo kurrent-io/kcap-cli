@@ -29,11 +29,14 @@ public static class CodexConfigToml {
     /// Codex reads MCP servers from the snake_case <c>[mcp_servers]</c> TOML table — note
     /// this is NOT the camelCase <c>mcpServers</c> key used by the Claude/Codex plugin
     /// *descriptor* JSON. <c>kcap-flows</c> is intentionally excluded: it launches a paid
-    /// hosted reviewer and stays Claude-only (AI-1056).
+    /// hosted reviewer and stays Claude-only (AI-1056). <c>kcap-memory</c> IS included
+    /// (AI-1146): it is a free, harness-agnostic team-memory server, so Codex users going
+    /// through <c>kcap setup</c> get it alongside review/sessions.
     /// </summary>
     static readonly (string Name, string[] Args)[] KcapMcpServers = [
         ("kcap-review",   ["mcp", "review"]),
-        ("kcap-sessions", ["mcp", "sessions"])
+        ("kcap-sessions", ["mcp", "sessions"]),
+        ("kcap-memory",   ["mcp", "memory"])
     ];
 
     const string McpServerCommand = "kcap";
@@ -87,7 +90,8 @@ public static class CodexConfigToml {
         Update(configPath ?? DefaultConfigPath, root => MutateTrust(root, worktreePath), out error);
 
     /// <summary>
-    /// Registers the kcap MCP servers (<c>kcap-review</c>, <c>kcap-sessions</c>) under the
+    /// Registers the kcap MCP servers (<c>kcap-review</c>, <c>kcap-sessions</c>,
+    /// <c>kcap-memory</c>) under the
     /// top-level <c>[mcp_servers]</c> table of <c>~/.codex/config.toml</c> (or
     /// <paramref name="configPath"/>) so Codex CLI picks them up with no manual TOML edit.
     /// Idempotent, and non-destructive: an entry that already exists (a prior registration
@@ -98,7 +102,8 @@ public static class CodexConfigToml {
         Update(configPath ?? DefaultConfigPath, MutateRegisterMcpServers, out _);
 
     /// <summary>
-    /// Removes the kcap-owned MCP server entries (<c>kcap-review</c>, <c>kcap-sessions</c>)
+    /// Removes the kcap-owned MCP server entries (<c>kcap-review</c>, <c>kcap-sessions</c>,
+    /// <c>kcap-memory</c>)
     /// from <c>~/.codex/config.toml</c> (or <paramref name="configPath"/>). Only those names
     /// are touched; user-defined servers are preserved. Drops the <c>[mcp_servers]</c> table
     /// entirely when removing them empties it, so uninstall leaves no bare table behind.
