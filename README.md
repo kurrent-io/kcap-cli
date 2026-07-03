@@ -585,7 +585,7 @@ Accepted values: `trace`, `debug`, `information` (default), `warning`, `error`, 
 
 A daemon killed by an uncatchable `SIGKILL` (macOS **jetsam** / Linux **OOM**, `kill -9`, power loss) or a hard native crash can't log its own exit — the process is gone before any handler runs. Two things help tell those apart from a normal stop:
 
-- **`~/.config/kcap/daemon.out.log`** — a background (`-d`) daemon reopens its stdout/stderr onto this file, so a runtime "Fatal error." dump or native crash message (which bypasses the normal `daemon.log` pipeline) is captured here. A service-managed daemon captures the same output via its service log. An empty file means nothing was written to stderr — i.e. a `SIGKILL`, not a crash.
+- **`~/.config/kcap/daemon.out.log`** — a background (`-d`) daemon reopens its stdout/stderr onto this file, so a runtime "Fatal error." dump or native crash message (which bypasses the normal `daemon.log` pipeline) is captured here. (`kcap daemon start -d` wires this up automatically by passing the daemon a `--stderr-file` flag; you don't set it yourself.) A service-managed daemon captures the same output via its service log. An empty file means nothing was written to stderr — i.e. a `SIGKILL`, not a crash.
 - **Startup breadcrumb** — when a daemon starts and finds the previous instance's lock was left for the kernel to release (the signature of an uncatchable kill), it logs a `warning` to `daemon.log` naming the dead PID. If you see this recur, run the daemon as a service (`kcap daemon service install`) so it auto-restarts instead of staying down.
 
 ### Local agents (run-agent / attach / ls)

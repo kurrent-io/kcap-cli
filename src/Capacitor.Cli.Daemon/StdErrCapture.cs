@@ -50,6 +50,13 @@ internal static partial class StdErrCapture {
     /// </summary>
     public static bool Apply(string path) {
         try {
+            // This runs before the logging provider creates the config dir, so on a
+            // fresh install/profile (or a custom KCAP_CONFIG_DIR) the parent dir may
+            // not exist yet — without this the open fails and capture is silently
+            // disabled for the whole daemon lifetime. Best-effort like the rest.
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
             var fs = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
             _capture = fs; // keep alive for the process lifetime
             var fd = (int)fs.SafeFileHandle.DangerousGetHandle();

@@ -121,7 +121,11 @@ public static class DaemonCommands {
             return 1;
         }
 
-        WritePidFile(name, process);
+        // The daemon writes its own PID file inside the flock during startup
+        // (DaemonLock.TryAcquire) and deletes it in Dispose. The supervisor no
+        // longer writes it too (AI-1155): a second, out-of-flock writer could
+        // recreate the file after the daemon's clean exit, making the successor's
+        // unclean-exit breadcrumb fire falsely. The daemon is the sole owner.
 
         try {
             await process.WaitForExitAsync();
@@ -237,7 +241,11 @@ public static class DaemonCommands {
             return process.ExitCode == 0 ? 1 : process.ExitCode;
         }
 
-        WritePidFile(name, process);
+        // No supervisor PID-file write here (AI-1155): the daemon wrote its own
+        // inside the flock during startup — which the readiness wait above just
+        // confirmed it survived — and owns its deletion. A redundant out-of-flock
+        // write could recreate the file after a clean daemon exit and trip the
+        // successor's unclean-exit breadcrumb falsely.
 
         Console.Out.WriteLine($"Daemon '{name}' started (PID {process.Id})");
         Console.Out.WriteLine($"  Log:       {LogPath}");
@@ -619,22 +627,6 @@ public static class DaemonCommands {
     // ── shared helpers ──────────────────────────────────────────────────────
 
     record struct PidEntry(int Pid, string? StartToken);
-
-    static void WritePidFile(string daemonName, Process process) {
-        var pidPath = DaemonLockPaths.PidPath(daemonName);
-        DaemonLockPaths.EnsureDirectory();
-
-        // Second line is a cross-process-stable start token (AI-839). The daemon
-        // writes the same thing for the same PID, so this redundant supervisor
-        // write agrees with it byte-for-byte instead of racing on a different
-        // value. Null token falls back to PID-only and a ProcessName check.
-        var token   = ProcessStartToken.ForPid(process.Id);
-        var content = token is not null
-            ? $"{process.Id}\n{token}"
-            : process.Id.ToString();
-
-        File.WriteAllText(pidPath, content);
-    }
 
     static PidEntry? ReadPidFile(string daemonName) {
         var pidPath = DaemonLockPaths.PidPath(daemonName);

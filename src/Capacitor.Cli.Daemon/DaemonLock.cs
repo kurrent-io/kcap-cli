@@ -147,10 +147,12 @@ internal sealed class DaemonLock : IDisposable {
         // present-but-unreadable file (permissions, transient IO, corruption)
         // still means the prior holder skipped cleanup — report unclean with an
         // unknown PID rather than silently masking a real hard-death as clean.
+        // Read only the first line (the PID; the daemon writes "{pid}\n{token}")
+        // instead of slurping the whole file, so a corrupt/oversized file can't
+        // force a large allocation on every startup.
         try {
-            var first = File.ReadAllText(pidPath)
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .FirstOrDefault();
+            using var reader = File.OpenText(pidPath);
+            var first = reader.ReadLine();
 
             return (true, int.TryParse(first, out var pid) ? pid : null);
         } catch {
