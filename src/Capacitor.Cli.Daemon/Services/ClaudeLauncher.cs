@@ -159,7 +159,9 @@ internal sealed partial class ClaudeLauncher(
             var descriptor = KcapMcpRegistry.Resolve(name);
 
             if (descriptor is null) {
-                LogAllowlistEntryUnknown(name, ctx.AgentId);
+                // name may be null here — a wire-deserialized allowlist element — so log it
+                // defensively rather than let a null flow into the formatter unlabeled.
+                LogAllowlistEntryUnknown(name ?? "(null)", ctx.AgentId);
                 continue;
             }
 

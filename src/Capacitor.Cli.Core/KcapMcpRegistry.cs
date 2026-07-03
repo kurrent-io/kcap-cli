@@ -15,6 +15,13 @@ public static class KcapMcpRegistry {
         ["kcap-flows"]    = new("kcap-flows",    ["mcp", "flows"],    true),
     };
 
-    public static KcapMcpServerDescriptor? Resolve(string name) =>
-        Entries.TryGetValue(name.Trim(), out var d) ? d : null;
+    /// <summary>Resolves an allowlist entry to its descriptor. Case-insensitive, trims
+    /// surrounding whitespace. A null or blank name — e.g. a wire-deserialized allowlist
+    /// element — returns null rather than throwing, so callers can route it through the
+    /// same unknown-name skip path as any other unresolvable name.</summary>
+    public static KcapMcpServerDescriptor? Resolve(string? name) {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+
+        return Entries.TryGetValue(name.Trim(), out var d) ? d : null;
+    }
 }

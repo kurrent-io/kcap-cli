@@ -160,4 +160,18 @@ public class KcapMcpRegistryTests {
 
         await Assert.That(result).IsNull();
     }
+
+    [Test]
+    public async Task Resolve_Null_ReturnsNull() {
+        var result = KcapMcpRegistry.Resolve(null);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task Resolve_TwoSpaceWhitespace_ReturnsNull() {
+        var result = KcapMcpRegistry.Resolve("  ");
+
+        await Assert.That(result).IsNull();
+    }
 }

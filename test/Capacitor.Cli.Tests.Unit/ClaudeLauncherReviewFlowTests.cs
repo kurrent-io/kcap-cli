@@ -176,6 +176,23 @@ public class ClaudeLauncherReviewFlowTests {
     }
 
     [Test]
+    public async Task ReviewFlow_allowlist_with_null_element_skips_it_without_throwing() {
+        // A wire-deserialized allowlist can contain a null element (e.g. a malformed JSON
+        // array entry). It must flow through the existing unknown-name skip path rather
+        // than throw a NullReferenceException out of the launch path.
+        var ctx = NewCtx(isReviewFlow: true) with { McpAllowlist = [null!, "kcap-sessions"] };
+
+        var args = NewLauncher(serverUrl: "https://t.example", capacitorPath: "/opt/kcap").BuildArgs(ctx).Args;
+
+        var cfgIndex = Array.IndexOf(args, "--mcp-config");
+        var servers  = JsonNode.Parse(args[cfgIndex + 1])!.AsObject()["mcpServers"]!.AsObject();
+
+        await Assert.That(servers.Count).IsEqualTo(2);
+        await Assert.That(servers.ContainsKey("kcap-flow-result")).IsTrue();
+        await Assert.That(servers.ContainsKey("kcap-sessions")).IsTrue();
+    }
+
+    [Test]
     public async Task ReviewFlow_empty_allowlist_args_byte_identical_to_null_allowlist() {
         var launcher = NewLauncher(serverUrl: "https://t.example", capacitorPath: "/opt/kcap");
 
