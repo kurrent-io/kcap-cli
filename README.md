@@ -140,6 +140,7 @@ Once set up, Capacitor runs silently in the background. Every Claude Code (and C
 - **Repository context** — git repo, branch, and PR linkage
 - **In-agent upgrade prompts** — in Claude Code sessions, when the server is running a newer kcap release than the local CLI, additional context is injected into the session so the agent can offer the user an upgrade via `kcap update`. The stderr `kcap` update hint continues to fire for direct command-line use.
 - **SessionStart context injection** — at every session start the server injects top evaluation-derived fact clusters for the current repo into Claude's `additionalContext`. The injected block is split into two sections: `## Known patterns` (repo/project facts relevant to any reader) and `## Guidance from past sessions` (agent-targeted action items derived from prior eval suggestions with `audience: "agent"`). Opt out by setting `disable_session_guidelines: true` in `~/.config/kcap/config.json` or via `kcap config set disable_session_guidelines true`.
+- **SessionStart team-memory index** — at every session start (Claude Code) `kcap` also fetches a compact index of durable [team memories](#memory-mcp-server-for-agents) visible for the current repo/machine and appends a `## Team memory` block to `additionalContext`: one `slug: description` line per memory, grouped **Org / Team / Yours**, with a nudge to call `get_memory` / `search_memories` for full content. Only the index is injected — never the bodies — so the cost stays roughly flat as the pool grows (mirrors a local `MEMORY.md`). Best-effort and fail-open (a slow or failed fetch injects nothing, never blocking the hook). Opt out with `disable_memory_index: true` in `~/.config/kcap/config.json` or `kcap config set disable_memory_index true`.
 
 ## CLI commands
 
@@ -346,6 +347,8 @@ It provides six tools:
 - **`archive_memory`** — soft-delete a memory.
 
 The server is repo- and machine-aware: it resolves the current working directory to a repo hash and the local persisted machine id at startup, and uses both to scope `save_memory` and to bias `search_memories` / `get_memory` results.
+
+At SessionStart (Claude Code), `kcap` also injects a compact **index** of the memories visible for the current repo/machine into the session context, so the agent starts each session aware of what's saved without a search — see [SessionStart team-memory index](#what-it-records) above. Opt out with `kcap config set disable_memory_index true`.
 
 ### Curate guidelines
 
