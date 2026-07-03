@@ -35,12 +35,18 @@ public static class UpdateCommand {
         // the whole v2 config via SaveProfileConfig — NEVER write a flat
         // CapacitorConfig, which would overwrite the user's v2 profile config.
         if (args.Contains("--beta") || args.Contains("--stable")) {
-            var pc         = await AppConfig.LoadProfileConfig();
-            var activeName = pc.ActiveProfile;
-            if (pc.Profiles.TryGetValue(activeName, out var active)
+            var pc = await AppConfig.LoadProfileConfig();
+
+            // Must match the profile GetActiveProfileAsync() resolved above (the
+            // read side): when a profile was resolved (env var, .kcap.json, git
+            // remote match, or `kcap use` binding), persist to THAT profile —
+            // not blindly to the on-disk active_profile — so the switch sticks
+            // for the profile the user is actually on.
+            var targetName = AppConfig.ResolvedProfile?.ProfileName ?? pc.ActiveProfile;
+            if (pc.Profiles.TryGetValue(targetName, out var active)
              && active.UpdateChannel != channel) {
                 var profiles = new Dictionary<string, Profile>(pc.Profiles) {
-                    [activeName] = active with { UpdateChannel = channel }
+                    [targetName] = active with { UpdateChannel = channel }
                 };
                 await AppConfig.SaveProfileConfig(pc with { Profiles = profiles });
             }
