@@ -15,6 +15,8 @@ description: >-
 
 Use the `kcap mcp flows` MCP tools (`start_review_flow`, `submit_review_round`, …) to run a structured review **flow**: your work is submitted to a **separate, hosted reviewer** agent, which returns findings; you address them and keep iterating until the reviewer returns `NO FINDINGS`. This is a deliberate, heavier workflow — use it only when the user explicitly opts into it.
 
+These four tools are aliases of the generic flow tools (`start_flow`, `send_to_participant`, `get_flow_status`, `close_flow`) — see the `agent-flows` skill for non-review flows.
+
 ## When NOT to use this skill / these tools
 
 These tools do **not** perform a review — they hand the work off to a separate hosted reviewer. If the user simply asked *you* to review something in a normal session — e.g. "review my PR", "review this diff", "code review this", "look over this spec" — just perform the review yourself and report your findings directly. Do **NOT** call `start_review_flow` / `submit_review_round` for an ordinary review request; that would spin up a hosted reviewer the user did not ask for.
