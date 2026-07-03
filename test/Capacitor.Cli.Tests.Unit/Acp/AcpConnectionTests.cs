@@ -188,7 +188,7 @@ public class AcpConnectionTests {
 
         harness.Connection.OnServerRequest = (request, _) => {
             var result = JsonSerializer.SerializeToElement(new { content = "file contents" });
-            return Task.FromResult<object?>(result);
+            return Task.FromResult<JsonElement?>(result);
         };
 
         await harness.WriteFrameToConnectionAsync(
@@ -201,6 +201,66 @@ public class AcpConnectionTests {
         await Assert.That(doc.RootElement.TryGetProperty("error", out _)).IsFalse();
         await Assert.That(doc.RootElement.GetProperty("result").GetProperty("content").GetString())
             .IsEqualTo("file contents");
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
+    }
+
+    // PR #244 review (Fix #3): OnServerRequest's contract is now Task<JsonElement?> — the handler
+    // can no longer return an un-serializable CLR object that WriteServerResponseAsync could only
+    // reject with a throw OUTSIDE any try/catch, silently orphaning the agent's request (no
+    // response ever written, wedging its wait on this id forever). These three tests assert the
+    // "always answered" guarantee holds across the three shapes a handler can produce: a value, a
+    // thrown exception, and a null result.
+    [Test]
+    public async Task Inbound_server_request_handler_throwing_still_writes_an_internal_error_response() {
+        await using var harness = new Harness();
+        using var       cts     = new CancellationTokenSource();
+        var              runTask = harness.Connection.RunAsync(cts.Token);
+
+        harness.Connection.OnServerRequest = (_, _) => throw new InvalidOperationException("boom");
+
+        await harness.WriteFrameToConnectionAsync(
+            """{"jsonrpc":"2.0","id":7,"method":"fs/read_text_file","params":{"path":"/tmp/x"}}"""
+        );
+
+        var frame = await harness.ReadFrameFromConnectionAsync();
+        using var doc = JsonDocument.Parse(frame);
+        await Assert.That(doc.RootElement.GetProperty("id").GetInt64()).IsEqualTo(7L);
+        await Assert.That(doc.RootElement.TryGetProperty("result", out _)).IsFalse();
+        var error = doc.RootElement.GetProperty("error");
+        await Assert.That(error.GetProperty("code").GetInt32()).IsEqualTo(-32603);
+
+        // Loop must still be alive afterward — a wedge would silently swallow this too.
+        var tcs = new TaskCompletionSource<AcpNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Connection.OnNotification += n => tcs.TrySetResult(n);
+        await harness.WriteFrameToConnectionAsync(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"still-alive"}}"""
+        );
+        var notification = await tcs.Task.WaitAsync(HangGuard);
+        await Assert.That(notification.Params!.Value.GetProperty("sessionId").GetString()).IsEqualTo("still-alive");
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
+    }
+
+    [Test]
+    public async Task Inbound_server_request_handler_returning_null_writes_a_null_result_response() {
+        await using var harness = new Harness();
+        using var       cts     = new CancellationTokenSource();
+        var              runTask = harness.Connection.RunAsync(cts.Token);
+
+        harness.Connection.OnServerRequest = (_, _) => Task.FromResult<JsonElement?>(null);
+
+        await harness.WriteFrameToConnectionAsync(
+            """{"jsonrpc":"2.0","id":8,"method":"session/request_permission","params":{}}"""
+        );
+
+        var frame = await harness.ReadFrameFromConnectionAsync();
+        using var doc = JsonDocument.Parse(frame);
+        await Assert.That(doc.RootElement.GetProperty("id").GetInt64()).IsEqualTo(8L);
+        await Assert.That(doc.RootElement.TryGetProperty("error", out _)).IsFalse();
+        await Assert.That(doc.RootElement.GetProperty("result").ValueKind).IsEqualTo(JsonValueKind.Null);
 
         cts.Cancel();
         await SwallowCancellation(runTask);
@@ -362,7 +422,7 @@ public class AcpConnectionTests {
 
         harness.Connection.OnServerRequest = (request, _) => {
             var result = JsonSerializer.SerializeToElement(new { content = "file contents" });
-            return Task.FromResult<object?>(result);
+            return Task.FromResult<JsonElement?>(result);
         };
 
         await harness.WriteFrameToConnectionAsync(

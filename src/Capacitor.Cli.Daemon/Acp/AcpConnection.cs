@@ -75,8 +75,19 @@ internal sealed class AcpConnection : IAsyncDisposable {
     /// response it writes back, with this delegate's return value as the JSON-RPC <c>result</c>.
     /// If unset, every inbound server request is answered with a method-not-found error — a safe
     /// default-decline posture. AI-684 leaves this unset; AI-686 wires it to the permission bridge.
+    ///
+    /// Typed <see cref="JsonElement"/>? rather than <c>object?</c> (PR #244 review, Fix #3): the
+    /// old <c>object?</c> contract let a handler return an un-serialized CLR object that
+    /// <see cref="WriteServerResponseAsync"/> could only reject with a thrown
+    /// <see cref="InvalidOperationException"/> — which happened OUTSIDE any try/catch here, so it
+    /// propagated up through <see cref="DispatchLineAsync"/>'s broad catch (log-and-skip) and the
+    /// agent's request was left with NO response at all, wedging its wait on this id forever. A
+    /// handler must now build its own <see cref="JsonElement"/> (typically via
+    /// <see cref="JsonSerializer.SerializeToElement"/> against a registered
+    /// <see cref="CapacitorJsonContext"/> type) so the shape is AOT-safe and can't fail to
+    /// serialize at the write site.
     /// </summary>
-    public Func<AcpRequest, CancellationToken, Task<object?>>? OnServerRequest { get; set; }
+    public Func<AcpRequest, CancellationToken, Task<JsonElement?>>? OnServerRequest { get; set; }
 
     /// <summary>
     /// Sends a request and awaits its correlated response. Throws <see cref="AcpRpcException"/> if
@@ -255,6 +266,15 @@ internal sealed class AcpConnection : IAsyncDisposable {
         tcs.TrySetResult(result);
     }
 
+    /// <summary>
+    /// Handles one inbound agent→client request. MUST write exactly one response frame for
+    /// <paramref name="idElement"/> no matter what happens — a missing response wedges the agent's
+    /// wait on this id forever (PR #244 review, Fix #3). The handler-invoke try/catch (existing)
+    /// and the outer try/catch around response serialization+write (new) together guarantee this:
+    /// any failure — a thrown handler, or a result that fails to serialize/write — falls back to a
+    /// JSON-RPC "Internal error" response keyed on the ORIGINAL request id, rather than letting the
+    /// exception escape to <see cref="DispatchLineAsync"/>'s log-and-skip catch.
+    /// </summary>
     async Task HandleServerRequestAsync(JsonElement root, JsonElement idElement, JsonElement methodElement, CancellationToken ct) {
         var method       = methodElement.GetString() ?? "";
         var paramsElement = root.TryGetProperty("params", out var p) ? p.Clone() : (JsonElement?) null;
@@ -264,8 +284,8 @@ internal sealed class AcpConnection : IAsyncDisposable {
         // that could throw and kill the read loop.
         var idClone = idElement.Clone();
 
-        object? result;
-        AcpError? error = null;
+        JsonElement? result;
+        AcpError?    error = null;
 
         var handler = OnServerRequest;
         if (handler is null) {
@@ -288,7 +308,23 @@ internal sealed class AcpConnection : IAsyncDisposable {
             }
         }
 
-        await WriteServerResponseAsync(idClone, result, error, ct).ConfigureAwait(false);
+        try {
+            await WriteServerResponseAsync(idClone, result, error, ct).ConfigureAwait(false);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            // Serializing/writing the chosen response itself failed (e.g. a malformed JsonElement,
+            // or a transient write fault). The agent is still owed a response for this id — never
+            // leave it log-and-skipped by DispatchLineAsync's outer catch — so fall back to a
+            // minimal internal-error response. Best-effort: if even THIS write fails, there is
+            // nothing left to try (the wire itself is broken and the read loop will observe that
+            // via its own exception handling on the next read).
+            _logger.LogDebug(ex, "ACP: failed to write server-request response for method={Method}; sending internal-error fallback", method);
+
+            try {
+                await WriteServerResponseAsync(idClone, null, new AcpError(-32603, "Internal error", null), ct).ConfigureAwait(false);
+            } catch (Exception fallbackEx) when (fallbackEx is not OperationCanceledException) {
+                _logger.LogDebug(fallbackEx, "ACP: internal-error fallback response also failed to write for method={Method}", method);
+            }
+        }
     }
 
     void HandleNotification(JsonElement root, JsonElement methodElement) {
@@ -298,15 +334,16 @@ internal sealed class AcpConnection : IAsyncDisposable {
         OnNotification?.Invoke(new AcpNotification(method, paramsElement));
     }
 
-    async Task WriteServerResponseAsync(JsonElement idElement, object? result, AcpError? error, CancellationToken ct) {
-        JsonElement? resultElement = result switch {
-            null              => null,
-            JsonElement je    => je,
-            _                 => throw new InvalidOperationException(
-                $"OnServerRequest must return a JsonElement (built via JsonSerializer.SerializeToElement against a registered CapacitorJsonContext type), got {result.GetType()}."),
-        };
-
-        var json = SerializeRawIdResponse(idElement, resultElement, error);
+    /// <summary>
+    /// Writes the JSON-RPC response for one inbound server request. <paramref name="result"/> is
+    /// already a <see cref="JsonElement"/>? by construction (the <see cref="OnServerRequest"/>
+    /// delegate is typed <c>Task&lt;JsonElement?&gt;</c> — PR #244 review, Fix #3 — so there is no
+    /// runtime shape to validate here, only to serialize+write; the caller
+    /// (<see cref="HandleServerRequestAsync"/>) wraps this call so a failure here still yields an
+    /// internal-error fallback response rather than none at all).
+    /// </summary>
+    async Task WriteServerResponseAsync(JsonElement idElement, JsonElement? result, AcpError? error, CancellationToken ct) {
+        var json = SerializeRawIdResponse(idElement, result, error);
         await WriteLineAsync(json, ct).ConfigureAwait(false);
     }
 
