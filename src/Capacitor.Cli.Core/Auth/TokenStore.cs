@@ -27,6 +27,14 @@ public record StoredTokens {
     public bool IsExpired => DateTimeOffset.UtcNow >= ExpiresAt - TimeSpan.FromSeconds(30);
 }
 
+// Outcome of a proactive-refresh tick (<see cref="TokenStore.RefreshIfExpiringAsync"/>).
+// NotDue = no-op (no tokens, the None provider, or the token still comfortably valid);
+// Refreshed = a valid token is now persisted (we refreshed, a peer did, or it was already
+// fresh under the lock); Failed = a refresh was attempted but failed (network / 4xx) and the
+// token is unchanged. The daemon loop rate-limits on both Refreshed and Failed so it never
+// re-hits the refresh endpoint every tick.
+public enum ProactiveRefreshOutcome { NotDue, Refreshed, Failed }
+
 public static class TokenStore {
     static string LegacyTokenPath => PathHelpers.ConfigPath("tokens.json");
     static string TokenDir         => PathHelpers.ConfigPath("tokens");
@@ -251,14 +259,90 @@ public static class TokenStore {
         return null;
     }
 
+    // The decision the daemon's proactive-refresh tick makes each time it wakes. Kept a
+    // pure function (no IO) so every branch is unit-testable in isolation;
+    // RefreshIfExpiringAsync turns the decision into action.
+    internal enum RefreshDecision { NoTokens, NotDueYet, RefreshWorkOS, RefreshGitHub, Unsupported }
+
+    // Should the active profile's token be refreshed ahead of expiry, and via which provider
+    // path? Refresh only once the token is within `window` of `ExpiresAt` — outside it we leave
+    // the refresh credential untouched so proactive refresh adds no measurable traffic. Provider
+    // gating mirrors GetValidTokensAsync: WorkOS needs its rotating refresh_token + client_id;
+    // GitHub re-mints via the server. Anything else — the None provider, or a WorkOS token
+    // missing its credentials — is a no-op.
+    internal static RefreshDecision DecideProactiveRefresh(StoredTokens? tokens, DateTimeOffset now, TimeSpan window) {
+        if (tokens is null) {
+            return RefreshDecision.NoTokens;
+        }
+
+        if (now < tokens.ExpiresAt - window) {
+            return RefreshDecision.NotDueYet;
+        }
+
+        if (tokens is { Provider: AuthProvider.WorkOS, RefreshToken: not null, ClientId: not null }) {
+            return RefreshDecision.RefreshWorkOS;
+        }
+
+        if (tokens.Provider is AuthProvider.GitHubApp) {
+            return RefreshDecision.RefreshGitHub;
+        }
+
+        return RefreshDecision.Unsupported;
+    }
+
+    // Proactively refresh the active profile's token when it is within `window` of expiry —
+    // even though it isn't expired yet. The daemon calls this on a low-frequency timer so a
+    // continuously-running daemon keeps a WorkOS sliding-inactivity session alive (up to its
+    // absolute lifetime) instead of the user hitting a 401 on the next hook after an idle
+    // period and being forced to re-run `kcap login`.
+    //
+    // Goes through the same profile-scoped cross-process lock as GetValidTokensAsync, so it
+    // never races a hook/watcher/MCP refresh and clobbers a rotated WorkOS refresh token, and
+    // refreshes only inside the window. The daemon loop rate-limits attempts, so refresh
+    // traffic stays bounded even when a token keeps landing back inside the window.
+    //
+    // Returns a ProactiveRefreshOutcome (see that enum). The refresh calls swallow network /
+    // parse failures (return null → Failed); a genuine IO fault reading the token or config
+    // can still propagate and is caught by the daemon's total tick.
+    public static async Task<ProactiveRefreshOutcome> RefreshIfExpiringAsync(TimeSpan window) {
+        // Resolve the active profile once and thread it through both the read and the lock, so
+        // a profile switch mid-call can't make us refresh one profile's token under another's
+        // lock (GetValidTokensAsync re-resolves; this is deliberately tighter).
+        var profile = await ResolveActiveProfileAsync();
+        var tokens  = await LoadAsync(profile);
+
+        // Re-evaluate the window under the lock too (via this predicate): a peer may refresh
+        // between our read here and our acquiring the lock, leaving the re-read token fresh.
+        bool ExpiringWithinWindow(StoredTokens t) => DateTimeOffset.UtcNow >= t.ExpiresAt - window;
+
+        return DecideProactiveRefresh(tokens, DateTimeOffset.UtcNow, window) switch {
+            RefreshDecision.RefreshWorkOS => ToOutcome(await RefreshWithCrossProcessLockAsync(profile, tokens!, RefreshWorkOSAsync, ExpiringWithinWindow)),
+            RefreshDecision.RefreshGitHub => ToOutcome(await RefreshWithCrossProcessLockAsync(profile, tokens!, RefreshGitHubAsync, ExpiringWithinWindow)),
+            _                             => ProactiveRefreshOutcome.NotDue
+        };
+
+        // Non-null = a valid token is now persisted; null = the refresh call failed and left
+        // the token unchanged (so the loop should back off rather than retry every tick).
+        static ProactiveRefreshOutcome ToOutcome(StoredTokens? result)
+            => result is not null ? ProactiveRefreshOutcome.Refreshed : ProactiveRefreshOutcome.Failed;
+    }
+
     // Profile-scoped cross-process lock. Acquire it, re-read the token under it (a peer
-    // may have just rotated it), refresh only if still expired, persist, release. If the
-    // lock can't be acquired within the deadline, fall back to whatever a peer persisted.
+    // may have just rotated it), refresh only if it is still due per `needsRefresh`, persist,
+    // release. If the lock can't be acquired within the deadline, fall back to whatever a peer
+    // persisted.
     static async Task<StoredTokens?> RefreshWithCrossProcessLockAsync(
             string                                  profile,
             StoredTokens                            current,
-            Func<StoredTokens, Task<StoredTokens?>> refresh
+            Func<StoredTokens, Task<StoredTokens?>> refresh,
+            Func<StoredTokens, bool>?               needsRefresh = null
         ) {
+        // Default predicate: refresh a token GetValidTokensAsync already found expired. The
+        // proactive path (RefreshIfExpiringAsync) passes a wider "within N minutes of expiry"
+        // predicate so it can refresh ahead of expiry — under this same lock, re-checked after
+        // the re-read, so it can't race a peer's refresh or double-spend a rotated token.
+        needsRefresh ??= static t => t.IsExpired;
+
         // Validate before building the lock path — a profile name with path separators
         // must not let the lock file escape TokenDir (matches ProfileTokenPath's guard).
         ValidateProfileName(profile);
@@ -275,7 +359,7 @@ public static class TokenStore {
                 if (DateTime.UtcNow >= deadline) {
                     var latest = await LoadAsync(profile);
 
-                    return latest is { IsExpired: false } ? latest : null;
+                    return latest is not null && !needsRefresh(latest) ? latest : null;
                 }
 
                 await Task.Delay(100);
@@ -285,7 +369,7 @@ public static class TokenStore {
         try {
             var latest = await LoadAsync(profile) ?? current;
 
-            return latest.IsExpired ? await refresh(latest) : latest;
+            return needsRefresh(latest) ? await refresh(latest) : latest;
         } finally {
             // Close the stream to release the OS lock, but DON'T delete the file: on Unix a
             // waiter can acquire the old inode between dispose and delete, then the unlink lets
