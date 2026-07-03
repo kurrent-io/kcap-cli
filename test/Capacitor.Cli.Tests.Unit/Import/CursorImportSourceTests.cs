@@ -678,19 +678,28 @@ public class CursorImportSourceTests {
         await Assert.That(startNode["session_id"]!.GetValue<string>()).IsEqualTo(parentId);
         await Assert.That(startNode["agent_id"]!.GetValue<string>()).IsEqualTo(childId);
         await Assert.That(startNode["agent_type"]!.GetValue<string>()).IsEqualTo("generalPurpose");
+        // HookBase-required fields (server binding rejects the hook without them) + fail-closed.
+        await Assert.That(startNode["cwd"]).IsNotNull();
+        await Assert.That(startNode["transcript_path"]).IsNotNull();
+        await Assert.That(startNode["strict"]!.GetValue<bool>()).IsTrue();
 
         var subTranscript = bodies.First(b => b.Path == "/hooks/transcript" && JsonNode.Parse(b.Body)!["agent_id"] is not null);
         var tNode = JsonNode.Parse(subTranscript.Body)!;
         await Assert.That(tNode["session_id"]!.GetValue<string>()).IsEqualTo(parentId);
         await Assert.That(tNode["agent_id"]!.GetValue<string>()).IsEqualTo(childId);
+        // Strict so server-side normalization failures fail the import, not just HTTP errors.
+        await Assert.That(tNode["strict"]!.GetValue<bool>()).IsTrue();
 
-        // Full SubagentStopHook shape (review finding): the server binds all fields.
+        // Full SubagentStopHook + HookBase shape (review finding): the server binds all fields.
         var stopNode = JsonNode.Parse(bodies.First(b => b.Path == "/hooks/subagent-stop").Body)!;
         await Assert.That(stopNode["session_id"]!.GetValue<string>()).IsEqualTo(parentId);
         await Assert.That(stopNode["agent_id"]!.GetValue<string>()).IsEqualTo(childId);
+        await Assert.That(stopNode["cwd"]).IsNotNull();
+        await Assert.That(stopNode["transcript_path"]).IsNotNull();
         await Assert.That(stopNode["stop_hook_active"]).IsNotNull();
         await Assert.That(stopNode["agent_transcript_path"]!.GetValue<string>().EndsWith(".jsonl")).IsTrue();
         await Assert.That(stopNode["last_assistant_message"]).IsNotNull();
+        await Assert.That(stopNode["strict"]!.GetValue<bool>()).IsTrue();
     }
 
     [Test]

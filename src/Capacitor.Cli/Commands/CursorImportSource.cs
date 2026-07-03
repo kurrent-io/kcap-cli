@@ -470,8 +470,9 @@ internal sealed class CursorImportSource : IImportSource {
             ["session_id"]      = parentSessionId,
             ["agent_id"]        = agentId,
             ["agent_type"]      = subagentType,
-            ["transcript_path"] = child.TranscriptPath,
-            ["cwd"]             = "", // wire-shape parity with SendAgentLifecycle / other vendors
+            ["transcript_path"] = child.TranscriptPath, // required by HookBase
+            ["cwd"]             = "",                    // required by HookBase
+            ["strict"]          = true,                  // fail-closed: 500 if SubagentStarted isn't persisted
         }, ct);
         if (!startOk) return false;
 
@@ -509,11 +510,12 @@ internal sealed class CursorImportSource : IImportSource {
             ["session_id"]             = parentSessionId,
             ["agent_id"]               = agentId,
             ["agent_type"]             = subagentType,
-            ["transcript_path"]        = child.TranscriptPath,
-            ["cwd"]                    = "", // wire-shape parity with SendAgentLifecycle / other vendors
+            ["transcript_path"]        = child.TranscriptPath, // required by HookBase
+            ["cwd"]                    = "",                   // required by HookBase
             ["stop_hook_active"]       = false,
             ["agent_transcript_path"]  = child.TranscriptPath,
             ["last_assistant_message"] = "",
+            ["strict"]                 = true,                 // fail-closed: 500 if SubagentCompleted isn't persisted
         }, ct);
     }
 
