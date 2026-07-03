@@ -814,7 +814,12 @@ public readonly record struct LaunchAgentCommand(
         // a mismatch (e.g. a different machine, where the path doesn't resolve) skips the sync.
         // Appended last as an optional field so the SignalR positional binding stays wire-compatible
         // with older daemons/servers.
-        string?           SyncFromRepoRoot = null
+        string?           SyncFromRepoRoot = null,
+        // AI-1126 D-c: for a review-flow launch, the flow definition's MCP allowlist — server-owned
+        // names the daemon resolves against the kcap-owned KcapMcpRegistry and materializes into the
+        // launcher's MCP config (flow-starting servers are stripped regardless of listing). Appended
+        // last, same wire-compat rule as SyncFromRepoRoot above.
+        string[]?         McpAllowlist = null
     );
 
 /// <summary>
