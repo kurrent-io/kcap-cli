@@ -95,6 +95,24 @@ public class TokenRefreshLoopTests {
     }
 
     [Test]
+    public async Task Tick_Contended_IsQuietAndDoesNotBackOff() {
+        // Lock contention (a peer holds the refresh lock) is not a refresh failure: no warning,
+        // and the next tick is NOT rate-limited — contention is transient, so we retry promptly.
+        var now    = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var logger = new CaptureLogger();
+        var port   = new FakePort { Handler = () => Task.FromResult(ProactiveRefreshOutcome.Contended) };
+        var loop   = new TokenRefreshLoop(port, logger, Interval, () => now);
+
+        await loop.TickAsync(CancellationToken.None);
+        await Assert.That(port.Calls).IsEqualTo(1);
+        await Assert.That(logger.Entries).DoesNotContain(e => e.Level == LogLevel.Warning);
+
+        now = now.AddMinutes(1);                            // well within the rate-limit interval
+        await loop.TickAsync(CancellationToken.None);
+        await Assert.That(port.Calls).IsEqualTo(2);         // not suppressed — contention doesn't arm the gate
+    }
+
+    [Test]
     public async Task Tick_OuterCancellation_DoesNotLogWarning() {
         // Outer cancellation = process shutdown. A cancellation surfacing from the refresh
         // during teardown must be treated as a clean exit, not a fault to warn about.

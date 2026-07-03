@@ -96,6 +96,14 @@ internal sealed class TokenRefreshLoop {
 
                     break;
 
+                case ProactiveRefreshOutcome.Contended:
+                    // A peer (hook/watcher/MCP) held the cross-process refresh lock — it is
+                    // presumably refreshing. No endpoint call was made, so this is not a failure:
+                    // stay quiet and retry on the next tick (no warning, no backoff).
+                    _logger.LogDebug("Proactive token refresh: another process holds the refresh lock — retrying next tick");
+
+                    break;
+
                 case ProactiveRefreshOutcome.NotDue:
                     _logger.LogTrace("Proactive token refresh: token still valid — nothing to do");
 
