@@ -229,7 +229,7 @@ static class CodexHookCommand {
                 skipTitle: false, vendor: "codex"
             );
 
-            await PostStopBestEffortAsync(baseUrl, node);
+            await PostBestEffortAsync(baseUrl, "stop", node, TimeSpan.FromSeconds(2));
         }
 
         // AI-635: Codex's stop-hook output parser rejects empty stdout as
@@ -265,14 +265,9 @@ static class CodexHookCommand {
         // 30 s hook timeout. Passing baseUrl also keeps discovery targeted at
         // the server we're about to POST to, not the
         // AppConfig.ResolvedServerUrl / KCAP_URL / localhost:5108 fallback.
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        try {
-            using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, cts.Token);
-            using var content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _       = await client.PostAsync($"{baseUrl}/hooks/permission-record", content, cts.Token);
-        } catch {
-            // Best-effort — recording must never block Codex's approval prompt.
-        }
+        // Recording must never block Codex's approval prompt — see
+        // PostBestEffortAsync for the shared swallow-all/cap behavior.
+        await PostBestEffortAsync(baseUrl, "permission-record", node, TimeSpan.FromSeconds(2));
 
         // Empty hookSpecificOutput → Codex treats it as "no decision" and runs
         // its normal approval flow. See
@@ -341,23 +336,21 @@ static class CodexHookCommand {
     }
 
     /// <summary>
-    /// Best-effort POST of the Codex Stop payload to <c>/hooks/stop</c>. Codex
-    /// fires Stop at every turn end; the server marks the session waiting and,
-    /// after a short debounce, emits the idle-wait marker that clears the chat
-    /// "working" indicator. Capped at 2s and swallows every failure — a slow or
-    /// unreachable server must never hang the local Codex terminal or break the
-    /// hook's stdout contract. The single deadline covers both /auth/config
-    /// discovery inside CreateAuthenticatedClientAsync and the POST itself.
+    /// Best-effort POST of <paramref name="node"/> to <c>/hooks/{endpoint}</c>, capped at
+    /// <paramref name="cap"/> and swallowing every failure. The single deadline covers both
+    /// /auth/config discovery inside CreateAuthenticatedClientAsync and the POST itself, so a
+    /// slow or unreachable server can never hang the caller. Callers that must satisfy Codex's
+    /// stdout contract write their JSON output AFTER awaiting this.
     /// </summary>
-    static async Task PostStopBestEffortAsync(string baseUrl, JsonNode node) {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+    static async Task PostBestEffortAsync(string baseUrl, string endpoint, JsonNode node, TimeSpan cap) {
+        using var cts = new CancellationTokenSource(cap);
 
         try {
             using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, cts.Token);
             using var content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _       = await client.PostAsync($"{baseUrl}/hooks/stop", content, cts.Token);
+            using var _       = await client.PostAsync($"{baseUrl}/hooks/{endpoint}", content, cts.Token);
         } catch {
-            // Best-effort — the idle marker is nice-to-have; never block the hook.
+            // Best-effort — must never block or fail the caller.
         }
     }
 

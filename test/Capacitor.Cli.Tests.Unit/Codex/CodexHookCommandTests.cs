@@ -85,11 +85,14 @@ public class CodexHookCommandTests : IDisposable {
             var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
             await Assert.That(exit).IsEqualTo(0);
 
-            // Stop now POSTs /hooks/stop exactly once, carrying the session id.
+            // Stop now POSTs /hooks/stop exactly once, carrying the full payload.
             var stopRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/stop").UsingPost());
             await Assert.That(stopRequests.Count).IsEqualTo(1);
             var body = JsonDocument.Parse(stopRequests[0].RequestMessage.Body!).RootElement;
             await Assert.That(body.GetProperty("session_id").GetString()).IsEqualTo("abc");
+            await Assert.That(body.GetProperty("transcript_path").GetString()).IsEqualTo("/tmp/rollout.jsonl");
+            await Assert.That(body.GetProperty("cwd").GetString()).IsEqualTo("/tmp");
+            await Assert.That(body.GetProperty("hook_event_name").GetString()).IsEqualTo("Stop");
 
             // Must NOT POST session-end.
             var endRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
@@ -140,6 +143,44 @@ public class CodexHookCommandTests : IDisposable {
         }
 
         // 2s POST cap + slack for CI jitter.
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
+    }
+
+    // Symmetric with PermissionRequest_returns_quickly_when_auth_discovery_is_slow:
+    // the shared best-effort POST helper's single deadline must cover /auth/config
+    // discovery for the Stop path too, not just the POST itself.
+    [Test, NotInParallel]
+    public async Task Stop_still_emits_continue_json_when_auth_discovery_is_slow() {
+        _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
+        _server.Given(Request.Create().WithPath("/hooks/stop").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+
+        var payload = """
+                      {
+                        "hook_event_name": "Stop",
+                        "session_id": "abc",
+                        "transcript_path": "/tmp/rollout.jsonl",
+                        "cwd": "/tmp"
+                      }
+                      """;
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+        var sw           = System.Diagnostics.Stopwatch.StartNew();
+
+        try {
+            Console.SetOut(stdoutWriter);
+            var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+            sw.Stop();
+            await Assert.That(exit).IsEqualTo(0);
+
+            var doc = JsonDocument.Parse(stdoutWriter.ToString());
+            await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
+        } finally {
+            Console.SetOut(originalOut);
+        }
+
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }
 
