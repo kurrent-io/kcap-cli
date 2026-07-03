@@ -53,10 +53,11 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     static AgentOrchestrator BuildOrchestrator(
-            ServerConnection                                  server,
-            IPtyProcessFactory                                ptyFactory,
-            IReadOnlyDictionary<string, IHostedAgentLauncher> launchers,
-            string?                                           allowedRepoPath = null
+            ServerConnection                                    server,
+            IPtyProcessFactory                                  ptyFactory,
+            IReadOnlyDictionary<string, IHostedAgentLauncher>   launchers,
+            string?                                             allowedRepoPath        = null,
+            IEnumerable<IHostedAgentRuntimeFactory>?            extraRuntimeFactories  = null
         ) {
         var config = new DaemonConfig {
             Name                = "test",
@@ -78,8 +79,11 @@ public partial class AgentOrchestratorVendorTests {
         // Mirror DaemonRunner's DI wiring: one PtyHostedAgentRuntimeFactory per registered launcher,
         // all sharing the same (spied) IPtyProcessFactory so SpyPtyProcessFactory's
         // SpawnCalls/LastCommand assertions stay valid through the runtime-selection seam.
+        // extraRuntimeFactories lets a test inject a non-PTY factory (e.g. a fake "cursor" ACP
+        // factory) without disturbing every other call site of this helper.
         IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> runtimeFactories = launchers.Values
             .Select(l => (IHostedAgentRuntimeFactory) new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance))
+            .Concat(extraRuntimeFactories ?? [])
             .ToDictionary(f => f.Vendor);
 
         return new AgentOrchestrator(
@@ -301,6 +305,54 @@ public partial class AgentOrchestratorVendorTests {
 
             await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(1);
             await Assert.That(ptyFactory.LastCommand).IsEqualTo("spy-codex");
+        } finally {
+            cleanup();
+        }
+    }
+
+    // AI-684 Task 10: a "cursor" launch must route to its registered IHostedAgentRuntimeFactory
+    // (the ACP seam) rather than falling through to a PTY launcher/factory. This is a pure unit
+    // test — SpyHostedAgentRuntimeFactory never spawns a real cursor-agent process.
+    [Test]
+    public async Task Launch_with_vendor_cursor_routes_to_the_acp_runtime_factory_not_pty() {
+        var (repoPath, cleanup) = CreateGitRepo();
+
+        try {
+            var server      = new CaptureServerConnection();
+            var ptyFactory  = new SpyPtyProcessFactory();
+            var claudeSpy   = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
+            var cursorSpy   = new SpyHostedAgentRuntimeFactory("cursor");
+
+            var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
+
+            await using var orch = BuildOrchestrator(
+                server,
+                ptyFactory,
+                launchers,
+                allowedRepoPath: repoPath,
+                extraRuntimeFactories: [cursorSpy]
+            );
+
+            var cmd = new LaunchAgentCommand(
+                AgentId: "agent-cursor1",
+                Prompt: "do work",
+                Model: "auto",
+                Effort: null,
+                RepoPath: repoPath,
+                Tools: null,
+                AttachmentIds: null,
+                Vendor: "cursor"
+            );
+
+            await orch.HandleLaunchAgentForTest(cmd);
+
+            await Assert.That(cursorSpy.StartCalls).IsEqualTo(1);
+            await Assert.That(cursorSpy.LastAgentId).IsEqualTo("agent-cursor1");
+
+            // Must NOT have gone through the PTY path at all.
+            await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
+            await Assert.That(claudeSpy.PrepareCalls).IsEqualTo(0);
+            await Assert.That(claudeSpy.BuildArgsCalls).IsEqualTo(0);
         } finally {
             cleanup();
         }
@@ -611,6 +663,55 @@ public partial class AgentOrchestratorVendorTests {
         public void Cleanup(AgentInstance agent) {
             CleanupCalls++;
         }
+    }
+
+    /// <summary>
+    /// Test double for the AI-684 Task 10 runtime-selection seam: records that <see cref="StartAsync"/>
+    /// was called (and with what agent id) and returns a no-op <see cref="FakeHostedAgentRuntime"/>,
+    /// without ever spawning a real process — proves the orchestrator routes a launch to the correct
+    /// <see cref="IHostedAgentRuntimeFactory"/> by vendor.
+    /// </summary>
+    sealed class SpyHostedAgentRuntimeFactory(string vendor) : IHostedAgentRuntimeFactory {
+        public string Vendor             { get; } = vendor;
+        public bool   SupportsUnattended { get; init; }
+
+        public int     StartCalls  { get; private set; }
+        public string? LastAgentId { get; private set; }
+
+        public bool IsAvailable() => true;
+
+        public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
+            StartCalls++;
+            LastAgentId = ctx.AgentId;
+
+            return Task.FromResult(new HostedRuntimeStart(new FakeHostedAgentRuntime(vendor), McpConfigPath: null));
+        }
+    }
+
+    /// <summary>No-op <see cref="IHostedAgentRuntime"/> returned by <see cref="SpyHostedAgentRuntimeFactory"/>
+    /// so the orchestrator's post-launch RegisterAgentAsync/ReadAgentOutputAsync run against a
+    /// harmless stand-in instead of a real PTY or ACP connection.</summary>
+    sealed class FakeHostedAgentRuntime(string vendor) : IHostedAgentRuntime {
+        public string Vendor    => vendor;
+        public int    Pid       => 0;
+        public bool   HasExited => true;
+        public int?   ExitCode  => 0;
+
+#pragma warning disable CS1998
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
+            yield break;
+        }
+#pragma warning restore CS1998
+
+        public Task SendUserInputAsync(string    text) => Task.CompletedTask;
+        public Task SendSpecialKeyAsync(string    key) => Task.CompletedTask;
+        public Task SendRawInputAsync(byte[]      data) => Task.CompletedTask;
+        public void Resize(ushort                 cols, ushort rows) { }
+        public Task RequestGracefulStopAsync() => Task.CompletedTask;
+        public Task WaitForExitAsync(TimeSpan?    timeout = null) => Task.CompletedTask;
+        public Task TerminateAsync(TimeSpan?      timeout = null) => Task.CompletedTask;
+
+        public ValueTask DisposeAsync() => default;
     }
 
     /// <summary>Returns a caller-supplied PTY process so a test can control its output behaviour.</summary>

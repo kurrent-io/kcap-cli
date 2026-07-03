@@ -111,6 +111,9 @@ public static partial class DaemonRunner {
         if (Environment.GetEnvironmentVariable("KCAP_CODEX_PATH") is { Length: > 0 } envCodexPath)
             config.CodexPath = envCodexPath;
 
+        if (Environment.GetEnvironmentVariable("KCAP_CURSOR_PATH") is { Length: > 0 } envCursorPath)
+            config.CursorPath = envCursorPath;
+
         // Shared name resolution with the CLI supervisor — the CLI's
         // DaemonCommands and the daemon binary must agree on the name so
         // the per-name PID file the CLI inspects is the one the daemon
@@ -190,20 +193,32 @@ public static partial class DaemonRunner {
             sp.GetServices<IHostedAgentLauncher>().ToDictionary(l => l.Vendor)
         );
 
-        // Runtime-selection seam (AI-684 Task 10): one IHostedAgentRuntimeFactory per vendor,
-        // wrapping each registered PTY launcher above. AgentOrchestrator selects by vendor from the
-        // resulting dictionary instead of driving Prepare/BuildArgs/Spawn inline.
-        builder.Services.AddSingleton<IReadOnlyDictionary<string, IHostedAgentRuntimeFactory>>(sp => {
-            var ptyFactory = sp.GetRequiredService<IPtyProcessFactory>();
-            var logger     = sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>();
+        // Runtime-selection seam (AI-684 Task 10): one IHostedAgentRuntimeFactory per vendor.
+        // AgentOrchestrator selects by vendor from the resulting dictionary instead of driving
+        // Prepare/BuildArgs/Spawn inline. PtyHostedAgentRuntimeFactory wraps each registered PTY
+        // launcher (Claude, Codex); AcpHostedAgentRuntimeFactory speaks ACP JSON-RPC over stdio for
+        // Cursor (no IHostedAgentLauncher — Cursor never went through the PTY launcher contract).
+        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
+            new PtyHostedAgentRuntimeFactory(
+                sp.GetServices<IHostedAgentLauncher>().Single(l => l.Vendor == "claude"),
+                sp.GetRequiredService<IPtyProcessFactory>(),
+                sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>()
+            )
+        );
+        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
+            new PtyHostedAgentRuntimeFactory(
+                sp.GetServices<IHostedAgentLauncher>().Single(l => l.Vendor == "codex"),
+                sp.GetRequiredService<IPtyProcessFactory>(),
+                sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>()
+            )
+        );
+        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
+            new AcpHostedAgentRuntimeFactory(sp.GetRequiredService<DaemonConfig>(), sp.GetRequiredService<ILoggerFactory>())
+        );
 
-            IEnumerable<IHostedAgentRuntimeFactory> factories = [
-                .. sp.GetServices<IHostedAgentLauncher>()
-                    .Select(l => new PtyHostedAgentRuntimeFactory(l, ptyFactory, logger))
-            ];
-
-            return factories.ToDictionary(f => f.Vendor);
-        });
+        builder.Services.AddSingleton<IReadOnlyDictionary<string, IHostedAgentRuntimeFactory>>(sp =>
+            sp.GetServices<IHostedAgentRuntimeFactory>().ToDictionary(f => f.Vendor)
+        );
 
         builder.Services.AddSingleton<AgentOrchestrator>();
         builder.Services.AddSingleton<EvalContextCache>();
@@ -242,14 +257,15 @@ public static partial class DaemonRunner {
         // Set by the supervised restart strategy so we exit non-zero for a supervisor relaunch.
         var restartState = host.Services.GetRequiredService<RestartState>();
 
-        // AI-652: probe each registered launcher's CLI binary so the
-        // DaemonConnect payload only advertises vendors this daemon can
-        // actually spawn. The launch dialog filters its vendor selector
-        // by this list. Ordered alphabetically so the wire format is
-        // stable across restarts.
-        config.SupportedVendors = host.Services.GetServices<IHostedAgentLauncher>()
-            .Where(l => l.IsAvailable())
-            .Select(l => l.Vendor)
+        // AI-652 (extended by AI-684 Task 10): probe each registered runtime factory's CLI binary
+        // so the DaemonConnect payload only advertises vendors this daemon can actually spawn —
+        // now via IHostedAgentRuntimeFactory.IsAvailable() rather than IHostedAgentLauncher, so
+        // Cursor (which has no IHostedAgentLauncher) is advertised once cursor-agent is installed.
+        // The launch dialog filters its vendor selector by this list. Ordered alphabetically so the
+        // wire format is stable across restarts.
+        config.SupportedVendors = host.Services.GetServices<IHostedAgentRuntimeFactory>()
+            .Where(f => f.IsAvailable())
+            .Select(f => f.Vendor)
             .OrderBy(v => v, StringComparer.Ordinal)
             .ToArray();
 
