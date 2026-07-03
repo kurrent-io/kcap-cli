@@ -7,33 +7,26 @@ using TUnit.Core;
 namespace Capacitor.Cli.Tests.Unit;
 
 public class UpdateChannelConfigTests {
-    // NOTE: Deliberately constructs CapacitorConfig directly rather than
-    // JsonSerializer.Deserialize("{}", ConfigJsonContext.Default.CapacitorConfig).
-    // The source-generated ConfigJsonContext deserializes CapacitorConfig via a
-    // parameterized-constructor path that does NOT apply C# member-initializer
-    // defaults for properties absent from the payload — it substitutes
-    // default(T) (null for string) instead. This is a pre-existing behavior of
-    // this JsonSerializerContext (confirmed independent of this change; it
-    // already affects sibling properties UpdateCheck and DefaultVisibility the
-    // same way, which is why AppConfig.Load() normalizes DefaultVisibility with
-    // `?? "org_public"`). Deserializing "{}" here would make this test always
-    // fail regardless of the property's default, so it is out of scope for this
-    // assertion. See task-3-report.md for the full analysis and the resulting
-    // concern for callers of AppConfig.Load().
+    // Default asserted via direct construction: STJ source-gen does NOT apply the
+    // `= "latest"` member-initializer for a property absent from the JSON, so a
+    // Deserialize("{}") would yield null here — that is expected, and Task 4's read
+    // site applies `?? "latest"`. This test verifies the record default itself.
     [Test]
-    public async Task Defaults_to_latest_when_absent() {
-        var cfg = new CapacitorConfig();
-        await Assert.That(cfg.UpdateChannel).IsEqualTo("latest");
+    public async Task Defaults_to_latest_on_new_profile() {
+        await Assert.That(new Profile().UpdateChannel).IsEqualTo("latest");
     }
 
+    // Round-trip through the SAME serialization context the profile config uses on
+    // disk (ProfileConfigJsonContext[Indented]).
     [Test]
-    public async Task Round_trips_beta() {
-        var json = JsonSerializer.Serialize(
-            new CapacitorConfig { UpdateChannel = "beta" },
-            ConfigJsonContext.Default.CapacitorConfig);
+    public async Task Round_trips_beta_through_profile_config() {
+        var config = new ProfileConfig {
+            Profiles = new() { ["default"] = new Profile { UpdateChannel = "beta" } }
+        };
+        var json = JsonSerializer.Serialize(config, ProfileConfigJsonContext.Default.ProfileConfig);
         await Assert.That(json).Contains("update_channel");
         await Assert.That(json).Contains("beta");
-        var back = JsonSerializer.Deserialize(json, ConfigJsonContext.Default.CapacitorConfig)!;
-        await Assert.That(back.UpdateChannel).IsEqualTo("beta");
+        var back = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.ProfileConfig)!;
+        await Assert.That(back.Profiles["default"].UpdateChannel).IsEqualTo("beta");
     }
 }

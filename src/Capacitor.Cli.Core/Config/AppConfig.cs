@@ -14,9 +14,6 @@ public record CapacitorConfig {
     [JsonPropertyName("update_check")]
     public bool UpdateCheck { get; init; } = true;
 
-    [JsonPropertyName("update_channel")]
-    public string UpdateChannel { get; init; } = "latest";
-
     [JsonPropertyName("default_visibility")]
     public string DefaultVisibility { get; init; } = "org_public";
 
