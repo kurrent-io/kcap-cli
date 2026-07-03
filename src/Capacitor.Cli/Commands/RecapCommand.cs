@@ -125,19 +125,23 @@ static class RecapCommand {
         ) {
         var summaries = entries.Where(e => e.Type is "whats_done" or "plan").ToList();
 
-        // Distinct session ids to render, in first-seen order. Non-chain: just the requested id.
-        var sessionIds = chain ? DistinctSessionIds(entries) : [sessionId];
+        // Fetch outlines for the CONCRETE ids /recap resolved (a slug or chain maps to real session
+        // ids, tagged on the entries) — never the raw input. /turns doesn't resolve slugs, so using
+        // the slug would 404 and the outline would silently vanish. Fall back to the input only when
+        // /recap returned no entries at all. Headers appear whenever more than one session is shown.
+        var sessionIds  = OutlineSessionIds(entries, sessionId);
+        var showHeaders = chain || sessionIds.Count > 1;
 
         var printedAnything = false;
 
         foreach (var sid in sessionIds) {
-            if (chain) {
+            if (showHeaders) {
                 Console.Out.WriteLine($"# Session {sid}");
                 Console.Out.WriteLine();
             }
 
             // Summary section for this session (plan + whats_done), reusing the existing types.
-            foreach (var entry in summaries.Where(e => !chain || e.SessionId == sid)) {
+            foreach (var entry in summaries.Where(e => e.SessionId == sid)) {
                 switch (entry.Type) {
                     case "plan":
                         Console.Out.WriteLine("## Plan");
@@ -171,7 +175,7 @@ static class RecapCommand {
             return 0;
         }
 
-        Console.Out.WriteLine($"→ kcap recap --get-turn <N>{(chain ? " <sessionId>" : "")} for one turn's full detail");
+        Console.Out.WriteLine(DrillDownPointer(sessionIds));
 
         return 0;
     }
@@ -179,6 +183,28 @@ static class RecapCommand {
     /// <summary>Session ids present in recap entries, first-seen order, nulls dropped.</summary>
     internal static List<string> DistinctSessionIds(List<RecapEntry> entries) =>
         entries.Select(e => e.SessionId).OfType<string>().Distinct().ToList();
+
+    /// <summary>
+    /// Concrete session id(s) to fetch turn outlines for: the ids <c>/recap</c> resolved (a slug or
+    /// chain maps to real ids, tagged on the entries), or the raw input when <c>/recap</c> returned
+    /// no entries. Never the unresolved slug — <c>/turns</c> doesn't resolve slugs, so that would
+    /// silently drop the outline.
+    /// </summary>
+    internal static List<string> OutlineSessionIds(List<RecapEntry> entries, string inputSessionId) {
+        var resolved = DistinctSessionIds(entries);
+
+        return resolved.Count > 0 ? resolved : [inputSessionId];
+    }
+
+    /// <summary>
+    /// Drill-down hint. For a single resolved session, emit its concrete id so the command targets
+    /// THIS session (a bare <c>--get-turn</c> falls back to the current/env session); for multiple
+    /// sessions, a <c>&lt;sessionId&gt;</c> placeholder the caller substitutes per the # Session headers.
+    /// </summary>
+    internal static string DrillDownPointer(IReadOnlyList<string> sessionIds) =>
+        sessionIds.Count == 1
+            ? $"→ kcap recap --get-turn <N> {sessionIds[0]} for one turn's full detail"
+            : "→ kcap recap --get-turn <N> <sessionId> for one turn's full detail";
 
     /// <summary>GETs /turns for one session and renders the outline block, or "" on any non-success.</summary>
     static async Task<string> FetchTurnOutline(string baseUrl, HttpClient httpClient, string sessionId) {

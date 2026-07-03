@@ -114,4 +114,40 @@ public class RecapOutlineTests {
 
         await Assert.That(ids).IsEquivalentTo(new List<string> { "A", "B" }, CollectionOrdering.Matching);
     }
+
+    [Test]
+    public async Task OutlineSessionIds_uses_resolved_ids_from_entries_not_input() {
+        var now     = DateTimeOffset.UtcNow;
+        var entries = new List<RecapEntry> {
+            new("whats_done", "concrete-guid", null, null, "s", null, now),
+            new("user_prompt", "concrete-guid", null, null, "hi", null, now),
+        };
+
+        // Input is a slug; /recap resolved it to the concrete id, so the outline must target that id.
+        var ids = RecapCommand.OutlineSessionIds(entries, "meta-session-slug");
+
+        await Assert.That(ids).IsEquivalentTo(new List<string> { "concrete-guid" }, CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task OutlineSessionIds_falls_back_to_input_when_no_entries() {
+        var ids = RecapCommand.OutlineSessionIds([], "the-input-id");
+
+        await Assert.That(ids).IsEquivalentTo(new List<string> { "the-input-id" }, CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task DrillDownPointer_includes_concrete_id_for_single_session() {
+        var hint = RecapCommand.DrillDownPointer(new List<string> { "abc-123" });
+
+        await Assert.That(hint).Contains("--get-turn <N> abc-123");
+        await Assert.That(hint).DoesNotContain("<sessionId>");
+    }
+
+    [Test]
+    public async Task DrillDownPointer_uses_placeholder_for_multiple_sessions() {
+        var hint = RecapCommand.DrillDownPointer(new List<string> { "a", "b" });
+
+        await Assert.That(hint).Contains("<sessionId>");
+    }
 }
