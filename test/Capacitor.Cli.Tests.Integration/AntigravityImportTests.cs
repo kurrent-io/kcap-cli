@@ -155,6 +155,47 @@ public class AntigravityImportTests : IDisposable {
     }
 
     [Test]
+    public async Task ImportChildren_fullyIngestedChild_reposts_idempotent_stop_without_resending_content() {
+        WriteTranscript(Root, "build it");
+        WriteTranscript(Child, "sub task");
+        WriteLinkage();
+
+        // Both parent and child are fully ingested (high HWM). The child's CONTENT must not be
+        // re-sent, but subagent-stop is re-posted (idempotent) in case a prior run's stop failed
+        // after content — otherwise the subagent would be left without a completion event forever
+        // (AI-1160 review, finding at :240).
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
+        foreach (var route in new[] {
+            "/hooks/session-start/antigravity", "/hooks/transcript",
+            "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/antigravity"
+        }) {
+            _server.Given(Request.Create().WithPath(route).UsingPost())
+                .RespondWith(Response.Create().WithStatusCode(200));
+        }
+
+        using var client = new HttpClient();
+        var source = new AntigravityImportSource(home: _home, geminiCliHome: "");
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(
+            discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None);
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
+
+        await source.ImportSessionAsync(
+            classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST")
+            .Select(e => e.RequestMessage.Path).ToList();
+
+        // Completion event repaired, but no content re-send and no re-registration.
+        await Assert.That(posts.Contains("/hooks/subagent-stop")).IsTrue();
+        await Assert.That(posts.Contains("/hooks/transcript")).IsFalse();
+        await Assert.That(posts.Contains("/hooks/subagent-start")).IsFalse();
+    }
+
+    [Test]
     public async Task ImportChildren_resumes_by_line_position_without_shifting_numbers() {
         WriteTranscript(Root, "build it");
         WriteTranscript(Child, "sub task");

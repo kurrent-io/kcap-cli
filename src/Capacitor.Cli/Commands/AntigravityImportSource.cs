@@ -237,7 +237,20 @@ internal sealed class AntigravityImportSource : IImportSource {
                 continue; // unreadable child transcript — retry on re-import
             }
             if (childLastImportable is null) continue;                       // empty child
-            if (chwm is { } done && done >= childLastImportable) continue;   // already fully ingested
+
+            if (chwm is { } done && done >= childLastImportable) {
+                // Content is fully ingested, but subagent-stop is best-effort below and may have
+                // failed AFTER the content POST on a prior run — leaving the subagent with no
+                // completion event permanently (HWM only tracks content lines, not lifecycle).
+                // Re-post the stop: it's idempotent server-side (deterministic SubagentCompleted
+                // id), so a prior failure is repaired and an already-recorded stop dedupes.
+                // subagent-start is not re-posted — content is fail-closed behind it, so its
+                // presence is implied by the ingested content (AI-1160 review).
+                await PostHookAsync(client, baseUrl, "subagent-stop",
+                    BuildSubagentPayload("subagent_stop", rootId, childId, childTranscript), ct);
+
+                continue;
+            }
 
             // Resume by FILE POSITION (startLine), numbering surviving lines by their true position
             // (offset 0) — matching the parent's resume and live capture, so line numbers stay
