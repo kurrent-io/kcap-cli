@@ -25,6 +25,13 @@ namespace Capacitor.Cli.Tests.Integration;
 /// <c>excluded_paths</c> entry covering the test <c>cwd</c> would silently
 /// short-circuit <c>ClaudeHookCommand</c> and make these tests pass for
 /// the wrong reason.
+///
+/// Each test is <c>[NotInParallel]</c> with NO group key — i.e. globally
+/// sequential — because it redirects the process-global <c>Console.Out</c>.
+/// A group key is insufficient: another file's test whose SUT writes to
+/// <c>Console.Out</c> (e.g. <c>CodexHookCommand</c> emitting
+/// <c>{"continue":true}</c>) can run under a DIFFERENT key and leak into the
+/// capture (AI-737). Do not re-add a group key here.
 /// </summary>
 public class ClaudeHookStdoutTests : IDisposable {
     readonly WireMockServer _server = WireMockServer.Start();
@@ -54,7 +61,7 @@ public class ClaudeHookStdoutTests : IDisposable {
         return sw.ToString();
     }
 
-    [Test, NotInParallel("Console_Out")]
+    [Test, NotInParallel]
     public async Task Emits_nudge_envelope_when_server_returns_newer_version_only() {
         _server.Given(Request.Create().WithPath("/hooks/session-start").UsingPost())
             .RespondWith(
@@ -80,7 +87,7 @@ public class ClaudeHookStdoutTests : IDisposable {
         await Assert.That(ctx).DoesNotContain("## Guidance from past sessions");
     }
 
-    [Test, NotInParallel("Console_Out")]
+    [Test, NotInParallel]
     public async Task Emits_combined_envelope_when_server_returns_top_clusters_and_newer_version() {
         _server.Given(Request.Create().WithPath("/hooks/session-start").UsingPost())
             .RespondWith(
@@ -120,7 +127,7 @@ public class ClaudeHookStdoutTests : IDisposable {
         await Assert.That(ctx).Contains("kcap update");
     }
 
-    [Test, NotInParallel("Console_Out")]
+    [Test, NotInParallel]
     public async Task Emits_nothing_when_server_returns_empty_object() {
         _server.Given(Request.Create().WithPath("/hooks/session-start").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
