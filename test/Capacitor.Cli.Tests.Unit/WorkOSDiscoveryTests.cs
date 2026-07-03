@@ -1,3 +1,4 @@
+using System.Text;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -11,6 +12,13 @@ namespace Capacitor.Cli.Tests.Unit;
 [NotInParallel(nameof(TokenStoreProfileTests))]
 public class WorkOSDiscoveryTests {
     static string TokensDir => PathHelpers.ConfigPath("tokens");
+
+    static string JwtWithExp(DateTimeOffset exp) {
+        var json = $"{{\"exp\":{exp.ToUnixTimeSeconds()}}}";
+        var b64  = Convert.ToBase64String(Encoding.UTF8.GetBytes(json)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+        return $"header.{b64}.signature";
+    }
 
     [Before(Test)]
     public void Cleanup() {
@@ -105,10 +113,11 @@ public class WorkOSDiscoveryTests {
         proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
              .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.None)));
 
+        WorkOSTokenSource? handedTokens = null;
         var provisioner = Substitute.For<ITenantProvisioner>();
-        provisioner.OfferCreateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-                   .Returns(Task.FromResult(ProvisionOffer.Created(
-                       new ProvisionedTenant("org_new", "acme", "Acme Inc", "https://acme.kcap.ai"))));
+        provisioner.OfferCreateAsync(Arg.Any<WorkOSTokenSource>(), Arg.Any<CancellationToken>())
+                   .Returns(ci => { handedTokens = ci.Arg<WorkOSTokenSource>(); return Task.FromResult(ProvisionOffer.Created(
+                       new ProvisionedTenant("org_new", "acme", "Acme Inc", "https://acme.kcap.ai"))); });
 
         var orgless  = new WorkOSAuthResponse { User = new() { Id = "user_x", FirstName = "Ada" }, AccessToken = "acc", RefreshToken = "rt" };
         var switched = new WorkOSAuthResponse { User = new() { Id = "user_x" }, OrganizationId = "org_new", AccessToken = "acc2", RefreshToken = "rt2" };
@@ -128,6 +137,43 @@ public class WorkOSDiscoveryTests {
         var cfg = await AppConfig.LoadProfileConfig();
         await Assert.That(cfg.ActiveProfile).IsEqualTo("acme");
         await Assert.That(cfg.Profiles["acme"].ServerUrl).IsEqualTo("https://acme.kcap.ai");
+
+        // The provisioner is handed a refreshing token source seeded with the org-less login token.
+        await Assert.That(handedTokens).IsNotNull();
+        await Assert.That(await handedTokens!.GetAsync(CancellationToken.None)).IsEqualTo("acc");
+    }
+
+    [Test]
+    public async Task RunAsync_uses_rotated_refresh_token_for_org_switch_when_poll_refreshed() {
+        var proxyConfig = new ProxyConfigResponse { WorkOSClientId = "client_d" };
+        var proxy = Substitute.For<IAuthProxyClient>();
+        proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
+             .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.None)));
+
+        // Login-time access token is already near expiry, so the provisioner's first token pull
+        // forces a refresh — exactly the long-provisioning case that consumes the org-less token.
+        var nearExpiry = JwtWithExp(DateTimeOffset.UtcNow.AddSeconds(5));
+        var orgless    = new WorkOSAuthResponse { User = new() { Id = "u" }, AccessToken = nearExpiry, RefreshToken = "R0" };
+        var switched   = new WorkOSAuthResponse { User = new() { Id = "u" }, OrganizationId = "org_new", AccessToken = "acc2", RefreshToken = "R2" };
+
+        var provisioner = Substitute.For<ITenantProvisioner>();
+        provisioner.OfferCreateAsync(Arg.Any<WorkOSTokenSource>(), Arg.Any<CancellationToken>())
+                   .Returns(async ci => {
+                       await ci.Arg<WorkOSTokenSource>().GetAsync(CancellationToken.None); // rotates R0 -> R1
+                       return ProvisionOffer.Created(new ProvisionedTenant("org_new", "acme", "Acme Inc", "https://acme.kcap.ai"));
+                   });
+
+        string? switchRefreshToken = null;
+        var exit = await WorkOSDiscovery.RunAsync(
+            "https://auth.kcap.ai", proxyConfig, proxy, Substitute.For<ITenantPicker>(),
+            orglessLogin:   ()      => Task.FromResult<WorkOSAuthResponse?>(orgless),
+            orgSwitch:      (rt, _) => { switchRefreshToken = rt; return Task.FromResult<WorkOSAuthResponse?>(switched); },
+            orglessRefresh: (_, _)  => Task.FromResult<WorkOSAuthResponse?>(
+                new WorkOSAuthResponse { AccessToken = JwtWithExp(DateTimeOffset.UtcNow.AddMinutes(5)), RefreshToken = "R1" }),
+            provisioner:    provisioner);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(switchRefreshToken).IsEqualTo("R1"); // rotated token, not the consumed login-time R0
     }
 
     [Test]
@@ -137,7 +183,7 @@ public class WorkOSDiscoveryTests {
              .Returns(Task.FromResult(new DiscoveryResult([], DiscoveryError.None)));
 
         var provisioner = Substitute.For<ITenantProvisioner>();
-        provisioner.OfferCreateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        provisioner.OfferCreateAsync(Arg.Any<WorkOSTokenSource>(), Arg.Any<CancellationToken>())
                    .Returns(Task.FromResult(ProvisionOffer.Declined));
 
         var switchCalled = false;

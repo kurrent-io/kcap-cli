@@ -593,6 +593,26 @@ public static class OAuthLoginFlow {
         return await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.WorkOSAuthResponse);
     }
 
+    /// <summary>
+    /// Public-client WorkOS token refresh (org-less): exchanges a refresh token for a fresh access
+    /// token without switching organization. Keeps the org-less token alive across the create-tenant
+    /// provisioning poll, which can outlive WorkOS's ~5-minute access-token TTL. No client secret.
+    /// </summary>
+    public static async Task<WorkOSAuthResponse?> RefreshWorkOSTokenAsync(
+            HttpClient http, string apiBase, string clientId, string refreshToken) {
+        var resp = await http.PostAsync(
+            $"{apiBase.TrimEnd('/')}/user_management/authenticate",
+            new FormUrlEncodedContent(new Dictionary<string, string> {
+                ["grant_type"]    = "refresh_token",
+                ["client_id"]     = clientId,
+                ["refresh_token"] = refreshToken
+            }));
+
+        if (!resp.IsSuccessStatusCode) return null;
+
+        return await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.WorkOSAuthResponse);
+    }
+
     // The server-supplied code-exchange URL must be a fully-qualified http(s) URI before
     // we trust it. An empty string, whitespace, relative path, or javascript:/file: URL
     // is treated as "no browser flow available" and the dispatcher falls back to device flow.

@@ -29,6 +29,10 @@ public static class WorkOSDiscovery {
                 using var http = new HttpClient();
                 return await OAuthLoginFlow.SwitchWorkOSOrgAsync(http, WorkOSApiBase, clientId, refreshToken, organizationId);
             },
+            orglessRefresh: async (refreshToken, _) => {
+                using var http = new HttpClient();
+                return await OAuthLoginFlow.RefreshWorkOSTokenAsync(http, WorkOSApiBase, clientId, refreshToken);
+            },
             provisioner: provisioner);
     }
 
@@ -39,6 +43,7 @@ public static class WorkOSDiscovery {
             ITenantPicker                                   picker,
             Func<Task<WorkOSAuthResponse?>>                 orglessLogin,
             Func<string, string, Task<WorkOSAuthResponse?>> orgSwitch,     // args: refreshToken, organizationId
+            Func<string, CancellationToken, Task<WorkOSAuthResponse?>>? orglessRefresh = null, // args: refreshToken, ct
             ITenantProvisioner?                             provisioner = null) {
         if (string.IsNullOrEmpty(proxyConfig.WorkOSClientId)) {
             await Console.Error.WriteLineAsync("This server isn't configured for WorkOS sign-in.");
@@ -72,7 +77,12 @@ public static class WorkOSDiscovery {
                 return 1;
             }
 
-            var offer = await provisioner.OfferCreateAsync(auth.AccessToken);
+            // Provisioning + polling can run for minutes, outliving WorkOS's ~5-minute access-token
+            // TTL, so hand the provisioner a refreshing token source rather than the login-time token.
+            var tokens = new WorkOSTokenSource(
+                auth.AccessToken, auth.RefreshToken,
+                orglessRefresh ?? ((_, _) => Task.FromResult<WorkOSAuthResponse?>(null)));
+            var offer = await provisioner.OfferCreateAsync(tokens);
             if (offer.Status != ProvisionOfferStatus.Created || offer.Tenant is null) {
                 // Declined / InProgress / Failed — the provisioner already printed the
                 // outcome-appropriate message; don't stack the legacy dead-end on top.
@@ -86,7 +96,10 @@ public static class WorkOSDiscovery {
                 DisplayName    = offer.Tenant.DisplayName,
                 Origin         = offer.Tenant.Origin
             };
-            return await SwitchAndSaveAsync(created, [created], auth, proxyConfig.WorkOSClientId!, orgSwitch);
+            // Polling may have rotated the org-less refresh token; the org-switch must use the
+            // current one (WorkOS invalidates the old on refresh) or the final switch would 401.
+            var authForSwitch = auth with { RefreshToken = tokens.CurrentRefreshToken ?? auth.RefreshToken };
+            return await SwitchAndSaveAsync(created, [created], authForSwitch, proxyConfig.WorkOSClientId!, orgSwitch);
         }
 
         var picked = result.Tenants.Length == 1 ? result.Tenants[0] : picker.Pick(result.Tenants);

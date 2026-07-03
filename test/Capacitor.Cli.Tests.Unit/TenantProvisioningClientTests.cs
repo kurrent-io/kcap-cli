@@ -76,8 +76,52 @@ public class TenantProvisioningClientTests {
         var client = new TenantProvisioningClient(http);
 
         var status = await client.GetStatusAsync(server.Urls[0], "tok", "acme", CancellationToken.None);
-        await Assert.That(status!.State).IsEqualTo("active");
-        await Assert.That(status.WorkosOrgId).IsEqualTo("org_live");
+        await Assert.That(status.StatusCode).IsEqualTo(200);
+        await Assert.That(status.Body!.State).IsEqualTo("active");
+        await Assert.That(status.Body.WorkosOrgId).IsEqualTo("org_live");
+    }
+
+    [Test]
+    public async Task GetStatusAsync_surfaces_401_so_the_poll_is_not_blind() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/signup/status").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(401)
+                .WithBody("""{"error":"unauthenticated"}""").WithHeader("Content-Type", "application/json"));
+
+        using var http = new HttpClient();
+        var client = new TenantProvisioningClient(http);
+
+        var status = await client.GetStatusAsync(server.Urls[0], "tok", "acme", CancellationToken.None);
+        await Assert.That(status.StatusCode).IsEqualTo(401);
+        await Assert.That(status.Body).IsNull();
+    }
+
+    [Test]
+    public async Task GetStatusAsync_surfaces_404_ownership_mismatch() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/signup/status").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404)
+                .WithBody("""{"error":"not_found"}""").WithHeader("Content-Type", "application/json"));
+
+        using var http = new HttpClient();
+        var client = new TenantProvisioningClient(http);
+
+        var status = await client.GetStatusAsync(server.Urls[0], "tok", "acme", CancellationToken.None);
+        await Assert.That(status.StatusCode).IsEqualTo(404);
+    }
+
+    [Test]
+    public async Task GetStatusAsync_returns_status_zero_on_transport_failure() {
+        var server = WireMockServer.Start();
+        var url = server.Urls[0];
+        server.Stop();
+
+        using var http = new HttpClient();
+        var client = new TenantProvisioningClient(http);
+
+        var status = await client.GetStatusAsync(url, "tok", "acme", CancellationToken.None);
+        await Assert.That(status.StatusCode).IsEqualTo(0);
+        await Assert.That(status.Body).IsNull();
     }
 
     [Test]
