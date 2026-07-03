@@ -156,9 +156,20 @@ internal partial class AgentOrchestrator {
                     var f = await FrameCodec.ReadAsync(stream, loopCts.Token);
                     if (f is null || f.Type == FrameType.Detach) break;
 
-                    switch (f.Type) {
-                        case FrameType.Stdin:  await agent.Runtime.SendRawInputAsync(f.Bytes); break;
-                        case FrameType.Resize: ApplyResizeClamp(agent, sink, f.Cols, f.Rows); break;
+                    if (f.Type == FrameType.Stdin) {
+                        try {
+                            await agent.Runtime.SendRawInputAsync(f.Bytes);
+                        } catch (NotSupportedException) {
+                            // ACP-backed runtimes (e.g. cursor) have no raw-input surface —
+                            // AcpHostedAgentRuntime.SendRawInputAsync throws by design. Tell the
+                            // client and detach gracefully instead of letting the exception
+                            // escape the read loop and crash the attach handler.
+                            try { await Send(LocalFrame.Error("This agent does not support local attach input")); } catch { /* client already gone */ }
+
+                            break;
+                        }
+                    } else if (f.Type == FrameType.Resize) {
+                        ApplyResizeClamp(agent, sink, f.Cols, f.Rows);
                     }
                 }
             } catch (Exception ex) when (ex is EndOfStreamException or IOException or OperationCanceledException) {

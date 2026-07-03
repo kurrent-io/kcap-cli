@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Capacitor.Cli.Core;
@@ -400,6 +401,75 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     [Test]
+    public async Task Attach_to_an_ACP_runtime_gets_an_error_frame_and_detaches_instead_of_crashing() {
+        var server = new CaptureServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        // A cursor/ACP-backed agent: SendRawInputAsync throws NotSupportedException, exactly like
+        // the real AcpHostedAgentRuntime (local attach is a PTY-only surface).
+        var runtime = new NoRawInputRuntime("cursor");
+        var agent = new AgentInstance(
+            "acp-1", null, "", null, "/r", "cursor",
+            runtime, new WorktreeInfo("/r", "", "/r", IsStandalone: true), new CancellationTokenSource()
+        );
+        orch.RegisterAgentForTest(agent);
+
+        // Client sends one Stdin frame, then nothing (stream ends) — mirrors `kcap attach`
+        // forwarding a keystroke to a runtime that can't accept raw input.
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Stdin("x"u8.ToArray()), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+        // Must complete (not throw) within a bounded time — the bug this guards against was an
+        // unhandled NotSupportedException escaping the read loop and crashing the attach handler.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await orch.HandleLocalAttachAsync("acp-1", client, cts.Token);
+
+        // Replay the frames the client received off the write side of the duplex stream.
+        client.WrittenStream.Position = 0;
+        var frames = new List<LocalFrame>();
+        while (await FrameCodec.ReadAsync(client.WrittenStream, default) is { } f) frames.Add(f);
+
+        await Assert.That(frames.Any(f => f.Type == FrameType.Attached)).IsTrue();
+        var error = frames.SingleOrDefault(f => f.Type == FrameType.Error);
+        await Assert.That(error).IsNotNull();
+        await Assert.That(error!.Text).Contains("does not support local attach input");
+
+        // The agent itself is untouched — attach failure detaches the client, it doesn't stop
+        // or crash the underlying runtime.
+        await Assert.That(runtime.Disposed).IsFalse();
+    }
+
+    /// <summary>Minimal <see cref="IHostedAgentRuntime"/> double mirroring AcpHostedAgentRuntime's
+    /// contract: no raw-input surface (throws NotSupportedException), never emits terminal output.</summary>
+    sealed class NoRawInputRuntime(string vendor) : IHostedAgentRuntime {
+        public bool Disposed { get; private set; }
+
+        public string Vendor              => vendor;
+        public int    Pid                 => 4242;
+        public bool   HasExited           => false;
+        public int?   ExitCode            => null;
+        public bool   EmitsTerminalOutput => false;
+
+#pragma warning disable CS1998
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
+            yield break;
+        }
+#pragma warning restore CS1998
+
+        public Task SendUserInputAsync(string text)   => Task.CompletedTask;
+        public Task SendSpecialKeyAsync(string key)   => Task.CompletedTask;
+        public Task SendRawInputAsync(byte[]   data)  => throw new NotSupportedException("Local-attach raw input is a PTY-only surface; the ACP runtime has no equivalent channel.");
+        public void Resize(ushort               cols, ushort rows) { }
+        public Task RequestGracefulStopAsync()        => Task.CompletedTask;
+        public Task WaitForExitAsync(TimeSpan?  timeout = null) => Task.CompletedTask;
+        public Task TerminateAsync(TimeSpan?    timeout = null) => Task.CompletedTask;
+
+        public ValueTask DisposeAsync() { Disposed = true; return default; }
+    }
+
+    [Test]
     public async Task Local_socket_list_round_trips_registered_agents_over_a_real_socket() {
         if (OperatingSystem.IsWindows()) return; // Unix-domain socket path
 
@@ -462,6 +532,9 @@ public partial class AgentOrchestratorVendorTests {
     /// while the daemon's frames are captured/discarded independently (a MemoryStream can't
     /// do both at once — it has a single position).
     sealed class DuplexTestStream(Stream readSide, Stream writeSide) : Stream {
+        /// <summary>The daemon's write side, for tests that need to inspect frames it sent.</summary>
+        public Stream WrittenStream => writeSide;
+
         public override int Read(byte[] b, int o, int c) => readSide.Read(b, o, c);
         public override ValueTask<int> ReadAsync(Memory<byte> b, CancellationToken ct = default) => readSide.ReadAsync(b, ct);
         public override void Write(byte[] b, int o, int c) => writeSide.Write(b, o, c);
