@@ -154,6 +154,11 @@ class WatchState {
     // eventually fire and end the session — adding a ceiling here would be YAGNI.
     public HashSet<string> PendingCodexToolCalls { get; } = new(StringComparer.Ordinal);
 
+    // Highwater mark of the last Antigravity gen_metadata row already streamed as a
+    // synthetic USAGE line, so the watcher only sends newly-appended cost rows on each
+    // poll (server dedup by deterministic id is the backstop). -1 = none seen yet.
+    public long LastAntigravityGenIdx { get; set; } = -1;
+
     public const int TranscriptThreshold = 10;
 }
 

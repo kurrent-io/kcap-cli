@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Antigravity;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
@@ -790,6 +791,14 @@ static partial class WatchCommand {
 
             var linesRead = lineIndex;
 
+            // Antigravity keeps per-generation tokens/model in the sibling conversation
+            // .db, not the JSONL; poll for newly-appended gen_metadata rows and stream them
+            // as synthetic USAGE lines (server → AntigravityUsageBackfilledEvent). agentId
+            // is the child conversation id for a subagent watcher, else the session id.
+            if (vendor == "antigravity") {
+                AppendAntigravityUsageLines(state, newLines, newLineNumbers, agentId ?? sessionId);
+            }
+
             if (newLines.Count > 0) {
                 state.LastActivityAt = DateTimeOffset.UtcNow;
             }
@@ -1240,6 +1249,28 @@ static partial class WatchCommand {
         var inner = (end < 0 ? content[start..] : content[start..end]).Trim();
 
         return inner.Length > 0 ? inner : null;
+    }
+
+    // Synthetic USAGE line numbers live in a high band so they never collide with real
+    // transcript line numbers (which start at 0). The server derives the USAGE event id
+    // from line CONTENT (which carries gen_row), so the line number is only an ordering
+    // hint — a stable, non-colliding value keeps re-sends idempotent.
+    const long AntigravityUsageLineBase = 1_000_000_000L;
+
+    static void AppendAntigravityUsageLines(WatchState state, List<string> newLines, List<int> newLineNumbers, string conversationId) {
+        try {
+            var dbPath = AntigravityPaths.ConversationDb(conversationId);
+            var rows   = AntigravityGenMetadataDb.ReadUsageLines(dbPath, state.LastAntigravityGenIdx);
+
+            foreach (var (idx, line) in rows) {
+                newLines.Add(line);
+                newLineNumbers.Add((int)(AntigravityUsageLineBase + idx));
+                if (idx > state.LastAntigravityGenIdx) state.LastAntigravityGenIdx = idx;
+            }
+        } catch (Exception ex) {
+            // Cost is always best-effort (AI-728) — never let a db read break the drain.
+            Log($"Antigravity usage poll failed: {ex.Message}");
+        }
     }
 
     // ── Kiro extractors (AI-888) ───────────────────────────────────────────
