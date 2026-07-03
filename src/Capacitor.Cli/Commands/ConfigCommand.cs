@@ -76,6 +76,8 @@ public static class ConfigCommand {
             "update_check" => throw new ArgumentException($"Invalid value for update_check: '{value}'. Must be true or false."),
             "disable_session_guidelines" when bool.TryParse(value, out var b) => profile with { DisableSessionGuidelines = b },
             "disable_session_guidelines" => throw new ArgumentException($"Invalid value for disable_session_guidelines: '{value}'. Must be true or false."),
+            "disable_memory_index" when bool.TryParse(value, out var b) => profile with { DisableMemoryIndex = b },
+            "disable_memory_index" => throw new ArgumentException($"Invalid value for disable_memory_index: '{value}'. Must be true or false."),
             "use_provider_api_key" when bool.TryParse(value, out var b) => profile with { UseProviderApiKey = b },
             "use_provider_api_key" => throw new ArgumentException($"Invalid value for use_provider_api_key: '{value}'. Must be true or false."),
             "default_visibility" when value is "private" or "org_public" or "public" => profile with { DefaultVisibility = value },

@@ -27,6 +27,14 @@ record TranscriptBatch {
     [JsonPropertyName("vendor")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Vendor { get; init; }
+
+    // When true, the server returns non-2xx if any line in the batch fails to normalize
+    // (HandleTranscript → 500 on batch.Strict && Failed>0), so a fail-closed importer aborts
+    // instead of proceeding over a partially-ingested transcript. Omitted on the wire when
+    // false so older servers keep deserialising unchanged.
+    [JsonPropertyName("strict")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Strict { get; init; }
 }
 
 record ErrorEntry(
@@ -807,9 +815,22 @@ public readonly record struct LaunchAgentCommand(
         string[]?         Tools,
         string[]?         AttachmentIds,
         string            Vendor,
-        LaunchKind        Kind    = LaunchKind.Default,
-        ReviewLaunchInfo? Review  = null,
-        string?           BaseRef = null
+        LaunchKind        Kind            = LaunchKind.Default,
+        ReviewLaunchInfo? Review          = null,
+        string?           BaseRef         = null,
+        // AI-1163: for a mirror-requester review flow, the requester's repo root. When set, the
+        // daemon syncs its working tree (uncommitted + untracked) into the freshly-created reviewer
+        // worktree BEFORE spawning, so round 1 sees in-progress code — not just committed HEAD. The
+        // daemon validates the source is a checkout of the same repo (origin match) before copying;
+        // a mismatch (e.g. a different machine, where the path doesn't resolve) skips the sync.
+        // Appended last as an optional field so the SignalR positional binding stays wire-compatible
+        // with older daemons/servers.
+        string?           SyncFromRepoRoot = null,
+        // AI-1126 D-c: for a review-flow launch, the flow definition's MCP allowlist — server-owned
+        // names the daemon resolves against the kcap-owned KcapMcpRegistry and materializes into the
+        // launcher's MCP config (flow-starting servers are stripped regardless of listing). Appended
+        // last, same wire-compat rule as SyncFromRepoRoot above.
+        string[]?         McpAllowlist = null
     );
 
 /// <summary>

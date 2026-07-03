@@ -25,6 +25,11 @@ public record ProfileConfig {
     /// </summary>
     [JsonPropertyName("cwd_remap")]
     public CwdRemap[] CwdRemap { get; init; } = [];
+
+    // AI-1134: stable machine identity for machine-tagged memories. Generated once by
+    // MachineIdProvider; never rotated (rotation orphans previously tagged memories).
+    [JsonPropertyName("machine_id")]
+    public string? MachineId { get; init; }
 }
 
 public record CwdRemap {
@@ -47,6 +52,14 @@ public record Profile {
 
     [JsonPropertyName("disable_session_guidelines")]
     public bool? DisableSessionGuidelines { get; init; }
+
+    /// <summary>
+    /// AI-1165 — when true, kcap skips injecting the team-memory index at SessionStart.
+    /// Independent of <see cref="DisableSessionGuidelines"/> so the recurring-lessons and
+    /// memory-index injections can be toggled separately.
+    /// </summary>
+    [JsonPropertyName("disable_memory_index")]
+    public bool? DisableMemoryIndex { get; init; }
 
     /// <summary>
     /// When true, kcap keeps <c>ANTHROPIC_API_KEY</c> / <c>OPENAI_API_KEY</c>

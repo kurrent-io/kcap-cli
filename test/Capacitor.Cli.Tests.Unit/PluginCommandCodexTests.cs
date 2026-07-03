@@ -606,6 +606,7 @@ public class PluginCommandCodexInstallIntegrationTests {
         var toml       = await File.ReadAllTextAsync(configPath);
         await Assert.That(toml).Contains("[mcp_servers.kcap-review]");
         await Assert.That(toml).Contains("[mcp_servers.kcap-sessions]");
+        await Assert.That(toml).Contains("[mcp_servers.kcap-memory]"); // AI-1146
     }
 
     [Test]
@@ -620,6 +621,7 @@ public class PluginCommandCodexInstallIntegrationTests {
         var toml = await File.ReadAllTextAsync(configPath);
         await Assert.That(toml).DoesNotContain("kcap-review");
         await Assert.That(toml).DoesNotContain("kcap-sessions");
+        await Assert.That(toml).DoesNotContain("kcap-memory"); // AI-1146
         await Assert.That(toml).Contains("my-tool"); // user's server preserved
     }
 
@@ -652,6 +654,10 @@ public class PluginCommandCodexInstallIntegrationTests {
             [mcp_servers.kcap-sessions]
             command = "kcap"
             args = ["mcp", "sessions"]
+
+            [mcp_servers.kcap-memory]
+            command = "kcap"
+            args = ["mcp", "memory"]
 
             [mcp_servers.my-tool]
             command = "my-tool"

@@ -32,14 +32,17 @@ public class PtyHostedAgentRuntimeTests {
     }
 
     [Test]
-    public async Task SendUserInput_writes_text_then_carriage_return() {
+    public async Task SendUserInput_wraps_text_in_a_bracketed_paste_then_carriage_return() {
         var pty     = new RecordingPty();
         var runtime = new PtyHostedAgentRuntime("claude", pty);
 
         await runtime.SendUserInputAsync("hello world");
 
+        // AI-30: the text is delivered as one bracketed-paste block (ESC[200~ … ESC[201~) so the
+        // CLI's TUI treats it as a single paste and the following Enter is an unambiguous submit
+        // keypress, rather than racing the still-ingesting text.
         await Assert.That(pty.StringWrites.Count).IsEqualTo(2);
-        await Assert.That(pty.StringWrites[0]).IsEqualTo("hello world");
+        await Assert.That(pty.StringWrites[0]).IsEqualTo("\x1b[200~hello world\x1b[201~");
         await Assert.That(pty.StringWrites[1]).IsEqualTo("\r");
     }
 

@@ -163,6 +163,10 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
         var copied = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var rawPath in relativePaths) {
+            // Honour cancellation between files: on a large tree the copy loop is the bulk of the
+            // work, and callers (per-round resync timeout, daemon shutdown) rely on this to bound it.
+            ct.ThrowIfCancellationRequested();
+
             // Normalise separators (git always emits forward slashes).
             var rel = rawPath.Replace('/', Path.DirectorySeparatorChar);
 
@@ -195,6 +199,8 @@ public partial class WorktreeManager(DaemonConfig config, ILogger<WorktreeManage
 
         // Delete target files that no longer exist in the source (i.e. deleted).
         foreach (var existingFile in Directory.EnumerateFiles(target, "*", SearchOption.AllDirectories)) {
+            ct.ThrowIfCancellationRequested();
+
             var rel = Path.GetRelativePath(target, existingFile);
 
             // Never touch .git/ or .capacitor/worktrees/ inside the target.

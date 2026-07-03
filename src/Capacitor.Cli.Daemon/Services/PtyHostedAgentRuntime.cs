@@ -25,8 +25,20 @@ internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty) : IH
 
     public IAsyncEnumerable<byte[]> ReadOutputAsync(CancellationToken ct = default) => pty.ReadOutputAsync(ct);
 
+    /// <summary>
+    /// Delivers <paramref name="text"/> as a bracketed paste (ESC[200~ … ESC[201~) so the agent's
+    /// TUI treats it as one pasted block and the following Enter is an unambiguous submit
+    /// keypress. Without the paste markers a large multi-line message is mis-handled (AI-30):
+    /// Codex never submits it at all, and Claude only submits it ~50% of the time — the CR races
+    /// the still-ingesting paste and is folded in as a literal newline, so the text sits in the
+    /// composer until a later, isolated keystroke finishes it. Both hosted CLIs enable
+    /// bracketed-paste mode, so the markers are consumed as paste delimiters (not echoed). Keep
+    /// the text and the Enter as separate writes with a short delay so the CR lands as a distinct
+    /// PTY read after the paste (Claude also needs the CR split out, or it treats the carriage
+    /// return as part of the buffer rather than a submit).
+    /// </summary>
     public async Task SendUserInputAsync(string text) {
-        await pty.WriteAsync(text);
+        await pty.WriteAsync($"\x1b[200~{text}\x1b[201~");
         await Task.Delay(InputSubmitDelay);
         await pty.WriteAsync("\r");
     }

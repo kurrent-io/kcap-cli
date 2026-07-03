@@ -70,8 +70,14 @@ static partial class SecretRedactor {
     static readonly Regex AwsUniqueIdRegex = AwsUniqueIdRx();
 
     // Known vendor token prefixes followed by token characters
-    // Each prefix is specific enough to avoid false positives
-    [GeneratedRegex(@"(?:ghp_|gho_|ghs_|github_pat_|cfat_|sk-(?:proj-|live_|test_)?|sk_live_|sk_test_|xoxb-|xoxp-|xoxa-|pypi-|npm_|glpat-|dckr_pat_|dckr_oat_)[A-Za-z0-9\-_]{10,}", RegexOptions.None)]
+    // Each prefix is specific enough to avoid false positives — EXCEPT the bare `sk-` (OpenAI)
+    // prefix, which is short enough to appear mid-word: it matched the `sk-notification` substring
+    // inside "ta·sk-notification", redacting Claude Code's injected background-task blocks to
+    // `<ta[REDACTED]> … </ta[REDACTED]>` (AI-1162). Gate the `sk-` branch on a non-alphanumeric
+    // lookbehind so it only fires at a token boundary; real keys (`sk-proj-…`, `sk-live_…`,
+    // preceded by whitespace/quote/punctuation) still redact, while `disk-`, `task-`, `kiosk-` etc.
+    // pass through. The other prefixes carry `_`/distinctive spellings and don't collide mid-word.
+    [GeneratedRegex(@"(?:ghp_|gho_|ghs_|github_pat_|cfat_|(?<![A-Za-z0-9])sk-(?:proj-|live_|test_)?|sk_live_|sk_test_|xoxb-|xoxp-|xoxa-|pypi-|npm_|glpat-|dckr_pat_|dckr_oat_)[A-Za-z0-9\-_]{10,}", RegexOptions.None)]
     private static partial Regex VendorTokenRx();
 
     static readonly Regex VendorTokenRegex = VendorTokenRx();

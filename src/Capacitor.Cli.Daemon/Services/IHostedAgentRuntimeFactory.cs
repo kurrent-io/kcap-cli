@@ -74,5 +74,10 @@ internal sealed record RuntimeStartContext(
         ushort            Rows,
         string?           ServerUrl,
         string?           DaemonBridgeUrl,
-        string            CapacitorPath
+        string            CapacitorPath,
+        // AI-1126 D-c: the review-flow definition's MCP allowlist, carried verbatim from
+        // LaunchAgentCommand.McpAllowlist through to LauncherContext.McpAllowlist for the PTY
+        // launchers to materialize. Unused by the ACP factory (Cursor has no MCP-allowlist
+        // materialization yet).
+        string[]?         McpAllowlist = null
     );

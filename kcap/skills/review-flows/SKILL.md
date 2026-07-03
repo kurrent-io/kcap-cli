@@ -1,20 +1,42 @@
 ---
 name: review-flows
 description: >-
-  This skill should be used when the user asks to "review this spec",
-  "review this design", "review my PR", "code review", "get this reviewed",
-  "re-review", "start a review flow", "review flow", "submit for review",
-  or wants structured iterative review with findings and sign-off.
+  This skill should be used ONLY when the user explicitly asks to run a
+  structured review *flow* — e.g. "start a review flow", "submit this for
+  review", "re-review after I address findings", or wants an iterative review
+  loop run by a separate reviewer that continues until sign-off. Do NOT use
+  this skill (and do NOT call the flows MCP tools) for an ordinary review
+  request such as "review my PR", "review this diff/spec/design", or "code
+  review" where the user just wants you to review it yourself — perform that
+  review directly instead.
 ---
 
 # Review Flows
 
-Use `kcap mcp flows` MCP tools to run structured review loops for specs/designs and PR/code work. A review flow submits your work to a reviewer, collects findings, lets you address them, and keeps iterating until the reviewer returns `NO FINDINGS`.
+Use the `kcap mcp flows` MCP tools (`start_review_flow`, `submit_review_round`, …) to run a structured review **flow**: your work is submitted to a **separate, hosted reviewer** agent, which returns findings; you address them and keep iterating until the reviewer returns `NO FINDINGS`. This is a deliberate, heavier workflow — use it only when the user explicitly opts into it.
 
-## When to use
+These four tools are aliases of the generic flow tools (`start_flow`, `send_to_participant`, `get_flow_status`, `close_flow`) — see the `agent-flows` skill for non-review flows.
 
-- Reviewing a spec or design document → use `kind: "spec-review"`
-- Reviewing code changes or a pull request → use `kind: "code-review"`
+## When NOT to use this skill / these tools
+
+These tools do **not** perform a review — they hand the work off to a separate hosted reviewer. If the user simply asked *you* to review something in a normal session — e.g. "review my PR", "review this diff", "code review this", "look over this spec" — just perform the review yourself and report your findings directly. Do **NOT** call `start_review_flow` / `submit_review_round` for an ordinary review request; that would spin up a hosted reviewer the user did not ask for.
+
+Only start a flow when the user explicitly asks for a review *flow* — e.g. "start a review flow", "submit this for review", "get an independent review", or "re-review after I address the findings".
+
+## Choosing the flow kind
+
+Once the user has explicitly opted into a flow (see above), pick the `kind`:
+
+- Spec or design document → `kind: "spec-review"`
+- Code changes or a pull request → `kind: "code-review"`
+
+## If the flows MCP tools are not loaded
+
+If `start_review_flow` / `submit_review_round` are not among the tools available in this session, do NOT try to obtain them:
+
+- Do NOT run `kcap mcp flows` from a shell, do NOT handshake it over stdio/JSON-RPC, and do NOT edit any MCP configuration.
+- The absence is deliberate: hosted review-flow reviewers run with all MCP servers stripped, so a reviewer cannot start a nested flow.
+- If you were asked to review a spec, design, or code and these tools are absent, you are most likely the hosted reviewer inside an existing flow. This skill does not apply to you — skip the workflow below entirely. Perform the requested review directly and end with a final message that starts with `FINDINGS:` (followed by your findings) or `NO FINDINGS`. Your final message is captured automatically; no tool call is needed to deliver it.
 
 ## Core rules
 
@@ -48,7 +70,7 @@ if FINDINGS:
 
 | Tool | Required args | Optional args | When to call |
 |---|---|---|---|
-| `start_review_flow` | `kind` (`spec-review`\|`code-review`), `target_kind` (what is being reviewed: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title, e.g. spec name or PR title), `context` (background context: what to focus on, constraints, definition of done) | `instructions`, `mode` (`context-only` — required for code-review unless the reviewer runs in your exact repo checkout) | Once, at the start of a review task. |
+| `start_review_flow` | `kind` (`spec-review`\|`code-review`), `target_kind` (what is being reviewed: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title, e.g. spec name or PR title), `context` (background context: what to focus on, constraints, definition of done) | `instructions`, `mode` (`context-only` — optional; by default, on the same machine, the reviewer's worktree is mirrored from your working tree including uncommitted changes, so it reads the actual source. Pass `context-only` to opt out and treat the submitted context as authoritative) | Once, at the start of a review task. |
 | `submit_review_round` | `flow_run_id`, `context` | `instructions` | After addressing findings. Pass the same `flow_run_id` and the updated context. |
 | `get_review_flow_status` | `flow_run_id` | — | Poll or check the current status of a flow (running, waiting, completed, failed). |
 | `close_review_flow` | `flow_run_id` | — | Only after the reviewer returns `NO FINDINGS`. |
@@ -56,14 +78,14 @@ if FINDINGS:
 ## Example (code review)
 
 ```
-# Step 1 — start (all five required args must be provided; mode=context-only is required for code-review)
+# Step 1 — start (all five required args must be provided; on the same machine the reviewer sees
+# your working tree, uncommitted changes included — pass mode="context-only" to opt out)
 start_review_flow(
   kind="code-review",
   target_kind="branch",
   target_ref="feature/add-null-check",
   target_title="Add null check on user input",
-  context="Review the diff on this branch for correctness and adherence to project conventions.",
-  mode="context-only"
+  context="Review the diff on this branch for correctness and adherence to project conventions."
 )
 # → returns flow_run_id, e.g. "flow_abc123"
 # → reviewer returns FINDINGS: missing null check on line 42

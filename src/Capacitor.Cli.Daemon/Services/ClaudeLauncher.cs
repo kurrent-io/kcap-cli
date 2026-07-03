@@ -93,7 +93,10 @@ internal sealed partial class ClaudeLauncher(
                 args.Add("bypassPermissions");
                 args.Add("--strict-mcp-config");
                 args.Add("--mcp-config");
-                args.Add(EmptyMcpConfig);
+                // AI-1139: the strict config now whitelists exactly the kcap-flow-result
+                // submission server; the empty map remains the fallback when the daemon has
+                // no server URL / kcap path configured.
+                args.Add(BuildReviewFlowMcpConfig(ctx));
                 // Disallow the built-in Agent (subagent) tool. Subagents do NOT inherit
                 // --mcp-config (see ClaudeCliRunner), so a spawned subagent would re-read the
                 // ambient user/project MCP config — which on a flows-enabled machine includes
@@ -121,6 +124,65 @@ internal sealed partial class ClaudeLauncher(
         }
 
         return new LaunchArgs(args.ToArray(), mcpConfigPath);
+    }
+
+    /// <summary>AI-1139: strict whitelist for review-flow reviewers — exactly the
+    /// kcap-flow-result submission server, or the empty map when the daemon has no server
+    /// URL / kcap path (zero servers is the recursion-safe default). Built via JsonNode
+    /// string casts — JsonValue.Create / collection expressions lower to generic Add&lt;T&gt;
+    /// and trip NativeAOT (IL3050).
+    /// AI-1126 D-c: on the non-empty path, also materializes the flow definition's
+    /// <see cref="LauncherContext.McpAllowlist"/> into the same mcpServers object — each name
+    /// resolved against the kcap-owned <see cref="KcapMcpRegistry"/> (never ambient user
+    /// config), unknown names skipped, flow-starting servers stripped regardless of listing.
+    /// Allowlist servers get KCAP_URL only — never KCAP_FLOW_AGENT_ID, which is exclusive to
+    /// the flow-result submission channel.</summary>
+    string BuildReviewFlowMcpConfig(LauncherContext ctx) {
+        if (string.IsNullOrWhiteSpace(config.ServerUrl) || string.IsNullOrWhiteSpace(config.CapacitorPath)) return EmptyMcpConfig;
+
+        var argsNode = new JsonArray();
+        argsNode.Add((JsonNode?)"mcp");
+        argsNode.Add((JsonNode?)"flow-result");
+
+        var server = new JsonObject {
+            ["command"] = (JsonNode?)config.CapacitorPath,
+            ["args"]    = argsNode,
+            ["env"]     = new JsonObject {
+                ["KCAP_URL"]            = (JsonNode?)config.ServerUrl,
+                ["KCAP_FLOW_AGENT_ID"] = (JsonNode?)ctx.AgentId
+            }
+        };
+
+        var mcpServers = new JsonObject { ["kcap-flow-result"] = server };
+
+        foreach (var name in ctx.McpAllowlist ?? []) {
+            var descriptor = KcapMcpRegistry.Resolve(name);
+
+            if (descriptor is null) {
+                // name may be null here — a wire-deserialized allowlist element — so log it
+                // defensively rather than let a null flow into the formatter unlabeled.
+                LogAllowlistEntryUnknown(name ?? "(null)", ctx.AgentId);
+                continue;
+            }
+
+            if (descriptor.StartsFlows) {
+                LogAllowlistEntryStripped(name, ctx.AgentId);
+                continue;
+            }
+
+            var entryArgs = new JsonArray();
+            foreach (var a in descriptor.Args) entryArgs.Add((JsonNode?)a);
+
+            mcpServers[descriptor.Id] = new JsonObject {
+                ["command"] = (JsonNode?)config.CapacitorPath,
+                ["args"]    = entryArgs,
+                ["env"]     = new JsonObject {
+                    ["KCAP_URL"] = (JsonNode?)config.ServerUrl
+                }
+            };
+        }
+
+        return new JsonObject { ["mcpServers"] = mcpServers }.ToJsonString();
     }
 
     /// Claude needs no mandatory daemon-level flags (cwd is set via forkpty chdir), so a
@@ -423,4 +485,10 @@ internal sealed partial class ClaudeLauncher(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to remove mcp config for agent {AgentId}")]
     partial void LogCleanupMcpConfigFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "MCP allowlist entry '{Name}' is not a kcap-owned server — skipping (agent {AgentId})")]
+    partial void LogAllowlistEntryUnknown(string name, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "MCP allowlist entry '{Name}' can start flows — stripped (agent {AgentId})")]
+    partial void LogAllowlistEntryStripped(string name, string agentId);
 }

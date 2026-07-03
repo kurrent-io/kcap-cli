@@ -82,13 +82,18 @@ internal sealed partial class CodexLauncher(
             ctx.IsReviewFlow ? "never" : "on-request"
         };
 
-        // Review-flow reviewers run with NO MCP servers: stops the reviewer recursively invoking
-        // kcap-flows' start_review_flow (the kcap-review-flows skill would otherwise trigger a
-        // nested review flow). The reviewer works from its prompt + read-only file inspection.
-        // Interactive agents keep their configured MCP servers.
+        // Review-flow reviewers get exactly ONE MCP server: kcap-flow-result (AI-1139), which can
+        // only submit a result — never start a flow. Clear-then-whitelist, in this order:
+        // the bare `mcp_servers={}` FIRST replaces the entire [mcp_servers] table from
+        // ~/.codex/config.toml; the dotted overrides then insert into the now-empty table.
+        // Dotted overrides alone MERGE into the user's table and would re-expose whatever MCP
+        // servers the user has registered (including a hand-registered kcap-flows with
+        // start_review_flow — the recursion guard would silently vanish).
         if (ctx.IsReviewFlow) {
             args.Add("-c");
             args.Add("mcp_servers={}");
+            AddFlowResultServer(args, ctx);
+            AddAllowlistServers(args, ctx);
         }
 
         AddModelArg(args, ctx.Model);
@@ -109,6 +114,60 @@ internal sealed partial class CodexLauncher(
         }
 
         return new([.. args], McpConfigPath: null);
+    }
+
+    /// <summary>AI-1139: registers the reviewer-side result-submission server. Skipped (zero
+    /// servers — the recursion-safe default) when the daemon has no server URL or kcap path;
+    /// the reviewer then falls back to the transcript marker per the prompt contract.</summary>
+    void AddFlowResultServer(List<string> args, LauncherContext ctx) {
+        if (string.IsNullOrWhiteSpace(config.ServerUrl) || string.IsNullOrWhiteSpace(config.CapacitorPath)) return;
+
+        const string name = "kcap-flow-result";
+
+        args.Add("-c");
+        args.Add($"mcp_servers.{name}.command={TomlString(config.CapacitorPath)}");
+        args.Add("-c");
+        args.Add($"mcp_servers.{name}.args=[{TomlString("mcp")},{TomlString("flow-result")}]");
+        args.Add("-c");
+        args.Add($"mcp_servers.{name}.env={{KCAP_URL={TomlString(config.ServerUrl)},KCAP_FLOW_AGENT_ID={TomlString(ctx.AgentId)}}}");
+    }
+
+    /// <summary>AI-1126 D-c: materializes the flow definition's <see cref="LauncherContext.McpAllowlist"/>
+    /// as additional dotted overrides, in the same clear-then-whitelist style as
+    /// <see cref="AddFlowResultServer"/>. Each name resolves against the kcap-owned
+    /// <see cref="KcapMcpRegistry"/> — never ambient user config — unknown names are skipped,
+    /// and any flow-starting server is stripped regardless of listing (the recursion guard).
+    /// Allowlist servers get KCAP_URL only — never KCAP_FLOW_AGENT_ID, which is exclusive to
+    /// the flow-result submission channel. Skipped (same as the flow-result server) when the
+    /// daemon has no server URL or kcap path configured.</summary>
+    void AddAllowlistServers(List<string> args, LauncherContext ctx) {
+        if (string.IsNullOrWhiteSpace(config.ServerUrl) || string.IsNullOrWhiteSpace(config.CapacitorPath)) return;
+
+        foreach (var name in ctx.McpAllowlist ?? []) {
+            var descriptor = KcapMcpRegistry.Resolve(name);
+
+            if (descriptor is null) {
+                // name may be null here — a wire-deserialized allowlist element — so log it
+                // defensively rather than let a null flow into the formatter unlabeled.
+                LogAllowlistEntryUnknown(name ?? "(null)", ctx.AgentId);
+                continue;
+            }
+
+            if (descriptor.StartsFlows) {
+                LogAllowlistEntryStripped(name, ctx.AgentId);
+                continue;
+            }
+
+            var id       = descriptor.Id;
+            var argsList = string.Join(",", descriptor.Args.Select(TomlString));
+
+            args.Add("-c");
+            args.Add($"mcp_servers.{id}.command={TomlString(config.CapacitorPath)}");
+            args.Add("-c");
+            args.Add($"mcp_servers.{id}.args=[{argsList}]");
+            args.Add("-c");
+            args.Add($"mcp_servers.{id}.env={{KCAP_URL={TomlString(config.ServerUrl)}}}");
+        }
     }
 
     /// Append `-m <model>` unless the model is empty or the "default" no-override sentinel.
@@ -243,4 +302,10 @@ internal sealed partial class CodexLauncher(
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Tools array of length {Count} ignored for vendor=codex (no allowlist concept) — agent {AgentId}")]
     partial void LogToolsIgnoredForCodex(string agentId, int count);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "MCP allowlist entry '{Name}' is not a kcap-owned server — skipping (agent {AgentId})")]
+    partial void LogAllowlistEntryUnknown(string name, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "MCP allowlist entry '{Name}' can start flows — stripped (agent {AgentId})")]
+    partial void LogAllowlistEntryStripped(string name, string agentId);
 }

@@ -10,7 +10,7 @@ public sealed class SpectreTenantProvisioner(TenantProvisioningClient client, st
     const int PollIntervalMs = 4000;
     const int MaxPolls       = 150; // ~10 minutes (server budget is 15)
 
-    public async Task<ProvisionOffer> OfferCreateAsync(string workosAccessToken, CancellationToken ct = default) {
+    public async Task<ProvisionOffer> OfferCreateAsync(WorkOSTokenSource tokens, CancellationToken ct = default) {
         AnsiConsole.MarkupLine("  [yellow]No Capacitor tenant is linked to your account.[/]");
         var create = AnsiConsole.Prompt(new ConfirmationPrompt("  Create one now?") { DefaultValue = true });
         if (!create) {
@@ -22,7 +22,7 @@ public sealed class SpectreTenantProvisioner(TenantProvisioningClient client, st
             new TextPrompt<string>("  Organization name:").Validate(n =>
                 string.IsNullOrWhiteSpace(n) ? ValidationResult.Error("Enter a name") : ValidationResult.Success()));
 
-        var slug = await PromptSlugAsync(orgName, workosAccessToken, ct);
+        var slug = await PromptSlugAsync(orgName, tokens, ct);
         if (slug is null) return ProvisionOffer.Declined;
 
         var origin = $"https://{slug}.kcap.ai";
@@ -33,12 +33,12 @@ public sealed class SpectreTenantProvisioner(TenantProvisioningClient client, st
             return ProvisionOffer.Declined;
         }
 
-        var outcome = await client.ProvisionAsync(baseUrl, workosAccessToken, orgName, slug, ct);
+        var outcome = await client.ProvisionAsync(baseUrl, await tokens.GetAsync(ct), orgName, slug, ct);
         switch (outcome.StatusCode) {
             case 200 when outcome.Body?.WorkosOrgId is { Length: > 0 } orgId:
                 return ProvisionOffer.Created(new ProvisionedTenant(orgId, slug, orgName, outcome.Body.Url ?? origin));
             case 202 or 200:
-                return await PollAsync(workosAccessToken, slug, orgName, origin, ct);
+                return await PollAsync(tokens, slug, orgName, origin, ct);
             case 400:
                 AnsiConsole.MarkupLine($"  [red]✗[/] {Reason400(outcome.Body?.Reason)}");
                 return ProvisionOffer.Failed;
@@ -54,7 +54,7 @@ public sealed class SpectreTenantProvisioner(TenantProvisioningClient client, st
         }
     }
 
-    async Task<string?> PromptSlugAsync(string orgName, string token, CancellationToken ct) {
+    async Task<string?> PromptSlugAsync(string orgName, WorkOSTokenSource tokens, CancellationToken ct) {
         var suggestion = SlugValidator.Derive(orgName);
         while (true) {
             var input = AnsiConsole.Prompt(
@@ -72,7 +72,7 @@ public sealed class SpectreTenantProvisioner(TenantProvisioningClient client, st
             }
 
             var avail = await AnsiConsole.Status().StartAsync($"Checking {slug}.kcap.ai…",
-                async _ => await client.CheckAvailabilityAsync(baseUrl, token, slug, ct));
+                async _ => await client.CheckAvailabilityAsync(baseUrl, await tokens.GetAsync(ct), slug, ct));
 
             if (avail is null) {
                 AnsiConsole.MarkupLine("  [yellow]![/] Couldn't check availability. Try again.");
@@ -89,20 +89,35 @@ public sealed class SpectreTenantProvisioner(TenantProvisioningClient client, st
         }
     }
 
-    async Task<ProvisionOffer> PollAsync(string token, string slug, string orgName, string origin, CancellationToken ct) {
-        return await AnsiConsole.Status().StartAsync($"Provisioning {slug}.kcap.ai — this can take a few minutes…", async _ => {
+    async Task<ProvisionOffer> PollAsync(WorkOSTokenSource tokens, string slug, string orgName, string origin, CancellationToken ct) {
+        var retry = $"Re-run [cyan]kcap setup {Markup.Escape(slug)}[/]";
+        return await AnsiConsole.Status().StartAsync($"Provisioning {slug}.kcap.ai — this can take a few minutes…", async ctx => {
             for (var i = 0; i < MaxPolls; i++) {
                 await Task.Delay(PollIntervalMs, ct);
-                var status = await client.GetStatusAsync(baseUrl, token, slug, ct);
-                switch (status?.State) {
-                    case "active" when status.WorkosOrgId is { Length: > 0 } orgId:
-                        return ProvisionOffer.Created(new ProvisionedTenant(orgId, slug, orgName, status.Url ?? origin));
-                    case "failed":
-                        AnsiConsole.MarkupLine("  [red]✗[/] Provisioning failed. Re-run [cyan]kcap setup " + Markup.Escape(slug) + "[/] to retry.");
+                var status = await client.GetStatusAsync(baseUrl, await tokens.GetAsync(ct), slug, ct);
+
+                switch (ProvisioningPoll.Classify(status.StatusCode, status.Body?.State, status.Body?.WorkosOrgId)) {
+                    case PollVerdict.Active:
+                        return ProvisionOffer.Created(new ProvisionedTenant(status.Body!.WorkosOrgId!, slug, orgName, status.Body.Url ?? origin));
+                    case PollVerdict.ActiveNoOrg:
+                        AnsiConsole.MarkupLine($"  [red]✗[/] {Markup.Escape(slug)}.kcap.ai is live but isn't linked to an organization. Contact support.");
                         return ProvisionOffer.Failed;
+                    case PollVerdict.Failed:
+                        AnsiConsole.MarkupLine($"  [red]✗[/] Provisioning failed. {retry} to retry.");
+                        return ProvisionOffer.Failed;
+                    case PollVerdict.Forbidden:
+                        AnsiConsole.MarkupLine($"  [red]✗[/] Verify your email address, then {retry.ToLowerInvariant()}.");
+                        return ProvisionOffer.Failed;
+                    case PollVerdict.NotFound:
+                        AnsiConsole.MarkupLine($"  [red]✗[/] '{Markup.Escape(slug)}' isn't linked to your account. {retry}.");
+                        return ProvisionOffer.Failed;
+                    case PollVerdict.Wait:
+                        // Surface liveness so an elapsed timer never reads as a frozen CLI.
+                        ctx.Status($"Provisioning {slug}.kcap.ai — waiting for it to come online… ({i + 1}/{MaxPolls})");
+                        break;
                 }
             }
-            AnsiConsole.MarkupLine($"  [yellow]![/] Still provisioning. Re-run [cyan]kcap setup {Markup.Escape(slug)}[/] once it's ready.");
+            AnsiConsole.MarkupLine($"  [yellow]![/] Still provisioning. {retry} once it's ready.");
             return ProvisionOffer.InProgress;
         });
     }

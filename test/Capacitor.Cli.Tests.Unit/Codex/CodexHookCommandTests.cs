@@ -53,18 +53,17 @@ public class CodexHookCommandTests : IDisposable {
         // the watcher spawn.
     }
 
-    // AI-648: Codex 'Stop' fires at turn end, not session end. The hook must
-    // NOT POST /hooks/session-end/codex (that path is reserved for the
-    // watcher's parent-exit fallback in WatchCommand.cs). It must still emit
-    // {"continue":true} on stdout to satisfy Codex's stop-hook JSON parser
-    // (AI-635 invariant) and must NOT leak WatcherManager chatter to stdout.
+    // Codex 'Stop' fires at turn end, not session end. The hook now best-effort
+    // POSTs to /hooks/stop so the server can emit the idle-wait marker that
+    // clears the chat "working" indicator — but it must NOT POST session-end
+    // (that path is reserved for the watcher's parent-exit fallback), and must
+    // still emit {"continue":true} on stdout (AI-635) with no watcher chatter.
     //
-    // Globally sequential: this test captures Console.Out for the duration.
-    // NotInParallel with no group key forces it to run on its own to avoid
-    // interleaving with other stdout-mutating tests under TUnit's scheduler.
+    // Globally sequential: captures Console.Out for the duration.
     [Test, NotInParallel]
-    public async Task Stop_is_turn_end_no_op_and_does_not_post_session_end() {
-        // Stub the route so any (incorrect) POST is recorded — we assert zero.
+    public async Task Stop_posts_to_hooks_stop_and_emits_continue_json() {
+        _server.Given(Request.Create().WithPath("/hooks/stop").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
         _server.Given(Request.Create().WithPath("/hooks/session-end/codex").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
@@ -86,23 +85,133 @@ public class CodexHookCommandTests : IDisposable {
             var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
             await Assert.That(exit).IsEqualTo(0);
 
-            // Core invariant: Stop must NOT POST session-end.
+            // Stop now POSTs /hooks/stop exactly once, carrying the full payload.
+            var stopRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/stop").UsingPost());
+            await Assert.That(stopRequests.Count).IsEqualTo(1);
+            var body = JsonDocument.Parse(stopRequests[0].RequestMessage.Body!).RootElement;
+            await Assert.That(body.GetProperty("session_id").GetString()).IsEqualTo("abc");
+            await Assert.That(body.GetProperty("transcript_path").GetString()).IsEqualTo("/tmp/rollout.jsonl");
+            await Assert.That(body.GetProperty("cwd").GetString()).IsEqualTo("/tmp");
+            await Assert.That(body.GetProperty("hook_event_name").GetString()).IsEqualTo("Stop");
+
+            // Must NOT POST session-end.
             var endRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
             await Assert.That(endRequests.Count).IsEqualTo(0);
-
-            // Defensive: also no other related routes.
-            var wrong1 = _server.FindLogEntries(Request.Create().WithPath("/hooks/stop").UsingPost());
-            var wrong2 = _server.FindLogEntries(Request.Create().WithPath("/hooks/codex/stop").UsingPost());
-            await Assert.That(wrong1.Count).IsEqualTo(0);
-            await Assert.That(wrong2.Count).IsEqualTo(0);
 
             // AI-635 invariant: valid JSON object on stdout, no chatter.
             var stdout = stdoutWriter.ToString();
             var doc    = JsonDocument.Parse(stdout);
             await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
             await Assert.That(stdout.Contains("Watcher ")).IsFalse();
-            await Assert.That(stdout.Contains("Inline drain")).IsFalse();
             await Assert.That(stdout.Contains("Spawned")).IsFalse();
+        } finally {
+            Console.SetOut(originalOut);
+        }
+    }
+
+    // The POST is best-effort: a slow/unreachable server must never hang the hook
+    // or break its stdout contract. Cap at 2s and swallow — assert we still emit
+    // {"continue":true} and return under 5s even when /hooks/stop stalls 10s.
+    [Test, NotInParallel]
+    public async Task Stop_still_emits_continue_json_when_server_is_slow() {
+        _server.Given(Request.Create().WithPath("/hooks/stop").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
+
+        var payload = """
+                      {
+                        "hook_event_name": "Stop",
+                        "session_id": "abc",
+                        "transcript_path": "/tmp/rollout.jsonl",
+                        "cwd": "/tmp"
+                      }
+                      """;
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+        var sw           = System.Diagnostics.Stopwatch.StartNew();
+
+        try {
+            Console.SetOut(stdoutWriter);
+            var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+            sw.Stop();
+            await Assert.That(exit).IsEqualTo(0);
+
+            var doc = JsonDocument.Parse(stdoutWriter.ToString());
+            await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
+        } finally {
+            Console.SetOut(originalOut);
+        }
+
+        // 2s POST cap + slack for CI jitter.
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
+    }
+
+    // Symmetric with PermissionRequest_returns_quickly_when_auth_discovery_is_slow:
+    // the shared best-effort POST helper's single deadline must cover /auth/config
+    // discovery for the Stop path too, not just the POST itself.
+    [Test, NotInParallel]
+    public async Task Stop_still_emits_continue_json_when_auth_discovery_is_slow() {
+        _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
+        _server.Given(Request.Create().WithPath("/hooks/stop").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+
+        var payload = """
+                      {
+                        "hook_event_name": "Stop",
+                        "session_id": "abc",
+                        "transcript_path": "/tmp/rollout.jsonl",
+                        "cwd": "/tmp"
+                      }
+                      """;
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+        var sw           = System.Diagnostics.Stopwatch.StartNew();
+
+        try {
+            Console.SetOut(stdoutWriter);
+            var exit = await CodexHookCommand.Handle(_server.Url!, new StringReader(payload));
+            sw.Stop();
+            await Assert.That(exit).IsEqualTo(0);
+
+            var doc = JsonDocument.Parse(stdoutWriter.ToString());
+            await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
+        } finally {
+            Console.SetOut(originalOut);
+        }
+
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
+    }
+
+    // Qodo #247: a malformed (scheme-less) server URL must NOT hard-exit via
+    // EnsureAbsolute's Environment.Exit(2) inside the best-effort POST — the hook
+    // must still emit {"continue":true} and return 0. The guard in
+    // PostBestEffortAsync bails before auth discovery (and thus EnsureAbsolute)
+    // is reached.
+    [Test, NotInParallel]
+    public async Task Stop_with_malformed_base_url_still_emits_continue_and_returns_zero() {
+        var payload = """
+                      {
+                        "hook_event_name": "Stop",
+                        "session_id": "abc",
+                        "transcript_path": "/tmp/rollout.jsonl",
+                        "cwd": "/tmp"
+                      }
+                      """;
+
+        var originalOut  = Console.Out;
+        var stdoutWriter = new StringWriter();
+
+        try {
+            Console.SetOut(stdoutWriter);
+            // Scheme-less URL → IsAcceptableUrl is false → PostBestEffortAsync returns
+            // before CreateClientWithAuthStatusAsync/EnsureAbsolute can Environment.Exit.
+            var exit = await CodexHookCommand.Handle("localhost:5108", new StringReader(payload));
+            await Assert.That(exit).IsEqualTo(0);
+
+            var doc = JsonDocument.Parse(stdoutWriter.ToString());
+            await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
         } finally {
             Console.SetOut(originalOut);
         }

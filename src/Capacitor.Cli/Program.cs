@@ -77,6 +77,12 @@ if (baseUrl is null && !offlineCommands.Contains(command)) {
     return 1;
 }
 
+// AI-1168: last-resort guard around the whole command dispatch. Without it, any
+// exception a handler doesn't swallow escapes to the NativeAOT runtime, which
+// aborts the process (SIGABRT + a macOS crash report). For a ~1s hook/generator
+// the agent spawns, that was happening dozens of times a day. Record the
+// exception and exit cleanly instead (fail-open for agent-spawned commands).
+try {
 switch (command) {
     case "--version" or "-v": {
         var version = typeof(Program).Assembly
@@ -291,11 +297,13 @@ switch (command) {
     }
     case "mcp": {
         if (args.Length < 2) {
-            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows …");
+            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory …");
             Console.Error.WriteLine("  kcap mcp review [--owner <owner> --repo <repo> --pr <number>]");
             Console.Error.WriteLine("  kcap mcp judge --session <sessionId>");
             Console.Error.WriteLine("  kcap mcp sessions");
             Console.Error.WriteLine("  kcap mcp flows");
+            Console.Error.WriteLine("  kcap mcp flow-result   (launched by the daemon for hosted reviewers)");
+            Console.Error.WriteLine("  kcap mcp memory");
 
             return 1;
         }
@@ -329,6 +337,10 @@ switch (command) {
                 return await McpSessionsServer.RunAsync(baseUrl!);
             case "flows":
                 return await McpFlowsServer.RunAsync(baseUrl!);
+            case "flow-result":
+                return await McpFlowResultServer.RunAsync(baseUrl!);
+            case "memory":
+                return await McpMemoryServer.RunAsync(baseUrl!);
             default:
                 Console.Error.WriteLine($"Unknown mcp subcommand: {args[1]}");
 
@@ -692,6 +704,11 @@ switch (command) {
 Console.Error.WriteLine($"Unknown command: {command}");
 
 return 1;
+} catch (Exception topLevelEx) {
+    CrashReporter.Record(command, topLevelEx);
+
+    return CrashReporter.ExitCode(command);
+}
 
 static string? GetArg(string[] arguments, string flag) {
     var idx = Array.IndexOf(arguments, flag);
