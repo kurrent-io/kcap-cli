@@ -57,8 +57,8 @@ If `start_flow` / `send_to_participant` are not among the tools available in thi
 The server enforces per-run budgets; watch for these in tool error responses:
 
 - **`400` containing `max_rounds (N) reached for this run — close the flow.`** — the run is still **open**, it's just hit its round cap. Stop submitting further rounds, summarize what you have, and call `close_flow`.
-- **`400` containing `budget_exceeded: …`** — the run has **already failed** and the participant agent has stopped. Report this to the user; do NOT retry and do NOT call `close_flow` (closing a terminal run returns another `400`).
-- **A round that exceeds the definition's `round_timeout`** fails that round with `timeout`. The run itself stays open — you may submit another round or close the flow.
+- **`400` containing `budget_exceeded: …`** — the run has **already failed** and the participant agent has stopped. Report this to the user; do NOT retry and do NOT call `close_flow` — the run is already terminal and the participant already stopped, so closing is a no-op that only muddies the event stream.
+- **A round that exceeds the definition's `round_timeout`** lands as a terminal **`unclear`** round, with the timeout explained in its result text — if you check round status programmatically, look for `unclear` and read the text for the timeout reason. The run itself stays open — you may submit another round or close the flow.
 - **Idle runs are auto-reaped** after the definition's `idle_ttl` (server default 24h). Don't rely on this — always call `close_flow` yourself once you're done, whether the outcome was clean or you're abandoning the task.
 
 ## Workflow
