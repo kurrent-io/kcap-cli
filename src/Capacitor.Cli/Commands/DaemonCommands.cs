@@ -635,9 +635,15 @@ public static class DaemonCommands {
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         if (lines.Length == 0 || !int.TryParse(lines[0], out var pid)) {
-            Console.Error.WriteLine($"Invalid PID file: {pidPath}");
-            File.Delete(pidPath);
-
+            // AI-1155: report "no usable PID" but do NOT delete the file. The
+            // daemon writes it with File.WriteAllText (truncate+write) under the
+            // flock, so a SIGKILL/native abort mid-write can leave a present but
+            // empty/partial/unparseable file — which is itself a hard-death
+            // breadcrumb that DaemonLock.InspectPriorHolder reports as
+            // (unclean, null). Since callers here (status, the pre-spawn guards)
+            // read this before the successor daemon runs, unlinking a corrupt
+            // file would erase that breadcrumb. Cleanup of corrupt/stale files is
+            // left to the explicit paths (`daemon stop`, `daemon doctor --clean`).
             return null;
         }
 
