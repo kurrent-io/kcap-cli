@@ -170,6 +170,25 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     static readonly TimeSpan PingDeadline = TimeSpan.FromSeconds(5);
 
+    // AI-992: proactively refresh the active profile's auth token ahead of expiry so a
+    // continuously-running daemon keeps a WorkOS sliding-inactivity session alive (up to its
+    // absolute lifetime) rather than forcing a `kcap login` after an idle period. The tick is
+    // cheap (a token-file read + expiry compare) and only calls the refresh endpoint when the
+    // token is within ProactiveRefreshWindow of expiry; TokenRefreshLoop further rate-limits
+    // attempts to at most one per ProactiveRefreshMinInterval, so refresh traffic stays bounded
+    // even for a failing refresh or a short-lived token that keeps re-entering the window.
+    readonly PeriodicTimer _tokenRefresh = new(TimeSpan.FromSeconds(60));
+
+    // Refresh once the token is within this much of its expiry. Comfortably above the 60 s tick
+    // so the window is never stepped over.
+    static readonly TimeSpan ProactiveRefreshWindow = TimeSpan.FromMinutes(5);
+
+    // Hit the refresh endpoint at most once per this interval (see TokenRefreshLoop). Small
+    // enough that a healthy token issued with a short lifetime is still renewed before it
+    // lapses during idle; large enough that a dead/rotated refresh token isn't re-hit every
+    // tick.
+    static readonly TimeSpan ProactiveRefreshMinInterval = TimeSpan.FromMinutes(5);
+
     /// <summary>
     /// How long <see cref="FinalizeAgentRunAsync"/> waits on the (reconnect-retrying)
     /// EndAgentSession call before proceeding with local cleanup regardless. Covers a
@@ -227,6 +246,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Start heartbeat loops
         _ = RunHeartbeatLoopAsync(_shutdownCts.Token);
         _ = RunDaemonHeartbeatLoopAsync(_shutdownCts.Token);
+        _ = RunTokenRefreshLoopAsync(_shutdownCts.Token);
     }
 
     internal int ActiveCount => _agents.Count(a => a.Value.Status is "Starting" or "Running");
@@ -1340,6 +1360,23 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
+    async Task RunTokenRefreshLoopAsync(CancellationToken ct) {
+        var loop = new TokenRefreshLoop(new TokenStoreRefreshPort(ProactiveRefreshWindow), _logger, ProactiveRefreshMinInterval);
+
+        while (await _tokenRefresh.WaitForNextTickAsync(ct)) {
+            // Defence in depth: TickAsync is intentionally total, but this runs as an
+            // unobserved background Task — guard here so the loop survives even if a
+            // future change lets an exception escape the tick.
+            try {
+                await loop.TickAsync(ct);
+            } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                return;
+            } catch (Exception ex) {
+                _logger.LogWarning(ex, "Token refresh tick faulted — continuing loop");
+            }
+        }
+    }
+
     async Task CleanupAgentAsync(string agentId) {
         if (!_agents.TryRemove(agentId, out var agent)) {
             return;
@@ -1395,6 +1432,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         _heartbeatTimer.Dispose();
         _daemonHeartbeat.Dispose();
+        _tokenRefresh.Dispose();
     }
 
     /// <summary>
