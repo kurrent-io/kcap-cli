@@ -73,7 +73,7 @@ internal static class AgentHookPoster {
             using var content = new StringContent(body, Encoding.UTF8, "application/json");
 
             try {
-                var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{endpoint}", content);
+                using var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{endpoint}", content);
 
                 if (!resp.IsSuccessStatusCode) {
                     Console.Error.WriteLine($"[kcap] {agentTag} {endpoint}: HTTP {(int)resp.StatusCode}");
