@@ -452,13 +452,20 @@ internal sealed partial class ClaudeLauncher(
         }
     }
 
-    static void WriteMcpConfig(string sourceRepoPath, string worktreePath) {
+    internal static void WriteMcpConfig(string sourceRepoPath, string worktreePath) {
         var claudeJsonPath = ClaudePaths.UserConfigJson();
 
         if (!File.Exists(claudeJsonPath)) return;
 
-        var root    = JsonNode.Parse(File.ReadAllText(claudeJsonPath));
-        var servers = root?["projects"]?[sourceRepoPath]?["mcpServers"]?.AsObject();
+        var root = JsonNode.Parse(File.ReadAllText(claudeJsonPath));
+
+        // Claude keys projects[] by the normalised path (forward slashes on Windows) —
+        // same reasoning as the trust write in TrustWorktreeInClaudeConfig. Fall back to
+        // the raw path for entries written by older kcap builds or by hand.
+        var sourceKey = NormalizeClaudeProjectKey(sourceRepoPath);
+
+        var servers = root?["projects"]?[sourceKey]?["mcpServers"]?.AsObject()
+         ?? root?["projects"]?[sourceRepoPath]?["mcpServers"]?.AsObject();
 
         if (servers is null || servers.Count == 0) return;
 
