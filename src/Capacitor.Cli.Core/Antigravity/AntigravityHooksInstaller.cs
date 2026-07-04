@@ -13,6 +13,10 @@ namespace Capacitor.Cli.Core.Antigravity;
 /// JSON is backed up to <c>hooks.json.bak</c> and replaced (never silently clobbered). A
 /// sibling marker (<see cref="MarkerFileName"/>) records the installed version. Mirrors the
 /// <see cref="Gemini.GeminiHooksInstaller"/> marker discipline.
+///
+/// The manifest is load-bearing, so its lifecycle is tied to the hooks file: <see cref="Install"/>
+/// writes it FIRST and fails if it can't (never a silent success), and <see cref="Remove"/> keeps
+/// it as long as a hooks.json remains for the GUI to load, deleting it only when the plugin is gone.
 /// </summary>
 public static class AntigravityHooksInstaller {
     public const string MarkerFileName = ".kcap-hooks-version";
@@ -21,26 +25,37 @@ public static class AntigravityHooksInstaller {
     static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
 
     public static void Install(string hooksPath) {
+        // plugin.json is REQUIRED for the GUI to load the dir — write it FIRST and let a
+        // failure propagate so the install aborts (it is NOT best-effort like the version
+        // marker). Otherwise a written hooks.json is dead weight the GUI ignores — the exact
+        // AI-1158 false-success mode this fix exists to prevent.
+        WritePluginManifest(hooksPath);
+
         var root = LoadOrBackup(hooksPath);
         root[AntigravityHooks.BlockName] = AntigravityHooks.BuildKcapBlock();
         Write(hooksPath, root);
-        WritePluginManifest(hooksPath);
         WriteMarker(hooksPath);
     }
 
     public static void Remove(string hooksPath) {
         if (File.Exists(hooksPath)) {
             JsonObject? root = null;
-            try { root = JsonNode.Parse(File.ReadAllText(hooksPath)) as JsonObject; } catch { /* malformed → leave file, just drop marker */ }
+            try { root = JsonNode.Parse(File.ReadAllText(hooksPath)) as JsonObject; } catch { /* malformed → leave file untouched, just drop marker */ }
 
             if (root is not null && root.Remove(AntigravityHooks.BlockName)) {
                 // hooks.json lives in the kcap-owned plugin dir. If nothing but the kcap block
-                // was there, drop the now-empty file rather than leaving an orphan {} behind.
+                // was there, drop the now-empty file rather than leaving an orphan {} behind;
+                // otherwise write back the user-authored blocks we're preserving.
                 if (root.Count == 0) TryDelete(hooksPath);
                 else Write(hooksPath, root);
             }
         }
-        DeletePluginManifest(hooksPath);
+        // plugin.json is load-bearing: keep it while a hooks.json remains for the GUI to load
+        // (e.g. user-authored blocks we just preserved, or a file we couldn't parse) — deleting
+        // it would silently disable those remaining hooks. Only drop the manifest once the hooks
+        // file is gone, i.e. the whole kcap plugin has been removed. The version marker is kcap's
+        // own bookkeeping, so it's always cleared.
+        if (!File.Exists(hooksPath)) DeletePluginManifest(hooksPath);
         DeleteMarker(hooksPath);
     }
 
@@ -83,14 +98,16 @@ public static class AntigravityHooksInstaller {
         File.WriteAllText(hooksPath, root.ToJsonString(WriteOptions));
     }
 
+    /// <summary>Writes the REQUIRED plugin.json manifest. Unlike the version marker this is
+    /// deliberately NOT best-effort: a failure propagates so <see cref="Install"/> fails
+    /// rather than leaving a hooks.json the GUI can never load (AI-1158).</summary>
     static void WritePluginManifest(string hooksPath) {
         var dir = Path.GetDirectoryName(hooksPath);
-        if (string.IsNullOrEmpty(dir)) return;
-        try {
-            Directory.CreateDirectory(dir);
-            File.WriteAllText(Path.Combine(dir, PluginManifestFileName),
-                AntigravityHooks.BuildPluginManifest().ToJsonString(WriteOptions));
-        } catch { /* best effort */ }
+        if (string.IsNullOrEmpty(dir))
+            throw new InvalidOperationException($"Cannot resolve a plugin dir for hooks path '{hooksPath}'.");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, PluginManifestFileName),
+            AntigravityHooks.BuildPluginManifest().ToJsonString(WriteOptions));
     }
 
     static void TryDelete(string path) {

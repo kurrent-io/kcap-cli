@@ -65,6 +65,43 @@ public class AntigravityHooksInstallerTests {
         } finally { Directory.Delete(dir, recursive: true); }
     }
 
+    // AI-1158 review (F1): plugin.json is load-bearing, so a failure to write it must fail the
+    // install rather than silently leaving a hooks.json the GUI ignores. Simulate the failure by
+    // making the manifest PATH an existing directory (WriteAllText can't overwrite a dir).
+    [Test]
+    public async Task Install_throws_when_the_plugin_manifest_cannot_be_written() {
+        var dir  = TempDir();
+        var path = Path.Combine(dir, "hooks.json");
+        try {
+            Directory.CreateDirectory(Path.Combine(dir, AntigravityHooksInstaller.PluginManifestFileName));
+
+            await Assert.That(() => AntigravityHooksInstaller.Install(path)).Throws<Exception>();
+            // No dead-weight hooks.json / marker left implying a good install.
+            await Assert.That(AntigravityHooksInstaller.IsInstalled(path)).IsFalse();
+        } finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    // AI-1158 review (F2): removing kcap must not neuter user-authored blocks by deleting the
+    // manifest — while a hooks.json remains for the GUI to load, plugin.json is kept.
+    [Test]
+    public async Task Remove_keeps_plugin_manifest_when_user_blocks_remain() {
+        var dir      = TempDir();
+        var path     = Path.Combine(dir, "hooks.json");
+        var manifest = Path.Combine(dir, AntigravityHooksInstaller.PluginManifestFileName);
+        try {
+            await File.WriteAllTextAsync(path, new JsonObject {
+                ["my-guard"] = new JsonObject { ["PreToolUse"] = new JsonArray() }
+            }.ToJsonString());
+            AntigravityHooksInstaller.Install(path);
+
+            AntigravityHooksInstaller.Remove(path);
+
+            await Assert.That(File.Exists(path)).IsTrue();       // user block preserved
+            await Assert.That(File.Exists(manifest)).IsTrue();   // → manifest kept so it still loads
+            await Assert.That(AntigravityHooksInstaller.IsInstalled(path)).IsFalse();
+        } finally { Directory.Delete(dir, recursive: true); }
+    }
+
     [Test]
     public async Task Install_preserves_user_authored_blocks() {
         var dir  = TempDir();
