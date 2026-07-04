@@ -46,6 +46,10 @@ internal partial class ConfigJsonContext : JsonSerializerContext;
 public static class AppConfig {
     static readonly string ConfigPath = PathHelpers.ConfigPath("config.json");
 
+    // Flipped the first time a legacy v1 config is migrated to v2 in this process,
+    // so the deprecation notice in LoadProfileConfig fires at most once per run.
+    static bool _v1MigrationSignalled;
+
     public static string? ResolvedServerUrl { get; private set; }
 
     public static ResolvedProfile? ResolvedProfile { get; private set; }
@@ -251,6 +255,23 @@ public static class AppConfig {
         // server URL here previously caused `ServerUrl is required` at daemon
         // startup despite the on-disk config being intact.
         if (result.ShouldPersist) {
+            // Deprecation signal for the v1 config format. `ShouldPersist` is set ONLY
+            // when a real v1 flat config was migrated (a fresh/empty config and an
+            // already-v2 config both leave it false), so this marks exactly a genuine
+            // v1 straggler. The v1 format is slated for removal; this one-time-per-run
+            // line is how we watch whether any v1 configs still exist in the wild
+            // before deleting the ConfigMigration path. Best-effort — a logging
+            // failure must never break a config load.
+            if (!_v1MigrationSignalled) {
+                _v1MigrationSignalled = true;
+                try {
+                    await Console.Error.WriteLineAsync(
+                        "kcap: migrated your config from the deprecated v1 format to the current format (one-time).");
+                } catch {
+                    /* best effort */
+                }
+            }
+
             try {
                 await SaveProfileConfig(result.Config);
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
