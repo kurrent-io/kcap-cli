@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Antigravity;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
@@ -63,7 +64,8 @@ public static class StatusCommand {
             gemini:   GeminiHooksInstaller.IsInstalled(GeminiPaths.SettingsJson()),
             kiro:     KiroHooksInstaller.IsInstalled(KiroPaths.KcapAgentJson()),
             pi:       PiExtensionInstaller.IsInstalled(PiPaths.KcapExtension()),
-            opencode: OpenCodeExtensionInstaller.IsInstalled(OpenCodePaths.KcapPlugin()));
+            opencode: OpenCodeExtensionInstaller.IsInstalled(OpenCodePaths.KcapPlugin()),
+            antigravity: AntigravityHooksInstaller.IsInstalled(AntigravityPaths.GlobalHooksJson()));
 
         await Console.Out.WriteLineAsync(line);
 
@@ -153,7 +155,7 @@ public static class StatusCommand {
     /// has shell hooks), but all share the line for at-a-glance parity. Pure — the
     /// I/O detection happens in the caller so this stays unit-testable.
     /// </summary>
-    internal static string BuildHooksStatusLine(bool claude, bool codex, bool cursor, bool copilot, bool gemini, bool kiro, bool pi, bool opencode) =>
+    internal static string BuildHooksStatusLine(bool claude, bool codex, bool cursor, bool copilot, bool gemini, bool kiro, bool pi, bool opencode, bool antigravity = false) =>
         string.Join("  ", new[] {
             claude   ? "Claude ✓"   : "Claude ✗",
             codex    ? "Codex ✓"    : "Codex ✗",
@@ -162,7 +164,8 @@ public static class StatusCommand {
             gemini   ? "Gemini ✓"   : "Gemini ✗",
             kiro     ? "Kiro ✓"     : "Kiro ✗",
             pi       ? "Pi ✓"       : "Pi ✗",
-            opencode ? "OpenCode ✓" : "OpenCode ✗"
+            opencode ? "OpenCode ✓" : "OpenCode ✗",
+            antigravity ? "Antigravity ✓" : "Antigravity ✗"
         });
 
     /// <summary>

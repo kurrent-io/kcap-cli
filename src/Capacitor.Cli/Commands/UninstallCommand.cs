@@ -55,6 +55,7 @@ public static class UninstallCommand {
         await Console.Out.WriteLineAsync($"  • Remove {KiroPaths.KcapAgentJson()} and restore the previous default Kiro agent");
         await Console.Out.WriteLineAsync($"  • Remove {Capacitor.Cli.Core.Pi.PiPaths.KcapExtension()}");
         await Console.Out.WriteLineAsync($"  • Remove {OpenCodePaths.KcapPlugin()}");
+        await Console.Out.WriteLineAsync($"  • Remove the kcap block from {Capacitor.Cli.Core.Antigravity.AntigravityPaths.GlobalHooksJson()}");
         await Console.Out.WriteLineAsync($"  • Remove agent skills under {AgentsPaths.UserSkillsDir}");
 
         if (projectRoot is not null) {
@@ -123,6 +124,7 @@ public static class UninstallCommand {
         if (await PluginCommand.HandleAsync(["plugin", "remove", "--kiro"]) != 0) hadFailures = true;     // ~/.kiro/agents/kcap.json + restore previous default agent
         if (await PluginCommand.HandleAsync(["plugin", "remove", "--pi"]) != 0) hadFailures = true;       // Pi extension (~/.pi/agent/extensions/kcap.ts)
         if (await PluginCommand.HandleAsync(["plugin", "remove", "--opencode"]) != 0) hadFailures = true; // OpenCode plugin (~/.config/opencode/plugins/kcap.ts)
+        if (await PluginCommand.HandleAsync(["plugin", "remove", "--antigravity"]) != 0) hadFailures = true; // Antigravity kcap block (~/.gemini/antigravity-cli/hooks.json)
 
         // Skills are removed by --codex above, but call --skills explicitly in
         // case the user only ever installed Cursor / agent-agnostic skills and

@@ -12,8 +12,9 @@ Description:
   dispatch is argument-driven (no stdin payload) — see --pi / --opencode below.
 
   The command is registered via 'kcap setup' or
-  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode]', which
-  writes the appropriate hook configuration (or, for Pi/OpenCode, the plugin) for the vendor.
+  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity]',
+  which writes the appropriate hook configuration (or, for Pi/OpenCode/Antigravity,
+  the plugin/hooks-block) for the vendor.
 
 Options:
   --claude    Dispatch the event as a Claude Code hook.
@@ -43,6 +44,14 @@ Options:
               The plugin writes {info,parts} JSONL to the transcript file; the
               watcher tails it (vendor=opencode) and synthesizes session-end on
               opencode exit.
+  --antigravity  Dispatch a Google Antigravity control-hook event. Antigravity
+              payloads carry no event-name field, so the event is passed as a
+              positional arg with the payload on stdin:
+                kcap hook --antigravity <PreInvocation|PostInvocation|Stop|
+                  PreToolUse|PostToolUse>
+              kcap acts on the first PreInvocation of a conversation (spawns a
+              watcher tailing its transcript_full.jsonl, vendor=antigravity) and
+              synthesizes session-end on idle. Other events are no-ops.
 
 Exit codes:
   0   Normal exit (including budget expiry, malformed payload, and

@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Antigravity;
 using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
@@ -37,6 +38,7 @@ public sealed record PluginEnvironment(
     public string KiroSettingsJson     => KiroPaths.SettingsFile(HomeDirectory);
     public string PiKcapExtension      => PiPaths.KcapExtension(HomeDirectory);
     public string OpenCodeKcapPlugin    => OpenCodePaths.KcapPlugin(HomeDirectory);
+    public string AntigravityHooksJson  => AntigravityPaths.GlobalHooksJson(HomeDirectory);
     public string AgentsSkillsDir     => Path.Combine(HomeDirectory, ".agents", "skills");
     public string LegacyCodexSkills   => Path.Combine(CodexHome, "skills");
 

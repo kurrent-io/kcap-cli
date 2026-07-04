@@ -22,13 +22,25 @@ public static class GeminiPaths {
     }
 
     /// <summary>
-    /// Detection by root-dir presence — Gemini CLI creates <c>~/.gemini</c> on
-    /// first run; the binary name <c>gemini</c> is too generic for a PATH probe
-    /// to be the only signal. Callers that also want the PATH probe OR this
-    /// with <c>AgentDetector.IsInstalled("gemini")</c>.
+    /// Detection by a Gemini-CLI-specific marker under <c>~/.gemini</c>. The bare
+    /// root is NOT sufficient because <c>~/.gemini</c> is SHARED with Google
+    /// Antigravity, which stores its state under <c>antigravity/</c> +
+    /// <c>antigravity-cli/</c> — so an Antigravity-only home would otherwise falsely
+    /// read as a Gemini install (AI-1158). Require one of the config/recording
+    /// markers Gemini CLI creates that Antigravity does not: <c>settings.json</c>,
+    /// <c>projects.json</c>, or the <c>tmp/</c> chat-recording dir. The binary name
+    /// <c>gemini</c> is too generic to be the only signal, so callers that want a
+    /// PATH probe OR this with <c>AgentDetector.IsInstalled("gemini")</c>
+    /// (a fresh install whose markers aren't written yet is still caught there).
     /// </summary>
-    public static bool IsInstalled(string? home = null, string? geminiCliHome = null)
-        => Directory.Exists(Root(home, geminiCliHome));
+    public static bool IsInstalled(string? home = null, string? geminiCliHome = null) {
+        var root = Root(home, geminiCliHome);
+        if (!Directory.Exists(root)) return false;
+
+        return File.Exists(Path.Combine(root, "settings.json"))
+            || File.Exists(Path.Combine(root, "projects.json"))
+            || Directory.Exists(Path.Combine(root, "tmp"));
+    }
 
     /// <summary>
     /// Shared settings file (<c>~/.gemini/settings.json</c>) — holds user config

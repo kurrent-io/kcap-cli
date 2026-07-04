@@ -38,7 +38,7 @@ var command = args[0];
 // nested headless invocation.
 if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
  && command == "hook"
- && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot") || args.Contains("--gemini") || args.Contains("--kiro") || args.Contains("--pi") || args.Contains("--opencode"))) {
+ && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot") || args.Contains("--gemini") || args.Contains("--kiro") || args.Contains("--pi") || args.Contains("--opencode") || args.Contains("--antigravity"))) {
     return 0;
 }
 
@@ -569,7 +569,7 @@ switch (command) {
             storedOrg:               storedOrg);
     }
     case "watch" when args.Length < 3:
-        Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex|copilot|gemini|kiro|pi|opencode]");
+        Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex|copilot|gemini|kiro|pi|opencode|antigravity]");
 
         return 1;
     case "watch": {
@@ -691,8 +691,11 @@ switch (command) {
         if (args.Contains("--opencode")) {
             return await OpenCodeHookCommand.Handle(baseUrl!, args);
         }
+        if (args.Contains("--antigravity")) {
+            return await AntigravityHookCommand.Handle(baseUrl!, args);
+        }
         Console.Error.WriteLine("kcap hook requires a vendor flag (for example --claude)");
-        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor, --copilot, --gemini, --kiro, --pi, --opencode");
+        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity");
         return 1;
     }
     case "cursor":
