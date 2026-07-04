@@ -208,11 +208,24 @@ internal sealed partial class LocalPermissionBridge(
             // would give us per-request cancellation; out of scope for this PR.
             PermissionDecision decision;
 
-            try {
-                decision = await server.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, ct);
-            } catch (Exception ex) {
-                LogRequestPermissionFailed(logger, ex, sessionId);
-                decision = new PermissionDecision("deny", null, null);
+            if (IsFlowResultSubmission(toolName)) {
+                // AI-1139 follow-up: a review-flow reviewer's own result-submission tool
+                // (kcap-flow-result → submit_review_result) is safe and expected — it only posts the
+                // reviewer's verdict back to the server. Auto-approve it here instead of surfacing a
+                // prompt: the reviewer is unattended (Codex fires a PermissionRequest for the MCP
+                // tool call even under `--ask-for-approval never`, and its hook bridges here), so a
+                // user decision it can't get would just block the flow. The tool name is unique to
+                // the kcap-flow-result server, which is only injected for review-flow reviewers, so
+                // matching it is sufficient and always safe — no server round-trip needed.
+                LogFlowResultAutoApproved(logger, sessionId, vendor);
+                decision = new PermissionDecision("allow", null, null);
+            } else {
+                try {
+                    decision = await server.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, ct);
+                } catch (Exception ex) {
+                    LogRequestPermissionFailed(logger, ex, sessionId);
+                    decision = new PermissionDecision("deny", null, null);
+                }
             }
 
             var responseJson = BuildHookResponseJson(decision, vendor);
@@ -246,6 +259,31 @@ internal sealed partial class LocalPermissionBridge(
         using var doc = JsonDocument.Parse(child.ToJsonString());
 
         return doc.RootElement.Clone();
+    }
+
+    /// <summary>
+    /// True when the permission request is for the review-flow reviewer's result-submission tool
+    /// (the <c>kcap-flow-result</c> server's <c>submit_review_result</c>). This auto-approve bypasses
+    /// the server permission boundary, so the match is deliberately precise rather than a loose
+    /// substring: it accepts either the bare tool name (a vendor that passes the raw MCP tool name,
+    /// e.g. Codex) OR a vendor-prefixed id that both names the <c>kcap-flow-result</c> server AND ends
+    /// in the exact tool — e.g. Claude's <c>mcp__kcap_flow_result__submit_review_result</c> (Claude
+    /// sanitizes the hyphens to underscores). Requiring the server token means a coincidental
+    /// "…submit_review_result" exposed by some other MCP server on an interactive hosted agent can't
+    /// slip past the prompt.
+    /// </summary>
+    static bool IsFlowResultSubmission(string? toolName) {
+        if (string.IsNullOrEmpty(toolName)) return false;
+
+        // Bare tool name, no server prefix.
+        if (string.Equals(toolName, "submit_review_result", StringComparison.Ordinal)) return true;
+
+        // Vendor-prefixed MCP id: require the flow-result server identity AND the exact tool suffix.
+        var namesFlowResultServer =
+            toolName.Contains("kcap_flow_result", StringComparison.Ordinal) ||
+            toolName.Contains("kcap-flow-result", StringComparison.Ordinal);
+
+        return namesFlowResultServer && toolName.EndsWith("submit_review_result", StringComparison.Ordinal);
     }
 
     static string BuildHookResponseJson(PermissionDecision decision, string vendor) =>
@@ -295,6 +333,9 @@ internal sealed partial class LocalPermissionBridge(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "RequestPermission via SignalR failed for session {SessionId}; falling back to deny")]
     static partial void LogRequestPermissionFailed(ILogger logger, Exception exception, string sessionId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Auto-approved review-flow result submission for session {SessionId} (vendor={Vendor}) without surfacing a prompt")]
+    static partial void LogFlowResultAutoApproved(ILogger logger, string sessionId, string vendor);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Permission bridge handler error")]
     static partial void LogBridgeHandlerError(ILogger logger, Exception exception);

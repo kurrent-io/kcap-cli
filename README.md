@@ -49,6 +49,10 @@ The CLI is compiled with NativeAOT — fast startup, no runtime dependency.
 > works regardless of the install-script gate. (You can also re-run `kcap plugin
 > install [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--skills] --if-installed` manually.)
 
+> **Internal-tenant testers:** opt into pre-release builds with `kcap update
+> --beta`; everyone else should stay on the default stable channel. See
+> [`kcap update`](#other-commands) below.
+
 ### 2. Run setup
 
 ```bash
@@ -122,7 +126,7 @@ Open the server URL in your browser. The dashboard shows repositories, sessions,
 
 The `kcap mcp sessions` stdio server lets coding agents search and recall past Capacitor sessions without leaving the chat. `kcap setup` **registers it (with `kcap-review`) for both Claude Code and Codex CLI** — no manual `claude mcp add` or TOML edit. For Claude Code it's carried by the plugin's `.mcp.json`; for Codex CLI, `kcap setup` / `kcap plugin install --codex` write it into `~/.codex/config.toml`. The server is repo-aware: `cd` into a project before spawning your agent and `search_sessions` defaults to that repo's sessions.
 
-The `kcap mcp flows` stdio server lets agents start and interact with AI-powered review flows. The plugin **auto-registers it for Claude Code** (Codex stays manual). See the [Flows MCP server](#flows-mcp-server-for-agents) section for details.
+The `kcap mcp flows` stdio server lets agents start and interact with AI-powered agent flows — any flow-definition catalog entry, not just reviews. The plugin **auto-registers it for Claude Code** (Codex stays manual). See the [Flows MCP server](#flows-mcp-server-for-agents) section for details.
 
 The `kcap mcp flow-result` stdio server is the reviewer-side counterpart: the daemon injects it into hosted review-flow reviewer sessions so they can submit their result. It is not meant to be registered or run manually — see [Flow-result MCP server](#flow-result-mcp-server-hosted-reviewers).
 
@@ -142,6 +146,7 @@ Once set up, Capacitor runs silently in the background. Every Claude Code (and C
 - **In-agent upgrade prompts** — in Claude Code sessions, when the server is running a newer kcap release than the local CLI, additional context is injected into the session so the agent can offer the user an upgrade via `kcap update`. The stderr `kcap` update hint continues to fire for direct command-line use.
 - **SessionStart context injection** — at every session start the server injects top evaluation-derived fact clusters for the current repo into Claude's `additionalContext`. The injected block is split into two sections: `## Known patterns` (repo/project facts relevant to any reader) and `## Guidance from past sessions` (agent-targeted action items derived from prior eval suggestions with `audience: "agent"`). Opt out by setting `disable_session_guidelines: true` in `~/.config/kcap/config.json` or via `kcap config set disable_session_guidelines true`.
 - **SessionStart team-memory index** — at every session start (Claude Code) `kcap` also fetches a compact index of durable [team memories](#memory-mcp-server-for-agents) visible for the current repo/machine and appends a `## Team memory` block to `additionalContext`: one `slug: description` line per memory, grouped **Org / Team / Yours**, with a nudge to call `get_memory` / `search_memories` for full content. Only the index is injected — never the bodies — so the cost stays roughly flat as the pool grows (mirrors a local `MEMORY.md`). Best-effort and fail-open (a slow or failed fetch injects nothing, never blocking the hook). Opt out with `disable_memory_index: true` in `~/.config/kcap/config.json` or `kcap config set disable_memory_index true`.
+- **Crash resilience** — if a `kcap` command hits an unexpected error it records the exception (with stack trace) to `~/.config/kcap/crash.log` (honours `KCAP_CONFIG_DIR`; size-capped) and exits cleanly instead of aborting. Hook and detached-generator commands the coding agent spawns **fail open** (exit 0, nothing surfaced to the agent); other commands exit non-zero with a one-line stderr message pointing at the log.
 
 ## CLI commands
 
@@ -274,7 +279,7 @@ Expect ~1-3 minutes total depending on the model and session size — judges run
 kcap review <pr-url-or-owner/repo#number>
 ```
 
-Accepts a GitHub PR URL (`https://github.com/owner/repo/pull/123`, any host including GitHub Enterprise), a GitLab MR URL (`https://gitlab.com/owner/repo/-/merge_requests/123`), or the shorthand `owner/repo#123`. Only single-level `owner/repo` namespaces are supported — GitLab's nested groups (e.g. `group/subgroup/repo`) aren't recognized yet.
+Accepts a GitHub PR URL (`https://github.com/owner/repo/pull/123`, any host including GitHub Enterprise), a GitLab MR URL (`https://gitlab.com/owner/repo/-/merge_requests/123`, including nested groups such as `https://gitlab.com/group/subgroup/repo/-/merge_requests/123`), or the shorthand `owner/repo#123` (single-level only).
 
 Launches a Claude Code session equipped with MCP tools that query the implementation transcripts. Reviewers can ask *why* code was changed, understand design decisions, check what alternatives were considered, and verify test coverage — all grounded in what actually happened during development.
 
@@ -303,9 +308,9 @@ The server is repo-aware — it resolves the current working directory to a repo
 kcap mcp flows
 ```
 
-Stdio MCP server that lets coding agents start and interact with AI-powered review flows directly from within a session. The Kurrent Capacitor plugin **auto-registers it for Claude Code** (via `.mcp.json`), so there's nothing to do after `kcap setup` — the flows server derives the target repo from its launch working directory, and Claude Code always runs inside the repo, so one registration works for every repo. It's registered even with no daemon connected; the tools simply stay inert (and `start_review_flow` returns an error) until a daemon with the repo is available.
+Stdio MCP server that lets coding agents start and interact with AI-powered agent flows — any entry in the server's flow-definition catalog, not just reviews — directly from within a session. The Kurrent Capacitor plugin **auto-registers it for Claude Code** (via `.mcp.json`), so there's nothing to do after `kcap setup` — the flows server derives the target repo from its launch working directory, and Claude Code always runs inside the repo, so one registration works for every repo. It's registered even with no daemon connected; the tools simply stay inert (and `start_flow` returns an error) until a daemon with the repo is available.
 
-For Codex, `kcap-flows` stays manual — unlike the `sessions` / `review` / `memory` servers (which `kcap setup` registers in `config.toml`), it launches a paid hosted reviewer, so it isn't auto-registered. Add it to `~/.codex/config.toml`:
+For Codex, `kcap-flows` stays manual — unlike the `sessions` / `review` / `memory` servers (which `kcap setup` registers in `config.toml`), it launches a paid hosted participant, so it isn't auto-registered. Add it to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.kcap-flows]
@@ -313,14 +318,16 @@ command = "kcap"           # use an absolute path (e.g. /opt/homebrew/bin/kcap) 
 args    = ["mcp", "flows"] # desktop app, which launches MCP servers without your shell PATH
 ```
 
-It provides four tools:
+It provides four generic tools:
 
-- **`start_review_flow`** — start a new review flow (`spec-review` or `code-review`). Provide `kind`, `target_kind`, `target_ref`, `target_title`, and `context`. Requester context (session ID, cwd, repo root, owner, name) is resolved automatically from the environment. Returns a `flow_run_id`. Optional `mode`: by default, when the daemon runs on the same machine, the reviewer works in a worktree mirrored from your working tree — **uncommitted and untracked changes included** — so it grounds the review in your actual in-progress source; pass `mode="context-only"` to opt out and have the reviewer treat only the submitted context as authoritative.
-- **`submit_review_round`** — submit a follow-up round to an existing flow with updated context or a response to the reviewer's findings. Returns the new round's findings.
-- **`get_review_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow.
-- **`close_review_flow`** — mark a completed review flow as closed.
+- **`start_flow`** — start a new flow from the server's flow-definition catalog. Provide `definition_id` (e.g. `spec-review`, `code-review`, or a custom definition), `target_kind`, `target_ref`, `target_title`, and `context`. Requester context (session ID, cwd, repo root, owner, name) is resolved automatically from the environment. Returns a `flow_run_id`. Optional `mode`: by default, when the daemon runs on the same machine, the participant works in a worktree mirrored from your working tree — **uncommitted and untracked changes included** — so it grounds the work in your actual in-progress source; pass `mode="context-only"` to opt out and have the participant treat only the submitted context as authoritative.
+- **`send_to_participant`** — send a follow-up message to a participant (e.g. `"reviewer"`, the only participant Phase D definitions currently define) in an existing flow with updated context or a response to prior findings. Returns the new round's findings.
+- **`get_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow run.
+- **`close_flow`** — mark a completed flow run as closed.
 
-Requires `kcap login` **and a running daemon with this repo checked out** — the server discovers a connected daemon to launch the hosted reviewer (Codex for the built-in `spec-review`/`code-review` flows; the vendor is chosen by the flow definition), and `start_review_flow` errors if none (or more than one) matches. The server creates an authenticated HTTP client at startup and posts to the Capacitor server's `/api/flows/*` endpoints.
+The four review tools — **`start_review_flow`**, **`submit_review_round`**, **`get_review_flow_status`**, **`close_review_flow`** — are aliases of the generic tools above, kept byte-compatible for existing callers: `start_review_flow`'s `kind` maps to `start_flow`'s `definition_id`, and `submit_review_round`'s `context` maps to `send_to_participant`'s `message` with no `participant` argument (the flow's single reviewer is targeted implicitly). New integrations should prefer the generic tools; the review tools stay best for a plain "review my PR" / "start a review flow" ask.
+
+Requires `kcap login` **and a running daemon with this repo checked out** — the server discovers a connected daemon to launch the hosted participant (Codex for the built-in `spec-review`/`code-review` flows; the vendor is chosen by the flow definition), and `start_flow` errors if none (or more than one) matches. The server creates an authenticated HTTP client at startup and posts to the Capacitor server's `/api/flows/*` endpoints.
 
 ### Flow-result MCP server (hosted reviewers)
 
@@ -328,7 +335,7 @@ Requires `kcap login` **and a running daemon with this repo checked out** — th
 kcap mcp flow-result   # launched by the daemon — not meant to be run manually
 ```
 
-Stdio MCP server the **daemon injects into hosted review-flow reviewer sessions** (both Claude and Codex reviewers) as their only MCP server. It exposes a single tool, **`submit_review_result`** (`round_token`, `kind: "findings" | "clean"`, `findings`), which posts the reviewer's result to the Capacitor server — the reliable alternative to the transcript-marker fallback. It is deliberately separate from `kcap mcp flows` so an unattended reviewer can never start a nested flow, and it reads its identity from daemon-provided environment (`KCAP_FLOW_AGENT_ID`); run manually it just exits with an explanation. There is nothing to register or configure.
+Stdio MCP server the **daemon injects into hosted review-flow reviewer sessions** (both Claude and Codex reviewers). It exposes a single tool, **`submit_review_result`** (`round_token`, `kind: "findings" | "clean"`, `findings`), which posts the reviewer's result to the Capacitor server — the reliable alternative to the transcript-marker fallback. It is deliberately separate from `kcap mcp flows` so an unattended reviewer can never start a nested flow, and it reads its identity from daemon-provided environment (`KCAP_FLOW_AGENT_ID`); run manually it just exits with an explanation. It's not necessarily the only server a reviewer gets, though: the flow definition's `mcp:` allowlist can additionally grant kcap-owned context servers (e.g. `kcap-sessions`), resolved against the same built-in registry — unknown names are skipped and any flow-starting server is always stripped regardless of listing, so a reviewer still can't start a nested flow. There is nothing to register or configure.
 
 ### Memory MCP server (for agents)
 
@@ -417,7 +424,7 @@ After discovery, the import surfaces a one-shot report of any transcript working
 
 ### Daemon
 
-The daemon connects to the Capacitor server and runs Claude Code or Codex agents in isolated git worktrees, controlled from the dashboard. The daemon supports hosted Claude and Codex agents on macOS and Linux — choose the vendor from the dashboard's launch dialog. At startup the daemon probes `daemon.claude_path` and `daemon.codex_path` and advertises only the vendors it can actually spawn, so the launch dialog hides whichever agent isn't installed on the selected daemon.
+The daemon connects to the Capacitor server and runs Claude Code, Codex, or Cursor agents in isolated git worktrees, controlled from the dashboard. The daemon supports hosted Claude, Codex, and Cursor (`cursor` vendor) agents on macOS and Linux — choose the vendor from the dashboard's launch dialog. At startup the daemon probes `daemon.claude_path`, `daemon.codex_path`, and the Cursor CLI (`cursor-agent`, overridable via `KCAP_CURSOR_PATH` — see [Daemon config settings](#daemon-config-settings)) and advertises only the vendors it can actually spawn, so the launch dialog hides whichever agent isn't installed on the selected daemon.
 
 ```bash
 kcap daemon start                   # start in foreground (defaults --name to your OS username)
@@ -610,6 +617,12 @@ KCAP_CLAUDE_PATH=/opt/claude/bin/claude kcap daemon
 KCAP_CODEX_PATH=/opt/codex/bin/codex  kcap daemon
 ```
 
+The Cursor CLI path (`cursor-agent` by default, used to spawn the `cursor` hosted-agent vendor) is env-only for now — there is no `daemon.cursor_path` profile key yet, so set it per-launch:
+
+```bash
+KCAP_CURSOR_PATH=/opt/cursor/bin/cursor-agent kcap daemon
+```
+
 **Codex session-end tuning.** Because Codex has no session-end hook, the watcher owns session-end via two triggers: parent `codex` process exit, and rollout-file idle timeout. The idle trigger is particularly important for the Codex desktop app, whose shared `codex app-server` process never exits per-conversation.
 
 | Environment variable | Default | Description |
@@ -626,6 +639,13 @@ KCAP_DAEMON_LOG_LEVEL=debug kcap daemon    # env var; read directly, works in an
 ```
 
 Accepted values: `trace`, `debug`, `information` (default), `warning`, `error`, `critical`, `none`. The `--log-level` flag wins over the env var when both are set. `Debug` is verbose — it also enables the SignalR client's framework logs — so use it for a diagnostic window rather than steady state.
+
+#### Diagnosing a hard death
+
+A daemon killed by an uncatchable `SIGKILL` (macOS **jetsam** / Linux **OOM**, `kill -9`, power loss) or a hard native crash can't log its own exit — the process is gone before any handler runs. Two things help tell those apart from a normal stop:
+
+- **`~/.config/kcap/daemon.out.log`** — a background (`-d`) daemon reopens its stdout/stderr onto this file, so a runtime "Fatal error." dump or native crash message (which bypasses the normal `daemon.log` pipeline) is captured here. (`kcap daemon start -d` wires this up automatically by passing the daemon a `--stderr-file` flag; you don't set it yourself.) A service-managed daemon captures the same output via its service log. An empty file means nothing was written to stderr — i.e. a `SIGKILL`, not a crash.
+- **Startup breadcrumb** — when a daemon starts and finds the previous instance's lock was left for the kernel to release (the signature of an uncatchable kill), it logs a `warning` to `daemon.log` naming the dead PID. If you see this recur, run the daemon as a service (`kcap daemon service install`) so it auto-restarts instead of staying down.
 
 ### Local agents (run-agent / attach / ls)
 
@@ -790,15 +810,26 @@ kcap whoami         # show current authenticated user
 kcap login          # authenticate via OAuth (browser flow by default)
 kcap login --device # force device-code flow (use in SSH / headless envs)
 kcap update         # upgrade the CLI and refresh agent plugins (npm-global installs)
+kcap update --beta  # switch to the beta channel and update to the latest beta
+kcap update --stable # switch back to the stable channel (the default)
 kcap logout         # delete stored tokens
 ```
 
 > `kcap update` is the one-step upgrade for npm-global installs: it checks the
-> registry, runs `npm install -g @kurrent/kcap@latest`, then refreshes your
+> registry, runs `npm install -g @kurrent/kcap@<tag>`, then refreshes your
 > opted-in agent plugins — so it picks up new skills/hooks even when your package
 > manager blocks install scripts. It exits early if you're already up to date,
 > and tells you what to run instead for non-npm installs (e.g. Homebrew). Use
 > `kcap update --check` for a machine-readable `{current, latest, newer}` probe.
+>
+> **Beta channel (opt-in):** `kcap update --beta` switches the active profile to
+> the beta release channel (npm dist-tag `beta`) and updates to the latest beta
+> immediately. The choice is **persisted per profile**, so subsequent `kcap
+> update` runs — and the passive stderr "update available" hint — keep tracking
+> beta until you run `kcap update --stable`. A fresh config defaults to the
+> **stable** channel (npm dist-tag `latest`); beta is strictly opt-in. Beta
+> releases correspond to server versions rolled out to internal tenants first,
+> so most users should stay on stable.
 
 The v1 config format stored `server_url` as a bare host name without a
 scheme. If `kcap` crashes with `An invalid request URI was provided`

@@ -29,4 +29,18 @@ public class GitHubPrDetectorTests {
         CommandRunner fake = (_, _, _, _) => Task.FromResult<string?>(null); // no PR / gh failed
         await Assert.That(await GitHubPrDetector.DetectAsync("/cwd", TimeSpan.FromSeconds(2), fake)).IsNull();
     }
+
+    [Test]
+    public async Task Malformed_json_yields_null() {
+        // gh emitted non-JSON → JsonNode.Parse throws → best-effort catch returns null.
+        CommandRunner fake = (_, _, _, _) => Task.FromResult<string?>("{not json");
+        await Assert.That(await GitHubPrDetector.DetectAsync("/cwd", TimeSpan.FromSeconds(2), fake)).IsNull();
+    }
+
+    [Test]
+    public async Task Non_numeric_number_yields_null() {
+        // A non-integer `number` makes GetValue<int> throw → caught → null (never a bogus PrInfo).
+        CommandRunner fake = (_, _, _, _) => Task.FromResult<string?>("""{"number":"oops","title":"t"}""");
+        await Assert.That(await GitHubPrDetector.DetectAsync("/cwd", TimeSpan.FromSeconds(2), fake)).IsNull();
+    }
 }

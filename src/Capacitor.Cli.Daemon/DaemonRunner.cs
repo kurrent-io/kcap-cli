@@ -26,6 +26,7 @@ public static partial class DaemonRunner {
 
     public static async Task<int> RunAsync(string[] args) {
         string?    logFile     = null;
+        string?    stderrFile  = null;
         LogLevel?  logLevelArg = null;
         var        config      = new DaemonConfig();
 
@@ -47,6 +48,7 @@ public static partial class DaemonRunner {
         for (var i = 0; i < args.Length - 1; i++) {
             switch (args[i]) {
                 case "--log-file": logFile = args[++i]; break;
+                case "--stderr-file": stderrFile = args[++i]; break;
                 case "--log-level": logLevelArg = ParseLogLevel(args[++i]); break;
                 case "--max-agents" when int.TryParse(args[i + 1], out var n) && n >= 1:
                     config.MaxConcurrentAgents = n;
@@ -58,6 +60,15 @@ public static partial class DaemonRunner {
 
                     return 1;
             }
+        }
+
+        // AI-1155: reopen fds 1/2 onto the capture file BEFORE building the host,
+        // so even a crash during construction lands somewhere. On the detached
+        // launch path the CLI closed our std pipes; without this a runtime/native
+        // fatal message would go to a broken pipe and vanish. No-op under launchd
+        // (StandardErrorPath) and foreground (no --stderr-file passed).
+        if (StdErrCapture.ResolveTarget(stderrFile) is { } capturePath) {
+            StdErrCapture.Apply(capturePath);
         }
 
         // Strip our custom args before passing to host builder
@@ -110,6 +121,9 @@ public static partial class DaemonRunner {
 
         if (Environment.GetEnvironmentVariable("KCAP_CODEX_PATH") is { Length: > 0 } envCodexPath)
             config.CodexPath = envCodexPath;
+
+        if (Environment.GetEnvironmentVariable("KCAP_CURSOR_PATH") is { Length: > 0 } envCursorPath)
+            config.CursorPath = envCursorPath;
 
         // Shared name resolution with the CLI supervisor — the CLI's
         // DaemonCommands and the daemon binary must agree on the name so
@@ -190,6 +204,35 @@ public static partial class DaemonRunner {
             sp.GetServices<IHostedAgentLauncher>().ToDictionary(l => l.Vendor)
         );
 
+        // Runtime-selection seam (AI-684 Task 10): one IHostedAgentRuntimeFactory per vendor.
+        // AgentOrchestrator selects by vendor from the resulting dictionary instead of driving
+        // Prepare/BuildArgs/Spawn inline. PtyHostedAgentRuntimeFactory wraps each registered PTY
+        // launcher (Claude, Codex); AcpHostedAgentRuntimeFactory speaks ACP JSON-RPC over stdio for
+        // Cursor (no IHostedAgentLauncher — Cursor never went through the PTY launcher contract).
+        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
+            new PtyHostedAgentRuntimeFactory(
+                sp.GetServices<IHostedAgentLauncher>().SingleOrDefault(l => l.Vendor == "claude")
+                    ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'claude'"),
+                sp.GetRequiredService<IPtyProcessFactory>(),
+                sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>()
+            )
+        );
+        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
+            new PtyHostedAgentRuntimeFactory(
+                sp.GetServices<IHostedAgentLauncher>().SingleOrDefault(l => l.Vendor == "codex")
+                    ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'codex'"),
+                sp.GetRequiredService<IPtyProcessFactory>(),
+                sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>()
+            )
+        );
+        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
+            new AcpHostedAgentRuntimeFactory(sp.GetRequiredService<DaemonConfig>(), sp.GetRequiredService<ILoggerFactory>())
+        );
+
+        builder.Services.AddSingleton<IReadOnlyDictionary<string, IHostedAgentRuntimeFactory>>(sp =>
+            sp.GetServices<IHostedAgentRuntimeFactory>().ToDictionary(f => f.Vendor)
+        );
+
         builder.Services.AddSingleton<AgentOrchestrator>();
         builder.Services.AddSingleton<EvalContextCache>();
         builder.Services.AddSingleton<EvalRunner>();
@@ -227,18 +270,32 @@ public static partial class DaemonRunner {
         // Set by the supervised restart strategy so we exit non-zero for a supervisor relaunch.
         var restartState = host.Services.GetRequiredService<RestartState>();
 
-        // AI-652: probe each registered launcher's CLI binary so the
-        // DaemonConnect payload only advertises vendors this daemon can
-        // actually spawn. The launch dialog filters its vendor selector
-        // by this list. Ordered alphabetically so the wire format is
-        // stable across restarts.
-        config.SupportedVendors = host.Services.GetServices<IHostedAgentLauncher>()
-            .Where(l => l.IsAvailable())
-            .Select(l => l.Vendor)
+        // AI-652 (extended by AI-684 Task 10): probe each registered runtime factory's CLI binary
+        // so the DaemonConnect payload only advertises vendors this daemon can actually spawn —
+        // now via IHostedAgentRuntimeFactory.IsAvailable() rather than IHostedAgentLauncher, so
+        // Cursor (which has no IHostedAgentLauncher) is advertised once cursor-agent is installed.
+        // The launch dialog filters its vendor selector by this list. Ordered alphabetically so the
+        // wire format is stable across restarts.
+        config.SupportedVendors = host.Services.GetServices<IHostedAgentRuntimeFactory>()
+            .Where(f => f.IsAvailable())
+            .Select(f => f.Vendor)
             .OrderBy(v => v, StringComparer.Ordinal)
             .ToArray();
 
         LogDaemonStarting(logger, config.Name, config.ServerUrl);
+
+        // AI-1155: if the previous daemon under this name vanished without
+        // releasing its lock, it was SIGKILLed (macOS jetsam/OOM, `kill -9`),
+        // lost power, or crashed hard — none of which the dying process can
+        // log. Emit a breadcrumb now so the otherwise-silent death is on the
+        // record. This is safe even for a `--await-lock` restart-after-update
+        // handoff: DaemonLock.Dispose now deletes the outgoing daemon's PID
+        // file *before* releasing the flock, so a clean handoff leaves nothing
+        // for us to find — a leftover PID file here is a real hard death (e.g.
+        // the outgoing daemon was OOM-killed mid-handoff) and worth recording.
+        if (daemonLock.PriorExitWasUnclean) {
+            LogPriorUncleanExit(logger, config.Name, daemonLock.PriorHolderPid?.ToString() ?? "unknown");
+        }
 
         var lifetime   = host.Services.GetRequiredService<IHostApplicationLifetime>();
         var connection = host.Services.GetRequiredService<ServerConnection>();
@@ -351,6 +408,9 @@ public static partial class DaemonRunner {
 
     [LoggerMessage(Level = LogLevel.Information, Message = "kcap daemon '{Name}' starting, connecting to {ServerUrl}")]
     static partial void LogDaemonStarting(ILogger logger, string name, string serverUrl);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Previous '{Name}' daemon (PID {Pid}) exited WITHOUT a graceful shutdown — its lock was left for the kernel to release. That is the signature of an uncatchable kill (macOS jetsam/OOM, `kill -9`), a power loss, or a hard native crash; an in-process signal handler cannot record it. If this recurs, run the daemon as a supervised service (`kcap daemon service install`) so it auto-restarts.")]
+    static partial void LogPriorUncleanExit(ILogger logger, string name, string pid);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Lifetime: ApplicationStopping fired")]
     static partial void LogLifetimeStopping(ILogger logger);

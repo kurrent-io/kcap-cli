@@ -3,6 +3,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -95,5 +96,109 @@ public class ClaudeLauncherReviewFlowTests {
     [Test]
     public async Task Claude_launcher_supports_unattended() {
         await Assert.That(NewLauncher().SupportsUnattended).IsTrue();
+    }
+
+    // === AI-1126 D-c: definition MCP allowlist materialization ===
+
+    [Test]
+    public async Task ReviewFlow_with_allowlist_merges_servers_into_mcp_config() {
+        var ctx = NewCtx(isReviewFlow: true) with { McpAllowlist = ["kcap-sessions"] };
+        var args = NewLauncher(serverUrl: "https://t.example", capacitorPath: "/opt/kcap").BuildArgs(ctx).Args;
+
+        await Assert.That(args).Contains("--strict-mcp-config");
+        await Assert.That(args).Contains("--disallowedTools");
+        var dIdx = Array.IndexOf(args, "--disallowedTools");
+        await Assert.That(args[dIdx + 1]).IsEqualTo("Agent");
+
+        var cfgIndex = Array.IndexOf(args, "--mcp-config");
+        var servers  = JsonNode.Parse(args[cfgIndex + 1])!.AsObject()["mcpServers"]!.AsObject();
+
+        await Assert.That(servers.Count).IsEqualTo(2);
+
+        var flowResult = servers["kcap-flow-result"]!.AsObject();
+        await Assert.That(flowResult["env"]!["KCAP_FLOW_AGENT_ID"]!.GetValue<string>()).IsEqualTo("a-1");
+
+        var sessions = servers["kcap-sessions"]!.AsObject();
+        await Assert.That(sessions["command"]!.GetValue<string>()).IsEqualTo("/opt/kcap");
+        await Assert.That(sessions["args"]![0]!.GetValue<string>()).IsEqualTo("mcp");
+        await Assert.That(sessions["args"]![1]!.GetValue<string>()).IsEqualTo("sessions");
+        await Assert.That(sessions["env"]!["KCAP_URL"]!.GetValue<string>()).IsEqualTo("https://t.example");
+        await Assert.That(sessions["env"]!.AsObject().ContainsKey("KCAP_FLOW_AGENT_ID")).IsFalse();
+    }
+
+    [Test]
+    public async Task ReviewFlow_allowlist_strips_flow_starting_server_any_case() {
+        var ctx = NewCtx(isReviewFlow: true) with { McpAllowlist = ["KCAP-Flows", "kcap-sessions"] };
+        var args = NewLauncher(serverUrl: "https://t.example", capacitorPath: "/opt/kcap").BuildArgs(ctx).Args;
+
+        var cfgIndex = Array.IndexOf(args, "--mcp-config");
+        var servers  = JsonNode.Parse(args[cfgIndex + 1])!.AsObject()["mcpServers"]!.AsObject();
+
+        await Assert.That(servers.Count).IsEqualTo(2);
+        await Assert.That(servers.ContainsKey("kcap-flow-result")).IsTrue();
+        await Assert.That(servers.ContainsKey("kcap-sessions")).IsTrue();
+        await Assert.That(servers.ContainsKey("kcap-flows")).IsFalse();
+    }
+
+    [Test]
+    public async Task ReviewFlow_allowlist_skips_unknown_names() {
+        var ctxWithAllowlist = NewCtx(isReviewFlow: true) with { McpAllowlist = ["not-a-server"] };
+        var ctxWithout       = NewCtx(isReviewFlow: true);
+        var launcher         = NewLauncher(serverUrl: "https://t.example", capacitorPath: "/opt/kcap");
+
+        var argsWithAllowlist = launcher.BuildArgs(ctxWithAllowlist).Args;
+        var argsWithout       = launcher.BuildArgs(ctxWithout).Args;
+
+        var cfgIndexWith    = Array.IndexOf(argsWithAllowlist, "--mcp-config");
+        var cfgIndexWithout = Array.IndexOf(argsWithout, "--mcp-config");
+
+        await Assert.That(argsWithAllowlist[cfgIndexWith + 1]).IsEqualTo(argsWithout[cfgIndexWithout + 1]);
+    }
+
+    [Test]
+    public async Task ReviewFlow_without_allowlist_args_byte_identical_to_today() {
+        var args = NewLauncher(serverUrl: "https://t.example", capacitorPath: "/opt/kcap")
+            .BuildArgs(NewCtx(isReviewFlow: true)).Args;
+
+        const string expectedMcpConfig =
+            """{"mcpServers":{"kcap-flow-result":{"command":"/opt/kcap","args":["mcp","flow-result"],"env":{"KCAP_URL":"https://t.example","KCAP_FLOW_AGENT_ID":"a-1"}}}}""";
+
+        string[] expected = [
+            "--permission-mode", "bypassPermissions",
+            "--strict-mcp-config",
+            "--mcp-config", expectedMcpConfig,
+            "--disallowedTools", "Agent",
+            "--model", "sonnet",
+            "--", "review this"
+        ];
+
+        await Assert.That(args).IsEquivalentTo(expected, CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task ReviewFlow_allowlist_with_null_element_skips_it_without_throwing() {
+        // A wire-deserialized allowlist can contain a null element (e.g. a malformed JSON
+        // array entry). It must flow through the existing unknown-name skip path rather
+        // than throw a NullReferenceException out of the launch path.
+        var ctx = NewCtx(isReviewFlow: true) with { McpAllowlist = [null!, "kcap-sessions"] };
+
+        var args = NewLauncher(serverUrl: "https://t.example", capacitorPath: "/opt/kcap").BuildArgs(ctx).Args;
+
+        var cfgIndex = Array.IndexOf(args, "--mcp-config");
+        var servers  = JsonNode.Parse(args[cfgIndex + 1])!.AsObject()["mcpServers"]!.AsObject();
+
+        await Assert.That(servers.Count).IsEqualTo(2);
+        await Assert.That(servers.ContainsKey("kcap-flow-result")).IsTrue();
+        await Assert.That(servers.ContainsKey("kcap-sessions")).IsTrue();
+    }
+
+    [Test]
+    public async Task ReviewFlow_empty_allowlist_args_byte_identical_to_null_allowlist() {
+        var launcher = NewLauncher(serverUrl: "https://t.example", capacitorPath: "/opt/kcap");
+
+        var argsNull  = launcher.BuildArgs(NewCtx(isReviewFlow: true) with { McpAllowlist = null }).Args;
+        var argsEmpty = launcher.BuildArgs(NewCtx(isReviewFlow: true) with { McpAllowlist = [] }).Args;
+
+        await Assert.That(argsEmpty).IsEquivalentTo(argsNull, CollectionOrdering.Matching);
     }
 }

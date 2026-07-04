@@ -47,9 +47,9 @@ var isHook = command == "hook";
 var baseUrl = await AppConfig.ResolveServerUrl(args, gitTimeoutMs: isHook ? 1000 : 5000);
 
 // Fire-and-forget update check (prints hint to stderr after command finishes).
-// Skipped for `uninstall` — the check writes ~/.config/kcap/update-check.json,
-// which would race with uninstall's `rm -rf` of the config dir and recreate it
-// after the command has reported success.
+// Skipped for `uninstall` — the check writes ~/.config/kcap/update-check-{channel}.json
+// (e.g. update-check-latest.json), which would race with uninstall's `rm -rf`
+// of the config dir and recreate it after the command has reported success.
 var   noUpdateCheck   = args.Contains("--no-update-check") || command == "uninstall";
 Task? updateCheckTask = null;
 
@@ -77,6 +77,12 @@ if (baseUrl is null && !offlineCommands.Contains(command)) {
     return 1;
 }
 
+// AI-1168: last-resort guard around the whole command dispatch. Without it, any
+// exception a handler doesn't swallow escapes to the NativeAOT runtime, which
+// aborts the process (SIGABRT + a macOS crash report). For a ~1s hook/generator
+// the agent spawns, that was happening dozens of times a day. Record the
+// exception and exit cleanly instead (fail-open for agent-spawned commands).
+try {
 switch (command) {
     case "--version" or "-v": {
         var version = typeof(Program).Assembly
@@ -702,6 +708,11 @@ switch (command) {
 Console.Error.WriteLine($"Unknown command: {command}");
 
 return 1;
+} catch (Exception topLevelEx) {
+    CrashReporter.Record(command, topLevelEx);
+
+    return CrashReporter.ExitCode(command);
+}
 
 static string? GetArg(string[] arguments, string flag) {
     var idx = Array.IndexOf(arguments, flag);

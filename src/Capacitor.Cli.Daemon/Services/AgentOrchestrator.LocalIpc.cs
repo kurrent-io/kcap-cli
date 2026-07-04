@@ -65,9 +65,10 @@ internal partial class AgentOrchestrator {
                 if (_permissionBridge.BaseUrl is { } bridgeUrl) env["KCAP_DAEMON_URL"] = bridgeUrl;
             }
 
-            var proc = _ptyFactory.Spawn(launcher.CliPath, built.Args, worktree.Path, env, cols, rows);
+            var pty     = _ptyFactory.Spawn(launcher.CliPath, built.Args, worktree.Path, env, cols, rows);
+            var runtime = new PtyHostedAgentRuntime(vendor, pty);
 
-            agent = new AgentInstance(agentId, null, "", null, cwd, vendor, proc, worktree, new CancellationTokenSource()) {
+            agent = new AgentInstance(agentId, null, "", null, cwd, vendor, runtime, worktree, new CancellationTokenSource()) {
                 IsPrivate      = isPrivate,
                 IsLocalSpawned = true,
                 Work           = work,
@@ -155,9 +156,20 @@ internal partial class AgentOrchestrator {
                     var f = await FrameCodec.ReadAsync(stream, loopCts.Token);
                     if (f is null || f.Type == FrameType.Detach) break;
 
-                    switch (f.Type) {
-                        case FrameType.Stdin:  await agent.Process.WriteAsync(f.Bytes); break;
-                        case FrameType.Resize: ApplyResizeClamp(agent, sink, f.Cols, f.Rows); break;
+                    if (f.Type == FrameType.Stdin) {
+                        try {
+                            await agent.Runtime.SendRawInputAsync(f.Bytes);
+                        } catch (NotSupportedException) {
+                            // ACP-backed runtimes (e.g. cursor) have no raw-input surface —
+                            // AcpHostedAgentRuntime.SendRawInputAsync throws by design. Tell the
+                            // client and detach gracefully instead of letting the exception
+                            // escape the read loop and crash the attach handler.
+                            try { await Send(LocalFrame.Error("This agent does not support local attach input")); } catch { /* client already gone */ }
+
+                            break;
+                        }
+                    } else if (f.Type == FrameType.Resize) {
+                        ApplyResizeClamp(agent, sink, f.Cols, f.Rows);
                     }
                 }
             } catch (Exception ex) when (ex is EndOfStreamException or IOException or OperationCanceledException) {
@@ -168,14 +180,14 @@ internal partial class AgentOrchestrator {
                 await detachMonitor.ConfigureAwait(false); // ensure the cancel ran before loopCts disposes
             }
 
-            if (sink.Detached && !agent.Process.HasExited) {
+            if (sink.Detached && !agent.Runtime.HasExited) {
                 // We dropped this client because its output overflowed — tell it so the user
                 // reattaches (a fresh `kcap attach` replays the buffer from a clean frame).
                 try { await Send(LocalFrame.Error("terminal output overflowed — detached; reattach with `kcap attach`")); } catch { /* client already gone */ }
             }
 
-            if (agent.Process.HasExited) {
-                try { await Send(LocalFrame.Exited(agent.Process.ExitCode ?? 0)); } catch { /* client already gone */ }
+            if (agent.Runtime.HasExited) {
+                try { await Send(LocalFrame.Exited(agent.Runtime.ExitCode ?? 0)); } catch { /* client already gone */ }
             }
         } finally {
             lock (agent.SinksLock) {
@@ -225,7 +237,7 @@ internal partial class AgentOrchestrator {
         }
 
         if (c > 0 && r > 0) {
-            agent.Process.Resize(c, r);
+            agent.Runtime.Resize(c, r);
             agent.CurrentCols = c;
             agent.CurrentRows = r;
         }

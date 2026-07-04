@@ -43,4 +43,19 @@ public class GitProviderRouterTests {
     public async Task Null_host_is_unknown() {
         await Assert.That(await GitProviderRouter.ResolveAsync(null, "/c", TimeSpan.FromSeconds(2), Never)).IsEqualTo(GitProviderKind.Unknown);
     }
+
+    [Test]
+    public async Task Malformed_gh_json_falls_back_to_gitlab() {
+        // `gh auth status --json hosts` returned junk → JsonNode.Parse throws → we can't confirm
+        // the host is a GitHub host, so best-effort GitLab (unique host avoids memo collisions).
+        CommandRunner fake = (_, _, _, _) => Task.FromResult<string?>("{not valid json");
+        await Assert.That(await GitProviderRouter.ResolveAsync("malformed-json.example.com", "/c", TimeSpan.FromSeconds(2), fake)).IsEqualTo(GitProviderKind.GitLab);
+    }
+
+    [Test]
+    public async Task Null_probe_result_falls_back_to_gitlab() {
+        // Probe failed / timed out (runner returned null) → best-effort GitLab.
+        CommandRunner fake = (_, _, _, _) => Task.FromResult<string?>(null);
+        await Assert.That(await GitProviderRouter.ResolveAsync("null-probe.example.com", "/c", TimeSpan.FromSeconds(2), fake)).IsEqualTo(GitProviderKind.GitLab);
+    }
 }

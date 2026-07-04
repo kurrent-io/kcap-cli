@@ -3,6 +3,7 @@ using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.Codex;
 
@@ -453,5 +454,100 @@ public class CodexLauncherTests {
     [Test]
     public async Task Codex_launcher_supports_unattended() {
         await Assert.That(NewLauncher().SupportsUnattended).IsTrue();
+    }
+
+    // === AI-1126 D-c: definition MCP allowlist materialization ===
+
+    static CodexLauncher NewFlowResultLauncher() =>
+        new(new DaemonConfig { CodexPath = "codex", CapacitorPath = "/opt/kcap", ServerUrl = "https://t.example" }, NullLogger<CodexLauncher>.Instance);
+
+    static LauncherContext NewFlowCtx(string[]? allowlist) => new LauncherContext(
+        AgentId: "agent-xyz",
+        SourceRepoPath: "/tmp/repo",
+        Worktree: new WorktreeInfo(Path: "/tmp/wt", Branch: "wt-branch", SourceRepo: "/tmp/repo"),
+        Prompt: null,
+        Model: "gpt-5.3-codex",
+        Effort: null,
+        Tools: null,
+        IsReview: false,
+        IsReviewFlow: true,
+        Review: null,
+        ReviewLaunch: null
+    ) { McpAllowlist = allowlist };
+
+    [Test]
+    public async Task ReviewFlow_with_allowlist_merges_servers_into_dotted_overrides() {
+        var args = NewFlowResultLauncher().BuildArgs(NewFlowCtx(["kcap-sessions"])).Args;
+
+        var clearIdx = Array.IndexOf(args, "mcp_servers={}");
+        await Assert.That(clearIdx).IsGreaterThanOrEqualTo(0);
+
+        var dotted = args.Where(a => a.StartsWith("mcp_servers.", StringComparison.Ordinal)).ToArray();
+        await Assert.That(dotted.Any(a => a.StartsWith("mcp_servers.kcap-flow-result.", StringComparison.Ordinal))).IsTrue();
+
+        var sessionsDotted = dotted.Where(a => a.StartsWith("mcp_servers.kcap-sessions.", StringComparison.Ordinal)).ToArray();
+        await Assert.That(sessionsDotted.Length).IsEqualTo(3);
+
+        foreach (var d in sessionsDotted) {
+            await Assert.That(Array.IndexOf(args, d)).IsGreaterThan(clearIdx);
+        }
+
+        var command = sessionsDotted.Single(a => a.Contains(".command="));
+        await Assert.That(command).Contains("/opt/kcap");
+        var argsOverride = sessionsDotted.Single(a => a.Contains(".args="));
+        await Assert.That(argsOverride).Contains("mcp");
+        await Assert.That(argsOverride).Contains("sessions");
+        var env = sessionsDotted.Single(a => a.Contains(".env="));
+        await Assert.That(env).Contains("KCAP_URL");
+        await Assert.That(env).Contains("https://t.example");
+        await Assert.That(env).DoesNotContain("KCAP_FLOW_AGENT_ID");
+    }
+
+    [Test]
+    public async Task ReviewFlow_allowlist_strips_flow_starting_server_any_case() {
+        var args = NewFlowResultLauncher().BuildArgs(NewFlowCtx(["KCAP-Flows", "kcap-sessions"])).Args;
+
+        var dotted = args.Where(a => a.StartsWith("mcp_servers.", StringComparison.Ordinal)).ToArray();
+        await Assert.That(dotted.Any(a => a.StartsWith("mcp_servers.kcap-flows.", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(dotted.Any(a => a.StartsWith("mcp_servers.kcap-sessions.", StringComparison.Ordinal))).IsTrue();
+    }
+
+    [Test]
+    public async Task ReviewFlow_allowlist_skips_unknown_names() {
+        var launcher = NewFlowResultLauncher();
+
+        var argsWith    = launcher.BuildArgs(NewFlowCtx(["not-a-server"])).Args;
+        var argsWithout = launcher.BuildArgs(NewFlowCtx(null)).Args;
+
+        await Assert.That(argsWith).IsEquivalentTo(argsWithout, CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task ReviewFlow_without_allowlist_args_byte_identical_to_today() {
+        var args = NewFlowResultLauncher().BuildArgs(NewFlowCtx(null)).Args;
+
+        string[] expected = [
+            "--cd", "/tmp/wt",
+            "--sandbox", "workspace-write",
+            "--ask-for-approval", "never",
+            "-c", "mcp_servers={}",
+            "-c", "mcp_servers.kcap-flow-result.command=\"/opt/kcap\"",
+            "-c", "mcp_servers.kcap-flow-result.args=[\"mcp\",\"flow-result\"]",
+            "-c", "mcp_servers.kcap-flow-result.env={KCAP_URL=\"https://t.example\",KCAP_FLOW_AGENT_ID=\"agent-xyz\"}",
+            "-m", "gpt-5.3-codex",
+            "--no-alt-screen"
+        ];
+
+        await Assert.That(args).IsEquivalentTo(expected, CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task ReviewFlow_empty_allowlist_args_byte_identical_to_null_allowlist() {
+        var launcher = NewFlowResultLauncher();
+
+        var argsNull  = launcher.BuildArgs(NewFlowCtx(null)).Args;
+        var argsEmpty = launcher.BuildArgs(NewFlowCtx([])).Args;
+
+        await Assert.That(argsEmpty).IsEquivalentTo(argsNull, CollectionOrdering.Matching);
     }
 }

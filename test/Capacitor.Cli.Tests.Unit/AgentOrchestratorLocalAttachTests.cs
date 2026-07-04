@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Capacitor.Cli.Core;
@@ -78,7 +79,7 @@ public partial class AgentOrchestratorVendorTests {
             // the Work=BorrowedCwd guard must prevent that.
             var agent = new AgentInstance(
                 "local-1", null, "", null, repoPath, "claude",
-                new StubPtyProcess(), new WorktreeInfo(repoPath, "", repoPath, IsStandalone: true), new CancellationTokenSource()
+                new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo(repoPath, "", repoPath, IsStandalone: true), new CancellationTokenSource()
             ) {
                 IsPrivate = true,
                 Work      = WorkLocation.BorrowedCwd
@@ -104,7 +105,7 @@ public partial class AgentOrchestratorVendorTests {
 
             var agent = new AgentInstance(
                 "owned-1", null, "", null, dir.FullName, "claude",
-                new StubPtyProcess(), new WorktreeInfo(dir.FullName, "", dir.FullName, IsStandalone: true), new CancellationTokenSource()
+                new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo(dir.FullName, "", dir.FullName, IsStandalone: true), new CancellationTokenSource()
             ) {
                 Work = WorkLocation.OwnedWorktree
             };
@@ -158,7 +159,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var pub = new AgentInstance("pub-1", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false };
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false };
         await orch.RegisterAgentForTestAsync(pub);
         await Assert.That(server.Calls).Contains(nameof(ServerConnection.AgentRegisteredAsync));
 
@@ -172,7 +173,7 @@ public partial class AgentOrchestratorVendorTests {
         var privServer = new TripwireServerConnection();
         await using var privOrch = BuildOrchestrator(privServer, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         var priv = new AgentInstance("priv-1", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true };
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true };
         await privOrch.RegisterAgentForTestAsync(priv);
         await Assert.That(privServer.Calls.Count).IsEqualTo(0);
     }
@@ -214,7 +215,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.RegisterAgentForTest(new AgentInstance("reg-1", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
             IsPrivate = false, Status = "Running", CurrentCols = 73, CurrentRows = 19
         });
 
@@ -229,7 +230,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-2", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
             IsPrivate = false, Status = "Running", CurrentCols = 80, CurrentRows = 24
         };
         orch.RegisterAgentForTest(agent);
@@ -248,7 +249,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-3", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
             IsPrivate = false, Status = "Running", CurrentCols = 80, CurrentRows = 24
         };
         // A local client reports 80×24; the web viewer wants 120×40.
@@ -269,7 +270,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-4", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
             IsPrivate = false, Status = "Running", CurrentCols = 200, CurrentRows = 50
         };
         agent.ClientDims[new FakeTerminalSink()] = new AgentInstance.Dim(200, 50);
@@ -288,7 +289,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-5", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
             IsPrivate = false, Status = "Running", CurrentCols = 150, CurrentRows = 40
         };
         agent.ClientDims[new FakeTerminalSink()] = new AgentInstance.Dim(150, 40);
@@ -312,7 +313,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("reg-6", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
             IsPrivate = false, Status = "Running", CurrentCols = 120, CurrentRows = 40
         };
         agent.ClientDims[new FakeTerminalSink()] = new AgentInstance.Dim(120, 40);
@@ -333,7 +334,7 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var agent = new AgentInstance("priv-2", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
             IsPrivate = true, Status = "Running", CurrentCols = 80, CurrentRows = 24
         };
         orch.RegisterAgentForTest(agent);
@@ -389,14 +390,83 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         orch.RegisterAgentForTest(new AgentInstance("pub-1", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false, Status = "Running" });
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = false, Status = "Running" });
         orch.RegisterAgentForTest(new AgentInstance("priv-1", null, "", null, "/r", "claude",
-            new StubPtyProcess(), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true, Status = "Running" });
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) { IsPrivate = true, Status = "Running" });
 
         var ids = server.GetLiveAgentIds!();
 
         await Assert.That(ids).Contains("pub-1");
         await Assert.That(ids).DoesNotContain("priv-1");
+    }
+
+    [Test]
+    public async Task Attach_to_an_ACP_runtime_gets_an_error_frame_and_detaches_instead_of_crashing() {
+        var server = new CaptureServerConnection();
+        await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        // A cursor/ACP-backed agent: SendRawInputAsync throws NotSupportedException, exactly like
+        // the real AcpHostedAgentRuntime (local attach is a PTY-only surface).
+        var runtime = new NoRawInputRuntime("cursor");
+        var agent = new AgentInstance(
+            "acp-1", null, "", null, "/r", "cursor",
+            runtime, new WorktreeInfo("/r", "", "/r", IsStandalone: true), new CancellationTokenSource()
+        );
+        orch.RegisterAgentForTest(agent);
+
+        // Client sends one Stdin frame, then nothing (stream ends) — mirrors `kcap attach`
+        // forwarding a keystroke to a runtime that can't accept raw input.
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Stdin("x"u8.ToArray()), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+        // Must complete (not throw) within a bounded time — the bug this guards against was an
+        // unhandled NotSupportedException escaping the read loop and crashing the attach handler.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await orch.HandleLocalAttachAsync("acp-1", client, cts.Token);
+
+        // Replay the frames the client received off the write side of the duplex stream.
+        client.WrittenStream.Position = 0;
+        var frames = new List<LocalFrame>();
+        while (await FrameCodec.ReadAsync(client.WrittenStream, default) is { } f) frames.Add(f);
+
+        await Assert.That(frames.Any(f => f.Type == FrameType.Attached)).IsTrue();
+        var error = frames.SingleOrDefault(f => f.Type == FrameType.Error);
+        await Assert.That(error).IsNotNull();
+        await Assert.That(error!.Text).Contains("does not support local attach input");
+
+        // The agent itself is untouched — attach failure detaches the client, it doesn't stop
+        // or crash the underlying runtime.
+        await Assert.That(runtime.Disposed).IsFalse();
+    }
+
+    /// <summary>Minimal <see cref="IHostedAgentRuntime"/> double mirroring AcpHostedAgentRuntime's
+    /// contract: no raw-input surface (throws NotSupportedException), never emits terminal output.</summary>
+    sealed class NoRawInputRuntime(string vendor) : IHostedAgentRuntime {
+        public bool Disposed { get; private set; }
+
+        public string Vendor              => vendor;
+        public int    Pid                 => 4242;
+        public bool   HasExited           => false;
+        public int?   ExitCode            => null;
+        public bool   EmitsTerminalOutput => false;
+
+#pragma warning disable CS1998
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
+            yield break;
+        }
+#pragma warning restore CS1998
+
+        public Task SendUserInputAsync(string text)   => Task.CompletedTask;
+        public Task SendSpecialKeyAsync(string key)   => Task.CompletedTask;
+        public Task SendRawInputAsync(byte[]   data)  => throw new NotSupportedException("Local-attach raw input is a PTY-only surface; the ACP runtime has no equivalent channel.");
+        public void Resize(ushort               cols, ushort rows) { }
+        public Task RequestGracefulStopAsync()        => Task.CompletedTask;
+        public Task WaitForExitAsync(TimeSpan?  timeout = null) => Task.CompletedTask;
+        public Task TerminateAsync(TimeSpan?    timeout = null) => Task.CompletedTask;
+
+        public ValueTask DisposeAsync() { Disposed = true; return default; }
     }
 
     [Test]
@@ -414,7 +484,7 @@ public partial class AgentOrchestratorVendorTests {
             orch = BuildOrchestrator(new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
             orch.RegisterAgentForTest(new AgentInstance(
                 "agent-xyz", null, "", null, "/tmp/repo", "claude",
-                new StubPtyProcess(), new WorktreeInfo("/tmp/repo", "", "/tmp/repo"), new CancellationTokenSource()
+                new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/tmp/repo", "", "/tmp/repo"), new CancellationTokenSource()
             ) {
                 IsPrivate = true, Work = WorkLocation.BorrowedCwd, Status = "Running"
             });
@@ -462,6 +532,9 @@ public partial class AgentOrchestratorVendorTests {
     /// while the daemon's frames are captured/discarded independently (a MemoryStream can't
     /// do both at once — it has a single position).
     sealed class DuplexTestStream(Stream readSide, Stream writeSide) : Stream {
+        /// <summary>The daemon's write side, for tests that need to inspect frames it sent.</summary>
+        public Stream WrittenStream => writeSide;
+
         public override int Read(byte[] b, int o, int c) => readSide.Read(b, o, c);
         public override ValueTask<int> ReadAsync(Memory<byte> b, CancellationToken ct = default) => readSide.ReadAsync(b, ct);
         public override void Write(byte[] b, int o, int c) => writeSide.Write(b, o, c);

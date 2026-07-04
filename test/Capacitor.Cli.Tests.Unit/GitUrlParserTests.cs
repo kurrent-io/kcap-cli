@@ -16,6 +16,9 @@ public class GitUrlParserTests {
     [Arguments("https://github.com/kurrent-io/kcap-server.git", "kurrent-io", "kcap-server")]
     [Arguments("https://github.com/owner/a.b.c", "owner", "a.b.c")]
     [Arguments("https://github.com/owner/a.b.c.git", "owner", "a.b.c")]
+    [Arguments("https://gitlab.com/group/subgroup/project", "group/subgroup", "project")]
+    [Arguments("https://gitlab.com/group/subgroup/project.git", "group/subgroup", "project")]
+    [Arguments("https://gitlab.com/a/b/c/deep-project.git", "a/b/c", "deep-project")]
     public async Task ParseRemoteUrl_HttpsUrls_ReturnsOwnerAndRepo(string url, string expectedOwner, string expectedRepo) {
         var (owner, repoName) = GitUrlParser.ParseRemoteUrl(url);
 
@@ -35,6 +38,8 @@ public class GitUrlParserTests {
     [Arguments("git@github.com:kurrent-io/kcap-server.git", "kurrent-io", "kcap-server")]
     [Arguments("git@github.com:owner/a.b.c", "owner", "a.b.c")]
     [Arguments("git@github.com:owner/a.b.c.git", "owner", "a.b.c")]
+    [Arguments("git@gitlab.com:group/subgroup/project.git", "group/subgroup", "project")]
+    [Arguments("git@gitlab.com:a/b/c/deep-project", "a/b/c", "deep-project")]
     public async Task ParseRemoteUrl_SshUrls_ReturnsOwnerAndRepo(string url, string expectedOwner, string expectedRepo) {
         var (owner, repoName) = GitUrlParser.ParseRemoteUrl(url);
 
@@ -53,11 +58,11 @@ public class GitUrlParserTests {
     }
 
     [Test]
-    public async Task ParseRemoteUrl_SshProtoUrl_NestedGroup_ReturnsBothNull() {
+    public async Task ParseRemoteUrl_SshProtoUrl_NestedGroup_ReturnsMultiSegmentOwner() {
         var (owner, repoName) = GitUrlParser.ParseRemoteUrl("ssh://git@gitlab.com/group/sub/project.git");
 
-        await Assert.That(owner).IsNull();
-        await Assert.That(repoName).IsNull();
+        await Assert.That(owner).IsEqualTo("group/sub");
+        await Assert.That(repoName).IsEqualTo("project");
     }
 
     [Test]

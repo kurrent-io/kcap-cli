@@ -169,4 +169,101 @@ public class ConfigMigrationTests {
         var config = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.Profile)!;
         await Assert.That(config.DisableSessionGuidelines).IsNull();
     }
+
+    // --- update_check migration-default quirk (AI-1168 / #268) ---
+    //
+    // STJ source-gen does not apply a record member-initializer default (`= true`)
+    // for a JSON property absent from the payload, so deserializing a v1 config
+    // through ConfigJsonContext.Default.LegacyV1Config yields UpdateCheck == false
+    // when "update_check" is missing — even though the v1 default was true. The
+    // migration must read the raw JSON node to tell "absent" apart from "explicitly
+    // false" and preserve the true v1 default.
+
+    [Test]
+    public async Task Migrate_V1MissingUpdateCheck_DefaultsToTrue() {
+        var v1Json = """
+            {
+                "server_url": "https://my-server.com"
+            }
+            """;
+
+        var result = ConfigMigration.MigrateIfNeeded(v1Json);
+
+        await Assert.That(result.WasMigrated).IsTrue();
+        await Assert.That(result.Config.Profiles["default"].UpdateCheck).IsTrue();
+    }
+
+    [Test]
+    public async Task Migrate_V1UpdateCheckFalse_StaysFalse() {
+        var v1Json = """
+            {
+                "server_url": "https://my-server.com",
+                "update_check": false
+            }
+            """;
+
+        var result = ConfigMigration.MigrateIfNeeded(v1Json);
+
+        await Assert.That(result.WasMigrated).IsTrue();
+        await Assert.That(result.Config.Profiles["default"].UpdateCheck).IsFalse();
+    }
+
+    [Test]
+    public async Task Migrate_V1UpdateCheckTrue_StaysTrue() {
+        var v1Json = """
+            {
+                "server_url": "https://my-server.com",
+                "update_check": true
+            }
+            """;
+
+        var result = ConfigMigration.MigrateIfNeeded(v1Json);
+
+        await Assert.That(result.WasMigrated).IsTrue();
+        await Assert.That(result.Config.Profiles["default"].UpdateCheck).IsTrue();
+    }
+
+    [Test]
+    public async Task Migrate_V1OtherFields_MapOntoDefaultProfile() {
+        var v1Json = """
+            {
+                "server_url": "https://my-server.com",
+                "default_visibility": "private",
+                "excluded_repos": ["owner/secret", "owner/other"]
+            }
+            """;
+
+        var result = ConfigMigration.MigrateIfNeeded(v1Json);
+
+        await Assert.That(result.WasMigrated).IsTrue();
+
+        var defaultProfile = result.Config.Profiles["default"];
+        await Assert.That(defaultProfile.ServerUrl).IsEqualTo("https://my-server.com");
+        await Assert.That(defaultProfile.DefaultVisibility).IsEqualTo("private");
+        await Assert.That(defaultProfile.ExcludedRepos).Contains("owner/secret");
+        await Assert.That(defaultProfile.ExcludedRepos).Contains("owner/other");
+        // The migration-default quirk fix: update_check absent from v1 JSON -> true.
+        await Assert.That(defaultProfile.UpdateCheck).IsTrue();
+    }
+
+    [Test]
+    public async Task Migrate_V2Config_IsPassthroughAndUnaffectedByUpdateCheckFix() {
+        var v2Json = """
+            {
+                "version": 2,
+                "active_profile": "default",
+                "profiles": {
+                    "default": { "server_url": "https://example.com", "update_check": false }
+                },
+                "profile_bindings": {}
+            }
+            """;
+
+        var result = ConfigMigration.MigrateIfNeeded(v2Json);
+
+        await Assert.That(result.WasMigrated).IsFalse();
+        await Assert.That(result.ShouldPersist).IsFalse();
+        // The v1-only migration-default fix must not leak into the v2 passthrough path.
+        await Assert.That(result.Config.Profiles["default"].UpdateCheck).IsFalse();
+    }
 }

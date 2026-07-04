@@ -10,7 +10,16 @@ internal static class UnattendedLaunchPolicy {
     /// <summary>User-facing rejection message when an unattended launch can't proceed;
     /// <c>null</c> when the launch may continue.</summary>
     public static string? RejectionReason(IHostedAgentLauncher launcher, bool isReviewFlow) =>
-        isReviewFlow && !launcher.SupportsUnattended
-            ? $"Vendor '{launcher.Vendor}' cannot host an unattended review-flow agent (its launcher has no unattended mode)."
+        RejectionReason(launcher.Vendor, launcher.SupportsUnattended, isReviewFlow);
+
+    /// <summary>
+    /// Vendor-agnostic overload (AI-684 Task 10): the orchestrator now selects by
+    /// <see cref="IHostedAgentRuntimeFactory"/> rather than <see cref="IHostedAgentLauncher"/>, so
+    /// this takes the vendor token and its <c>SupportsUnattended</c> flag directly instead of a
+    /// launcher instance.
+    /// </summary>
+    public static string? RejectionReason(string vendor, bool supportsUnattended, bool isReviewFlow) =>
+        isReviewFlow && !supportsUnattended
+            ? $"Vendor '{vendor}' cannot host an unattended review-flow agent (its launcher has no unattended mode)."
             : null;
 }

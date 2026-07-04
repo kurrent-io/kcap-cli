@@ -646,13 +646,17 @@ static partial class GitUrlParser {
             : (null, null);
     }
 
-    [GeneratedRegex(@"https?://[^/]+/(?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$")]
+    // owner is greedy (`.+`) so a nested GitLab namespace (group/subgroup/...) is
+    // captured whole, with repo as the final path segment. AI-1121 / §6b.
+    [GeneratedRegex(@"https?://[^/]+/(?<owner>.+)/(?<repo>[^/]+?)(?:\.git)?$")]
     internal static partial Regex HttpsRegex();
 
-    [GeneratedRegex(@"git@[\w.-]+:(?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$")]
+    // Anchored: a greedy multi-segment owner would otherwise let this match the
+    // "git@host:port" inside an ssh:// URL and steal it from SshProtoRegex.
+    [GeneratedRegex(@"^git@[\w.-]+:(?<owner>.+)/(?<repo>[^/]+?)(?:\.git)?$")]
     internal static partial Regex SshRegex();
 
-    [GeneratedRegex(@"ssh://(?:[^@/]+@)?[^/]+/(?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$")]
+    [GeneratedRegex(@"ssh://(?:[^@/]+@)?[^/]+/(?<owner>.+)/(?<repo>[^/]+?)(?:\.git)?$")]
     internal static partial Regex SshProtoRegex();
 }
 
@@ -762,6 +766,17 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Auth.ProvisionResponse))]
 [JsonSerializable(typeof(Auth.AvailabilityResponse))]
 [JsonSerializable(typeof(Auth.StatusResponse))]
+[JsonSerializable(typeof(Acp.AcpRequest))]
+[JsonSerializable(typeof(Acp.AcpResponse))]
+[JsonSerializable(typeof(Acp.AcpNotification))]
+[JsonSerializable(typeof(Acp.AcpError))]
+[JsonSerializable(typeof(Acp.InitializeParams))]
+[JsonSerializable(typeof(Acp.ClientCapabilities))]
+[JsonSerializable(typeof(Acp.FsCapabilities))]
+[JsonSerializable(typeof(Acp.SessionNewParams))]
+[JsonSerializable(typeof(Acp.SessionPromptParams))]
+[JsonSerializable(typeof(Acp.PromptContentBlock))]
+[JsonSerializable(typeof(Acp.SessionCancelParams))]
 // UseStringEnumConverter=true matches the server's SignalR JSON protocol, which
 // serialises enums (e.g. LaunchKind) as camelCase strings. Without it the
 // source-gen LaunchKind JsonTypeInfo defaults to numeric and silently drops the
@@ -830,7 +845,12 @@ public readonly record struct LaunchAgentCommand(
         // a mismatch (e.g. a different machine, where the path doesn't resolve) skips the sync.
         // Appended last as an optional field so the SignalR positional binding stays wire-compatible
         // with older daemons/servers.
-        string?           SyncFromRepoRoot = null
+        string?           SyncFromRepoRoot = null,
+        // AI-1126 D-c: for a review-flow launch, the flow definition's MCP allowlist — server-owned
+        // names the daemon resolves against the kcap-owned KcapMcpRegistry and materializes into the
+        // launcher's MCP config (flow-starting servers are stripped regardless of listing). Appended
+        // last, same wire-compat rule as SyncFromRepoRoot above.
+        string[]?         McpAllowlist = null
     );
 
 /// <summary>

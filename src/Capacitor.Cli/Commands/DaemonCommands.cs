@@ -121,21 +121,22 @@ public static class DaemonCommands {
             return 1;
         }
 
-        WritePidFile(name, process);
+        // The daemon owns its PID file end to end (AI-1155): it writes it inside
+        // the flock during startup (DaemonLock.TryAcquire) and deletes it under
+        // the flock in Dispose. The supervisor neither writes nor deletes it.
+        //
+        // We deliberately do NOT delete the PID file when the child exits here. On
+        // a clean exit the daemon already removed it via Dispose, so there's
+        // nothing to clean up; on a hard death (SIGKILL / native abort — Dispose
+        // never runs) the leftover PID file IS the unclean-exit breadcrumb the
+        // next start reads, so deleting it here would erase exactly what this
+        // change exists to preserve. A stale PID from a hard death is harmless:
+        // the kernel released the flock, the next TryAcquire overwrites it (after
+        // logging the breadcrumb), and status/doctor already treat a
+        // dead-PID/foreign-token file as stale.
+        await process.WaitForExitAsync();
 
-        try {
-            await process.WaitForExitAsync();
-
-            return process.ExitCode;
-        } finally {
-            try {
-                if (ReadPidFile(name) is { } current && current.Pid == process.Id) {
-                    File.Delete(DaemonLockPaths.PidPath(name));
-                }
-            } catch {
-                /* best-effort */
-            }
-        }
+        return process.ExitCode;
     }
 
     static int StartDetached(string[] args) {
@@ -190,6 +191,14 @@ public static class DaemonCommands {
         psi.ArgumentList.Add("--log-file");
         psi.ArgumentList.Add(LogPath);
 
+        // AI-1155: we close the daemon's std pipes just below (anti-hang), which
+        // means a runtime/native fatal message written straight to fd 2 would be
+        // lost — the reason hard daemon deaths currently leave no trace. Point the
+        // daemon's fds at a sibling capture file so those messages survive. Same
+        // ".out.log" convention as the launchd unit's StandardErrorPath.
+        psi.ArgumentList.Add("--stderr-file");
+        psi.ArgumentList.Add(Path.ChangeExtension(LogPath, null) + ".out.log");
+
         foreach (var arg in args.Where(a => a is not "-d" and not "--detach")) {
             psi.ArgumentList.Add(arg);
         }
@@ -229,7 +238,11 @@ public static class DaemonCommands {
             return process.ExitCode == 0 ? 1 : process.ExitCode;
         }
 
-        WritePidFile(name, process);
+        // No supervisor PID-file write here (AI-1155): the daemon wrote its own
+        // inside the flock during startup — which the readiness wait above just
+        // confirmed it survived — and owns its deletion. A redundant out-of-flock
+        // write could recreate the file after a clean daemon exit and trip the
+        // successor's unclean-exit breadcrumb falsely.
 
         Console.Out.WriteLine($"Daemon '{name}' started (PID {process.Id})");
         Console.Out.WriteLine($"  Log:       {LogPath}");
@@ -305,38 +318,94 @@ public static class DaemonCommands {
         }
 
         if (ReadPidFile(name) is not { } entry) {
-            Console.Error.WriteLine($"No daemon '{name}' running (no PID file found).");
+            // ReadPidFile returns null for BOTH an absent file and a present-but-
+            // unparseable one (empty/partial — e.g. a mid-write SIGKILL; it no
+            // longer unlinks the latter, AI-1155).
+            if (!File.Exists(DaemonLockPaths.PidPath(name))) {
+                Console.Error.WriteLine($"No daemon '{name}' running (no PID file found).");
+
+                return 1;
+            }
+
+            // Present-but-unusable: a leftover hard-death breadcrumb. `stop` is an
+            // explicit cleanup path so it may remove it — but only under the flock,
+            // so we can't race a concurrent `daemon start` that just wrote a valid
+            // PID and delete a LIVE daemon's file.
+            if (TryCleanupMarkersUnderLock(name)) {
+                Console.Out.WriteLine($"Daemon '{name}' was not running (removed unusable PID file).");
+
+                return 0;
+            }
+
+            Console.Error.WriteLine(
+                $"Daemon '{name}' appears to be running (its lock is held) but its PID file is unreadable; "
+              + $"not removing it. Retry, or run `kcap daemon doctor`.");
 
             return 1;
         }
 
         try {
             if (!IsOurDaemon(entry.Pid, entry.StartToken)) {
-                Console.Out.WriteLine($"Daemon '{name}' was not running (stale PID file).");
-                File.Delete(DaemonLockPaths.PidPath(name));
-                DaemonVersionMarker.Delete(name);
+                // A dead/foreign PID. Clean up under the flock so we don't unlink a
+                // PID a concurrent start wrote after our read (TOCTOU).
+                if (TryCleanupMarkersUnderLock(name))
+                    Console.Out.WriteLine($"Daemon '{name}' was not running (stale PID file).");
+                else
+                    Console.Out.WriteLine($"Daemon '{name}' is running (started concurrently); leaving it.");
 
                 return 0;
             }
 
             var process = Process.GetProcessById(entry.Pid);
             process.Kill(entireProcessTree: true);
+            // Wait for it to actually exit so the kernel releases its flock before
+            // we try to reclaim it for cleanup below.
+            try { process.WaitForExit(5000); } catch { /* best-effort */ }
             Console.Out.WriteLine($"Daemon '{name}' stopped (PID {entry.Pid}).");
         } catch (ArgumentException) {
             Console.Out.WriteLine($"Daemon '{name}' was not running.");
         }
 
-        // Clean up the daemon's on-disk markers. The kill above is a SIGKILL, so
-        // the daemon's own Dispose cleanup never runs — the CLI must remove the
-        // PID file and the version marker itself (they were written together at
-        // startup and track the same "live under this name" fact).
-        try { File.Delete(DaemonLockPaths.PidPath(name)); } catch {
-            /* best-effort */
-        }
-
-        DaemonVersionMarker.Delete(name);
+        // Clean up the killed daemon's markers. The kill was a SIGKILL, so the
+        // daemon's own Dispose never ran. Do it under the flock: if a `daemon
+        // start` raced in after the kill and took the lock, the fresh PID belongs
+        // to the NEW daemon and TryCleanupMarkersUnderLock (correctly) won't touch
+        // it.
+        TryCleanupMarkersUnderLock(name);
 
         return 0;
+    }
+
+    /// <summary>
+    /// Remove the daemon-owned on-disk markers (PID file + version marker) for
+    /// <paramref name="name"/>, but ONLY while holding the exclusive daemon flock.
+    /// Holding it proves no daemon is live under this name and blocks any
+    /// concurrent <c>daemon start</c> until we release — its
+    /// <c>DaemonLock.TryAcquire</c> waits on this same flock, then writes a fresh
+    /// PID afterward. Every daemon (supervisor-started, foreground, or
+    /// self-respawned) takes this flock before writing its PID, so this is the
+    /// race-free way for the CLI to clean up markers without unlinking a live
+    /// daemon's PID file (AI-1155). The lock file itself is never deleted
+    /// (AI-630); <c>doctor --clean</c> owns that. Returns false if a live daemon
+    /// holds the flock (caller should treat the name as running).
+    /// </summary>
+    static bool TryCleanupMarkersUnderLock(string name) {
+        FileStream held;
+
+        try {
+            held = new FileStream(
+                DaemonLockPaths.LockPath(name), FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
+        } catch (IOException) {
+            return false; // a live daemon owns the name
+        }
+
+        using (held) {
+            try { File.Delete(DaemonLockPaths.PidPath(name)); } catch { /* best-effort */ }
+            try { File.Delete(DaemonLockPaths.RestartPendingPath(name)); } catch { /* best-effort */ }
+            DaemonVersionMarker.Delete(name);
+        }
+
+        return true;
     }
 
     // ── restart ───────────────────────────────────────────────────────────────
@@ -452,13 +521,14 @@ public static class DaemonCommands {
                 if (DaemonRestartMarker.TryRead(name) is { } marker)
                     await Console.Out.WriteLineAsync($"  {marker.Describe()}");
             } else {
+                // AI-1155: report the stale PID file but do NOT delete it. Its
+                // presence is now the durable hard-death signal the next daemon
+                // reads to log the unclean-exit breadcrumb (DaemonLock); a passive
+                // `status` read that removed it would give that breadcrumb a false
+                // negative (run status after a SIGKILL, lose the trace). Cleanup of
+                // stale entries stays with the explicit paths — `daemon stop` and
+                // `daemon doctor --clean`.
                 await Console.Out.WriteLineAsync($"Daemon '{name}': not running (stale PID file)");
-
-                try { File.Delete(DaemonLockPaths.PidPath(name)); } catch {
-                    /* best-effort */
-                }
-
-                DaemonVersionMarker.Delete(name);
             }
 
             if (manager is not null) {
@@ -558,29 +628,29 @@ public static class DaemonCommands {
                     await Console.Out.WriteLineAsync($"  {name,-20}  STALE    instance=(none)   ({leftovers})");
 
                     if (clean) {
-                        try { File.Delete(pidPath); } catch {
-                            /* best-effort */
-                        }
-
-                        try { File.Delete(DaemonLockPaths.RestartPendingPath(name)); } catch {
-                            /* best-effort */
-                        }
-
-                        DaemonVersionMarker.Delete(name);
+                        // No lock file now, but a `daemon start` could be creating
+                        // one this instant. Delete the orphan markers under the
+                        // flock (TryCleanupMarkersUnderLock acquires it first), so
+                        // if a start wins the race we skip rather than unlink its
+                        // fresh PID.
+                        TryCleanupMarkersUnderLock(name);
                     }
 
                     break;
                 }
                 default: {
-                    await probe.DisposeAsync();
                     staleCount++;
                     await Console.Out.WriteLineAsync($"  {name,-20}  STALE    instance={instancePrefix}  (no holder)");
 
                     if (clean) {
-                        try { File.Delete(lockPath); } catch {
-                            /* best-effort */
-                        }
-
+                        // Delete the daemon-owned markers WHILE still holding the
+                        // probe's flock (AI-1155): a concurrent `daemon start` must
+                        // take this same flock, so it can't slip a live daemon in
+                        // and have us unlink its fresh PID. Do NOT delete the lock
+                        // file — unlinking it (even while holding it) lets a later
+                        // start create a new lock inode and acquire a SECOND
+                        // independent flock at the same path (AI-630). Leave it;
+                        // it's inert and the next start reuses it.
                         try { File.Delete(pidPath); } catch {
                             /* best-effort */
                         }
@@ -591,6 +661,8 @@ public static class DaemonCommands {
 
                         DaemonVersionMarker.Delete(name);
                     }
+
+                    await probe.DisposeAsync();
 
                     break;
                 }
@@ -612,22 +684,6 @@ public static class DaemonCommands {
 
     record struct PidEntry(int Pid, string? StartToken);
 
-    static void WritePidFile(string daemonName, Process process) {
-        var pidPath = DaemonLockPaths.PidPath(daemonName);
-        DaemonLockPaths.EnsureDirectory();
-
-        // Second line is a cross-process-stable start token (AI-839). The daemon
-        // writes the same thing for the same PID, so this redundant supervisor
-        // write agrees with it byte-for-byte instead of racing on a different
-        // value. Null token falls back to PID-only and a ProcessName check.
-        var token   = ProcessStartToken.ForPid(process.Id);
-        var content = token is not null
-            ? $"{process.Id}\n{token}"
-            : process.Id.ToString();
-
-        File.WriteAllText(pidPath, content);
-    }
-
     static PidEntry? ReadPidFile(string daemonName) {
         var pidPath = DaemonLockPaths.PidPath(daemonName);
 
@@ -637,9 +693,15 @@ public static class DaemonCommands {
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         if (lines.Length == 0 || !int.TryParse(lines[0], out var pid)) {
-            Console.Error.WriteLine($"Invalid PID file: {pidPath}");
-            File.Delete(pidPath);
-
+            // AI-1155: report "no usable PID" but do NOT delete the file. The
+            // daemon writes it with File.WriteAllText (truncate+write) under the
+            // flock, so a SIGKILL/native abort mid-write can leave a present but
+            // empty/partial/unparseable file — which is itself a hard-death
+            // breadcrumb that DaemonLock.InspectPriorHolder reports as
+            // (unclean, null). Since callers here (status, the pre-spawn guards)
+            // read this before the successor daemon runs, unlinking a corrupt
+            // file would erase that breadcrumb. Cleanup of corrupt/stale files is
+            // left to the explicit paths (`daemon stop`, `daemon doctor --clean`).
             return null;
         }
 

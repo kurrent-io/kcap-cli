@@ -4,6 +4,17 @@
 **Status:** Draft for review
 **Linear:** (to be filed — GitHub issue too, per repo policy)
 
+> **Update 2026-07-03 (AI-1121 / #231):** The nested-group fast-follow (§3, §6b,
+> Open decision #2) has **landed**. GitLab nested groups
+> (`group/subgroup/project`) are now supported end-to-end: `GitUrlParser` and
+> `PrRefParser` parse a multi-segment owner (owner = all segments before the last;
+> project = last segment), and the server URL-**decodes** the owner/repo route
+> values before hashing. **The §6b `%2F` worry was disproved empirically** (.NET 10
+> Kestrel spike): `%2F` in a named route segment is *accepted* (HTTP 200), is *not*
+> split, and arrives *still-encoded* in the route value, so a single
+> `Uri.UnescapeDataString` recovers the slash — **no route-template change was
+> needed**. `repo_hash` stays host-agnostic (Open decision #1 unchanged).
+
 ## Problem
 
 kcap's session recording tags each session with the pull request it belongs to,

@@ -44,6 +44,13 @@ public class DaemonConfig {
     public string CodexPath  { get; set; } = "codex";
 
     /// <summary>
+    /// Path or bare command for the Cursor CLI's ACP entry point, spawned as
+    /// <c>{CursorPath} acp</c> by <c>AcpHostedAgentRuntimeFactory</c> (AI-684 Task 10). Overridable
+    /// via <c>KCAP_CURSOR_PATH</c>, mirroring <see cref="ClaudePath"/>/<see cref="CodexPath"/>.
+    /// </summary>
+    public string CursorPath { get; set; } = "cursor-agent";
+
+    /// <summary>
     /// Path to the kcap CLI binary. Used by the daemon to spawn auxiliary
     /// processes (e.g. <c>generate-whats-done</c>) when claude didn't fire its
     /// own session-end hook. Defaults to "kcap" — resolved via PATH, which

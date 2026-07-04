@@ -31,12 +31,33 @@ internal sealed class DaemonLock : IDisposable {
 
     public string InstanceId { get; }
 
-    DaemonLock(FileStream stream, string lockPath, string pidPath, string versionPath, string instanceId) {
-        _stream      = stream;
-        _lockPath    = lockPath;
-        _pidPath     = pidPath;
-        _versionPath = versionPath;
-        InstanceId   = instanceId;
+    /// <summary>
+    /// True when a PID file for this name was still on disk at the moment we
+    /// acquired the exclusive flock (AI-1155). A graceful shutdown deletes the
+    /// PID file in <see cref="Dispose"/>, so a leftover one means the previous
+    /// holder exited WITHOUT running its cleanup — the signature of an
+    /// uncatchable termination (external <c>SIGKILL</c> from macOS jetsam/OOM
+    /// or <c>kill -9</c>, a power loss, or a hard native crash), none of which
+    /// a signal handler inside the dying process can log. The successor logs a
+    /// startup breadcrumb so the otherwise-silent death leaves a trace.
+    /// </summary>
+    public bool PriorExitWasUnclean { get; }
+
+    /// <summary>
+    /// The PID recorded in the leftover PID file, when <see cref="PriorExitWasUnclean"/>
+    /// is true and the file's first line parsed as an integer; otherwise null.
+    /// </summary>
+    public int? PriorHolderPid { get; }
+
+    DaemonLock(FileStream stream, string lockPath, string pidPath, string versionPath, string instanceId,
+               bool priorExitWasUnclean, int? priorHolderPid) {
+        _stream             = stream;
+        _lockPath           = lockPath;
+        _pidPath            = pidPath;
+        _versionPath        = versionPath;
+        InstanceId          = instanceId;
+        PriorExitWasUnclean = priorExitWasUnclean;
+        PriorHolderPid      = priorHolderPid;
     }
 
     /// <summary>
@@ -70,6 +91,13 @@ internal sealed class DaemonLock : IDisposable {
 
         var instanceId = Guid.NewGuid().ToString("N");
 
+        // AI-1155: inspect any leftover PID file BEFORE WritePidFile overwrites
+        // it. Now that we hold the exclusive flock the prior holder is provably
+        // gone, so a still-present PID file means it never ran Dispose (which
+        // deletes it) — i.e. it died via an uncatchable SIGKILL / crash. Capture
+        // that for the successor's startup breadcrumb.
+        var (priorUnclean, priorPid) = InspectPriorHolder(pidPath);
+
         try {
             // Rewrite the file content with the fresh instance id. Truncate
             // first so a smaller new id doesn't leave trailing bytes from
@@ -94,7 +122,42 @@ internal sealed class DaemonLock : IDisposable {
             try { DaemonVersionMarker.Write(daemonName, version); } catch { /* best-effort */ }
         }
 
-        return new DaemonLock(stream, lockPath, pidPath, versionPath, instanceId);
+        return new DaemonLock(stream, lockPath, pidPath, versionPath, instanceId, priorUnclean, priorPid);
+    }
+
+    /// <summary>
+    /// Reads a leftover PID file (call only while holding the flock, before
+    /// overwriting it). Returns (unclean: whether the file was present at all,
+    /// pid: its parsed first line if any). A present file ⇒ the prior holder
+    /// skipped its cleanup ⇒ unclean exit; the PID may be unparseable, in which
+    /// case we still report unclean but with a null PID.
+    /// </summary>
+    static (bool unclean, int? pid) InspectPriorHolder(string pidPath) {
+        bool present;
+        try {
+            present = File.Exists(pidPath);
+        } catch {
+            // Can't even stat it — don't fabricate a breadcrumb.
+            return (false, null);
+        }
+
+        if (!present) return (false, null);
+
+        // Presence is the unclean-exit signal; parsing the PID is secondary. A
+        // present-but-unreadable file (permissions, transient IO, corruption)
+        // still means the prior holder skipped cleanup — report unclean with an
+        // unknown PID rather than silently masking a real hard-death as clean.
+        // Read only the first line (the PID; the daemon writes "{pid}\n{token}")
+        // instead of slurping the whole file, so a corrupt/oversized file can't
+        // force a large allocation on every startup.
+        try {
+            using var reader = File.OpenText(pidPath);
+            var first = reader.ReadLine();
+
+            return (true, int.TryParse(first, out var pid) ? pid : null);
+        } catch {
+            return (true, null);
+        }
     }
 
     /// <summary>
@@ -127,27 +190,17 @@ internal sealed class DaemonLock : IDisposable {
         if (_disposed) return;
         _disposed = true;
 
-        // Releasing the FileStream releases the kernel-level flock. After
-        // that, a follow-up start with the same name can acquire cleanly.
-        try { _stream.Dispose(); } catch { /* best-effort */ }
-
-        // Do NOT delete the lock file. The kernel flock is what enforces
-        // exclusion; file presence on disk is irrelevant. Deleting it here
-        // races against another daemon that may already have acquired the
-        // path between our Dispose() and the unlink: our `File.Delete`
-        // would unlink the inode they're holding open, and a third daemon
-        // could then create a brand-new `<name>.lock` at the same path
-        // and acquire a SECOND independent flock — defeating the whole
-        // AI-630 guard. `kcap daemon doctor --clean` removes truly
-        // stale files.
-        //
-        // Delete the PID file only if it still points to our own PID. A
-        // legitimate successor daemon that ran while we were disposing
-        // would have already rewritten the file to its own PID, and an
-        // unconditional Delete here would orphan their entry. The version
-        // marker follows the SAME ownership guard: if a successor has taken
-        // over the name it has already written its own version marker, so
-        // deleting here would clobber the successor's fresh value.
+        // AI-1155: delete the PID file (and version marker) BEFORE releasing the
+        // flock, not after. A successor waiting on the lock (`--await-lock`
+        // restart-after-update) can't acquire it until we release below, so by
+        // then our PID file is already gone — it can never observe a leftover PID
+        // file from our *clean* shutdown and misread it as an unclean death.
+        // That makes "PID file present once you hold the flock" an unambiguous
+        // uncatchable-kill signal (see TryAcquire), so the successor's startup
+        // breadcrumb no longer needs to special-case the handoff. Because we
+        // still hold the flock here, no other daemon can have rewritten these
+        // files, so the ownership check below always passes for us — it stays as
+        // defence-in-depth (e.g. a stale PID file we never owned).
         bool ours;
         try { ours = PidFileMatchesCurrentProcess(_pidPath); } catch { ours = false; }
 
@@ -155,6 +208,13 @@ internal sealed class DaemonLock : IDisposable {
             try { File.Delete(_pidPath); } catch { /* best-effort */ }
             try { File.Delete(_versionPath); } catch { /* best-effort */ }
         }
+
+        // Release the kernel-level flock last. Do NOT delete the lock file: the
+        // kernel flock is what enforces exclusion, file presence on disk is
+        // irrelevant, and unlinking it here would race a daemon that acquired the
+        // path between our unlink and a re-create — reopening the AI-630 hole.
+        // `kcap daemon doctor --clean` removes truly stale files.
+        try { _stream.Dispose(); } catch { /* best-effort */ }
     }
 
     static bool PidFileMatchesCurrentProcess(string pidPath) {
