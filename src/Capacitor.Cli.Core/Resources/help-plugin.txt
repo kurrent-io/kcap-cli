@@ -37,11 +37,11 @@ Options:
                       hooks; the plugin auto-loads on `opencode` startup and
                       streams each session. User-wide only — --project has no
                       effect with --opencode.
-  --antigravity       Target Google Antigravity: install the kcap hooks block to
-                      ~/.gemini/antigravity-cli/hooks.json. Antigravity has no
-                      shell hooks; it loads control hooks at startup and streams
-                      each conversation. User-wide only — --project has no effect
-                      with --antigravity.
+  --antigravity       Target Google Antigravity: install the kcap capture plugin
+                      to ~/.gemini/config/plugins/kcap/ (a plugin.json manifest +
+                      hooks.json). Antigravity has no shell hooks; the GUI loads
+                      plugins at startup and streams each conversation. User-wide
+                      only — --project has no effect with --antigravity.
   --skills            Install only the agent-agnostic skills to ~/.agents/skills/.
                       Use this if you only have Cursor (or another agent that
                       reads ~/.agents/skills/) and don't want Codex hooks.
@@ -103,11 +103,12 @@ Notes:
   session after install. Pi has no project-scope extensions dir, so --project
   has no effect with --pi.
 
-  --antigravity writes a kcap block to ~/.gemini/antigravity-cli/hooks.json
-  (preserving any hook blocks you authored) — Antigravity exposes no shell hooks,
-  only control hooks. Each event runs `kcap hook --antigravity <Event>`, so kcap
-  must be on PATH. Antigravity loads hooks at startup, so restart it after
-  install. User-wide only — --project has no effect with --antigravity.
+  --antigravity installs the kcap plugin to ~/.gemini/config/plugins/kcap/ — a
+  plugin.json manifest (which the GUI requires to load the dir) plus a hooks.json
+  kcap block (preserving any hook blocks you authored). Antigravity exposes no
+  shell hooks, only control hooks. Each event runs `kcap hook --antigravity
+  <Event>`, so kcap must be on PATH. The GUI loads plugins at startup, so restart
+  it after install. User-wide only — --project has no effect with --antigravity.
 
   --opencode writes a single plugin file (~/.config/opencode/plugins/kcap.ts)
   instead of a hooks file — OpenCode exposes no shell hooks, only an in-process
@@ -131,7 +132,7 @@ Examples:
   kcap plugin install --kiro                # Clone default Kiro agent + hooks, set as default
   kcap plugin install --pi                  # Install Pi extension (~/.pi/agent/extensions/kcap.ts)
   kcap plugin install --opencode            # Install OpenCode plugin (~/.config/opencode/plugins/kcap.ts)
-  kcap plugin install --antigravity         # Install Antigravity hooks block (~/.gemini/antigravity-cli/hooks.json)
+  kcap plugin install --antigravity         # Install Antigravity capture plugin (~/.gemini/config/plugins/kcap/)
   kcap plugin install --skills --if-installed   # Refresh skills if previously installed (used by npm postinstall)
   kcap plugin install --codex --if-installed    # Refresh Codex hooks if previously installed (used by npm postinstall)
   kcap plugin install --if-installed            # Refresh Claude plugin registration if previously installed
@@ -141,5 +142,5 @@ Examples:
   kcap plugin remove --gemini               # Remove kcap hooks from ~/.gemini/settings.json
   kcap plugin remove --kiro                 # Restore previous default agent, delete kcap.json
   kcap plugin remove --opencode             # Delete ~/.config/opencode/plugins/kcap.ts
-  kcap plugin remove --antigravity          # Remove the kcap block from ~/.gemini/antigravity-cli/hooks.json
+  kcap plugin remove --antigravity          # Remove the kcap plugin from ~/.gemini/config/plugins/kcap/
   kcap plugin remove --skills               # Remove agent skills + legacy ~/.codex/skills

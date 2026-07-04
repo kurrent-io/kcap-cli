@@ -4,17 +4,19 @@ using System.Text.Json.Nodes;
 namespace Capacitor.Cli.Core.Antigravity;
 
 /// <summary>
-/// Installs / removes kcap's hook block in an Antigravity <c>hooks.json</c> — global
-/// (<see cref="AntigravityPaths.GlobalHooksJson"/>) or per-workspace
-/// (<see cref="AntigravityPaths.WorkspaceHooksJson"/>). The merge preserves any
-/// user-authored blocks; only kcap's block (<see cref="AntigravityHooks.BlockName"/>)
-/// is added/replaced/removed. Malformed existing JSON is backed up to
-/// <c>hooks.json.bak</c> and replaced (never silently clobbered). A sibling marker
-/// (<see cref="MarkerFileName"/>) records the installed version. Mirrors the
+/// Installs / removes the kcap Antigravity capture <b>plugin</b>. The plugin dir
+/// (<see cref="AntigravityPaths.PluginDir"/>) holds two files written here: a required
+/// <c>plugin.json</c> manifest (<see cref="PluginManifestFileName"/>) — without which the
+/// GUI never loads the dir — and a <c>hooks.json</c> registering the kcap control hooks.
+/// The <c>hooks.json</c> merge preserves any user-authored blocks; only kcap's block
+/// (<see cref="AntigravityHooks.BlockName"/>) is added/replaced/removed. Malformed existing
+/// JSON is backed up to <c>hooks.json.bak</c> and replaced (never silently clobbered). A
+/// sibling marker (<see cref="MarkerFileName"/>) records the installed version. Mirrors the
 /// <see cref="Gemini.GeminiHooksInstaller"/> marker discipline.
 /// </summary>
 public static class AntigravityHooksInstaller {
     public const string MarkerFileName = ".kcap-hooks-version";
+    public const string PluginManifestFileName = "plugin.json";
 
     static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
 
@@ -22,6 +24,7 @@ public static class AntigravityHooksInstaller {
         var root = LoadOrBackup(hooksPath);
         root[AntigravityHooks.BlockName] = AntigravityHooks.BuildKcapBlock();
         Write(hooksPath, root);
+        WritePluginManifest(hooksPath);
         WriteMarker(hooksPath);
     }
 
@@ -30,9 +33,14 @@ public static class AntigravityHooksInstaller {
             JsonObject? root = null;
             try { root = JsonNode.Parse(File.ReadAllText(hooksPath)) as JsonObject; } catch { /* malformed → leave file, just drop marker */ }
 
-            if (root is not null && root.Remove(AntigravityHooks.BlockName))
-                Write(hooksPath, root);
+            if (root is not null && root.Remove(AntigravityHooks.BlockName)) {
+                // hooks.json lives in the kcap-owned plugin dir. If nothing but the kcap block
+                // was there, drop the now-empty file rather than leaving an orphan {} behind.
+                if (root.Count == 0) TryDelete(hooksPath);
+                else Write(hooksPath, root);
+            }
         }
+        DeletePluginManifest(hooksPath);
         DeleteMarker(hooksPath);
     }
 
@@ -73,6 +81,27 @@ public static class AntigravityHooksInstaller {
         var dir = Path.GetDirectoryName(hooksPath);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
         File.WriteAllText(hooksPath, root.ToJsonString(WriteOptions));
+    }
+
+    static void WritePluginManifest(string hooksPath) {
+        var dir = Path.GetDirectoryName(hooksPath);
+        if (string.IsNullOrEmpty(dir)) return;
+        try {
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, PluginManifestFileName),
+                AntigravityHooks.BuildPluginManifest().ToJsonString(WriteOptions));
+        } catch { /* best effort */ }
+    }
+
+    static void TryDelete(string path) {
+        try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
+    }
+
+    static void DeletePluginManifest(string hooksPath) {
+        var dir = Path.GetDirectoryName(hooksPath);
+        if (string.IsNullOrEmpty(dir)) return;
+        var manifest = Path.Combine(dir, PluginManifestFileName);
+        try { if (File.Exists(manifest)) File.Delete(manifest); } catch { /* best effort */ }
     }
 
     static void WriteMarker(string hooksPath) {

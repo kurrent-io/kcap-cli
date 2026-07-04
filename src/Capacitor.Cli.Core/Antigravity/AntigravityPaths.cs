@@ -9,8 +9,14 @@ namespace Capacitor.Cli.Core.Antigravity;
 /// <see cref="GeminiPaths.Root"/> and honor <c>GEMINI_CLI_HOME</c>). Each conversation
 /// has a per-conversation JSONL transcript under <c>brain/&lt;id&gt;/…/logs/</c> and a
 /// SQLite <c>conversations/&lt;id&gt;.db</c> (token/model in its protobuf <c>gen_metadata</c>).
-/// The kcap capture plugin installs a <c>hooks.json</c> (global under
-/// <c>~/.gemini/antigravity-cli/</c>, or per-workspace under <c>&lt;root&gt;/.agents/</c>).
+///
+/// kcap ships as an Antigravity <b>plugin</b>: a directory under the GUI config root
+/// (<c>~/.gemini/config/plugins/kcap/</c>) holding a required <c>plugin.json</c> marker
+/// (without it the GUI never loads the dir) plus a <c>hooks.json</c> that registers the
+/// kcap control hooks. Per-workspace installs live under <c>&lt;root&gt;/.agents/plugins/kcap/</c>.
+/// ⚠️ The <c>~/.gemini/antigravity-cli/</c> dir is the <c>agy</c> CLI's config root — the
+/// GUI does NOT read it, so installing hooks there (as #256 originally did) is invisible
+/// to the running IDE (AI-1158 GUI re-test).
 ///
 /// ⚠️ <c>~/.gemini</c> is shared with the Gemini CLI — <see cref="GeminiPaths.IsInstalled"/>
 /// must require a Gemini-specific marker so an Antigravity-only home doesn't read as
@@ -21,9 +27,13 @@ public static class AntigravityPaths {
     public static string Root(string? home = null, string? geminiCliHome = null)
         => Path.Combine(GeminiPaths.Root(home, geminiCliHome), "antigravity");
 
-    /// <summary>CLI/hooks config root: <c>&lt;gemini-root&gt;/antigravity-cli</c>.</summary>
-    public static string CliRoot(string? home = null, string? geminiCliHome = null)
-        => Path.Combine(GeminiPaths.Root(home, geminiCliHome), "antigravity-cli");
+    /// <summary>GUI config root the IDE reads plugins from: <c>&lt;gemini-root&gt;/config</c>.</summary>
+    public static string GuiConfigRoot(string? home = null, string? geminiCliHome = null)
+        => Path.Combine(GeminiPaths.Root(home, geminiCliHome), "config");
+
+    /// <summary>The kcap capture plugin dir the GUI loads: <c>&lt;gui-config&gt;/plugins/kcap</c>.</summary>
+    public static string PluginDir(string? home = null, string? geminiCliHome = null)
+        => Path.Combine(GuiConfigRoot(home, geminiCliHome), "plugins", AntigravityHooks.BlockName);
 
     /// <summary>Per-conversation "brain" dir: <c>&lt;root&gt;/brain/&lt;id&gt;</c>.</summary>
     public static string BrainDir(string conversationId, string? home = null, string? geminiCliHome = null)
@@ -73,13 +83,21 @@ public static class AntigravityPaths {
         return Path.Combine(root, "conversations", $"{convId}.db");
     }
 
-    /// <summary>Global hooks config the kcap plugin installs into: <c>&lt;cli-root&gt;/hooks.json</c>.</summary>
+    /// <summary>Global hooks config the kcap plugin installs into: <c>&lt;plugin-dir&gt;/hooks.json</c>.</summary>
     public static string GlobalHooksJson(string? home = null, string? geminiCliHome = null)
-        => Path.Combine(CliRoot(home, geminiCliHome), "hooks.json");
+        => Path.Combine(PluginDir(home, geminiCliHome), "hooks.json");
 
-    /// <summary>Per-workspace hooks config (opt-in): <c>&lt;workspaceRoot&gt;/.agents/hooks.json</c>.</summary>
+    /// <summary>Plugin manifest marker the GUI requires: <c>&lt;plugin-dir&gt;/plugin.json</c>.</summary>
+    public static string GlobalPluginManifest(string? home = null, string? geminiCliHome = null)
+        => Path.Combine(PluginDir(home, geminiCliHome), "plugin.json");
+
+    /// <summary>Per-workspace plugin dir (opt-in): <c>&lt;workspaceRoot&gt;/.agents/plugins/kcap</c>.</summary>
+    public static string WorkspacePluginDir(string workspaceRoot)
+        => Path.Combine(workspaceRoot, ".agents", "plugins", AntigravityHooks.BlockName);
+
+    /// <summary>Per-workspace hooks config (opt-in): <c>&lt;workspaceRoot&gt;/.agents/plugins/kcap/hooks.json</c>.</summary>
     public static string WorkspaceHooksJson(string workspaceRoot)
-        => Path.Combine(workspaceRoot, ".agents", "hooks.json");
+        => Path.Combine(WorkspacePluginDir(workspaceRoot), "hooks.json");
 
     /// <summary>
     /// Detection by data-root presence — Antigravity creates <c>~/.gemini/antigravity</c>

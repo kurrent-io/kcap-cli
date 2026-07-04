@@ -44,6 +44,27 @@ public class AntigravityHooksInstallerTests {
         } finally { Directory.Delete(dir, recursive: true); }
     }
 
+    // AI-1158 GUI re-test: the GUI only loads a plugin dir that contains a plugin.json
+    // manifest — without it, hooks.json is never read. Install must write it; Remove must
+    // clean it up.
+    [Test]
+    public async Task Install_writes_plugin_manifest_marker_and_Remove_deletes_it() {
+        var dir      = TempDir();
+        var path     = Path.Combine(dir, "hooks.json");
+        var manifest = Path.Combine(dir, AntigravityHooksInstaller.PluginManifestFileName);
+        try {
+            AntigravityHooksInstaller.Install(path);
+
+            await Assert.That(File.Exists(manifest)).IsTrue();
+            var m = (JsonObject)JsonNode.Parse(await File.ReadAllTextAsync(manifest))!;
+            await Assert.That((string?)m["name"]).IsEqualTo(AntigravityHooks.BlockName);
+            await Assert.That(m.ContainsKey("version")).IsTrue();
+
+            AntigravityHooksInstaller.Remove(path);
+            await Assert.That(File.Exists(manifest)).IsFalse();
+        } finally { Directory.Delete(dir, recursive: true); }
+    }
+
     [Test]
     public async Task Install_preserves_user_authored_blocks() {
         var dir  = TempDir();
