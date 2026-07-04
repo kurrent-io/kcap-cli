@@ -92,9 +92,15 @@ public class RepositoryDetectionCacheTests {
             RedirectStandardError  = true
         };
         using var proc = Process.Start(psi)!;
+        // Drain BOTH pipes before WaitForExit. A child that fills its stdout buffer blocks on the
+        // write while we block on WaitForExit → deadlock. Harmless for init/remote add (near-empty
+        // output), but a footgun the moment this helper is reused for a chattier git subcommand.
+        var stdout = proc.StandardOutput.ReadToEndAsync();
+        var stderr = proc.StandardError.ReadToEndAsync();
         proc.WaitForExit();
         if (proc.ExitCode != 0) {
-            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {proc.StandardError.ReadToEnd()}");
+            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {stderr.GetAwaiter().GetResult()}");
         }
+        _ = stdout.GetAwaiter().GetResult();
     }
 }

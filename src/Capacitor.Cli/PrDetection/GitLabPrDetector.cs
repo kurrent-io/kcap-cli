@@ -31,13 +31,15 @@ internal static class GitLabPrDetector {
                 if (node is not JsonObject mr) continue;
                 // Defense in depth: only accept an exact source_branch match.
                 if (mr["source_branch"]?.GetValue<string>() != branch) continue;
-                var iid = mr["iid"]?.GetValue<int>();
-                if (iid is null) continue;
+                // Skip a record whose iid is missing or non-numeric rather than letting
+                // GetValue<int> throw — the outer catch would otherwise drop every match, not
+                // just the bad record.
+                if (mr["iid"] is not JsonValue iidVal || !iidVal.TryGetValue<int>(out var iid)) continue;
 
                 var updated = ParseTimestamp(mr["updated_at"]?.GetValue<string>());
                 if (best is null || updated > bestUpdated) {
                     bestUpdated = updated;
-                    best = new PrInfo(iid.Value, mr["title"]?.GetValue<string>(),
+                    best = new PrInfo(iid, mr["title"]?.GetValue<string>(),
                                       mr["web_url"]?.GetValue<string>(), mr["source_branch"]?.GetValue<string>());
                 }
             }

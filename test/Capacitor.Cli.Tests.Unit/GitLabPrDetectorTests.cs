@@ -66,4 +66,30 @@ public class GitLabPrDetectorTests {
             """[{"iid":5,"title":"x","web_url":"u","source_branch":"different","updated_at":"2026-06-01T00:00:00Z"}]""");
         await Assert.That(await GitLabPrDetector.DetectAsync("gitlab.com", "g", "p", "feat/x", "/cwd", TimeSpan.FromSeconds(2), fake)).IsNull();
     }
+
+    [Test]
+    public async Task Bad_iid_record_is_skipped_not_the_whole_result() {
+        // A non-numeric iid on one matching record must not drop the OTHER valid match — the bad
+        // record is skipped, not the whole detection (the per-record parse used to throw and the
+        // outer catch returned null for everything).
+        CommandRunner fake = (_, _, _, _) => Task.FromResult<string?>("""
+        [
+          {"iid":9,"title":"good","web_url":"https://gitlab.com/g/p/-/merge_requests/9","source_branch":"feat/x","updated_at":"2026-06-30T00:00:00Z"},
+          {"iid":"oops","title":"bad","web_url":"u","source_branch":"feat/x","updated_at":"2026-07-01T00:00:00Z"}
+        ]
+        """);
+        var pr = await GitLabPrDetector.DetectAsync("gitlab.com", "g", "p", "feat/x", "/cwd", TimeSpan.FromSeconds(2), fake);
+
+        await Assert.That(pr!.Number).IsEqualTo(9);
+    }
+
+    [Test]
+    public async Task Encodes_branch_with_plus() {
+        // '+' is a query-string metacharacter (space in x-www-form-urlencoded); it must be
+        // percent-encoded to %2B so the source_branch filter matches the real branch, not " ".
+        string seen = "";
+        CommandRunner fake = (_, args, _, _) => { seen = args; return Task.FromResult<string?>("[]"); };
+        await GitLabPrDetector.DetectAsync("gitlab.com", "g", "p", "feat+x", "/cwd", TimeSpan.FromSeconds(2), fake);
+        await Assert.That(seen).Contains("source_branch=feat%2Bx");
+    }
 }
