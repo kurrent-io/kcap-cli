@@ -33,7 +33,7 @@ public static class UpdateCommand {
         // Persist an explicit channel switch onto the active profile so future
         // auto-updates track it. Update the profile inside ProfileConfig and save
         // the whole v2 config via SaveProfileConfig — NEVER write a flat
-        // CapacitorConfig, which would overwrite the user's v2 profile config.
+        // LegacyV1Config, which would overwrite the user's v2 profile config.
         if (args.Contains("--beta") || args.Contains("--stable")) {
             var pc = await AppConfig.LoadProfileConfig();
 
@@ -113,14 +113,10 @@ public static class UpdateCommand {
     /// Called on every CLI invocation (cached, max once per 24h).
     /// </summary>
     public static async Task PrintUpdateHintIfAvailable() {
-        var config = await AppConfig.Load();
-
-        if (config?.UpdateCheck == false) return;
-
         try {
             var profile = await AppConfig.GetActiveProfileAsync();
+            if (profile?.UpdateCheck == false) return;
             var channel = ResolveChannel([], profile?.UpdateChannel);
-
             var (latest, current) = await CheckForUpdateAsync(forceCheck: false, channel);
 
             if (latest is not null && current is not null && IsNewer(latest, current)) {
