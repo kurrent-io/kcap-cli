@@ -68,6 +68,14 @@ if (args.Skip(1).Any(a => a is "--help" or "-h")) {
     return await PrintCommandHelp(command);
 }
 
+// Interactive commands block on synchronous Spectre.Console prompts. Install a
+// signal + parent-liveness safety net so an abandoned prompt (closed terminal,
+// killed launching agent, detached pseudo-console) can't orphan this process
+// alive — the reported stray `kcap.exe` after `kcap setup` is exited partway.
+if (InteractiveLifetime.IsInteractiveCommand(command)) {
+    InteractiveLifetime.Install();
+}
+
 // Commands that don't need a server URL
 string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "update", "plugin", "profile", "use", "repos", "login", "ignore", "remap", "uninstall"];
 
