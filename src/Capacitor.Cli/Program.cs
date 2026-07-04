@@ -47,9 +47,9 @@ var isHook = command == "hook";
 var baseUrl = await AppConfig.ResolveServerUrl(args, gitTimeoutMs: isHook ? 1000 : 5000);
 
 // Fire-and-forget update check (prints hint to stderr after command finishes).
-// Skipped for `uninstall` — the check writes ~/.config/kcap/update-check.json,
-// which would race with uninstall's `rm -rf` of the config dir and recreate it
-// after the command has reported success.
+// Skipped for `uninstall` — the check writes ~/.config/kcap/update-check-{channel}.json
+// (e.g. update-check-latest.json), which would race with uninstall's `rm -rf`
+// of the config dir and recreate it after the command has reported success.
 var   noUpdateCheck   = args.Contains("--no-update-check") || command == "uninstall";
 Task? updateCheckTask = null;
 

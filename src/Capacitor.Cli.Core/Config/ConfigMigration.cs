@@ -29,14 +29,22 @@ public static class ConfigMigration {
         }
 
         // V1 → V2: read old flat fields, build default profile
-        var v1 = JsonSerializer.Deserialize(json, ConfigJsonContext.Default.CapacitorConfig)
-         ?? new CapacitorConfig();
+        var v1 = JsonSerializer.Deserialize(json, ConfigJsonContext.Default.LegacyV1Config)
+         ?? new LegacyV1Config();
+
+        // STJ source-gen does not apply the record member-initializer default
+        // (`= true`) for a JSON property absent from the payload — a v1 config
+        // lacking "update_check" deserializes v1.UpdateCheck to false, even
+        // though the v1 default was true (see UpdateChannelConfigTests for the
+        // same quirk on Profile.UpdateChannel). Read the raw node instead so
+        // "absent" and "explicitly false" are distinguished correctly.
+        var updateCheck = node["update_check"]?.GetValue<bool>() ?? true;
 
         var defaultProfile = new Profile {
             ServerUrl         = v1.ServerUrl,
             Daemon            = v1.Daemon,
             DefaultVisibility = v1.DefaultVisibility,
-            UpdateCheck       = v1.UpdateCheck,
+            UpdateCheck       = updateCheck,
             ExcludedRepos     = v1.ExcludedRepos
         };
 

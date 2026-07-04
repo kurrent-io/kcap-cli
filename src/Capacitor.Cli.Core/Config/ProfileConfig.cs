@@ -74,6 +74,9 @@ public record Profile {
     [JsonPropertyName("update_check")]
     public bool UpdateCheck { get; init; } = true;
 
+    [JsonPropertyName("update_channel")]
+    public string UpdateChannel { get; init; } = "latest";
+
     [JsonPropertyName("excluded_repos")]
     public string[] ExcludedRepos { get; init; } = [];
 

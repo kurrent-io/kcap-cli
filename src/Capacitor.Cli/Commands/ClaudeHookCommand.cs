@@ -271,7 +271,7 @@ public static class ClaudeHookCommand {
 
         // Resolve the V2 profile once for repo/path exclusion and
         // default_visibility injection. Reading these off the legacy top-level
-        // CapacitorConfig silently misses v2 settings (the fields live under
+        // LegacyV1Config silently misses v2 settings (the fields live under
         // the active profile), so per-profile `excluded_repos` / `private`
         // visibility were being ignored.
         var activeProfile = await AppConfig.GetActiveProfileAsync();
@@ -424,7 +424,7 @@ public static class ClaudeHookCommand {
             body = await deferredRepoTask!;
 
             // Inject default_visibility from the active V2 profile. The legacy top-level
-            // CapacitorConfig.DefaultVisibility shape is not populated by v2 configs (the field
+            // LegacyV1Config.DefaultVisibility shape is not populated by v2 configs (the field
             // lives under the profile), so reading it there silently fell back to "org_public"
             // and ignored per-profile `private` settings.
             if (activeProfile?.DefaultVisibility is { } vis) {
