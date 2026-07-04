@@ -13,7 +13,9 @@ namespace Capacitor.Cli.Tests.Unit;
 /// later, isolated keystroke finishes it (Codex never submits at all; Claude ~50% of the time).
 /// The fix delivers the message as a bracketed paste (ESC[200~ … ESC[201~) so the TUI treats it
 /// as one block and the following Enter is an unambiguous submit. This test drives
-/// <see cref="AgentOrchestrator.HandleSendInput"/> and asserts the wire shape.
+/// <see cref="AgentOrchestrator.HandleSendInput"/> end-to-end through the
+/// <see cref="IHostedAgentRuntime"/> seam (<see cref="PtyHostedAgentRuntime"/> wrapping a fake
+/// PTY) and asserts the wire shape reaching the PTY.
 /// </summary>
 public partial class AgentOrchestratorVendorTests {
     const string PasteStart = "\x1b[200~";
@@ -30,7 +32,7 @@ public partial class AgentOrchestratorVendorTests {
 
         var agent = new AgentInstance(
             "agent-paste", null, "", null, "/tmp", "codex",
-            pty, new WorktreeInfo("/tmp", "", "/tmp", IsStandalone: true), new CancellationTokenSource());
+            new PtyHostedAgentRuntime("codex", pty), new WorktreeInfo("/tmp", "", "/tmp", IsStandalone: true), new CancellationTokenSource());
         orch.RegisterAgentForTest(agent);
 
         await orch.HandleSendInputForTest(new SendInputCommand("agent-paste", message, null));

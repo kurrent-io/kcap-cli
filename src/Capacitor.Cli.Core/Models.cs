@@ -750,6 +750,17 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Auth.ProvisionResponse))]
 [JsonSerializable(typeof(Auth.AvailabilityResponse))]
 [JsonSerializable(typeof(Auth.StatusResponse))]
+[JsonSerializable(typeof(Acp.AcpRequest))]
+[JsonSerializable(typeof(Acp.AcpResponse))]
+[JsonSerializable(typeof(Acp.AcpNotification))]
+[JsonSerializable(typeof(Acp.AcpError))]
+[JsonSerializable(typeof(Acp.InitializeParams))]
+[JsonSerializable(typeof(Acp.ClientCapabilities))]
+[JsonSerializable(typeof(Acp.FsCapabilities))]
+[JsonSerializable(typeof(Acp.SessionNewParams))]
+[JsonSerializable(typeof(Acp.SessionPromptParams))]
+[JsonSerializable(typeof(Acp.PromptContentBlock))]
+[JsonSerializable(typeof(Acp.SessionCancelParams))]
 // UseStringEnumConverter=true matches the server's SignalR JSON protocol, which
 // serialises enums (e.g. LaunchKind) as camelCase strings. Without it the
 // source-gen LaunchKind JsonTypeInfo defaults to numeric and silently drops the

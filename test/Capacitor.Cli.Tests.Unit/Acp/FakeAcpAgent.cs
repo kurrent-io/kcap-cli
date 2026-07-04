@@ -1,0 +1,443 @@
+// test/Capacitor.Cli.Tests.Unit/Acp/FakeAcpAgent.cs
+using System.Collections.Concurrent;
+using System.IO.Pipelines;
+using System.Text;
+using System.Text.Json;
+
+namespace Capacitor.Cli.Tests.Unit.Acp;
+
+/// <summary>
+/// Reusable, scriptable in-process stand-in for a real <c>cursor-agent acp</c> child process.
+/// Plays the "agent side" of the ACP stdio JSON-RPC wire protocol against a real
+/// <see cref="Capacitor.Cli.Daemon.Acp.AcpConnection"/> under test, so higher-level code (Task 9's
+/// <c>AcpHostedAgentRuntime</c>) can be exercised end-to-end without spawning the real binary.
+///
+/// Topology (mirrors the <c>Harness</c> in <c>AcpConnectionTests.cs</c>, generalized): two
+/// independent <see cref="Pipe"/>s stand in for the agent process's stdin/stdout.
+/// <list type="bullet">
+/// <item><description><see cref="ClientWriteStream"/> is the pipe the <em>connection under test</em>
+/// writes into (its <c>writeStream</c> ctor arg) — i.e. this is the agent's simulated STDIN. This
+/// fake reads inbound frames from the other end of that same pipe.</description></item>
+/// <item><description><see cref="ClientReadStream"/> is the pipe the <em>connection under test</em>
+/// reads from (its <c>readStream</c> ctor arg) — i.e. this is the agent's simulated STDOUT. This
+/// fake writes outbound frames (responses/notifications) into the other end of that same
+/// pipe.</description></item>
+/// </list>
+/// Construct the connection under test as:
+/// <code>new AcpConnection(writeStream: fake.ClientWriteStream, readStream: fake.ClientReadStream, logger)</code>
+///
+/// Lifecycle: <see cref="RunAsync"/> must be started explicitly (e.g. alongside the connection's own
+/// <c>RunAsync</c>) — it is the fake's read loop and does nothing until awaited/started as a
+/// background task. It runs until the token is cancelled or the simulated stdin stream ends.
+/// </summary>
+public sealed class FakeAcpAgent : IAsyncDisposable {
+    /// <summary>Fixed, deterministic session id returned by the fake's <c>session/new</c> handler.</summary>
+    public const string FixedSessionId = "fc2e09cf-f4b0-4463-9dc1-bda11268896b";
+
+    static readonly JsonElement DefaultPromptResult =
+        JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone();
+
+    readonly Pipe   _toAgent  = new();  // connection writes here; fake reads here (simulated stdin)
+    readonly Pipe   _toClient = new();  // fake writes here; connection reads here (simulated stdout)
+    readonly Stream _agentReadsFromConnection;
+    readonly Stream _agentWritesToConnection;
+
+    readonly ConcurrentQueue<(IReadOnlyList<JsonElement> Updates, JsonElement Result)> _promptScripts = new();
+    readonly List<(string Method, JsonElement? Params)> _receivedCalls = new();
+    readonly object _receivedCallsLock = new();
+
+    /// <summary>
+    /// The stream a NEW <see cref="Capacitor.Cli.Daemon.Acp.AcpConnection"/> under test should be
+    /// constructed with as its <c>writeStream</c> — the connection's outbound frames land here, and
+    /// this fake reads them from the other end of the same pipe (the fake's simulated stdin).
+    /// </summary>
+    public Stream ClientWriteStream { get; }
+
+    /// <summary>
+    /// The stream a NEW <see cref="Capacitor.Cli.Daemon.Acp.AcpConnection"/> under test should be
+    /// constructed with as its <c>readStream</c> — this fake's outbound frames (responses,
+    /// <c>session/update</c> notifications) land here, and the connection reads them from the other
+    /// end of the same pipe (the fake's simulated stdout).
+    /// </summary>
+    public Stream ClientReadStream { get; }
+
+    /// <summary>
+    /// Every inbound method the fake has dispatched so far, in arrival order, with a verbatim clone
+    /// of its (possibly absent) params. Safe to read concurrently with an in-flight
+    /// <see cref="RunAsync"/> loop — appended to under a lock, snapshotted here as an
+    /// <see cref="IReadOnlyList{T}"/> copy so callers never see a collection mutated mid-enumeration.
+    /// </summary>
+    public IReadOnlyList<(string Method, JsonElement? Params)> ReceivedCalls {
+        get {
+            lock (_receivedCallsLock)
+                return _receivedCalls.ToArray();
+        }
+    }
+
+    public FakeAcpAgent() {
+        _agentReadsFromConnection = _toAgent.Reader.AsStream();
+        _agentWritesToConnection  = _toClient.Writer.AsStream();
+
+        ClientWriteStream = _toAgent.Writer.AsStream();
+        ClientReadStream  = _toClient.Reader.AsStream();
+    }
+
+    /// <summary>
+    /// Overrides the script the NEXT <c>session/prompt</c> request will run: the fake emits
+    /// <paramref name="updates"/> (each already a full <c>session/update</c> notification envelope —
+    /// build them with <see cref="BuildSessionUpdateNotification"/> or one of the
+    /// <c>Build*Update</c> helpers) as raw frames, in order, then answers the request with
+    /// <paramref name="result"/>. Call this before sending the request whose behavior you want to
+    /// override. Scripts are consumed one-per-prompt and queued (FIFO) — if you never call this, the
+    /// fake falls back to its built-in default script (one <c>agent_message_chunk</c> then
+    /// <c>{"stopReason":"end_turn"}</c>) for every <c>session/prompt</c>.
+    /// </summary>
+    public void EnqueuePromptScript(IReadOnlyList<JsonElement> updateNotifications, JsonElement result) =>
+        _promptScripts.Enqueue((updateNotifications, result));
+
+    /// <summary>
+    /// When set, every <c>session/prompt</c> request's RESPONSE (not the queued updates, if any) is
+    /// held back until <paramref name="gate"/> completes — the fake still records the call
+    /// immediately (so <see cref="ReceivedCalls"/> observes it right away), it just doesn't answer.
+    /// Models a real agent mid-turn: used by AI-684 Fix E tests to prove
+    /// <c>AcpHostedAgentRuntime.StartAsync</c>/<c>SendUserInputAsync</c> return promptly WITHOUT
+    /// waiting for the turn's <c>stopReason</c> response, instead of the pre-fix behavior where
+    /// both awaited the full round trip. Set to <see langword="null"/> (the default) to answer
+    /// immediately as usual.
+    /// </summary>
+    public TaskCompletionSource? HoldPromptResponses { get; set; }
+
+    /// <summary>
+    /// The fake's read loop: parses newline-delimited JSON-RPC frames arriving from the connection
+    /// under test (its simulated stdin) and dispatches <c>initialize</c> / <c>session/new</c> /
+    /// <c>session/prompt</c> / <c>session/cancel</c>. Must be started explicitly by the test (e.g.
+    /// <c>var fakeRunTask = fake.RunAsync(cts.Token);</c> run concurrently with the connection's own
+    /// <c>RunAsync</c>) — nothing happens until this is running. Returns when <paramref name="ct"/>
+    /// is cancelled or the simulated stdin stream ends.
+    /// </summary>
+    public async Task RunAsync(CancellationToken ct) {
+        using var reader = new StreamReader(_agentReadsFromConnection, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+
+        try {
+            while (!ct.IsCancellationRequested) {
+                var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
+                if (line is null)
+                    break;
+
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                await DispatchLineAsync(line, ct).ConfigureAwait(false);
+            }
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            // normal shutdown
+        }
+    }
+
+    async Task DispatchLineAsync(string line, CancellationToken ct) {
+        using var doc  = JsonDocument.Parse(line);
+        var       root = doc.RootElement;
+
+        var hasId     = root.TryGetProperty("id", out var idElement);
+        var hasMethod = root.TryGetProperty("method", out var methodElement);
+        if (!hasMethod)
+            return;
+
+        var method        = methodElement.GetString() ?? "";
+        var paramsElement = root.TryGetProperty("params", out var p) ? p.Clone() : (JsonElement?) null;
+
+        Record(method, paramsElement);
+
+        if (!hasId) {
+            // Notification (e.g. session/cancel) — recorded above, no response frame is written.
+            return;
+        }
+
+        var id = idElement.Clone();
+
+        switch (method) {
+            case "initialize":
+                await WriteResponseAsync(id, ProbeConfirmedInitializeResult, ct).ConfigureAwait(false);
+                break;
+
+            case "session/new":
+                await WriteResponseAsync(id, ProbeConfirmedSessionNewResult, ct).ConfigureAwait(false);
+                break;
+
+            case "session/prompt":
+                await RunPromptScriptAsync(id, ct).ConfigureAwait(false);
+                break;
+
+            default:
+                // Unrecognized request method: still recorded above; answer with a method-not-found
+                // error so a caller awaiting the response doesn't hang forever.
+                await WriteErrorResponseAsync(id, -32601, $"Method not found: {method}", ct).ConfigureAwait(false);
+                break;
+        }
+    }
+
+    async Task RunPromptScriptAsync(JsonElement id, CancellationToken ct) {
+        var (updates, result) = _promptScripts.TryDequeue(out var script)
+            ? script
+            : (new[] { DefaultAgentMessageChunkUpdate(FixedSessionId, "hello from FakeAcpAgent") }, DefaultPromptResult);
+
+        foreach (var update in updates)
+            await WriteRawFrameAsync(update, ct).ConfigureAwait(false);
+
+        if (HoldPromptResponses is { } gate)
+            await gate.Task.ConfigureAwait(false);
+
+        await WriteResponseAsync(id, result, ct).ConfigureAwait(false);
+    }
+
+    void Record(string method, JsonElement? @params) {
+        lock (_receivedCallsLock)
+            _receivedCalls.Add((method, @params));
+    }
+
+    // ---- probe-confirmed canned response shapes (docs/acp-probe-findings.md) ----
+
+    static readonly JsonElement ProbeConfirmedInitializeResult = JsonDocument.Parse("""
+        {
+          "protocolVersion": 1,
+          "agentCapabilities": {
+            "loadSession": true,
+            "mcpCapabilities": { "http": true, "sse": true },
+            "promptCapabilities": { "audio": false, "embeddedContext": false, "image": true },
+            "sessionCapabilities": { "list": {} }
+          },
+          "authMethods": [
+            {
+              "id": "cursor_login",
+              "name": "Cursor Login",
+              "description": "Authenticate using existing Cursor login credentials. Run 'agent login' first if not logged in."
+            }
+          ]
+        }
+        """).RootElement.Clone();
+
+    static readonly JsonElement ProbeConfirmedSessionNewResult = JsonDocument.Parse($$"""
+        {
+          "sessionId": "{{FixedSessionId}}",
+          "modes": {
+            "currentModeId": "agent",
+            "availableModes": [
+              { "id": "agent", "name": "Agent", "description": "Full agent capabilities with tool access" },
+              { "id": "plan", "name": "Plan", "description": "Read-only mode for planning and designing before implementation" },
+              { "id": "ask", "name": "Ask", "description": "Q&A mode - no edits or command execution" }
+            ]
+          },
+          "models": {
+            "currentModelId": "composer-2.5[fast=true]",
+            "availableModels": [
+              { "modelId": "composer-2.5[fast=true]", "name": "composer-2.5" }
+            ]
+          },
+          "configOptions": []
+        }
+        """).RootElement.Clone();
+
+    /// <summary>
+    /// Builds a full <c>session/update</c> notification frame (probe-confirmed envelope shape):
+    /// <c>{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"...","update":{...}}}</c>.
+    /// <paramref name="update"/> is the inner <c>update</c> object (e.g. from
+    /// <see cref="BuildAgentMessageChunkUpdate"/>).
+    /// </summary>
+    public static JsonElement BuildSessionUpdateNotification(string sessionId, JsonElement update) {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteString("jsonrpc", "2.0");
+            writer.WriteString("method", "session/update");
+            writer.WriteStartObject("params");
+            writer.WriteString("sessionId", sessionId);
+            writer.WritePropertyName("update");
+            update.WriteTo(writer);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+
+        return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
+    }
+
+    /// <summary>
+    /// Probe-confirmed <c>agent_message_chunk</c> update variant:
+    /// <c>{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"..."}}</c>.
+    /// </summary>
+    public static JsonElement BuildAgentMessageChunkUpdate(string text) {
+        var escaped = JsonEncodedText.Encode(text);
+        return JsonDocument.Parse($$$"""{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"{{{escaped}}}"}}""")
+            .RootElement.Clone();
+    }
+
+    /// <summary>Convenience: a full default <c>session/update</c> notification frame carrying one
+    /// probe-confirmed <c>agent_message_chunk</c> for <paramref name="sessionId"/>.</summary>
+    public static JsonElement DefaultAgentMessageChunkUpdate(string sessionId, string text) =>
+        BuildSessionUpdateNotification(sessionId, BuildAgentMessageChunkUpdate(text));
+
+    /// <summary>
+    /// Probe-confirmed <c>available_commands_update</c> variant:
+    /// <c>{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"...","description":"..."}]}</c>.
+    /// <paramref name="commands"/> entries are <c>(name, description)</c> pairs.
+    /// </summary>
+    public static JsonElement BuildAvailableCommandsUpdate(IEnumerable<(string Name, string Description)> commands) {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteString("sessionUpdate", "available_commands_update");
+            writer.WriteStartArray("availableCommands");
+            foreach (var (name, description) in commands) {
+                writer.WriteStartObject();
+                writer.WriteString("name", name);
+                writer.WriteString("description", description);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
+        return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
+    }
+
+    // ---- spec-derived (NOT probe-confirmed) helper builders ----
+    //
+    // The AI-684 probe account was plan-gated before any tool-call turn completed, so none of the
+    // variants below were ever observed on the wire (see docs/acp-probe-findings.md, "sessionUpdate
+    // variants observed" and "Recommended follow-up"). They are built from the published ACP spec
+    // only. Re-verify each against docs/acp-probe-findings.md's "Recommended follow-up" once a
+    // non-plan-gated probe run is available, before relying on their exact field shapes in
+    // production mapping code.
+
+    /// <summary>
+    /// Spec-derived, NOT yet verified against cursor-agent (the probe account was plan-gated before
+    /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
+    /// follow-up" once available. Shape: <c>{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"..."}}</c>.
+    /// </summary>
+    public static JsonElement BuildAgentThoughtChunkUpdate(string text) {
+        var escaped = JsonEncodedText.Encode(text);
+        return JsonDocument.Parse($$$"""{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"{{{escaped}}}"}}""")
+            .RootElement.Clone();
+    }
+
+    /// <summary>
+    /// Spec-derived, NOT yet verified against cursor-agent (the probe account was plan-gated before
+    /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
+    /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call","toolCallId":"...","title":"...","kind":"...","status":"..."}</c>.
+    /// <paramref name="status"/> is one of <c>pending</c> / <c>in_progress</c> / <c>completed</c> / <c>failed</c>.
+    /// </summary>
+    public static JsonElement BuildToolCallUpdate(string toolCallId, string title, string kind, string status) {
+        var json = $$"""
+            {"sessionUpdate":"tool_call","toolCallId":"{{toolCallId}}","title":"{{title}}","kind":"{{kind}}","status":"{{status}}"}
+            """;
+        return JsonDocument.Parse(json).RootElement.Clone();
+    }
+
+    /// <summary>
+    /// Spec-derived, NOT yet verified against cursor-agent (the probe account was plan-gated before
+    /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
+    /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call_update","toolCallId":"...","status":"..."}</c>.
+    /// </summary>
+    public static JsonElement BuildToolCallStatusUpdate(string toolCallId, string status) {
+        var json = $$"""{"sessionUpdate":"tool_call_update","toolCallId":"{{toolCallId}}","status":"{{status}}"}""";
+        return JsonDocument.Parse(json).RootElement.Clone();
+    }
+
+    /// <summary>
+    /// Spec-derived, NOT yet verified against cursor-agent (the probe account was plan-gated before
+    /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
+    /// follow-up" once available. Shape: <c>{"sessionUpdate":"plan","entries":[...]}</c>, where
+    /// <paramref name="entriesJson"/> is the raw JSON text of the entries array (kept as a raw string
+    /// since the ACP spec's plan-entry shape is not yet pinned down by this probe).
+    /// </summary>
+    public static JsonElement BuildPlanUpdate(string entriesJson) {
+        var json = $$"""{"sessionUpdate":"plan","entries":{{entriesJson}}}""";
+        return JsonDocument.Parse(json).RootElement.Clone();
+    }
+
+    /// <summary>
+    /// Spec-derived, NOT yet verified against cursor-agent — <c>session/request_permission</c> was
+    /// never observed in the probe (see docs/acp-probe-findings.md "Permission / elicitation
+    /// requests"); re-verify once a non-plan-gated probe run is available. Builds the FULL
+    /// server→client request frame (has its own <paramref name="id"/> and method, unlike the
+    /// <c>update</c>-variant helpers above): params shape
+    /// <c>{"sessionId":"...","toolCall":{...},"options":[{"optionId":"...","name":"...","kind":"..."}]}</c>.
+    /// <paramref name="toolCallJson"/> and <paramref name="optionsJson"/> are raw JSON text for the
+    /// nested objects, left as caller-supplied strings since their exact shape is unconfirmed.
+    /// Task 8 does not wire this into <see cref="RunAsync"/>'s dispatch loop — a documented builder
+    /// is sufficient for this fixture's scope; Task 9 (AI-686) wires the actual permission bridge.
+    /// The two possible client response shapes are documented on
+    /// <see cref="PermissionOutcomeSelected"/> / <see cref="PermissionOutcomeCancelled"/>.
+    /// </summary>
+    public static JsonElement BuildRequestPermissionFrame(long id, string sessionId, string toolCallJson, string optionsJson) {
+        var json = $$$"""
+            {"jsonrpc":"2.0","id":{{{id}}},"method":"session/request_permission","params":{"sessionId":"{{{sessionId}}}","toolCall":{{{toolCallJson}}},"options":{{{optionsJson}}}}}
+            """;
+        return JsonDocument.Parse(json).RootElement.Clone();
+    }
+
+    /// <summary>
+    /// Spec-derived client response shape for an ALLOWED <c>session/request_permission</c>:
+    /// <c>{"outcome":{"outcome":"selected","optionId":"..."}}</c>. NOT probe-confirmed — see
+    /// <see cref="BuildRequestPermissionFrame"/> remarks.
+    /// </summary>
+    public static JsonElement PermissionOutcomeSelected(string optionId) =>
+        JsonDocument.Parse($$$"""{"outcome":{"outcome":"selected","optionId":"{{{optionId}}}"}}""").RootElement.Clone();
+
+    /// <summary>
+    /// Spec-derived client response shape for a DENIED/cancelled <c>session/request_permission</c>:
+    /// <c>{"outcome":{"outcome":"cancelled"}}</c>. NOT probe-confirmed — see
+    /// <see cref="BuildRequestPermissionFrame"/> remarks.
+    /// </summary>
+    public static JsonElement PermissionOutcomeCancelled() =>
+        JsonDocument.Parse("""{"outcome":{"outcome":"cancelled"}}""").RootElement.Clone();
+
+    // ---- wire plumbing ----
+
+    async Task WriteResponseAsync(JsonElement id, JsonElement result, CancellationToken ct) {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteString("jsonrpc", "2.0");
+            writer.WritePropertyName("id");
+            id.WriteTo(writer);
+            writer.WritePropertyName("result");
+            result.WriteTo(writer);
+            writer.WriteEndObject();
+        }
+
+        await WriteLineAsync(Encoding.UTF8.GetString(stream.ToArray()), ct).ConfigureAwait(false);
+    }
+
+    async Task WriteErrorResponseAsync(JsonElement id, int code, string message, CancellationToken ct) {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteString("jsonrpc", "2.0");
+            writer.WritePropertyName("id");
+            id.WriteTo(writer);
+            writer.WriteStartObject("error");
+            writer.WriteNumber("code", code);
+            writer.WriteString("message", message);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+
+        await WriteLineAsync(Encoding.UTF8.GetString(stream.ToArray()), ct).ConfigureAwait(false);
+    }
+
+    async Task WriteRawFrameAsync(JsonElement frame, CancellationToken ct) =>
+        await WriteLineAsync(frame.GetRawText(), ct).ConfigureAwait(false);
+
+    async Task WriteLineAsync(string json, CancellationToken ct) {
+        var bytes = Encoding.UTF8.GetBytes(json + "\n");
+        await _agentWritesToConnection.WriteAsync(bytes, ct).ConfigureAwait(false);
+        await _agentWritesToConnection.FlushAsync(ct).ConfigureAwait(false);
+    }
+
+    public async ValueTask DisposeAsync() {
+        await _agentReadsFromConnection.DisposeAsync().ConfigureAwait(false);
+        await _agentWritesToConnection.DisposeAsync().ConfigureAwait(false);
+        await ClientWriteStream.DisposeAsync().ConfigureAwait(false);
+        await ClientReadStream.DisposeAsync().ConfigureAwait(false);
+    }
+}
