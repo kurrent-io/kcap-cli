@@ -56,7 +56,7 @@ internal sealed class AntigravityImportSource : IImportSource {
         // sessions; ALL transitive descendants (children, grandchildren, …) import as their
         // root's subagents. Cycle-/non-tree-safe (BuildRootDescendants) so a deep chain isn't
         // lost and a cycle imports standalone rather than vanishing. Linkage is complete on disk.
-        var parentMap = AntigravitySubagents.BuildParentMap(_home, _geminiCliHome);
+        var parentMap = AntigravitySubagents.BuildParentMap(_home, _geminiCliHome, ct);
         var convIds   = Directory.EnumerateDirectories(BrainRoot).Select(Path.GetFileName).OfType<string>().ToList();
         var byRoot    = AntigravitySubagents.BuildRootDescendants(convIds, parentMap);
 
@@ -161,13 +161,26 @@ internal sealed class AntigravityImportSource : IImportSource {
         var transcriptPath = (string)c.SourceMeta!["TranscriptPath"]!;
         if (!File.Exists(transcriptPath)) return ImportOutcome.Failed;
 
-        // An AlreadyLoaded root's parent transcript is fully imported, but a subagent may have
-        // been skipped on a prior run (watermark probe / subagent-start / transcript POST
-        // failure). Children classify independently by their own HWM, so still run a child-repair
-        // pass — complete children are no-ops, incomplete ones resume — then report Skipped.
-        // Without this, a once-skipped child would be lost forever (AI-1160 review).
+        // An AlreadyLoaded root's parent transcript is fully imported, but a prior run may have
+        // advanced the transcript watermark and then FAILED a lifecycle POST — most damagingly
+        // session-end, leaving the session with no end event and stuck "running" (the HWM tracks
+        // only content lines, not lifecycle). The import pipeline routes AlreadyLoaded here
+        // precisely so a source can re-assert lifecycle. Re-post session-start, repair children (a
+        // once-skipped subagent would otherwise be lost forever), then re-post session-end — all
+        // idempotent server-side (deterministic lifecycle ids → no-ops when they already
+        // succeeded). If either lifecycle POST fails, return Failed so a re-run retries the repair
+        // instead of reporting a falsely-complete Skipped (mirrors Cursor) (AI-1160 review).
         if (c.Status == ImportCommand.ClassificationStatus.AlreadyLoaded) {
+            if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/antigravity",
+                    BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate), ct))
+                return ImportOutcome.Failed;
+
             await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, c.SourceMeta!, ct);
+
+            if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/antigravity",
+                    BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), ct))
+                return ImportOutcome.Failed;
+
             return ImportOutcome.Skipped;
         }
 
@@ -418,7 +431,7 @@ internal sealed class AntigravityImportSource : IImportSource {
 
     static async Task<int?> FetchServerLastLineAsync(
             HttpClient http, string baseUrl, string sessionId, string? agentId, CancellationToken ct) {
-        var url = $"{baseUrl}/api/sessions/{sessionId}/last-line" + (agentId is not null ? $"?agentId={agentId}" : "");
+        var url = $"{baseUrl}/api/sessions/{sessionId}/last-line" + (agentId is not null ? $"?agentId={Uri.EscapeDataString(agentId)}" : "");
         using var resp = await http.GetWithRetryAsync(url, ct: ct);
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");

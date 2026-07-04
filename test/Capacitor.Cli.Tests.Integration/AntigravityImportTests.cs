@@ -141,12 +141,13 @@ public class AntigravityImportTests : IDisposable {
         var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST")
             .Select(e => e.RequestMessage.Path).ToList();
 
-        // The parent is not re-imported (no session-start/-end), but the missing child IS repaired:
-        // subagent-start → child transcript → subagent-stop.
+        // The parent transcript is not re-sent, but lifecycle IS re-asserted (repair — a prior
+        // run may have failed session-end) and the missing child is repaired: session-start →
+        // subagent-start → child transcript → subagent-stop → session-end (AI-1160 review, finding 1).
         await Assert.That(posts.Contains("/hooks/subagent-start")).IsTrue();
         await Assert.That(posts.Contains("/hooks/subagent-stop")).IsTrue();
-        await Assert.That(posts.Contains("/hooks/session-start/antigravity")).IsFalse();
-        await Assert.That(posts.Contains("/hooks/session-end/antigravity")).IsFalse();
+        await Assert.That(posts.Contains("/hooks/session-start/antigravity")).IsTrue();
+        await Assert.That(posts.Contains("/hooks/session-end/antigravity")).IsTrue();
 
         var childTranscript = _server.LogEntries
             .Where(e => e.RequestMessage.Path == "/hooks/transcript")
@@ -263,6 +264,11 @@ public class AntigravityImportTests : IDisposable {
         // Server reports a high watermark → the transcript's last relevant line is already ingested.
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
+        // AlreadyLoaded still re-asserts lifecycle (idempotent repair), so stub those POSTs.
+        foreach (var route in new[] { "/hooks/session-start/antigravity", "/hooks/session-end/antigravity" }) {
+            _server.Given(Request.Create().WithPath(route).UsingPost())
+                .RespondWith(Response.Create().WithStatusCode(200));
+        }
 
         using var client = new HttpClient();
         var source = new AntigravityImportSource(home: _home, geminiCliHome: "");
@@ -278,5 +284,12 @@ public class AntigravityImportTests : IDisposable {
         var outcome = await source.ImportSessionAsync(
             classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Skipped);
+
+        // No parent transcript re-send, but lifecycle IS re-asserted (repair path).
+        var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST")
+            .Select(e => e.RequestMessage.Path).ToList();
+        await Assert.That(posts.Contains("/hooks/session-start/antigravity")).IsTrue();
+        await Assert.That(posts.Contains("/hooks/session-end/antigravity")).IsTrue();
+        await Assert.That(posts.Contains("/hooks/transcript")).IsFalse();
     }
 }

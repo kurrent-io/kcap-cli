@@ -26,6 +26,19 @@ public class AntigravitySubagentsTests {
     static void MakeBrainDir(string home, string convId) =>
         Directory.CreateDirectory(Path.Combine(home, ".gemini", "antigravity", "brain", convId, ".system_generated", "logs"));
 
+    // AI-1160 review (finding 3): the discovery scan is O(history) IO and must be interruptible.
+    [Test]
+    public async Task BuildParentMap_honors_cancellation() {
+        var home = NewHome();
+        try {
+            MakeBrainDir(home, "P"); // at least one brain dir so the scan loop runs
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+            await Assert.That(() => AntigravitySubagents.BuildParentMap(home: home, geminiCliHome: "", ct: cts.Token))
+                .Throws<OperationCanceledException>();
+        } finally { Directory.Delete(home, recursive: true); }
+    }
+
     [Test]
     public async Task BuildParentMap_links_children_to_the_parent_that_owns_the_message() {
         var home = NewHome();

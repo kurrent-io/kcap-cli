@@ -19,17 +19,24 @@ public static class AntigravitySubagents {
     /// to MULTIPLE parents (pathological / non-tree data), the lexicographically-smallest parent
     /// wins so the map is deterministic regardless of directory enumeration order.
     /// </summary>
-    public static IReadOnlyDictionary<string, string> BuildParentMap(string? home = null, string? geminiCliHome = null) {
+    public static IReadOnlyDictionary<string, string> BuildParentMap(
+            string? home = null, string? geminiCliHome = null, CancellationToken ct = default) {
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
 
         var brainRoot = Path.Combine(AntigravityPaths.Root(home, geminiCliHome), "brain");
         if (!Directory.Exists(brainRoot)) return map;
 
+        // Building the full map requires scanning every brain dir's messages (a child records its
+        // parent, so finding any root's descendants means reading all links). That's O(history) IO,
+        // so honour cancellation between dirs and files — a targeted `--session` import or a Ctrl+C
+        // must be able to interrupt it (AI-1160 review).
         foreach (var brainDir in Directory.EnumerateDirectories(brainRoot)) {
+            ct.ThrowIfCancellationRequested();
             var messages = Path.Combine(brainDir, ".system_generated", "messages");
             if (!Directory.Exists(messages)) continue;
 
             foreach (var file in Directory.EnumerateFiles(messages, "*.json")) {
+                ct.ThrowIfCancellationRequested();
                 try {
                     using var doc = JsonDocument.Parse(File.ReadAllText(file));
                     var root = doc.RootElement;
