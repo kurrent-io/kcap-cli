@@ -274,7 +274,7 @@ Expect ~1-3 minutes total depending on the model and session size — judges run
 kcap review <pr-url-or-owner/repo#number>
 ```
 
-Accepts a GitHub PR URL (`https://github.com/owner/repo/pull/123`, any host including GitHub Enterprise), a GitLab MR URL (`https://gitlab.com/owner/repo/-/merge_requests/123`), or the shorthand `owner/repo#123`. Only single-level `owner/repo` namespaces are supported — GitLab's nested groups (e.g. `group/subgroup/repo`) aren't recognized yet.
+Accepts a GitHub PR URL (`https://github.com/owner/repo/pull/123`, any host including GitHub Enterprise), a GitLab MR URL (`https://gitlab.com/owner/repo/-/merge_requests/123`, including nested groups such as `https://gitlab.com/group/subgroup/repo/-/merge_requests/123`), or the shorthand `owner/repo#123` (single-level only).
 
 Launches a Claude Code session equipped with MCP tools that query the implementation transcripts. Reviewers can ask *why* code was changed, understand design decisions, check what alternatives were considered, and verify test coverage — all grounded in what actually happened during development.
 

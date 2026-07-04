@@ -12,7 +12,9 @@ namespace Capacitor.Cli;
 static class RepositoryDetection {
     // Bump whenever the cached shape/derivation changes so stale entries are ignored.
     // v2: added Host + provider-aware parsing.
-    internal const int CacheSchemaVersion = 2;
+    // v3: multi-segment owner parsing (nested GitLab groups, AI-1121) — v2 entries for
+    //     nested repos have owner=null and must re-derive.
+    internal const int CacheSchemaVersion = 3;
 
     internal static CommandRunner DefaultRunner => RunCommandAsync;
 
