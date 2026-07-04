@@ -12,17 +12,26 @@ public static class UpdateCommand {
     /// </summary>
     internal static string RegistryBaseUrl = "https://registry.npmjs.org";
 
+    /// <summary>Valid npm dist-tags for the update channel (Phase 1).</summary>
+    static readonly string[] KnownChannels = ["latest", "beta"];
+
     /// <summary>
     /// Resolves the effective update channel (npm dist-tag): an explicit
-    /// <c>--beta</c>/<c>--stable</c> flag wins, otherwise the configured
-    /// channel is used, defaulting to <c>"latest"</c> when unset/blank
-    /// (STJ source-gen doesn't apply the record default on deserialize, so a
-    /// real profile can carry a null <c>UpdateChannel</c>).
+    /// <c>--beta</c>/<c>--stable</c> flag wins, otherwise the configured channel
+    /// is used. The result is validated against <see cref="KnownChannels"/> and
+    /// falls back to <c>"latest"</c> for anything unset/blank/unknown. This is the
+    /// single trust boundary for the channel value: it flows into a filesystem
+    /// cache path (<c>update-check-{channel}.json</c>) and the registry URL, so a
+    /// corrupted or hand-edited <c>update_channel</c> (a typo, or one containing
+    /// <c>..</c> or a rooted path) must never reach either unsanitized. STJ
+    /// source-gen also doesn't apply the record default on deserialize, so a real
+    /// profile can carry a null <c>UpdateChannel</c> — also handled here.
     /// </summary>
     internal static string ResolveChannel(string[] args, string? configuredChannel) {
         if (args.Contains("--stable")) return "latest";
         if (args.Contains("--beta"))   return "beta";
-        return string.IsNullOrWhiteSpace(configuredChannel) ? "latest" : configuredChannel;
+        var channel = configuredChannel?.Trim().ToLowerInvariant();
+        return channel is not null && KnownChannels.Contains(channel) ? channel : "latest";
     }
 
     public static async Task<int> HandleAsync(string[] args) {
