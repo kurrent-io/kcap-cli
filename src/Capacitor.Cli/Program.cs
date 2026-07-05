@@ -17,6 +17,20 @@ if (args.Length < 1) {
 
 var command = args[0];
 
+// Interactive commands block on synchronous Spectre.Console prompts. Install a
+// signal + parent-liveness safety net so an abandoned prompt (closed terminal,
+// killed launching agent, detached pseudo-console) can't orphan this process
+// alive — the reported stray `kcap.exe` after `kcap setup` is exited partway.
+//
+// Armed here, before ResolveServerUrl/update-check, on purpose: those can block
+// for seconds (git remote lookup, npm registry), and StartParentWatchdog refuses
+// to arm if the parent is already gone. Installing later leaves a window where
+// the launching agent can exit during that startup work — the watchdog then
+// never starts and the very first prompt still orphans us.
+if (InteractiveLifetime.IsInteractiveCommand(command)) {
+    InteractiveLifetime.Install();
+}
+
 // Hook short-circuit: when spawned inside a kcap-launched headless agent
 // invocation (e.g., title generation, the eval judge) we don't forward the
 // nested session's hook events back into kcap. Scoped to `hook` because
