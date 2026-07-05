@@ -80,6 +80,18 @@ public sealed class ConPtyProcess : IPtyProcess {
         env.Remove("CLAUDECODE");
         env.Remove("CLAUDE_CODE_ENTRYPOINT");
         env.Remove("ANTHROPIC_API_KEY");
+        // A daemon started from inside a Claude Code session inherits that session's
+        // identity vars. CLAUDE_CODE_CHILD_SESSION=1 makes the spawned interactive
+        // claude behave as a child session and never write its own transcript .jsonl,
+        // so `kcap watch` has nothing to stream and the hosted agent's web chat stays
+        // empty forever ("Waiting for conversation data...") while the PTY works fine.
+        // Scrub the whole inherited-session surface: the child marker, the outer
+        // session id, the outer session's env file, and the backup API key Claude
+        // Code stashes for its own children.
+        env.Remove("CLAUDE_CODE_CHILD_SESSION");
+        env.Remove("CLAUDE_CODE_SESSION_ID");
+        env.Remove("CLAUDE_ENV_FILE");
+        env.Remove("ANTHROPIC_API_KEY_CLAUDE_CODE_BACKUP");
         // Parity with UnixPtyProcess: never leak daemon supervision state into spawned
         // children. Auto-restart is out of scope on Windows, but keep the two PTY paths
         // in lockstep so the scrub doesn't drift.
