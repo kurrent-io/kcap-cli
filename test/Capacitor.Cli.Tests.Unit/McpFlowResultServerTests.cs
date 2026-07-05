@@ -86,7 +86,8 @@ public class McpFlowResultServerTests {
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).Contains("no round awaiting a result");
-        await Assert.That(text).Contains("fall back to the marker");
+        await Assert.That(text).Contains("Retry this tool call");
+        await Assert.That(text).Contains("does not read the transcript");
         await Assert.That(delays).HasCount().EqualTo(4); // 5 attempts = 4 delays
         await Assert.That(server.LogEntries.Count()).IsEqualTo(5);
     }
@@ -103,7 +104,7 @@ public class McpFlowResultServerTests {
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).Contains("Discard this result entirely");
-        await Assert.That(text).DoesNotContain("fall back to the marker");
+        await Assert.That(text).DoesNotContain("Retry this tool call");
         await Assert.That(delays).HasCount().EqualTo(0);
         await Assert.That(server.LogEntries.Count()).IsEqualTo(1);
     }
