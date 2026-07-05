@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Antigravity;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
@@ -42,16 +43,17 @@ public static class PluginCommand {
         };
     }
 
-    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--opencode", "--skills"];
+    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--opencode", "--antigravity", "--skills"];
+
+    const string MutuallyExclusiveMsg =
+        "--cursor, --codex, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, and --skills are mutually exclusive.";
 
     static bool HasConflictingTargets(string[] args) =>
         ExclusiveTargetFlags.Count(args.Contains) > 1;
 
     static async Task<int> Install(string[] args, PluginEnvironment env) {
         if (HasConflictingTargets(args)) {
-            await env.Stderr.WriteLineAsync(
-                "--cursor, --codex, --copilot, --gemini, --kiro, --pi, --opencode, and --skills are mutually exclusive."
-            );
+            await env.Stderr.WriteLineAsync(MutuallyExclusiveMsg);
 
             return 1;
         }
@@ -64,15 +66,14 @@ public static class PluginCommand {
         if (args.Contains("--kiro")) return await InstallKiro(args, env);
         if (args.Contains("--pi")) return await InstallPi(args, env);
         if (args.Contains("--opencode")) return await InstallOpenCode(args, env);
+        if (args.Contains("--antigravity")) return await InstallAntigravity(args, env);
 
         return await InstallClaude(args, env);
     }
 
     static async Task<int> Remove(string[] args, PluginEnvironment env) {
         if (HasConflictingTargets(args)) {
-            await env.Stderr.WriteLineAsync(
-                "--cursor, --codex, --copilot, --gemini, --kiro, --pi, --opencode, and --skills are mutually exclusive."
-            );
+            await env.Stderr.WriteLineAsync(MutuallyExclusiveMsg);
 
             return 1;
         }
@@ -85,6 +86,7 @@ public static class PluginCommand {
         if (args.Contains("--kiro")) return await RemoveKiro(args, env);
         if (args.Contains("--pi")) return await RemovePi(args, env);
         if (args.Contains("--opencode")) return await RemoveOpenCode(args, env);
+        if (args.Contains("--antigravity")) return await RemoveAntigravity(args, env);
 
         return await RemoveClaude(args, env);
     }
@@ -896,6 +898,81 @@ public static class PluginCommand {
 
             return 1;
         }
+    }
+
+    // ── Antigravity (AI-1158) — a named block in Antigravity's hooks.json ────────
+    static async Task<int> InstallAntigravity(string[] args, PluginEnvironment env) {
+        var hooksPath = GetArg(args, "--antigravity-hooks-path") ?? env.AntigravityHooksJson;
+
+        var refreshOnly = args.Contains("--if-installed");
+
+        switch (refreshOnly) {
+            case true when !AntigravityHooksInstaller.IsInstalled(hooksPath):
+            case true when AntigravityHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current():
+                return 0;
+            // The block runs the bare `kcap hook --antigravity` command, so Antigravity
+            // (and therefore kcap) must find kcap on PATH. Skipped on the postinstall
+            // (--if-installed) refresh path, like the other vendors.
+            case false when !AgentDetector.IsInstalled("kcap"):
+                await env.Stderr.WriteLineAsync(
+                    "Cannot install Antigravity hooks: 'kcap' is not on PATH. "
+                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                );
+
+                return 1;
+        }
+
+        if (!InstallAntigravityHooks(hooksPath)) {
+            if (refreshOnly) return 0;
+
+            await env.Stderr.WriteLineAsync($"Could not install Antigravity hooks at {hooksPath}.");
+
+            return 1;
+        }
+
+        await env.Stdout.WriteLineAsync(
+            refreshOnly
+                ? $"Antigravity hooks refreshed ({hooksPath})"
+                : $"Antigravity hooks installed ({hooksPath})"
+        );
+
+        return 0;
+    }
+
+    static async Task<int> RemoveAntigravity(string[] args, PluginEnvironment env) {
+        var hooksPath = GetArg(args, "--antigravity-hooks-path") ?? env.AntigravityHooksJson;
+
+        try {
+            var removed = RemoveAntigravityHooks(hooksPath);
+
+            await env.Stdout.WriteLineAsync(
+                removed
+                    ? $"Antigravity hooks removed ({hooksPath})"
+                    : "Antigravity hooks were not installed."
+            );
+
+            return 0;
+        } catch (Exception ex) {
+            await env.Stderr.WriteLineAsync($"Could not update Antigravity hooks at {hooksPath}: {ex.Message}");
+
+            return 1;
+        }
+    }
+
+    /// <summary>Setup-step delegate: install the kcap block, reporting success as a bool.</summary>
+    internal static bool InstallAntigravityHooks(string hooksPath) {
+        try {
+            AntigravityHooksInstaller.Install(hooksPath);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    static bool RemoveAntigravityHooks(string hooksPath) {
+        var was = AntigravityHooksInstaller.IsInstalled(hooksPath);
+        AntigravityHooksInstaller.Remove(hooksPath);
+        return was;
     }
 
     static async Task<int> InstallCopilot(string[] args, PluginEnvironment env) {

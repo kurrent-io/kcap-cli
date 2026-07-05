@@ -594,7 +594,7 @@ static class McpFlowsServer {
                     ["target_kind"]  = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
                     ["target_ref"]   = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
                     ["target_title"] = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
-                    ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done."),
+                    ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done. State where the changes live — the reviewer sees a mirror of the working tree you launched from only; if the changeset is elsewhere or incomplete there, say so and inline the relevant diffs."),
                     ["instructions"] = new("string", "Optional additional instructions for the reviewer agent."),
                     ["mode"]         = new("string", "Optional. Pass 'context-only' to have the reviewer treat the submitted context/diff as authoritative rather than reading the repository. By default the reviewer runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the review in the actual source; passing 'context-only' opts out of that.")
                 },
@@ -648,7 +648,7 @@ static class McpFlowsServer {
                     ["target_kind"]    = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
                     ["target_ref"]     = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
                     ["target_title"]   = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
-                    ["context"]        = new("string", "Background context for the agent: what to focus on, constraints, definition of done."),
+                    ["context"]        = new("string", "Background context for the agent: what to focus on, constraints, definition of done. State where the changes live — the participant sees a mirror of the working tree you launched from only; if the changeset is elsewhere or incomplete there, say so and inline the relevant diffs."),
                     ["instructions"]   = new("string", "Optional additional instructions for the agent."),
                     ["mode"]           = new("string", "Optional. Pass 'context-only' to have the agent treat the submitted context/diff as authoritative rather than reading the repository. By default the agent runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the work in the actual source; passing 'context-only' opts out of that.")
                 },

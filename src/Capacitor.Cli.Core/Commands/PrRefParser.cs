@@ -42,9 +42,11 @@ public static partial class PrRefParser {
     [GeneratedRegex(@"^https?://[^/]+/([^/]+)/([^/]+)/pull/(\d+)(?:[/?#].*)?$")]
     private static partial Regex GitHubUrlPattern();
 
-    // GitLab MR URL. Single-level owner/repo only (nested groups deferred, §3/§6b).
+    // GitLab MR URL. Nested groups supported (§6b / AI-1121): owner is the full
+    // namespace path before the project, project is the last segment. The literal
+    // "/-/merge_requests/" delimiter disambiguates the greedy owner from the project.
     // Same trailing-suffix tolerance so /diffs, /commits, ?query, #note parse.
-    [GeneratedRegex(@"^https?://[^/]+/([^/]+)/([^/]+)/-/merge_requests/(\d+)(?:[/?#].*)?$")]
+    [GeneratedRegex(@"^https?://[^/]+/(.+)/([^/]+)/-/merge_requests/(\d+)(?:[/?#].*)?$")]
     private static partial Regex GitLabUrlPattern();
 
     // Shorthand owner/repo#123 — single-level, unchanged. Repo forbids '/'.

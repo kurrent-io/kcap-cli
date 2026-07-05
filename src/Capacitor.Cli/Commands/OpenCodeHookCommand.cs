@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
@@ -101,10 +100,11 @@ static class OpenCodeHookCommand {
             return 0;
         }
 
-        // Fail-open like Kiro: a non-zero exit would surface as a failed plugin
-        // call; skip the watcher this firing and let the next session.idle retry.
-        var exit = await PostHookAsync(baseUrl, "session-start/opencode", enriched);
-        if (exit != 0) return 0;
+        // Fail-open like Kiro: a non-zero exit would surface as a failed plugin call. On a real
+        // failure PostHookAsync logged to stderr; on an auth lapse it stayed silent (no doomed
+        // POST). Either way skip the watcher this firing and exit 0; the next session.idle retries.
+        var outcome = await PostHookAsync(baseUrl, "session-start/opencode", enriched);
+        if (outcome != HookPostOutcome.Posted) return 0;
 
         await WatcherManager.EnsureWatcherRunning(
             baseUrl, sessionId, file,
@@ -115,24 +115,11 @@ static class OpenCodeHookCommand {
         return 0;
     }
 
-    static async Task<int> PostHookAsync(string baseUrl, string endpoint, string body) {
-        using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync();
-        using var content = new StringContent(body, Encoding.UTF8, "application/json");
-
-        try {
-            var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{endpoint}", content);
-
-            if (!resp.IsSuccessStatusCode) {
-                Console.Error.WriteLine($"[kcap] opencode-hook {endpoint}: HTTP {(int)resp.StatusCode}");
-                return 1;
-            }
-
-            return 0;
-        } catch (HttpRequestException ex) {
-            HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
-            return 1;
-        }
-    }
+    // Shared auth-aware recording POST: skips the doomed POST (and the misleading per-turn
+    // "HTTP 401" stderr line) when auth has lapsed, reporting AuthLapsed so the caller exits
+    // cleanly instead of erroring. See AgentHookPoster.
+    static Task<HookPostOutcome> PostHookAsync(string baseUrl, string endpoint, string body)
+        => AgentHookPoster.PostAsync(baseUrl, endpoint, body, "opencode-hook");
 
     static string? GetArg(string[] args, string flag) {
         var idx = Array.IndexOf(args, flag);

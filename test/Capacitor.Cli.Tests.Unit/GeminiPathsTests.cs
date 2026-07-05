@@ -39,4 +39,45 @@ public class GeminiPathsTests {
             Environment.SetEnvironmentVariable("GEMINI_HOME", originalOld);
         }
     }
+
+    // AI-1158: ~/.gemini is shared with Google Antigravity — an Antigravity-only
+    // home must NOT read as a Gemini install, but a real Gemini marker still must.
+    [Test]
+    public async Task IsInstalled_false_when_only_antigravity_present() {
+        var home = Path.Combine(Path.GetTempPath(), "kcap-gem-" + Guid.NewGuid().ToString("N"));
+        try {
+            // Antigravity-only: ~/.gemini exists but holds only antigravity subdirs.
+            Directory.CreateDirectory(Path.Combine(home, ".gemini", "antigravity", "brain"));
+            Directory.CreateDirectory(Path.Combine(home, ".gemini", "antigravity-cli"));
+            await Assert.That(GeminiPaths.IsInstalled(home: home, geminiCliHome: "")).IsFalse();
+        } finally {
+            if (Directory.Exists(home)) Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Test]
+    [Arguments("settings.json")]
+    [Arguments("projects.json")]
+    public async Task IsInstalled_true_on_gemini_marker_file(string marker) {
+        var home = Path.Combine(Path.GetTempPath(), "kcap-gem-" + Guid.NewGuid().ToString("N"));
+        try {
+            var root = Path.Combine(home, ".gemini");
+            Directory.CreateDirectory(root);
+            await File.WriteAllTextAsync(Path.Combine(root, marker), "{}");
+            await Assert.That(GeminiPaths.IsInstalled(home: home, geminiCliHome: "")).IsTrue();
+        } finally {
+            if (Directory.Exists(home)) Directory.Delete(home, recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task IsInstalled_true_on_tmp_recordings_dir() {
+        var home = Path.Combine(Path.GetTempPath(), "kcap-gem-" + Guid.NewGuid().ToString("N"));
+        try {
+            Directory.CreateDirectory(Path.Combine(home, ".gemini", "tmp"));
+            await Assert.That(GeminiPaths.IsInstalled(home: home, geminiCliHome: "")).IsTrue();
+        } finally {
+            if (Directory.Exists(home)) Directory.Delete(home, recursive: true);
+        }
+    }
 }

@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Antigravity;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
@@ -157,7 +158,20 @@ static partial class WatchCommand {
 
         var state = new WatchState();
         state.LastActivityAt = DateTimeOffset.UtcNow;
-        var codexIdleTimeout = ResolveCodexIdleTimeout(Environment.GetEnvironmentVariable("KCAP_CODEX_IDLE_MINUTES"));
+        // Antigravity posts /hooks/session-start BEFORE the watcher spawns, so the session is
+        // already committed server-side — the below-threshold buffering (which exists to avoid
+        // junk sessions the server hasn't seen) doesn't apply. Treat it as past-threshold from
+        // the start so short conversations stream live and still idle-end + post session-end
+        // (otherwise a <10-line conversation would never reach threshold, never idle-end, and
+        // leave the session Active with the watcher lingering — the IDE process outlives it).
+        if (vendor == "antigravity") state.ThresholdReached = true;
+        // Antigravity is a GUI app like the Codex desktop: its shared process never
+        // exits per-conversation, so (like Codex) the idle timeout — not a parent-exit
+        // watchdog — is the per-conversation session-end path. Its own knob so tenants
+        // can tune the two GUIs independently.
+        var idleTimeout = vendor == "antigravity"
+            ? ResolveCodexIdleTimeout(Environment.GetEnvironmentVariable("KCAP_ANTIGRAVITY_IDLE_MINUTES"))
+            : ResolveCodexIdleTimeout(Environment.GetEnvironmentVariable("KCAP_CODEX_IDLE_MINUTES"));
         var idleExit = false;
 
         if (skipTitle) {
@@ -316,9 +330,13 @@ static partial class WatchCommand {
                         state.ThresholdReached,
                         state.LastActivityAt,
                         DateTimeOffset.UtcNow,
-                        codexIdleTimeout,
-                        toolInFlight: state.PendingCodexToolCalls.Count > 0)) {
-                    Log($"Codex rollout idle for >{codexIdleTimeout.TotalMinutes:F0}m; ending session (idle_timeout)");
+                        idleTimeout,
+                        // A tool awaiting its result suppresses idle-end: Codex tracks call_ids,
+                        // Antigravity counts PLANNER_RESPONSE calls vs result steps (AI-1157 review).
+                        toolInFlight: vendor == "antigravity"
+                            ? state.PendingAntigravityToolCalls > 0
+                            : state.PendingCodexToolCalls.Count > 0)) {
+                    Log($"{vendor} transcript idle for >{idleTimeout.TotalMinutes:F0}m; ending session (idle_timeout)");
                     idleExit = true;
                     cts.Cancel();
 
@@ -524,7 +542,7 @@ static partial class WatchCommand {
     /// Used to reject unexpected --vendor input before interpolating into the URL
     /// path (defence-in-depth against path traversal even though the CLI runs locally).
     /// </summary>
-    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode" };
+    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode", "antigravity" };
 
     /// <summary>
     /// Total time budget for the parent-exit session-end POST. Covers /auth/config
@@ -558,10 +576,11 @@ static partial class WatchCommand {
 
     /// <summary>
     /// Whether the watcher should self-terminate and POST session-end because the
-    /// Codex rollout file has gone idle. Pure so the policy is unit-testable.
-    /// Gated to: vendor codex (only vendor whose parent-exit watchdog can't fire
-    /// per-conversation — the desktop app's shared app-server never exits per
-    /// session), session watchers (not subagents), and threshold-reached sessions
+    /// vendor's transcript file has gone idle. Pure so the policy is unit-testable.
+    /// Gated to: the two GUI vendors whose parent-exit watchdog can't fire
+    /// per-conversation — codex (the desktop app's shared app-server never exits per
+    /// session) and antigravity (the IDE process outlives any one conversation) —
+    /// session watchers (not subagents), and threshold-reached sessions
     /// (below-threshold short-lived sessions have no server session to end). Uses
     /// strictly-greater-than so the boundary tick is not yet considered idle.
     /// Also suppressed when a tool call is in flight (<paramref name="toolInFlight"/>
@@ -580,7 +599,7 @@ static partial class WatchCommand {
             TimeSpan       idleTimeout,
             bool           toolInFlight = false
         ) =>
-        vendor == "codex"
+        (vendor == "codex" || vendor == "antigravity")
         && isSessionWatcher
         && thresholdReached
         && now - lastActivityAt > idleTimeout
@@ -783,6 +802,31 @@ static partial class WatchCommand {
 
             var linesRead = lineIndex;
 
+            // Track Antigravity in-flight tool calls + the latest step timestamp from this
+            // drain's transcript lines (BEFORE appending USAGE lines, which aren't transcript
+            // steps). The created_at anchors USAGE recency; the pending-call count suppresses a
+            // premature idle session-end while a long command runs (no line between call/result).
+            if (vendor == "antigravity") {
+                foreach (var l in newLines) {
+                    UpdateAntigravityPendingToolCalls(state, l);
+                    if (TryGetAntigravityCreatedAt(l) is { } ca) state.LastAntigravityCreatedAt = ca;
+                }
+            }
+
+            // Antigravity keeps per-generation tokens/model in the sibling conversation .db
+            // (derived from the transcript path — the session id here is the canonical dashless
+            // form, but the transcript path carries the real conversation id), not the JSONL;
+            // poll for newly-appended gen_metadata rows and stream them as synthetic USAGE
+            // lines (server → AntigravityUsageBackfilledEvent). Only outside the below-threshold
+            // buffering phase (a session watcher that hasn't reached threshold buffers without
+            // sending — injecting there would either dupe on re-read or be lost on a flush
+            // failure); subagent watchers (agentId != null) never buffer. The gen watermark
+            // advances only after a successful send (below), so a failed batch re-reads the rows.
+            var antigravityGenMax = -1L;
+            if (vendor == "antigravity" && (agentId is not null || state.ThresholdReached)) {
+                antigravityGenMax = AppendAntigravityUsageLines(state, newLines, newLineNumbers, transcriptPath, state.LastAntigravityCreatedAt);
+            }
+
             if (newLines.Count > 0) {
                 state.LastActivityAt = DateTimeOffset.UtcNow;
             }
@@ -970,6 +1014,12 @@ static partial class WatchCommand {
                 // so re-sending is idempotent.
                 state.LinesProcessed = linesRead;
 
+                // Commit the Antigravity gen_metadata watermark ONLY now (after the batch
+                // carrying its USAGE lines landed); a failed send above leaves it unchanged
+                // so the rows re-read next drain instead of being skipped forever.
+                if (antigravityGenMax > state.LastAntigravityGenIdx)
+                    state.LastAntigravityGenIdx = antigravityGenMax;
+
                 if (repoToSend is not null) {
                     state.LastSentRepository = repoToSend;
                 }
@@ -1011,6 +1061,7 @@ static partial class WatchCommand {
             "kiro"     => TryExtractKiroAssistantText(line),
             "pi"       => TryExtractPiAssistantText(line),
             "opencode" => TryExtractOpenCodeText(line, "assistant"),
+            "antigravity" => TryExtractAntigravityText(line, "assistant"),
             _          => TryExtractClaudeAssistantText(line)
         };
 
@@ -1132,6 +1183,19 @@ static partial class WatchCommand {
                 return OpenCodeTextParts(root.Arr("parts")) is not null;
             }
 
+            if (vendor == "antigravity") {
+                // Antigravity transcript_full.jsonl lines carry a `type`; only the two
+                // conversational steps count toward the title-event threshold, and only
+                // when they have text (a tool-only PLANNER_RESPONSE or an empty prompt
+                // yields no titleable text). Everything else (RUN_COMMAND, VIEW_FILE,
+                // GENERIC, CHECKPOINT, INVOKE_SUBAGENT, SYSTEM_*) is plumbing.
+                return root.Str("type") switch {
+                    "USER_INPUT"       => TryExtractAntigravityText(line, "user")      is not null,
+                    "PLANNER_RESPONSE" => TryExtractAntigravityText(line, "assistant") is not null,
+                    _                  => false
+                };
+            }
+
             return root.Str("type") is "user" or "assistant";
         } catch {
             return false;
@@ -1145,6 +1209,7 @@ static partial class WatchCommand {
             "kiro"     => TryExtractKiroUserText(line),
             "pi"       => TryExtractPiUserText(line),
             "opencode" => TryExtractOpenCodeText(line, "user"),
+            "antigravity" => TryExtractAntigravityText(line, "user"),
             _          => TryExtractClaudeUserText(line)
         };
 
@@ -1178,6 +1243,112 @@ static partial class WatchCommand {
         }
 
         return pieces.Count > 0 ? string.Join("\n", pieces) : null;
+    }
+
+    // ── Antigravity extractors (AI-1158) ────────────────────────────────────────
+    //
+    // Antigravity writes brain/<id>/.system_generated/logs/transcript_full.jsonl as
+    // {step_index, source, type, status, content, thinking, tool_calls, …} lines.
+    // USER_INPUT (source USER_EXPLICIT) carries the prompt wrapped in
+    // <USER_REQUEST>…</USER_REQUEST> plus trailing <ADDITIONAL_METADATA>/
+    // <USER_SETTINGS_CHANGE> blocks; PLANNER_RESPONSE (source MODEL) carries the
+    // assistant's visible `content`. Mirrors the server's
+    // AntigravityTranscriptNormalizer so watcher titles match ingest.
+    static string? TryExtractAntigravityText(string line, string role) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            var want = role == "user" ? "USER_INPUT" : "PLANNER_RESPONSE";
+            if (root.Str("type") != want) return null;
+
+            if (root.Str("content")?.Trim() is not { Length: > 0 } content) return null;
+
+            return role == "user" ? StripAntigravityUserWrapper(content) : content;
+        } catch {
+            return null;
+        }
+    }
+
+    // Pull the human prompt out of the <USER_REQUEST> envelope, dropping the trailing
+    // metadata blocks Antigravity appends. Falls back to the raw text when no envelope
+    // is present.
+    static string? StripAntigravityUserWrapper(string content) {
+        const string open = "<USER_REQUEST>", close = "</USER_REQUEST>";
+        var start = content.IndexOf(open, StringComparison.Ordinal);
+        if (start < 0) return content;
+
+        start += open.Length;
+        var end   = content.IndexOf(close, start, StringComparison.Ordinal);
+        var inner = (end < 0 ? content[start..] : content[start..end]).Trim();
+
+        return inner.Length > 0 ? inner : null;
+    }
+
+    // Synthetic USAGE line numbers live in a high band so they never collide with real
+    // transcript line numbers (which start at 0). The server derives the USAGE event id
+    // from line CONTENT (which carries gen_row), so the line number is only an ordering
+    // hint — a stable, non-colliding value keeps re-sends idempotent.
+    const long AntigravityUsageLineBase = 1_000_000_000L;
+
+    /// <summary>
+    /// Appends synthetic USAGE lines for gen_metadata rows past the committed watermark, and
+    /// returns the max row idx staged (-1 if none). It does NOT advance the watermark — the
+    /// caller commits it only after the batch send succeeds, so a failed send re-reads the
+    /// rows next drain. The db is the sibling of the transcript (its path carries the real
+    /// conversation id, even when the session id is the canonical dashless form).
+    /// </summary>
+    static long AppendAntigravityUsageLines(WatchState state, List<string> newLines, List<int> newLineNumbers, string transcriptPath, string? createdAt) {
+        var maxIdx = -1L;
+        try {
+            if (AntigravityPaths.ConversationDbFromTranscript(transcriptPath) is not { } dbPath) return -1L;
+            var rows = AntigravityGenMetadataDb.ReadUsageLines(dbPath, state.LastAntigravityGenIdx, createdAt);
+
+            foreach (var (idx, line) in rows) {
+                newLines.Add(line);
+                newLineNumbers.Add((int)(AntigravityUsageLineBase + idx));
+                if (idx > maxIdx) maxIdx = idx;
+            }
+        } catch (Exception ex) {
+            // Cost is always best-effort (AI-728) — never let a db read break the drain.
+            Log($"Antigravity usage poll failed: {ex.Message}");
+        }
+        return maxIdx;
+    }
+
+    /// <summary>
+    /// Tracks Antigravity tool calls in flight from a transcript line: a PLANNER_RESPONSE adds
+    /// its tool_calls count; a result step (RUN_COMMAND/VIEW_FILE/LIST_DIRECTORY/CODE_ACTION)
+    /// removes one. Safe to call for any line — non-matching / malformed lines are ignored — so
+    /// the count reflects whether a (possibly long-running) tool is awaiting its result.
+    /// </summary>
+    internal static void UpdateAntigravityPendingToolCalls(WatchState state, string line) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return;
+
+            switch (root.Str("type")) {
+                case "PLANNER_RESPONSE":
+                    if (root.Arr("tool_calls") is { } calls)
+                        state.PendingAntigravityToolCalls += calls.EnumerateArray().Count(tc => tc.Str("name") is not null);
+                    break;
+                case "RUN_COMMAND" or "VIEW_FILE" or "LIST_DIRECTORY" or "CODE_ACTION":
+                    if (state.PendingAntigravityToolCalls > 0) state.PendingAntigravityToolCalls--;
+                    break;
+            }
+        } catch {
+            // Never break the drain loop on a malformed line.
+        }
+    }
+
+    static string? TryGetAntigravityCreatedAt(string line) {
+        try {
+            using var doc = JsonDocument.Parse(line);
+            return doc.RootElement.ValueKind == JsonValueKind.Object ? doc.RootElement.Str("created_at") : null;
+        } catch {
+            return null;
+        }
     }
 
     // ── Kiro extractors (AI-888) ───────────────────────────────────────────

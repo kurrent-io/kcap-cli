@@ -6,12 +6,62 @@ using Capacitor.Cli.Core.Config;
 namespace Capacitor.Cli.Commands;
 
 public static class UpdateCommand {
-    static readonly string CachePath = PathHelpers.ConfigPath("update-check.json");
+    /// <summary>
+    /// npm registry base URL. Overridable seam so integration tests can point
+    /// the CLI at a fake registry (e.g. WireMock) instead of the real npm registry.
+    /// </summary>
+    internal static string RegistryBaseUrl = "https://registry.npmjs.org";
+
+    /// <summary>Valid npm dist-tags for the update channel (Phase 1).</summary>
+    static readonly string[] KnownChannels = ["latest", "beta"];
+
+    /// <summary>
+    /// Resolves the effective update channel (npm dist-tag): an explicit
+    /// <c>--beta</c>/<c>--stable</c> flag wins, otherwise the configured channel
+    /// is used. The result is validated against <see cref="KnownChannels"/> and
+    /// falls back to <c>"latest"</c> for anything unset/blank/unknown. This is the
+    /// single trust boundary for the channel value: it flows into a filesystem
+    /// cache path (<c>update-check-{channel}.json</c>) and the registry URL, so a
+    /// corrupted or hand-edited <c>update_channel</c> (a typo, or one containing
+    /// <c>..</c> or a rooted path) must never reach either unsanitized. STJ
+    /// source-gen also doesn't apply the record default on deserialize, so a real
+    /// profile can carry a null <c>UpdateChannel</c> — also handled here.
+    /// </summary>
+    internal static string ResolveChannel(string[] args, string? configuredChannel) {
+        if (args.Contains("--stable")) return "latest";
+        if (args.Contains("--beta"))   return "beta";
+        var channel = configuredChannel?.Trim().ToLowerInvariant();
+        return channel is not null && KnownChannels.Contains(channel) ? channel : "latest";
+    }
 
     public static async Task<int> HandleAsync(string[] args) {
+        var profile   = await AppConfig.GetActiveProfileAsync();
+        var channel   = ResolveChannel(args, profile?.UpdateChannel);
         var checkOnly = args.Contains("--check");
 
-        var (latest, current) = await CheckForUpdateAsync(forceCheck: true);
+        // Persist an explicit channel switch onto the active profile so future
+        // auto-updates track it. Update the profile inside ProfileConfig and save
+        // the whole v2 config via SaveProfileConfig — NEVER write a flat
+        // LegacyV1Config, which would overwrite the user's v2 profile config.
+        if (args.Contains("--beta") || args.Contains("--stable")) {
+            var pc = await AppConfig.LoadProfileConfig();
+
+            // Must match the profile GetActiveProfileAsync() resolved above (the
+            // read side): when a profile was resolved (env var, .kcap.json, git
+            // remote match, or `kcap use` binding), persist to THAT profile —
+            // not blindly to the on-disk active_profile — so the switch sticks
+            // for the profile the user is actually on.
+            var targetName = AppConfig.ResolvedProfile?.ProfileName ?? pc.ActiveProfile;
+            if (pc.Profiles.TryGetValue(targetName, out var active)
+             && active.UpdateChannel != channel) {
+                var profiles = new Dictionary<string, Profile>(pc.Profiles) {
+                    [targetName] = active with { UpdateChannel = channel }
+                };
+                await AppConfig.SaveProfileConfig(pc with { Profiles = profiles });
+            }
+        }
+
+        var (latest, current) = await CheckForUpdateAsync(forceCheck: true, channel);
 
         if (checkOnly) {
             // Machine-readable probe consumed by the npm launcher (kcap.js).
@@ -26,9 +76,11 @@ public static class UpdateCommand {
                 : IsNewer(latest, current);
 
             var obj = new JsonObject {
-                ["current"] = current,
-                ["latest"]  = latest,
-                ["newer"]   = newer,
+                ["current"]     = current,
+                ["latest"]      = latest,
+                ["newer"]       = newer,
+                ["channel"]     = channel,
+                ["install_tag"] = channel,
             };
 
             await Console.Out.WriteLineAsync(obj.ToJsonString());
@@ -70,12 +122,11 @@ public static class UpdateCommand {
     /// Called on every CLI invocation (cached, max once per 24h).
     /// </summary>
     public static async Task PrintUpdateHintIfAvailable() {
-        var config = await AppConfig.Load();
-
-        if (config?.UpdateCheck == false) return;
-
         try {
-            var (latest, current) = await CheckForUpdateAsync(forceCheck: false);
+            var profile = await AppConfig.GetActiveProfileAsync();
+            if (profile?.UpdateCheck == false) return;
+            var channel = ResolveChannel([], profile?.UpdateChannel);
+            var (latest, current) = await CheckForUpdateAsync(forceCheck: false, channel);
 
             if (latest is not null && current is not null && IsNewer(latest, current)) {
                 await Console.Error.WriteLineAsync();
@@ -87,14 +138,22 @@ public static class UpdateCommand {
         }
     }
 
-    static async Task<(string? latest, string? current)> CheckForUpdateAsync(bool forceCheck) {
-        var current = GetCurrentVersion();
+    /// <summary>
+    /// Per-channel cache path so a <c>beta</c> check doesn't clobber the
+    /// cached <c>latest</c> result (and vice versa).
+    /// </summary>
+    static string CachePathFor(string channel) =>
+        PathHelpers.ConfigPath($"update-check-{channel}.json");
+
+    internal static async Task<(string? latest, string? current)> CheckForUpdateAsync(bool forceCheck, string channel) {
+        var current   = GetCurrentVersion();
+        var cachePath = CachePathFor(channel);
 
         if (!forceCheck) {
             // Check cache
-            if (File.Exists(CachePath)) {
+            if (File.Exists(cachePath)) {
                 try {
-                    var cacheJson     = await File.ReadAllTextAsync(CachePath);
+                    var cacheJson     = await File.ReadAllTextAsync(cachePath);
                     var cache         = JsonNode.Parse(cacheJson);
                     var checkedAt     = cache?["checked_at"]?.GetValue<DateTimeOffset>();
                     var cachedVersion = cache?["latest_version"]?.GetValue<string>();
@@ -116,7 +175,7 @@ public static class UpdateCommand {
         http.DefaultRequestHeaders.Add("User-Agent", "kcap-cli");
 
         try {
-            var resp = await http.GetAsync("https://registry.npmjs.org/@kurrent/kcap/latest");
+            var resp = await http.GetAsync($"{RegistryBaseUrl}/@kurrent/kcap/{channel}");
 
             if (!resp.IsSuccessStatusCode) return (null, current);
 
@@ -126,16 +185,16 @@ public static class UpdateCommand {
 
             // Cache result
             if (latest is not null) {
-                var dir = Path.GetDirectoryName(CachePath)!;
+                var dir = Path.GetDirectoryName(cachePath)!;
                 Directory.CreateDirectory(dir);
 
                 var cacheObj = new JsonObject {
                     ["latest_version"] = latest,
                     ["checked_at"]     = DateTimeOffset.UtcNow
                 };
-                var tempPath = $"{CachePath}.tmp";
+                var tempPath = $"{cachePath}.tmp";
                 await File.WriteAllTextAsync(tempPath, cacheObj.ToJsonString());
-                File.Move(tempPath, CachePath, overwrite: true);
+                File.Move(tempPath, cachePath, overwrite: true);
             }
 
             return (latest, current);
@@ -144,7 +203,7 @@ public static class UpdateCommand {
         }
     }
 
-    static bool IsNewer(string? latest, string? current) => SemverCompare.IsNewer(latest, current);
+    static bool IsNewer(string? latest, string? current) => PrereleaseSemver.IsNewer(latest, current);
 
     static string? GetCurrentVersion() {
         var v = CapacitorVersion.CurrentDisplay();

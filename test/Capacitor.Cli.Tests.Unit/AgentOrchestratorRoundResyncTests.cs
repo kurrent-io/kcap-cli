@@ -52,7 +52,7 @@ public partial class AgentOrchestratorVendorTests {
 
             var agent = new AgentInstance(
                 "agent-flow", null, "", null, baseRepo, "codex",
-                pty, new WorktreeInfo(reviewerWorktree, "", baseRepo), new CancellationTokenSource()) {
+                new PtyHostedAgentRuntime("codex", pty), new WorktreeInfo(reviewerWorktree, "", baseRepo), new CancellationTokenSource()) {
                 SyncSourceRepoRoot = callerRepo,
                 Work               = WorkLocation.OwnedWorktree
             };
@@ -94,7 +94,7 @@ public partial class AgentOrchestratorVendorTests {
 
             var agent = new AgentInstance(
                 "agent-borrowed", null, "", null, callerRepo, "codex",
-                pty, WorktreeInfo.Borrowed(borrowedCwd), new CancellationTokenSource()) {
+                new PtyHostedAgentRuntime("codex", pty), WorktreeInfo.Borrowed(borrowedCwd), new CancellationTokenSource()) {
                 SyncSourceRepoRoot = callerRepo,
                 Work               = WorkLocation.BorrowedCwd
             };
@@ -129,7 +129,7 @@ public partial class AgentOrchestratorVendorTests {
 
             var agent = new AgentInstance(
                 "agent-plain", null, "", null, "/tmp", "codex",
-                pty, new WorktreeInfo(worktree, "", "/tmp"), new CancellationTokenSource()) {
+                new PtyHostedAgentRuntime("codex", pty), new WorktreeInfo(worktree, "", "/tmp"), new CancellationTokenSource()) {
                 SyncSourceRepoRoot = null,
                 Work               = WorkLocation.OwnedWorktree
             };

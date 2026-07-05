@@ -14,14 +14,14 @@ using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
 
-public record AgentInstance(
+internal record AgentInstance(
         string                  Id,
         string?                 Prompt,
         string                  Model,
         string?                 Effort,
         string                  RepoPath,
         string                  Vendor,
-        IPtyProcess             Process,
+        IHostedAgentRuntime     Runtime,
         WorktreeInfo            Worktree,
         CancellationTokenSource ReadCts
     ) {
@@ -147,6 +147,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly IHttpClientFactory                                _httpClientFactory;
     readonly LocalPermissionBridge                             _permissionBridge;
     readonly IReadOnlyDictionary<string, IHostedAgentLauncher> _launchers;
+    readonly IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> _runtimeFactories;
     readonly ILogger<AgentOrchestrator>                        _logger;
 
     // Hosted-agent PTYs are spawned at a fixed size and never resized. The daemon
@@ -169,6 +170,25 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly PeriodicTimer _daemonHeartbeat = new(TimeSpan.FromSeconds(7));
 
     static readonly TimeSpan PingDeadline = TimeSpan.FromSeconds(5);
+
+    // AI-992: proactively refresh the active profile's auth token ahead of expiry so a
+    // continuously-running daemon keeps a WorkOS sliding-inactivity session alive (up to its
+    // absolute lifetime) rather than forcing a `kcap login` after an idle period. The tick is
+    // cheap (a token-file read + expiry compare) and only calls the refresh endpoint when the
+    // token is within ProactiveRefreshWindow of expiry; TokenRefreshLoop further rate-limits
+    // attempts to at most one per ProactiveRefreshMinInterval, so refresh traffic stays bounded
+    // even for a failing refresh or a short-lived token that keeps re-entering the window.
+    readonly PeriodicTimer _tokenRefresh = new(TimeSpan.FromSeconds(60));
+
+    // Refresh once the token is within this much of its expiry. Comfortably above the 60 s tick
+    // so the window is never stepped over.
+    static readonly TimeSpan ProactiveRefreshWindow = TimeSpan.FromMinutes(5);
+
+    // Hit the refresh endpoint at most once per this interval (see TokenRefreshLoop). Small
+    // enough that a healthy token issued with a short lifetime is still renewed before it
+    // lapses during idle; large enough that a dead/rotated refresh token isn't re-hit every
+    // tick.
+    static readonly TimeSpan ProactiveRefreshMinInterval = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// How long <see cref="FinalizeAgentRunAsync"/> waits on the (reconnect-retrying)
@@ -194,6 +214,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             IHttpClientFactory                                httpClientFactory,
             LocalPermissionBridge                             permissionBridge,
             IReadOnlyDictionary<string, IHostedAgentLauncher> launchers,
+            IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> runtimeFactories,
             IHostApplicationLifetime                          lifetime,
             ILogger<AgentOrchestrator>                        logger
         ) {
@@ -206,6 +227,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _httpClientFactory = httpClientFactory;
         _permissionBridge  = permissionBridge;
         _launchers         = launchers;
+        _runtimeFactories  = runtimeFactories;
         _logger            = logger;
 
         // Wire up server commands
@@ -227,6 +249,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Start heartbeat loops
         _ = RunHeartbeatLoopAsync(_shutdownCts.Token);
         _ = RunDaemonHeartbeatLoopAsync(_shutdownCts.Token);
+        _ = RunTokenRefreshLoopAsync(_shutdownCts.Token);
     }
 
     internal int ActiveCount => _agents.Count(a => a.Value.Status is "Starting" or "Running");
@@ -247,16 +270,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // .TryGetValue(null) throws ArgumentNullException — which SafeInvoke would swallow, dropping
         // the launch with no LaunchFailed reaching the server. (The removed vendor allowlist used to
         // absorb this incidentally.)
-        if (string.IsNullOrWhiteSpace(cmd.Vendor) || !_launchers.TryGetValue(cmd.Vendor, out var launcher)) {
+        if (string.IsNullOrWhiteSpace(cmd.Vendor) || !_runtimeFactories.TryGetValue(cmd.Vendor, out var runtimeFactory)) {
             await _server.LaunchFailedAsync(cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
 
             return;
         }
 
         // AI-1124: fail an unattended (review-flow) launch fast when the selected vendor's
-        // launcher can't run unattended — before creating a worktree, so there's nothing to
-        // clean up. Both shipped launchers support it; this guards future vendors.
-        if (UnattendedLaunchPolicy.RejectionReason(launcher, isReviewFlow) is { } unattendedRejection) {
+        // runtime can't run unattended — before creating a worktree, so there's nothing to
+        // clean up. Both shipped PTY launchers support it; this guards future vendors (and the
+        // ACP/Cursor runtime, which does not).
+        if (UnattendedLaunchPolicy.RejectionReason(cmd.Vendor, runtimeFactory.SupportsUnattended, isReviewFlow) is { } unattendedRejection) {
             await _server.LaunchFailedAsync(cmd.AgentId, unattendedRejection);
 
             return;
@@ -355,8 +379,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
 
-            var launcherCtx = new LauncherContext(
+            var runtimeCtx = new RuntimeStartContext(
                 AgentId: agentId,
+                Vendor: cmd.Vendor,
                 SourceRepoPath: repoPath,
                 Worktree: worktree,
                 Prompt: prompt,
@@ -366,15 +391,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 IsReview: isReview,
                 IsReviewFlow: isReviewFlow,
                 Review: cmd.Review,
-                ReviewLaunch: isReview && cmd.Review is { } reviewArgs
-                    ? await ReviewLaunchBuilder.BuildAsync(cmd.Vendor, _config.CapacitorPath, _config.ServerUrl ?? "", reviewArgs.Owner, reviewArgs.Repo, reviewArgs.PrNumber)
-                    : null
-            ) {
-                McpAllowlist = cmd.McpAllowlist
-            };
+                Cols: HostedPtyCols,
+                Rows: HostedPtyRows,
+                ServerUrl: _config.ServerUrl,
+                DaemonBridgeUrl: _permissionBridge.BaseUrl,
+                CapacitorPath: _config.CapacitorPath,
+                McpAllowlist: cmd.McpAllowlist
+            );
+
+            HostedRuntimeStart start;
 
             try {
-                launcher.Prepare(launcherCtx);
+                start = await runtimeFactory.StartAsync(runtimeCtx, _shutdownCts.Token);
             } catch (CodexHooksNotInstalledException ex) {
                 await _server.LaunchFailedAsync(agentId, ex.Message);
 
@@ -384,42 +412,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
 
                 return;
-            } catch (Exception ex) {
-                LogPrepareSoftFailure(ex, agentId);
             }
 
-            var launchArgs = launcher.BuildArgs(launcherCtx);
-            var args       = launchArgs.Args;
-            mcpConfigPath = launchArgs.McpConfigPath;
+            mcpConfigPath = start.McpConfigPath;
+            var runtime = start.Runtime;
 
-            var env = new Dictionary<string, string> {
-                ["KCAP_RENDERED_AGENT"] = "1",
-                ["KCAP_AGENT_ID"]       = agentId
-            };
-
-            if (!string.IsNullOrEmpty(_config.ServerUrl)) {
-                env["KCAP_URL"] = _config.ServerUrl;
-            }
-
-            // Tell the spawned Claude's permission-request hook where to find this
-            // daemon's local SignalR bridge. Bypasses Cloudflare's HTTP timeout on
-            // the server's /hooks/permission-request long-poll. CLI falls back to
-            // KCAP_URL if this var is absent (e.g. older CLI builds).
-            if (_permissionBridge.BaseUrl is { } bridgeUrl) {
-                env["KCAP_DAEMON_URL"] = bridgeUrl;
-            }
-
-            if (isReview && cmd.Review is { } reviewEnv) {
-                env["KCAP_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
-            }
-
-            var process = _ptyFactory.Spawn(launcher.CliPath, args, worktree.Path, env, HostedPtyCols, HostedPtyRows);
-
-            LogAgentSpawned(agentId, process.Pid, worktree.Path, launcher.CliPath);
+            LogAgentSpawned(agentId, runtime.Pid, worktree.Path, runtimeFactory.Vendor);
 
             var cts = new CancellationTokenSource();
 
-            var agent = new AgentInstance(agentId, prompt, model, effort, repoPath, cmd.Vendor, process, worktree, cts) {
+            var agent = new AgentInstance(agentId, prompt, model, effort, repoPath, cmd.Vendor, runtime, worktree, cts) {
                 McpConfigPath      = mcpConfigPath,
                 SyncSourceRepoRoot = string.IsNullOrEmpty(cmd.SyncFromRepoRoot) ? null : cmd.SyncFromRepoRoot,
                 CurrentCols        = HostedPtyCols,
@@ -428,6 +430,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             _agents[agentId] = agent;
 
             await RegisterAgentAsync(agent);
+
+            // A runtime with no terminal output (ACP/cursor) has no output-chunk signal to flip
+            // Starting→Running on — ReadAgentOutputAsync's read loop never yields a byte for such
+            // a runtime, so without this the agent would sit in "Starting" until the heartbeat's
+            // StartupTimeout auto-stops it as stuck (AI-684 Fix B/E). Flip to Running immediately:
+            // the runtime factory's StartAsync already completed the ACP initialize/session-new
+            // handshake by the time we get here, so the session really is established. PTY
+            // runtimes are unaffected — they keep the existing on-first-chunk flip in
+            // ReadAgentOutputAsync unchanged.
+            if (!runtime.EmitsTerminalOutput) {
+                agent.Status            = "Running";
+                agent.HasReceivedOutput = true;
+                if (!agent.IsPrivate) _ = _server.AgentStatusChangedAsync(agent.Id, "Running", agent.SessionId);
+            }
 
             // Start reading output
             _ = ReadAgentOutputAsync(agent);
@@ -456,7 +472,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                             effort,
                             repoPath,
                             cmd.Vendor,
-                            NoopPtyProcess.Instance,
+                            new PtyHostedAgentRuntime(cmd.Vendor, NoopPtyProcess.Instance),
                             worktree,
                             new CancellationTokenSource()
                         ) {
@@ -570,7 +586,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         using var sendCts = CancellationTokenSource.CreateLinkedTokenSource(agent.ReadCts.Token, _shutdownCts.Token);
 
         try {
-            await foreach (var data in agent.Process.ReadOutputAsync(agent.ReadCts.Token)) {
+            await foreach (var data in agent.Runtime.ReadOutputAsync(agent.ReadCts.Token)) {
                 agent.LastOutputAt      = DateTime.UtcNow;
                 agent.HasReceivedOutput = true;
 
@@ -628,11 +644,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         try {
             // PTY output can end before waitpid reports the child as exited.
             // Wait briefly for the process to finalize so we get a real exit code.
-            await agent.Process.WaitForExitAsync(TimeSpan.FromSeconds(5));
+            await agent.Runtime.WaitForExitAsync(TimeSpan.FromSeconds(5));
 
-            var exitCode = agent.Process.ExitCode;
+            var exitCode = agent.Runtime.ExitCode;
 
-            var status = agent.Process.HasExited
+            var status = agent.Runtime.HasExited
                 ? exitCode is null or 0 ? "Completed" : "Failed"
                 : "Failed";
 
@@ -650,7 +666,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // flagged as a launch failure. HasReceivedOutput guards
                 // against a no-output process whose CreatedAt/LastOutputAt
                 // initializers happened to straddle a long pause.
-                if (IsStartupFailure(agent.CreatedAt, agent.LastOutputAt, agent.HasReceivedOutput)) {
+                //
+                // This whole heuristic is output-stream-centric and only applies to a runtime
+                // whose ReadOutputAsync yields real terminal bytes (PTY). A no-terminal runtime
+                // (ACP/cursor) never has output to key off, so gate the check on
+                // EmitsTerminalOutput — such a runtime is Completed/Failed purely by exit code
+                // (AI-684 Fix B/E), never misclassified as a startup failure just for having
+                // produced no output.
+                if (agent.Runtime.EmitsTerminalOutput && IsStartupFailure(agent.CreatedAt, agent.LastOutputAt, agent.HasReceivedOutput)) {
                     var output = ExtractTerminalText(agent.OutputBuffer);
 
                     var reason = !string.IsNullOrWhiteSpace(output)
@@ -769,10 +792,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // command buffer instead of a submit. HandleSendInput uses the same split
             // pattern; matching it here makes the graceful path actually fire.
             try {
-                await agent.Process.WriteAsync("/exit");
-                await Task.Delay(50);
-                await agent.Process.WriteAsync("\r");
-                await agent.Process.WaitForExitAsync(GracefulExitWait);
+                await agent.Runtime.RequestGracefulStopAsync();
+                await agent.Runtime.WaitForExitAsync(GracefulExitWait);
             } catch (Exception ex) {
                 LogGracefulExitFailed(ex, agentId);
             }
@@ -781,7 +802,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // so a graceful-exit *timeout* doesn't throw. Check HasExited explicitly
             // so we can tell from logs whether the graceful path is actually working
             // in production or if claude is consistently being SIGTERMed instead.
-            if (!agent.Process.HasExited) {
+            if (!agent.Runtime.HasExited) {
                 LogGracefulExitTimedOut(agentId, GracefulExitWait.TotalSeconds);
             }
 
@@ -796,7 +817,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // teardown, and is idempotent: if claude already fired its own session-end
             // during the graceful window above, the backstop call is a server-side no-op.
             await agent.ReadCts.CancelAsync();
-            await agent.Process.TerminateAsync(TimeSpan.FromSeconds(10));
+            await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(10));
         } catch (Exception ex) {
             LogStopError(ex, agentId);
         }
@@ -884,19 +905,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
         }
 
-        // Deliver the message as a bracketed paste (ESC[200~ … ESC[201~) so the agent's TUI
-        // treats it as one pasted block and the following Enter is an unambiguous submit
-        // keypress. Without the paste markers a large multi-line message is mis-handled (AI-30):
-        // Codex never submits it at all, and Claude only submits it ~50% of the time — the CR
-        // races the still-ingesting paste and is folded in as a literal newline, so the text
-        // sits in the composer until a later, isolated keystroke finishes it. Both hosted CLIs
-        // enable bracketed-paste mode, so the markers are consumed as paste delimiters (not
-        // echoed). Keep the text and the Enter as separate writes with a short delay so the CR
-        // lands as a distinct PTY read after the paste (Claude also needs the CR split out, or
-        // it treats the carriage return as part of the buffer rather than a submit).
-        await agent.Process.WriteAsync($"\x1b[200~{message}\x1b[201~");
-        await Task.Delay(50);
-        await agent.Process.WriteAsync("\r");
+        // AI-30: PtyHostedAgentRuntime.SendUserInputAsync delivers this as a bracketed paste so
+        // the CLI's TUI treats it as one pasted block and the following Enter is an unambiguous
+        // submit keypress (see its doc comment for why a naive text-then-CR write mishandles
+        // large multi-line input). The ACP runtime sends a structured session/prompt instead, so
+        // this call is the single vendor-agnostic entry point for both.
+        await agent.Runtime.SendUserInputAsync(message);
     }
 
     async Task HandleSendSpecialKey(string agentId, string key) {
@@ -906,11 +920,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (agent.IsPrivate) return; // server-origin key ignored for private agents
 
-        var bytes = SpecialKeyMap.ToBytes(key);
-
-        if (bytes.Length > 0) {
-            await agent.Process.WriteAsync(bytes);
-        }
+        await agent.Runtime.SendSpecialKeyAsync(key);
     }
 
     async Task<List<string>> DownloadAttachmentsAsync(string worktreePath, string[] attachmentIds) {
@@ -1308,7 +1318,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // Detect agents stuck in "Starting" with no output
                 if (agent.Status                         == "Starting" &&
                     DateTime.UtcNow - agent.LastOutputAt > StartupTimeout) {
-                    LogAgentStuck(agent.Id, (DateTime.UtcNow - agent.LastOutputAt).TotalSeconds, agent.Process.Pid, agent.Process.HasExited);
+                    LogAgentStuck(agent.Id, (DateTime.UtcNow - agent.LastOutputAt).TotalSeconds, agent.Runtime.Pid, agent.Runtime.HasExited);
                     _ = HandleStopAgent(agent.Id);
 
                     continue;
@@ -1340,6 +1350,23 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
+    async Task RunTokenRefreshLoopAsync(CancellationToken ct) {
+        var loop = new TokenRefreshLoop(new TokenStoreRefreshPort(ProactiveRefreshWindow), _logger, ProactiveRefreshMinInterval);
+
+        while (await _tokenRefresh.WaitForNextTickAsync(ct)) {
+            // Defence in depth: TickAsync is intentionally total, but this runs as an
+            // unobserved background Task — guard here so the loop survives even if a
+            // future change lets an exception escape the tick.
+            try {
+                await loop.TickAsync(ct);
+            } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                return;
+            } catch (Exception ex) {
+                _logger.LogWarning(ex, "Token refresh tick faulted — continuing loop");
+            }
+        }
+    }
+
     async Task CleanupAgentAsync(string agentId) {
         if (!_agents.TryRemove(agentId, out var agent)) {
             return;
@@ -1347,11 +1374,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         // Wake any attached local clients blocked on the user's stdin so they can flush the
         // last output and send Exited (the agent is going away). The exit code is already
-        // captured on agent.Process, so disposing it below doesn't lose it.
+        // captured on agent.Runtime, so disposing it below doesn't lose it.
         try { await agent.ExitedCts.CancelAsync(); } catch { /* best-effort */ }
 
         // Each cleanup step is best-effort so later steps still run
-        try { await agent.Process.DisposeAsync(); } catch (Exception ex) { LogCleanupStepFailed(ex, "disposing process", agentId); }
+        try { await agent.Runtime.DisposeAsync(); } catch (Exception ex) { LogCleanupStepFailed(ex, "disposing process", agentId); }
 
         if (_launchers.TryGetValue(agent.Vendor, out var launcher)) {
             try { launcher.Cleanup(agent); } catch (Exception ex) { LogCleanupStepFailed(ex, "launcher.Cleanup", agentId); }
@@ -1383,7 +1410,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         foreach (var agent in _agents.Values.Where(a => a.Status is "Starting" or "Running")) {
             try {
                 await agent.ReadCts.CancelAsync();
-                await agent.Process.TerminateAsync(TimeSpan.FromSeconds(5));
+                await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(5));
             } catch {
                 /* best-effort */
             }
@@ -1395,6 +1422,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         _heartbeatTimer.Dispose();
         _daemonHeartbeat.Dispose();
+        _tokenRefresh.Dispose();
     }
 
     /// <summary>
@@ -1428,8 +1456,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Information, Message = "Launching agent {AgentId} for {Repo} (effort={Effort}, model={Model})")]
     partial void LogLaunching(string agentId, string repo, string effort, string model);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId} spawned (PID={Pid}, worktree={Worktree}, claude={ClaudePath})")]
-    partial void LogAgentSpawned(string agentId, int pid, string worktree, string claudePath);
+    [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId} spawned (PID={Pid}, worktree={Worktree}, vendor={Vendor})")]
+    partial void LogAgentSpawned(string agentId, int pid, string worktree, string vendor);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId} exited with code {ExitCode}")]
     partial void LogAgentExited(string agentId, int? exitCode);
@@ -1466,9 +1494,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error {Step} for agent {AgentId}")]
     partial void LogCleanupStepFailed(Exception ex, string step, string agentId);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Launcher Prepare soft-failure for agent {AgentId} (continuing)")]
-    partial void LogPrepareSoftFailure(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report resolved model for agent {AgentId} (continuing)")]
     partial void LogReportResolvedModelFailed(Exception ex, string agentId);

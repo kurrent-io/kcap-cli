@@ -132,4 +132,12 @@ public class RemoteMatcherTests {
         await Assert.That(RemoteMatcher.PathAfterHost("gitlab.com/group/project")).IsEqualTo("group/project");
         await Assert.That(RemoteMatcher.PathAfterHost("nohostonly")).IsNull();
     }
+
+    [Test]
+    public async Task PathAfterHost_edge_inputs_return_null() {
+        await Assert.That(RemoteMatcher.PathAfterHost("")).IsNull();            // empty
+        await Assert.That(RemoteMatcher.PathAfterHost("/")).IsNull();           // lone slash → no host, no path
+        await Assert.That(RemoteMatcher.PathAfterHost("host/")).IsNull();       // trailing slash → no path
+        await Assert.That(RemoteMatcher.PathAfterHost("/owner/repo")).IsNull(); // leading slash → no host segment
+    }
 }

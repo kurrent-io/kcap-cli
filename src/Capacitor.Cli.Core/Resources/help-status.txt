@@ -6,6 +6,7 @@ Reports:
   Server     Configured base URL and reachability check
   Auth       Stored credentials and token expiry
   Hooks      Per-agent integration state: Claude plugin, Codex / Cursor /
-             Copilot / Gemini / Kiro hooks, and the Pi / OpenCode live-ingest
-             extensions (✓ installed, ✗ not installed)
+             Copilot / Gemini / Kiro hooks, the Pi / OpenCode live-ingest
+             extensions, and the Antigravity hooks block (✓ installed,
+             ✗ not installed)
   Daemon     Whether the daemon is running (PID file check)

@@ -47,7 +47,11 @@ The CLI is compiled with NativeAOT — fast startup, no runtime dependency.
 > Without either, upgrade with **`kcap update`** instead of `npm install -g` — it
 > runs the global npm upgrade and then refreshes your agent plugins itself, so it
 > works regardless of the install-script gate. (You can also re-run `kcap plugin
-> install [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--skills] --if-installed` manually.)
+> install [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--skills] --if-installed` manually.)
+
+> **Internal-tenant testers:** opt into pre-release builds with `kcap update
+> --beta`; everyone else should stay on the default stable channel. See
+> [`kcap update`](#other-commands) below.
 
 ### 2. Run setup
 
@@ -62,7 +66,7 @@ The setup wizard walks you through:
 1. **Server** — with no `--server-url`/`<tenant>`, kcap **discovers** your tenant: it signs you in with your organization's single sign-on (pass `--github` to use GitHub instead), then lets you choose from the tenants you belong to. A bare `<tenant>` slug expands to `https://<tenant>.kcap.ai`; a full URL is used as-is. If you sign in with your organization's single sign-on and don't yet have a Capacitor tenant, `kcap setup` offers to create one for you (name + workspace URL), provisions it, and continues once it's live.
 2. **Login** — authenticates via your tenant's configured sign-in method; discovery completes the sign-in inline
 3. **Default visibility** — choose how your sessions are visible to others
-4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH`, Cursor by user-dir presence (`~/.cursor/`), GitHub Copilot CLI by `~/.copilot/` or `copilot` on `PATH`, Google Gemini CLI by `~/.gemini/` or `gemini` on `PATH`, AWS Kiro CLI by `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`, Pi by `~/.pi/` or `pi` on `PATH`, and SST OpenCode by `~/.config/opencode/` (or `~/.local/share/opencode/`) or `opencode` on `PATH`, then offers to install hooks/skills (or, for Pi/OpenCode, the live-ingest plugin) for each (user-wide). For Codex it also offers to enable **sandbox network access** for kcap (see below) — Codex blocks sandbox network by default, so the kcap skills can't reach the server without it. Each agent's own config-relocation environment variable is honored when set: `CLAUDE_CONFIG_DIR` (Claude), `CODEX_HOME` (Codex), `GEMINI_CLI_HOME` (Gemini — names the parent of `.gemini`), `KIRO_HOME` (Kiro), `COPILOT_HOME` (Copilot), `OPENCODE_CONFIG_DIR` (OpenCode), and `PI_CODING_AGENT_DIR` (Pi). Cursor's hooks path is fixed at `~/.cursor/hooks.json` and is not relocated.
+4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH`, Cursor by user-dir presence (`~/.cursor/`), GitHub Copilot CLI by `~/.copilot/` or `copilot` on `PATH`, Google Gemini CLI by `~/.gemini/` or `gemini` on `PATH`, AWS Kiro CLI by `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`, Pi by `~/.pi/` or `pi` on `PATH`, SST OpenCode by `~/.config/opencode/` (or `~/.local/share/opencode/`) or `opencode` on `PATH`, and Google Antigravity by `~/.gemini/antigravity/` or `antigravity` on `PATH`, then offers to install hooks/skills (or, for Pi/OpenCode/Antigravity, the live-ingest plugin) for each (user-wide). For Codex it also offers to enable **sandbox network access** for kcap (see below) — Codex blocks sandbox network by default, so the kcap skills can't reach the server without it. Each agent's own config-relocation environment variable is honored when set: `CLAUDE_CONFIG_DIR` (Claude), `CODEX_HOME` (Codex), `GEMINI_CLI_HOME` (Gemini — names the parent of `.gemini`), `KIRO_HOME` (Kiro), `COPILOT_HOME` (Copilot), `OPENCODE_CONFIG_DIR` (OpenCode), and `PI_CODING_AGENT_DIR` (Pi). Cursor's hooks path is fixed at `~/.cursor/hooks.json` and is not relocated.
 5. **Daemon** — configure the daemon name for remote agent execution
 
 When setup finishes, `kcap` sends a best-effort POST to the server's `/api/users/me/cli-setup` endpoint so the dashboard can mark your CLI as registered and surface the import-past-sessions hint. The call is capped at 5 seconds and failures are silent — they do not affect setup completion.
@@ -77,10 +81,10 @@ For non-interactive environments:
 kcap setup --server-url https://my-tenant.kcap.ai --default-visibility org_public --no-prompt
 ```
 
-In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, `--skip-cursor-hooks`, `--skip-copilot-hooks`, `--skip-gemini-hooks`, `--skip-kiro-hooks`, `--skip-pi-hooks`, and/or `--skip-opencode-hooks`. When Codex hooks are installed, the wizard also enables Codex sandbox network access for your server(s) by default; pass `--skip-codex-network-access` to leave `~/.codex/config.toml` untouched.
+In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, `--skip-cursor-hooks`, `--skip-copilot-hooks`, `--skip-gemini-hooks`, `--skip-kiro-hooks`, `--skip-pi-hooks`, `--skip-opencode-hooks`, and/or `--skip-antigravity-hooks`. When Codex hooks are installed, the wizard also enables Codex sandbox network access for your server(s) by default; pass `--skip-codex-network-access` to leave `~/.codex/config.toml` untouched.
 
 > **Need hooks for an agent installed after setup, or scoped to a single repo?**
-> Run `kcap plugin install [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, the next `codex` launch prompts to trust the new hooks — accept once to trust them all (run `/hooks` inside Codex if you'd rather trust each entry individually). After a `--project` install, also run `codex` once in the repo and accept the workspace trust prompt. Re-running after a kcap upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kcap`, and `kcap update` refreshes them too (npm 11+ blocks install scripts by default — `kcap update` works regardless, or add `allow-scripts[]=@kurrent/kcap` to `~/.npmrc` to opt the postinstall in once).
+> Run `kcap plugin install [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Use `--skills` instead of `--codex` if you only want the agent skills without Codex hooks. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, the next `codex` launch prompts to trust the new hooks — accept once to trust them all (run `/hooks` inside Codex if you'd rather trust each entry individually). After a `--project` install, also run `codex` once in the repo and accept the workspace trust prompt. Re-running after a kcap upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kcap`, and `kcap update` refreshes them too (npm 11+ blocks install scripts by default — `kcap update` works regardless, or add `allow-scripts[]=@kurrent/kcap` to `~/.npmrc` to opt the postinstall in once).
 
 > **Need at least one agent to capture sessions:** the setup wizard runs to completion without an agent CLI on `PATH` (it'll still configure your profile, auth, and daemon), but kcap only records work once Claude Code or Codex CLI is installed and the hooks are in place.
 
@@ -91,7 +95,7 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 ### 3. Import existing sessions (optional)
 
 ```bash
-kcap import                     # every detected agent (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode)
+kcap import                     # every detected agent (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode, Antigravity)
 kcap import --org EventStore    # sessions whose git-remote owner is EventStore
 kcap import --org               # pick an org from your discovered repos (and remember it)
 kcap import --repo owner/repo   # sessions for one specific repo
@@ -101,13 +105,14 @@ kcap import --gemini            # only Gemini
 kcap import --kiro              # only Kiro
 kcap import --pi                # only Pi (badlogic/pi-mono)
 kcap import --opencode          # only OpenCode
+kcap import --antigravity       # only Antigravity
 ```
 
 > **Pi** has no shell hooks, so live capture uses a shipped Pi extension rather than a hooks file: run `kcap plugin install --pi` (or accept the `kcap setup` prompt) to write `~/.pi/agent/extensions/kcap.ts`, which `pi` auto-loads and streams each session live. Historical `kcap import --pi` works with or without it.
 
 > **OpenCode** likewise has no shell hooks: live capture uses a shipped OpenCode plugin. Run `kcap plugin install --opencode` (or accept the `kcap setup` prompt) to write `~/.config/opencode/plugins/kcap.ts`, which `opencode` auto-loads and streams each session live (`vendor=opencode`). Subagents (the `task` tool / `@agent`) are captured too — the plugin fetches each child session via the SDK and streams it, so it nests under the parent in the trace. Historical `kcap import --opencode` reads OpenCode's SQLite database (`~/.local/share/opencode/opencode.db`) and imports child sessions as subagents, so it backfills sessions from before the plugin was installed.
 
-This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), `~/.gemini/tmp/<project>/chats/` (Gemini), `~/.kiro/sessions/cli/` (Kiro), `~/.pi/agent/sessions/` (Pi), and `~/.local/share/opencode/opencode.db` (OpenCode) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, `--gemini`, `--kiro`, `--pi`, or `--opencode` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
+This backfills your past sessions from `~/.claude/projects/` (Claude), `~/.codex/sessions/` (Codex), `~/.cursor/projects/.../agent-transcripts/` (Cursor), `~/.copilot/session-state/` (Copilot), `~/.gemini/tmp/<project>/chats/` (Gemini), `~/.kiro/sessions/cli/` (Kiro), `~/.pi/agent/sessions/` (Pi), `~/.local/share/opencode/opencode.db` (OpenCode), and `~/.gemini/antigravity/brain/` (Antigravity) so they appear in the dashboard. All agents are discovered automatically — pass `--claude`, `--codex`, `--cursor`, `--copilot`, `--gemini`, `--kiro`, `--pi`, `--opencode`, or `--antigravity` (one or more) to narrow the run. All forms are idempotent — safe to run multiple times.
 
 You must pick an explicit scope (`--all`, `--org`, or `--repo`) so personal/private repos aren't uploaded by accident. `--org <owner>` filters by the git-remote owner (GitHub org/user) detected on each session — independent of your profile name, so it behaves identically under GitHub and WorkOS sign-in. A bare `--org` lets you pick an owner from your discovered repos and remembers it for next time. Run with no scope on an interactive terminal to get a picker. See [Loading historical sessions](#loading-historical-sessions) for the full set of flags.
 
@@ -155,7 +160,7 @@ kcap setup --server-url <url> --no-prompt    # CI / scripted
 
 With no server argument, setup (and `kcap login`) runs **tenant discovery**: it signs you in with your organization's single sign-on, then lets you pick from the tenants you belong to. Pass `--github` to sign in with GitHub instead; `--discover` forces discovery even when a server is configured. In SSH / headless environments (no browser), discovery falls back to GitHub Device Flow, since SSO needs a local browser.
 
-The setup wizard detects every supported coding agent and offers to install hooks for each, then configures the daemon. Claude Code and Codex CLI are detected via `PATH`; Cursor is detected by user-dir presence (`~/.cursor/`), so IDE users without the `cursor` shell command are covered; GitHub Copilot CLI is detected via `~/.copilot/` or `copilot` on `PATH`; Google Gemini CLI via `~/.gemini/` or `gemini` on `PATH`; AWS Kiro CLI via `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`; Pi via `~/.pi/agent/` or `pi` on `PATH`; and SST OpenCode via `~/.config/opencode/` (or `~/.local/share/opencode/`) or `opencode` on `PATH` (Pi and OpenCode have no shell hooks, so for those the wizard installs a live-ingest plugin rather than hook config). Re-run any time to update the configuration.
+The setup wizard detects every supported coding agent and offers to install hooks for each, then configures the daemon. Claude Code and Codex CLI are detected via `PATH`; Cursor is detected by user-dir presence (`~/.cursor/`), so IDE users without the `cursor` shell command are covered; GitHub Copilot CLI is detected via `~/.copilot/` or `copilot` on `PATH`; Google Gemini CLI via `~/.gemini/` or `gemini` on `PATH`; AWS Kiro CLI via `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`; Pi via `~/.pi/agent/` or `pi` on `PATH`; SST OpenCode via `~/.config/opencode/` (or `~/.local/share/opencode/`) or `opencode` on `PATH`; and Google Antigravity via `~/.gemini/antigravity/` or `antigravity` on `PATH` (Pi, OpenCode, and Antigravity have no shell hooks, so for those the wizard installs a live-ingest plugin rather than hook config). Re-run any time to update the configuration.
 
 - **New tenant:** when signing in via Kurrent's hosted auth and you have no tenant yet, `setup` prompts to create one (organization name + `<slug>.kcap.ai` workspace URL) and waits for it to come online. Non-interactive runs (`--no-prompt`) skip this and exit with guidance.
 
@@ -274,7 +279,7 @@ Expect ~1-3 minutes total depending on the model and session size — judges run
 kcap review <pr-url-or-owner/repo#number>
 ```
 
-Accepts a GitHub PR URL (`https://github.com/owner/repo/pull/123`, any host including GitHub Enterprise), a GitLab MR URL (`https://gitlab.com/owner/repo/-/merge_requests/123`), or the shorthand `owner/repo#123`. Only single-level `owner/repo` namespaces are supported — GitLab's nested groups (e.g. `group/subgroup/repo`) aren't recognized yet.
+Accepts a GitHub PR URL (`https://github.com/owner/repo/pull/123`, any host including GitHub Enterprise), a GitLab MR URL (`https://gitlab.com/owner/repo/-/merge_requests/123`, including nested groups such as `https://gitlab.com/group/subgroup/repo/-/merge_requests/123`), or the shorthand `owner/repo#123` (single-level only).
 
 Launches a Claude Code session equipped with MCP tools that query the implementation transcripts. Reviewers can ask *why* code was changed, understand design decisions, check what alternatives were considered, and verify test coverage — all grounded in what actually happened during development.
 
@@ -330,7 +335,7 @@ Requires `kcap login` **and a running daemon with this repo checked out** — th
 kcap mcp flow-result   # launched by the daemon — not meant to be run manually
 ```
 
-Stdio MCP server the **daemon injects into hosted review-flow reviewer sessions** (both Claude and Codex reviewers). It exposes a single tool, **`submit_review_result`** (`round_token`, `kind: "findings" | "clean"`, `findings`), which posts the reviewer's result to the Capacitor server — the reliable alternative to the transcript-marker fallback. It is deliberately separate from `kcap mcp flows` so an unattended reviewer can never start a nested flow, and it reads its identity from daemon-provided environment (`KCAP_FLOW_AGENT_ID`); run manually it just exits with an explanation. It's not necessarily the only server a reviewer gets, though: the flow definition's `mcp:` allowlist can additionally grant kcap-owned context servers (e.g. `kcap-sessions`), resolved against the same built-in registry — unknown names are skipped and any flow-starting server is always stripped regardless of listing, so a reviewer still can't start a nested flow. There is nothing to register or configure.
+Stdio MCP server the **daemon injects into hosted review-flow reviewer sessions** (both Claude and Codex reviewers). It exposes a single tool, **`submit_review_result`** (`round_token`, `kind: "findings" | "clean"`, `findings`), which posts the reviewer's result to the Capacitor server — the **only** delivery channel: the server does not read the reviewer's transcript, so ending a reply with `FINDINGS:`/`NO FINDINGS` markers delivers nothing (servers ≥ Flows Phase E-0). It is deliberately separate from `kcap mcp flows` so an unattended reviewer can never start a nested flow, and it reads its identity from daemon-provided environment (`KCAP_FLOW_AGENT_ID`); run manually it just exits with an explanation. It's not necessarily the only server a reviewer gets, though: the flow definition's `mcp:` allowlist can additionally grant kcap-owned context servers (e.g. `kcap-sessions`), resolved against the same built-in registry — unknown names are skipped and any flow-starting server is always stripped regardless of listing, so a reviewer still can't start a nested flow. There is nothing to register or configure.
 
 ### Memory MCP server (for agents)
 
@@ -419,7 +424,7 @@ After discovery, the import surfaces a one-shot report of any transcript working
 
 ### Daemon
 
-The daemon connects to the Capacitor server and runs Claude Code or Codex agents in isolated git worktrees, controlled from the dashboard. The daemon supports hosted Claude and Codex agents on macOS and Linux — choose the vendor from the dashboard's launch dialog. At startup the daemon probes `daemon.claude_path` and `daemon.codex_path` and advertises only the vendors it can actually spawn, so the launch dialog hides whichever agent isn't installed on the selected daemon.
+The daemon connects to the Capacitor server and runs Claude Code, Codex, or Cursor agents in isolated git worktrees, controlled from the dashboard. The daemon supports hosted Claude, Codex, and Cursor (`cursor` vendor) agents on macOS and Linux — choose the vendor from the dashboard's launch dialog. At startup the daemon probes `daemon.claude_path`, `daemon.codex_path`, and the Cursor CLI (`cursor-agent`, overridable via `KCAP_CURSOR_PATH` — see [Daemon config settings](#daemon-config-settings)) and advertises only the vendors it can actually spawn, so the launch dialog hides whichever agent isn't installed on the selected daemon.
 
 ```bash
 kcap daemon start                   # start in foreground (defaults --name to your OS username)
@@ -572,6 +577,17 @@ kcap plugin remove --opencode               # delete it
 
 On `session.created` the plugin runs `kcap hook --opencode` (POSTs lifecycle + spawns the watcher); on each `session.idle` it fetches the session's full messages via OpenCode's in-process SDK and appends them as native `{info, parts}` JSONL to a file the watcher tails (`vendor=opencode`) — so kcap must be on `PATH`. Since OpenCode has **no session-end event**, the watcher synthesizes session-end when the `opencode` process exits. OpenCode records per-message tokens/cost, so those flow through. Capture is **live-only** — OpenCode's on-disk format is unstable (SQLite, version-dependent), so there is no historical `kcap import --opencode`.
 
+#### Google Antigravity plugin
+
+Google Antigravity is a GUI agent IDE detected via `~/.gemini/antigravity/` (it shares the `~/.gemini` home with the Gemini CLI, honouring `GEMINI_CLI_HOME`) or the `antigravity` binary on `PATH`. Antigravity has **no shell hooks** — it runs *control hooks* configured by a **plugin** — so `install --antigravity` installs the kcap capture plugin to `~/.gemini/config/plugins/kcap/`: a `plugin.json` manifest (which the GUI requires to load the directory) plus a `hooks.json` `kcap` block (preserving any hook blocks you authored). The GUI only reads plugins under its config root — the `~/.gemini/antigravity-cli/` dir is the `agy` CLI's config and is invisible to the IDE. Restart Antigravity after installing so it reloads the plugin.
+
+```bash
+kcap plugin install --antigravity           # install the kcap plugin to ~/.gemini/config/plugins/kcap/
+kcap plugin remove --antigravity            # remove the kcap plugin
+```
+
+Antigravity fires a distinct control hook per lifecycle/tool event; kcap acts on the first `PreInvocation` of a conversation (POSTs lifecycle + spawns a watcher tailing that conversation's `transcript_full.jsonl`, `vendor=antigravity`) — so kcap must be on `PATH`. Antigravity is a GUI whose process outlives any one conversation (like the Codex desktop app), so there is no per-conversation exit signal: the watcher ends a session after it goes idle (default 60 min; override with `KCAP_ANTIGRAVITY_IDLE_MINUTES`), and a later turn reactivates it. Token/model usage lives in each conversation's sibling SQLite db (`conversations/<id>.db`), not the JSONL, so the watcher decodes it and streams the per-generation cost (priced on read; cost is never stored). **Subagents** (Antigravity's nested agents) are separate conversations; in *live* capture they're recorded as their own sessions (nesting them under the parent is a follow-up), while historical `kcap import --antigravity` nests them under the parent (the parent↔child linkage is complete on disk at import time). Historical import reads `~/.gemini/antigravity/brain/*/…/transcript_full.jsonl` and backfills sessions from before the hooks were installed; it's watermark-idempotent (safe to re-run) and leaves the working dir empty (Antigravity records no machine-readable cwd in the transcript — live capture gets it from the hook payload). Imported sessions currently carry content but not cost (cost injection on import is a follow-up).
+
 Cursor uses a single user-scope `hooks.json`; there is no project-scope variant.
 
 `kcap setup` writes all 8 supported Cursor hook entries. Use `--skip-cursor-hooks` to opt out during setup:
@@ -599,6 +615,12 @@ You can also override these at runtime with environment variables (take preceden
 ```bash
 KCAP_CLAUDE_PATH=/opt/claude/bin/claude kcap daemon
 KCAP_CODEX_PATH=/opt/codex/bin/codex  kcap daemon
+```
+
+The Cursor CLI path (`cursor-agent` by default, used to spawn the `cursor` hosted-agent vendor) is env-only for now — there is no `daemon.cursor_path` profile key yet, so set it per-launch:
+
+```bash
+KCAP_CURSOR_PATH=/opt/cursor/bin/cursor-agent kcap daemon
 ```
 
 **Codex session-end tuning.** Because Codex has no session-end hook, the watcher owns session-end via two triggers: parent `codex` process exit, and rollout-file idle timeout. The idle trigger is particularly important for the Codex desktop app, whose shared `codex app-server` process never exits per-conversation.
@@ -774,11 +796,11 @@ kcap uninstall --project --yes  # also strip project-scope hooks in cwd's repo
 kcap uninstall --keep-config    # remove integrations, keep ~/.config/kcap
 ```
 
-`uninstall` covers every supported agent: it stops running daemons and watcher processes, strips kcap entries from user-level Claude Code, Codex CLI, Cursor, and Copilot CLI hook files (preserving any non-kcap entries), deletes the Pi live-ingest extension (`~/.pi/agent/extensions/kcap.ts`) and the OpenCode plugin (`~/.config/opencode/plugins/kcap.ts`), removes agent skills under `~/.agents/skills/` (plus the legacy `~/.codex/skills/kcap-*` folders), and deletes `~/.config/kcap/`.
+`uninstall` covers every supported agent: it stops running daemons and watcher processes, strips kcap entries from user-level Claude Code, Codex CLI, Cursor, and Copilot CLI hook files (preserving any non-kcap entries), deletes the Pi live-ingest extension (`~/.pi/agent/extensions/kcap.ts`) and the OpenCode plugin (`~/.config/opencode/plugins/kcap.ts`), removes the kcap capture plugin from Antigravity's `~/.gemini/config/plugins/kcap/`, removes agent skills under `~/.agents/skills/` (plus the legacy `~/.codex/skills/kcap-*` folders), and deletes `~/.config/kcap/`.
 
 `--project` additionally cleans up `<repo>/.claude/settings.local.json` and `<repo>/.codex/hooks.json` in the current git working tree (errors if you're not inside one). Cursor only has a user-scope `hooks.json`, so `--project` does not affect it. Project-scope hooks in other repos are not touched — re-run from each repo that has them.
 
-Use `--keep-config` to preserve profiles, tokens, and ignore lists when you plan to reinstall. Per-agent selective cleanup is not exposed here — use `kcap plugin remove [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--skills]` for finer-grained removal.
+Use `--keep-config` to preserve profiles, tokens, and ignore lists when you plan to reinstall. Per-agent selective cleanup is not exposed here — use `kcap plugin remove [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--skills]` for finer-grained removal.
 
 ### Other commands
 
@@ -788,15 +810,26 @@ kcap whoami         # show current authenticated user
 kcap login          # authenticate via OAuth (browser flow by default)
 kcap login --device # force device-code flow (use in SSH / headless envs)
 kcap update         # upgrade the CLI and refresh agent plugins (npm-global installs)
+kcap update --beta  # switch to the beta channel and update to the latest beta
+kcap update --stable # switch back to the stable channel (the default)
 kcap logout         # delete stored tokens
 ```
 
 > `kcap update` is the one-step upgrade for npm-global installs: it checks the
-> registry, runs `npm install -g @kurrent/kcap@latest`, then refreshes your
+> registry, runs `npm install -g @kurrent/kcap@<tag>`, then refreshes your
 > opted-in agent plugins — so it picks up new skills/hooks even when your package
 > manager blocks install scripts. It exits early if you're already up to date,
 > and tells you what to run instead for non-npm installs (e.g. Homebrew). Use
 > `kcap update --check` for a machine-readable `{current, latest, newer}` probe.
+>
+> **Beta channel (opt-in):** `kcap update --beta` switches the active profile to
+> the beta release channel (npm dist-tag `beta`) and updates to the latest beta
+> immediately. The choice is **persisted per profile**, so subsequent `kcap
+> update` runs — and the passive stderr "update available" hint — keep tracking
+> beta until you run `kcap update --stable`. A fresh config defaults to the
+> **stable** channel (npm dist-tag `latest`); beta is strictly opt-in. Beta
+> releases correspond to server versions rolled out to internal tenants first,
+> so most users should stay on stable.
 
 The v1 config format stored `server_url` as a bare host name without a
 scheme. If `kcap` crashes with `An invalid request URI was provided`

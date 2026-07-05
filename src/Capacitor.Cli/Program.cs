@@ -38,7 +38,7 @@ var command = args[0];
 // nested headless invocation.
 if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
  && command == "hook"
- && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot") || args.Contains("--gemini") || args.Contains("--kiro") || args.Contains("--pi") || args.Contains("--opencode"))) {
+ && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot") || args.Contains("--gemini") || args.Contains("--kiro") || args.Contains("--pi") || args.Contains("--opencode") || args.Contains("--antigravity"))) {
     return 0;
 }
 
@@ -47,9 +47,9 @@ var isHook = command == "hook";
 var baseUrl = await AppConfig.ResolveServerUrl(args, gitTimeoutMs: isHook ? 1000 : 5000);
 
 // Fire-and-forget update check (prints hint to stderr after command finishes).
-// Skipped for `uninstall` — the check writes ~/.config/kcap/update-check.json,
-// which would race with uninstall's `rm -rf` of the config dir and recreate it
-// after the command has reported success.
+// Skipped for `uninstall` — the check writes ~/.config/kcap/update-check-{channel}.json
+// (e.g. update-check-latest.json), which would race with uninstall's `rm -rf`
+// of the config dir and recreate it after the command has reported success.
 var   noUpdateCheck   = args.Contains("--no-update-check") || command == "uninstall";
 Task? updateCheckTask = null;
 
@@ -523,6 +523,7 @@ switch (command) {
             new KiroImportSource(),
             new PiImportSource(),
             new OpenCodeImportSource(),
+            new AntigravityImportSource(),
         };
         IReadOnlyList<IImportSource> sources = explicitVendorSelection
             ? allSources.Where(s => vsel.Vendors.Contains(s.Vendor)).ToList()
@@ -569,7 +570,7 @@ switch (command) {
             storedOrg:               storedOrg);
     }
     case "watch" when args.Length < 3:
-        Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex|copilot|gemini|kiro|pi|opencode]");
+        Console.Error.WriteLine("Usage: kcap watch <sessionId> <transcriptPath> [--agent-id <agentId>] [--cwd <cwd>] [--skip-title] [--parent-pid <pid>] [--vendor claude|codex|copilot|gemini|kiro|pi|opencode|antigravity]");
 
         return 1;
     case "watch": {
@@ -691,8 +692,11 @@ switch (command) {
         if (args.Contains("--opencode")) {
             return await OpenCodeHookCommand.Handle(baseUrl!, args);
         }
+        if (args.Contains("--antigravity")) {
+            return await AntigravityHookCommand.Handle(baseUrl!, args);
+        }
         Console.Error.WriteLine("kcap hook requires a vendor flag (for example --claude)");
-        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor, --copilot, --gemini, --kiro, --pi, --opencode");
+        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity");
         return 1;
     }
     case "cursor":

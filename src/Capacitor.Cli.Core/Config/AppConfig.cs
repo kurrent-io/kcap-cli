@@ -4,7 +4,12 @@ using System.Text.Json.Serialization;
 
 namespace Capacitor.Cli.Core.Config;
 
-public record CapacitorConfig {
+/// <summary>
+/// Legacy v1 flat config — a deserialization DTO used ONLY for one-way v1→v2
+/// migration in <see cref="ConfigMigration"/>. Not a live config; do not read
+/// this elsewhere.
+/// </summary>
+public record LegacyV1Config {
     [JsonPropertyName("server_url")]
     public string? ServerUrl { get; init; }
 
@@ -35,15 +40,15 @@ public record DaemonSettings {
     public string? CodexPath { get; init; }
 }
 
-[JsonSerializable(typeof(CapacitorConfig))]
+[JsonSerializable(typeof(LegacyV1Config))]
 internal partial class ConfigJsonContext : JsonSerializerContext;
-
-[JsonSerializable(typeof(CapacitorConfig))]
-[JsonSourceGenerationOptions(WriteIndented = true)]
-internal partial class ConfigJsonContextIndented : JsonSerializerContext;
 
 public static class AppConfig {
     static readonly string ConfigPath = PathHelpers.ConfigPath("config.json");
+
+    // Flipped the first time a legacy v1 config is migrated to v2 in this process,
+    // so the deprecation notice in LoadProfileConfig fires at most once per run.
+    static bool _v1MigrationSignalled;
 
     public static string? ResolvedServerUrl { get; private set; }
 
@@ -221,29 +226,6 @@ public static class AppConfig {
 
     static readonly string[] ValidVisibilities = ["private", "org_public", "public"];
 
-    public static async Task<CapacitorConfig?> Load() {
-        if (!File.Exists(ConfigPath))
-            return null;
-
-        try {
-            var json   = await File.ReadAllTextAsync(ConfigPath);
-            var config = JsonSerializer.Deserialize(json, ConfigJsonContext.Default.CapacitorConfig);
-
-            if (config is null) return null;
-
-            // Normalize default_visibility to lowercase; reset invalid values to default
-            var vis = (config.DefaultVisibility ?? "org_public").ToLowerInvariant();
-
-            if (!ValidVisibilities.Contains(vis)) vis = "org_public";
-
-            return vis == config.DefaultVisibility ? config : config with { DefaultVisibility = vis };
-        } catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException) {
-            await Console.Error.WriteLineAsync($"Warning: could not read config at {ConfigPath}: {ex.Message}");
-
-            return null;
-        }
-    }
-
     public static async Task<ProfileConfig> LoadProfileConfig() {
         if (!File.Exists(ConfigPath))
             return new() { Profiles = new() { ["default"] = new() } };
@@ -273,6 +255,23 @@ public static class AppConfig {
         // server URL here previously caused `ServerUrl is required` at daemon
         // startup despite the on-disk config being intact.
         if (result.ShouldPersist) {
+            // Deprecation signal for the v1 config format. `ShouldPersist` is set ONLY
+            // when a real v1 flat config was migrated (a fresh/empty config and an
+            // already-v2 config both leave it false), so this marks exactly a genuine
+            // v1 straggler. The v1 format is slated for removal; this one-time-per-run
+            // line is how we watch whether any v1 configs still exist in the wild
+            // before deleting the ConfigMigration path. Best-effort — a logging
+            // failure must never break a config load.
+            if (!_v1MigrationSignalled) {
+                _v1MigrationSignalled = true;
+                try {
+                    await Console.Error.WriteLineAsync(
+                        "kcap: migrated your config from the deprecated v1 format to the current format (one-time).");
+                } catch {
+                    /* best effort */
+                }
+            }
+
             try {
                 await SaveProfileConfig(result.Config);
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
@@ -285,7 +284,7 @@ public static class AppConfig {
 
     /// <summary>
     /// Coerce each profile's <c>default_visibility</c> to the same set the
-    /// legacy <see cref="Load"/> path enforced (lowercase, restricted to
+    /// legacy v1 config read path used to enforce (lowercase, restricted to
     /// <see cref="ValidVisibilities"/>; fall back to <c>org_public</c>
     /// otherwise). Manual edits and v1→v2 migrations bypass the validation
     /// that <c>kcap config set</c> / <c>kcap setup</c> apply at write time,

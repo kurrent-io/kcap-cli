@@ -13,9 +13,9 @@ internal static class CodingAgentsStep {
     // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini
     // (AI-887), Kiro (AI-888), and Pi (AI-886) were all added after the original
     // four vendors.
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false);
 
-    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false);
+    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false);
 
     internal record Paths(
             string  ClaudeSettingsPath,
@@ -30,7 +30,8 @@ internal static class CodingAgentsStep {
             string  KiroHooksPath = "",
             string  PiExtensionPath = "",
             string  OpenCodeExtensionPath = "",
-            string  CodexConfigTomlPath = ""
+            string  CodexConfigTomlPath = "",
+            string  AntigravityHooksPath = ""
         );
 
     internal record Installers(
@@ -46,7 +47,8 @@ internal static class CodingAgentsStep {
             Func<string /*extensionPath*/, bool>?                     InstallPiExtension = null,
             Func<string /*pluginPath*/, bool>?                        InstallOpenCodeExtension = null,
             Func<CodexConfigToml.Change>?                            EnableCodexNetworkAccess = null,
-            Func<CodexConfigToml.Change>?                            RegisterCodexMcp = null
+            Func<CodexConfigToml.Change>?                            RegisterCodexMcp = null,
+            Func<string /*hooksPath*/, bool>?                        InstallAntigravityHooks = null
         );
 
     internal record Result(
@@ -60,7 +62,8 @@ internal static class CodingAgentsStep {
             bool PiExtensionInstalled = false,
             bool OpenCodeExtensionInstalled = false,
             bool CodexNetworkAccessApplied = false,
-            bool CodexMcpRegistered = false
+            bool CodexMcpRegistered = false,
+            bool AntigravityHooksInstalled = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -70,7 +73,7 @@ internal static class CodingAgentsStep {
         /// as agents are added (consumers like SetupCommand's restart tip key off this).
         /// </summary>
         internal bool AnyHooksInstalled =>
-            ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled || GeminiHooksInstalled || KiroHooksInstalled || PiExtensionInstalled || OpenCodeExtensionInstalled;
+            ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled || GeminiHooksInstalled || KiroHooksInstalled || PiExtensionInstalled || OpenCodeExtensionInstalled || AntigravityHooksInstalled;
     }
 
     /// <summary>
@@ -97,9 +100,10 @@ internal static class CodingAgentsStep {
         var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, prompt, writeLine);
         var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, prompt, writeLine);
         var openCodeExtensionInstalled = HandleOpenCodeExtension(options, detected, paths, installers, prompt, writeLine);
+        var antigravityHooksInstalled  = HandleAntigravityHooks(options, detected, paths, installers, prompt, writeLine);
 
-        if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: false, Kiro: false, Pi: false, OpenCode: false }) {
-            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, Pi, or OpenCode to start capturing sessions.");
+        if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: false, Kiro: false, Pi: false, OpenCode: false, Antigravity: false }) {
+            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, Pi, OpenCode, or Antigravity to start capturing sessions.");
         }
 
         return Task.FromResult(
@@ -114,7 +118,8 @@ internal static class CodingAgentsStep {
                 piExtensionInstalled,
                 openCodeExtensionInstalled,
                 codexNetworkApplied,
-                codexMcpRegistered
+                codexMcpRegistered,
+                antigravityHooksInstalled
             )
         );
     }
@@ -386,6 +391,61 @@ internal static class CodingAgentsStep {
 
         writeLine($"  [green]✓[/] OpenCode plugin installed ({Markup.Escape(paths.OpenCodeExtensionPath)})");
         writeLine("  [dim]  Note: OpenCode loads plugins at startup — restart any running opencode session to pick it up.[/]");
+
+        return true;
+    }
+
+    static bool HandleAntigravityHooks(
+            Options            options,
+            DetectedAgents     detected,
+            Paths              paths,
+            Installers         installers,
+            Func<string, bool> prompt,
+            Action<string>     writeLine
+        ) {
+        if (!detected.Antigravity) {
+            writeLine("  [dim]· Antigravity not detected — skipping[/]");
+
+            return false;
+        }
+
+        writeLine("  [green]✓[/] Antigravity detected");
+
+        if (options.SkipAntigravity) {
+            writeLine("  [dim]· Antigravity hooks skipped by flag[/]");
+
+            return false;
+        }
+
+        if (installers.InstallAntigravityHooks is null) return false;
+
+        var shouldInstall = options.NoPrompt || prompt("Install Antigravity hooks (live session capture)?");
+
+        if (!shouldInstall) {
+            writeLine("  [dim]· Antigravity hooks not installed (you can run kcap plugin install --antigravity later)[/]");
+
+            return false;
+        }
+
+        // Antigravity's hooks.json runs the bare "kcap hook --antigravity" command, so
+        // Antigravity must find kcap on PATH (same precheck as the OpenCode/Pi branches).
+        if (!installers.CapacitorOnPath()) {
+            writeLine("  [yellow]⚠[/] Antigravity hooks not installed — 'kcap' is not on PATH.");
+            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+
+            return false;
+        }
+
+        var ok = installers.InstallAntigravityHooks(paths.AntigravityHooksPath);
+
+        if (!ok) {
+            writeLine("  [yellow]⚠[/] Could not write the Antigravity hooks file.");
+
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] Antigravity hooks installed ({Markup.Escape(paths.AntigravityHooksPath)})");
+        writeLine("  [dim]  Note: Antigravity loads hooks at startup — restart it to pick them up.[/]");
 
         return true;
     }

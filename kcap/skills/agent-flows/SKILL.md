@@ -18,7 +18,7 @@ description: >-
 
 # Agent Flows
 
-Use the `kcap mcp flows` MCP tools (`start_flow`, `send_to_participant`, `get_flow_status`, `close_flow`) to run a structured agent **flow**: your work is handed to a **separate, hosted participant agent** driven by a flow definition from the server's catalog, which returns a result per that definition's markers (e.g. `FINDINGS:` / `NO FINDINGS` for the review-style built-ins); you address the result and keep iterating until the definition's clean/complete signal. This is a deliberate, heavier workflow — use it only when the user explicitly opts into it.
+Use the `kcap mcp flows` MCP tools (`start_flow`, `send_to_participant`, `get_flow_status`, `close_flow`) to run a structured agent **flow**: your work is handed to a **separate, hosted participant agent** driven by a flow definition from the server's catalog, which returns a result (kind `findings` with the participant's result text, or `clean`); you address a `findings` result and keep iterating until the clean signal. This is a deliberate, heavier workflow — use it only when the user explicitly opts into it.
 
 ## When NOT to use this skill / these tools
 
@@ -40,7 +40,7 @@ If `start_flow` / `send_to_participant` are not among the tools available in thi
 
 - Do NOT run `kcap mcp flows` from a shell, do NOT handshake it over stdio/JSON-RPC, and do NOT edit any MCP configuration.
 - The absence is deliberate: hosted flow participants run with all MCP servers stripped, so a participant cannot start a nested flow.
-- If you were asked to do work and these tools are absent, you are most likely the hosted participant inside an existing flow. This skill does not apply to you — skip the workflow below entirely. Perform the requested work directly and end your final message with the definition's result markers (for the review-style built-ins, that's a final message starting with `FINDINGS:` followed by your findings, or `NO FINDINGS`; check any instructions you were given for a custom definition's actual markers). Your final message is captured automatically; no tool call is needed to deliver it.
+- If you were asked to do work and these tools are absent, you are most likely the hosted participant inside an existing flow. This skill does not apply to you — skip the workflow below entirely. Perform the requested work directly, then deliver your result by calling the `submit_review_result` tool (from the injected `kcap-flow-result` server) exactly as the "Result contract" section of your prompt instructs, quoting its round token — `kind: "findings"` plus your result text, or `kind: "clean"`. The tool is the ONLY delivery channel: the server does not read your reply text, so result markers in your final message deliver nothing and the round would sit unresolved until its timeout. If the tool call fails, retry it.
 
 ## Core rules
 
@@ -52,6 +52,7 @@ If `start_flow` / `send_to_participant` are not among the tools available in thi
 6. **Never start a nested flow.** If you are the hosted participant (see above), do not call these tools yourself.
 7. **Single participant.** In Phase D every flow definition has exactly one participant, `reviewer`. `send_to_participant` with any other `participant` value is rejected by the server, which names the valid participant in its error.
 8. **For a code review flow (`definition_id: "code-review"`), do NOT ask the participant to run tests.** CI covers test execution; participant feedback is on correctness, design, and adherence to conventions.
+9. **State where your changes live.** The participant's worktree is mirrored from the working tree you LAUNCHED from (your cwd's git root) — nothing else. If any part of the changeset lives elsewhere (another git worktree, another repository, a different machine) or is not in that tree, say so explicitly in `context`/`message` and inline the relevant diffs or file contents — or pass `mode: "context-only"` so the participant treats your context as the sole source of truth. The participant is instructed to flag referenced changes it cannot find in its worktree; incomplete context wastes a full round.
 
 ## Guardrail errors
 
@@ -61,19 +62,23 @@ The server enforces per-run budgets; watch for these in tool error responses:
 - **`400` containing `budget_exceeded: …`** — the run has **already failed** and the participant agent has stopped. Report this to the user; do NOT retry and do NOT call `close_flow` — closing a failed run overwrites the failure status in the read model (the projector flips `failed` → `closed`), hiding what went wrong.
 - **A round that exceeds the definition's `round_timeout`** lands as a terminal **`unclear`** round, with the timeout explained in its result text — if you check round status programmatically, look for `unclear` and read the text for the timeout reason. The run itself stays open — you may submit another round or close the flow.
 - **Idle runs are auto-reaped** after the definition's `idle_ttl` (server default 24h). Don't rely on this — always call `close_flow` yourself once you're done, whether the outcome was clean or you're abandoning the task.
+- **`400` starting `no_daemon_available:`** — no connected daemon has the repo checked out. Tell the user to run `kcap agent` on a machine with the repo cloned (or pass an explicit `daemon_name` + `repo_path`).
+- **`400` starting `daemon_outdated:`** — the daemon's kcap is too old to host flow participants. Tell the user to update (`npm i -g @kurrent/kcap`) and restart `kcap agent`.
+- **`400` starting `participant_unavailable:`** — the participant agent died and automatic relaunch is not available yet. Close this flow and start a new one, carrying your context forward; re-submitting will keep failing.
+- **A round result of `unclear` whose text is exactly `participant_died` or `participant_stopped`** — the participant agent crashed or was stopped mid-round. The run stays open but has no live participant: close the flow and start a new one.
 
 ## Workflow
 
 ```
 start_flow(definition_id, target_kind, target_ref, target_title, context)
-  → participant returns a result per the definition's markers (e.g. FINDINGS: … | NO FINDINGS)
+  → participant returns a result: kind findings (with the result text) | kind clean
 
-if clean (e.g. NO FINDINGS):
+if clean:
   close_flow(flow_run_id)
   report completion to user
   DONE
 
-if not clean (e.g. FINDINGS:):
+if findings:
   address the result
   send_to_participant(flow_run_id, participant="reviewer", message=…)
     → repeat until clean
@@ -103,7 +108,7 @@ start_flow(
   context="Review the diff on this branch for correctness and adherence to project conventions."
 )
 # → returns flow_run_id, e.g. "flow_abc123"
-# → participant returns FINDINGS: missing null check on line 42
+# → participant returns kind findings: missing null check on line 42
 
 # Step 2 — address findings, then send a follow-up to the reviewer participant
 send_to_participant(
@@ -112,7 +117,7 @@ send_to_participant(
   message="Fixed null check on line 42. Updated diff attached."
 )
 
-# Step 3 — participant returns NO FINDINGS
+# Step 3 — participant returns kind clean
 close_flow(flow_run_id="flow_abc123")
 # Report to user: flow complete, all findings resolved
 ```

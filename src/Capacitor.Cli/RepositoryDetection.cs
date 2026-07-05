@@ -12,7 +12,9 @@ namespace Capacitor.Cli;
 static class RepositoryDetection {
     // Bump whenever the cached shape/derivation changes so stale entries are ignored.
     // v2: added Host + provider-aware parsing.
-    internal const int CacheSchemaVersion = 2;
+    // v3: multi-segment owner parsing (nested GitLab groups, AI-1121) — v2 entries for
+    //     nested repos have owner=null and must re-derive.
+    internal const int CacheSchemaVersion = 3;
 
     internal static CommandRunner DefaultRunner => RunCommandAsync;
 
@@ -198,25 +200,17 @@ static class RepositoryDetection {
             // (only ClaudeHookCommand does), else the historical 2s cap. Covers probe + detector.
             var providerCap = ghCap;
 
+            // Import passes detectPullRequest:false to skip the provider round-trip (it discards
+            // PR fields). ResolveAndDetectPrAsync (from #261) owns the probe+detector budget split;
+            // thread the injectable `run` through so the git/provider spawns stay unit-testable.
             if (detectPullRequest && providerCap > TimeSpan.Zero && host is not null) {
-                var provSw = Stopwatch.StartNew();
-                var kind   = await GitProviderRouter.ResolveAsync(host, cwd, providerCap, run);
-                var detectCap = providerCap - provSw.Elapsed; // combined ceiling: probe + detector
+                var pr = await ResolveAndDetectPrAsync(host, owner, repoName, branch, cwd, providerCap, run);
 
-                if (detectCap > TimeSpan.Zero) {
-                    var pr = kind switch {
-                        GitProviderKind.GitHub => await GitHubPrDetector.DetectAsync(cwd, detectCap, run),
-                        GitProviderKind.GitLab when owner is not null && repoName is not null
-                            => await GitLabPrDetector.DetectAsync(host, owner, repoName, branch, cwd, detectCap, run),
-                        _ => null
-                    };
-
-                    if (pr is not null) {
-                        prNumber  = pr.Number;
-                        prTitle   = pr.Title;
-                        prUrl     = pr.Url;
-                        prHeadRef = pr.HeadRef;
-                    }
+                if (pr is not null) {
+                    prNumber  = pr.Number;
+                    prTitle   = pr.Title;
+                    prUrl     = pr.Url;
+                    prHeadRef = pr.HeadRef;
                 }
             }
 
@@ -236,6 +230,48 @@ static class RepositoryDetection {
         } catch {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Resolves the git provider for <paramref name="host"/> and detects the current PR/MR within a
+    /// single <paramref name="providerCap"/> ceiling shared by the probe and the detector. The
+    /// detector is given only the budget the probe left behind — never the full cap — so probe +
+    /// detector together can't overrun the deadline. <paramref name="getTimestamp"/> is a seam for
+    /// tests (defaults to <see cref="Stopwatch.GetTimestamp"/>).
+    /// </summary>
+    internal static async Task<PrInfo?> ResolveAndDetectPrAsync(
+            string        host,
+            string?       owner,
+            string?       repoName,
+            string?       branch,
+            string        cwd,
+            TimeSpan      providerCap,
+            CommandRunner run,
+            Func<long>?   getTimestamp = null
+        ) {
+        if (providerCap <= TimeSpan.Zero) return null;
+
+        var getTs = getTimestamp ?? Stopwatch.GetTimestamp;
+        var start = getTs();
+        var kind  = await GitProviderRouter.ResolveAsync(host, cwd, providerCap, run);
+
+        // The remainder after the probe — NOT the full providerCap. Passing providerCap here would
+        // let a slow probe + a full-length detector overrun the caller's deadline. Clamp the elapsed
+        // time to >= 0 so a non-monotonic timestamp seam can never inflate detectCap past providerCap
+        // (the invariant is "detector budget <= providerCap, always"). Production uses the monotonic
+        // Stopwatch.GetTimestamp, so this only hardens the injectable test seam.
+        var elapsed = Stopwatch.GetElapsedTime(start, getTs());
+        if (elapsed < TimeSpan.Zero) elapsed = TimeSpan.Zero;
+
+        var detectCap = providerCap - elapsed;
+        if (detectCap <= TimeSpan.Zero) return null;
+
+        return kind switch {
+            GitProviderKind.GitHub => await GitHubPrDetector.DetectAsync(cwd, detectCap, run),
+            GitProviderKind.GitLab when owner is not null && repoName is not null
+                => await GitLabPrDetector.DetectAsync(host, owner, repoName, branch, cwd, detectCap, run),
+            _ => null
+        };
     }
 
     static async Task<string?> RunCommandAsync(string cmd, string arguments, string cwd, TimeSpan timeout) {

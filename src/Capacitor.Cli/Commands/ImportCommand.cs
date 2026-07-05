@@ -612,7 +612,7 @@ static class ImportCommand {
         ReportMissingCwds(sessionCwds, cwdRemap, display);
 
         // --- Scope picker ---
-        var kcapConfig = await AppConfig.Load();
+        var profile = await AppConfig.GetActiveProfileAsync();
 
         if (scope is null) {
             var distinct = resolved.Values
@@ -695,7 +695,7 @@ static class ImportCommand {
 
         var visibilityDesc = forcePrivate
             ? "private (--private)"
-            : $"{kcapConfig?.DefaultVisibility ?? "org_public"} (from profile)";
+            : $"{profile?.DefaultVisibility ?? "org_public"} (from profile)";
 
         if (!ImportScopePrompt.PromptConfirm(
                 scope,
@@ -710,8 +710,8 @@ static class ImportCommand {
         }
 
         // --- Classification (parallel fan-out per source) ---
-        var excludedRepos = kcapConfig?.ExcludedRepos;
-        var excludedPaths = (await AppConfig.GetActiveProfileAsync())?.ExcludedPaths;
+        var excludedRepos = profile?.ExcludedRepos;
+        var excludedPaths = profile?.ExcludedPaths;
 
         var classifyCtx = new ClassifyContext(
             HttpClient: httpClient,

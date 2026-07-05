@@ -28,73 +28,98 @@ const PLATFORM_PACKAGES = {
   "win32-x64":         "@kurrent/kcap-win-x64",
 };
 
-const musl = process.platform === "linux" && isMusl() ? "-musl" : "";
-const platformKey = `${process.platform}${musl}-${process.arch}`;
-const packageName = PLATFORM_PACKAGES[platformKey];
-
-if (!packageName) {
-  console.error(`Unsupported platform: ${platformKey}`);
-  console.error(`Supported: ${Object.keys(PLATFORM_PACKAGES).join(", ")}`);
-  process.exit(1);
+// Resolves the npm dist-tag to install for `kcap update`, based on the
+// resolved channel reported by `kcap update --check`'s `install_tag` field.
+// Falls back to "latest" when the probe is missing, failed, or has no tag,
+// preserving today's default behavior.
+function resolveInstallSpec(info) {
+  const tag = info && typeof info.install_tag === "string" && info.install_tag
+    ? info.install_tag
+    : "latest";
+  return `@kurrent/kcap@${tag}`;
 }
 
-// Resolve the platform package
-let binaryDir;
-try {
-  binaryDir = path.dirname(require.resolve(`${packageName}/package.json`));
-} catch {
-  console.error(`Platform package ${packageName} is not installed.`);
-  console.error(`Try: npm install -g @kurrent/kcap`);
-  process.exit(1);
+// Builds the arg list for the `kcap update --check` probe, forwarding only
+// the channel-switch flags (`--beta`/`--stable`) from the user's `kcap update`
+// invocation. Nothing else is forwarded — the probe already supplies `--check`
+// and `--no-update-check` itself, so this is a controlled call.
+function probeArgs(updArgs) {
+  const channelFlags = (updArgs || []).filter((a) => a === "--beta" || a === "--stable");
+  return ["update", "--check", "--no-update-check", ...channelFlags];
 }
 
-const ext = process.platform === "win32" ? ".exe" : "";
-const binaryPath = path.join(binaryDir, "bin", `kcap${ext}`);
+// Everything below actually DOES something (resolves the binary, execs it,
+// runs the update flow), so it's guarded to only run when this file is
+// executed directly — not when `require()`d (e.g. by the test).
+if (require.main === module) {
+  const musl = process.platform === "linux" && isMusl() ? "-musl" : "";
+  const platformKey = `${process.platform}${musl}-${process.arch}`;
+  const packageName = PLATFORM_PACKAGES[platformKey];
 
-if (!fs.existsSync(binaryPath)) {
-  console.error(`Binary not found at ${binaryPath}`);
-  process.exit(1);
-}
-
-// Ensure the binary is executable (npm doesn't always preserve permissions)
-try {
-  fs.accessSync(binaryPath, fs.constants.X_OK);
-} catch {
-  try { fs.chmodSync(binaryPath, 0o755); } catch {}
-}
-
-// `kcap update` for npm-global installs is driven HERE, in the Node launcher,
-// not by the native binary. The OS locks an executable image for the whole
-// process lifetime but a script only during load — so by driving the upgrade
-// from this script (with the native binary not running) npm can overwrite the
-// binary even on Windows, with no temp-file/rename/detached-helper dance.
-// `--check` (JSON probe) and `--help` fall through to the native binary.
-{
-  const updArgs   = process.argv.slice(3);
-  const checkOnly = updArgs.includes("--check");
-  const wantsHelp = updArgs.some((a) => a === "--help" || a === "-h");
-  if (process.argv[2] === "update" && !checkOnly && !wantsHelp) {
-    runUpdate(binaryPath); // never returns
+  if (!packageName) {
+    console.error(`Unsupported platform: ${platformKey}`);
+    console.error(`Supported: ${Object.keys(PLATFORM_PACKAGES).join(", ")}`);
+    process.exit(1);
   }
-}
 
-// Exec the native binary, replacing this process
-try {
-  execFileSync(binaryPath, process.argv.slice(2), {
-    stdio: "inherit",
-    env: process.env,
-  });
-  process.exit(0);
-} catch (e) {
-  if (e.status !== null) {
-    process.exit(e.status);
+  // Resolve the platform package
+  let binaryDir;
+  try {
+    binaryDir = path.dirname(require.resolve(`${packageName}/package.json`));
+  } catch {
+    console.error(`Platform package ${packageName} is not installed.`);
+    console.error(`Try: npm install -g @kurrent/kcap`);
+    process.exit(1);
   }
-  process.exit(1);
+
+  const ext = process.platform === "win32" ? ".exe" : "";
+  const binaryPath = path.join(binaryDir, "bin", `kcap${ext}`);
+
+  if (!fs.existsSync(binaryPath)) {
+    console.error(`Binary not found at ${binaryPath}`);
+    process.exit(1);
+  }
+
+  // Ensure the binary is executable (npm doesn't always preserve permissions)
+  try {
+    fs.accessSync(binaryPath, fs.constants.X_OK);
+  } catch {
+    try { fs.chmodSync(binaryPath, 0o755); } catch {}
+  }
+
+  // `kcap update` for npm-global installs is driven HERE, in the Node launcher,
+  // not by the native binary. The OS locks an executable image for the whole
+  // process lifetime but a script only during load — so by driving the upgrade
+  // from this script (with the native binary not running) npm can overwrite the
+  // binary even on Windows, with no temp-file/rename/detached-helper dance.
+  // `--check` (JSON probe) and `--help` fall through to the native binary.
+  {
+    const updArgs   = process.argv.slice(3);
+    const checkOnly = updArgs.includes("--check");
+    const wantsHelp = updArgs.some((a) => a === "--help" || a === "-h");
+    if (process.argv[2] === "update" && !checkOnly && !wantsHelp) {
+      runUpdate(binaryPath, updArgs); // never returns
+    }
+  }
+
+  // Exec the native binary, replacing this process
+  try {
+    execFileSync(binaryPath, process.argv.slice(2), {
+      stdio: "inherit",
+      env: process.env,
+    });
+    process.exit(0);
+  } catch (e) {
+    if (e.status !== null) {
+      process.exit(e.status);
+    }
+    process.exit(1);
+  }
 }
 
 // Performs `kcap update`: upgrade the global npm package, then refresh
 // user-scope skills/hooks. Always exits the process; never returns.
-function runUpdate(binaryPath) {
+function runUpdate(binaryPath, updArgs) {
   // On Windows, `npm` is a .cmd shim; Node refuses to spawn .cmd/.bat directly
   // (2024 command-injection fix), so route npm through a shell there. Our npm
   // args are static, so shell use is safe.
@@ -127,12 +152,13 @@ function runUpdate(binaryPath) {
   // child fully EXITS before we run npm, so the binary file is unlocked when
   // npm overwrites it (matters on Windows). `--no-update-check` keeps the
   // background nudge from racing onto stderr.
+  let info = null;
   try {
-    const out  = execFileSync(binaryPath, ["update", "--check", "--no-update-check"], { encoding: "utf8" });
+    const out  = execFileSync(binaryPath, probeArgs(updArgs), { encoding: "utf8" });
     // The probe prints one JSON line; take the last {...} line in case anything
     // else (e.g. a git-remote warning) landed on stdout first.
     const line = out.split(/\r?\n/).reverse().find((l) => l.trim().startsWith("{"));
-    const info = JSON.parse(line);
+    info = JSON.parse(line);
     // Only short-circuit when the probe is CONFIDENT we're up to date: `newer`
     // explicitly false AND a known current version. `newer: null` (version
     // unknown / check failed) falls through to the upgrade rather than stranding
@@ -177,7 +203,7 @@ function runUpdate(binaryPath) {
     process.exit(1);
   }
 
-  const res = spawnSync("npm", ["install", "-g", "@kurrent/kcap@latest"], {
+  const res = spawnSync("npm", ["install", "-g", resolveInstallSpec(info)], {
     stdio: "inherit",
     windowsHide: true,
     ...npmOpts,
@@ -211,3 +237,5 @@ function runUpdate(binaryPath) {
 
   process.exit(0);
 }
+
+module.exports = { resolveInstallSpec, probeArgs };

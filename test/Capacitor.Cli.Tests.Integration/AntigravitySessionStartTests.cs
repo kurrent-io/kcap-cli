@@ -1,0 +1,133 @@
+using System.Text.Json.Nodes;
+using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+using WireMock.Server;
+
+namespace Capacitor.Cli.Tests.Integration;
+
+/// <summary>
+/// CLI→server integration for the Antigravity hook dispatcher (AI-1158/AI-1159):
+/// a PreInvocation drives a POST to /hooks/session-start/antigravity carrying the
+/// enriched payload (session id, version, profile default visibility), and an
+/// excluded-repo PreInvocation is skipped and marks the session disabled.
+/// The watcher spawn that normally follows the POST is neutralized by pre-seeding a
+/// live watcher pid file for the conversation so <c>EnsureWatcherRunning</c> no-ops.
+/// </summary>
+public class AntigravitySessionStartTests : IDisposable {
+    readonly WireMockServer _server     = WireMockServer.Start();
+    readonly string         _configPath = PathHelpers.ConfigPath("config.json");
+    readonly string?        _previousConfig;
+    readonly List<string>   _pidFiles = [];
+
+    public AntigravitySessionStartTests() {
+        _previousConfig = File.Exists(_configPath) ? File.ReadAllText(_configPath) : null;
+    }
+
+    public void Dispose() {
+        _server.Stop();
+        foreach (var p in _pidFiles) { try { File.Delete(p); } catch { /* ignore */ } }
+
+        if (_previousConfig is null) {
+            if (File.Exists(_configPath)) File.Delete(_configPath);
+        } else {
+            File.WriteAllText(_configPath, _previousConfig);
+        }
+    }
+
+    // Pre-seed a live pid file so EnsureWatcherRunning sees a running watcher and skips
+    // spawning `kcap watch` during the test.
+    void NeutralizeWatcherSpawn(string conversationId) {
+        var dir = PathHelpers.ConfigPath("watchers");
+        Directory.CreateDirectory(dir);
+        var pidFile = Path.Combine(dir, $"{conversationId}.pid");
+        File.WriteAllText(pidFile, Environment.ProcessId.ToString());
+        _pidFiles.Add(pidFile);
+    }
+
+    [Test, NotInParallel("AppConfig_FileState")]
+    public async Task PreInvocation_posts_session_start_with_profile_visibility() {
+        // Antigravity conversation ids are dashed UUIDs; the CLI must canonicalize to the
+        // dashless form for session_id + the watcher key + disable (matching `kcap watch`),
+        // so everything resolves to ONE stream.
+        const string convId  = "ag-test-sess-0001";
+        const string dashless = "agtestsess0001";
+        NeutralizeWatcherSpawn(dashless);
+
+        await AppConfig.SaveProfileConfig(new ProfileConfig {
+            ActiveProfile = "work",
+            Profiles = new() {
+                ["work"] = new Profile { ServerUrl = _server.Url, DefaultVisibility = "private" }
+            }
+        });
+
+        _server.Given(Request.Create().WithPath("/hooks/session-start/antigravity").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+
+        var transcript = Path.Combine(Path.GetTempPath(), $"{convId}.jsonl");
+        var payload =
+            $$"""
+            {
+              "conversationId":     "{{convId}}",
+              "transcriptPath":     "{{transcript.Replace("\\", "\\\\")}}",
+              "workspacePaths":     ["/tmp"],
+              "antigravityVersion": "2.2.1"
+            }
+            """;
+
+        var exit = await AntigravityHookCommand.Handle(
+            _server.Url!, ["hook", "--antigravity", "PreInvocation"], new StringReader(payload));
+
+        await Assert.That(exit).IsEqualTo(0);
+
+        var requests = _server.FindLogEntries(
+            Request.Create().WithPath("/hooks/session-start/antigravity").UsingPost());
+        await Assert.That(requests.Count).IsEqualTo(1);
+
+        var body = JsonNode.Parse(requests[0].RequestMessage.Body!)!;
+        // session_id is the DASHLESS canonical form, not the raw dashed conversationId.
+        await Assert.That(body["session_id"]?.GetValue<string>()).IsEqualTo(dashless);
+        await Assert.That(body["hook_event_name"]?.GetValue<string>()).IsEqualTo("sessionStart");
+        await Assert.That(body["antigravity_version"]?.GetValue<string>()).IsEqualTo("2.2.1");
+        await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("private");
+    }
+
+    [Test, NotInParallel("AppConfig_FileState")]
+    public async Task PreInvocation_for_excluded_path_is_skipped_without_posting() {
+        const string convId = "agexcludedsess1";
+        var excludedDir = Path.Combine(Path.GetTempPath(), "kcap-ag-excluded");
+        NeutralizeWatcherSpawn(convId);
+
+        await AppConfig.SaveProfileConfig(new ProfileConfig {
+            ActiveProfile = "work",
+            Profiles = new() {
+                ["work"] = new Profile { ServerUrl = _server.Url, ExcludedPaths = [excludedDir] }
+            }
+        });
+
+        _server.Given(Request.Create().WithPath("/hooks/session-start/antigravity").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+
+        // Antigravity attributes the working dir from workspacePaths[0]; an excluded
+        // path short-circuits before any POST.
+        var transcript = Path.Combine(Path.GetTempPath(), $"{convId}.jsonl");
+        var payload =
+            $$"""
+            {
+              "conversationId": "{{convId}}",
+              "transcriptPath": "{{transcript.Replace("\\", "\\\\")}}",
+              "workspacePaths": ["{{excludedDir.Replace("\\", "\\\\")}}"]
+            }
+            """;
+
+        var exit = await AntigravityHookCommand.Handle(
+            _server.Url!, ["hook", "--antigravity", "PreInvocation"], new StringReader(payload));
+        await Assert.That(exit).IsEqualTo(0);
+
+        var requests = _server.FindLogEntries(
+            Request.Create().WithPath("/hooks/session-start/antigravity").UsingPost());
+        await Assert.That(requests.Count).IsEqualTo(0);
+    }
+}

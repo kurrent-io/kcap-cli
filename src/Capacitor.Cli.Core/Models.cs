@@ -154,6 +154,22 @@ class WatchState {
     // eventually fire and end the session — adding a ceiling here would be YAGNI.
     public HashSet<string> PendingCodexToolCalls { get; } = new(StringComparer.Ordinal);
 
+    // Highwater mark of the last Antigravity gen_metadata row already streamed as a
+    // synthetic USAGE line, so the watcher only sends newly-appended cost rows on each
+    // poll (server dedup by deterministic id is the backstop). -1 = none seen yet.
+    public long LastAntigravityGenIdx { get; set; } = -1;
+
+    // Most-recent Antigravity transcript step created_at, stamped onto synthetic USAGE lines
+    // so their backfill event's recency reflects the turn, not the event-store write time.
+    public string? LastAntigravityCreatedAt { get; set; }
+
+    // Antigravity tool calls seen without a matching result step yet (PLANNER_RESPONSE
+    // tool_calls increment; RUN_COMMAND/VIEW_FILE/LIST_DIRECTORY/CODE_ACTION decrement). A
+    // long-running command produces no transcript line between its call and result, so this
+    // suppresses the idle-timeout session-end while a tool is genuinely in flight (mirrors
+    // the Codex PendingCodexToolCalls guard).
+    public int PendingAntigravityToolCalls { get; set; }
+
     public const int TranscriptThreshold = 10;
 }
 
@@ -630,13 +646,17 @@ static partial class GitUrlParser {
             : (null, null);
     }
 
-    [GeneratedRegex(@"https?://[^/]+/(?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$")]
+    // owner is greedy (`.+`) so a nested GitLab namespace (group/subgroup/...) is
+    // captured whole, with repo as the final path segment. AI-1121 / §6b.
+    [GeneratedRegex(@"https?://[^/]+/(?<owner>.+)/(?<repo>[^/]+?)(?:\.git)?$")]
     internal static partial Regex HttpsRegex();
 
-    [GeneratedRegex(@"git@[\w.-]+:(?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$")]
+    // Anchored: a greedy multi-segment owner would otherwise let this match the
+    // "git@host:port" inside an ssh:// URL and steal it from SshProtoRegex.
+    [GeneratedRegex(@"^git@[\w.-]+:(?<owner>.+)/(?<repo>[^/]+?)(?:\.git)?$")]
     internal static partial Regex SshRegex();
 
-    [GeneratedRegex(@"ssh://(?:[^@/]+@)?[^/]+/(?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$")]
+    [GeneratedRegex(@"ssh://(?:[^@/]+@)?[^/]+/(?<owner>.+)/(?<repo>[^/]+?)(?:\.git)?$")]
     internal static partial Regex SshProtoRegex();
 }
 
@@ -746,6 +766,17 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Auth.ProvisionResponse))]
 [JsonSerializable(typeof(Auth.AvailabilityResponse))]
 [JsonSerializable(typeof(Auth.StatusResponse))]
+[JsonSerializable(typeof(Acp.AcpRequest))]
+[JsonSerializable(typeof(Acp.AcpResponse))]
+[JsonSerializable(typeof(Acp.AcpNotification))]
+[JsonSerializable(typeof(Acp.AcpError))]
+[JsonSerializable(typeof(Acp.InitializeParams))]
+[JsonSerializable(typeof(Acp.ClientCapabilities))]
+[JsonSerializable(typeof(Acp.FsCapabilities))]
+[JsonSerializable(typeof(Acp.SessionNewParams))]
+[JsonSerializable(typeof(Acp.SessionPromptParams))]
+[JsonSerializable(typeof(Acp.PromptContentBlock))]
+[JsonSerializable(typeof(Acp.SessionCancelParams))]
 // UseStringEnumConverter=true matches the server's SignalR JSON protocol, which
 // serialises enums (e.g. LaunchKind) as camelCase strings. Without it the
 // source-gen LaunchKind JsonTypeInfo defaults to numeric and silently drops the
