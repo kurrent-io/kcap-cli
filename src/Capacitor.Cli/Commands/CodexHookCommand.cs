@@ -198,14 +198,18 @@ static class CodexHookCommand {
             return 0;
         }
 
-        var exit = await PostHookAsync(baseUrl, "session-start/codex", enriched);
-        if (exit != 0) return exit;
+        var outcome = await PostHookAsync(baseUrl, "session-start/codex", enriched);
+        if (outcome == HookPostOutcome.Failed) return 1;
 
         // Emit Codex's required JSON output BEFORE spawning the watcher. The
         // watcher is best-effort and may take time to start; the parent (Codex)
         // is waiting on stdout, and there's nothing the watcher can contribute
         // to this response.
         Console.Write(SessionScopedOutputJson);
+
+        // Auth lapsed: recording is paused until the user re-runs `kcap login`. We've satisfied
+        // Codex's stdout contract and exit cleanly; skip the watcher — its POSTs would 401 too.
+        if (outcome == HookPostOutcome.AuthLapsed) return 0;
 
         var enrichedNode = JsonNode.Parse(enriched);
         var sessionId    = TryGetString(enrichedNode, "session_id");
@@ -335,23 +339,11 @@ static class CodexHookCommand {
         return 1;
     }
 
-    static async Task<int> PostHookAsync(string baseUrl, string endpoint, string body) {
-        using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync();
-        using var content = new StringContent(body, Encoding.UTF8, "application/json");
-
-        try {
-            var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{endpoint}", content);
-            if (!resp.IsSuccessStatusCode) {
-                Console.Error.WriteLine($"[kcap] codex-hook {endpoint}: HTTP {(int)resp.StatusCode}");
-                return 1;
-            }
-
-            return 0;
-        } catch (HttpRequestException ex) {
-            HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
-            return 1;
-        }
-    }
+    // Shared auth-aware recording POST: skips the doomed POST (and the misleading per-turn
+    // "HTTP 401" stderr line) when auth has lapsed, reporting AuthLapsed so the caller exits
+    // cleanly instead of erroring. See AgentHookPoster.
+    static Task<HookPostOutcome> PostHookAsync(string baseUrl, string endpoint, string body)
+        => AgentHookPoster.PostAsync(baseUrl, endpoint, body, "codex-hook");
 
     /// <summary>
     /// Best-effort POST of <paramref name="node"/> to <c>/hooks/{endpoint}</c>, capped at

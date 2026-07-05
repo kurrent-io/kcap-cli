@@ -52,7 +52,16 @@ public static class CursorHookCommand {
         using var cts = new CancellationTokenSource(DispatcherBudget);
         HttpClient? client = null;
         try {
-            client = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, cts.Token);
+            // Status-returning variant so a lapse doesn't write the per-turn "expired" stderr
+            // line CreateAuthenticatedClientAsync would. On a lapse, skip HandleCore entirely:
+            // every POST would 401, and draining the spool would turn its 401s into Drops that
+            // discard the backlog — so leave it intact for replay after the user re-runs
+            // `kcap login`, and exit cleanly. Mirrors the Claude hook (#183); kcap status
+            // surfaces the expired state. Cursor has no user-facing notice channel.
+            var (c, status) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl, cts.Token);
+            client = c;
+            if (AgentHookPoster.IsAuthLapsed(status)) return 0;
+
             var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
             MigrateLegacyCursorSpool(spool, CursorPaths.SpoolDir());
             spool.ReapOlderThan(TimeSpan.FromDays(30));

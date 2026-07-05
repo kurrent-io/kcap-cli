@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
@@ -130,11 +129,11 @@ static class KiroHookCommand {
 
         // Fail-open: a non-zero exit surfaces as a FAILED agentSpawn hook inside
         // kiro-cli, which is exactly what this vendor wrapper must avoid on a
-        // transient server/auth blip. PostHookAsync already logged the failure to
-        // stderr; swallow it and skip the watcher this firing. agentSpawn fires
-        // again on the next prompt and retries both the POST and the watcher.
-        var exit = await PostHookAsync(baseUrl, "session-start/kiro", enriched);
-        if (exit != 0) return 0;
+        // transient server/auth blip. On a real failure PostHookAsync already logged to
+        // stderr; on an auth lapse it stayed silent (no doomed POST). Either way skip the
+        // watcher this firing and exit 0 — agentSpawn fires again next prompt and retries.
+        var outcome = await PostHookAsync(baseUrl, "session-start/kiro", enriched);
+        if (outcome != HookPostOutcome.Posted) return 0;
 
         // The watcher tails Kiro's own append-only session log
         // ~/.kiro/sessions/cli/{id}.jsonl (the file is named with the dashed id).
@@ -152,24 +151,11 @@ static class KiroHookCommand {
         return 0;
     }
 
-    static async Task<int> PostHookAsync(string baseUrl, string endpoint, string body) {
-        using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync();
-        using var content = new StringContent(body, Encoding.UTF8, "application/json");
-
-        try {
-            var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{endpoint}", content);
-
-            if (!resp.IsSuccessStatusCode) {
-                Console.Error.WriteLine($"[kcap] kiro-hook {endpoint}: HTTP {(int)resp.StatusCode}");
-                return 1;
-            }
-
-            return 0;
-        } catch (HttpRequestException ex) {
-            HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
-            return 1;
-        }
-    }
+    // Shared auth-aware recording POST: skips the doomed POST (and the misleading per-turn
+    // "HTTP 401" stderr line) when auth has lapsed, reporting AuthLapsed so the caller exits
+    // cleanly instead of erroring. See AgentHookPoster.
+    static Task<HookPostOutcome> PostHookAsync(string baseUrl, string endpoint, string body)
+        => AgentHookPoster.PostAsync(baseUrl, endpoint, body, "kiro-hook");
 
     /// <summary>
     /// Reads the session model from the sibling <c>{id}.json</c>

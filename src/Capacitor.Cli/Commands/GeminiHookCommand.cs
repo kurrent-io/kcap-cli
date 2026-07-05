@@ -127,8 +127,11 @@ static class GeminiHookCommand {
             return 0;
         }
 
-        var exit = await PostHookAsync(baseUrl, "session-start/gemini", enriched);
-        if (exit != 0) return exit;
+        var outcome = await PostHookAsync(baseUrl, "session-start/gemini", enriched);
+
+        // Failed keeps the prior non-zero exit; AuthLapsed exits cleanly (no error banner). Either
+        // way skip the watcher — on a lapse its POSTs would 401 too.
+        if (outcome != HookPostOutcome.Posted) return outcome == HookPostOutcome.Failed ? 1 : 0;
 
         EnsureWatcher(baseUrl, sessionId, node, cwd, source);
         await Task.CompletedTask;
@@ -186,7 +189,8 @@ static class GeminiHookCommand {
             forwarded["agent_host_id"] = agentHostId;
         }
 
-        return await PostHookAsync(baseUrl, "session-end/gemini", forwarded.ToJsonString());
+        // AuthLapsed / Posted → clean exit (0); a real failure keeps the prior non-zero exit.
+        return await PostHookAsync(baseUrl, "session-end/gemini", forwarded.ToJsonString()) == HookPostOutcome.Failed ? 1 : 0;
     }
 
     static async Task<int> HandleNotification(string baseUrl, JsonNode node, string sessionId, string? cwd) {
@@ -209,9 +213,14 @@ static class GeminiHookCommand {
 
         using var cts = new CancellationTokenSource(NotificationPostBudget);
         try {
-            using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, cts.Token);
-            using var content = new StringContent(forwarded.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _       = await client.PostAsync($"{baseUrl}/hooks/notification", content, cts.Token);
+            // Status-returning variant (not CreateAuthenticatedClientAsync, which writes a
+            // per-turn "expired" line to stderr): on a lapse, stay quiet and skip the doomed POST.
+            var (client, status) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl, cts.Token);
+            using (client) {
+                if (AgentHookPoster.IsAuthLapsed(status)) return 0;
+                using var content = new StringContent(forwarded.ToJsonString(), Encoding.UTF8, "application/json");
+                using var _       = await client.PostAsync($"{baseUrl}/hooks/notification", content, cts.Token);
+            }
         } catch {
             // Recording must never fail the hook.
         }
@@ -236,24 +245,11 @@ static class GeminiHookCommand {
         );
     }
 
-    static async Task<int> PostHookAsync(string baseUrl, string endpoint, string body) {
-        using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync();
-        using var content = new StringContent(body, Encoding.UTF8, "application/json");
-
-        try {
-            var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{endpoint}", content);
-
-            if (!resp.IsSuccessStatusCode) {
-                Console.Error.WriteLine($"[kcap] gemini-hook {endpoint}: HTTP {(int)resp.StatusCode}");
-                return 1;
-            }
-
-            return 0;
-        } catch (HttpRequestException ex) {
-            HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
-            return 1;
-        }
-    }
+    // Shared auth-aware recording POST: skips the doomed POST (and the misleading per-turn
+    // "HTTP 401" stderr line) when auth has lapsed, reporting AuthLapsed so the caller exits
+    // cleanly instead of erroring. See AgentHookPoster.
+    static Task<HookPostOutcome> PostHookAsync(string baseUrl, string endpoint, string body)
+        => AgentHookPoster.PostAsync(baseUrl, endpoint, body, "gemini-hook");
 
     static DateTimeOffset? TryGetIsoTimestamp(JsonNode? node, string fieldName) {
         if (node?[fieldName] is JsonValue v
