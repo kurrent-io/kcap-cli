@@ -18,12 +18,20 @@ public class AntigravityPathsTests {
             .IsEqualTo(Path.Combine(GeminiRoot, "antigravity"));
     }
 
+    // AI-1158 GUI re-test: the plugin must land under the GUI config root
+    // (~/.gemini/config/plugins/kcap/), NOT the agy CLI dir (~/.gemini/antigravity-cli/),
+    // which the running IDE never reads.
     [Test]
-    public async Task CliRoot_and_GlobalHooksJson() {
-        await Assert.That(AntigravityPaths.CliRoot(home: "/h", geminiCliHome: P))
-            .IsEqualTo(Path.Combine(GeminiRoot, "antigravity-cli"));
+    public async Task PluginDir_and_GlobalHooksJson_and_manifest_are_under_gui_config() {
+        var pluginDir = Path.Combine(GeminiRoot, "config", "plugins", "kcap");
+        await Assert.That(AntigravityPaths.GuiConfigRoot(home: "/h", geminiCliHome: P))
+            .IsEqualTo(Path.Combine(GeminiRoot, "config"));
+        await Assert.That(AntigravityPaths.PluginDir(home: "/h", geminiCliHome: P))
+            .IsEqualTo(pluginDir);
         await Assert.That(AntigravityPaths.GlobalHooksJson(home: "/h", geminiCliHome: P))
-            .IsEqualTo(Path.Combine(GeminiRoot, "antigravity-cli", "hooks.json"));
+            .IsEqualTo(Path.Combine(pluginDir, "hooks.json"));
+        await Assert.That(AntigravityPaths.GlobalPluginManifest(home: "/h", geminiCliHome: P))
+            .IsEqualTo(Path.Combine(pluginDir, "plugin.json"));
     }
 
     [Test]
@@ -41,9 +49,11 @@ public class AntigravityPathsTests {
     }
 
     [Test]
-    public async Task WorkspaceHooksJson_is_dot_agents() {
+    public async Task WorkspaceHooksJson_is_dot_agents_plugin_dir() {
+        await Assert.That(AntigravityPaths.WorkspacePluginDir("/repo"))
+            .IsEqualTo(Path.Combine("/repo", ".agents", "plugins", "kcap"));
         await Assert.That(AntigravityPaths.WorkspaceHooksJson("/repo"))
-            .IsEqualTo(Path.Combine("/repo", ".agents", "hooks.json"));
+            .IsEqualTo(Path.Combine("/repo", ".agents", "plugins", "kcap", "hooks.json"));
     }
 
     [Test]

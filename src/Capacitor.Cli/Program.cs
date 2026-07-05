@@ -523,6 +523,7 @@ switch (command) {
             new KiroImportSource(),
             new PiImportSource(),
             new OpenCodeImportSource(),
+            new AntigravityImportSource(),
         };
         IReadOnlyList<IImportSource> sources = explicitVendorSelection
             ? allSources.Where(s => vsel.Vendors.Contains(s.Vendor)).ToList()
