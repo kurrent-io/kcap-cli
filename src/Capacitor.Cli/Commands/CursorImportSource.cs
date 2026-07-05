@@ -42,6 +42,10 @@ internal sealed class CursorImportSource : IImportSource {
         _projectsDir         = projectsDirOverride         ?? CursorPaths.ProjectsDir();
         _workspaceStorageDir = workspaceStorageDirOverride ?? CursorPaths.Resolve().WorkspaceStorageDir;
         _sanitizedToFolder   = new Lazy<IReadOnlyDictionary<string, string?>>(BuildSanitizedToFolderMap);
+        // Cursor is the one import source that emits a `repository` node in its synthetic
+        // session-start (AI-1152) via BuildRepositoryNode, which includes pr_* when populated —
+        // so it keeps live PR detection (unlike the owner/repo-only detectors in the other
+        // sources). Dropping it here would silently strip PR tagging from imported Cursor sessions.
         _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd));
     }
 

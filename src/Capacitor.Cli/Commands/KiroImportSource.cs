@@ -26,7 +26,7 @@ internal sealed class KiroImportSource : IImportSource {
         Func<string, Task<RepositoryPayload?>>? repoDetector        = null
     ) {
         _sessionsDir  = sessionsDirOverride ?? KiroPaths.SessionsDir();
-        _repoDetector = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd));
+        _repoDetector = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd, detectPullRequest: false));
     }
 
     static StringComparison PathComparison =>

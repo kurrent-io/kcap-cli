@@ -589,7 +589,8 @@ static class ImportCommand {
                     opts,
                     async (cwd, _) => {
                         try {
-                            var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
+                            // Import only needs owner/repo here — skip the PR/MR provider round-trip.
+                            var repo = await RepositoryDetection.DetectRepositoryAsync(cwd, detectPullRequest: false);
                             repoByCwd[cwd] = repo is { Owner: { } o, RepoName: { } n } ? (o, n) : null;
                         } catch {
                             repoByCwd[cwd] = null;
@@ -2003,7 +2004,8 @@ static class ImportCommand {
             var total   = uniqueCwds.Count;
 
             async ValueTask DetectOne(string cwd) {
-                var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
+                // Import only needs owner/repo here — skip the PR/MR provider round-trip.
+                var repo = await RepositoryDetection.DetectRepositoryAsync(cwd, detectPullRequest: false);
                 repoByCwd[cwd] = repo is { Owner: { } o, RepoName: { } n } ? (o, n) : null;
             }
 
@@ -2358,7 +2360,9 @@ static class ImportCommand {
         var codexRepo = session.Vendor == "codex" ? ExtractCodexGitInfo(session.FilePath) : null;
 
         if (cwd is not null) {
-            var repo = await RepositoryDetection.DetectRepositoryAsync(cwd);
+            // The imported session-start payload carries no PR fields (only owner/repo/branch/user),
+            // so skip the PR/MR provider round-trip.
+            var repo = await RepositoryDetection.DetectRepositoryAsync(cwd, detectPullRequest: false);
 
             if (repo is not null || codexRepo is not null) {
                 var repoNode = new JsonObject();
