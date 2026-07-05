@@ -23,8 +23,10 @@ static class McpFlowResultServer {
     const int MaxAttempts = 5;
     static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(3);
 
+    // AI-1127 E-0 (AI-1190): the server no longer reads the transcript — markers deliver
+    // nothing, so the only useful guidance on failure is to retry the tool itself.
     const string FallbackHint =
-        "If you cannot submit via this tool, fall back to the marker: end your final message with a line starting FINDINGS: or NO FINDINGS.";
+        "Retry this tool call — it is the ONLY delivery channel. Do NOT fall back to FINDINGS:/NO FINDINGS markers in your reply: the server does not read the transcript, so a marker delivers nothing.";
 
     public static async Task<int> RunAsync(string baseUrl) {
         var agentId = Environment.GetEnvironmentVariable(AgentIdEnvVar);
@@ -206,8 +208,9 @@ static class McpFlowResultServer {
             }
 
             if (code == "stale_round_token")
-                // Deliberately NO fallback hint: routing a stale result through the marker
-                // would bypass the round-token guard (spec-review round 2 finding).
+                // Deliberately NO retry hint: a stale round token means this round is already
+                // closed — the result must be discarded, never redelivered (spec-review round 2
+                // finding; the AI-1139 round-token guard).
                 return ($"Error: {message}", true);
 
             return ($"Error: HTTP {(int)response.StatusCode} — {message}\n{FallbackHint}", true);
