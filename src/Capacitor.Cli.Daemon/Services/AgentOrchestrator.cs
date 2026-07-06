@@ -401,6 +401,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             HostedRuntimeStart start;
 
+            // Captured BEFORE the spawn so the transcript-based session-id fallback
+            // (DetectClaudeSessionIdAsync) can filter the shared project dir to files
+            // written by THIS agent's process, not the user's earlier sessions.
+            var spawnedAtUtc = DateTime.UtcNow;
+
             try {
                 start = await runtimeFactory.StartAsync(runtimeCtx, _shutdownCts.Token);
             } catch (CodexHooksNotInstalledException ex) {
@@ -447,6 +452,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // Start reading output
             _ = ReadAgentOutputAsync(agent);
+
+            // Fallback session-id discovery: the primary link (the spawned Claude's
+            // session-start hook POSTing agent_host_id to /hooks/session-start) silently
+            // breaks when the hook can't authenticate (e.g. expired kcap token → 401),
+            // leaving the agent's web chat stuck on "Waiting for session to start..."
+            // forever while the terminal works. The daemon can discover the session id
+            // itself from the transcript file Claude writes and report it over its own
+            // authenticated connection. Claude-vendor only — other vendors have different
+            // transcript layouts. Best-effort background task, cancelled with the agent.
+            if (string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase)) {
+                _ = DetectClaudeSessionIdAsync(agent, spawnedAtUtc);
+            }
 
             // Report the resolved model so the server can display the real model the agent
             // is running (the dispatched `model` may be the "default" no-override sentinel,
@@ -1310,6 +1327,62 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     static readonly HashSet<string> ValidEffortLevels = ["low", "medium", "high", "max"];
 
+    static readonly TimeSpan SessionIdPollInterval = TimeSpan.FromSeconds(2);
+    static readonly TimeSpan SessionIdPollTimeout  = TimeSpan.FromMinutes(3);
+
+    /// <summary>
+    /// Background fallback that discovers the spawned Claude's session id from its transcript
+    /// file and reports it to the server, for when the session-start hook (the primary source
+    /// of the agent↔session link) fails — e.g. an expired kcap token means every /hooks POST
+    /// 401s, and the server would otherwise never learn the session id (its recovery path reads
+    /// an AgentRun heartbeat that only the same hook handler writes).
+    ///
+    /// Polls the Claude project dir for the agent's worktree (symlinked to the SOURCE repo's
+    /// project dir, so it's shared with the user's own sessions — see
+    /// <see cref="SessionTranscriptLocator"/> for how candidates are disambiguated by cwd).
+    /// On a match it sets <see cref="AgentInstance.SessionId"/> and best-effort reports via
+    /// AgentStatusChanged (live registry link) AND an <see cref="AgentRunHeartbeat"/> (so the
+    /// server's restart-recovery FindAgentSessionIdAsync path works too). Once SessionId is
+    /// set, the regular 30 s heartbeat loop and reconnect re-registration keep re-sending it,
+    /// so a transient report failure here self-heals. Stops when the id is known by other
+    /// means, the agent exits (ReadCts), or the daemon shuts down. Never breaks the launch.
+    /// </summary>
+    async Task DetectClaudeSessionIdAsync(AgentInstance agent, DateTime spawnedAtUtc) {
+        try {
+            var projectDir = ClaudePaths.ProjectDir(agent.Worktree.Path);
+            var deadline   = DateTime.UtcNow + SessionIdPollTimeout;
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(agent.ReadCts.Token, _shutdownCts.Token);
+
+            while (DateTime.UtcNow < deadline) {
+                if (agent.SessionId is not null) return; // linked by other means (hook succeeded)
+
+                if (SessionTranscriptLocator.TryLocate(projectDir, agent.Worktree.Path, spawnedAtUtc) is { } sessionId) {
+                    agent.SessionId ??= sessionId;
+
+                    LogSessionIdDetected(agent.Id, sessionId);
+
+                    if (!agent.IsPrivate) {
+                        await _server.AgentStatusChangedAsync(agent.Id, agent.Status, sessionId);
+                        await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunHeartbeat(sessionId));
+                    }
+
+                    return;
+                }
+
+                await Task.Delay(SessionIdPollInterval, cts.Token);
+            }
+
+            LogSessionIdNotDetected(agent.Id, SessionIdPollTimeout.TotalSeconds);
+        } catch (OperationCanceledException) {
+            // Agent stopped or daemon shutting down — nothing to report.
+        } catch (Exception ex) {
+            // Best-effort by design: if the immediate report failed after SessionId was set,
+            // the heartbeat loop / reconnect re-registration will re-send it.
+            LogSessionIdDetectFailed(ex, agent.Id);
+        }
+    }
+
     async Task RunHeartbeatLoopAsync(CancellationToken ct) {
         while (await _heartbeatTimer.WaitForNextTickAsync(ct)) {
             // PrivateLocal agents get no heartbeats and no stuck-Starting auto-stop (deny-all;
@@ -1539,6 +1612,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to persist repo path for agent {AgentId}")]
     partial void LogRepoPathPersistFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId} linked to session {SessionId} via its transcript file (session-start hook fallback)")]
+    partial void LogSessionIdDetected(string agentId, string sessionId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "No transcript matched agent {AgentId}'s worktree within {Seconds:F0}s; session id stays hook-provided (or unknown if the hook failed)")]
+    partial void LogSessionIdNotDetected(string agentId, double seconds);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Transcript-based session-id detection failed for agent {AgentId} (continuing; the session-start hook remains the primary link)")]
+    partial void LogSessionIdDetectFailed(Exception ex, string agentId);
 
     [GeneratedRegex(@"\x1B\[[0-9;]*[A-Za-z]|\x1B\].*?\x07|\x1B[()][AB012]|\x1B\[[\?]?[0-9;]*[hlm]")]
     private static partial Regex StripAnsiRegex();
