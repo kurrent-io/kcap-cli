@@ -116,11 +116,24 @@ function renameAsideBinaries(binDir, trashDir) {
 // Undo rename-aside after a failed install, so the user isn't left without a
 // binary. Skips any path npm already managed to replace.
 function restoreMoved(moved) {
+  const failures = [];
   for (const m of moved) {
     try {
       if (!fs.existsSync(m.from)) fs.renameSync(m.to, m.from);
-    } catch {}
+    } catch (e) {
+      failures.push({ ...m, error: e });
+    }
   }
+
+  if (failures.length) {
+    console.error("Could not restore one or more kcap binaries after a failed update:");
+    for (const f of failures) {
+      console.error(`  ${f.to} -> ${f.from}: ${f.error.message}`);
+    }
+    console.error("You may need to move the files back manually from the .kcap-trash directory.");
+  }
+
+  return failures;
 }
 
 // Pure helper (unit-tested): shape a Win32_Process JSON payload into the kcap
@@ -277,10 +290,12 @@ function runUpdate(binaryPath, updArgs) {
     globalRoot = execFileSync("npm", ["root", "-g"], { encoding: "utf8", ...npmOpts }).trim();
   } catch {}
 
+  let realGlobalRoot = null;
   let isGlobalNpm = false;
   try {
     if (globalRoot) {
-      const root = fs.realpathSync(globalRoot) + path.sep;
+      realGlobalRoot = fs.realpathSync(globalRoot);
+      const root = realGlobalRoot + path.sep;
       isGlobalNpm = fs.realpathSync(__filename).startsWith(root);
     }
   } catch {}
@@ -333,7 +348,7 @@ function runUpdate(binaryPath, updArgs) {
 
   // Fail clearly instead of half-installing under a root-owned prefix.
   try {
-    fs.accessSync(globalRoot, fs.constants.W_OK);
+    fs.accessSync(realGlobalRoot, fs.constants.W_OK);
   } catch {
     console.error(`Cannot write to the global npm directory (${globalRoot}).`);
     console.error("Re-run with the permissions you installed kcap with, or reinstall");
@@ -346,13 +361,13 @@ function runUpdate(binaryPath, updArgs) {
   let moved = [];
   if (process.platform === "win32") {
     try {
-      moved = renameAsideBinaries(path.dirname(binaryPath), trashDirFor(globalRoot));
+      moved = renameAsideBinaries(path.dirname(binaryPath), trashDirFor(realGlobalRoot));
     } catch (e) {
       // Even a rename was refused — something holds the file exclusively
       // (AV scan, exclusive open). renameAsideBinaries already rolled back its
       // partial moves; diagnose instead of letting npm EBUSY.
       console.error(`Could not move the current kcap binary aside: ${e.message}`);
-      printLockedBinaryHelp(globalRoot);
+      printLockedBinaryHelp(realGlobalRoot);
       process.exit(1);
     }
   }
@@ -365,7 +380,7 @@ function runUpdate(binaryPath, updArgs) {
   if (res.status !== 0) {
     restoreMoved(moved);
     console.error("npm install failed; kcap was not updated.");
-    if (process.platform === "win32") printLockedBinaryHelp(globalRoot, /* onlyIfFound */ true);
+    if (process.platform === "win32") printLockedBinaryHelp(realGlobalRoot, /* onlyIfFound */ true);
     process.exit(res.status == null ? 1 : res.status);
   }
 
@@ -400,4 +415,5 @@ module.exports = {
   trashDirFromLauncher,
   filterKcapProcesses,
   describeRole,
+  restoreMoved,
 };

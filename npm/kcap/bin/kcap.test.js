@@ -1,4 +1,6 @@
 const assert = require("node:assert");
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const {
   resolveInstallSpec,
@@ -7,6 +9,7 @@ const {
   trashDirFromLauncher,
   filterKcapProcesses,
   describeRole,
+  restoreMoved,
 } = require("./kcap.js");
 
 assert.strictEqual(resolveInstallSpec({ install_tag: "beta" }), "@kurrent/kcap@beta");
@@ -64,5 +67,37 @@ assert.strictEqual(describeRole("C:\\x\\kcap-daemon.exe run --name main"), "daem
 assert.strictEqual(describeRole("kcap.exe daemon status"), "daemon");
 assert.strictEqual(describeRole("kcap.exe mcp memory"), "MCP server — open Claude Code/agent session");
 assert.strictEqual(describeRole("kcap.exe watch"), "kcap process");
+
+// restoreMoved: successful restores are reported as no failures; restore
+// failures are surfaced so users can recover files left in trash manually.
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kcap-restore-test-"));
+  try {
+    const from = path.join(dir, "bin", "kcap.exe");
+    const to = path.join(dir, ".kcap-trash", "kcap.exe.1");
+    fs.mkdirSync(path.dirname(from), { recursive: true });
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.writeFileSync(to, "exe");
+
+    assert.deepStrictEqual(restoreMoved([{ from, to }]), []);
+    assert.strictEqual(fs.readFileSync(from, "utf8"), "exe");
+    assert.strictEqual(fs.existsSync(to), false);
+
+    const missing = path.join(dir, ".kcap-trash", "missing.exe");
+    const errors = [];
+    const originalError = console.error;
+    console.error = (message) => errors.push(String(message));
+    try {
+      const failures = restoreMoved([{ from: path.join(dir, "bin", "missing.exe"), to: missing }]);
+      assert.strictEqual(failures.length, 1);
+    } finally {
+      console.error = originalError;
+    }
+    assert(errors.some((m) => m.includes("Could not restore one or more kcap binaries")));
+    assert(errors.some((m) => m.includes(".kcap-trash")));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 console.log("ok");
