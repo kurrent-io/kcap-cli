@@ -310,12 +310,42 @@ static class McpFlowsServer {
     // Maximum consecutive transient failures (5xx / network / TLS) before giving up.
     const int MaxTransientRetries = 5;
 
+    /// <summary>AI-1127 E-c: a multi-participant start records the run only — no round exists to
+    /// poll, so the old poll path must not run. Returns null unless the body is exactly that shape
+    /// (round-full starts and old servers fall through to the existing logic unchanged).</summary>
+    internal static string? TryFormatRoundlessStart(string postBody) {
+        try {
+            var node = JsonNode.Parse(postBody)?.AsObject();
+            if (node is null) return null;
+
+            var flowRunId = node["flow_run_id"]?.GetValue<string>();
+            var status    = node["status"]?.GetValue<string>();
+
+            if (flowRunId is null || status != "running") return null;
+            if (node["round_id"] is not null || node["round_number"] is not null) return null;
+
+            var sb = new StringBuilder();
+            sb.Append("flow_run_id: "); AppendLine(sb, flowRunId);
+            sb.AppendLine("status: running");
+            sb.AppendLine();
+            sb.Append("Multi-participant flow started — no round is in flight yet. Address a role with " +
+                      "send_to_participant(flow_run_id, participant, message); each role's agent launches " +
+                      "lazily on its first message.");
+            return sb.ToString();
+        } catch {
+            return null;
+        }
+    }
+
     /// <summary>If the POST already carries a terminal result (old/blocking server), return it.
     /// Otherwise poll GET /api/flows/{id} until the started round is terminal (AI-1061).
     /// <paramref name="toolName"/> is the tool that initiated the round (one of
     /// start_review_flow/submit_review_round/start_flow/send_to_participant) — threaded through
     /// so the graceful-cap timeout message can point back at the matching status tool.</summary>
     static async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody, string toolName) {
+        if (TryFormatRoundlessStart(postBody) is { } roundless)
+            return new(roundless, false);
+
         var node      = JsonNode.Parse(postBody)?.AsObject();
         var status    = node?["status"]?.GetValue<string>();
         var flowRunId = node?["flow_run_id"]?.GetValue<string>();
