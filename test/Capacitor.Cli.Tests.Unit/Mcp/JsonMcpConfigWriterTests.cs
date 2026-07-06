@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Mcp;
 
@@ -139,5 +140,31 @@ public class JsonMcpConfigWriterTests {
 
         var review = (JsonObject)((JsonObject)JsonNode.Parse(File.ReadAllText(path))!["mcpServers"]!)["kcap-review"]!;
         await Assert.That((string)review["command"]!).IsEqualTo("user-owned"); // NOT clobbered
+    }
+
+    [Test]
+    public async Task Register_heals_stale_owned_entry_but_stays_idempotent() {
+        var dir = Directory.CreateTempSubdirectory("kcap-heal-").FullName;
+        var path = Path.Combine(dir, "mcp.json");
+        var marker = new McpMarker("test", _ => Path.Combine(dir, "marker.json"));
+
+        // First registration records ownership + writes canonical entries.
+        JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Standard, null, marker);
+        // Re-running with no changes is a no-op (idempotent).
+        var again = JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Standard, null, marker);
+        await Assert.That(again).IsEqualTo(JsonMcpConfigWriter.Change.Unchanged);
+
+        // Simulate a stale owned entry (still command "kcap", so still kcap-owned).
+        var root = (JsonObject)JsonNode.Parse(File.ReadAllText(path))!;
+        ((JsonObject)root["mcpServers"]!)["kcap-review"] =
+            new JsonObject { ["command"] = "kcap", ["args"] = new JsonArray { "mcp", "OLD-review" } };
+        File.WriteAllText(path, root.ToJsonString());
+
+        // Re-register heals it back to canonical.
+        var change = JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Standard, null, marker);
+        await Assert.That(change).IsEqualTo(JsonMcpConfigWriter.Change.Updated);
+        var review = (JsonObject)((JsonObject)JsonNode.Parse(File.ReadAllText(path))!["mcpServers"]!)["kcap-review"]!;
+        var args = review["args"]!.AsArray().Select(n => (string)n!).ToArray();
+        await Assert.That(args).IsEquivalentTo(new[] { "mcp", "review" }); // healed
     }
 }

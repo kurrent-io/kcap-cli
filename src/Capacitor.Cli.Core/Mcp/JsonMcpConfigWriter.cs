@@ -23,15 +23,16 @@ public static class JsonMcpConfigWriter {
             var written = new List<string>();
 
             foreach (var s in servers) {
+                var rendered = RenderEntry(s, shape, cwd);
                 if (block[s.Name] is JsonNode existing) {
-                    // Already present: a prior kcap registration is already correct, and a
-                    // user look-alike must not be clobbered either way. Only a missing entry
-                    // is written — mirrors CodexConfigToml's "only missing servers are added"
-                    // idempotency contract.
-                    if (marker.Owns(configPath, s.Name, existing)) written.Add(s.Name);
+                    if (!marker.Owns(configPath, s.Name, existing)) continue;   // user look-alike — never clobber
+                    written.Add(s.Name);                                        // kcap-owned → keep recorded
+                    if (JsonNode.DeepEquals(existing, rendered)) continue;      // identical → idempotent no-op
+                    block[s.Name] = rendered;                                   // stale/old shape → heal to canonical
+                    changed = true;
                     continue;
                 }
-                block[s.Name] = RenderEntry(s, shape, cwd);
+                block[s.Name] = rendered;                                       // missing → add
                 written.Add(s.Name);
                 changed = true;
             }
