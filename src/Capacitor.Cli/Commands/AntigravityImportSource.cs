@@ -64,12 +64,14 @@ internal sealed class AntigravityImportSource : IImportSource {
         var byRoot    = AntigravitySubagents.BuildRootDescendants(convIds, parentMap);
 
         // AI-1218 drift observability: surface format drift without a messages fallback.
-        var allConversationIds = convIds;
+        // HashSet membership so the counters stay O(n), not O(n²), on large brain trees (qodo #285).
+        var allConversationIds = convIds.ToHashSet(StringComparer.Ordinal);
+        var linkedChildIds     = parentMap.Values.ToHashSet(StringComparer.Ordinal);
         var invokeEdges   = parentMap.Count;
         var danglingChild = parentMap.Keys.Count(c => !allConversationIds.Contains(c));
-        var msgButNoInvoke = allConversationIds.Count(id =>
+        var msgButNoInvoke = convIds.Count(id =>
             Directory.Exists(AntigravityPaths.MessagesDir(id, _home, _geminiCliHome))
-            && !parentMap.ContainsKey(id) && !parentMap.Values.Contains(id));
+            && !parentMap.ContainsKey(id) && !linkedChildIds.Contains(id));
         Log($"Antigravity import: {invokeEdges} invoke edge(s); {danglingChild} invoked child id(s) with no conversation dir; {msgButNoInvoke} conversation(s) with messages/ but no invoke edge");
 
         var sinceUtc = filters.Since is { } since
