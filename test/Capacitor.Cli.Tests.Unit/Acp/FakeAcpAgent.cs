@@ -46,6 +46,46 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     readonly List<(string Method, JsonElement? Params)> _receivedCalls = new();
     readonly object _receivedCallsLock = new();
 
+    string? _pendingServerRequestToolCallJson;
+    string? _pendingServerRequestOptionsJson;
+    long    _nextServerRequestId = 1000; // disjoint range from the connection's own outbound ids
+
+    readonly List<(string Method, JsonElement? Params)>          _sentServerRequests = new();
+    readonly object                                              _sentServerRequestsLock = new();
+    JsonElement?                                                 _lastServerRequestResponse;
+    JsonElement?                                                 _lastServerRequestError;
+
+    /// <summary>
+    /// Every server→client request (e.g. <c>session/request_permission</c>) this fake has SENT to
+    /// the connection under test, in send order. Populated by
+    /// <see cref="EnqueuePermissionRequestDuringNextPrompt"/>'s injection into
+    /// <see cref="RunPromptScriptAsync"/>.
+    /// </summary>
+    public IReadOnlyList<(string Method, JsonElement? Params)> SentServerRequests {
+        get { lock (_sentServerRequestsLock) return _sentServerRequests.ToArray(); }
+    }
+
+    /// <summary>The connection's JSON-RPC <c>result</c> for the most recent server→client request this fake sent, or null if not yet answered.</summary>
+    public JsonElement? LastServerRequestResponse => _lastServerRequestResponse;
+
+    /// <summary>The connection's JSON-RPC <c>error</c> for the most recent server→client request this fake sent, or null if not answered with an error.</summary>
+    public JsonElement? LastServerRequestError => _lastServerRequestError;
+
+    /// <summary>
+    /// Arranges the fake to send a real <c>session/request_permission</c> server→client request
+    /// (built via <see cref="BuildRequestPermissionFrame"/>) as part of the NEXT
+    /// <c>session/prompt</c> turn's response, awaiting and recording the connection's reply before
+    /// answering the prompt itself with the default <c>end_turn</c> result. This finally wires the
+    /// builder helpers <see cref="BuildRequestPermissionFrame"/>/<see cref="PermissionOutcomeSelected"/>/
+    /// <see cref="PermissionOutcomeCancelled"/> into the fake's active dispatch loop — AI-684 Task 8
+    /// built them but deliberately left them unwired (see this file's original remarks), since the
+    /// permission bridge itself was AI-686's job.
+    /// </summary>
+    public void EnqueuePermissionRequestDuringNextPrompt(string toolCallJson, string optionsJson) {
+        _pendingServerRequestToolCallJson = toolCallJson;
+        _pendingServerRequestOptionsJson  = optionsJson;
+    }
+
     /// <summary>
     /// The stream a NEW <see cref="Capacitor.Cli.Daemon.Acp.AcpConnection"/> under test should be
     /// constructed with as its <c>writeStream</c> — the connection's outbound frames land here, and
@@ -127,7 +167,24 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
                 if (string.IsNullOrWhiteSpace(line))
                     continue;
 
-                await DispatchLineAsync(line, ct).ConfigureAwait(false);
+                // AI-686: dispatched as untracked background work rather than awaited in-loop.
+                // EnqueuePermissionRequestDuringNextPrompt's session/request_permission send-and-await
+                // (SendServerRequestAndAwaitResponseAsync) is itself triggered from a session/prompt's
+                // dispatch — its TaskCompletionSource can only be completed by THIS SAME loop reading
+                // the connection's reply line. Awaiting the dispatch here would therefore deadlock:
+                // the loop would be blocked inside the prompt's dispatch waiting for a line that only
+                // the loop itself can read. Firing dispatch as background work keeps the loop free to
+                // read subsequent lines (including that reply) while a single dispatch is in flight.
+                // Record() (called synchronously at the top of DispatchLineAsync, before any await)
+                // still runs before this method returns to the loop for lines processed one at a
+                // time by ReadLineAsync, so ReceivedCalls order is unaffected for the existing tests
+                // that assert strict ordering (FakeAcpAgentTests) — those never have two lines
+                // in flight at once.
+                var dispatchTask = DispatchLineAsync(line, ct);
+                _ = dispatchTask.ContinueWith(t => {
+                    if (t.IsFaulted)
+                        System.Diagnostics.Debug.WriteLine($"FakeAcpAgent: DispatchLineAsync faulted: {t.Exception}");
+                }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             }
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             // normal shutdown
@@ -140,8 +197,24 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
         var hasId     = root.TryGetProperty("id", out var idElement);
         var hasMethod = root.TryGetProperty("method", out var methodElement);
-        if (!hasMethod)
+        if (!hasMethod) {
+            // A frame with no "method" is either the connection's reply to one of THIS fake's own
+            // session/request_permission sends (id in _pendingFakeRequests), or an unrelated
+            // response the fake doesn't care about — never expected in AI-684/686's scripts other
+            // than this new path, but guarded defensively.
+            if (hasId && idElement.TryGetInt64(out var replyId)) {
+                TaskCompletionSource<(JsonElement?, JsonElement?)>? pending;
+                lock (_sentServerRequestsLock) _pendingFakeRequests.Remove(replyId, out pending);
+
+                if (pending is not null) {
+                    var hasResult = root.TryGetProperty("result", out var resultEl);
+                    var hasError  = root.TryGetProperty("error", out var errorEl);
+                    pending.TrySetResult((hasResult ? resultEl.Clone() : null, hasError ? errorEl.Clone() : null));
+                }
+            }
+
             return;
+        }
 
         var method        = methodElement.GetString() ?? "";
         var paramsElement = root.TryGetProperty("params", out var p) ? p.Clone() : (JsonElement?) null;
@@ -177,6 +250,15 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     }
 
     async Task RunPromptScriptAsync(JsonElement id, CancellationToken ct) {
+        if (_pendingServerRequestToolCallJson is not null && _pendingServerRequestOptionsJson is not null) {
+            var toolCallJson = _pendingServerRequestToolCallJson;
+            var optionsJson  = _pendingServerRequestOptionsJson;
+            _pendingServerRequestToolCallJson = null;
+            _pendingServerRequestOptionsJson  = null;
+
+            await SendServerRequestAndAwaitResponseAsync("session/request_permission", toolCallJson, optionsJson, ct).ConfigureAwait(false);
+        }
+
         var (updates, result) = _promptScripts.TryDequeue(out var script)
             ? script
             : (new[] { DefaultAgentMessageChunkUpdate(FixedSessionId, "hello from FakeAcpAgent") }, DefaultPromptResult);
@@ -188,6 +270,36 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
             await gate.Task.ConfigureAwait(false);
 
         await WriteResponseAsync(id, result, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Sends a server→client request frame (currently only <c>session/request_permission</c>) with
+    /// a fake-allocated id disjoint from the connection's own outbound id space, waits for the
+    /// connection's response frame, and records it on <see cref="LastServerRequestResponse"/>/
+    /// <see cref="LastServerRequestError"/>. This is a SEPARATE read loop concern from
+    /// <see cref="RunAsync"/>'s main dispatch (which handles requests ARRIVING from the connection
+    /// under test) — the fake's OWN read loop, already running via <see cref="RunAsync"/>, also
+    /// observes the connection's reply to THIS request as an ordinary incoming "response" frame
+    /// (has <c>id</c> + <c>result</c>/<c>error</c>, no <c>method</c>) and records it here via a
+    /// short-lived local completion source correlated by id.
+    /// </summary>
+    readonly Dictionary<long, TaskCompletionSource<(JsonElement? Result, JsonElement? Error)>> _pendingFakeRequests = new();
+
+    async Task SendServerRequestAndAwaitResponseAsync(string method, string toolCallJson, string optionsJson, CancellationToken ct) {
+        var id    = Interlocked.Increment(ref _nextServerRequestId);
+        var frame = BuildRequestPermissionFrame(id, FixedSessionId, toolCallJson, optionsJson);
+
+        var tcs = new TaskCompletionSource<(JsonElement?, JsonElement?)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_sentServerRequestsLock) {
+            _pendingFakeRequests[id] = tcs;
+            _sentServerRequests.Add((method, frame.GetProperty("params")));
+        }
+
+        await WriteRawFrameAsync(frame, ct).ConfigureAwait(false);
+
+        var (result, error) = await tcs.Task.ConfigureAwait(false);
+        _lastServerRequestResponse = result;
+        _lastServerRequestError    = error;
     }
 
     void Record(string method, JsonElement? @params) {

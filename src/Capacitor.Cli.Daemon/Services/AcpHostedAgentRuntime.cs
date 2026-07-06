@@ -27,6 +27,7 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
     readonly AcpConnection _connection;
     readonly IAcpProcess   _process;
     readonly ILogger       _logger;
+    readonly AcpInteractionBridge? _interactionBridge;
     readonly CancellationTokenSource _cts = new();
     readonly Channel<AcpSessionUpdate> _updates = Channel.CreateUnbounded<AcpSessionUpdate>(
         new UnboundedChannelOptions { SingleReader = false, SingleWriter = true });
@@ -42,12 +43,34 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
     string? _sessionId;
     int     _disposed;
 
-    public AcpHostedAgentRuntime(AcpConnection connection, IAcpProcess process, ILogger logger) {
+    /// <summary>
+    /// <paramref name="requestInteraction"/> is optional (AI-686) — when null, matches AI-684's
+    /// original behavior exactly: <see cref="AcpConnection.OnServerRequest"/> stays unset, and any
+    /// <c>session/request_permission</c>/<c>elicitation/create</c> the agent sends gets the
+    /// connection's default JSON-RPC "Method not found" response. When provided, it is forwarded
+    /// into a new <see cref="AcpInteractionBridge"/> and wired as <see cref="AcpConnection.OnServerRequest"/>,
+    /// closing over this runtime's <see cref="_sessionId"/> at call time (not construction time —
+    /// the session id isn't known until <see cref="StartAsync"/>'s <c>session/new</c> resolves,
+    /// but a permission/elicitation request can only ever arrive AFTER that, during a
+    /// <c>session/prompt</c> turn).
+    /// </summary>
+    public AcpHostedAgentRuntime(
+            AcpConnection                                                                  connection,
+            IAcpProcess                                                                    process,
+            ILogger                                                                        logger,
+            string                                                                         agentId = "",
+            Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>?   requestInteraction = null
+        ) {
         _connection = connection;
         _process    = process;
         _logger     = logger;
 
         _connection.OnNotification += HandleNotification;
+
+        if (requestInteraction is not null) {
+            _interactionBridge = new AcpInteractionBridge(requestInteraction, agentId, logger);
+            _connection.OnServerRequest = (request, ct) => _interactionBridge.HandleAsync(request, _sessionId ?? "", ct);
+        }
     }
 
     public string Vendor              => "cursor";
@@ -55,6 +78,9 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
     public bool   HasExited           => _process.HasExited;
     public int?   ExitCode            => _process.ExitCode;
     public bool   EmitsTerminalOutput => false;
+
+    /// <summary>The ACP <c>sessionId</c> once <see cref="StartAsync"/>'s <c>session/new</c> has resolved; null before that.</summary>
+    public string? SessionId => _sessionId;
 
     /// <summary>
     /// Reduced <c>session/update</c> notifications, in arrival order. Unbounded so a mapper that
