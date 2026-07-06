@@ -47,7 +47,7 @@ public class AcpInteractionBridgeTests {
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
 
-        var result = await bridge.HandleAsync(request, AcpSessionId, CancellationToken.None);
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
 
         await Assert.That(result).IsNotNull();
         var outcome = result!.Value.GetProperty("outcome");
@@ -64,7 +64,7 @@ public class AcpInteractionBridgeTests {
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
 
-        var result = await bridge.HandleAsync(request, AcpSessionId, CancellationToken.None);
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
 
         var outcome = result!.Value.GetProperty("outcome");
         await Assert.That(outcome.GetProperty("outcome").GetString()).IsEqualTo("cancelled");
@@ -79,7 +79,7 @@ public class AcpInteractionBridgeTests {
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
 
-        var result = await bridge.HandleAsync(request, AcpSessionId, CancellationToken.None);
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
 
         var outcome = result!.Value.GetProperty("outcome");
         await Assert.That(outcome.GetProperty("outcome").GetString()).IsEqualTo("cancelled");
@@ -94,7 +94,7 @@ public class AcpInteractionBridgeTests {
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
 
-        var result = await bridge.HandleAsync(request, AcpSessionId, CancellationToken.None);
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
 
         await Assert.That(result).IsNotNull();
         var outcome = result!.Value.GetProperty("outcome");
@@ -121,7 +121,7 @@ public class AcpInteractionBridgeTests {
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
 
-        var result = await bridge.HandleAsync(request, AcpSessionId, CancellationToken.None);
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
 
         await Assert.That(result).IsNotNull();
         var outcome = result!.Value.GetProperty("outcome");
@@ -138,9 +138,168 @@ public class AcpInteractionBridgeTests {
 
         var request = new AcpRequest(1, "session/request_permission", Params: null);
 
-        var result = await bridge.HandleAsync(request, AcpSessionId, CancellationToken.None);
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
 
         await Assert.That(called).IsFalse();
+        var outcome = result!.Value.GetProperty("outcome");
+        await Assert.That(outcome.GetProperty("outcome").GetString()).IsEqualTo("cancelled");
+    }
+
+    /// <summary>
+    /// Qodo daemon-review Q1 (fail-safe hole): <c>SessionRequestPermissionParams.Options</c> is
+    /// typed as a non-nullable <c>PermissionOptionDto[]</c>, but System.Text.Json does NOT enforce
+    /// non-nullable-reference annotations at deserialize time — an <c>options</c> field OMITTED
+    /// entirely from the wire frame (the ACP spec for this method is spec-derived, NOT
+    /// probe-confirmed; see <c>docs/acp-probe-findings.md</c>) yields <c>parsed.Options == null</c>.
+    /// PRE-FIX this NRE'd inside <c>.Select(...)</c>/<c>MapPermissionDecision</c>, which
+    /// <see cref="HandlePermissionAsync"/>'s own try/catch does NOT cover (it only wraps the
+    /// deserialize step and the <c>requestInteraction</c> call) — so the exception propagated all
+    /// the way out to <see cref="AcpConnection.HandleServerRequestAsync"/>'s generic catch-all,
+    /// which answers with a bare JSON-RPC "Internal error" (-32603) instead of the well-formed ACP
+    /// <c>cancelled</c> outcome every other malformed-input path in this bridge produces. This test
+    /// proves an omitted <c>options</c> field degrades to <c>cancelled</c> instead.
+    /// </summary>
+    [Test]
+    public async Task RequestPermission_OptionsFieldOmitted_ReturnsCancelledResultNotThrow() {
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)),
+            agentId: AgentId,
+            logger: NullLogger.Instance);
+
+        var json = $$"""{"sessionId":"{{AcpSessionId}}","toolCall":{"toolCallId":"call-1","title":"Run ls"} }""";
+        var request = new AcpRequest(1, "session/request_permission", JsonDocument.Parse(json).RootElement.Clone());
+
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        var outcome = result!.Value.GetProperty("outcome");
+        await Assert.That(outcome.GetProperty("outcome").GetString()).IsEqualTo("cancelled");
+    }
+
+    /// <summary>
+    /// Qodo daemon-review Q1: same fail-safe hole as above, but for an explicit JSON <c>null</c>
+    /// (rather than an omitted field) for <c>options</c> — also deserializes to
+    /// <c>parsed.Options == null</c> since <see cref="Capacitor.Cli.Core.Acp.PermissionOptionDto"/>[]
+    /// is a reference type and System.Text.Json happily assigns <c>null</c> to it regardless of the
+    /// record's non-nullable C# annotation.
+    /// </summary>
+    [Test]
+    public async Task RequestPermission_OptionsFieldExplicitNull_ReturnsCancelledResultNotThrow() {
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)),
+            agentId: AgentId,
+            logger: NullLogger.Instance);
+
+        var json = $$"""{"sessionId":"{{AcpSessionId}}","toolCall":{"toolCallId":"call-1","title":"Run ls"},"options":null}""";
+        var request = new AcpRequest(1, "session/request_permission", JsonDocument.Parse(json).RootElement.Clone());
+
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        var outcome = result!.Value.GetProperty("outcome");
+        await Assert.That(outcome.GetProperty("outcome").GetString()).IsEqualTo("cancelled");
+    }
+
+    /// <summary>
+    /// Qodo daemon-review Q1: an <c>options</c> array containing a JSON <c>null</c> ELEMENT (rather
+    /// than the whole array being absent/null) must also never throw — the fix's normalization
+    /// filters out null elements before building <see cref="AcpInteractionRequest.Options"/> and
+    /// before <c>MapPermissionDecision</c> ever sees them.
+    /// </summary>
+    [Test]
+    public async Task RequestPermission_OptionsArrayContainsNullElement_ReturnsCancelledResultNotThrow() {
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)),
+            agentId: AgentId,
+            logger: NullLogger.Instance);
+
+        var json = $$"""{"sessionId":"{{AcpSessionId}}","toolCall":{"toolCallId":"call-1","title":"Run ls"},"options":[null,{"optionId":"allow-once","name":"Allow","kind":"allow_once"}]}""";
+        var request = new AcpRequest(1, "session/request_permission", JsonDocument.Parse(json).RootElement.Clone());
+
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        var outcome = result!.Value.GetProperty("outcome");
+        // "allow" with no SelectedOptionId still fails closed per the existing fail-closed contract —
+        // the point of this test is only that the null element never throws.
+        await Assert.That(outcome.GetProperty("outcome").GetString()).IsEqualTo("cancelled");
+    }
+
+    /// <summary>
+    /// Qodo daemon-review Q1: the same omitted-<c>options</c> fail-safe hole exists on the
+    /// <c>elicitation/create</c> path too (<see cref="ElicitationCreateParams.Options"/> is already
+    /// nullable there, and <see cref="HandleElicitationAsync"/> already null-coalesces it — this
+    /// test pins that existing defensive behavior stays correct after the shared normalization
+    /// helper is introduced for Q1).
+    /// </summary>
+    [Test]
+    public async Task ElicitationCreate_OptionsFieldOmitted_ReturnsCancelledResultNotThrow() {
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("answered", null, null, null, null, null)),
+            agentId: AgentId,
+            logger: NullLogger.Instance);
+
+        var json = $$"""{"sessionId":"{{AcpSessionId}}","message":"Proceed?"}""";
+        var request = new AcpRequest(1, "elicitation/create", JsonDocument.Parse(json).RootElement.Clone());
+
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        var outcome = result!.Value.GetProperty("outcome");
+        await Assert.That(outcome.GetProperty("outcome").GetString()).IsEqualTo("cancelled");
+    }
+
+    /// <summary>
+    /// Qodo daemon-review Q2: <see cref="AcpHostedAgentRuntime"/> used to wire
+    /// <c>OnServerRequest</c> with <c>_sessionId ?? ""</c> — a server→client request handled before
+    /// <c>session/new</c>'s response assigns <c>_sessionId</c> (the read loop can start before that
+    /// completes) forwarded an <see cref="AcpInteractionRequest"/> with <c>AcpSessionId == ""</c>,
+    /// breaking server-side correlation. The fix drops that runtime-level session id entirely and
+    /// has the bridge trust <see cref="SessionRequestPermissionParams.SessionId"/> — the request's
+    /// OWN params — as the sole source of truth. This test proves the forwarded
+    /// <see cref="AcpInteractionRequest.AcpSessionId"/> comes from the request params, not from any
+    /// caller-supplied value, by using a params <c>sessionId</c> distinct from any value the old API
+    /// shape would have injected.
+    /// </summary>
+    [Test]
+    public async Task RequestPermission_ForwardsAcpSessionIdFromRequestParams() {
+        AcpInteractionRequest? captured = null;
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => { captured = req; return Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)); },
+            agentId: AgentId,
+            logger: NullLogger.Instance);
+
+        const string sessionIdFromParams = "session-from-params-only";
+        var json = $$"""{"sessionId":"{{sessionIdFromParams}}","toolCall":{"toolCallId":"call-1","title":"Run ls"},"options":[{"optionId":"allow-once","name":"Allow","kind":"allow_once"}]}""";
+        var request = new AcpRequest(1, "session/request_permission", JsonDocument.Parse(json).RootElement.Clone());
+
+        await bridge.HandleAsync(request, CancellationToken.None);
+
+        await Assert.That(captured).IsNotNull();
+        await Assert.That(captured!.Value.AcpSessionId).IsEqualTo(sessionIdFromParams);
+    }
+
+    /// <summary>
+    /// Qodo daemon-review Q2: a <c>session/request_permission</c> whose OWN params carry no
+    /// resolvable session id (missing/empty <c>sessionId</c>) can't be correlated server-side at
+    /// all — this must degrade to the well-formed ACP <c>cancelled</c> result (never a thrown
+    /// exception, and never forwarded to the server with an empty/placeholder session id).
+    /// </summary>
+    [Test]
+    public async Task RequestPermission_EmptySessionIdInParams_ReturnsCancelledResultWithoutCallingServer() {
+        var called = false;
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => { called = true; return Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)); },
+            agentId: AgentId,
+            logger: NullLogger.Instance);
+
+        var json = """{"sessionId":"","toolCall":{"toolCallId":"call-1","title":"Run ls"},"options":[{"optionId":"allow-once","name":"Allow","kind":"allow_once"}]}""";
+        var request = new AcpRequest(1, "session/request_permission", JsonDocument.Parse(json).RootElement.Clone());
+
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
+
+        await Assert.That(called).IsFalse();
+        await Assert.That(result).IsNotNull();
         var outcome = result!.Value.GetProperty("outcome");
         await Assert.That(outcome.GetProperty("outcome").GetString()).IsEqualTo("cancelled");
     }
@@ -168,7 +327,7 @@ public class AcpInteractionBridgeTests {
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
 
-        var result = await bridge.HandleAsync(request, AcpSessionId, CancellationToken.None);
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
 
         var outcome = result!.Value.GetProperty("outcome");
         // No SelectedOptionId was supplied — must be cancelled, NEVER "selected"/"allow-once".
@@ -191,7 +350,7 @@ public class AcpInteractionBridgeTests {
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once"]));
 
-        var result = await bridge.HandleAsync(request, AcpSessionId, CancellationToken.None);
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
 
         var outcome = result!.Value.GetProperty("outcome");
         await Assert.That(outcome.GetProperty("outcome").GetString()).IsEqualTo("cancelled");
@@ -216,7 +375,7 @@ public class AcpInteractionBridgeTests {
         var json = $$"""{"sessionId":"{{AcpSessionId}}","toolCall":{"toolCallId":"call-1","title":"Run ls"},"options":[{"optionId":"allow-first","name":"Allow","kind":"allow_once"},{"optionId":"allow-second","name":"Allow","kind":"allow_always"},{"optionId":"deny","name":"Deny","kind":"reject_once"}]}""";
         var request = new AcpRequest(1, "session/request_permission", JsonDocument.Parse(json).RootElement.Clone());
 
-        var result = await bridge.HandleAsync(request, AcpSessionId, CancellationToken.None);
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
 
         var outcome = result!.Value.GetProperty("outcome");
         await Assert.That(outcome.GetProperty("outcome").GetString()).IsEqualTo("selected");
@@ -241,7 +400,7 @@ public class AcpInteractionBridgeTests {
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
 
-        var result = await bridge.HandleAsync(request, AcpSessionId, CancellationToken.None);
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
 
         var outcome = result!.Value.GetProperty("outcome");
         await Assert.That(outcome.GetProperty("outcome").GetString()).IsEqualTo("cancelled");
@@ -269,7 +428,7 @@ public class AcpInteractionBridgeTests {
 
         var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
 
-        var result = await bridge.HandleAsync(request, AcpSessionId, CancellationToken.None);
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
 
         var outcome = result!.Value.GetProperty("outcome");
         await Assert.That(outcome.GetProperty("outcome").GetString()).IsEqualTo("cancelled");
@@ -285,7 +444,7 @@ public class AcpInteractionBridgeTests {
 
         var request = new AcpRequest(1, "fs/read_text_file", Params: JsonDocument.Parse("{}").RootElement.Clone());
 
-        var result = await bridge.HandleAsync(request, AcpSessionId, CancellationToken.None);
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
 
         await Assert.That(result).IsNull();
     }
@@ -304,7 +463,7 @@ public class AcpInteractionBridgeTests {
         var json = $$"""{"sessionId":"{{AcpSessionId}}","message":"Proceed?","options":[{"optionId":"yes","name":"Yes","kind":"allow_once"},{"optionId":"no","name":"No","kind":"reject_once"}]}""";
         var request = new AcpRequest(1, "elicitation/create", JsonDocument.Parse(json).RootElement.Clone());
 
-        var result = await bridge.HandleAsync(request, AcpSessionId, CancellationToken.None);
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
 
         await Assert.That(result).IsNotNull();
         var outcome = result!.Value.GetProperty("outcome");
@@ -339,7 +498,7 @@ public class AcpInteractionBridgeTests {
         var json = $$$$$"""{"sessionId":"{{{{{AcpSessionId}}}}}","message":"Describe the config","requestedSchema":{"type":"object","properties":{"name":{"type":"string"}}}}""";
         var request = new AcpRequest(1, "elicitation/create", JsonDocument.Parse(json).RootElement.Clone());
 
-        var result = await bridge.HandleAsync(request, AcpSessionId, CancellationToken.None);
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
 
         await Assert.That(result).IsNotNull();
         await Assert.That(captured).IsNotNull();
@@ -369,7 +528,7 @@ public class AcpInteractionBridgeTests {
         var json = $$"""{"sessionId":"{{AcpSessionId}}","message":"Proceed?","requestedSchema":"not-an-object"}""";
         var request = new AcpRequest(1, "elicitation/create", JsonDocument.Parse(json).RootElement.Clone());
 
-        var result = await bridge.HandleAsync(request, AcpSessionId, CancellationToken.None);
+        var result = await bridge.HandleAsync(request, CancellationToken.None);
 
         await Assert.That(result).IsNotNull();
         var outcome = result!.Value.GetProperty("outcome");

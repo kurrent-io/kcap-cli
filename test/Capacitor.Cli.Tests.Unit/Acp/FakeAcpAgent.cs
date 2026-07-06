@@ -1,6 +1,7 @@
 // test/Capacitor.Cli.Tests.Unit/Acp/FakeAcpAgent.cs
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 
@@ -70,6 +71,23 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
     /// <summary>The connection's JSON-RPC <c>error</c> for the most recent server→client request this fake sent, or null if not answered with an error.</summary>
     public JsonElement? LastServerRequestError => _lastServerRequestError;
+
+    /// <summary>
+    /// Qodo daemon-review Q3: the FIRST exception thrown by a fire-and-forget
+    /// <c>DispatchLineAsync</c> dispatch (see <see cref="RunAsync"/>'s remarks on why dispatch must
+    /// stay untracked-by-the-loop rather than awaited in-line), or <see langword="null"/> if none has
+    /// faulted yet. PRE-FIX, a dispatch fault was only <c>Debug.WriteLine</c>'d — invisible to a test
+    /// assertion — so a faulted dispatch manifested as a hang/timeout on whatever the test was
+    /// awaiting from the connection, rather than a clear failure. Captured via
+    /// <see cref="ExceptionDispatchInfo"/> (not the bare <see cref="Exception"/>) so
+    /// <see cref="DisposeAsync"/> can rethrow it with its ORIGINAL stack trace preserved. Only the
+    /// first fault is kept — later ones are logged the same way the pre-fix code always did, since a
+    /// second fault on an already-faulted fake is rarely independently interesting and keeping "the
+    /// first thing that went wrong" is the more useful diagnostic.
+    /// </summary>
+    public Exception? DispatchFault => Volatile.Read(ref _dispatchFault)?.SourceException;
+
+    ExceptionDispatchInfo? _dispatchFault;
 
     /// <summary>
     /// Arranges the fake to send a real <c>session/request_permission</c> server→client request
@@ -182,8 +200,19 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
                 // in flight at once.
                 var dispatchTask = DispatchLineAsync(line, ct);
                 _ = dispatchTask.ContinueWith(t => {
-                    if (t.IsFaulted)
-                        System.Diagnostics.Debug.WriteLine($"FakeAcpAgent: DispatchLineAsync faulted: {t.Exception}");
+                    if (!t.IsFaulted)
+                        return;
+
+                    System.Diagnostics.Debug.WriteLine($"FakeAcpAgent: DispatchLineAsync faulted: {t.Exception}");
+
+                    // Qodo daemon-review Q3: capture the FIRST fault (thread-safe — multiple
+                    // dispatches can be in flight at once, see this method's own remarks above) so
+                    // it surfaces via DispatchFault / DisposeAsync instead of being visible only in
+                    // Debug output. t.Exception is an AggregateException; unwrap to the single inner
+                    // exception a faulted Task always carries here (DispatchLineAsync never throws
+                    // an AggregateException itself).
+                    var captured = ExceptionDispatchInfo.Capture(t.Exception!.InnerException ?? t.Exception);
+                    Interlocked.CompareExchange(ref _dispatchFault, captured, null);
                 }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             }
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
@@ -546,10 +575,20 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
         await _agentWritesToConnection.FlushAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Qodo daemon-review Q3: disposes the fixture's streams as before, then — if a fire-and-forget
+    /// <c>DispatchLineAsync</c> dispatch ever faulted (see <see cref="DispatchFault"/>) — rethrows
+    /// that FIRST captured fault with its original stack trace, so a test that tore this fixture
+    /// down via <c>await using</c> without explicitly checking <see cref="DispatchFault"/> still
+    /// fails loudly instead of the fault being silently dropped. Stream disposal always runs first
+    /// (best-effort cleanup must not be skipped just because a fault will be rethrown after).
+    /// </summary>
     public async ValueTask DisposeAsync() {
         await _agentReadsFromConnection.DisposeAsync().ConfigureAwait(false);
         await _agentWritesToConnection.DisposeAsync().ConfigureAwait(false);
         await ClientWriteStream.DisposeAsync().ConfigureAwait(false);
         await ClientReadStream.DisposeAsync().ConfigureAwait(false);
+
+        Volatile.Read(ref _dispatchFault)?.Throw();
     }
 }

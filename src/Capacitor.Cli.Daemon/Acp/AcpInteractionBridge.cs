@@ -36,16 +36,28 @@ internal sealed class AcpInteractionBridge(
     /// this bridge doesn't recognize (letting <see cref="AcpConnection.HandleServerRequestAsync"/>'s
     /// existing default-decline posture answer with a JSON-RPC "Method not found" error, unchanged
     /// from AI-684's behavior for every method except the two this bridge now claims).
+    ///
+    /// <b>Qodo daemon-review Q2:</b> takes NO caller-supplied session id — the ACP session id used to
+    /// correlate this interaction server-side comes ONLY from the request's OWN
+    /// <c>params.sessionId</c> (<see cref="SessionRequestPermissionParams.SessionId"/> /
+    /// <see cref="ElicitationCreateParams.SessionId"/>), never from a runtime field closed over at
+    /// wiring time. The prior shape took an <c>acpSessionId</c> parameter that
+    /// <see cref="Capacitor.Cli.Daemon.Services.AcpHostedAgentRuntime"/> supplied as
+    /// <c>_sessionId ?? ""</c> — a server→client request handled before <c>session/new</c>'s
+    /// response assigned <c>_sessionId</c> (the read loop can start before that completes) forwarded
+    /// an <see cref="AcpInteractionRequest"/> with <c>AcpSessionId == ""</c>, breaking server-side
+    /// correlation. Trusting the request's own params instead removes that whole class of bug: the
+    /// session id is authoritative and available at the exact moment the request itself exists.
     /// </summary>
-    public async Task<JsonElement?> HandleAsync(AcpRequest request, string acpSessionId, CancellationToken ct) {
+    public async Task<JsonElement?> HandleAsync(AcpRequest request, CancellationToken ct) {
         return request.Method switch {
-            "session/request_permission" => await HandlePermissionAsync(request, acpSessionId, ct).ConfigureAwait(false),
-            "elicitation/create"         => await HandleElicitationAsync(request, acpSessionId, ct).ConfigureAwait(false),
+            "session/request_permission" => await HandlePermissionAsync(request, ct).ConfigureAwait(false),
+            "elicitation/create"         => await HandleElicitationAsync(request, ct).ConfigureAwait(false),
             _                            => null
         };
     }
 
-    async Task<JsonElement?> HandlePermissionAsync(AcpRequest request, string acpSessionId, CancellationToken ct) {
+    async Task<JsonElement?> HandlePermissionAsync(AcpRequest request, CancellationToken ct) {
         SessionRequestPermissionParams parsed;
 
         try {
@@ -60,17 +72,45 @@ internal sealed class AcpInteractionBridge(
             return CancelledResult();
         }
 
+        // Qodo daemon-review Q2: the request's OWN params are the sole source of truth for
+        // correlation — no resolvable session id at all means the server has no way to correlate
+        // this interaction, so fail safe rather than forwarding an empty/placeholder id.
+        if (string.IsNullOrEmpty(parsed.SessionId)) {
+            logger.LogDebug("ACP: session/request_permission params carried no sessionId for agent {AgentId}; cannot correlate, defaulting to cancelled", agentId);
+
+            return CancelledResult();
+        }
+
+        // Qodo daemon-review Q1 (fail-safe hole): System.Text.Json does NOT enforce
+        // SessionRequestPermissionParams.Options' non-nullable C# annotation — an omitted OR
+        // explicit-null `options` field on the wire (this shape is spec-derived, NOT
+        // probe-confirmed; see docs/acp-probe-findings.md) deserializes to `parsed.Options == null`,
+        // which used to NRE inside `.Select(...)` below and propagate all the way out to
+        // AcpConnection.HandleServerRequestAsync's generic catch-all (-32603) instead of this
+        // bridge's well-formed `cancelled`. Normalize once, up front, filtering out any null
+        // element too (an options ARRAY with a null entry is equally unenforceable on the wire) —
+        // the normalized array is used for BOTH the forwarded AcpInteractionRequest.Options and the
+        // later MapPermissionDecision call, so there is exactly one empty-options code path
+        // (MapPermissionDecision's existing `options.Count == 0 → cancelled` branch) rather than two
+        // separate null-checks that could drift.
+        var options = parsed.Options?.Where(o => o is not null).ToArray() ?? [];
+
         var interactionRequest = new AcpInteractionRequest(
             AgentId: agentId,
-            AcpSessionId: acpSessionId,
+            AcpSessionId: parsed.SessionId,
             Kind: "permission",
             ToolName: TryGetToolTitle(parsed.ToolCall),
-            ToolInput: parsed.ToolCall,
+            // Qodo daemon-review Q1: a default/undefined JsonElement (e.g. `toolCall` itself omitted
+            // from the wire frame — ToolCall is non-nullable on SessionRequestPermissionParams, but
+            // again unenforced by System.Text.Json) must not be forwarded as a bare JsonElement,
+            // which can throw when the caller later tries to serialize/inspect it. Undefined maps to
+            // null; a genuine (even non-object) value forwards as-is, same as before.
+            ToolInput: parsed.ToolCall.ValueKind == JsonValueKind.Undefined ? null : parsed.ToolCall,
             ToolCallId: TryGetToolCallId(parsed.ToolCall),
             Prompt: null,
             // Spec-review Finding 6: carry OptionId through to the server-facing DTO so a UI
             // decision can round-trip it back — Options: o.Name (Label) is now display-only.
-            Options: parsed.Options.Select(o => new AcpInteractionOption(o.OptionId, o.Name, null, o.Kind)).ToArray(),
+            Options: options.Select(o => new AcpInteractionOption(o.OptionId, o.Name, null, o.Kind)).ToArray(),
             IsMultiSelect: false
         );
 
@@ -100,10 +140,10 @@ internal sealed class AcpInteractionBridge(
             return CancelledResult();
         }
 
-        return MapPermissionDecision(decision, parsed.Options);
+        return MapPermissionDecision(decision, options);
     }
 
-    async Task<JsonElement?> HandleElicitationAsync(AcpRequest request, string acpSessionId, CancellationToken ct) {
+    async Task<JsonElement?> HandleElicitationAsync(AcpRequest request, CancellationToken ct) {
         // Never advertised in `initialize` (see AcpHostedAgentRuntime.StartAsync's minimal
         // ClientCapabilities, unchanged by this plan) — handled defensively in case a real agent
         // sends it unprompted, per R3's open question on whether Cursor uses a vendor-specific
@@ -122,11 +162,21 @@ internal sealed class AcpInteractionBridge(
             return CancelledResult();
         }
 
-        var options = parsed.Options ?? [];
+        // Qodo daemon-review Q2 — same session-id-from-params contract as HandlePermissionAsync.
+        if (string.IsNullOrEmpty(parsed.SessionId)) {
+            logger.LogDebug("ACP: elicitation/create params carried no sessionId for agent {AgentId}; cannot correlate, defaulting to cancelled", agentId);
+
+            return CancelledResult();
+        }
+
+        // Qodo daemon-review Q1 — same null/omitted-array AND null-element normalization as
+        // HandlePermissionAsync above (this path was already null-coalescing the whole array, but
+        // not filtering individual null elements).
+        var options = parsed.Options?.Where(o => o is not null).ToArray() ?? [];
 
         var interactionRequest = new AcpInteractionRequest(
             AgentId: agentId,
-            AcpSessionId: acpSessionId,
+            AcpSessionId: parsed.SessionId,
             Kind: "elicitation",
             ToolName: null,
             ToolInput: null,

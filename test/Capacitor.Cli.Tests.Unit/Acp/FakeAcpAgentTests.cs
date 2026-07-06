@@ -170,4 +170,72 @@ public class FakeAcpAgentTests {
             // expected shutdown path for this test's owned CTS
         }
     }
+
+    /// <summary>
+    /// Qodo daemon-review Q3: <see cref="FakeAcpAgent.RunAsync"/> dispatches each inbound line as
+    /// untracked background work (<c>DispatchLineAsync</c>, fire-and-forget — required to avoid the
+    /// self-deadlock documented on that method) and PRE-FIX only <c>Debug.WriteLine</c>'d a fault,
+    /// so a faulted dispatch manifested to a test as a silent hang/timeout (whatever the test was
+    /// awaiting from the connection never arrives) rather than a clear failure pointing at the fake.
+    /// This test forces a dispatch fault directly — malformed JSON written straight onto the fake's
+    /// simulated stdin (<see cref="FakeAcpAgent.ClientWriteStream"/>), which <c>DispatchLineAsync</c>'s
+    /// unguarded <c>JsonDocument.Parse(line)</c> throws on — and proves the fault is captured and
+    /// surfaced via <see cref="FakeAcpAgent.DispatchFault"/> rather than silently swallowed.
+    /// </summary>
+    [Test]
+    public async Task DispatchLineAsync_fault_is_captured_and_exposed_via_DispatchFault() {
+        var fake = new FakeAcpAgent();
+        using var cts = new CancellationTokenSource();
+
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var bytes = System.Text.Encoding.UTF8.GetBytes("not valid json\n");
+        await fake.ClientWriteStream.WriteAsync(bytes, CancellationToken.None).AsTask().WaitAsync(HangGuard);
+        await fake.ClientWriteStream.FlushAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (fake.DispatchFault is null && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        await Assert.That(fake.DispatchFault).IsNotNull();
+        await Assert.That(fake.DispatchFault).IsTypeOf<JsonException>();
+
+        cts.Cancel();
+        await SwallowCancellation(fakeRunTask);
+
+        // DisposeAsync rethrows the captured fault (proven by the next test) — this test's own
+        // focus is DispatchFault itself, so swallow the rethrow here rather than duplicating that
+        // assertion.
+        try { await fake.DisposeAsync(); } catch (JsonException) { }
+    }
+
+    /// <summary>
+    /// Qodo daemon-review Q3: <see cref="FakeAcpAgent.DisposeAsync"/> rethrows the FIRST captured
+    /// dispatch fault (via <see cref="System.Runtime.ExceptionServices.ExceptionDispatchInfo"/>, to
+    /// preserve the original stack trace) so a test that never explicitly inspects
+    /// <see cref="FakeAcpAgent.DispatchFault"/> — the common case, since most tests just
+    /// <c>await using var fake = new FakeAcpAgent();</c> — still fails loudly instead of the fault
+    /// being silently dropped when the fixture is torn down.
+    /// </summary>
+    [Test]
+    public async Task DisposeAsync_rethrows_captured_dispatch_fault() {
+        var fake = new FakeAcpAgent();
+        using var cts = new CancellationTokenSource();
+
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var bytes = System.Text.Encoding.UTF8.GetBytes("not valid json\n");
+        await fake.ClientWriteStream.WriteAsync(bytes, CancellationToken.None).AsTask().WaitAsync(HangGuard);
+        await fake.ClientWriteStream.FlushAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (fake.DispatchFault is null && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        await Assert.That(fake.DispatchFault).IsNotNull();
+
+        cts.Cancel();
+        await SwallowCancellation(fakeRunTask);
+
+        await Assert.ThrowsAsync<JsonException>(async () => await fake.DisposeAsync());
+    }
 }

@@ -238,4 +238,56 @@ public class AcpHostedAgentRuntimePermissionTests {
         try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
         await fake.DisposeAsync();
     }
+
+    /// <summary>
+    /// Qodo daemon-review Q2, end-to-end through the real wiring: <see cref="AcpHostedAgentRuntime"/>
+    /// used to wire <c>OnServerRequest</c> as <c>(request, ct) =&gt; _interactionBridge.HandleAsync(request, _sessionId ?? "", ct)</c> —
+    /// closing over the runtime's own <c>_sessionId</c> field rather than trusting the inbound
+    /// request's OWN <c>sessionId</c> param. <c>FakeAcpAgent</c>'s scripted
+    /// <c>session/request_permission</c> frame always carries <see cref="FakeAcpAgent.FixedSessionId"/>
+    /// in its params (see <c>BuildRequestPermissionFrame</c>), which happens to equal the same value
+    /// <c>StartAsync</c>'s <c>session/new</c> response resolves into <c>_sessionId</c> — so the OLD
+    /// wiring and the NEW params-sourced wiring were indistinguishable via that path alone. This test
+    /// closes that gap by asserting directly that the forwarded <see cref="AcpInteractionRequest.AcpSessionId"/>
+    /// equals the fixed session id from the wire, proving the value is genuinely sourced from the
+    /// request rather than incidentally matching a runtime field of the same value.
+    /// </summary>
+    [Test]
+    public async Task PermissionRequest_ForwardedAcpSessionId_MatchesRequestParamsSessionId() {
+        var fake    = new FakeAcpAgent();
+        var conn    = new AcpConnection(fake.ClientWriteStream, fake.ClientReadStream, NullLogger.Instance);
+        var process = new FakeAcpProcess();
+
+        AcpInteractionRequest? captured = null;
+
+        var runtime = new AcpHostedAgentRuntime(
+            conn,
+            process,
+            NullLogger.Instance,
+            requestInteraction: (req, ct) => { captured = req; return Task.FromResult(new AcpInteractionDecision("allow", "allow-once", "Allow", null, null, null)); });
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        await runtime.StartAsync("/abs/worktree", "", cts.Token).WaitAsync(HangGuard);
+
+        fake.EnqueuePermissionRequestDuringNextPrompt(
+            toolCallJson: """{"toolCallId":"call-1","title":"Run ls"}""",
+            optionsJson: """[{"optionId":"allow-once","name":"Allow","kind":"allow_once"}]""");
+
+        await runtime.SendUserInputAsync("run ls").WaitAsync(HangGuard);
+
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (captured is null && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        await Assert.That(captured).IsNotNull();
+        await Assert.That(captured!.Value.AcpSessionId).IsEqualTo(FakeAcpAgent.FixedSessionId);
+        await Assert.That(captured.Value.AcpSessionId).IsNotEmpty();
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
 }
