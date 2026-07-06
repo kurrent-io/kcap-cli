@@ -46,8 +46,11 @@ public static class KiroUsage {
             // Session-level model id (e.g. "minimax-m2.5", "auto"). Rides alongside the
             // token counts so the server can stamp a canonical $usage with a model —
             // AccumulateTokens drops entries with no model (HasModel guard).
+            // Defensive read: GetValue<string>() throws if model_id is present but not a
+            // JSON string, and this whole method is one best-effort try/catch — a bad
+            // optional field must not abort the map and drop credits/context% enrichment.
             var sessionModel = root?["session_state"]?["rts_model_state"]?["model_info"]?["model_id"]
-                ?.GetValue<string>();
+                is JsonValue mv && mv.TryGetValue<string>(out var sm) ? sm : null;
 
             foreach (var t in turns) {
                 if (t?["message_ids"] is not JsonArray mids || mids.Count == 0) continue;

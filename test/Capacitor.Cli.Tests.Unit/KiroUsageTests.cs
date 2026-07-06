@@ -100,6 +100,28 @@ public class KiroUsageTests {
     }
 
     [Test]
+    public async Task anchor_map_tolerates_non_string_model_id() {
+        // Review finding: a malformed/variant model_id (present but not a JSON string)
+        // must NOT abort the whole anchor map — usage enrichment is best-effort. Here the
+        // turn's credits/context% must still be captured.
+        const string metaBadModel = """
+            {"session_state":{
+              "rts_model_state":{"model_info":{"model_id":12345}},
+              "conversation_metadata":{"user_turn_metadatas":[
+                {"message_ids":["u1","a1"],
+                 "context_usage_percentage":7.5,
+                 "metering_usage":[{"value":0.1,"unit":"credit"}]}
+              ]}}}
+            """;
+
+        var map = KiroUsage.AnchorMap(metaBadModel);
+
+        await Assert.That(map.ContainsKey("a1")).IsTrue();
+        await Assert.That(map["a1"].Credits).IsEqualTo(0.1);
+        await Assert.That(map["a1"].ContextPct).IsEqualTo(7.5);
+    }
+
+    [Test]
     public async Task zero_token_counts_stay_dormant() {
         // The default fixture has input/output_token_count = 0 — the hedge must NOT
         // fabricate token/model fields (today's behaviour: credits/context% only).
