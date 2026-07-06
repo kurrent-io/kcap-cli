@@ -1,8 +1,14 @@
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+using WireMock.Server;
 
 namespace Capacitor.Cli.Tests.Unit;
 
 public class McpFlowsServerTests {
+    static Func<TimeSpan, Task> NoDelay(List<TimeSpan> recorded) => ts => { recorded.Add(ts); return Task.CompletedTask; };
+
     [Test]
     public async Task Roundless_start_renders_started_envelope() {
         var body = """{"flow_run_id":"f1","round_id":null,"round_number":null,"status":"running","result_kind":null,"result_text":null,"reviewer_agent_id":null,"reviewer_session_id":null}""";
@@ -119,6 +125,106 @@ public class McpFlowsServerTests {
         var firstIndex  = text.IndexOf("from tester [msg-a1]:", StringComparison.Ordinal);
         var secondIndex = text.IndexOf("from reviewer [msg-b2]:", StringComparison.Ordinal);
         await Assert.That(secondIndex).IsGreaterThan(firstIndex);
+        await Assert.That(pendingIds).IsEquivalentTo(["msg-a1", "msg-b2"]);
+    }
+
+    [Test]
+    public async Task Malformed_pending_entry_is_skipped() {
+        var body = """
+            {"flow_run_id":"f1","round_number":2,"status":"closed","round_status":"clean","round_result_text":"all clean",
+             "pending_messages":[
+                {"message_id":"msg-a1","from_participant":"tester","text":"first"},
+                "junk-string",
+                {"message_id":"msg-b2","from_participant":"reviewer","text":"second"}
+             ]}
+            """;
+        var node = JsonNode.Parse(body)!.AsObject();
+
+        // Pins the carried Minor from Task 2's review: a malformed (non-object) array entry must
+        // be skipped, not throw — FormatPolledRoundResult has no try/catch, so a throw here would
+        // turn a terminal result into a generic internal error.
+        var text = McpFlowsServer.FormatPolledRoundResult(node, "f1", out var pendingIds);
+
+        await Assert.That(text).Contains("from tester [msg-a1]: first");
+        await Assert.That(text).Contains("from reviewer [msg-b2]: second");
+        await Assert.That(pendingIds).IsEquivalentTo(["msg-a1", "msg-b2"]);
+    }
+
+    [Test]
+    public async Task Ack_posts_rendered_ids_snake_case() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/f1/messages/ack").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(200));
+        using var client = new HttpClient();
+
+        await McpFlowsServer.AckRenderedMessagesAsync(client, server.Url!, "f1", ["m1", "m2"], NoDelay([]));
+
+        await Assert.That(server.LogEntries.Count()).IsEqualTo(1);
+        var body = server.LogEntries.Single().RequestMessage.Body!;
+        await Assert.That(body).Contains("\"message_ids\"");
+        var parsed = JsonNode.Parse(body)!.AsObject();
+        var ids    = parsed["message_ids"]!.AsArray().Select(n => n!.GetValue<string>());
+        await Assert.That(ids).IsEquivalentTo(["m1", "m2"]);
+    }
+
+    [Test]
+    public async Task Ack_retries_once_then_swallows() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/f1/messages/ack").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(500));
+        using var client = new HttpClient();
+
+        var delays = new List<TimeSpan>();
+        await McpFlowsServer.AckRenderedMessagesAsync(client, server.Url!, "f1", ["m1"], NoDelay(delays));
+
+        await Assert.That(server.LogEntries.Count()).IsEqualTo(2);
+        await Assert.That(delays).HasCount().EqualTo(1);
+        await Assert.That(delays[0]).IsEqualTo(TimeSpan.FromSeconds(2));
+    }
+
+    [Test]
+    public async Task Ack_skips_empty_ids() {
+        using var server = WireMockServer.Start();
+        using var client = new HttpClient();
+
+        await McpFlowsServer.AckRenderedMessagesAsync(client, server.Url!, "f1", [], NoDelay([]));
+
+        await Assert.That(server.LogEntries.Count()).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// Ordering pin, composition-shaped: the real dispatch path (HandleToolCallAsync) isn't
+    /// directly invocable from a unit test (it needs a live authenticated HttpClient and the full
+    /// stdio JSON-RPC loop — that seam is covered by Capacitor.Cli.Tests.Integration instead). So
+    /// this test pins the composition explicitly: format a status response through the
+    /// id-exposing overload (the same call the get_flow_status wiring makes), then ack exactly
+    /// the ids that call returned — and assert the ack body carries exactly those ids, matching
+    /// what the wiring in McpFlowsServer's get_review_flow_status/get_flow_status arm does.
+    /// </summary>
+    [Test]
+    public async Task Ordering_pin_format_then_ack_sends_exactly_the_rendered_ids() {
+        var statusBody = """
+            {"flow_run_id":"f1","status":"running","definition_id":"code-review","target_title":"t",
+             "pending_messages":[
+                {"message_id":"msg-a1","from_participant":"tester","text":"found a broken symlink in scripts/"},
+                {"message_id":"msg-b2","from_participant":"reviewer","text":"heads-up, migration file also touched"}
+             ]}
+            """;
+
+        var text = McpFlowsServer.FormatStatusResponse(statusBody, out var pendingIds);
+        await Assert.That(text).Contains("pending_messages (2):");
+
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/f1/messages/ack").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(200));
+        using var client = new HttpClient();
+
+        await McpFlowsServer.AckRenderedMessagesAsync(client, server.Url!, "f1", pendingIds, NoDelay([]));
+
+        await Assert.That(server.LogEntries.Count()).IsEqualTo(1);
+        var ackBody = server.LogEntries.Single().RequestMessage.Body!;
+        var ackIds  = JsonNode.Parse(ackBody)!.AsObject()["message_ids"]!.AsArray().Select(n => n!.GetValue<string>());
+        await Assert.That(ackIds).IsEquivalentTo(pendingIds);
         await Assert.That(pendingIds).IsEquivalentTo(["msg-a1", "msg-b2"]);
     }
 }

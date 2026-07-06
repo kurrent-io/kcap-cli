@@ -169,11 +169,23 @@ static class McpFlowsServer {
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
             }
 
-            var statusPayload = toolName switch {
-                "get_review_flow_status" or "get_flow_status" => FormatStatusResponse(body),
-                "close_review_flow"      or "close_flow"      => FormatCloseResponse(body),
-                _                                             => FormatRoundResponse(body)
-            };
+            string statusPayload;
+
+            if (toolName is "get_review_flow_status" or "get_flow_status") {
+                statusPayload = FormatStatusResponse(body, out var pendingIds);
+
+                // AI-1127 E-c: ack exactly the ids that were actually rendered into the text
+                // above, after the text is fully built — never before, never a superset.
+                var flowRunId = arguments?["flow_run_id"]?.GetValue<string>();
+                if (flowRunId is not null)
+                    await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
+            } else if (toolName is "close_review_flow" or "close_flow") {
+                // AI-1127 E-c: render pending_messages but never ack them — the server delivers
+                // them atomically with the close, so there is nothing left to redeliver.
+                statusPayload = FormatCloseResponse(body, out _);
+            } else {
+                statusPayload = FormatRoundResponse(body);
+            }
 
             return BuildToolResult(id, statusPayload);
         } catch (ArgumentException ex) {
@@ -351,8 +363,16 @@ static class McpFlowsServer {
         var flowRunId = node?["flow_run_id"]?.GetValue<string>();
         var roundNum  = node?["round_number"]?.GetValue<int>();
 
-        if (status != "running" || flowRunId is null || roundNum is null)
-            return new(FormatRoundResponse(postBody), false); // terminal-in-POST (old server) or unparseable
+        if (status != "running" || flowRunId is null || roundNum is null) {
+            // terminal-in-POST (old server) or unparseable body.
+            var formatted = FormatRoundResponse(postBody, out var pendingIds);
+
+            // flowRunId may be null here (unparseable body) — nothing to ack against.
+            if (flowRunId is not null)
+                await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
+
+            return new(formatted, false);
+        }
 
         return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value, toolName);
     }
@@ -427,15 +447,21 @@ static class McpFlowsServer {
                 // Fix #1: run-level terminal stops the loop, but only return round result
                 // when the projected round matches the one we submitted.
                 if (runStatus is "closed" or "failed") {
-                    if (rn == roundNumber && rs is not null && TerminalRoundStatuses.Contains(rs))
-                        return new(FormatPolledRoundResult(node!, flowRunId), false);
+                    if (rn == roundNumber && rs is not null && TerminalRoundStatuses.Contains(rs)) {
+                        var formatted = FormatPolledRoundResult(node!, flowRunId, out var pendingIds);
+                        await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
+                        return new(formatted, false);
+                    }
                     // Run became terminal before our round produced a result — explicit error.
                     return new($"Error: review run {runStatus} before round {roundNumber} produced a result.", true);
                 }
 
                 // Only act on OUR round; an earlier projection may still show a prior round.
-                if (rn == roundNumber && rs is not null && TerminalRoundStatuses.Contains(rs))
-                    return new(FormatPolledRoundResult(node!, flowRunId), false);
+                if (rn == roundNumber && rs is not null && TerminalRoundStatuses.Contains(rs)) {
+                    var formatted = FormatPolledRoundResult(node!, flowRunId, out var pendingIds);
+                    await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
+                    return new(formatted, false);
+                }
             }
             await Task.Delay(PollInterval);
         }
@@ -589,8 +615,7 @@ static class McpFlowsServer {
         sb.Append("pending_messages ("); sb.Append(arr.Count); sb.AppendLine("):");
 
         foreach (var item in arr) {
-            var o = item?.AsObject();
-            if (o is null) continue;
+            if (item is not JsonObject o) continue;
 
             var id   = o["message_id"]?.GetValue<string>() ?? "";
             var from = o["from_participant"]?.GetValue<string>() ?? "";
@@ -603,6 +628,48 @@ static class McpFlowsServer {
         }
 
         return ids;
+    }
+
+    /// <summary>AI-1127 E-c: deliver-once ack for pending messages. Callers must invoke this
+    /// AFTER the response text has been fully formatted, passing only the ids that were actually
+    /// rendered into that text — never before, never a superset. No-op (no HTTP call at all) when
+    /// <paramref name="messageIds"/> is empty, which keeps this byte-compatible with servers that
+    /// predate the ack endpoint. Best-effort: one retry after <paramref name="delay"/>(2s) on any
+    /// failure (non-2xx or exception), then swallows and logs to stderr — the next status/round/
+    /// close call will see the same messages still pending and re-render + re-ack them, so a lost
+    /// ack only delays cleanup, it never drops a message.</summary>
+    internal static async Task AckRenderedMessagesAsync(
+            HttpClient            client,
+            string                apiRoot,
+            string                flowRunId,
+            IReadOnlyList<string> messageIds,
+            Func<TimeSpan, Task>  delay
+        ) {
+        if (messageIds.Count == 0) return;
+
+        var url  = $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}/messages/ack";
+        var body = new AckFlowMessagesDto(messageIds);
+
+        async Task<bool> TryPostAsync() {
+            try {
+                using var response = await SendWithRefreshRetryAsync(
+                    client,
+                    c => c.PostAsync(url, JsonContent.Create(body, McpJsonContext.Default.AckFlowMessagesDto))
+                );
+                return response.IsSuccessStatusCode;
+            } catch {
+                return false;
+            }
+        }
+
+        if (await TryPostAsync()) return;
+
+        await delay(TimeSpan.FromSeconds(2));
+
+        if (await TryPostAsync()) return;
+
+        await Console.Error.WriteLineAsync(
+            $"kcap mcp flows: failed to ack {messageIds.Count} rendered message(s) for flow_run_id {flowRunId}; will redeliver on next call.");
     }
 
     static void AppendLine(StringBuilder sb, string value) => sb.AppendLine(value);
@@ -804,4 +871,9 @@ record SubmitReviewRoundDto(
     [property: JsonPropertyName("instructions")] string? Instructions,
     [property: JsonPropertyName("async")]        bool    Async,
     [property: JsonPropertyName("participant")]  string? Participant = null
+);
+
+/// <summary>CLI-side DTO for POST /api/flows/{flowRunId}/messages/ack — AI-1127 E-c deliver-once ack.</summary>
+record AckFlowMessagesDto(
+    [property: JsonPropertyName("message_ids")] IReadOnlyList<string> MessageIds
 );
