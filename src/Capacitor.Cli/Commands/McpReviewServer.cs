@@ -92,10 +92,11 @@ static class McpReviewServer {
                 if (id is null) continue;
 
                 var response = method switch {
-                    "initialize" => BuildInitializeResponse(id),
+                    "initialize" => BuildInitializeResponse(id, request),
                     "tools/list" => BuildToolsListResponse(id, tools),
                     "tools/call" => await DispatchToolCallAsync(id, request),
-                    _            => BuildErrorResponse(id, -32601, $"Method not found: {method}")
+                    _            => McpProtocol.TryHandleStandardMethod(method, id)
+                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
                 };
 
                 await writer.WriteLineAsync(response);
@@ -126,10 +127,10 @@ static class McpReviewServer {
         }
     }
 
-    static string BuildInitializeResponse(JsonNode id) =>
+    static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
             id,
-            new("2024-11-05", new(new()), new("kcap-review", "1.0.0")),
+            new(McpProtocol.NegotiateVersion(request), new(new()), new("kcap-review", "1.0.0")),
             McpJsonContext.Default.McpInitResult
         );
 
