@@ -18,9 +18,10 @@ namespace Capacitor.Cli.Commands;
 /// <para>The conversation id is the brain dir name and is used VERBATIM as the session id
 /// (matching live capture, which uses the dashed conversationId), so a session captured
 /// live and later re-imported dedupes to one stream. Subagents are separate conversations
-/// linked via <c>messages/*.json</c> (see <see cref="AntigravitySubagents"/>); roots are
-/// conversations that are never a child, and their children are imported as subagents under
-/// them. Antigravity records no machine-readable workspace path in the transcript, so import
+/// linked via <c>INVOKE_SUBAGENT</c> steps in the parent's transcript (the spawn-time signal;
+/// see <see cref="AntigravitySubagents"/>); roots are conversations that are never a child,
+/// and their children are imported as subagents under them. Antigravity records no
+/// machine-readable workspace path in the transcript, so import
 /// leaves <c>cwd</c> null (no repo enrichment / exclusion on historical import — a v1
 /// limitation shared with Gemini; live capture gets cwd from the hook payload).</para>
 ///
