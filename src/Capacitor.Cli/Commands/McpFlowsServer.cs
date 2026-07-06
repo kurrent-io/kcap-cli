@@ -748,7 +748,8 @@ static class McpFlowsServer {
         ),
         new(
             "submit_review_round",
-            "Submit a follow-up round to an existing review flow. Returns findings (same UX); the server runs the reviewer asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback.",
+            "Submit a follow-up round to an existing review flow. Returns findings (same UX); the server runs the reviewer asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback. " +
+            "Responses may carry pending_messages — out-of-band notes from participants, delivered exactly once: react to them now; they will not be shown again.",
             new(
                 "object",
                 new() {
@@ -761,7 +762,8 @@ static class McpFlowsServer {
         ),
         new(
             "get_review_flow_status",
-            "Get the current status of a review flow: running, waiting, completed, or failed. Also surfaces the last result kind and result text.",
+            "Get the current status of a review flow: running, waiting, completed, or failed. Also surfaces the last result kind and result text. " +
+            "Responses may carry pending_messages — out-of-band notes from participants, delivered exactly once: react to them now; they will not be shown again.",
             new(
                 "object",
                 new() {
@@ -772,7 +774,8 @@ static class McpFlowsServer {
         ),
         new(
             "close_review_flow",
-            "Close a review flow, marking it as complete. Call this after the review is done and the findings have been addressed.",
+            "Close a review flow, marking it as complete. Call this after the review is done and the findings have been addressed. " +
+            "The close response may carry final pending_messages — read them; they are delivered with the close and will not be shown again.",
             new(
                 "object",
                 new() {
@@ -785,7 +788,8 @@ static class McpFlowsServer {
             "start_flow",
             "Start a new agent flow from the server's flow-definition catalog. This hands the work to a SEPARATE hosted agent and iterates to sign-off — it is NOT how you do the work yourself. " +
             "Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. " +
-            "Returns a flow_run_id that identifies this flow run — save it to call send_to_participant or get_flow_status later.",
+            "Returns a flow_run_id that identifies this flow run — save it to call send_to_participant or get_flow_status later. " +
+            "Multi-participant definitions start round-less — the response carries no round; address each role with send_to_participant (roles launch lazily on first message).",
             new(
                 "object",
                 new() {
@@ -802,12 +806,13 @@ static class McpFlowsServer {
         ),
         new(
             "send_to_participant",
-            "Send a follow-up message to a participant in an existing flow. Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback.",
+            "Send a follow-up message to a participant in an existing flow. Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback. " +
+            "Responses may carry pending_messages — out-of-band notes from participants, delivered exactly once: react to them now; they will not be shown again.",
             new(
                 "object",
                 new() {
                     ["flow_run_id"]  = new("string", "Flow run ID returned by start_flow."),
-                    ["participant"]  = new("string", "The participant role to send to. Phase D flows have a single participant: 'reviewer'."),
+                    ["participant"]  = new("string", "The participant role to send to, as declared by the flow definition's participants map (single-participant definitions use 'reviewer'). The server rejects an unknown role, naming the valid ones."),
                     ["message"]      = new("string", "Updated context or response to the participant's previous findings."),
                     ["instructions"] = new("string", "Optional instructions for this round."),
                     ["async"]        = new("boolean", "Optional. Defaults to true.")
@@ -817,7 +822,8 @@ static class McpFlowsServer {
         ),
         new(
             "get_flow_status",
-            "Get the current status of a flow run: running, waiting, completed, or failed. Also surfaces the last result kind and result text.",
+            "Get the current status of a flow run: running, waiting, completed, or failed. Also surfaces the last result kind and result text. " +
+            "Responses may carry pending_messages — out-of-band notes from participants, delivered exactly once: react to them now; they will not be shown again.",
             new(
                 "object",
                 new() {
@@ -828,7 +834,8 @@ static class McpFlowsServer {
         ),
         new(
             "close_flow",
-            "Close a flow run, marking it as complete. Call this after the work is done and the findings have been addressed.",
+            "Close a flow run, marking it as complete. Call this after the work is done and the findings have been addressed. " +
+            "The close response may carry final pending_messages — read them; they are delivered with the close and will not be shown again.",
             new(
                 "object",
                 new() {

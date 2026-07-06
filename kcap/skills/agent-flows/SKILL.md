@@ -50,24 +50,30 @@ If `start_flow` / `send_to_participant` are not among the tools available in thi
 4. **Only call `close_flow` after the clean signal.** The run stays open until you explicitly close it — don't rely on it closing itself. Then report completion to the user.
 5. **If participant output is unclear or requires user input**, pause and ask the user before proceeding.
 6. **Never start a nested flow.** If you are the hosted participant (see above), do not call these tools yourself.
-7. **Single participant.** In Phase D every flow definition has exactly one participant, `reviewer`. `send_to_participant` with any other `participant` value is rejected by the server, which names the valid participant in its error.
+7. **Address each role independently.** A flow definition declares one or more participant roles in its `participants` map (single-participant definitions use `reviewer`). A multi-participant `start_flow` returns no round — nothing has launched yet. Call `send_to_participant(flow_run_id, participant=<role>, message=…)` naming the role you want to address; its first message launches that role's agent lazily. Only one round is in flight per role at a time — sending to a role that's still working on a round gets a `409` naming the busy round — but every OTHER role stays addressable in the meantime. Sending an unknown role is rejected by the server, which names the valid roles in its error.
 8. **For a code review flow (`definition_id: "code-review"`), do NOT ask the participant to run tests.** CI covers test execution; participant feedback is on correctness, design, and adherence to conventions.
 9. **State where your changes live.** The participant's worktree is mirrored from the working tree you LAUNCHED from (your cwd's git root) — nothing else. If any part of the changeset lives elsewhere (another git worktree, another repository, a different machine) or is not in that tree, say so explicitly in `context`/`message` and inline the relevant diffs or file contents — or pass `mode: "context-only"` so the participant treats your context as the sole source of truth. The participant is instructed to flag referenced changes it cannot find in its worktree; incomplete context wastes a full round.
+
+## Pending messages
+
+Participants can push you out-of-band notes between rounds — observations that don't warrant a full round result (e.g. "found something odd, still looking"). These ride along as `pending_messages` on `get_flow_status`, `send_to_participant`/`submit_review_round`, and `close_flow` responses, rendered as a list of `from <role> [<id>]: <text>` entries. Each message is delivered **exactly once**: react to it the moment you see it, because it will not be shown again on a later call. `close_flow`'s response can carry final pending messages too — often the last thing a participant tells you — so read them before you report completion to the user.
 
 ## Guardrail errors
 
 The server enforces per-run budgets; watch for these in tool error responses:
 
 - **`400` containing `max_rounds (N) reached for this run — close the flow.`** — the run is still **open**, it's just hit its round cap. Stop submitting further rounds, summarize what you have, and call `close_flow`.
-- **`400` containing `budget_exceeded: …`** — the run has **already failed** and the participant agent has stopped. Report this to the user; do NOT retry and do NOT call `close_flow` — closing a failed run overwrites the failure status in the read model (the projector flips `failed` → `closed`), hiding what went wrong.
-- **A round that exceeds the definition's `round_timeout`** lands as a terminal **`unclear`** round, with the timeout explained in its result text — if you check round status programmatically, look for `unclear` and read the text for the timeout reason. The run itself stays open — you may submit another round or close the flow.
+- **`400` containing `budget_exceeded: …`** — the run has **already failed** and all participant agents have stopped. Report this to the user; do NOT retry and do NOT call `close_flow` — closing a failed run overwrites the failure status in the read model (the projector flips `failed` → `closed`), hiding what went wrong.
+- **A round that exceeds the definition's `round_timeout`** lands as a terminal **`unclear`** round, with the timeout explained in its result text — if you check round status programmatically, look for `unclear` and read the text for the timeout reason. The run itself stays open — you may submit another round to that role or close the flow.
 - **Idle runs are auto-reaped** after the definition's `idle_ttl` (server default 24h). Don't rely on this — always call `close_flow` yourself once you're done, whether the outcome was clean or you're abandoning the task.
 - **`400` starting `no_daemon_available:`** — no connected daemon has the repo checked out. Tell the user to run `kcap agent` on a machine with the repo cloned (or pass an explicit `daemon_name` + `repo_path`).
 - **`400` starting `daemon_outdated:`** — the daemon's kcap is too old to host flow participants. Tell the user to update (`npm i -g @kurrent/kcap`) and restart `kcap agent`.
-- **`400` starting `participant_unavailable:`** — the participant agent died and automatic relaunch is not available yet. Close this flow and start a new one, carrying your context forward; re-submitting will keep failing.
-- **A round result of `unclear` whose text is exactly `participant_died` or `participant_stopped`** — the participant agent crashed or was stopped mid-round. The run stays open but has no live participant: close the flow and start a new one.
+- **`400` containing `participant_unreachable`** — that role's agent is in an ambiguous liveness state (its daemon disconnected or is restarting), so the server won't guess whether it's still alive rather than risk a duplicate launch. Retry the send shortly, or stop the participant via the flow-aware stop and re-send to force a fresh relaunch.
+- **A round result of `unclear` whose text is exactly `participant_died` or `participant_stopped`** — that role's agent crashed or was stopped mid-round. The run stays **open**: address the same role again with `send_to_participant` and it relaunches automatically, carrying forward its prior session history and budget — there is no need to close and restart the flow. Other roles are unaffected and remain addressable in the meantime.
 
 ## Workflow
+
+Single-participant definitions start eagerly — round 1 runs as part of `start_flow`:
 
 ```
 start_flow(definition_id, target_kind, target_ref, target_title, context)
@@ -86,12 +92,36 @@ if findings:
   report completion to user
 ```
 
+Multi-participant definitions start round-less — you address each role yourself, and the run is clean only in aggregate:
+
+```
+start_flow(definition_id, target_kind, target_ref, target_title, context)
+  → no round yet — roles have not launched
+
+send_to_participant(flow_run_id, participant="reviewer", message=…)
+  → launches the reviewer's agent; returns kind findings | clean
+
+send_to_participant(flow_run_id, participant="tester", message=…)
+  → launches the tester's agent independently — no need to wait on the reviewer's round;
+    returns kind findings | clean
+
+# a role with an open round in flight 409s if you send to it again — address the OTHER
+# role(s) in the meantime, then come back once its round completes
+
+loop until every addressed role's latest round is clean and none is in flight:
+  address whichever role(s) still have findings
+  send_to_participant(flow_run_id, participant=<that role>, message=…)
+
+close_flow(flow_run_id)   # only once reviewer AND tester are both clean
+report completion to user
+```
+
 ## Tool reference
 
 | Tool | Required args | Optional args | When to call |
 |---|---|---|---|
 | `start_flow` | `definition_id` (e.g. `spec-review`, `code-review`, or a custom catalog id), `target_kind` (what is being worked on: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title), `context` (background context: what to focus on, constraints, definition of done) | `instructions`, `mode` (`context-only` — optional; by default, on the same machine, the participant's worktree is mirrored from your working tree including uncommitted changes, so it reads the actual source. Pass `context-only` to opt out and treat the submitted context as authoritative) | Once, at the start of a flow task. |
-| `send_to_participant` | `flow_run_id`, `participant` (Phase D flows have a single participant: `reviewer`), `message` | `instructions`, `async` (defaults to `true`) | After addressing a non-clean result. Pass the same `flow_run_id` and the updated message. |
+| `send_to_participant` | `flow_run_id`, `participant` (role name declared in the flow definition's `participants` map; single-participant definitions use `reviewer` — an unknown role is rejected, naming the valid ones), `message` | `instructions`, `async` (defaults to `true`) | After addressing a non-clean result for that role, or to launch a role for the first time. Pass the same `flow_run_id`, the role's name, and the updated message. |
 | `get_flow_status` | `flow_run_id` | — | Poll or check the current status of a flow run (running, waiting, completed, failed). |
 | `close_flow` | `flow_run_id` | — | Only after the definition's clean signal — or when abandoning the task early; the run otherwise stays open until closed. |
 
@@ -120,4 +150,42 @@ send_to_participant(
 # Step 3 — participant returns kind clean
 close_flow(flow_run_id="flow_abc123")
 # Report to user: flow complete, all findings resolved
+```
+
+## Example (two roles: reviewer + tester)
+
+`review-and-test`'s `participants` map declares `reviewer` and `tester` — each is addressed independently, and neither's `send_to_participant` waits on the other's round:
+
+```
+# Step 1 — start; multi-participant, so no round comes back yet
+start_flow(
+  definition_id="review-and-test",
+  target_kind="branch",
+  target_ref="feature/add-null-check",
+  target_title="Add null check on user input",
+  context="Review the diff on this branch and write/run tests for the new code path."
+)
+# → returns flow_run_id, e.g. "flow_xyz789"; no round in the response
+
+# Step 2 — address both roles; each launches lazily on its first message.
+# These are independent — send to tester without waiting for the reviewer's round.
+send_to_participant(flow_run_id="flow_xyz789", participant="reviewer", message="…")
+  # → launches the reviewer; returns kind findings: missing null check on line 42
+send_to_participant(flow_run_id="flow_xyz789", participant="tester", message="…")
+  # → launches the tester; returns kind clean: added a null-input test case, passing
+
+# Step 3 — only the reviewer had findings; fix them and send a follow-up to JUST that role
+send_to_participant(
+  flow_run_id="flow_xyz789",
+  participant="reviewer",
+  message="Fixed null check on line 42. Updated diff attached."
+)
+# → reviewer returns kind clean
+
+# Step 4 — close only once EVERY addressed role's latest round is clean and none is
+# in flight: reviewer clean + tester clean (from step 2, still current) = aggregate clean.
+# One role going clean does not end the run by itself — get_flow_status lists every
+# participant's latest result if you need to check before closing.
+close_flow(flow_run_id="flow_xyz789")
+# Report to user: flow complete, review and tests both clean
 ```
