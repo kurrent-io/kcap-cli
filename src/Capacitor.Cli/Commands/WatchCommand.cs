@@ -317,11 +317,15 @@ static partial class WatchCommand {
                 // Live subagent discovery: only the parent (agentId == null) watcher scans;
                 // child subagent watchers (agentId != null) just stream their file. Gemini
                 // scans its native nested chat files; OpenCode scans the nested dir the
-                // kcap plugin writes child {info,parts} into (AI-919 phase 2).
+                // kcap plugin writes child {info,parts} into (AI-919 phase 2); Antigravity
+                // scans its own brain messages dir for children that have reported back
+                // (AI-1218 — nesting only, subagents are captured standalone already).
                 if (agentId is null && vendor == "gemini") {
                     await ScanGeminiSubagents(baseUrl, sessionId, transcriptPath, seenSubagents, cts.Token);
                 } else if (agentId is null && vendor == "opencode") {
                     await ScanOpenCodeSubagents(baseUrl, sessionId, transcriptPath, seenSubagents, cts.Token);
+                } else if (agentId is null && vendor == "antigravity") {
+                    await ScanAntigravitySubagentLinks(baseUrl, sessionId, transcriptPath, state.PostedSubagentLinks, cts.Token);
                 }
 
                 if (ShouldEndOnIdle(
@@ -361,6 +365,13 @@ static partial class WatchCommand {
         } else {
             Log("Draining remaining lines...");
             await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, CancellationToken.None);
+
+            // One last subagent-link scan on the way out — a child may have reported back
+            // (written its messages/*.json) after the main loop's last tick but before exit,
+            // and this is the watcher's final chance to link it (AI-1218).
+            if (agentId is null && vendor == "antigravity") {
+                await ScanAntigravitySubagentLinks(baseUrl, sessionId, transcriptPath, state.PostedSubagentLinks, CancellationToken.None);
+            }
         }
 
         // Signal drain complete to server.
@@ -1348,6 +1359,78 @@ static partial class WatchCommand {
             return doc.RootElement.ValueKind == JsonValueKind.Object ? doc.RootElement.Str("created_at") : null;
         } catch {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Live subagent nesting (AI-1218): Antigravity fires no subagent hooks, so a child that
+    /// reports back is discovered by scanning the PARENT's own
+    /// <c>brain/&lt;parent&gt;/.system_generated/messages/*.json</c> dir (see
+    /// <see cref="AntigravitySubagents.ChildrenOf"/>) — the same linkage the offline importer
+    /// (AI-1160) reads, but scoped to one parent so a live watcher can poll it cheaply on every
+    /// drain. <paramref name="sessionId"/> is the canonical dashless id the watcher/server use
+    /// everywhere else; the real (dashed) conversation id — required to locate the brain dir —
+    /// is derived from <paramref name="transcriptPath"/> (mirrors
+    /// <see cref="AppendAntigravityUsageLines"/>'s use of
+    /// <see cref="AntigravityPaths.ConversationDbFromTranscript"/>). Each newly-seen child is
+    /// POSTed to <c>/hooks/antigravity/subagent-link</c> and only added to
+    /// <paramref name="posted"/> on success, so a failed POST retries on the next scan
+    /// (fail-open — never breaks the drain loop).
+    /// </summary>
+    static async Task ScanAntigravitySubagentLinks(
+            string            baseUrl,
+            string            sessionId,
+            string            transcriptPath,
+            HashSet<string>   posted,
+            CancellationToken ct
+        ) {
+        // Same validated path-walk as ConversationDbFromTranscript, just stopping one segment
+        // earlier at the conversation id itself rather than the sibling db file.
+        if (AntigravityPaths.ConversationDbFromTranscript(transcriptPath) is not { } dbPath) return;
+        var conversationId = Path.GetFileNameWithoutExtension(dbPath);
+        if (string.IsNullOrEmpty(conversationId)) return;
+
+        IReadOnlyList<string> children;
+        try {
+            children = AntigravitySubagents.ChildrenOf(conversationId, ct: ct);
+        } catch (OperationCanceledException) {
+            throw;
+        } catch (Exception ex) {
+            Log($"Antigravity subagent-link scan failed: {ex.Message}");
+            return;
+        }
+
+        foreach (var child in children) {
+            if (ct.IsCancellationRequested) return;
+            if (posted.Contains(child)) continue;
+
+            if (await PostAntigravitySubagentLinkAsync(baseUrl, sessionId, child, ct)) {
+                posted.Add(child);
+                Log($"Antigravity subagent {child} linked to parent {sessionId}");
+            }
+            // On failure, leave out of `posted` so the next scan retries (fail-open).
+        }
+    }
+
+    static async Task<bool> PostAntigravitySubagentLinkAsync(
+        string baseUrl, string sessionId, string childId, CancellationToken ct
+    ) {
+        try {
+            using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, ct);
+            var       payload = new JsonObject {
+                ["hook_event_name"] = "subagent-link",
+                ["session_id"]      = sessionId,
+                ["agent_id"]        = childId,
+            };
+            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/antigravity/subagent-link", content, ct: ct);
+
+            return resp.IsSuccessStatusCode;
+        } catch (OperationCanceledException) {
+            throw;
+        } catch (Exception ex) {
+            Log($"Antigravity subagent-link POST failed for child {childId}: {ex.Message}");
+            return false;
         }
     }
 

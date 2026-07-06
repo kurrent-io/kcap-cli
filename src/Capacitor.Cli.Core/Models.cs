@@ -170,6 +170,11 @@ class WatchState {
     // the Codex PendingCodexToolCalls guard).
     public int PendingAntigravityToolCalls { get; set; }
 
+    // Antigravity live subagent nesting (AI-1218): child conversation ids already POSTed to
+    // /hooks/antigravity/subagent-link for this parent watcher. A child stays OUT of this set
+    // until its link POST succeeds, so a failed POST retries on the next scan (fail-open).
+    public HashSet<string> PostedSubagentLinks { get; } = new(StringComparer.Ordinal);
+
     public const int TranscriptThreshold = 10;
 }
 
