@@ -9,6 +9,11 @@ Claude plugin). This works even when your package manager blocks install
 scripts. Exits early if already up to date. For non-npm installs (e.g.
 Homebrew), prints the command to run instead.
 
+On Windows the update also works while agent sessions or the daemon keep
+the binary locked: the old executable is moved aside and cleaned up later.
+Running processes keep the old version until they restart (for a running
+daemon: kcap daemon restart).
+
 Options:
   --check    Print a machine-readable {current, latest, newer} JSON line
              and exit without upgrading.

@@ -64,7 +64,9 @@ var baseUrl = await AppConfig.ResolveServerUrl(args, gitTimeoutMs: isHook ? 1000
 // Skipped for `uninstall` — the check writes ~/.config/kcap/update-check-{channel}.json
 // (e.g. update-check-latest.json), which would race with uninstall's `rm -rf`
 // of the config dir and recreate it after the command has reported success.
-var   noUpdateCheck   = args.Contains("--no-update-check") || command == "uninstall";
+// Skipped for `update` — nudging "run `kcap update`" from inside `kcap update`
+// is noise at best and lands mid-upgrade at worst.
+var   noUpdateCheck   = args.Contains("--no-update-check") || command is "uninstall" or "update";
 Task? updateCheckTask = null;
 
 if (!noUpdateCheck) {
