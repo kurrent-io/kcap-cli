@@ -19,6 +19,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     readonly ILogger<ServerConnection> _logger;
     readonly RegistrationGate          _gate                = new();
     readonly PendingPermissionRegistry _pendingPermissions  = new();
+    readonly PendingAcpInteractionRegistry _pendingAcpInteractions = new();
 
     static readonly TimeSpan PermissionRetryPollInterval = TimeSpan.FromMilliseconds(500);
     static readonly TimeSpan EndSessionRetryPollInterval  = TimeSpan.FromMilliseconds(500);
@@ -158,6 +159,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         // contract can evolve without breaking mixed-version daemons.
         _hub.On<PermissionResolution>("PermissionResolved",
             res => _pendingPermissions.Resolve(res.RequestId, res.Decision));
+
+        // Server→client push carrying the user's decision for an ACP permission/elicitation
+        // interaction (AI-686). Mirrors the PermissionResolved registration above — a separate
+        // registry (AcpInteractionDecision-typed) rather than reusing _pendingPermissions, since
+        // the decision payload shape differs (ACP interactions carry SelectedOptionLabel/
+        // SelectedIndex/FreeText that Claude Code's PermissionDecision has no equivalent for).
+        _hub.On<AcpInteractionResolution>("AcpInteractionResolved",
+            res => _pendingAcpInteractions.Resolve(res.RequestId, res.Decision));
 
         RegisterUiBroadcastSinks();
 
@@ -574,6 +583,30 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         );
 
         return await _pendingPermissions.AwaitDecisionAsync(requestId, ct);
+    }
+
+    /// <summary>
+    /// Forwards an ACP permission/elicitation interaction to the server's
+    /// <c>AcpRequestInteraction</c> hub method and returns the user's decision (AI-686). Mirrors
+    /// <see cref="RequestPermissionAsync"/>'s non-blocking-invoke-then-await-push pattern exactly —
+    /// see that method's remarks for why the invoke returns a requestId immediately rather than
+    /// blocking the connection's parallel-invocation slot for the whole interaction wait.
+    /// </summary>
+    public virtual async Task<AcpInteractionDecision> RequestAcpInteractionAsync(
+            AcpInteractionRequest request,
+            CancellationToken     ct = default
+        ) {
+        var requestId = await ConnectionRetry.InvokeWithConnectionRetryAsync(
+            () => _hub.InvokeAsync<string>("AcpRequestInteraction", request, ct),
+            () => IsReady,
+            PermissionRetryPollInterval,
+            attempt => LogPermissionRetry(request.AcpSessionId, attempt),
+            ct,
+            isRetriableServerError: IsOwnershipNotReady,
+            maxServerErrorRetries: OwnershipNotReadyMaxRetries
+        );
+
+        return await _pendingAcpInteractions.AwaitDecisionAsync(requestId, ct);
     }
 
     /// <summary>
