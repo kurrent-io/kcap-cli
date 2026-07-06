@@ -230,10 +230,13 @@ static class McpFlowResultServer {
             Func<TimeSpan, Task> delay,
             string?              messageId = null
         ) {
-        var text = arguments?["text"]?.GetValue<string>();
-
-        if (string.IsNullOrWhiteSpace(text))
-            return ("Error: text is required.", true);
+        // Type-safe extraction: a non-string `text` (number/object/array) must yield this clean
+        // validation error, not throw into the dispatch guard's generic "internal error"
+        // (Qodo review on #278; same JsonValue.TryGetValue pattern as ParseAsyncArg).
+        if (arguments?["text"] is not JsonValue textValue ||
+            !textValue.TryGetValue<string>(out var text) ||
+            string.IsNullOrWhiteSpace(text))
+            return ("Error: text must be a non-empty string.", true);
 
         var body = new SendFlowMessageDto(agentId, messageId ?? Guid.NewGuid().ToString("N"), text);
         var url  = $"{apiRoot.TrimEnd('/')}/api/flows/participant/message";

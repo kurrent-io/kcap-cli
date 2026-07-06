@@ -329,8 +329,13 @@ static class McpFlowsServer {
 
     /// <summary>AI-1127 E-c: a multi-participant start records the run only — no round exists to
     /// poll, so the old poll path must not run. Returns null unless the body is exactly that shape
-    /// (round-full starts and old servers fall through to the existing logic unchanged).</summary>
-    internal static string? TryFormatRoundlessStart(string postBody) {
+    /// (round-full starts and old servers fall through to the existing logic unchanged). Today's
+    /// server never puts pending_messages on a round-less start (a brand-new run has no
+    /// participants), but the path renders + exposes them anyway so every returned response obeys
+    /// the same format-then-ack rule with no carve-outs (Qodo review on #278).</summary>
+    internal static string? TryFormatRoundlessStart(string postBody, out IReadOnlyList<string> pendingIds) {
+        pendingIds = [];
+
         try {
             var node = JsonNode.Parse(postBody)?.AsObject();
             if (node is null) return null;
@@ -348,6 +353,7 @@ static class McpFlowsServer {
             sb.Append("Multi-participant flow started — no round is in flight yet. Address a role with " +
                       "send_to_participant(flow_run_id, participant, message); each role's agent launches " +
                       "lazily on its first message.");
+            pendingIds = AppendPendingMessages(sb, node);
             return sb.ToString();
         } catch {
             return null;
@@ -360,8 +366,13 @@ static class McpFlowsServer {
     /// start_review_flow/submit_review_round/start_flow/send_to_participant) — threaded through
     /// so the graceful-cap timeout message can point back at the matching status tool.</summary>
     static async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody, string toolName) {
-        if (TryFormatRoundlessStart(postBody) is { } roundless)
+        if (TryFormatRoundlessStart(postBody, out var roundlessPendingIds) is { } roundless) {
+            if (roundlessPendingIds.Count > 0 &&
+                JsonNode.Parse(postBody)?.AsObject()?["flow_run_id"]?.GetValue<string>() is { } roundlessRunId)
+                await AckRenderedMessagesAsync(client, apiRoot, roundlessRunId, roundlessPendingIds, Task.Delay);
+
             return new(roundless, false);
+        }
 
         var node      = JsonNode.Parse(postBody)?.AsObject();
         var status    = node?["status"]?.GetValue<string>();
@@ -626,9 +637,12 @@ static class McpFlowsServer {
         foreach (var item in arr) {
             if (item is not JsonObject o) continue;
 
-            var id   = o["message_id"]?.GetValue<string>() ?? "";
-            var from = o["from_participant"]?.GetValue<string>() ?? "";
-            var text = o["text"]?.GetValue<string>() ?? "";
+            // Type-safe extraction: a wrong-typed field degrades to "", never throws —
+            // FormatPolledRoundResult has no exception boundary, so a throw here would turn a
+            // successful terminal poll into a generic internal error (Qodo review on #278).
+            var id   = StringField(o, "message_id");
+            var from = StringField(o, "from_participant");
+            var text = StringField(o, "text");
 
             entries.Append("- from "); entries.Append(from); entries.Append(" ["); entries.Append(id); entries.Append("]: ");
             entries.AppendLine(text);
@@ -645,6 +659,9 @@ static class McpFlowsServer {
 
         return ids;
     }
+
+    static string StringField(JsonObject o, string name) =>
+        o[name] is JsonValue v && v.TryGetValue<string>(out var s) ? s : "";
 
     /// <summary>AI-1127 E-c: deliver-once ack for pending messages. Callers must invoke this
     /// AFTER the response text has been fully formatted, passing only the ids that were actually

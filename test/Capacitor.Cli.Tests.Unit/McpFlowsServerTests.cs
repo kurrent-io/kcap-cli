@@ -13,23 +13,59 @@ public class McpFlowsServerTests {
     public async Task Roundless_start_renders_started_envelope() {
         var body = """{"flow_run_id":"f1","round_id":null,"round_number":null,"status":"running","result_kind":null,"result_text":null,"reviewer_agent_id":null,"reviewer_session_id":null}""";
 
-        var text = McpFlowsServer.TryFormatRoundlessStart(body);
+        var text = McpFlowsServer.TryFormatRoundlessStart(body, out var pendingIds);
 
         await Assert.That(text).IsNotNull();
         await Assert.That(text!).Contains("flow_run_id: f1");
         await Assert.That(text).Contains("status: running");
         await Assert.That(text).Contains("send_to_participant");
+        await Assert.That(pendingIds).IsEmpty();
+    }
+
+    [Test]
+    public async Task Roundless_start_renders_and_exposes_pending_messages() {
+        var body = """
+            {"flow_run_id":"f1","round_id":null,"round_number":null,"status":"running",
+             "pending_messages":[
+                {"message_id":"msg-a1","from_participant":"tester","text":"early note","received_at":"2026-07-06T00:00:00Z"}
+             ]}
+            """;
+
+        var text = McpFlowsServer.TryFormatRoundlessStart(body, out var pendingIds);
+
+        await Assert.That(text).IsNotNull();
+        await Assert.That(text!).Contains("pending_messages (1):");
+        await Assert.That(text).Contains("- from tester [msg-a1]: early note");
+        await Assert.That(pendingIds).IsEquivalentTo(new[] { "msg-a1" });
     }
 
     [Test]
     public async Task Single_participant_start_with_round_is_not_roundless() {
         var body = """{"flow_run_id":"f1","round_id":"r1","round_number":1,"status":"running"}""";
-        await Assert.That(McpFlowsServer.TryFormatRoundlessStart(body)).IsNull();
+        await Assert.That(McpFlowsServer.TryFormatRoundlessStart(body, out _)).IsNull();
     }
 
     [Test]
     public async Task Unparseable_body_is_not_roundless() {
-        await Assert.That(McpFlowsServer.TryFormatRoundlessStart("not json")).IsNull();
+        await Assert.That(McpFlowsServer.TryFormatRoundlessStart("not json", out _)).IsNull();
+    }
+
+    [Test]
+    public async Task Wrong_typed_pending_fields_render_empty_instead_of_throwing() {
+        var body = """
+            {"flow_run_id":"f1","status":"running","definition_id":"code-review","target_title":"t",
+             "pending_messages":[
+                {"message_id":123,"from_participant":{"x":1},"text":"still shown","received_at":"2026-07-06T00:00:00Z"},
+                {"message_id":"msg-ok","from_participant":"tester","text":"fine","received_at":"2026-07-06T00:00:00Z"}
+             ]}
+            """;
+
+        var text = McpFlowsServer.FormatStatusResponse(body, out var pendingIds);
+
+        await Assert.That(text).Contains("pending_messages (2):");
+        await Assert.That(text).Contains("- from  []: still shown");
+        await Assert.That(text).Contains("- from tester [msg-ok]: fine");
+        await Assert.That(pendingIds).IsEquivalentTo(new[] { "msg-ok" });
     }
 
     [Test]

@@ -215,7 +215,23 @@ public class McpFlowResultServerTests {
         );
 
         await Assert.That(isError).IsTrue();
-        await Assert.That(text).IsEqualTo("Error: text is required.");
+        await Assert.That(text).IsEqualTo("Error: text must be a non-empty string.");
+        await Assert.That(server.LogEntries.Count()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Send_message_rejects_non_string_text_without_throwing() {
+        using var server = WireMockServer.Start();
+        using var client = new HttpClient();
+
+        var args = new JsonObject { ["text"] = 42 };
+
+        var (text, isError) = await McpFlowResultServer.SendMessageCoreAsync(
+            client, server.Url!, "agent-1", args, NoDelay([])
+        );
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).IsEqualTo("Error: text must be a non-empty string.");
         await Assert.That(server.LogEntries.Count()).IsEqualTo(0);
     }
 
