@@ -312,20 +312,21 @@ static partial class WatchCommand {
                     state.LastRepoDetection = DateTimeOffset.UtcNow;
                 }
 
-                await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, cts.Token);
+                var drained = await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, cts.Token);
 
                 // Live subagent discovery: only the parent (agentId == null) watcher scans;
                 // child subagent watchers (agentId != null) just stream their file. Gemini
                 // scans its native nested chat files; OpenCode scans the nested dir the
                 // kcap plugin writes child {info,parts} into (AI-919 phase 2); Antigravity
-                // scans its own brain messages dir for children that have reported back
-                // (AI-1218 — nesting only, subagents are captured standalone already).
+                // links subagents from the parent transcript's INVOKE_SUBAGENT steps — the
+                // spawn-time signal — drained this tick (AI-1218 — nesting only, subagents are
+                // captured standalone already).
                 if (agentId is null && vendor == "gemini") {
                     await ScanGeminiSubagents(baseUrl, sessionId, transcriptPath, seenSubagents, cts.Token);
                 } else if (agentId is null && vendor == "opencode") {
                     await ScanOpenCodeSubagents(baseUrl, sessionId, transcriptPath, seenSubagents, cts.Token);
                 } else if (agentId is null && vendor == "antigravity") {
-                    await ScanAntigravitySubagentLinks(baseUrl, sessionId, transcriptPath, state.PostedSubagentLinks, cts.Token);
+                    await ScanAntigravitySubagentLinks(baseUrl, sessionId, drained, state.PostedSubagentLinks, cts.Token);
                 }
 
                 if (ShouldEndOnIdle(
@@ -364,13 +365,13 @@ static partial class WatchCommand {
             Log($"Session below threshold ({state.BufferedLines.Count}/{WatchState.TranscriptThreshold} lines), skipping final drain");
         } else {
             Log("Draining remaining lines...");
-            await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, CancellationToken.None);
+            var finalDrained = await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, CancellationToken.None);
 
-            // One last subagent-link scan on the way out — a child may have reported back
-            // (written its messages/*.json) after the main loop's last tick but before exit,
-            // and this is the watcher's final chance to link it (AI-1218).
+            // One last subagent-link scan on the way out — the parent may have emitted an
+            // INVOKE_SUBAGENT step after the main loop's last tick but before exit, and this is
+            // the watcher's final chance to link it (AI-1218).
             if (agentId is null && vendor == "antigravity") {
-                await ScanAntigravitySubagentLinks(baseUrl, sessionId, transcriptPath, state.PostedSubagentLinks, CancellationToken.None);
+                await ScanAntigravitySubagentLinks(baseUrl, sessionId, finalDrained, state.PostedSubagentLinks, CancellationToken.None);
             }
         }
 
@@ -769,7 +770,7 @@ static partial class WatchCommand {
     static readonly Regex CommandNameRegex = CommandNameRx();
     static          bool  parseErrorLogged;
 
-    static async Task DrainNewLines(
+    static async Task<IReadOnlyList<string>> DrainNewLines(
             HubConnection     hubConnection,
             string            sessionId,
             string            transcriptPath,
@@ -780,7 +781,7 @@ static partial class WatchCommand {
         ) {
         try {
             if (!File.Exists(transcriptPath)) {
-                return;
+                return [];
             }
 
             var newLines       = new List<string>();
@@ -950,7 +951,7 @@ static partial class WatchCommand {
                     if (state.BufferedLines.Count < WatchState.TranscriptThreshold) {
                         Log($"Buffering {newLines.Count} line(s) ({state.BufferedLines.Count}/{WatchState.TranscriptThreshold} threshold)");
 
-                        return;
+                        return newLines;
                     }
 
                     // Threshold reached — flush the entire buffer
@@ -974,7 +975,7 @@ static partial class WatchCommand {
                     // No new content lines while buffering — track file position
                     state.LinesReadAhead = linesRead;
 
-                    return;
+                    return newLines;
             }
 
             // Only include repository info when it has changed since last send
@@ -986,7 +987,7 @@ static partial class WatchCommand {
                 // No content lines and no repo changes — safe to advance past blank/whitespace lines
                 state.LinesProcessed = linesRead;
 
-                return;
+                return newLines;
             }
 
             try {
@@ -1045,11 +1046,15 @@ static partial class WatchCommand {
                     Log($"Repo info send failed, will retry in 60s: {ex.Message}");
                 }
             }
+
+            return newLines;
         } catch (IOException ex) {
             Log($"Error reading file: {ex.Message}");
         } catch (OperationCanceledException) {
             // Expected during shutdown
         }
+
+        return [];
     }
 
     static void SetFirstUserText(WatchState state, string userText) {
@@ -1379,54 +1384,41 @@ static partial class WatchCommand {
     }
 
     /// <summary>
-    /// Live subagent nesting (AI-1218): Antigravity fires no subagent hooks, so a child that
-    /// reports back is discovered by scanning the PARENT's own
-    /// <c>brain/&lt;parent&gt;/.system_generated/messages/*.json</c> dir (see
-    /// <see cref="AntigravitySubagents.ChildrenOf"/>) — the same linkage the offline importer
-    /// (AI-1160) reads, but scoped to one parent so a live watcher can poll it cheaply on every
-    /// drain. <paramref name="sessionId"/> is the canonical dashless id the watcher/server use
-    /// everywhere else; the real (dashed) conversation id — required to locate the brain dir —
-    /// is derived from <paramref name="transcriptPath"/> (mirrors
-    /// <see cref="AppendAntigravityUsageLines"/>'s use of
-    /// <see cref="AntigravityPaths.ConversationDbFromTranscript"/>). Each newly-seen child is
-    /// POSTed to <c>/hooks/antigravity/subagent-link</c> and only added to
-    /// <paramref name="posted"/> on success, so a failed POST retries on the next scan
-    /// (fail-open — never breaks the drain loop).
+    /// AI-1218 redesign: link subagents from the parent transcript's INVOKE_SUBAGENT steps (the
+    /// spawn-time signal), replacing the messages/*.json scan. For each child id not already
+    /// posted, POST the link once via <paramref name="post"/> (returns true on success); a failed
+    /// POST is left un-posted so a later scan retries. Pure over its inputs for unit testing.
     /// </summary>
-    static async Task ScanAntigravitySubagentLinks(
-            string            baseUrl,
-            string            sessionId,
-            string            transcriptPath,
-            HashSet<string>   posted,
-            CancellationToken ct
-        ) {
-        // Same validated path-walk as ConversationDbFromTranscript, just stopping one segment
-        // earlier at the conversation id itself rather than the sibling db file.
-        if (AntigravityPaths.ConversationDbFromTranscript(transcriptPath) is not { } dbPath) return;
-        var conversationId = Path.GetFileNameWithoutExtension(dbPath);
-        if (string.IsNullOrEmpty(conversationId)) return;
-
-        IReadOnlyList<string> children;
-        try {
-            children = AntigravitySubagents.ChildrenOf(conversationId, ct: ct);
-        } catch (OperationCanceledException) {
-            throw;
-        } catch (Exception ex) {
-            Log($"Antigravity subagent-link scan failed: {ex.Message}");
-            return;
-        }
-
-        foreach (var child in children) {
-            if (ct.IsCancellationRequested) return;
-            if (posted.Contains(child)) continue;
-
-            if (await PostAntigravitySubagentLinkAsync(baseUrl, sessionId, child, ct)) {
-                posted.Add(child);
-                Log($"Antigravity subagent {child} linked to parent {sessionId}");
+    internal static async Task ExtractAndPostSubagentLinks(
+            IEnumerable<string> lines, HashSet<string> posted, Func<string, Task<bool>> post) {
+        foreach (var line in lines) {
+            var children = AntigravitySubagents.ChildConversationIdsFromLine(line);
+            if (children.Count == 0) {
+                if (AntigravitySubagents.IsInvokeSubagentLine(line))
+                    Log("Antigravity INVOKE_SUBAGENT step had no parseable child conversationId (format drift?)");
+                continue;
             }
-            // On failure, leave out of `posted` so the next scan retries (fail-open).
+            foreach (var child in children) {
+                if (posted.Contains(child)) continue;
+                if (await post(child)) posted.Add(child);   // fail-open: leave un-posted to retry
+            }
         }
     }
+
+    /// <summary>
+    /// Live subagent nesting (AI-1218): links a subagent from its parent transcript's
+    /// INVOKE_SUBAGENT steps — the spawn-time signal — rather than waiting for the child to
+    /// report back. <paramref name="drainedLines"/> are the lines the watcher just drained from
+    /// the parent transcript this tick. Each newly-seen child is POSTed to
+    /// <c>/hooks/antigravity/subagent-link</c> and only added to <paramref name="posted"/> on
+    /// success, so a failed POST retries on the next scan (fail-open — never breaks the drain
+    /// loop).
+    /// </summary>
+    static Task ScanAntigravitySubagentLinks(
+            string baseUrl, string sessionId, IReadOnlyList<string> drainedLines,
+            HashSet<string> posted, CancellationToken ct) =>
+        ExtractAndPostSubagentLinks(drainedLines, posted,
+            child => PostAntigravitySubagentLinkAsync(baseUrl, sessionId, child, ct));
 
     static async Task<bool> PostAntigravitySubagentLinkAsync(
         string baseUrl, string sessionId, string childId, CancellationToken ct

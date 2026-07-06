@@ -1,84 +1,36 @@
-using System.Text.Json.Nodes;
-using Capacitor.Cli.Core.Antigravity;
+using Capacitor.Cli.Commands;
 
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Unit tests for <see cref="AntigravitySubagents.ChildrenOf"/> (AI-1218): the live-watcher
-/// scoped scan of a single parent's <c>messages/*.json</c> dir, used to detect subagents that
-/// have reported back while the parent conversation is still running (as opposed to
-/// <see cref="AntigravitySubagentsTests"/>, which covers the full-history import scan).
+/// Unit tests for <see cref="WatchCommand.ExtractAndPostSubagentLinks"/> (AI-1218 redesign): the
+/// live-watcher scan that links Antigravity subagents from the parent transcript's
+/// INVOKE_SUBAGENT steps (the spawn-time signal) instead of the child-reports-back
+/// <c>messages/*.json</c> scan. Drives the extraction+POST composition directly since
+/// <c>ScanAntigravitySubagentLinks</c> itself is now a thin wrapper over drained lines.
 /// </summary>
 public class AntigravitySubagentLinkScanTests {
-    static string NewHome() {
-        var home = Path.Combine(Path.GetTempPath(), "kcap-agsublink-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(home);
-        return home;
-    }
-
-    // Writes brain/<owner>/.system_generated/messages/<name>.json with sender→recipient.
-    static void WriteMessage(string home, string owner, string name, string sender, string recipient) {
-        var dir = Path.Combine(home, ".gemini", "antigravity", "brain", owner, ".system_generated", "messages");
-        Directory.CreateDirectory(dir);
-        File.WriteAllText(Path.Combine(dir, name + ".json"),
-            new JsonObject { ["sender"] = sender, ["recipient"] = recipient }.ToJsonString());
+    [Test]
+    public async Task Scan_posts_each_invoke_child_once_and_dedupes() {
+        var posted = new HashSet<string>(StringComparer.Ordinal);
+        var sent   = new List<string>();
+        var lines = new[] {
+            """{"type":"PLANNER_RESPONSE","content":"thinking"}""",
+            """{"type":"INVOKE_SUBAGENT","content":"Created the following subagents:\n{\"conversationId\":\"6111e615-3caa-4fe8-9d55-b85c43f2cf1f\"}"}""",
+        };
+        await WatchCommand.ExtractAndPostSubagentLinks(lines, posted, child => { sent.Add(child); return Task.FromResult(true); });
+        await WatchCommand.ExtractAndPostSubagentLinks(lines, posted, child => { sent.Add(child); return Task.FromResult(true); }); // re-scan
+        await Assert.That(sent).IsEquivalentTo(new List<string> { "6111e615-3caa-4fe8-9d55-b85c43f2cf1f" }); // once
     }
 
     [Test]
-    public async Task ChildrenOf_returns_only_children_reporting_to_the_parent_deduped() {
-        var home = NewHome();
-        try {
-            // Two children report back to the parent.
-            WriteMessage(home, owner: "P", name: "m1", sender: "child1", recipient: "P");
-            WriteMessage(home, owner: "P", name: "m2", sender: "child2", recipient: "P");
-            // A duplicate message from child1 (e.g. re-sent) must not double the result.
-            WriteMessage(home, owner: "P", name: "m3", sender: "child1", recipient: "P");
-            // Unrelated: a message in the parent's dir addressed to someone else must be excluded.
-            WriteMessage(home, owner: "P", name: "m4", sender: "child3", recipient: "someone-else");
-            // Malformed file must be skipped, not throw.
-            var dir = Path.Combine(home, ".gemini", "antigravity", "brain", "P", ".system_generated", "messages");
-            File.WriteAllText(Path.Combine(dir, "bad.json"), "{ not json");
-
-            var children = AntigravitySubagents.ChildrenOf("P", home: home, geminiCliHome: "");
-
-            await Assert.That(children.Count).IsEqualTo(2);
-            await Assert.That(children.OrderBy(x => x).ToList()).IsEquivalentTo(new List<string> { "child1", "child2" });
-        } finally { Directory.Delete(home, recursive: true); }
-    }
-
-    [Test]
-    public async Task ChildrenOf_excludes_self_messages() {
-        var home = NewHome();
-        try {
-            WriteMessage(home, owner: "P", name: "self", sender: "P", recipient: "P");
-
-            var children = AntigravitySubagents.ChildrenOf("P", home: home, geminiCliHome: "");
-            await Assert.That(children.Count).IsEqualTo(0);
-        } finally { Directory.Delete(home, recursive: true); }
-    }
-
-    [Test]
-    public async Task ChildrenOf_is_empty_when_no_messages_dir() {
-        var home = NewHome();
-        try {
-            var children = AntigravitySubagents.ChildrenOf("P", home: home, geminiCliHome: "");
-            await Assert.That(children.Count).IsEqualTo(0);
-        } finally { Directory.Delete(home, recursive: true); }
-    }
-
-    [Test]
-    public async Task ChildrenOf_honors_cancellation() {
-        var home = NewHome();
-        try {
-            // A handful of message files so the per-file loop actually runs.
-            for (var i = 0; i < 5; i++)
-                WriteMessage(home, owner: "P", name: $"m{i}", sender: $"child{i}", recipient: "P");
-
-            using var cts = new CancellationTokenSource();
-            cts.Cancel();
-
-            await Assert.That(() => AntigravitySubagents.ChildrenOf("P", home: home, geminiCliHome: "", ct: cts.Token))
-                .Throws<OperationCanceledException>();
-        } finally { Directory.Delete(home, recursive: true); }
+    public async Task Scan_failed_post_is_retried_next_scan() {
+        var posted = new HashSet<string>(StringComparer.Ordinal);
+        var attempts = 0;
+        var lines = new[] { """{"type":"INVOKE_SUBAGENT","content":"{\"conversationId\":\"6111e615-3caa-4fe8-9d55-b85c43f2cf1f\"}"}""" };
+        await WatchCommand.ExtractAndPostSubagentLinks(lines, posted, _ => { attempts++; return Task.FromResult(false); }); // fail
+        await WatchCommand.ExtractAndPostSubagentLinks(lines, posted, _ => { attempts++; return Task.FromResult(true); });  // retry, succeed
+        await Assert.That(attempts).IsEqualTo(2);
+        await Assert.That(posted).Contains("6111e615-3caa-4fe8-9d55-b85c43f2cf1f");
     }
 }

@@ -68,47 +68,6 @@ public static class AntigravitySubagents {
         BuildParentMap(home, geminiCliHome).TryGetValue(childConversationId, out var parent) ? parent : null;
 
     /// <summary>
-    /// Live-watcher scoped scan (AI-1218): children that have reported back to
-    /// <paramref name="parentSessionId"/> so far, read from ONLY that parent's own
-    /// <c>messages/*.json</c> dir (unlike <see cref="BuildParentMap"/>, which scans every brain
-    /// dir to build the full cross-conversation map for import). A live parent watcher polls
-    /// this each drain to detect newly-linked subagents while its own conversation is still
-    /// running. Best-effort: unreadable / malformed message files are skipped; deduped;
-    /// self-messages excluded.
-    /// </summary>
-    public static IReadOnlyList<string> ChildrenOf(
-            string parentSessionId, string? home = null, string? geminiCliHome = null, CancellationToken ct = default) {
-        var children = new HashSet<string>(StringComparer.Ordinal);
-
-        var messages = AntigravityPaths.MessagesDir(parentSessionId, home, geminiCliHome);
-        if (!Directory.Exists(messages)) return [];
-
-        foreach (var file in Directory.EnumerateFiles(messages, "*.json")) {
-            ct.ThrowIfCancellationRequested();
-            try {
-                using var doc = JsonDocument.Parse(File.ReadAllText(file));
-                var root = doc.RootElement;
-                if (root.ValueKind != JsonValueKind.Object) continue;
-
-                var sender    = root.TryGetProperty("sender",    out var s) ? s.GetString() : null;
-                var recipient = root.TryGetProperty("recipient", out var r) ? r.GetString() : null;
-
-                if (string.IsNullOrEmpty(sender)
-                 || string.IsNullOrEmpty(recipient)
-                 || !string.Equals(recipient, parentSessionId, StringComparison.Ordinal)
-                 || string.Equals(sender, parentSessionId, StringComparison.Ordinal))
-                    continue;
-
-                children.Add(sender!);
-            } catch {
-                // Skip a malformed / unreadable message file — never abort the scan.
-            }
-        }
-
-        return [.. children];
-    }
-
-    /// <summary>
     /// Walks parent links up to the top-level ancestor (a conversation with no parent), so a
     /// deep chain P←C←G resolves G's ancestor to P. Cycle-safe: if a cycle is encountered
     /// (A↔B, or a child that is also its own ancestor) the starting conversation is returned as
