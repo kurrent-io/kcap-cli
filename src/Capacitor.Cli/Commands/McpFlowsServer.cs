@@ -169,11 +169,23 @@ static class McpFlowsServer {
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
             }
 
-            var statusPayload = toolName switch {
-                "get_review_flow_status" or "get_flow_status" => FormatStatusResponse(body),
-                "close_review_flow"      or "close_flow"      => FormatCloseResponse(body),
-                _                                             => FormatRoundResponse(body)
-            };
+            string statusPayload;
+
+            if (toolName is "get_review_flow_status" or "get_flow_status") {
+                statusPayload = FormatStatusResponse(body, out var pendingIds);
+
+                // AI-1127 E-c: ack exactly the ids that were actually rendered into the text
+                // above, after the text is fully built — never before, never a superset.
+                var flowRunId = arguments?["flow_run_id"]?.GetValue<string>();
+                if (flowRunId is not null)
+                    await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
+            } else if (toolName is "close_review_flow" or "close_flow") {
+                // AI-1127 E-c: render pending_messages but never ack them — the server delivers
+                // them atomically with the close, so there is nothing left to redeliver.
+                statusPayload = FormatCloseResponse(body, out _);
+            } else {
+                statusPayload = FormatRoundResponse(body);
+            }
 
             return BuildToolResult(id, statusPayload);
         } catch (ArgumentException ex) {
@@ -296,10 +308,15 @@ static class McpFlowsServer {
         return $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
     }
 
-    static readonly TimeSpan PollInterval  = TimeSpan.FromSeconds(3);
-    static readonly TimeSpan PollCap       = TimeSpan.FromMinutes(8);   // safely below MCP_TOOL_TIMEOUT
-    static readonly TimeSpan PerGetTimeout = TimeSpan.FromSeconds(20);
-    static readonly TimeSpan NotFoundGrace = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan PollInterval   = TimeSpan.FromSeconds(3);
+    static readonly TimeSpan PollCap        = TimeSpan.FromMinutes(8);   // safely below MCP_TOOL_TIMEOUT
+    static readonly TimeSpan PerGetTimeout  = TimeSpan.FromSeconds(20);
+    static readonly TimeSpan NotFoundGrace  = TimeSpan.FromSeconds(10);
+    // AI-1127 E-c final review, Important: the shared client has Timeout = InfiniteTimeSpan (the
+    // review-flow endpoints long-poll), so without a per-attempt bound a hung ack POST would block
+    // indefinitely — stalling the tool response the driver is waiting on. Mirrors PerGetTimeout's
+    // per-attempt bounding of PollUntilTerminalAsync's GETs.
+    static readonly TimeSpan PerAckPostTimeout = TimeSpan.FromSeconds(15);
 
     static readonly HashSet<string> TerminalRoundStatuses =
         new(StringComparer.Ordinal) { "findings", "clean", "waiting", "unclear", "failed", "cancelled" };
@@ -310,19 +327,68 @@ static class McpFlowsServer {
     // Maximum consecutive transient failures (5xx / network / TLS) before giving up.
     const int MaxTransientRetries = 5;
 
+    /// <summary>AI-1127 E-c: a multi-participant start records the run only — no round exists to
+    /// poll, so the old poll path must not run. Returns null unless the body is exactly that shape
+    /// (round-full starts and old servers fall through to the existing logic unchanged). Today's
+    /// server never puts pending_messages on a round-less start (a brand-new run has no
+    /// participants), but the path renders + exposes them anyway so every returned response obeys
+    /// the same format-then-ack rule with no carve-outs (Qodo review on #278).</summary>
+    internal static string? TryFormatRoundlessStart(string postBody, out IReadOnlyList<string> pendingIds) {
+        pendingIds = [];
+
+        try {
+            var node = JsonNode.Parse(postBody)?.AsObject();
+            if (node is null) return null;
+
+            var flowRunId = node["flow_run_id"]?.GetValue<string>();
+            var status    = node["status"]?.GetValue<string>();
+
+            if (flowRunId is null || status != "running") return null;
+            if (node["round_id"] is not null || node["round_number"] is not null) return null;
+
+            var sb = new StringBuilder();
+            sb.Append("flow_run_id: "); AppendLine(sb, flowRunId);
+            sb.AppendLine("status: running");
+            sb.AppendLine();
+            sb.Append("Multi-participant flow started — no round is in flight yet. Address a role with " +
+                      "send_to_participant(flow_run_id, participant, message); each role's agent launches " +
+                      "lazily on its first message.");
+            pendingIds = AppendPendingMessages(sb, node);
+            return sb.ToString();
+        } catch {
+            return null;
+        }
+    }
+
     /// <summary>If the POST already carries a terminal result (old/blocking server), return it.
     /// Otherwise poll GET /api/flows/{id} until the started round is terminal (AI-1061).
     /// <paramref name="toolName"/> is the tool that initiated the round (one of
     /// start_review_flow/submit_review_round/start_flow/send_to_participant) — threaded through
     /// so the graceful-cap timeout message can point back at the matching status tool.</summary>
     static async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody, string toolName) {
+        if (TryFormatRoundlessStart(postBody, out var roundlessPendingIds) is { } roundless) {
+            if (roundlessPendingIds.Count > 0 &&
+                JsonNode.Parse(postBody)?.AsObject()?["flow_run_id"]?.GetValue<string>() is { } roundlessRunId)
+                await AckRenderedMessagesAsync(client, apiRoot, roundlessRunId, roundlessPendingIds, Task.Delay);
+
+            return new(roundless, false);
+        }
+
         var node      = JsonNode.Parse(postBody)?.AsObject();
         var status    = node?["status"]?.GetValue<string>();
         var flowRunId = node?["flow_run_id"]?.GetValue<string>();
         var roundNum  = node?["round_number"]?.GetValue<int>();
 
-        if (status != "running" || flowRunId is null || roundNum is null)
-            return new(FormatRoundResponse(postBody), false); // terminal-in-POST (old server) or unparseable
+        if (status != "running" || flowRunId is null || roundNum is null) {
+            // terminal-in-POST (old server) or unparseable body.
+            var formatted = FormatRoundResponse(postBody, out var pendingIds);
+
+            // flowRunId may be null here (unparseable body) — nothing to ack against.
+            if (flowRunId is not null)
+                await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
+
+            return new(formatted, false);
+        }
 
         return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value, toolName);
     }
@@ -397,15 +463,21 @@ static class McpFlowsServer {
                 // Fix #1: run-level terminal stops the loop, but only return round result
                 // when the projected round matches the one we submitted.
                 if (runStatus is "closed" or "failed") {
-                    if (rn == roundNumber && rs is not null && TerminalRoundStatuses.Contains(rs))
-                        return new(FormatPolledRoundResult(node!, flowRunId), false);
+                    if (rn == roundNumber && rs is not null && TerminalRoundStatuses.Contains(rs)) {
+                        var formatted = FormatPolledRoundResult(node!, flowRunId, out var pendingIds);
+                        await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
+                        return new(formatted, false);
+                    }
                     // Run became terminal before our round produced a result — explicit error.
                     return new($"Error: review run {runStatus} before round {roundNumber} produced a result.", true);
                 }
 
                 // Only act on OUR round; an earlier projection may still show a prior round.
-                if (rn == roundNumber && rs is not null && TerminalRoundStatuses.Contains(rs))
-                    return new(FormatPolledRoundResult(node!, flowRunId), false);
+                if (rn == roundNumber && rs is not null && TerminalRoundStatuses.Contains(rs)) {
+                    var formatted = FormatPolledRoundResult(node!, flowRunId, out var pendingIds);
+                    await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
+                    return new(formatted, false);
+                }
             }
             await Task.Delay(PollInterval);
         }
@@ -420,7 +492,11 @@ static class McpFlowsServer {
     }
 
     /// <summary>Formats the terminal GET /api/flows/{id} response into the same envelope+text as FormatRoundResponse.</summary>
-    static string FormatPolledRoundResult(JsonObject node, string flowRunId) {
+    internal static string FormatPolledRoundResult(JsonObject node, string flowRunId) =>
+        FormatPolledRoundResult(node, flowRunId, out _);
+
+    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    internal static string FormatPolledRoundResult(JsonObject node, string flowRunId, out IReadOnlyList<string> pendingIds) {
         var roundNumber = node["round_number"]?.GetValue<int>();
         var resultKind  = node["round_result_kind"]?.GetValue<string>() ?? node["round_status"]?.GetValue<string>() ?? "";
         var resultText  = node["round_result_text"]?.GetValue<string>();
@@ -431,6 +507,8 @@ static class McpFlowsServer {
         sb.Append("status: ");      AppendLine(sb, node["status"]?.GetValue<string>() ?? "");
         sb.Append("result_kind: "); AppendLine(sb, resultKind);
         if (!string.IsNullOrEmpty(resultText)) { sb.AppendLine(); sb.Append(resultText); }
+
+        pendingIds = AppendPendingMessages(sb, node);
         return sb.ToString();
     }
 
@@ -438,10 +516,13 @@ static class McpFlowsServer {
     /// Formats a ReviewFlowRoundResponse or ReviewFlowStatusResponse (from start/submit) into a
     /// compact envelope followed by the result text.
     /// </summary>
-    static string FormatRoundResponse(string body) {
+    internal static string FormatRoundResponse(string body) => FormatRoundResponse(body, out _);
+
+    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    internal static string FormatRoundResponse(string body, out IReadOnlyList<string> pendingIds) {
         try {
             var node = JsonNode.Parse(body)?.AsObject();
-            if (node is null) return body;
+            if (node is null) { pendingIds = []; return body; }
 
             var flowRunId   = node["flow_run_id"]?.GetValue<string>()   ?? "";
             var roundId     = node["round_id"]?.GetValue<string>()     ?? "";
@@ -460,16 +541,21 @@ static class McpFlowsServer {
                 sb.Append(resultText);
             }
 
+            pendingIds = AppendPendingMessages(sb, node);
             return sb.ToString();
         } catch {
+            pendingIds = [];
             return body;
         }
     }
 
-    static string FormatStatusResponse(string body) {
+    internal static string FormatStatusResponse(string body) => FormatStatusResponse(body, out _);
+
+    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    internal static string FormatStatusResponse(string body, out IReadOnlyList<string> pendingIds) {
         try {
             var node = JsonNode.Parse(body)?.AsObject();
-            if (node is null) return body;
+            if (node is null) { pendingIds = []; return body; }
 
             var flowRunId      = node["flow_run_id"]?.GetValue<string>()      ?? "";
             var status         = node["status"]?.GetValue<string>()         ?? "";
@@ -499,8 +585,10 @@ static class McpFlowsServer {
                 sb.Append(lastResultText);
             }
 
+            pendingIds = AppendPendingMessages(sb, node);
             return sb.ToString();
         } catch {
+            pendingIds = [];
             return body;
         }
     }
@@ -509,10 +597,13 @@ static class McpFlowsServer {
     /// Formats a CloseReviewFlowResponse into a compact envelope.
     /// The server returns only <c>flow_run_id</c> and <c>status</c>.
     /// </summary>
-    static string FormatCloseResponse(string body) {
+    internal static string FormatCloseResponse(string body) => FormatCloseResponse(body, out _);
+
+    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    internal static string FormatCloseResponse(string body, out IReadOnlyList<string> pendingIds) {
         try {
             var node = JsonNode.Parse(body)?.AsObject();
-            if (node is null) return body;
+            if (node is null) { pendingIds = []; return body; }
 
             var flowRunId = node["flow_run_id"]?.GetValue<string>() ?? "";
             var status    = node["status"]?.GetValue<string>()      ?? "";
@@ -521,10 +612,103 @@ static class McpFlowsServer {
             sb.Append("flow_run_id: "); AppendLine(sb, flowRunId);
             sb.Append("status: ");      AppendLine(sb, status);
 
+            pendingIds = AppendPendingMessages(sb, node);
             return sb.ToString();
         } catch {
+            pendingIds = [];
             return body;
         }
+    }
+
+    /// <summary>AI-1127 E-c: renders the fold-computed undelivered sidecar messages carried on a
+    /// status/round/close response. Returns the rendered ids so the caller can ack exactly what
+    /// the driver will actually see (never more).</summary>
+    internal static IReadOnlyList<string> AppendPendingMessages(StringBuilder sb, JsonObject node) {
+        if (node["pending_messages"] is not JsonArray arr || arr.Count == 0) return [];
+
+        // Render entries into a scratch buffer first so the header count reflects what actually
+        // got rendered, not the raw array length — a malformed (non-object) entry is skipped
+        // below, and the header must not overcount past what the driver will see (AI-1127 E-c
+        // final review, Minor: header used arr.Count while entries were filtered).
+        var ids     = new List<string>();
+        var entries = new StringBuilder();
+        var count   = 0;
+
+        foreach (var item in arr) {
+            if (item is not JsonObject o) continue;
+
+            // Type-safe extraction: a wrong-typed field degrades to "", never throws —
+            // FormatPolledRoundResult has no exception boundary, so a throw here would turn a
+            // successful terminal poll into a generic internal error (Qodo review on #278).
+            var id   = StringField(o, "message_id");
+            var from = StringField(o, "from_participant");
+            var text = StringField(o, "text");
+
+            entries.Append("- from "); entries.Append(from); entries.Append(" ["); entries.Append(id); entries.Append("]: ");
+            entries.AppendLine(text);
+            count++;
+
+            if (id.Length > 0) ids.Add(id);
+        }
+
+        if (count == 0) return [];
+
+        sb.AppendLine();
+        sb.Append("pending_messages ("); sb.Append(count); sb.AppendLine("):");
+        sb.Append(entries);
+
+        return ids;
+    }
+
+    static string StringField(JsonObject o, string name) =>
+        o[name] is JsonValue v && v.TryGetValue<string>(out var s) ? s : "";
+
+    /// <summary>AI-1127 E-c: deliver-once ack for pending messages. Callers must invoke this
+    /// AFTER the response text has been fully formatted, passing only the ids that were actually
+    /// rendered into that text — never before, never a superset. No-op (no HTTP call at all) when
+    /// <paramref name="messageIds"/> is empty, which keeps this byte-compatible with servers that
+    /// predate the ack endpoint. Best-effort: one retry after <paramref name="delay"/>(2s) on any
+    /// failure (non-2xx or exception), then swallows and logs to stderr — the next status/round/
+    /// close call will see the same messages still pending and re-render + re-ack them, so a lost
+    /// ack only delays cleanup, it never drops a message.</summary>
+    internal static async Task AckRenderedMessagesAsync(
+            HttpClient            client,
+            string                apiRoot,
+            string                flowRunId,
+            IReadOnlyList<string> messageIds,
+            Func<TimeSpan, Task>  delay
+        ) {
+        if (messageIds.Count == 0) return;
+
+        var url  = $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}/messages/ack";
+        var body = new AckFlowMessagesDto(messageIds);
+
+        async Task<bool> TryPostAsync() {
+            try {
+                // AI-1127 E-c final review, Important: bound each attempt — the shared client has
+                // no client-side deadline (Timeout = InfiniteTimeSpan, needed for the long-polling
+                // round endpoints), so an unbounded ack POST could hang the tool response the
+                // driver is waiting on. A timeout surfaces as OperationCanceledException, which
+                // falls into the existing swallow-and-retry-once path below.
+                using var postCts = new CancellationTokenSource(PerAckPostTimeout);
+                using var response = await SendWithRefreshRetryAsync(
+                    client,
+                    c => c.PostAsync(url, JsonContent.Create(body, McpJsonContext.Default.AckFlowMessagesDto), postCts.Token)
+                );
+                return response.IsSuccessStatusCode;
+            } catch {
+                return false;
+            }
+        }
+
+        if (await TryPostAsync()) return;
+
+        await delay(TimeSpan.FromSeconds(2));
+
+        if (await TryPostAsync()) return;
+
+        await Console.Error.WriteLineAsync(
+            $"kcap mcp flows: failed to ack {messageIds.Count} rendered message(s) for flow_run_id {flowRunId}; will redeliver on next call.");
     }
 
     static void AppendLine(StringBuilder sb, string value) => sb.AppendLine(value);
@@ -586,7 +770,8 @@ static class McpFlowsServer {
             "Start a new review flow. This hands the work to a SEPARATE hosted reviewer agent and iterates to sign-off — it is NOT how you review something yourself. " +
             "Only call this when the user explicitly asked for a review *flow* / to submit for review; for an ordinary 'review my PR' or 'code review' request, review directly and do NOT call this tool. " +
             "Returns findings (same UX); the server runs the reviewer asynchronously and the CLI polls internally. " +
-            "Returns a flow_run_id that identifies this review session — save it to call submit_review_round or get_review_flow_status later.",
+            "Returns a flow_run_id that identifies this review session — save it to call submit_review_round or get_review_flow_status later. " +
+            "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
@@ -603,7 +788,8 @@ static class McpFlowsServer {
         ),
         new(
             "submit_review_round",
-            "Submit a follow-up round to an existing review flow. Returns findings (same UX); the server runs the reviewer asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback.",
+            "Submit a follow-up round to an existing review flow. Returns findings (same UX); the server runs the reviewer asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback. " +
+            "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
@@ -616,7 +802,8 @@ static class McpFlowsServer {
         ),
         new(
             "get_review_flow_status",
-            "Get the current status of a review flow: running, waiting, completed, or failed. Also surfaces the last result kind and result text.",
+            "Get the current status of a review flow: running, waiting, completed, or failed. Also surfaces the last result kind and result text. " +
+            "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
@@ -627,7 +814,8 @@ static class McpFlowsServer {
         ),
         new(
             "close_review_flow",
-            "Close a review flow, marking it as complete. Call this after the review is done and the findings have been addressed.",
+            "Close a review flow, marking it as complete. Call this after the review is done and the findings have been addressed. " +
+            "The close response may carry final pending_messages — read them; they are delivered with the close and will not be shown again.",
             new(
                 "object",
                 new() {
@@ -640,7 +828,9 @@ static class McpFlowsServer {
             "start_flow",
             "Start a new agent flow from the server's flow-definition catalog. This hands the work to a SEPARATE hosted agent and iterates to sign-off — it is NOT how you do the work yourself. " +
             "Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. " +
-            "Returns a flow_run_id that identifies this flow run — save it to call send_to_participant or get_flow_status later.",
+            "Returns a flow_run_id that identifies this flow run — save it to call send_to_participant or get_flow_status later. " +
+            "Multi-participant definitions start round-less — the response carries no round; address each role with send_to_participant (roles launch lazily on first message). " +
+            "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
@@ -657,12 +847,13 @@ static class McpFlowsServer {
         ),
         new(
             "send_to_participant",
-            "Send a follow-up message to a participant in an existing flow. Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback.",
+            "Send a follow-up message to a participant in an existing flow. Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback. " +
+            "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
                     ["flow_run_id"]  = new("string", "Flow run ID returned by start_flow."),
-                    ["participant"]  = new("string", "The participant role to send to. Phase D flows have a single participant: 'reviewer'."),
+                    ["participant"]  = new("string", "The participant role to send to, as declared by the flow definition's participants map (single-participant definitions use 'reviewer'). The server rejects an unknown role, naming the valid ones."),
                     ["message"]      = new("string", "Updated context or response to the participant's previous findings."),
                     ["instructions"] = new("string", "Optional instructions for this round."),
                     ["async"]        = new("boolean", "Optional. Defaults to true.")
@@ -672,7 +863,8 @@ static class McpFlowsServer {
         ),
         new(
             "get_flow_status",
-            "Get the current status of a flow run: running, waiting, completed, or failed. Also surfaces the last result kind and result text.",
+            "Get the current status of a flow run: running, waiting, completed, or failed. Also surfaces the last result kind and result text. " +
+            "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
@@ -683,7 +875,8 @@ static class McpFlowsServer {
         ),
         new(
             "close_flow",
-            "Close a flow run, marking it as complete. Call this after the work is done and the findings have been addressed.",
+            "Close a flow run, marking it as complete. Call this after the work is done and the findings have been addressed. " +
+            "The close response may carry final pending_messages — read them; they are delivered with the close and will not be shown again.",
             new(
                 "object",
                 new() {
@@ -726,4 +919,9 @@ record SubmitReviewRoundDto(
     [property: JsonPropertyName("instructions")] string? Instructions,
     [property: JsonPropertyName("async")]        bool    Async,
     [property: JsonPropertyName("participant")]  string? Participant = null
+);
+
+/// <summary>CLI-side DTO for POST /api/flows/{flowRunId}/messages/ack — AI-1127 E-c deliver-once ack.</summary>
+record AckFlowMessagesDto(
+    [property: JsonPropertyName("message_ids")] IReadOnlyList<string> MessageIds
 );

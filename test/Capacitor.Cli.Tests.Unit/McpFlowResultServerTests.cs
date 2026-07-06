@@ -15,10 +15,16 @@ public class McpFlowResultServerTests {
         return o;
     }
 
+    static JsonObject MessageArgs(string? text = "heads up: found something outside this round's scope") {
+        var o = new JsonObject();
+        if (text is not null) o["text"] = (JsonNode?)text;
+        return o;
+    }
+
     static Func<TimeSpan, Task> NoDelay(List<TimeSpan> recorded) => ts => { recorded.Add(ts); return Task.CompletedTask; };
 
     [Test]
-    public async Task Happy_path_posts_snake_case_body_and_reports_round() {
+    public async Task Happy_path_posts_snake_case_body_and_confirms_result() {
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/api/flows/reviewer/result").UsingPost())
               .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"flow_run_id":"f1","round_id":"r1","round_number":2}"""));
@@ -28,7 +34,7 @@ public class McpFlowResultServerTests {
         var (text, isError) = await McpFlowResultServer.SubmitCoreAsync(client, server.Url!, "agent-1", Args(), NoDelay(delays));
 
         await Assert.That(isError).IsFalse();
-        await Assert.That(text).IsEqualTo("Result recorded for round 2. You may end your reply now.");
+        await Assert.That(text).IsEqualTo("Result recorded. You may end your reply now.");
 
         var body = server.LogEntries.Single().RequestMessage.Body!;
         await Assert.That(body).Contains("\"agent_id\"");
@@ -69,7 +75,7 @@ public class McpFlowResultServerTests {
         var (text, isError) = await McpFlowResultServer.SubmitCoreAsync(client, server.Url!, "agent-1", Args(), NoDelay(delays));
 
         await Assert.That(isError).IsFalse();
-        await Assert.That(text).Contains("round 1");
+        await Assert.That(text).IsEqualTo("Result recorded. You may end your reply now.");
         await Assert.That(delays).HasCount().EqualTo(1);
         await Assert.That(delays[0]).IsEqualTo(TimeSpan.FromSeconds(3));
     }
@@ -123,6 +129,129 @@ public class McpFlowResultServerTests {
         await Assert.That(badKind.IsError).IsTrue();
         await Assert.That(noFindings.IsError).IsTrue();
         await Assert.That(server.LogEntries.Count()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Send_message_posts_snake_case_body_with_stable_message_id() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/participant/message").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+        using var client = new HttpClient();
+
+        var (text, isError) = await McpFlowResultServer.SendMessageCoreAsync(
+            client, server.Url!, "agent-1", MessageArgs(), NoDelay([]), messageId: "msg-1"
+        );
+
+        await Assert.That(isError).IsFalse();
+        await Assert.That(text).IsEqualTo("Message sent to the flow driver. It will be delivered with the driver's next flow call — you may continue.");
+
+        var body = server.LogEntries.Single().RequestMessage.Body!;
+        await Assert.That(body).Contains("\"agent_id\"");
+        await Assert.That(body).Contains("\"message_id\"");
+        await Assert.That(body).Contains("\"text\"");
+        await Assert.That(body).Contains("agent-1");
+        await Assert.That(body).Contains("msg-1");
+    }
+
+    [Test]
+    public async Task Send_message_retries_no_active_flow_with_same_message_id() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/participant/message").UsingPost())
+              .InScenario("launch-race")
+              .WillSetStateTo("second")
+              .RespondWith(Response.Create().WithStatusCode(404).WithBody("""{"error":"no_active_flow","message":"not registered yet"}"""));
+        server.Given(Request.Create().WithPath("/api/flows/participant/message").UsingPost())
+              .InScenario("launch-race")
+              .WhenStateIs("second")
+              .WillSetStateTo("third")
+              .RespondWith(Response.Create().WithStatusCode(404).WithBody("""{"error":"no_active_flow","message":"not registered yet"}"""));
+        server.Given(Request.Create().WithPath("/api/flows/participant/message").UsingPost())
+              .InScenario("launch-race")
+              .WhenStateIs("third")
+              .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+        using var client = new HttpClient();
+
+        var delays = new List<TimeSpan>();
+        var (text, isError) = await McpFlowResultServer.SendMessageCoreAsync(
+            client, server.Url!, "agent-1", MessageArgs(), NoDelay(delays), messageId: "msg-stable"
+        );
+
+        await Assert.That(isError).IsFalse();
+        await Assert.That(text).Contains("Message sent to the flow driver");
+        await Assert.That(delays).HasCount().EqualTo(2);
+
+        var bodies = server.LogEntries.Select(e => e.RequestMessage.Body!).ToList();
+        await Assert.That(bodies).HasCount().EqualTo(3);
+        foreach (var b in bodies) {
+            await Assert.That(b).Contains("msg-stable");
+        }
+    }
+
+    [Test]
+    public async Task Send_message_run_closed_is_terminal_no_retry() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/participant/message").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(409).WithBody("""{"error":"run_closed","message":"this flow run is already closed"}"""));
+        using var client = new HttpClient();
+
+        var delays = new List<TimeSpan>();
+        var (text, isError) = await McpFlowResultServer.SendMessageCoreAsync(
+            client, server.Url!, "agent-1", MessageArgs(), NoDelay(delays)
+        );
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("this flow run is already closed");
+        await Assert.That(delays).HasCount().EqualTo(0);
+        await Assert.That(server.LogEntries.Count()).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Send_message_requires_text() {
+        using var server = WireMockServer.Start();
+        using var client = new HttpClient();
+
+        var (text, isError) = await McpFlowResultServer.SendMessageCoreAsync(
+            client, server.Url!, "agent-1", MessageArgs(text: null), NoDelay([])
+        );
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).IsEqualTo("Error: text must be a non-empty string.");
+        await Assert.That(server.LogEntries.Count()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Send_message_rejects_non_string_text_without_throwing() {
+        using var server = WireMockServer.Start();
+        using var client = new HttpClient();
+
+        var args = new JsonObject { ["text"] = 42 };
+
+        var (text, isError) = await McpFlowResultServer.SendMessageCoreAsync(
+            client, server.Url!, "agent-1", args, NoDelay([])
+        );
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).IsEqualTo("Error: text must be a non-empty string.");
+        await Assert.That(server.LogEntries.Count()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Send_message_exhausts_retries_without_fallback_hint() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/participant/message").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(404).WithBody("""{"error":"no_active_flow","message":"not registered yet"}"""));
+        using var client = new HttpClient();
+
+        var delays = new List<TimeSpan>();
+        var (text, isError) = await McpFlowResultServer.SendMessageCoreAsync(
+            client, server.Url!, "agent-1", MessageArgs(), NoDelay(delays)
+        );
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("not registered yet");
+        await Assert.That(text).DoesNotContain("FINDINGS");
+        await Assert.That(delays).HasCount().EqualTo(4); // 5 attempts = 4 delays
+        await Assert.That(server.LogEntries.Count()).IsEqualTo(5);
     }
 
     [Test]
