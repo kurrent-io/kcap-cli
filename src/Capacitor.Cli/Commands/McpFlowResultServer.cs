@@ -180,13 +180,8 @@ static class McpFlowResultServer {
             );
             var responseBody = await response.Content.ReadAsStringAsync();
 
-            if (response.IsSuccessStatusCode) {
-                var node        = TryParse(responseBody);
-                var roundNumber = node?["round_number"]?.GetValue<int>();
-                return (roundNumber is { } n
-                    ? $"Result recorded for round {n}. You may end your reply now."
-                    : "Result recorded. You may end your reply now.", false);
-            }
+            if (response.IsSuccessStatusCode)
+                return ("Result recorded. You may end your reply now.", false);
 
             if (response.StatusCode == HttpStatusCode.Unauthorized)
                 return ("Not logged in. Run 'kcap login' on the host shell.", true);

@@ -24,7 +24,7 @@ public class McpFlowResultServerTests {
     static Func<TimeSpan, Task> NoDelay(List<TimeSpan> recorded) => ts => { recorded.Add(ts); return Task.CompletedTask; };
 
     [Test]
-    public async Task Happy_path_posts_snake_case_body_and_reports_round() {
+    public async Task Happy_path_posts_snake_case_body_and_confirms_result() {
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/api/flows/reviewer/result").UsingPost())
               .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"flow_run_id":"f1","round_id":"r1","round_number":2}"""));
@@ -34,7 +34,7 @@ public class McpFlowResultServerTests {
         var (text, isError) = await McpFlowResultServer.SubmitCoreAsync(client, server.Url!, "agent-1", Args(), NoDelay(delays));
 
         await Assert.That(isError).IsFalse();
-        await Assert.That(text).IsEqualTo("Result recorded for round 2. You may end your reply now.");
+        await Assert.That(text).IsEqualTo("Result recorded. You may end your reply now.");
 
         var body = server.LogEntries.Single().RequestMessage.Body!;
         await Assert.That(body).Contains("\"agent_id\"");
@@ -75,7 +75,7 @@ public class McpFlowResultServerTests {
         var (text, isError) = await McpFlowResultServer.SubmitCoreAsync(client, server.Url!, "agent-1", Args(), NoDelay(delays));
 
         await Assert.That(isError).IsFalse();
-        await Assert.That(text).Contains("round 1");
+        await Assert.That(text).IsEqualTo("Result recorded. You may end your reply now.");
         await Assert.That(delays).HasCount().EqualTo(1);
         await Assert.That(delays[0]).IsEqualTo(TimeSpan.FromSeconds(3));
     }
