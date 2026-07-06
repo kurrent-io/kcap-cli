@@ -58,13 +58,6 @@ public sealed class UnixPtyProcess : IPtyProcess {
                 UnixPtyInterop.unsetenv("CLAUDECODE");
                 UnixPtyInterop.unsetenv("CLAUDE_CODE_ENTRYPOINT");
                 UnixPtyInterop.unsetenv("ANTHROPIC_API_KEY");
-                // A daemon started from inside a Claude Code session inherits that
-                // session's identity vars. CLAUDE_CODE_CHILD_SESSION=1 makes the spawned
-                // interactive claude behave as a child session and never write its own
-                // transcript .jsonl, so `kcap watch` has nothing to stream and the hosted
-                // agent's web chat stays empty forever ("Waiting for conversation
-                // data...") while the PTY works fine. Scrub the whole inherited-session
-                // surface — parity with ConPtyProcess.BuildEnvironmentBlock.
                 UnixPtyInterop.unsetenv("CLAUDE_CODE_CHILD_SESSION");
                 UnixPtyInterop.unsetenv("CLAUDE_CODE_SESSION_ID");
                 UnixPtyInterop.unsetenv("CLAUDE_ENV_FILE");
