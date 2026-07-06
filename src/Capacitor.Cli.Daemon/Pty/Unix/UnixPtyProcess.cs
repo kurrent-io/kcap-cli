@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using Capacitor.Cli.Daemon.Pty;
 
 namespace Capacitor.Cli.Daemon.Pty.Unix;
 
@@ -43,6 +44,12 @@ public sealed class UnixPtyProcess : IPtyProcess {
             extraEnvValues = extraEnv.Values.ToArray();
         }
 
+        // Touch shared scrub lists before fork; the child then only iterates
+        // prebuilt arrays before exec.
+        var claudeSessionVars     = PtyEnvScrub.ClaudeSessionVars;
+        var hostedAgentVars       = PtyEnvScrub.HostedAgentVars;
+        var daemonSupervisionVars = PtyEnvScrub.DaemonSupervisionVars;
+
         var ws  = new UnixPtyInterop.WinSize { ws_row = rows, ws_col = cols };
         var pid = UnixPtyInterop.forkpty(out var masterFd, IntPtr.Zero, IntPtr.Zero, ref ws);
 
@@ -55,23 +62,22 @@ public sealed class UnixPtyProcess : IPtyProcess {
                 UnixPtyInterop.setenv("LANG", "en_US.UTF-8", 1);
                 UnixPtyInterop.setenv("COLUMNS", colsStr, 1);
                 UnixPtyInterop.setenv("LINES", rowsStr, 1);
-                UnixPtyInterop.unsetenv("CLAUDECODE");
-                UnixPtyInterop.unsetenv("CLAUDE_CODE_ENTRYPOINT");
-                UnixPtyInterop.unsetenv("ANTHROPIC_API_KEY");
+                foreach (var key in claudeSessionVars) {
+                    UnixPtyInterop.unsetenv(key);
+                }
                 // Clear any hosted-agent identity/routing the daemon may have inherited (e.g.
                 // it was started from inside a kcap-tracked session) so the spawned agent gets
                 // ONLY what extraEnv sets: hosted launches re-add these below; private local
                 // launches deliberately leave them unset (no mis-tag, native permissions).
-                UnixPtyInterop.unsetenv("KCAP_AGENT_ID");
-                UnixPtyInterop.unsetenv("KCAP_RENDERED_AGENT");
-                UnixPtyInterop.unsetenv("KCAP_DAEMON_URL");
+                foreach (var key in hostedAgentVars) {
+                    UnixPtyInterop.unsetenv(key);
+                }
                 // Never leak daemon supervision state into hosted agents — otherwise a
                 // `kcap daemon start` run from inside an agent could inherit a supervised
                 // classification and later take the exit-for-relaunch path with no supervisor.
-                UnixPtyInterop.unsetenv("KCAP_DAEMON_SUPERVISED");
-                UnixPtyInterop.unsetenv("XPC_SERVICE_NAME");
-                UnixPtyInterop.unsetenv("INVOCATION_ID");
-                UnixPtyInterop.unsetenv("SYSTEMD_EXEC_PID");
+                foreach (var key in daemonSupervisionVars) {
+                    UnixPtyInterop.unsetenv(key);
+                }
 
                 if (extraEnvKeys is not null) {
                     for (var i = 0; i < extraEnvKeys.Length; i++) {

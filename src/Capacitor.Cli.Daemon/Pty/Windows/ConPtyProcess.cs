@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
+using Capacitor.Cli.Daemon.Pty;
 using Microsoft.Win32.SafeHandles;
 using static Capacitor.Cli.Daemon.Pty.Windows.ConPtyInterop;
 
@@ -77,16 +78,24 @@ public sealed class ConPtyProcess : IPtyProcess {
         }
 
         env["TERM"] = "xterm-256color";
-        env.Remove("CLAUDECODE");
-        env.Remove("CLAUDE_CODE_ENTRYPOINT");
-        env.Remove("ANTHROPIC_API_KEY");
+
+        foreach (var key in PtyEnvScrub.ClaudeSessionVars) {
+            env.Remove(key);
+        }
+
+        // Clear any hosted-agent identity/routing the daemon may have inherited (e.g.
+        // it was started from inside a kcap-tracked session) so the spawned agent gets
+        // ONLY what extraEnv sets: hosted launches re-add these below; private local
+        // launches deliberately leave them unset (no mis-tag, native permissions).
+        foreach (var key in PtyEnvScrub.HostedAgentVars) {
+            env.Remove(key);
+        }
+
         // Parity with UnixPtyProcess: never leak daemon supervision state into spawned
-        // children. Auto-restart is out of scope on Windows, but keep the two PTY paths
-        // in lockstep so the scrub doesn't drift.
-        env.Remove("KCAP_DAEMON_SUPERVISED");
-        env.Remove("XPC_SERVICE_NAME");
-        env.Remove("INVOCATION_ID");
-        env.Remove("SYSTEMD_EXEC_PID");
+        // children. Auto-restart is out of scope on Windows.
+        foreach (var key in PtyEnvScrub.DaemonSupervisionVars) {
+            env.Remove(key);
+        }
 
         if (extraEnv is not null) {
             foreach (var (key, value) in extraEnv) {
