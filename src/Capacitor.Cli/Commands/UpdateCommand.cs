@@ -16,6 +16,12 @@ public static class UpdateCommand {
     static readonly string[] KnownChannels = ["latest", "beta"];
 
     /// <summary>
+    /// Version-transition arrow. ASCII on Windows: legacy console codepages
+    /// (cp437/cp850) can't encode `→` and render it as `␦`/`?`.
+    /// </summary>
+    static readonly string Arrow = OperatingSystem.IsWindows() ? "->" : "→";
+
+    /// <summary>
     /// Resolves the effective update channel (npm dist-tag): an explicit
     /// <c>--beta</c>/<c>--stable</c> flag wins, otherwise the configured channel
     /// is used. The result is validated against <see cref="KnownChannels"/> and
@@ -109,7 +115,7 @@ public static class UpdateCommand {
         // Reached only when the native binary is run WITHOUT the npm launcher
         // (e.g. invoking the platform binary directly). For npm-global installs
         // the launcher intercepts `update` and performs the upgrade itself.
-        await Console.Out.WriteLineAsync($"Update available: {current} → {latest}");
+        await Console.Out.WriteLineAsync($"Update available: {current} {Arrow} {latest}");
         await Console.Out.WriteLineAsync();
         await Console.Out.WriteLineAsync("Run `kcap update` to update, or upgrade directly:");
         await Console.Out.WriteLineAsync("  npm install -g @kurrent/kcap@latest");
@@ -130,7 +136,7 @@ public static class UpdateCommand {
 
             if (latest is not null && current is not null && IsNewer(latest, current)) {
                 await Console.Error.WriteLineAsync();
-                await Console.Error.WriteLineAsync($"Update available: {current} → {latest}");
+                await Console.Error.WriteLineAsync($"Update available: {current} {Arrow} {latest}");
                 await Console.Error.WriteLineAsync("Run `kcap update` to update");
             }
         } catch {

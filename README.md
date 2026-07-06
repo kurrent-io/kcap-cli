@@ -821,6 +821,15 @@ kcap logout         # delete stored tokens
 > and tells you what to run instead for non-npm installs (e.g. Homebrew). Use
 > `kcap update --check` for a machine-readable `{current, latest, newer}` probe.
 >
+> **Windows:** the update works even while Claude Code sessions (whose kcap MCP
+> servers keep the binary locked) or the daemon are running — the old executable
+> is moved aside so npm can replace it, and the leftover is cleaned up
+> automatically later. Running processes keep the old version until they
+> restart; a running daemon reports this and applies the new version on
+> `kcap daemon restart`. A plain `npm install -g` / `npm update -g` does **not**
+> do this and fails with `EBUSY` while any kcap process is running — prefer
+> `kcap update`.
+>
 > **Beta channel (opt-in):** `kcap update --beta` switches the active profile to
 > the beta release channel (npm dist-tag `beta`) and updates to the latest beta
 > immediately. The choice is **persisted per profile**, so subsequent `kcap
