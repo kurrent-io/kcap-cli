@@ -269,6 +269,13 @@ public class McpSessionsServerTests {
     }
 
     [Test]
+    public async Task BuildSearchUrl_rejects_nonstring_repo_with_clean_error() {
+        var args = new JsonObject { ["query"] = "hi", ["repo"] = 123 };
+        await Assert.That(() => McpSessionsServer.BuildSearchUrl("http://x", args, cwdRepoHash: "abc"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
     public async Task BuildSearchUrl_allows_explicit_cross_repo_all() {
         var url = McpSessionsServer.BuildSearchUrl("http://x", new JsonObject { ["query"] = "hi", ["repo"] = "all" }, cwdRepoHash: null);
         await Assert.That(url).DoesNotContain("repo="); // cross-repo → repo param omitted, no throw

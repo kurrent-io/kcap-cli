@@ -209,7 +209,15 @@ static class McpSessionsServer {
         // repo scope: explicit "all" → cross-repo; explicit value → that repo; else cwd repo.
         // Fail closed rather than silently broadening: if we can't resolve the current repo
         // and the caller didn't explicitly opt into cross-repo, error instead of searching everything.
-        var explicitRepo                                          = args?["repo"]?.GetValue<string>();
+        // Read `repo` defensively: a non-string JSON value must yield a clean validation error
+        // (caught as a tool error), not an unhandled InvalidOperationException that the outer
+        // guard turns into a generic "internal error".
+        string? explicitRepo = args?["repo"] switch {
+            null                                          => null,
+            JsonValue v when v.TryGetValue(out string? s) => s,
+            _                                             => throw new ArgumentException(
+                "`repo` must be a string — \"<owner>/<name>\", a 16-hex repo hash, or \"all\".")
+        };
         if (string.IsNullOrWhiteSpace(explicitRepo)) explicitRepo = null;
 
         if (string.Equals(explicitRepo, "all", StringComparison.OrdinalIgnoreCase)) {
@@ -218,8 +226,9 @@ static class McpSessionsServer {
             var repo = explicitRepo ?? cwdRepoHash;
             if (repo is null)
                 throw new ArgumentException(
-                    "Cannot resolve the current repository — run from a git checkout, or pass repo: \"<owner>/<name>\" " +
-                    "for a specific repo or repo: \"all\" to search across all visible repos.");
+                    "Cannot resolve the current repository owner/name from git metadata (e.g. a missing or " +
+                    "unparseable 'origin' remote). Pass repo: \"<owner>/<name>\" for a specific repo, or " +
+                    "repo: \"all\" to search across all visible repos.");
             qs.Add($"repo={Uri.EscapeDataString(repo)}");
         }
 
