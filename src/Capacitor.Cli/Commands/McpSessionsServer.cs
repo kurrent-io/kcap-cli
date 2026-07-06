@@ -206,14 +206,20 @@ static class McpSessionsServer {
             qs.Add($"author_github_id={aid}");
         }
 
-        // repo: explicit value > cwd-derived hash > omit. Sentinel "all" means cross-repo (omit param).
-        // Normalise empty/whitespace explicit repo to null so the cwd fallback runs — otherwise
-        // `repo: ""` produced `repo=` in the URL and silently broadened search to all visible repos.
+        // repo scope: explicit "all" → cross-repo; explicit value → that repo; else cwd repo.
+        // Fail closed rather than silently broadening: if we can't resolve the current repo
+        // and the caller didn't explicitly opt into cross-repo, error instead of searching everything.
         var explicitRepo                                          = args?["repo"]?.GetValue<string>();
         if (string.IsNullOrWhiteSpace(explicitRepo)) explicitRepo = null;
-        var repo                                                  = explicitRepo ?? cwdRepoHash;
 
-        if (repo is not null && !string.Equals(explicitRepo, "all", StringComparison.OrdinalIgnoreCase)) {
+        if (string.Equals(explicitRepo, "all", StringComparison.OrdinalIgnoreCase)) {
+            // cross-repo: omit the repo filter entirely.
+        } else {
+            var repo = explicitRepo ?? cwdRepoHash;
+            if (repo is null)
+                throw new ArgumentException(
+                    "Cannot resolve the current repository — run from a git checkout, or pass repo: \"<owner>/<name>\" " +
+                    "for a specific repo or repo: \"all\" to search across all visible repos.");
             qs.Add($"repo={Uri.EscapeDataString(repo)}");
         }
 
