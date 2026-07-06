@@ -146,4 +146,109 @@ public static class AntigravitySubagents {
 
         return byRoot;
     }
+
+    /// <summary>
+    /// AI-1218 redesign — the authoritative spawn-time parent→child signal. A parent's transcript
+    /// records an INVOKE_SUBAGENT step whose <c>content</c> embeds JSON listing the child
+    /// conversation(s) it spawned (<c>{ "conversationId": "&lt;child&gt;", … }</c>, one object or an
+    /// array). Returns the child ids for a single transcript line — empty for any non-INVOKE_SUBAGENT,
+    /// blank, or malformed line. Strict: the id is read ONLY from the step's content payload (parsed
+    /// as JSON), not matched by a regex over the whole line, and each id must be GUID-shaped.
+    /// </summary>
+    public static IReadOnlyList<string> ChildConversationIdsFromLine(string line) {
+        if (!TryReadInvokeContent(line, out var content)) return [];
+
+        var raw = new List<string>();
+        // The content can embed more than one top-level JSON value (e.g. several
+        // "{ \"conversationId\": … }" objects separated by narrative text/newlines), so scan for
+        // every balanced block rather than stopping at the first.
+        foreach (var json in ExtractJsonBlocks(content)) {
+            try {
+                using var doc = JsonDocument.Parse(json);
+                CollectConversationIds(doc.RootElement, raw);
+            } catch {
+                // Skip an unparsable block; a sibling block may still be valid.
+            }
+        }
+
+        var seen   = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<string>();
+        foreach (var id in raw) {
+            if (!Guid.TryParse(id, out _)) continue;   // GUID-shaped only; brain-dir ids are dashed
+            if (seen.Add(id)) result.Add(id);
+        }
+        return result;
+    }
+
+    /// <summary>True iff the line is a structurally-valid INVOKE_SUBAGENT step (used by callers to
+    /// log a drift diagnostic when such a step yields no parseable child id).</summary>
+    public static bool IsInvokeSubagentLine(string line) => TryReadInvokeContent(line, out _);
+
+    static bool TryReadInvokeContent(string line, out string content) {
+        content = "";
+        if (string.IsNullOrWhiteSpace(line)) return false;
+        try {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            if (!root.TryGetProperty("type", out var t) || t.ValueKind != JsonValueKind.String
+             || t.GetString() != "INVOKE_SUBAGENT") return false;
+            if (!root.TryGetProperty("content", out var c) || c.ValueKind != JsonValueKind.String) {
+                content = "";                 // an INVOKE step with no string content is still an invoke line
+                return true;
+            }
+            content = c.GetString() ?? "";
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /// <summary>Every balanced {…} or […] block found in <paramref name="s"/>, scanning left to
+    /// right (content can embed several sibling JSON values, not just one). String-aware so braces
+    /// inside quoted text don't break balancing. An unbalanced/truncated trailing block is dropped
+    /// rather than yielded partially.</summary>
+    static List<string> ExtractJsonBlocks(string s) {
+        var blocks = new List<string>();
+        var i = 0;
+        while (i < s.Length) {
+            var start = s.IndexOfAny(['{', '['], i);
+            if (start < 0) break;
+            char open = s[start], close = open == '{' ? '}' : ']';
+            int depth = 0; bool inStr = false, esc = false;
+            var end = -1;
+            for (var j = start; j < s.Length; j++) {
+                var ch = s[j];
+                if (inStr) {
+                    if (esc) esc = false;
+                    else if (ch == '\\') esc = true;
+                    else if (ch == '"') inStr = false;
+                    continue;
+                }
+                if (ch == '"') inStr = true;
+                else if (ch == open) depth++;
+                else if (ch == close && --depth == 0) { end = j; break; }
+            }
+            if (end < 0) break;   // unbalanced / truncated — stop scanning
+            blocks.Add(s.Substring(start, end - start + 1));
+            i = end + 1;
+        }
+        return blocks;
+    }
+
+    static void CollectConversationIds(JsonElement el, List<string> into) {
+        switch (el.ValueKind) {
+            case JsonValueKind.Object:
+                foreach (var p in el.EnumerateObject()) {
+                    if (p.NameEquals("conversationId") && p.Value.ValueKind == JsonValueKind.String)
+                        into.Add(p.Value.GetString()!);
+                    else
+                        CollectConversationIds(p.Value, into);
+                }
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in el.EnumerateArray()) CollectConversationIds(item, into);
+                break;
+        }
+    }
 }

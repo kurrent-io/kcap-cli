@@ -146,4 +146,57 @@ public class AntigravitySubagentsTests {
         await Assert.That(byRoot["B"].Count).IsEqualTo(0);
         await Assert.That(byRoot["R"]).IsEquivalentTo(new List<string> { "C" });
     }
+
+    [Test]
+    public async Task ChildConversationIds_extracts_all_children_from_one_invoke_step() {
+        // One INVOKE_SUBAGENT step listing multiple children (as c8a36fda does on disk).
+        const string line = """
+            {"type":"INVOKE_SUBAGENT","content":"Created the following subagents:\n[{\"conversationId\":\"9999c82b-0000-0000-0000-000000000001\"},{\"conversationId\":\"189ba558-0000-0000-0000-000000000002\"}]\nThey will report back."}
+            """;
+        var ids = AntigravitySubagents.ChildConversationIdsFromLine(line);
+        await Assert.That(ids).IsEquivalentTo(new List<string> {
+            "9999c82b-0000-0000-0000-000000000001", "189ba558-0000-0000-0000-000000000002" });
+    }
+
+    [Test]
+    public async Task ChildConversationIds_single_child_object_payload() {
+        const string line = """
+            {"type":"INVOKE_SUBAGENT","content":"Created the following subagents:\n{\"conversationId\":\"6111e615-3caa-4fe8-9d55-b85c43f2cf1f\",\"logAbsoluteUri\":\"file:///x\"}"}
+            """;
+        var ids = AntigravitySubagents.ChildConversationIdsFromLine(line);
+        await Assert.That(ids).IsEquivalentTo(new List<string> { "6111e615-3caa-4fe8-9d55-b85c43f2cf1f" });
+    }
+
+    [Test]
+    public async Task ChildConversationIds_ignores_conversationId_outside_an_invoke_step() {
+        // A conversationId quoted in a non-INVOKE line (e.g. error text) must NOT match — proves
+        // structural, content-scoped parsing rather than a whole-line regex.
+        const string line = """
+            {"type":"PLANNER_RESPONSE","content":"note conversationId 6111e615-3caa-4fe8-9d55-b85c43f2cf1f in passing"}
+            """;
+        await Assert.That(AntigravitySubagents.ChildConversationIdsFromLine(line)).IsEmpty();
+    }
+
+    [Test]
+    public async Task ChildConversationIds_drops_non_guid_and_dedupes() {
+        const string line = """
+            {"type":"INVOKE_SUBAGENT","content":"{\"conversationId\":\"not-a-guid\"}\n{\"conversationId\":\"6111e615-3caa-4fe8-9d55-b85c43f2cf1f\"}\n{\"conversationId\":\"6111e615-3caa-4fe8-9d55-b85c43f2cf1f\"}"}
+            """;
+        var ids = AntigravitySubagents.ChildConversationIdsFromLine(line);
+        await Assert.That(ids).IsEquivalentTo(new List<string> { "6111e615-3caa-4fe8-9d55-b85c43f2cf1f" });
+    }
+
+    [Test]
+    public async Task ChildConversationIds_blank_partial_or_malformed_line_is_empty() {
+        await Assert.That(AntigravitySubagents.ChildConversationIdsFromLine("")).IsEmpty();
+        await Assert.That(AntigravitySubagents.ChildConversationIdsFromLine("{\"type\":\"INVOKE_SUBAGENT\",\"content\":\"trunca")).IsEmpty();
+        await Assert.That(AntigravitySubagents.ChildConversationIdsFromLine("not json")).IsEmpty();
+    }
+
+    [Test]
+    public async Task IsInvokeSubagentLine_true_only_for_invoke_steps() {
+        await Assert.That(AntigravitySubagents.IsInvokeSubagentLine("""{"type":"INVOKE_SUBAGENT","content":"x"}""")).IsTrue();
+        await Assert.That(AntigravitySubagents.IsInvokeSubagentLine("""{"type":"PLANNER_RESPONSE"}""")).IsFalse();
+        await Assert.That(AntigravitySubagents.IsInvokeSubagentLine("nonsense")).IsFalse();
+    }
 }
