@@ -12,10 +12,11 @@ using Capacitor.Cli.Core.Auth;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// AI-1139: reviewer-side MCP server injected into hosted review-flow launches. Exposes a
-/// single submit_review_result tool that POSTs to /api/flows/reviewer/result. Deliberately
-/// a SEPARATE command from `kcap mcp flows` — a hard security boundary so no flag regression
-/// can ever expose start_review_flow to an unattended reviewer.
+/// AI-1139: reviewer/participant-side MCP server injected into hosted review-flow launches.
+/// Exposes submit_review_result (POSTs to /api/flows/reviewer/result) and, as of AI-1127 E-c,
+/// send_flow_message (POSTs to /api/flows/participant/message) — the only two tools a hosted
+/// participant needs. Deliberately a SEPARATE command from `kcap mcp flows` — a hard security
+/// boundary so no flag regression can ever expose start_review_flow to an unattended reviewer.
 /// </summary>
 static class McpFlowResultServer {
     internal const string AgentIdEnvVar = "KCAP_FLOW_AGENT_ID";
@@ -84,18 +85,15 @@ static class McpFlowResultServer {
                 if (toolName is null)
                     return BuildErrorResponse(callId, -32602, "Missing params.name");
 
-                if (toolName != "submit_review_result")
+                if (toolName is not ("submit_review_result" or "send_flow_message"))
                     return BuildToolResult(callId, $"Error: Unknown tool: {toolName}", isError: true);
 
                 client ??= await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
 
-                var (text, isError) = await SubmitCoreAsync(
-                    client,
-                    apiRoot,
-                    agentId,
-                    arguments,
-                    delay: Task.Delay
-                );
+                var (text, isError) = toolName switch {
+                    "submit_review_result" => await SubmitCoreAsync(client, apiRoot, agentId, arguments, delay: Task.Delay),
+                    _                       => await SendMessageCoreAsync(client, apiRoot, agentId, arguments, delay: Task.Delay)
+                };
 
                 return BuildToolResult(callId, text, isError);
             } catch (Exception ex) {
@@ -223,6 +221,70 @@ static class McpFlowResultServer {
         }
     }
 
+    /// <summary>AI-1127 E-c: validation + POST + retry policy for the participant's out-of-band
+    /// note to the driver. Mirrors SubmitCoreAsync's structure. <paramref name="messageId"/> is
+    /// generated ONCE per tool call (by the caller's default) and reused across every retry
+    /// attempt below, so the server can dedupe a redelivered POST instead of recording the same
+    /// note twice. Injectable so tests can pin a stable id. Never throws for expected failures.
+    /// </summary>
+    internal static async Task<(string Text, bool IsError)> SendMessageCoreAsync(
+            HttpClient           client,
+            string               apiRoot,
+            string               agentId,
+            JsonObject?          arguments,
+            Func<TimeSpan, Task> delay,
+            string?              messageId = null
+        ) {
+        var text = arguments?["text"]?.GetValue<string>();
+
+        if (string.IsNullOrWhiteSpace(text))
+            return ("Error: text is required.", true);
+
+        var body = new SendFlowMessageDto(agentId, messageId ?? Guid.NewGuid().ToString("N"), text);
+        var url  = $"{apiRoot.TrimEnd('/')}/api/flows/participant/message";
+
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++) {
+            using var response = await SendWithRefreshRetryAsync(
+                client,
+                c => c.PostAsync(url, JsonContent.Create(body, McpJsonContext.Default.SendFlowMessageDto))
+            );
+
+            if (response.IsSuccessStatusCode)
+                return ("Message sent to the flow driver. It will be delivered with the driver's next flow call — you may continue.", false);
+
+            if (response.StatusCode == HttpStatusCode.Unauthorized)
+                return ("Not logged in. Run 'kcap login' on the host shell.", true);
+
+            var responseBody = await response.Content.ReadAsStringAsync();
+            var errorNode    = TryParse(responseBody);
+            var code         = errorNode?["error"]?.GetValue<string>();
+            var message      = errorNode?["message"]?.GetValue<string>() ?? responseBody;
+
+            if (code is "no_active_flow" or "concurrent_update") {
+                // Launch race or a concurrent writer on the same flow's fold — retry with the
+                // SAME message_id so a redelivered POST dedupes instead of double-recording.
+                if (attempt < MaxAttempts) {
+                    await delay(RetryDelay);
+                    continue;
+                }
+                return ($"Error: {message}", true);
+            }
+
+            if (code == "run_closed")
+                // Terminal: the flow is already closed, so there is no driver left to deliver
+                // this message to. No retry — unlike no_active_flow, more attempts can't help.
+                return ($"Error: {message}", true);
+
+            return ($"Error: HTTP {(int)response.StatusCode} — {message}", true);
+        }
+
+        return ("Error: unreachable", true); // loop always returns
+
+        static JsonObject? TryParse(string s) {
+            try { return JsonNode.Parse(s)?.AsObject(); } catch { return null; }
+        }
+    }
+
     /// <summary>
     /// Sends an HTTP request with one-shot retry on 401. See McpFlowsServer's copy of this
     /// helper for the full rationale: a cached token that was valid at startup may have
@@ -289,6 +351,17 @@ static class McpFlowResultServer {
                 },
                 Required: ["round_token", "kind"]
             )
+        ),
+        new(
+            Name: "send_flow_message",
+            Description: "Send a short out-of-band note to the flow DRIVER between rounds — e.g. a notable observation, a blocking question, or a heads-up about something outside the current round's scope. NOT for round results: deliver those with submit_review_result. The driver sees pending messages on its next flow call; delivery is not immediate.",
+            InputSchema: new McpInputSchema(
+                Type: "object",
+                Properties: new Dictionary<string, McpSchemaProperty> {
+                    ["text"] = new("string", "The message text for the driver.")
+                },
+                Required: ["text"]
+            )
         )
     ];
 }
@@ -299,4 +372,11 @@ record SubmitReviewerResultDto(
     [property: JsonPropertyName("round_token")] string  RoundToken,
     [property: JsonPropertyName("kind")]        string  Kind,
     [property: JsonPropertyName("text")]        string? Text
+);
+
+/// <summary>CLI-side DTO for POST /api/flows/participant/message — mirrors the server's request shape (AI-1127 E-c).</summary>
+record SendFlowMessageDto(
+    [property: JsonPropertyName("agent_id")]   string AgentId,
+    [property: JsonPropertyName("message_id")] string MessageId,
+    [property: JsonPropertyName("text")]       string Text
 );

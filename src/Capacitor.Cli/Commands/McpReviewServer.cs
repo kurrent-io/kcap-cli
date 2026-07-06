@@ -409,4 +409,5 @@ record SessionSearchQuery(string Query, int? Limit = null);
 [JsonSerializable(typeof(SubmitReviewRoundDto))]
 [JsonSerializable(typeof(SubmitReviewerResultDto))]
 [JsonSerializable(typeof(AckFlowMessagesDto))]
+[JsonSerializable(typeof(SendFlowMessageDto))]
 partial class McpJsonContext : JsonSerializerContext;
