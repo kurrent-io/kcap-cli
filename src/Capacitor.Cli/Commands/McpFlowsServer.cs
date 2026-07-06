@@ -771,7 +771,7 @@ static class McpFlowsServer {
             "Only call this when the user explicitly asked for a review *flow* / to submit for review; for an ordinary 'review my PR' or 'code review' request, review directly and do NOT call this tool. " +
             "Returns findings (same UX); the server runs the reviewer asynchronously and the CLI polls internally. " +
             "Returns a flow_run_id that identifies this review session — save it to call submit_review_round or get_review_flow_status later. " +
-            "Responses may carry pending_messages — out-of-band notes from participants, delivered exactly once: react to them now; they will not be shown again.",
+            "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
@@ -789,7 +789,7 @@ static class McpFlowsServer {
         new(
             "submit_review_round",
             "Submit a follow-up round to an existing review flow. Returns findings (same UX); the server runs the reviewer asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback. " +
-            "Responses may carry pending_messages — out-of-band notes from participants, delivered exactly once: react to them now; they will not be shown again.",
+            "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
@@ -803,7 +803,7 @@ static class McpFlowsServer {
         new(
             "get_review_flow_status",
             "Get the current status of a review flow: running, waiting, completed, or failed. Also surfaces the last result kind and result text. " +
-            "Responses may carry pending_messages — out-of-band notes from participants, delivered exactly once: react to them now; they will not be shown again.",
+            "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
@@ -830,7 +830,7 @@ static class McpFlowsServer {
             "Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. " +
             "Returns a flow_run_id that identifies this flow run — save it to call send_to_participant or get_flow_status later. " +
             "Multi-participant definitions start round-less — the response carries no round; address each role with send_to_participant (roles launch lazily on first message). " +
-            "Responses may carry pending_messages — out-of-band notes from participants, delivered exactly once: react to them now; they will not be shown again.",
+            "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
@@ -848,7 +848,7 @@ static class McpFlowsServer {
         new(
             "send_to_participant",
             "Send a follow-up message to a participant in an existing flow. Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. Use this to ask for clarifications, provide additional context, or request a re-review after addressing feedback. " +
-            "Responses may carry pending_messages — out-of-band notes from participants, delivered exactly once: react to them now; they will not be shown again.",
+            "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
@@ -864,7 +864,7 @@ static class McpFlowsServer {
         new(
             "get_flow_status",
             "Get the current status of a flow run: running, waiting, completed, or failed. Also surfaces the last result kind and result text. " +
-            "Responses may carry pending_messages — out-of-band notes from participants, delivered exactly once: react to them now; they will not be shown again.",
+            "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {

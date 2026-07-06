@@ -325,7 +325,7 @@ It provides four generic tools:
 - **`get_flow_status`** — get the current status (running, waiting, completed, failed) and last result of a flow run.
 - **`close_flow`** — mark a completed flow run as closed.
 
-Responses from these tools may carry **`pending_messages`** — out-of-band notes participants push to the driver via `send_flow_message` (see the flow-result server below). They are delivered exactly once: the CLI acknowledges them to the server after rendering the response, so react to them when seen — they will not be shown again.
+Responses from these tools may carry **`pending_messages`** — out-of-band notes participants push to the driver via `send_flow_message` (see the flow-result server below). The CLI acknowledges them to the server after rendering the response, so a message is normally shown once — but a failed acknowledgment redelivers it on a later call (at-least-once), so consumers should treat the `message_id` as the dedup key and react to each id only once.
 
 The four review tools — **`start_review_flow`**, **`submit_review_round`**, **`get_review_flow_status`**, **`close_review_flow`** — are aliases of the generic tools above, kept byte-compatible for existing callers: `start_review_flow`'s `kind` maps to `start_flow`'s `definition_id`, and `submit_review_round`'s `context` maps to `send_to_participant`'s `message` with no `participant` argument (the `reviewer` role is targeted implicitly). New integrations should prefer the generic tools; the review tools stay best for a plain "review my PR" / "start a review flow" ask.
 
