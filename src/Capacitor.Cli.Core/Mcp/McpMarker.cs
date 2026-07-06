@@ -26,18 +26,19 @@ public sealed class McpMarker(string harness, Func<string, string>? markerPathFo
 
     public bool Owns(string configPath, string name, JsonNode entry) {
         if (!Owned(configPath).Contains(name)) return false;
-        // Command is "kcap" (string) or ["kcap", ...] (OpenCode array).
-        var cmd = entry["command"];
+        if (entry is not JsonObject obj) return false; // malformed/non-object entry → not ours; never throw
+        var cmd = obj["command"];
         return cmd is JsonValue v && v.TryGetValue(out string? s) && s == KcapMcpServers.Command
             || cmd is JsonArray a && a.Count > 0 && a[0] is JsonValue fv && fv.TryGetValue(out string? fs) && fs == KcapMcpServers.Command;
     }
 
     public void Record(string configPath, IReadOnlyList<string> names) {
         var path = MarkerPath(configPath);
-        var existing = ReadNames(path);
+        var existing = ReadNames(path, configPath);
         foreach (var n in names) existing.Add(n);
         var doc = new JsonObject {
             ["version"] = Version,
+            ["harness"] = harness,
             ["config"]  = configPath,
             ["servers"] = new JsonArray(existing.Select(n => (JsonNode)n!).ToArray())
         };
@@ -46,19 +47,22 @@ public sealed class McpMarker(string harness, Func<string, string>? markerPathFo
         File.WriteAllText(path, doc.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     }
 
-    public IEnumerable<string> Owned(string configPath) => ReadNames(MarkerPath(configPath));
+    public IEnumerable<string> Owned(string configPath) => ReadNames(MarkerPath(configPath), configPath);
 
     public void Clear(string configPath) {
         var p = MarkerPath(configPath);
         try { if (File.Exists(p)) File.Delete(p); } catch { /* best-effort */ }
     }
 
-    static HashSet<string> ReadNames(string markerPath) {
+    HashSet<string> ReadNames(string markerPath, string configPath) {
         try {
             if (!File.Exists(markerPath)) return [];
-            var root = JsonNode.Parse(File.ReadAllText(markerPath)) as JsonObject;
-            var arr  = root?["servers"] as JsonArray;
-            return arr is null ? [] : [.. arr.Select(n => (string)n!)];
+            if (JsonNode.Parse(File.ReadAllText(markerPath)) is not JsonObject root) return [];
+            // A user-scope sidecar is per-directory and could be shared; only trust a marker
+            // that pertains to THIS harness + config path (else treat as not-ours → preserve).
+            if ((string?)root["harness"] != harness) return [];
+            if ((string?)root["config"] != configPath) return [];
+            return root["servers"] is JsonArray arr ? [.. arr.Select(n => (string)n!)] : [];
         } catch { return []; }
     }
 
@@ -76,9 +80,10 @@ public sealed class McpMarker(string harness, Func<string, string>? markerPathFo
     }
 
     static bool IsInsideRepo(string dir) {
-        var d = new DirectoryInfo(dir);
-        for (var cur = d; cur is not null; cur = cur.Parent)
-            if (Directory.Exists(Path.Combine(cur.FullName, ".git"))) return true;
+        for (var cur = new DirectoryInfo(dir); cur is not null; cur = cur.Parent) {
+            var git = Path.Combine(cur.FullName, ".git");
+            if (Directory.Exists(git) || File.Exists(git)) return true; // .git is a file in worktrees/submodules
+        }
         return false;
     }
 }

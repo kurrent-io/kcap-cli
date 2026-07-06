@@ -59,4 +59,27 @@ public class McpMarkerTests {
         await Assert.That(File.Exists(markerFile)).IsFalse();
         await Assert.That(marker.Owned(cfg)).IsEmpty();
     }
+
+    [Test]
+    public async Task Owns_false_and_no_throw_for_nonobject_entry() {
+        var (marker, cfg, _) = NewMarker();
+        marker.Record(cfg, ["kcap-review"]);
+        JsonNode arrEntry = new JsonArray { "x" };
+        await Assert.That(marker.Owns(cfg, "kcap-review", arrEntry)).IsFalse();            // must not throw
+        JsonNode valEntry = JsonValue.Create("disabled")!;
+        await Assert.That(marker.Owns(cfg, "kcap-review", valEntry)).IsFalse();
+    }
+
+    [Test]
+    public async Task Owned_ignores_marker_recorded_for_a_different_config() {
+        var dir = Directory.CreateTempSubdirectory("kcap-marker-x-").FullName;
+        var shared = Path.Combine(dir, ".kcap-mcp-version");
+        var m = new McpMarker("test", _ => shared); // both configs resolve to the SAME sidecar (simulates per-dir collision)
+        var cfgA = Path.Combine(dir, "a.json");
+        var cfgB = Path.Combine(dir, "b.json");
+        m.Record(cfgA, ["kcap-review"]);
+        await Assert.That(m.Owned(cfgA)).Contains("kcap-review");   // A owns it
+        await Assert.That(m.Owned(cfgB)).IsEmpty();                 // B must NOT inherit A's marker
+        await Assert.That(m.Owns(cfgB, "kcap-review", new JsonObject { ["command"] = "kcap" })).IsFalse(); // → preserved
+    }
 }
