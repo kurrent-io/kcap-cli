@@ -282,6 +282,17 @@ switch (command) {
         return await RemapCommand.HandleAsync(args);
     case "repos":
         return await ReposCommand.HandleAsync(args);
+    case "projects":
+        return await ProjectsCommand.HandleList(baseUrl!);
+    case "project": {
+        if (args.Length < 2) {
+            Console.Error.WriteLine("Usage: kcap project <slug>");
+
+            return 1;
+        }
+
+        return await ProjectsCommand.HandleDetail(baseUrl!, args[1]);
+    }
     case "update":
         return await UpdateCommand.HandleAsync(args);
     case "review": {

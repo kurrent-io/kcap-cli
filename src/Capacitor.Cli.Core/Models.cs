@@ -668,6 +668,123 @@ public record RepoEntry {
     public required DateTimeOffset LastUsed { get; init; }
 }
 
+// ── Projects (`kcap projects` / `kcap project <slug>`) — mirrors the server's
+// ProjectSummaryDto / ProjectDetailDto (src/Capacitor.Server.Core/Projects/ProjectContracts.cs) ──
+
+/// <summary>A single row from <c>GET /api/projects</c>.</summary>
+public sealed record CliProjectSummary {
+    [JsonPropertyName("project_id")]
+    public required string ProjectId { get; init; }
+
+    [JsonPropertyName("slug")]
+    public required string Slug { get; init; }
+
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    [JsonPropertyName("description")]
+    public string? Description { get; init; }
+
+    [JsonPropertyName("owner_user_id")]
+    public required string OwnerUserId { get; init; }
+
+    [JsonPropertyName("repo_count")]
+    public int RepoCount { get; init; }
+
+    [JsonPropertyName("member_count")]
+    public int MemberCount { get; init; }
+
+    /// <summary>"owner" | "member" | "none".</summary>
+    [JsonPropertyName("viewer_membership")]
+    public required string ViewerMembership { get; init; }
+
+    /// <summary>"request" | "invite" | null.</summary>
+    [JsonPropertyName("viewer_pending")]
+    public string? ViewerPending { get; init; }
+
+    [JsonPropertyName("pending_request_count")]
+    public int PendingRequestCount { get; init; }
+
+    [JsonPropertyName("repo_hashes")]
+    public List<string> RepoHashes { get; init; } = [];
+}
+
+/// <summary>A repo entry inside <see cref="CliProjectDetail"/>.</summary>
+public sealed record CliProjectRepo {
+    [JsonPropertyName("repo_hash")]
+    public required string RepoHash { get; init; }
+
+    [JsonPropertyName("repo_slug")]
+    public required string RepoSlug { get; init; }
+}
+
+/// <summary>A member entry inside <see cref="CliProjectDetail"/>.</summary>
+public sealed record CliProjectMember {
+    [JsonPropertyName("member_kind")]
+    public required string MemberKind { get; init; }
+
+    [JsonPropertyName("member_id")]
+    public required string MemberId { get; init; }
+
+    [JsonPropertyName("display_name")]
+    public required string DisplayName { get; init; }
+}
+
+/// <summary>A pending join request/invite inside <see cref="CliProjectDetail"/>. Empty unless the viewer is owner/admin.</summary>
+public sealed record CliProjectJoinRequest {
+    [JsonPropertyName("user_id")]
+    public required string UserId { get; init; }
+
+    /// <summary>"request" | "invite".</summary>
+    [JsonPropertyName("direction")]
+    public required string Direction { get; init; }
+
+    [JsonPropertyName("requested_at")]
+    public DateTimeOffset RequestedAt { get; init; }
+}
+
+/// <summary>The body of <c>GET /api/projects/{slug}</c>.</summary>
+public sealed record CliProjectDetail {
+    [JsonPropertyName("project_id")]
+    public required string ProjectId { get; init; }
+
+    [JsonPropertyName("slug")]
+    public required string Slug { get; init; }
+
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    [JsonPropertyName("description")]
+    public string? Description { get; init; }
+
+    [JsonPropertyName("owner_user_id")]
+    public required string OwnerUserId { get; init; }
+
+    [JsonPropertyName("viewer_membership")]
+    public required string ViewerMembership { get; init; }
+
+    [JsonPropertyName("viewer_pending")]
+    public string? ViewerPending { get; init; }
+
+    [JsonPropertyName("repos")]
+    public List<CliProjectRepo> Repos { get; init; } = [];
+
+    [JsonPropertyName("members")]
+    public List<CliProjectMember> Members { get; init; } = [];
+
+    [JsonPropertyName("join_requests")]
+    public List<CliProjectJoinRequest> JoinRequests { get; init; } = [];
+}
+
+/// <summary>Error body shared by every <c>/api/projects*</c> route on failure (e.g. <c>projects_not_in_plan</c>).</summary>
+public sealed record CliProjectError {
+    [JsonPropertyName("error")]
+    public required string Error { get; init; }
+
+    [JsonPropertyName("message")]
+    public required string Message { get; init; }
+}
+
 public sealed record CurationApplyItem {
     [JsonPropertyName("category")]      public string?               Category     { get; init; }
     [JsonPropertyName("cluster_id")]    public string?               ClusterId    { get; init; }
@@ -701,6 +818,9 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalCatalogQuestionDto))]
 [JsonSerializable(typeof(SessionEvalCompletedPayloadV3))]
 [JsonSerializable(typeof(List<ErrorEntry>))]
+[JsonSerializable(typeof(List<CliProjectSummary>))]
+[JsonSerializable(typeof(CliProjectDetail))]
+[JsonSerializable(typeof(CliProjectError))]
 [JsonSerializable(typeof(RepositoryPayload))]
 [JsonSerializable(typeof(GitCacheEntry))]
 [JsonSerializable(typeof(TranscriptBatch))]

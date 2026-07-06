@@ -684,6 +684,17 @@ kcap repos remove ~/dev/old   # remove a path
 
 Known repos are persisted to `~/.config/kcap/repos.json` and reported to the server when the daemon connects, so the launch dialog always shows previously-used repos even after restarts.
 
+### Projects
+
+List and inspect projects — a Team/Enterprise-plan grouping of repos and members that sessions can be scoped to (see `default_visibility project` below).
+
+```bash
+kcap projects            # table: slug, name, repos, members, your role
+kcap project <slug>      # metadata, repo list, member list, and (owner/admin) pending join requests
+```
+
+Requires the Team or Enterprise plan — the server 403s on Free with a message telling you so.
+
 ### Profiles
 
 Profiles let you work with multiple Capacitor servers — for example, a company server for work repos and a separate one for open-source projects. Each profile stores its own server URL, visibility settings, and daemon configuration.
@@ -731,6 +742,7 @@ kcap config set <key> <value>
 
 ```bash
 kcap config set default_visibility private      # only you can see your sessions
+kcap config set default_visibility project      # visible to the repo's project members (see `kcap projects`)
 kcap config set default_visibility org_public   # org repos visible, others private (default)
 kcap config set default_visibility public       # all sessions visible to others in your account
 ```

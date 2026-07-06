@@ -224,7 +224,7 @@ public static class AppConfig {
     /// </summary>
     public static string NormalizeUrl(string url) => url.TrimEnd('/');
 
-    static readonly string[] ValidVisibilities = ["private", "org_public", "public"];
+    static readonly string[] ValidVisibilities = ["private", "project", "org_public", "public"];
 
     public static async Task<ProfileConfig> LoadProfileConfig() {
         if (!File.Exists(ConfigPath))
