@@ -24,6 +24,17 @@ public class McpProtocolTests {
     }
 
     [Test]
+    public async Task NegotiateVersion_falls_back_when_params_is_not_an_object() {
+        await Assert.That(McpProtocol.NegotiateVersion(new JsonObject { ["params"] = "oops" })).IsEqualTo("2024-11-05");
+    }
+
+    [Test]
+    public async Task NegotiateVersion_falls_back_when_version_is_not_a_string() {
+        var req = new JsonObject { ["params"] = new JsonObject { ["protocolVersion"] = 2025 } };
+        await Assert.That(McpProtocol.NegotiateVersion(req)).IsEqualTo("2024-11-05");
+    }
+
+    [Test]
     public async Task ResourcesList_returns_empty_array_result() {
         var r = Parse(McpProtocol.TryHandleStandardMethod("resources/list", 7)!);
         await Assert.That((string)r["jsonrpc"]!).IsEqualTo("2.0");

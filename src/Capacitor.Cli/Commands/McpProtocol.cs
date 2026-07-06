@@ -21,7 +21,11 @@ static class McpProtocol {
     /// support it, else our baseline. <paramref name="initializeRequest"/> is the full
     /// JSON-RPC initialize request object.</summary>
     public static string NegotiateVersion(JsonObject initializeRequest) {
-        var requested = initializeRequest["params"]?["protocolVersion"]?.GetValue<string>();
+        // Read params.protocolVersion DEFENSIVELY — a malformed initialize (non-object params, or a
+        // non-string protocolVersion) must fall back to baseline, never throw. The initialize dispatch
+        // arm has no try/catch, so a throw here would kill the stdio server.
+        var requested = (initializeRequest["params"] as JsonObject)?["protocolVersion"] is JsonValue v
+                        && v.TryGetValue(out string? s) ? s : null;
         return requested is not null && Supported.Contains(requested) ? requested : BaselineVersion;
     }
 
