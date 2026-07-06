@@ -28,7 +28,7 @@ static class McpProtocol {
     /// <summary>Answers the standard capability-probe methods a client may send regardless of
     /// advertised capabilities. Returns a full JSON-RPC response string, or null if
     /// <paramref name="method"/> isn't one of them (caller falls back to -32601).</summary>
-    public static string? TryHandleStandardMethod(string method, JsonNode id) => method switch {
+    public static string? TryHandleStandardMethod(string? method, JsonNode id) => method switch {
         "resources/list" => Result(id, new JsonObject { ["resources"] = new JsonArray() }),
         "prompts/list"   => Result(id, new JsonObject { ["prompts"]   = new JsonArray() }),
         "ping"           => Result(id, new JsonObject()),
