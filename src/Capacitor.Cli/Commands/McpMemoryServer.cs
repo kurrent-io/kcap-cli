@@ -41,11 +41,13 @@ static class McpMemoryServer {
 
             try {
                 client ??= await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
+
                 return await HandleToolCallAsync(callId, callRequest, client, baseUrl, cwdRepoHash, machineId);
             } catch (Exception ex) {
                 // Unexpected: log the detail to stderr (not to the client, which could leak local
                 // paths from IO errors) and return a generic tool error, keeping the loop alive.
                 await Console.Error.WriteLineAsync($"kcap mcp memory: unexpected error handling tools/call: {ex}");
+
                 return BuildToolResult(callId, "Error: internal error handling the request.", isError: true);
             }
         }
@@ -142,12 +144,15 @@ static class McpMemoryServer {
         try {
             using var httpResponse = toolName switch {
                 "search_memories" => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildSearchUrl(baseUrl, arguments, cwdRepoHash, machineId))),
-                "get_memory"      => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildGetUrl(baseUrl, arguments, cwdRepoHash, machineId))),
-                "save_memory"     => await SendWithRefreshRetryAsync(client, c => c.PostAsync($"{baseUrl}/api/memories", ToJsonContent(BuildSaveBody(arguments, cwdRepoHash, machineId)))),
-                "update_memory"   => await SendWithRefreshRetryAsync(client, c => c.PutAsync($"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(arguments))}", ToJsonContent(BuildUpdateBody(arguments)))),
-                "rescope_memory"  => await SendWithRefreshRetryAsync(client, c => c.PostAsync($"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(arguments))}/rescope", ToJsonContent(BuildRescopeBody(arguments)))),
-                "archive_memory"  => await SendWithRefreshRetryAsync(client, c => c.DeleteAsync($"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(arguments))}")),
-                _                 => throw new ArgumentException($"Unknown tool: {toolName}")
+                "get_memory" => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildGetUrl(baseUrl, arguments, cwdRepoHash, machineId))),
+                "save_memory" => await SendWithRefreshRetryAsync(client, c => c.PostAsync($"{baseUrl}/api/memories", ToJsonContent(BuildSaveBody(arguments, cwdRepoHash, machineId)))),
+                "update_memory" => await SendWithRefreshRetryAsync(client, c => c.PutAsync($"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(arguments))}", ToJsonContent(BuildUpdateBody(arguments)))),
+                "rescope_memory" => await SendWithRefreshRetryAsync(
+                    client,
+                    c => c.PostAsync($"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(arguments))}/rescope", ToJsonContent(BuildRescopeBody(arguments)))
+                ),
+                "archive_memory" => await SendWithRefreshRetryAsync(client, c => c.DeleteAsync($"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(arguments))}")),
+                _                => throw new ArgumentException($"Unknown tool: {toolName}")
             };
 
             var body = await httpResponse.Content.ReadAsStringAsync();
@@ -156,11 +161,7 @@ static class McpMemoryServer {
                 return BuildToolResult(id, NotLoggedInMessage, isError: true);
             }
 
-            if (!httpResponse.IsSuccessStatusCode) {
-                return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
-            }
-
-            return BuildToolResult(id, body);
+            return !httpResponse.IsSuccessStatusCode ? BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true) : BuildToolResult(id, body);
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
@@ -200,6 +201,7 @@ static class McpMemoryServer {
 
     internal static string BuildSearchUrl(string baseUrl, JsonObject? args, string? cwdRepoHash, string? machineId) {
         var q = args?["query"]?.GetValue<string>();
+
         if (string.IsNullOrWhiteSpace(q)) throw new ArgumentException("query is required");
 
         var qs = new List<string> { $"q={Uri.EscapeDataString(q)}" };
@@ -212,6 +214,7 @@ static class McpMemoryServer {
 
     internal static string BuildGetUrl(string baseUrl, JsonObject? args, string? cwdRepoHash, string? machineId) {
         var idOrSlug = args?["id_or_slug"]?.GetValue<string>();
+
         if (string.IsNullOrWhiteSpace(idOrSlug)) throw new ArgumentException("id_or_slug is required");
 
         var qs = new List<string>();
@@ -219,6 +222,7 @@ static class McpMemoryServer {
         if (machineId is not null) qs.Add($"machine={Uri.EscapeDataString(machineId)}");
 
         var url = $"{baseUrl}/api/memories/{Uri.EscapeDataString(idOrSlug)}";
+
         return qs.Count == 0 ? url : $"{url}?{string.Join("&", qs)}";
     }
 
@@ -229,7 +233,7 @@ static class McpMemoryServer {
         string Req(string name) =>
             args?[name]?.GetValue<string>() is { Length: > 0 } v ? v : throw new ArgumentException($"{name} is required");
 
-        var global          = args?["global"]?.GetValue<bool>() == true;
+        var global          = args?["global"]?.GetValue<bool>()           == true;
         var machineSpecific = args?["machine_specific"]?.GetValue<bool>() == true;
 
         // Fail closed rather than silently broadening scope: a null cwdRepoHash with global not
@@ -339,46 +343,78 @@ static class McpMemoryServer {
     }
 
     internal static McpTool[] BuildToolsList() => [
-        new("search_memories",
+        new(
+            "search_memories",
             "Search the team's shared memories (hybrid semantic + keyword). Call this BEFORE saving a new memory and when starting work that might have prior learnings.",
-            new("object", new() {
-                ["query"] = new("string", "What to search for."),
-                ["limit"] = new("number", "Max results (default 10, max 50).")
-            }, ["query"])),
-        new("get_memory",
+            new(
+                "object",
+                new() {
+                    ["query"] = new("string", "What to search for."),
+                    ["limit"] = new("number", "Max results (default 10, max 50).")
+                },
+                ["query"]
+            )
+        ),
+        new(
+            "get_memory",
             "Fetch a memory's full content by id or slug. Slug resolution precedence: your memories, then your teams', then org-wide; repo-scoped before global.",
-            new("object", new() {
-                ["id_or_slug"] = new("string", "Memory id (32 hex) or slug.")
-            }, ["id_or_slug"])),
-        new("save_memory",
+            new(
+                "object",
+                new() {
+                    ["id_or_slug"] = new("string", "Memory id (32 hex) or slug.")
+                },
+                ["id_or_slug"]
+            )
+        ),
+        new(
+            "save_memory",
             "Save a durable learning to the server. audience: 'user' (private), 'team', or 'org' (everyone). Saves are repo-scoped by default (to the cwd's git checkout); if the current repo can't be resolved, pass global: true for a repo-independent memory, or the save fails. Prefer update_memory when the result reports a nearDuplicate.",
-            new("object", new() {
-                ["audience"]         = new("string", "user | team | org"),
-                ["slug"]             = new("string", "kebab-case identifier, unique within the audience+repo pool"),
-                ["description"]      = new("string", "One-line summary (max 300 chars)"),
-                ["content"]          = new("string", "Full memory body (max 64 KiB)"),
-                ["kind"]             = new("string", "preference | feedback | project | reference"),
-                ["team"]             = new("string", "Team name or id — required for audience 'team' if you are in several teams"),
-                ["global"]           = new("boolean", "true = not tied to the current repo (required if not run from a git checkout; default: scoped to cwd repo)"),
-                ["machine_specific"] = new("boolean", "true = only relevant on this machine (user audience only)")
-            }, ["audience", "slug", "description", "content", "kind"])),
-        new("update_memory",
+            new(
+                "object",
+                new() {
+                    ["audience"]         = new("string", "user | team | org"),
+                    ["slug"]             = new("string", "kebab-case identifier, unique within the audience+repo pool"),
+                    ["description"]      = new("string", "One-line summary (max 300 chars)"),
+                    ["content"]          = new("string", "Full memory body (max 64 KiB)"),
+                    ["kind"]             = new("string", "preference | feedback | project | reference"),
+                    ["team"]             = new("string", "Team name or id — required for audience 'team' if you are in several teams"),
+                    ["global"]           = new("boolean", "true = not tied to the current repo (required if not run from a git checkout; default: scoped to cwd repo)"),
+                    ["machine_specific"] = new("boolean", "true = only relevant on this machine (user audience only)")
+                },
+                ["audience", "slug", "description", "content", "kind"]
+            )
+        ),
+        new(
+            "update_memory",
             "Update an existing memory's description/content/kind (any subset).",
-            new("object", new() {
-                ["id"]          = new("string", "Memory id"),
-                ["description"] = new("string", "New one-line summary"),
-                ["content"]     = new("string", "New body"),
-                ["kind"]        = new("string", "preference | feedback | project | reference")
-            }, ["id"])),
-        new("rescope_memory",
+            new(
+                "object",
+                new() {
+                    ["id"]          = new("string", "Memory id"),
+                    ["description"] = new("string", "New one-line summary"),
+                    ["content"]     = new("string", "New body"),
+                    ["kind"]        = new("string", "preference | feedback | project | reference")
+                },
+                ["id"]
+            )
+        ),
+        new(
+            "rescope_memory",
             "Change a memory's audience (e.g. promote your user memory to team or org).",
-            new("object", new() {
-                ["id"]       = new("string", "Memory id"),
-                ["audience"] = new("string", "user | team | org"),
-                ["team"]     = new("string", "Target team when audience is 'team'")
-            }, ["id", "audience"])),
-        new("archive_memory",
+            new(
+                "object",
+                new() {
+                    ["id"]       = new("string", "Memory id"),
+                    ["audience"] = new("string", "user | team | org"),
+                    ["team"]     = new("string", "Target team when audience is 'team'")
+                },
+                ["id", "audience"]
+            )
+        ),
+        new(
+            "archive_memory",
             "Archive (soft-delete) a memory.",
-            new("object", new() { ["id"] = new("string", "Memory id") }, ["id"]))
+            new("object", new() { ["id"] = new("string", "Memory id") }, ["id"])
+        )
     ];
 }

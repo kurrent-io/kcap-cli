@@ -12,7 +12,7 @@ public class CuratedBlockTests {
         var block = CuratedBlock.Render([G("quality", "b"), G("quality", "a"), G("efficiency", "c")])!;
         // efficiency sorts before quality; within quality, "a" before "b"
         var bullets = block.Split('\n').Where(l => l.StartsWith("- ")).ToArray();
-        await Assert.That(bullets).IsEquivalentTo(new[] { "- c", "- a", "- b" });
+        await Assert.That(bullets).IsEquivalentTo(["- c", "- a", "- b"]);
         await Assert.That(block.StartsWith(CuratedBlock.StartMarker)).IsTrue();
         await Assert.That(block.TrimEnd().EndsWith(CuratedBlock.EndMarker)).IsTrue();
     }
@@ -118,7 +118,7 @@ public class CuratedBlockTests {
     [Test]
     public async Task ExtractBullets_returns_block_lines() {
         var block = CuratedBlock.Render([G("quality", "a"), G("quality", "b")])!;
-        var bullets = CuratedBlock.ExtractBullets("noise\n" + block + "\nmore noise\n");
-        await Assert.That(bullets).IsEquivalentTo(new[] { "a", "b" });
+        var bullets = CuratedBlock.ExtractBullets($"noise\n{block}\nmore noise\n");
+        await Assert.That(bullets).IsEquivalentTo(["a", "b"]);
     }
 }

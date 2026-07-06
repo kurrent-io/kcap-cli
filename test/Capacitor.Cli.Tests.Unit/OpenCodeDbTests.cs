@@ -71,7 +71,7 @@ public class OpenCodeDbTests {
         var roots = ocdb.QueryRoots();
 
         await Assert.That(roots.Select(r => r.Id).OrderBy(x => x))
-            .IsEquivalentTo(new[] { "ses_root1", "ses_root2" });
+            .IsEquivalentTo(["ses_root1", "ses_root2"]);
     }
 
     [Test]
@@ -94,7 +94,7 @@ public class OpenCodeDbTests {
         using var tmp = new TempDir();
         var db = BuildDb(tmp.Path);
 
-        using var writer = new SqliteConnection($"Data Source={db}");
+        await using var writer = new SqliteConnection($"Data Source={db}");
         writer.Open();
         Exec(writer, "PRAGMA journal_mode=WAL;");
         InsertSession(db, "ses_live", null, "/w", "Live", 100);

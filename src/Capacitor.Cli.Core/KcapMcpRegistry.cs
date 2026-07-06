@@ -9,10 +9,10 @@ public sealed record KcapMcpServerDescriptor(string Id, string[] Args, bool Star
 
 public static class KcapMcpRegistry {
     static readonly Dictionary<string, KcapMcpServerDescriptor> Entries = new(StringComparer.OrdinalIgnoreCase) {
-        ["kcap-review"]   = new("kcap-review",   ["mcp", "review"],   false),
+        ["kcap-review"]   = new("kcap-review", ["mcp", "review"], false),
         ["kcap-sessions"] = new("kcap-sessions", ["mcp", "sessions"], false),
-        ["kcap-memory"]   = new("kcap-memory",   ["mcp", "memory"],   false),
-        ["kcap-flows"]    = new("kcap-flows",    ["mcp", "flows"],    true),
+        ["kcap-memory"]   = new("kcap-memory", ["mcp", "memory"], false),
+        ["kcap-flows"]    = new("kcap-flows", ["mcp", "flows"], true),
     };
 
     /// <summary>Resolves an allowlist entry to its descriptor. Case-insensitive, trims
@@ -20,8 +20,6 @@ public static class KcapMcpRegistry {
     /// element — returns null rather than throwing, so callers can route it through the
     /// same unknown-name skip path as any other unresolvable name.</summary>
     public static KcapMcpServerDescriptor? Resolve(string? name) {
-        if (string.IsNullOrWhiteSpace(name)) return null;
-
-        return Entries.TryGetValue(name.Trim(), out var d) ? d : null;
+        return string.IsNullOrWhiteSpace(name) ? null : Entries.GetValueOrDefault(name.Trim());
     }
 }

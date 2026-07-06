@@ -136,8 +136,8 @@ public sealed class ConPtyProcess : IPtyProcess {
             cmdLine.Append(QuoteArg(arg));
         }
 
-        var pipeSa = new ConPtyInterop.SECURITY_ATTRIBUTES {
-            nLength        = Marshal.SizeOf<ConPtyInterop.SECURITY_ATTRIBUTES>(),
+        var pipeSa = new SECURITY_ATTRIBUTES {
+            nLength        = Marshal.SizeOf<SECURITY_ATTRIBUTES>(),
             bInheritHandle = true
         };
 
@@ -184,8 +184,8 @@ public sealed class ConPtyProcess : IPtyProcess {
             throw new InvalidOperationException($"UpdateProcThreadAttribute failed: {Marshal.GetLastWin32Error()}");
         }
 
-        var si = new ConPtyInterop.STARTUPINFOEXW();
-        si.StartupInfo.cb      = Marshal.SizeOf<ConPtyInterop.STARTUPINFOEXW>();
+        var si = new STARTUPINFOEXW();
+        si.StartupInfo.cb      = Marshal.SizeOf<STARTUPINFOEXW>();
         si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
         si.lpAttributeList     = attrList;
 
@@ -298,7 +298,7 @@ public sealed class ConPtyProcess : IPtyProcess {
     }
 
     public void Resize(ushort cols, ushort rows) {
-        var size = new ConPtyInterop.COORD { X = (short)cols, Y = (short)rows };
+        var size = new COORD { X = (short)cols, Y = (short)rows };
         ResizePseudoConsole(_hPC, size);
     }
 
@@ -324,6 +324,7 @@ public sealed class ConPtyProcess : IPtyProcess {
 
         while (!HasExited && DateTime.UtcNow < deadline) {
             CheckExited();
+
             if (!HasExited) {
                 await Task.Delay(100);
             }
@@ -340,7 +341,7 @@ public sealed class ConPtyProcess : IPtyProcess {
             return;
         }
 
-        var sw = Stopwatch.StartNew();
+        var sw    = Stopwatch.StartNew();
         var limit = timeout ?? TimeSpan.FromSeconds(5);
 
         while (!HasExited && sw.Elapsed < limit) {

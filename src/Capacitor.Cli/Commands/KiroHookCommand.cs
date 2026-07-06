@@ -36,6 +36,7 @@ static class KiroHookCommand {
         var body = await stdin.ReadToEndAsync();
 
         JsonNode? node;
+
         try {
             node = JsonNode.Parse(body);
         } catch {
@@ -58,9 +59,11 @@ static class KiroHookCommand {
         // conversation_id) and the dashless form for local keys (watcher pid file /
         // disable markers), mirroring every other vendor dispatcher.
         var dashedSessionId = Environment.GetEnvironmentVariable("KIRO_SESSION_ID");
+
         if (string.IsNullOrEmpty(dashedSessionId)) {
             dashedSessionId = TryGetString(node, "session_id");
         }
+
         if (string.IsNullOrEmpty(dashedSessionId)) return 0;
         if (!Guid.TryParse(dashedSessionId, out _)) return 0;
 
@@ -81,12 +84,11 @@ static class KiroHookCommand {
             return 0;
         }
 
-        return await HandleAgentSpawn(baseUrl, node, dashedSessionId, sessionId, cwd, activeProfile);
+        return await HandleAgentSpawn(baseUrl, dashedSessionId, sessionId, cwd, activeProfile);
     }
 
     static async Task<int> HandleAgentSpawn(
             string   baseUrl,
-            JsonNode node,
             string   dashedSessionId,
             string   sessionId,
             string?  cwd,
@@ -124,6 +126,7 @@ static class KiroHookCommand {
         if (activeProfile?.ExcludedRepos is { Length: > 0 } excludedRepos
          && await RepoExclusion.IsExcludedAsync(enriched, excludedRepos)) {
             DisabledSessions.Mark(sessionId);
+
             return 0;
         }
 
@@ -133,6 +136,7 @@ static class KiroHookCommand {
         // stderr; on an auth lapse it stayed silent (no doomed POST). Either way skip the
         // watcher this firing and exit 0 — agentSpawn fires again next prompt and retries.
         var outcome = await PostHookAsync(baseUrl, "session-start/kiro", enriched);
+
         if (outcome != HookPostOutcome.Posted) return 0;
 
         // The watcher tails Kiro's own append-only session log
@@ -143,9 +147,14 @@ static class KiroHookCommand {
         var transcriptPath = KiroPaths.SessionJsonl(dashedSessionId);
 
         await WatcherManager.EnsureWatcherRunning(
-            baseUrl, sessionId, transcriptPath,
-            agentId: null, sessionIdOverride: null, cwd: cwd,
-            skipTitle: false, vendor: "kiro"
+            baseUrl,
+            sessionId,
+            transcriptPath,
+            agentId: null,
+            sessionIdOverride: null,
+            cwd: cwd,
+            skipTitle: false,
+            vendor: "kiro"
         );
 
         return 0;
@@ -166,10 +175,12 @@ static class KiroHookCommand {
     static string? ReadKiroModel(string dashedSessionId) {
         try {
             var path = KiroPaths.SessionJson(dashedSessionId);
+
             if (!File.Exists(path)) return null;
 
             var model = JsonNode.Parse(File.ReadAllText(path))
-                ?["session_state"]?["rts_model_state"]?["model_info"]?["model_id"]?.GetValue<string>();
+                ?["session_state"]?["rts_model_state"]?["model_info"]?["model_id"]
+                ?.GetValue<string>();
 
             return string.IsNullOrWhiteSpace(model) ? null : model;
         } catch {

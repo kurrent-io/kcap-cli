@@ -94,7 +94,7 @@ public static class FrameCodec {
         // Validate the arg count against a cap AND remaining bytes before allocating, so a
         // malformed/huge count can't force an OOM (each arg has at least a 4-byte prefix).
         if (n is < 0 or > MaxSpawnArgs) throw new InvalidDataException($"Spawn arg count out of range: {n}");
-        if ((long)(p.Length - o) < (long)n * 4) throw new InvalidDataException("Spawn arg count exceeds payload");
+        if (p.Length - o < (long)n * 4) throw new InvalidDataException("Spawn arg count exceeds payload");
 
         var args = new string[n];
         for (var i = 0; i < n; i++) args[i] = ReadLp(p, ref o);

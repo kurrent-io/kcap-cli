@@ -40,11 +40,13 @@ static class McpSessionsServer {
 
             try {
                 client ??= await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl);
+
                 return await HandleToolCallAsync(callId, callRequest, client, baseUrl, cwdRepoHash);
             } catch (Exception ex) {
                 // Unexpected: log the detail to stderr (not to the client, which could leak local
                 // paths from IO errors) and return a generic tool error, keeping the loop alive.
                 await Console.Error.WriteLineAsync($"kcap mcp sessions: unexpected error handling tools/call: {ex}");
+
                 return BuildToolResult(callId, "Error: internal error handling the request.", isError: true);
             }
         }
@@ -238,11 +240,9 @@ static class McpSessionsServer {
         var id = args?["session_id"]?.GetValue<string>()
          ?? throw new ArgumentException("Missing required argument: session_id");
 
-        if (!TryReadInt(args, "turn_index", out var turnIndex)) {
-            throw new ArgumentException("Missing required argument: turn_index");
-        }
-
-        return $"{baseUrl}/api/sessions/{Uri.EscapeDataString(id)}/turns/{turnIndex}";
+        return !TryReadInt(args, "turn_index", out var turnIndex)
+            ? throw new ArgumentException("Missing required argument: turn_index")
+            : $"{baseUrl}/api/sessions/{Uri.EscapeDataString(id)}/turns/{turnIndex}";
     }
 
     internal static string BuildTurnsUrl(string baseUrl, JsonObject? args) {
@@ -522,7 +522,7 @@ static class McpSessionsServer {
             new(
                 "object",
                 new() {
-                    ["session_id"] = new("string",  "Session ID (from search_sessions or get_session_summary)."),
+                    ["session_id"] = new("string", "Session ID (from search_sessions or get_session_summary)."),
                     ["turn_index"] = new("integer", "Zero-based turn index.")
                 },
                 ["session_id", "turn_index"]

@@ -43,7 +43,7 @@ public class ImportScopePromptTests {
             discoveredRepos: [("A", "x"), ("A", "x"), ("A", "y")]
         );
 
-        await Assert.That(choices).IsEquivalentTo(new[] { "A/x", "A/y" });
+        await Assert.That(choices).IsEquivalentTo(["A/x", "A/y"]);
     }
 
     // --- BuildOrgChoices ---
@@ -53,19 +53,17 @@ public class ImportScopePromptTests {
         var owners = ImportScopePrompt.BuildOrgChoices(
             [
                 ("EventStore", "kurrentdb"),
-                ("EventStore", "kcap"),       // same owner, different repo
+                ("EventStore", "kcap"), // same owner, different repo
                 ("alexeyzimarev", "scratchpad"),
             ]
         );
 
-        await Assert.That(owners).IsEquivalentTo(new[] { "alexeyzimarev", "EventStore" });
+        await Assert.That(owners).IsEquivalentTo(["alexeyzimarev", "EventStore"]);
     }
 
     [Test]
     public async Task BuildOrgChoices_deduplicates_case_insensitively() {
-        var owners = ImportScopePrompt.BuildOrgChoices(
-            [("EventStore", "a"), ("eventstore", "b")]
-        );
+        var owners = ImportScopePrompt.BuildOrgChoices([("EventStore", "a"), ("eventstore", "b")]);
 
         await Assert.That(owners.Length).IsEqualTo(1);
     }

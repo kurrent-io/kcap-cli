@@ -21,15 +21,17 @@ internal partial class AgentOrchestrator {
 
         if (!_launchers.TryGetValue(vendor, out var launcher)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Unknown vendor: {vendor}"), ct);
+
             return;
         }
 
         if (!Directory.Exists(cwd)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Directory does not exist: {cwd}"), ct);
+
             return;
         }
 
-        var           agentId       = Guid.NewGuid().ToString("N");
+        var           agentId = Guid.NewGuid().ToString("N");
         AgentInstance agent;
         WorktreeInfo? ownedWorktree = null; // tracked so a failure after creation cleans it up
 
@@ -39,8 +41,17 @@ internal partial class AgentOrchestrator {
                 : WorktreeInfo.Borrowed(cwd);
 
             var ctx = new LauncherContext(
-                agentId, cwd, worktree, Prompt: null, Model: "", Effort: null,
-                Tools: null, IsReview: false, IsReviewFlow: false, Review: null, ReviewLaunch: null
+                agentId,
+                cwd,
+                worktree,
+                Prompt: null,
+                Model: "",
+                Effort: null,
+                Tools: null,
+                IsReview: false,
+                IsReviewFlow: false,
+                Review: null,
+                ReviewLaunch: null
             ) {
                 Work = work
             };
@@ -51,10 +62,10 @@ internal partial class AgentOrchestrator {
             // Records to the account either way. Keep KCAP_URL and re-add ANTHROPIC_API_KEY so
             // normal local auth survives UnixPtyProcess.Spawn's headless scrub (it applies
             // extraEnv after unsetenv).
-            var env = new Dictionary<string, string>();
+            var env                                                       = new Dictionary<string, string>();
             if (!string.IsNullOrEmpty(_config.ServerUrl)) env["KCAP_URL"] = _config.ServerUrl;
-            var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
-            if (!string.IsNullOrEmpty(apiKey)) env["ANTHROPIC_API_KEY"] = apiKey;
+            var apiKey                                                    = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+            if (!string.IsNullOrEmpty(apiKey)) env["ANTHROPIC_API_KEY"]   = apiKey;
 
             if (!isPrivate) {
                 // Register like a UI-launched agent: hosted env so it's visible/drivable from the
@@ -80,18 +91,20 @@ internal partial class AgentOrchestrator {
         } catch (Exception ex) {
             // Don't leak a daemon-created worktree if Prepare / passthrough-arg building /
             // spawn fails after the worktree was created (mirrors the server launch path).
-            if (ownedWorktree is { } leaked) {
-                try { await WorktreeManager.RemoveAsync(leaked); } catch { /* best-effort */ }
+            if (ownedWorktree != null) {
+                try { await WorktreeManager.RemoveAsync(ownedWorktree); } catch {
+                    /* best-effort */
+                }
             }
 
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Launch failed: {ex.Message}"), ct);
+
             return;
         }
 
         // Register like a UI launch (no-op for --private). Best-effort: a registration hiccup
         // must not break the local terminal session.
-        try { await RegisterAgentAsync(agent); }
-        catch (Exception ex) { LogLocalRegisterFailed(ex, agentId); }
+        try { await RegisterAgentAsync(agent); } catch (Exception ex) { LogLocalRegisterFailed(ex, agentId); }
 
         _ = ReadAgentOutputAsync(agent);
         await AttachClientLoopAsync(agent, stream, ct);
@@ -99,10 +112,7 @@ internal partial class AgentOrchestrator {
 
     /// <summary>Attach an existing agent to a local client (used by <c>kcap attach</c>).</summary>
     public Task HandleLocalAttachAsync(string agentId, Stream stream, CancellationToken ct) {
-        if (!_agents.TryGetValue(agentId, out var agent))
-            return FrameCodec.WriteAsync(stream, LocalFrame.Error($"no such agent {agentId}"), ct);
-
-        return AttachClientLoopAsync(agent, stream, ct);
+        return !_agents.TryGetValue(agentId, out var agent) ? FrameCodec.WriteAsync(stream, LocalFrame.Error($"no such agent {agentId}"), ct) : AttachClientLoopAsync(agent, stream, ct);
     }
 
     /// <summary>
@@ -126,6 +136,7 @@ internal partial class AgentOrchestrator {
         // with the read loop's locked append+enqueue) so no chunk is both replayed and sent
         // live, and none is dropped between the two.
         byte[] snapshot;
+
         lock (agent.SinksLock) {
             snapshot = agent.OutputBuffer.Snapshot();
             agent.LocalSinks.Add(sink);
@@ -147,13 +158,18 @@ internal partial class AgentOrchestrator {
             // (blind). Cancelling ends the loop so the client disconnects and reattaches for a
             // fresh replay — the intended force-detach behaviour.
             var detachMonitor = pump.ContinueWith(
-                _ => { if (sink.Detached) { try { loopCts.Cancel(); } catch (ObjectDisposedException) { } } },
+                _ => {
+                    if (sink.Detached) {
+                        try { loopCts.Cancel(); } catch (ObjectDisposedException) { }
+                    }
+                },
                 TaskScheduler.Default
             );
 
             try {
                 while (!loopCts.Token.IsCancellationRequested) {
                     var f = await FrameCodec.ReadAsync(stream, loopCts.Token);
+
                     if (f is null || f.Type == FrameType.Detach) break;
 
                     if (f.Type == FrameType.Stdin) {
@@ -164,7 +180,9 @@ internal partial class AgentOrchestrator {
                             // AcpHostedAgentRuntime.SendRawInputAsync throws by design. Tell the
                             // client and detach gracefully instead of letting the exception
                             // escape the read loop and crash the attach handler.
-                            try { await Send(LocalFrame.Error("This agent does not support local attach input")); } catch { /* client already gone */ }
+                            try { await Send(LocalFrame.Error("This agent does not support local attach input")); } catch {
+                                /* client already gone */
+                            }
 
                             break;
                         }
@@ -183,11 +201,15 @@ internal partial class AgentOrchestrator {
             if (sink.Detached && !agent.Runtime.HasExited) {
                 // We dropped this client because its output overflowed — tell it so the user
                 // reattaches (a fresh `kcap attach` replays the buffer from a clean frame).
-                try { await Send(LocalFrame.Error("terminal output overflowed — detached; reattach with `kcap attach`")); } catch { /* client already gone */ }
+                try { await Send(LocalFrame.Error("terminal output overflowed — detached; reattach with `kcap attach`")); } catch {
+                    /* client already gone */
+                }
             }
 
             if (agent.Runtime.HasExited) {
-                try { await Send(LocalFrame.Exited(agent.Runtime.ExitCode ?? 0)); } catch { /* client already gone */ }
+                try { await Send(LocalFrame.Exited(agent.Runtime.ExitCode ?? 0)); } catch {
+                    /* client already gone */
+                }
             }
         } finally {
             lock (agent.SinksLock) {
@@ -213,8 +235,7 @@ internal partial class AgentOrchestrator {
     }
 
     async Task SafeSendDimsAsync(AgentInstance agent) {
-        try { await _server.SendTerminalDimensionsAsync(agent.Id, agent.CurrentCols, agent.CurrentRows); }
-        catch (Exception ex) { LogTerminalDimsSendFailed(ex, agent.Id); }
+        try { await _server.SendTerminalDimensionsAsync(agent.Id, agent.CurrentCols, agent.CurrentRows); } catch (Exception ex) { LogTerminalDimsSendFailed(ex, agent.Id); }
     }
 
     /// <summary>
@@ -231,6 +252,7 @@ internal partial class AgentOrchestrator {
             if (c == 0 || d.Cols < c) c = d.Cols;
             if (r == 0 || d.Rows < r) r = d.Rows;
         }
+
         if (agent.WebDims is { } w) {
             if (c == 0 || w.Cols < c) c = w.Cols;
             if (r == 0 || w.Rows < r) r = w.Rows;

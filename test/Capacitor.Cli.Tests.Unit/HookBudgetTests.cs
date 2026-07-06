@@ -18,7 +18,7 @@ public class HookBudgetTests {
         await Assert.That(rem).IsLessThanOrEqualTo(TimeSpan.FromSeconds(13.5));
 
         // A start far in the past clamps to zero, never negative.
-        var old = Stopwatch.GetTimestamp() - (long)(Stopwatch.Frequency * 100);
+        var old = Stopwatch.GetTimestamp() - Stopwatch.Frequency * 100;
         await Assert.That(HookBudget.Remaining(old, "stop")).IsEqualTo(TimeSpan.Zero);
     }
 }

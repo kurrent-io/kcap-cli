@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Capacitor.Cli.Core; // JsonElement Str/Obj/Arr extensions
 
 namespace Capacitor.Cli.Core.Gemini;
 
@@ -20,9 +19,12 @@ public static class GeminiSubagentDiscovery {
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
                 using var doc = JsonDocument.Parse(line);
+
                 return doc.RootElement.Str("sessionId");
             }
-        } catch { /* unreadable / malformed → no subagents */ }
+        } catch {
+            /* unreadable / malformed → no subagents */
+        }
 
         return null;
     }
@@ -32,13 +34,11 @@ public static class GeminiSubagentDiscovery {
     /// (empty when the session spawned none). Path: <c>chats/&lt;dashedParent&gt;/*.jsonl</c>.
     /// </summary>
     public static IReadOnlyList<string> EnumerateSubagentFiles(string transcriptPath) {
-        if (ReadParentSessionId(transcriptPath) is not { } dashedParent) return [];
-        if (Path.GetDirectoryName(transcriptPath) is not { } chatsDir) return [];
+        if (ReadParentSessionId(transcriptPath) is not { } dashedParent || Path.GetDirectoryName(transcriptPath) is not { } chatsDir) return [];
 
         var subDir = GeminiPaths.SubagentDir(chatsDir, dashedParent);
-        if (!Directory.Exists(subDir)) return [];
 
-        return Directory.EnumerateFiles(subDir, "*.jsonl").ToList();
+        return !Directory.Exists(subDir) ? [] : Directory.EnumerateFiles(subDir, "*.jsonl").ToList();
     }
 
     /// <summary>
@@ -65,7 +65,9 @@ public static class GeminiSubagentDiscovery {
                         map[aid] = name;
                 }
             }
-        } catch { /* best effort */ }
+        } catch {
+            /* best effort */
+        }
 
         return map;
     }

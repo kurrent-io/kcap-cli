@@ -33,7 +33,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// </summary>
 internal static class ConnectionRetry {
     public static async Task<T> InvokeWithConnectionRetryAsync<T>(
-            Func<Task<T>>      invoke,
+            Func<Task<T>>?      invoke,
             Func<bool>         isReady,
             TimeSpan           pollInterval,
             Action<int>        onRetry,

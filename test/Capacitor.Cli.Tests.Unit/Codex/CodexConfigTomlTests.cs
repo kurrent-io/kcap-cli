@@ -21,7 +21,7 @@ public class CodexConfigTomlTests {
             "https://acme.kcap.ai", "https://globex.kcap.ai"
         ]);
 
-        await Assert.That(domains).IsEquivalentTo(new[] { "**.kcap.ai" });
+        await Assert.That(domains).IsEquivalentTo(["**.kcap.ai"]);
     }
 
     [Test]
@@ -31,9 +31,11 @@ public class CodexConfigTomlTests {
         ]);
 
         // Wildcard first (kcap.ai tenant present), then self-hosted hosts sorted.
-        await Assert.That(domains).IsEquivalentTo(new[] {
+        await Assert.That(domains).IsEquivalentTo(
+        [
             "**.kcap.ai", "capacitor.example.com", "kcap.internal.corp"
-        });
+        ]
+        );
     }
 
     [Test]
@@ -42,7 +44,7 @@ public class CodexConfigTomlTests {
             "https://capacitor.example.com:8443"
         ]);
 
-        await Assert.That(domains).IsEquivalentTo(new[] { "capacitor.example.com" });
+        await Assert.That(domains).IsEquivalentTo(["capacitor.example.com"]);
     }
 
     [Test]
@@ -51,14 +53,14 @@ public class CodexConfigTomlTests {
             null, "", "  ", "https://capacitor.example.com", "https://capacitor.example.com"
         ]);
 
-        await Assert.That(domains).IsEquivalentTo(new[] { "capacitor.example.com" });
+        await Assert.That(domains).IsEquivalentTo(["capacitor.example.com"]);
     }
 
     [Test]
     public async Task BuildAllowDomains_accepts_bare_host_without_scheme() {
         var domains = CodexConfigToml.BuildAllowDomains(["my-tenant.kcap.ai", "self.example.com"]);
 
-        await Assert.That(domains).IsEquivalentTo(new[] { "**.kcap.ai", "self.example.com" });
+        await Assert.That(domains).IsEquivalentTo(["**.kcap.ai", "self.example.com"]);
     }
 
     // ── EnableNetworkAccess: default config ──────────────────────────────────
@@ -221,12 +223,12 @@ public class CodexConfigTomlTests {
         var memory   = (TomlTable)servers["kcap-memory"];
 
         await Assert.That((string)review["command"]).IsEqualTo("kcap");
-        await Assert.That(ArgsOf(review)).IsEquivalentTo(new[] { "mcp", "review" });
+        await Assert.That(ArgsOf(review)).IsEquivalentTo(["mcp", "review"]);
         await Assert.That((string)sessions["command"]).IsEqualTo("kcap");
-        await Assert.That(ArgsOf(sessions)).IsEquivalentTo(new[] { "mcp", "sessions" });
+        await Assert.That(ArgsOf(sessions)).IsEquivalentTo(["mcp", "sessions"]);
         // AI-1146: kcap-memory is now auto-registered for Codex too.
         await Assert.That((string)memory["command"]).IsEqualTo("kcap");
-        await Assert.That(ArgsOf(memory)).IsEquivalentTo(new[] { "mcp", "memory" });
+        await Assert.That(ArgsOf(memory)).IsEquivalentTo(["mcp", "memory"]);
     }
 
     [Test]
@@ -237,7 +239,7 @@ public class CodexConfigTomlTests {
 
         CodexConfigToml.RegisterKcapMcpServers(path);
 
-        var text = File.ReadAllText(path);
+        var text = await File.ReadAllTextAsync(path);
         await Assert.That(text).Contains("[mcp_servers.kcap-review]");
         await Assert.That(text).Contains("[mcp_servers.kcap-sessions]");
         await Assert.That(text).Contains("[mcp_servers.kcap-memory]");

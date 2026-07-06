@@ -1,7 +1,4 @@
 using Capacitor.Cli.Commands;
-using TUnit.Assertions;
-using TUnit.Assertions.Extensions;
-using TUnit.Core;
 
 namespace Capacitor.Cli.Tests.Unit;
 

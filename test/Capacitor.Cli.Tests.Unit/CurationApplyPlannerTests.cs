@@ -19,7 +19,7 @@ public class CurationApplyPlannerTests {
         var f = plan.Files[0];
         await Assert.That(f.Path).IsEqualTo(Agents);
         await Assert.That(f.Action).IsEqualTo(CurateAction.Create);
-        await Assert.That(f.Added).IsEquivalentTo(new[] { "alpha" });
+        await Assert.That(f.Added).IsEquivalentTo(["alpha"]);
         await Assert.That(f.NewContent!.Contains("- alpha")).IsTrue();
     }
 
@@ -33,8 +33,8 @@ public class CurationApplyPlannerTests {
 
         var f = plan.Files.Single(p => p.Path == Claude);
         await Assert.That(f.Action).IsEqualTo(CurateAction.Update);
-        await Assert.That(f.Added).IsEquivalentTo(new[] { "new" });
-        await Assert.That(f.Removed).IsEquivalentTo(new[] { "drop" });
+        await Assert.That(f.Added).IsEquivalentTo(["new"]);
+        await Assert.That(f.Removed).IsEquivalentTo(["drop"]);
     }
 
     [Test]
@@ -57,7 +57,7 @@ public class CurationApplyPlannerTests {
 
         var f = plan.Files.Single(p => p.Path == Claude);
         await Assert.That(f.Action).IsEqualTo(CurateAction.Remove);
-        await Assert.That(f.Removed).IsEquivalentTo(new[] { "x" });
+        await Assert.That(f.Removed).IsEquivalentTo(["x"]);
         await Assert.That(f.NewContent!.Contains(CuratedBlock.StartMarker)).IsFalse();
     }
 }

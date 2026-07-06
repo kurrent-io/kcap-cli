@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 
 namespace Capacitor.Cli;
@@ -111,7 +112,17 @@ static class InteractiveLifetime {
             return;
         }
 
-        var thread = new Thread(() => {
+        var thread = new Thread(Start) {
+            IsBackground = true,
+            Name         = "kcap-interactive-parent-watchdog"
+        };
+
+        thread.Start();
+
+        return;
+
+        [DoesNotReturn]
+        void Start() {
             while (true) {
                 Thread.Sleep(ParentPollInterval);
 
@@ -119,11 +130,6 @@ static class InteractiveLifetime {
                     Environment.Exit(InterruptExitCode);
                 }
             }
-        }) {
-            IsBackground = true,
-            Name         = "kcap-interactive-parent-watchdog"
-        };
-
-        thread.Start();
+        }
     }
 }

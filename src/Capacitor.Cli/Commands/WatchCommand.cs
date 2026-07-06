@@ -35,9 +35,11 @@ static partial class WatchCommand {
     /// are unit-testable without spawning processes.
     /// </summary>
     internal static ParentWatchdog DecideParentWatchdog(int? parentPid, Func<int, bool> isAlive) =>
-        parentPid is not { } ppid ? ParentWatchdog.NoParentPid
-        : !isAlive(ppid)          ? ParentWatchdog.ParentAlreadyDead
-        :                           ParentWatchdog.Monitor;
+        parentPid is not { } ppid
+            ? ParentWatchdog.NoParentPid
+            : !isAlive(ppid)
+                ? ParentWatchdog.ParentAlreadyDead
+                : ParentWatchdog.Monitor;
 
     public static async Task<int> RunWatch(
             string  baseUrl,
@@ -96,22 +98,29 @@ static partial class WatchCommand {
             e.Cancel = true;
             cts.Cancel();
         };
-        using var sigtermReg = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx => {
-            cts.Cancel();
-            ctx.Cancel = true;
-        });
+
+        using var sigtermReg = PosixSignalRegistration.Create(
+            PosixSignal.SIGTERM,
+            ctx => {
+                cts.Cancel();
+                ctx.Cancel = true;
+            }
+        );
 
         // SIGHUP defense-in-depth: setsid above should prevent the kernel from
         // delivering SIGHUP to us, but if a shell forwards SIGHUP explicitly to
         // its process group children before our setsid lands, or if setsid
         // failed, this handler keeps the watcher alive long enough to run the
         // parent-exit cleanup path (drain + session-end POST).
-        using var sighupReg = PosixSignalRegistration.Create(PosixSignal.SIGHUP, ctx => {
-            Log("Received SIGHUP; treating as parent-exit");
-            Interlocked.Exchange(ref parentExited, 1);
-            cts.Cancel();
-            ctx.Cancel = true;
-        });
+        using var sighupReg = PosixSignalRegistration.Create(
+            PosixSignal.SIGHUP,
+            ctx => {
+                Log("Received SIGHUP; treating as parent-exit");
+                Interlocked.Exchange(ref parentExited, 1);
+                cts.Cancel();
+                ctx.Cancel = true;
+            }
+        );
 
         // Watch the spawning coding-agent process. If it dies without firing
         // session-end (crash, force-kill, IDE-detach), self-terminate within ~5s and
@@ -126,38 +135,45 @@ static partial class WatchCommand {
                 break;
 
             case ParentWatchdog.ParentAlreadyDead:
-                Log($"Parent pid {parentPid} already dead at watcher startup; parent-exit watchdog NOT started — "
+                Log(
+                    $"Parent pid {parentPid} already dead at watcher startup; parent-exit watchdog NOT started — "
                   + "session-end will not be POSTed if the agent ends abruptly. This usually means parent-PID "
-                  + "resolution returned a transient process; see ProcessHelpers.GetCodingAgentPid.");
+                  + "resolution returned a transient process; see ProcessHelpers.GetCodingAgentPid."
+                );
 
                 break;
 
             case ParentWatchdog.Monitor:
                 var ppid = parentPid!.Value;
                 Log($"Monitoring parent pid {ppid}");
-                _ = Task.Run(async () => {
-                    while (!cts.Token.IsCancellationRequested) {
-                        try {
-                            await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
-                        } catch (OperationCanceledException) {
-                            return;
-                        }
 
-                        if (!ProcessHelpers.IsProcessAlive(ppid)) {
-                            Log($"Parent pid {ppid} exited; shutting down watcher");
-                            Interlocked.Exchange(ref parentExited, 1);
-                            cts.Cancel();
+                _ = Task.Run(
+                    async () => {
+                        while (!cts.Token.IsCancellationRequested) {
+                            try {
+                                await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
+                            } catch (OperationCanceledException) {
+                                return;
+                            }
 
-                            return;
+                            if (!ProcessHelpers.IsProcessAlive(ppid)) {
+                                Log($"Parent pid {ppid} exited; shutting down watcher");
+                                Interlocked.Exchange(ref parentExited, 1);
+                                cts.Cancel();
+
+                                return;
+                            }
                         }
-                    }
-                }, cts.Token);
+                    },
+                    cts.Token
+                );
 
                 break;
         }
 
-        var state = new WatchState();
-        state.LastActivityAt = DateTimeOffset.UtcNow;
+        var state = new WatchState {
+            LastActivityAt = DateTimeOffset.UtcNow
+        };
         // Antigravity posts /hooks/session-start BEFORE the watcher spawns, so the session is
         // already committed server-side — the below-threshold buffering (which exists to avoid
         // junk sessions the server hasn't seen) doesn't apply. Treat it as past-threshold from
@@ -165,6 +181,7 @@ static partial class WatchCommand {
         // (otherwise a <10-line conversation would never reach threshold, never idle-end, and
         // leave the session Active with the watcher lingering — the IDE process outlives it).
         if (vendor == "antigravity") state.ThresholdReached = true;
+
         // Antigravity is a GUI app like the Codex desktop: its shared process never
         // exits per-conversation, so (like Codex) the idle timeout — not a parent-exit
         // watchdog — is the per-conversation session-end path. Its own knob so tenants
@@ -314,14 +331,15 @@ static partial class WatchCommand {
 
                 await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, cts.Token);
 
-                // Live subagent discovery: only the parent (agentId == null) watcher scans;
-                // child subagent watchers (agentId != null) just stream their file. Gemini
-                // scans its native nested chat files; OpenCode scans the nested dir the
-                // kcap plugin writes child {info,parts} into (AI-919 phase 2).
-                if (agentId is null && vendor == "gemini") {
-                    await ScanGeminiSubagents(baseUrl, sessionId, transcriptPath, seenSubagents, cts.Token);
-                } else if (agentId is null && vendor == "opencode") {
-                    await ScanOpenCodeSubagents(baseUrl, sessionId, transcriptPath, seenSubagents, cts.Token);
+                switch (agentId) {
+                    // Live subagent discovery: only the parent (agentId == null) watcher scans;
+                    // child subagent watchers (agentId != null) just stream their file. Gemini
+                    // scans its native nested chat files; OpenCode scans the nested dir the
+                    // kcap plugin writes child {info,parts} into (AI-919 phase 2).
+                    case null when vendor == "gemini":
+                        await ScanGeminiSubagents(baseUrl, sessionId, transcriptPath, seenSubagents, cts.Token); break;
+                    case null when vendor == "opencode":
+                        await ScanOpenCodeSubagents(baseUrl, sessionId, transcriptPath, seenSubagents, cts.Token); break;
                 }
 
                 if (ShouldEndOnIdle(
@@ -333,9 +351,10 @@ static partial class WatchCommand {
                         idleTimeout,
                         // A tool awaiting its result suppresses idle-end: Codex tracks call_ids,
                         // Antigravity counts PLANNER_RESPONSE calls vs result steps (AI-1157 review).
-                        toolInFlight: vendor == "antigravity"
+                        toolInFlight: vendor                    == "antigravity"
                             ? state.PendingAntigravityToolCalls > 0
-                            : state.PendingCodexToolCalls.Count > 0)) {
+                            : state.PendingCodexToolCalls.Count > 0
+                    )) {
                     Log($"{vendor} transcript idle for >{idleTimeout.TotalMinutes:F0}m; ending session (idle_timeout)");
                     idleExit = true;
                     cts.Cancel();
@@ -392,9 +411,11 @@ static partial class WatchCommand {
         //     server may not have a meaningful session to end.
         // Runs after SignalR dispose so the server's StopAndDrainAsync skips the
         // 10s drain wait (no live watcher connection to signal).
-        var endReason = Volatile.Read(ref parentExited) == 1 ? "parent_exited"
-                      : idleExit                              ? "idle_timeout"
-                      :                                         null;
+        var endReason = Volatile.Read(ref parentExited) == 1
+            ? "parent_exited"
+            : idleExit
+                ? "idle_timeout"
+                : null;
 
         if (endReason is not null && agentId is null && state.ThresholdReached) {
             await PostSessionEndOnParentExitAsync(baseUrl, sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
@@ -414,13 +435,14 @@ static partial class WatchCommand {
     /// deterministic server-side lifecycle ids make re-registration safe. AI-900.
     /// </summary>
     static async Task ScanGeminiSubagents(
-            string          baseUrl,
-            string          sessionId,
-            string          transcriptPath,
-            HashSet<string> seen,
+            string            baseUrl,
+            string            sessionId,
+            string            transcriptPath,
+            HashSet<string>   seen,
             CancellationToken ct
         ) {
         IReadOnlyList<string> subFiles;
+
         try {
             subFiles = GeminiSubagentDiscovery.EnumerateSubagentFiles(transcriptPath);
         } catch {
@@ -433,33 +455,46 @@ static partial class WatchCommand {
 
         foreach (var subFile in subFiles) {
             if (ct.IsCancellationRequested) return;
+
             if (!seen.Add(subFile)) continue; // already registered + spawned
 
             var subId = Path.GetFileNameWithoutExtension(subFile);
+
             if (!Guid.TryParse(subId, out _)) continue; // not a <subId>.jsonl
 
-            var agentId   = GeminiSubagentDiscovery.CanonicalAgentId(subId);
-            types       ??= GeminiSubagentDiscovery.ResolveAgentTypes(transcriptPath);
+            var agentId = GeminiSubagentDiscovery.CanonicalAgentId(subId);
+            types ??= GeminiSubagentDiscovery.ResolveAgentTypes(transcriptPath);
             var agentType = types.GetValueOrDefault(subId) ?? "subagent";
 
             // Fail-closed: register the subagent (→ SubagentStarted) before its child watcher
             // streams content. On POST failure, drop from `seen` so the next tick retries.
             if (!await PostSubagentStartAsync(baseUrl, sessionId, agentId, agentType, subFile, ct)) {
                 seen.Remove(subFile);
+
                 continue;
             }
 
             await WatcherManager.EnsureWatcherRunning(
-                baseUrl, key: $"{sessionId}-{agentId}", transcriptPath: subFile,
-                agentId: agentId, sessionIdOverride: sessionId, vendor: "gemini");
+                baseUrl,
+                key: $"{sessionId}-{agentId}",
+                transcriptPath: subFile,
+                agentId: agentId,
+                sessionIdOverride: sessionId,
+                vendor: "gemini"
+            );
 
             Log($"Gemini subagent {agentId} ({agentType}) registered + child watcher spawned");
         }
     }
 
     static async Task<bool> PostSubagentStartAsync(
-        string baseUrl, string sessionId, string agentId, string agentType, string subFile, CancellationToken ct
-    ) {
+            string            baseUrl,
+            string            sessionId,
+            string            agentId,
+            string            agentType,
+            string            subFile,
+            CancellationToken ct
+        ) {
         try {
             using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, ct);
             var       payload = GeminiSubagentDiscovery.BuildStartPayload(sessionId, agentId, agentType, subFile);
@@ -491,6 +526,7 @@ static partial class WatchCommand {
             CancellationToken ct
         ) {
         IReadOnlyList<string> subFiles;
+
         try {
             subFiles = OpenCodeSubagentDiscovery.EnumerateSubagentFiles(transcriptPath);
         } catch {
@@ -501,6 +537,7 @@ static partial class WatchCommand {
 
         foreach (var subFile in subFiles) {
             if (ct.IsCancellationRequested) return;
+
             if (!seen.Add(subFile)) continue; // already registered + spawned
 
             var childId   = Path.GetFileNameWithoutExtension(subFile);
@@ -511,20 +548,31 @@ static partial class WatchCommand {
             // streams content. On POST failure, drop from `seen` so the next tick retries.
             if (!await PostOpenCodeSubagentStartAsync(baseUrl, sessionId, agentId, agentType, subFile, ct)) {
                 seen.Remove(subFile);
+
                 continue;
             }
 
             await WatcherManager.EnsureWatcherRunning(
-                baseUrl, key: $"{sessionId}-{agentId}", transcriptPath: subFile,
-                agentId: agentId, sessionIdOverride: sessionId, vendor: "opencode");
+                baseUrl,
+                key: $"{sessionId}-{agentId}",
+                transcriptPath: subFile,
+                agentId: agentId,
+                sessionIdOverride: sessionId,
+                vendor: "opencode"
+            );
 
             Log($"OpenCode subagent {agentId} ({agentType}) registered + child watcher spawned");
         }
     }
 
     static async Task<bool> PostOpenCodeSubagentStartAsync(
-        string baseUrl, string sessionId, string agentId, string agentType, string subFile, CancellationToken ct
-    ) {
+            string            baseUrl,
+            string            sessionId,
+            string            agentId,
+            string            agentType,
+            string            subFile,
+            CancellationToken ct
+        ) {
         try {
             using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, ct);
             var       payload = OpenCodeSubagentDiscovery.BuildStartPayload(sessionId, agentId, agentType, subFile);
@@ -599,11 +647,11 @@ static partial class WatchCommand {
             TimeSpan       idleTimeout,
             bool           toolInFlight = false
         ) =>
-        (vendor == "codex" || vendor == "antigravity")
-        && isSessionWatcher
-        && thresholdReached
-        && now - lastActivityAt > idleTimeout
-        && !toolInFlight;
+        vendor is "codex" or "antigravity"
+     && isSessionWatcher
+     && thresholdReached
+     && now - lastActivityAt > idleTimeout
+     && !toolInFlight;
 
     /// <summary>
     /// Updates <paramref name="pending"/> based on a single Codex rollout line.
@@ -629,13 +677,15 @@ static partial class WatchCommand {
 
             switch (p.Str("type")) {
                 case "function_call"
-                  or "custom_tool_call":
+                    or "custom_tool_call":
                     pending.Add(callId);
+
                     break;
 
                 case "function_call_output"
-                  or "custom_tool_call_output":
+                    or "custom_tool_call_output":
                     pending.Remove(callId);
+
                     break;
             }
         } catch {
@@ -654,51 +704,61 @@ static partial class WatchCommand {
         ) {
         if (!KnownVendors.Contains(vendor)) {
             Log($"Parent-exit session-end skipped: unknown vendor '{vendor}'");
+
             return;
         }
 
-        // Gemini fires no subagent-stop hook and the child watchers spawned in ScanGeminiSubagents
-        // carry no parent-pid watchdog, so when the parent process dies WITHOUT the session-end
-        // hook this is the only place that finalizes live subagents. Mirror the hook path: kill
-        // each child watcher, drain its tail, POST subagent-stop — capped so a slow drain can't
-        // block the watchdog's self-termination, and run BEFORE the session-end POST so
-        // SubagentCompleted lands ahead of SessionEnded. No-op when none were spawned (AI-900).
-        if (vendor == "gemini") {
-            try {
-                var finalized = await TimeBudget.RunCappedAsync(
-                    () => GeminiSubagentTeardown.DrainAsync(baseUrl, sessionId, transcriptPath),
-                    GeminiSubagentTeardown.DrainCap);
+        switch (vendor) {
+            // Gemini fires no subagent-stop hook and the child watchers spawned in ScanGeminiSubagents
+            // carry no parent-pid watchdog, so when the parent process dies WITHOUT the session-end
+            // hook this is the only place that finalizes live subagents. Mirror the hook path: kill
+            // each child watcher, drain its tail, POST subagent-stop — capped so a slow drain can't
+            // block the watchdog's self-termination, and run BEFORE the session-end POST so
+            // SubagentCompleted lands ahead of SessionEnded. No-op when none were spawned (AI-900).
+            case "gemini":
+                try {
+                    var finalized = await TimeBudget.RunCappedAsync(
+                        () => GeminiSubagentTeardown.DrainAsync(baseUrl, sessionId, transcriptPath),
+                        GeminiSubagentTeardown.DrainCap
+                    );
 
-                if (!finalized) {
-                    Log("Parent-exit Gemini subagent teardown cap elapsed; "
-                      + "unfinalized subagents recover via: kcap import --gemini");
+                    if (!finalized) {
+                        Log(
+                            "Parent-exit Gemini subagent teardown cap elapsed; "
+                          + "unfinalized subagents recover via: kcap import --gemini"
+                        );
+                    }
+                } catch (Exception ex) {
+                    Log($"Parent-exit Gemini subagent teardown failed: {ex.Message}");
                 }
-            } catch (Exception ex) {
-                Log($"Parent-exit Gemini subagent teardown failed: {ex.Message}");
-            }
-        }
 
-        // OpenCode likewise fires no subagent-stop hook (the plugin-written child files are
-        // discovered + streamed by ScanOpenCodeSubagents, with no parent-pid watchdog on the
-        // child watchers), so the parent exit is the only place that finalizes them. Same
-        // shape as the Gemini teardown; runs BEFORE the session-end POST so SubagentCompleted
-        // lands ahead of SessionEnded. No-op when none were spawned (AI-919 phase 2).
-        if (vendor == "opencode") {
-            // DrainAsync is self-bounding (per-step caps + a shared cleanup deadline + a hard
-            // overall ceiling), so it needs no outer time cap here — wrapping it in one risked
-            // cutting later children's SubagentCompleted. It attempts subagent-stop for every child
-            // WITHIN the overall budget; under a pathological/huge child count it stops at the
-            // ceiling and returns how many were left unfinalized (logged below — OpenCode has no
-            // historical import to recover a missed stop).
-            try {
-                var unfinalized = await OpenCodeSubagentTeardown.DrainAsync(baseUrl, sessionId, transcriptPath);
-                if (unfinalized > 0) {
-                    Log($"Parent-exit OpenCode subagent teardown hit the {OpenCodeSubagentTeardown.OverallBudget.TotalSeconds:0}s ceiling; "
-                      + $"{unfinalized} subagent(s) left without SubagentCompleted");
+                break;
+            // OpenCode likewise fires no subagent-stop hook (the plugin-written child files are
+            // discovered + streamed by ScanOpenCodeSubagents, with no parent-pid watchdog on the
+            // child watchers), so the parent exit is the only place that finalizes them. Same
+            // shape as the Gemini teardown; runs BEFORE the session-end POST so SubagentCompleted
+            // lands ahead of SessionEnded. No-op when none were spawned (AI-919 phase 2).
+            case "opencode":
+                // DrainAsync is self-bounding (per-step caps + a shared cleanup deadline + a hard
+                // overall ceiling), so it needs no outer time cap here — wrapping it in one risked
+                // cutting later children's SubagentCompleted. It attempts subagent-stop for every child
+                // WITHIN the overall budget; under a pathological/huge child count it stops at the
+                // ceiling and returns how many were left unfinalized (logged below — OpenCode has no
+                // historical import to recover a missed stop).
+                try {
+                    var unfinalized = await OpenCodeSubagentTeardown.DrainAsync(baseUrl, sessionId, transcriptPath);
+
+                    if (unfinalized > 0) {
+                        Log(
+                            $"Parent-exit OpenCode subagent teardown hit the {OpenCodeSubagentTeardown.OverallBudget.TotalSeconds:0}s ceiling; "
+                          + $"{unfinalized} subagent(s) left without SubagentCompleted"
+                        );
+                    }
+                } catch (Exception ex) {
+                    Log($"Parent-exit OpenCode subagent teardown failed: {ex.Message}");
                 }
-            } catch (Exception ex) {
-                Log($"Parent-exit OpenCode subagent teardown failed: {ex.Message}");
-            }
+
+                break;
         }
 
         using var budgetCts = new CancellationTokenSource(ParentExitPostBudget);
@@ -716,7 +776,7 @@ static partial class WatchCommand {
                 // dedupe against the first and the session would stay Active.
                 // Computed once here and reused across POST retries, so it stays
                 // idempotent for a single exit.
-                ["ended_at"]        = DateTimeOffset.UtcNow.ToString("O"),
+                ["ended_at"] = DateTimeOffset.UtcNow.ToString("O"),
             };
 
             if (repository is not null) {
@@ -728,11 +788,12 @@ static partial class WatchCommand {
             using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync(baseUrl, budgetCts.Token);
             using var content    = new StringContent(endHook.ToJsonString(), Encoding.UTF8, "application/json");
 
-            var url = $"{baseUrl}/hooks/session-end/{vendor}";
+            var       url      = $"{baseUrl}/hooks/session-end/{vendor}";
             using var response = await httpClient.PostWithRetryAsync(url, content, timeout: ParentExitPostBudget, ct: budgetCts.Token);
 
             if (!response.IsSuccessStatusCode) {
                 Log($"Parent-exit session-end POST returned HTTP {(int)response.StatusCode}");
+
                 return;
             }
 
@@ -823,6 +884,7 @@ static partial class WatchCommand {
             // failure); subagent watchers (agentId != null) never buffer. The gen watermark
             // advances only after a successful send (below), so a failed batch re-reads the rows.
             var antigravityGenMax = -1L;
+
             if (vendor == "antigravity" && (agentId is not null || state.ThresholdReached)) {
                 antigravityGenMax = AppendAntigravityUsageLines(state, newLines, newLineNumbers, transcriptPath, state.LastAntigravityCreatedAt);
             }
@@ -1056,13 +1118,13 @@ static partial class WatchCommand {
 
     internal static string? TryExtractAssistantText(string line, string vendor = "claude") =>
         vendor switch {
-            "codex"    => TryExtractCodexAssistantText(line),
-            "copilot"  => TryExtractCopilotAssistantText(line),
-            "kiro"     => TryExtractKiroAssistantText(line),
-            "pi"       => TryExtractPiAssistantText(line),
-            "opencode" => TryExtractOpenCodeText(line, "assistant"),
+            "codex"       => TryExtractCodexAssistantText(line),
+            "copilot"     => TryExtractCopilotAssistantText(line),
+            "kiro"        => TryExtractKiroAssistantText(line),
+            "pi"          => TryExtractPiAssistantText(line),
+            "opencode"    => TryExtractOpenCodeText(line, "assistant"),
             "antigravity" => TryExtractAntigravityText(line, "assistant"),
-            _          => TryExtractClaudeAssistantText(line)
+            _             => TryExtractClaudeAssistantText(line)
         };
 
     static string? TryExtractClaudeAssistantText(string line) {
@@ -1116,22 +1178,18 @@ static partial class WatchCommand {
             using var doc  = JsonDocument.Parse(line);
             var       root = doc.RootElement;
 
-            if (vendor == "copilot") {
-                // user.message / assistant.message are the only conversational
-                // envelopes; everything else (hook.*, system.*, tool.*,
-                // session.*) is plumbing and must not count toward the
-                // title-generation event threshold.
-                return root.Str("type") is "user.message" or "assistant.message";
-            }
-
-            if (vendor == "kiro") {
-                // Prompt / AssistantMessage are the conversational lines;
-                // ToolResults is plumbing and must not count toward the
-                // title-generation event threshold.
-                return root.Str("kind") is "Prompt" or "AssistantMessage";
-            }
-
-            if (vendor == "codex") {
+            switch (vendor) {
+                case "copilot":
+                    // user.message / assistant.message are the only conversational
+                    // envelopes; everything else (hook.*, system.*, tool.*,
+                    // session.*) is plumbing and must not count toward the
+                    // title-generation event threshold.
+                    return root.Str("type") is "user.message" or "assistant.message";
+                case "kiro":
+                    // Prompt / AssistantMessage are the conversational lines;
+                    // ToolResults is plumbing and must not count toward the
+                    // title-generation event threshold.
+                    return root.Str("kind") is "Prompt" or "AssistantMessage";
                 // Codex rolls everything into a top-level response_item envelope;
                 // a "message" payload (user or assistant) is the analog of Claude's
                 // user/assistant event for title-threshold purposes. User-role
@@ -1139,23 +1197,22 @@ static partial class WatchCommand {
                 // (<environment_context>, AGENTS.md, <turn_aborted>) must NOT
                 // count — otherwise a fresh session with no real prompts can
                 // reach the 5-event threshold and produce a low-context title.
-                if (root.Str("type") != "response_item") return false;
+                case "codex" when root.Str("type") != "response_item":
+                    return false;
+                case "codex": {
+                    var payload = root.Obj("payload");
 
-                var payload = root.Obj("payload");
+                    if (payload?.Str("type") != "message") return false;
 
-                if (payload?.Str("type") != "message") return false;
+                    var role = payload.Value.Str("role");
 
-                var role = payload.Value.Str("role");
-
-                return role switch {
-                    "assistant" => true,
-                    "user"      => TitleGenerator.ExtractCodexBlockText(payload.Value, "input_text") is { } text
-                                && !TitleGenerator.IsCodexInjectedUserPrelude(text),
-                    _           => false
-                };
-            }
-
-            if (vendor == "pi") {
+                    return role switch {
+                        "assistant" => true,
+                        "user" => TitleGenerator.ExtractCodexBlockText(payload.Value, "input_text") is { } text
+                         && !TitleGenerator.IsCodexInjectedUserPrelude(text),
+                        _ => false
+                    };
+                }
                 // Pi conversational envelopes are type:"message" with
                 // message.role user/assistant (Pi has no top-level user/assistant
                 // type). Gate on CONTENT, not just role: an empty user/assistant
@@ -1163,40 +1220,39 @@ static partial class WatchCommand {
                 // returns null for empty content, NormalizeAssistant for zero
                 // parts), so it must not count toward the title-event threshold
                 // either. Mirrors PiImportSource.IsImportRelevantLine.
-                if (root.Str("type") != "message") return false;
-                if (root.Obj("message") is not { } piMsg) return false;
+                case "pi" when root.Str("type") != "message":
+                    return false;
+                case "pi": {
+                    if (root.Obj("message") is not { } piMsg) return false;
 
-                return piMsg.Str("role") switch {
-                    "user"      => PiContent.HasUserContent(piMsg),
-                    "assistant" => PiContent.HasAssistantContent(piMsg),
-                    _           => false
-                };
-            }
-
-            if (vendor == "opencode") {
+                    return piMsg.Str("role") switch {
+                        "user"      => PiContent.HasUserContent(piMsg),
+                        "assistant" => PiContent.HasAssistantContent(piMsg),
+                        _           => false
+                    };
+                }
                 // OpenCode envelopes are {info,parts} with info.role user/assistant.
                 // Gate on text content: a turn with no non-hidden text (e.g. tool-only)
                 // yields no titleable text, so it must not count toward the title-event
                 // threshold. Mirrors the Pi content gate.
-                if (root.Obj("info")?.Str("role") is not ("user" or "assistant")) return false;
-
-                return OpenCodeTextParts(root.Arr("parts")) is not null;
+                case "opencode" when (root.Obj("info")?.Str("role") is not ("user" or "assistant")):
+                    return false;
+                case "opencode":
+                    return OpenCodeTextParts(root.Arr("parts")) is not null;
+                case "antigravity":
+                    // Antigravity transcript_full.jsonl lines carry a `type`; only the two
+                    // conversational steps count toward the title-event threshold, and only
+                    // when they have text (a tool-only PLANNER_RESPONSE or an empty prompt
+                    // yields no titleable text). Everything else (RUN_COMMAND, VIEW_FILE,
+                    // GENERIC, CHECKPOINT, INVOKE_SUBAGENT, SYSTEM_*) is plumbing.
+                    return root.Str("type") switch {
+                        "USER_INPUT"       => TryExtractAntigravityText(line, "user") is not null,
+                        "PLANNER_RESPONSE" => TryExtractAntigravityText(line, "assistant") is not null,
+                        _                  => false
+                    };
+                default:
+                    return root.Str("type") is "user" or "assistant";
             }
-
-            if (vendor == "antigravity") {
-                // Antigravity transcript_full.jsonl lines carry a `type`; only the two
-                // conversational steps count toward the title-event threshold, and only
-                // when they have text (a tool-only PLANNER_RESPONSE or an empty prompt
-                // yields no titleable text). Everything else (RUN_COMMAND, VIEW_FILE,
-                // GENERIC, CHECKPOINT, INVOKE_SUBAGENT, SYSTEM_*) is plumbing.
-                return root.Str("type") switch {
-                    "USER_INPUT"       => TryExtractAntigravityText(line, "user")      is not null,
-                    "PLANNER_RESPONSE" => TryExtractAntigravityText(line, "assistant") is not null,
-                    _                  => false
-                };
-            }
-
-            return root.Str("type") is "user" or "assistant";
         } catch {
             return false;
         }
@@ -1204,13 +1260,13 @@ static partial class WatchCommand {
 
     internal static string? TryExtractUserText(string line, string vendor = "claude") =>
         vendor switch {
-            "codex"    => TryExtractCodexUserText(line),
-            "copilot"  => TryExtractCopilotUserText(line),
-            "kiro"     => TryExtractKiroUserText(line),
-            "pi"       => TryExtractPiUserText(line),
-            "opencode" => TryExtractOpenCodeText(line, "user"),
+            "codex"       => TryExtractCodexUserText(line),
+            "copilot"     => TryExtractCopilotUserText(line),
+            "kiro"        => TryExtractKiroUserText(line),
+            "pi"          => TryExtractPiUserText(line),
+            "opencode"    => TryExtractOpenCodeText(line, "user"),
             "antigravity" => TryExtractAntigravityText(line, "user"),
-            _          => TryExtractClaudeUserText(line)
+            _             => TryExtractClaudeUserText(line)
         };
 
     // ── OpenCode extractors (AI-919) ───────────────────────────────────────────
@@ -1223,9 +1279,7 @@ static partial class WatchCommand {
             using var doc  = JsonDocument.Parse(line);
             var       root = doc.RootElement;
 
-            if (root.Obj("info")?.Str("role") != role) return null;
-
-            return OpenCodeTextParts(root.Arr("parts"));
+            return root.Obj("info")?.Str("role") != role ? null : OpenCodeTextParts(root.Arr("parts"));
         } catch {
             return null;
         }
@@ -1235,10 +1289,12 @@ static partial class WatchCommand {
         if (parts is not { } arr) return null;
 
         var pieces = new List<string>();
+
         foreach (var part in arr.EnumerateArray()) {
             if (part.Str("type") != "text") continue;
             if (part.TryGetProperty("synthetic", out var syn) && syn.ValueKind == JsonValueKind.True) continue;
-            if (part.TryGetProperty("ignored",   out var ign) && ign.ValueKind == JsonValueKind.True) continue;
+            if (part.TryGetProperty("ignored", out var ign)   && ign.ValueKind == JsonValueKind.True) continue;
+
             if (part.Str("text")?.Trim() is { Length: > 0 } t) pieces.Add(t);
         }
 
@@ -1260,6 +1316,7 @@ static partial class WatchCommand {
             var       root = doc.RootElement;
 
             var want = role == "user" ? "USER_INPUT" : "PLANNER_RESPONSE";
+
             if (root.Str("type") != want) return null;
 
             if (root.Str("content")?.Trim() is not { Length: > 0 } content) return null;
@@ -1274,8 +1331,9 @@ static partial class WatchCommand {
     // metadata blocks Antigravity appends. Falls back to the raw text when no envelope
     // is present.
     static string? StripAntigravityUserWrapper(string content) {
-        const string open = "<USER_REQUEST>", close = "</USER_REQUEST>";
-        var start = content.IndexOf(open, StringComparison.Ordinal);
+        const string open  = "<USER_REQUEST>", close = "</USER_REQUEST>";
+        var          start = content.IndexOf(open, StringComparison.Ordinal);
+
         if (start < 0) return content;
 
         start += open.Length;
@@ -1300,8 +1358,10 @@ static partial class WatchCommand {
     /// </summary>
     static long AppendAntigravityUsageLines(WatchState state, List<string> newLines, List<int> newLineNumbers, string transcriptPath, string? createdAt) {
         var maxIdx = -1L;
+
         try {
             if (AntigravityPaths.ConversationDbFromTranscript(transcriptPath) is not { } dbPath) return -1L;
+
             var rows = AntigravityGenMetadataDb.ReadUsageLines(dbPath, state.LastAntigravityGenIdx, createdAt);
 
             foreach (var (idx, line) in rows) {
@@ -1313,6 +1373,7 @@ static partial class WatchCommand {
             // Cost is always best-effort (AI-728) — never let a db read break the drain.
             Log($"Antigravity usage poll failed: {ex.Message}");
         }
+
         return maxIdx;
     }
 
@@ -1326,15 +1387,18 @@ static partial class WatchCommand {
         try {
             using var doc  = JsonDocument.Parse(line);
             var       root = doc.RootElement;
+
             if (root.ValueKind != JsonValueKind.Object) return;
 
             switch (root.Str("type")) {
                 case "PLANNER_RESPONSE":
                     if (root.Arr("tool_calls") is { } calls)
                         state.PendingAntigravityToolCalls += calls.EnumerateArray().Count(tc => tc.Str("name") is not null);
+
                     break;
                 case "RUN_COMMAND" or "VIEW_FILE" or "LIST_DIRECTORY" or "CODE_ACTION":
                     if (state.PendingAntigravityToolCalls > 0) state.PendingAntigravityToolCalls--;
+
                     break;
             }
         } catch {
@@ -1345,6 +1409,7 @@ static partial class WatchCommand {
     static string? TryGetAntigravityCreatedAt(string line) {
         try {
             using var doc = JsonDocument.Parse(line);
+
             return doc.RootElement.ValueKind == JsonValueKind.Object ? doc.RootElement.Str("created_at") : null;
         } catch {
             return null;

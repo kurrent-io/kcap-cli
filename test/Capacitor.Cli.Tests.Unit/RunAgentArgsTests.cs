@@ -9,7 +9,7 @@ public class RunAgentArgsTests {
         await Assert.That(a.Vendor).IsEqualTo("claude");
         await Assert.That(a.Worktree).IsTrue();
         await Assert.That(a.DaemonName).IsEqualTo("dev");
-        await Assert.That(a.Passthrough).IsEquivalentTo(new[] { "--model", "opus", "fix" });
+        await Assert.That(a.Passthrough).IsEquivalentTo(["--model", "opus", "fix"]);
         await Assert.That(a.Error).IsNull();
     }
 
@@ -42,9 +42,9 @@ public class RunAgentArgsTests {
 
     [Test]
     public async Task Private_flag_is_parsed_and_defaults_false() {
-        var on  = RunAgentArgs.Parse(["claude", "--private", "--", "fix"]);
+        var on = RunAgentArgs.Parse(["claude", "--private", "--", "fix"]);
         await Assert.That(on.Private).IsTrue();
-        await Assert.That(on.Passthrough).IsEquivalentTo(new[] { "fix" });
+        await Assert.That(on.Passthrough).IsEquivalentTo(["fix"]);
         await Assert.That(on.Error).IsNull();
 
         var off = RunAgentArgs.Parse(["claude"]);

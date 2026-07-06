@@ -138,12 +138,12 @@ public class AntigravitySubagentsTests {
         // A ↔ B cycle plus a real root R with child C. Cycle members each become their own root
         // (with no descendants) rather than being lost.
         var map = new Dictionary<string, string>(StringComparer.Ordinal) { ["A"] = "B", ["B"] = "A", ["C"] = "R" };
-        var byRoot = AntigravitySubagents.BuildRootDescendants(new[] { "A", "B", "R", "C" }, map);
+        var byRoot = AntigravitySubagents.BuildRootDescendants(["A", "B", "R", "C"], map);
 
         await Assert.That(byRoot.ContainsKey("A")).IsTrue();
         await Assert.That(byRoot["A"].Count).IsEqualTo(0);
         await Assert.That(byRoot.ContainsKey("B")).IsTrue();
         await Assert.That(byRoot["B"].Count).IsEqualTo(0);
-        await Assert.That(byRoot["R"]).IsEquivalentTo(new List<string> { "C" });
+        await Assert.That(byRoot["R"]).IsEquivalentTo((List<string>)["C"]);
     }
 }

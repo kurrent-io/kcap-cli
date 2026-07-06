@@ -132,7 +132,7 @@ public class LocalPermissionBridgeTests {
 
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
     public async Task ValidRequestStripsDashesAndForwardsArgsToServer() {
-        var (bridge, server) = CreateBridge((sid, tool, input, suggestions, _) =>
+        var (bridge, server) = CreateBridge((_, _, _, _, _) =>
             Task.FromResult(new PermissionDecision("allow", null, null))
         );
 

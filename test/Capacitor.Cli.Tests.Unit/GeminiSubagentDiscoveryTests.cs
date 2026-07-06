@@ -17,16 +17,22 @@ public class GeminiSubagentDiscoveryTests {
         Directory.CreateDirectory(chats);
 
         var parent = Path.Combine(chats, "session-2026-06-22T14-31-0a900000.jsonl");
-        File.WriteAllLines(parent, new[] {
-            $$"""{"sessionId":"{{DashedParent}}","projectHash":"h","startTime":"2026-06-22T14:31:00.000Z","kind":"main"}""",
-            $$"""{"id":"m1","timestamp":"2026-06-22T14:31:05.000Z","type":"gemini","content":"","toolCalls":[{"id":"invoke_agent__x","name":"invoke_agent","args":{"agent_name":"{{agentName}}","prompt":"p"},"agentId":"{{DashedSub}}","status":"success"}]}"""
-        });
+
+        File.WriteAllLines(
+            parent,
+            [
+                $$"""{"sessionId":"{{DashedParent}}","projectHash":"h","startTime":"2026-06-22T14:31:00.000Z","kind":"main"}""",
+                $$"""{"id":"m1","timestamp":"2026-06-22T14:31:05.000Z","type":"gemini","content":"","toolCalls":[{"id":"invoke_agent__x","name":"invoke_agent","args":{"agent_name":"{{agentName}}","prompt":"p"},"agentId":"{{DashedSub}}","status":"success"}]}"""
+            ]
+        );
 
         var subDir = Path.Combine(chats, DashedParent);
         Directory.CreateDirectory(subDir);
+
         File.WriteAllText(
             Path.Combine(subDir, DashedSub + ".jsonl"),
-            $$"""{"sessionId":"{{DashedSub}}","projectHash":"h","kind":"subagent","directories":[]}""" + "\n");
+            $$"""{"sessionId":"{{DashedSub}}","projectHash":"h","kind":"subagent","directories":[]}""" + "\n"
+        );
 
         return parent;
     }
@@ -34,6 +40,7 @@ public class GeminiSubagentDiscoveryTests {
     [Test]
     public async Task EnumerateSubagentFiles_FindsNestedFile() {
         var tmp = Directory.CreateTempSubdirectory("kcap-gsd").FullName;
+
         try {
             var parent = WriteParentWithSubagent(tmp, "codebase_investigator");
 
@@ -49,6 +56,7 @@ public class GeminiSubagentDiscoveryTests {
     [Test]
     public async Task EnumerateSubagentFiles_EmptyWhenNoNestedDir() {
         var tmp = Directory.CreateTempSubdirectory("kcap-gsd").FullName;
+
         try {
             var chats = Path.Combine(tmp, "chats");
             Directory.CreateDirectory(chats);
@@ -64,6 +72,7 @@ public class GeminiSubagentDiscoveryTests {
     [Test]
     public async Task ResolveAgentTypes_MapsSubIdToParentAgentName() {
         var tmp = Directory.CreateTempSubdirectory("kcap-gsd").FullName;
+
         try {
             var parent = WriteParentWithSubagent(tmp, "codebase_investigator");
 

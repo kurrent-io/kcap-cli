@@ -44,7 +44,7 @@ public class ServerUrlNormalizerOrchestrationTests {
     [Test]
     public async Task SkipProbe_ReturnsLoopbackDefault_NoWarning_NoProbeCalls() {
         var probeCalls = 0;
-        var probe = Probe(u => { probeCalls++; return true; });
+        var probe = Probe(_ => { probeCalls++; return true; });
 
         var result = await ServerUrlNormalizer.NormalizeAsync(
             "staging.kcap.ai", skipProbe: true, CancellationToken.None, probe);

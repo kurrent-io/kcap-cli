@@ -65,7 +65,7 @@ public static class AntigravitySubagents {
 
     /// <summary>Parent conversation id for a child, or null when it is a root / unlinked.</summary>
     public static string? ResolveParent(string childConversationId, string? home = null, string? geminiCliHome = null) =>
-        BuildParentMap(home, geminiCliHome).TryGetValue(childConversationId, out var parent) ? parent : null;
+        BuildParentMap(home, geminiCliHome).GetValueOrDefault(childConversationId);
 
     /// <summary>
     /// Walks parent links up to the top-level ancestor (a conversation with no parent), so a

@@ -65,7 +65,7 @@ public class AntigravityGenMetadataTests {
     [Test]
     public async Task Malformed_or_empty_blob_returns_null() {
         await Assert.That(AntigravityGenMetadata.TryDecode(ReadOnlySpan<byte>.Empty)).IsNull();
-        await Assert.That(AntigravityGenMetadata.TryDecode(new byte[] { 0xff, 0xff, 0xff })).IsNull();
+        await Assert.That(AntigravityGenMetadata.TryDecode([0xff, 0xff, 0xff])).IsNull();
         // A well-formed message with zero tokens is not useful cost data → null.
         await Assert.That(AntigravityGenMetadata.TryDecode(Blob(0, 0, null, "m", null))).IsNull();
     }

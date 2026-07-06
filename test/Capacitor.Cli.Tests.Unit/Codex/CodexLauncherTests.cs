@@ -339,11 +339,11 @@ public class CodexLauncherTests {
             var ctx = NewCtxWith(source: sourceRepo, worktree: worktree);
             NewLauncher().Prepare(ctx);
 
-            var configToml = File.ReadAllText(Path.Combine(home, ".codex", "config.toml"));
+            var configToml = await File.ReadAllTextAsync(Path.Combine(home, ".codex", "config.toml"));
             // The TOML writer emits the path as a basic (double-quoted) key, so
             // backslashes are escaped per spec (\ → \\). Match the escaped form
             // so the assertion holds on Windows too (no-op on POSIX paths). AI-820.
-            var escapedWorktree = worktree.Replace("\\", "\\\\");
+            var escapedWorktree = worktree.Replace("\\", @"\\");
             await Assert.That(configToml).Contains($"\"{escapedWorktree}\"");
             await Assert.That(configToml).Contains("trust_level = \"trusted\"");
         } finally {
@@ -416,7 +416,7 @@ public class CodexLauncherTests {
 
     [Test]
     public async Task BuildArgs_review_toml_escapes_quotes_and_backslashes_in_command() {
-        var ctx = NewReviewCtx("p", "C:\\Program Files\\kcap\\kcap.exe", "https://srv");
+        var ctx = NewReviewCtx("p", @"C:\Program Files\kcap\kcap.exe", "https://srv");
         var joined = string.Join(' ', NewLauncher().BuildArgs(ctx).Args);
         await Assert.That(joined).Contains("mcp_servers.kcap-review.command=\"C:\\\\Program Files\\\\kcap\\\\kcap.exe\"");
     }

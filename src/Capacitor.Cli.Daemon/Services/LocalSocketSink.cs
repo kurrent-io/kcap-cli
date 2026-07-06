@@ -9,22 +9,19 @@ namespace Capacitor.Cli.Daemon.Services;
 /// (AI-844) — or (b) back-pressuring the shared loop and stalling every other client. A
 /// dropped client reattaches for a fresh <c>OutputBuffer</c> replay, recovering from a
 /// clean frame.
-internal sealed class LocalSocketSink : ITerminalSink {
-    readonly Channel<byte[]>                       _ch;
-    readonly Func<byte[], CancellationToken, Task> _send;
+internal sealed class LocalSocketSink(int capacity, Func<byte[], CancellationToken, Task> send) : ITerminalSink {
+    readonly Channel<byte[]> _ch = Channel.CreateBounded<byte[]>(
+        new BoundedChannelOptions(capacity) {
+            FullMode     = BoundedChannelFullMode.Wait,
+            SingleReader = true
+        }
+    );
 
     public bool Detached { get; private set; }
 
-    public LocalSocketSink(int capacity, Func<byte[], CancellationToken, Task> send) {
-        _send = send;
-        // Wait mode: TryWrite never blocks but returns false when the queue is full — that
-        // false is our overflow signal (force-detach). DropOldest/DropWrite would silently
-        // lose a chunk and always return true, reintroducing the AI-844 corruption.
-        _ch = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(capacity) {
-            FullMode     = BoundedChannelFullMode.Wait,
-            SingleReader = true
-        });
-    }
+    // Wait mode: TryWrite never blocks but returns false when the queue is full — that
+    // false is our overflow signal (force-detach). DropOldest/DropWrite would silently
+    // lose a chunk and always return true, reintroducing the AI-844 corruption.
 
     public void TryEnqueue(byte[] chunk) {
         if (Detached) return;
@@ -41,7 +38,7 @@ internal sealed class LocalSocketSink : ITerminalSink {
         try {
             await foreach (var chunk in _ch.Reader.ReadAllAsync(ct)) {
                 try {
-                    await _send(chunk, ct);
+                    await send(chunk, ct);
                 } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                     return;
                 } catch {

@@ -1,5 +1,4 @@
 // test/Capacitor.Cli.Tests.Unit/Acp/AcpHostedAgentRuntimeTests.cs
-using System.Threading.Channels;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -124,7 +123,7 @@ public class AcpHostedAgentRuntimeTests {
             FakeAcpAgent.FixedSessionId,
             FakeAcpAgent.BuildAgentMessageChunkUpdate("hello there"));
         var result = System.Text.Json.JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone();
-        h.Fake.EnqueuePromptScript(new[] { update }, result);
+        h.Fake.EnqueuePromptScript([update], result);
 
         h.StartFakeAgentLoop();
 
@@ -143,7 +142,7 @@ public class AcpHostedAgentRuntimeTests {
         var weirdUpdate = System.Text.Json.JsonDocument.Parse("""{"sessionUpdate":"some_future_variant","foo":"bar"}""").RootElement.Clone();
         var notification = FakeAcpAgent.BuildSessionUpdateNotification(FakeAcpAgent.FixedSessionId, weirdUpdate);
         var result = System.Text.Json.JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone();
-        h.Fake.EnqueuePromptScript(new[] { notification }, result);
+        h.Fake.EnqueuePromptScript([notification], result);
 
         h.StartFakeAgentLoop();
 
@@ -295,7 +294,7 @@ public class AcpHostedAgentRuntimeTests {
         // Prove the prompt really was sent (as background work) even though we never released the
         // hold — the fake recorded the call as soon as it arrived, before answering.
         var deadline = DateTime.UtcNow + HangGuard;
-        while (!h.Fake.ReceivedCalls.Any(c => c.Method == "session/prompt") && DateTime.UtcNow < deadline)
+        while (h.Fake.ReceivedCalls.All(c => c.Method != "session/prompt") && DateTime.UtcNow < deadline)
             await Task.Delay(10);
 
         await Assert.That(h.Fake.ReceivedCalls.Any(c => c.Method == "session/prompt")).IsTrue();

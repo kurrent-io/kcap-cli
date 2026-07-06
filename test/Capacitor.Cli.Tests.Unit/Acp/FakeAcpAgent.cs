@@ -1,4 +1,5 @@
 // test/Capacitor.Cli.Tests.Unit/Acp/FakeAcpAgent.cs
+
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using System.Text;
@@ -37,14 +38,14 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     static readonly JsonElement DefaultPromptResult =
         JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone();
 
-    readonly Pipe   _toAgent  = new();  // connection writes here; fake reads here (simulated stdin)
-    readonly Pipe   _toClient = new();  // fake writes here; connection reads here (simulated stdout)
+    readonly Pipe   _toAgent  = new(); // connection writes here; fake reads here (simulated stdin)
+    readonly Pipe   _toClient = new(); // fake writes here; connection reads here (simulated stdout)
     readonly Stream _agentReadsFromConnection;
     readonly Stream _agentWritesToConnection;
 
-    readonly ConcurrentQueue<(IReadOnlyList<JsonElement> Updates, JsonElement Result)> _promptScripts = new();
-    readonly List<(string Method, JsonElement? Params)> _receivedCalls = new();
-    readonly object _receivedCallsLock = new();
+    readonly ConcurrentQueue<(IReadOnlyList<JsonElement> Updates, JsonElement Result)> _promptScripts     = new();
+    readonly List<(string Method, JsonElement? Params)>                                _receivedCalls     = [];
+    readonly Lock                                                                      _receivedCallsLock = new();
 
     /// <summary>
     /// The stream a NEW <see cref="Capacitor.Cli.Daemon.Acp.AcpConnection"/> under test should be
@@ -121,6 +122,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
         try {
             while (!ct.IsCancellationRequested) {
                 var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
+
                 if (line is null)
                     break;
 
@@ -140,11 +142,12 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
         var hasId     = root.TryGetProperty("id", out var idElement);
         var hasMethod = root.TryGetProperty("method", out var methodElement);
+
         if (!hasMethod)
             return;
 
         var method        = methodElement.GetString() ?? "";
-        var paramsElement = root.TryGetProperty("params", out var p) ? p.Clone() : (JsonElement?) null;
+        var paramsElement = root.TryGetProperty("params", out var p) ? p.Clone() : (JsonElement?)null;
 
         Record(method, paramsElement);
 
@@ -158,20 +161,24 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
         switch (method) {
             case "initialize":
                 await WriteResponseAsync(id, ProbeConfirmedInitializeResult, ct).ConfigureAwait(false);
+
                 break;
 
             case "session/new":
                 await WriteResponseAsync(id, ProbeConfirmedSessionNewResult, ct).ConfigureAwait(false);
+
                 break;
 
             case "session/prompt":
                 await RunPromptScriptAsync(id, ct).ConfigureAwait(false);
+
                 break;
 
             default:
                 // Unrecognized request method: still recorded above; answer with a method-not-found
                 // error so a caller awaiting the response doesn't hang forever.
                 await WriteErrorResponseAsync(id, -32601, $"Method not found: {method}", ct).ConfigureAwait(false);
+
                 break;
         }
     }
@@ -179,7 +186,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     async Task RunPromptScriptAsync(JsonElement id, CancellationToken ct) {
         var (updates, result) = _promptScripts.TryDequeue(out var script)
             ? script
-            : (new[] { DefaultAgentMessageChunkUpdate(FixedSessionId, "hello from FakeAcpAgent") }, DefaultPromptResult);
+            : ([DefaultAgentMessageChunkUpdate(FixedSessionId, "hello from FakeAcpAgent")], DefaultPromptResult);
 
         foreach (var update in updates)
             await WriteRawFrameAsync(update, ct).ConfigureAwait(false);
@@ -197,45 +204,51 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
     // ---- probe-confirmed canned response shapes (docs/acp-probe-findings.md) ----
 
-    static readonly JsonElement ProbeConfirmedInitializeResult = JsonDocument.Parse("""
-        {
-          "protocolVersion": 1,
-          "agentCapabilities": {
-            "loadSession": true,
-            "mcpCapabilities": { "http": true, "sse": true },
-            "promptCapabilities": { "audio": false, "embeddedContext": false, "image": true },
-            "sessionCapabilities": { "list": {} }
-          },
-          "authMethods": [
+    static readonly JsonElement ProbeConfirmedInitializeResult = JsonDocument.Parse(
+            """
             {
-              "id": "cursor_login",
-              "name": "Cursor Login",
-              "description": "Authenticate using existing Cursor login credentials. Run 'agent login' first if not logged in."
+              "protocolVersion": 1,
+              "agentCapabilities": {
+                "loadSession": true,
+                "mcpCapabilities": { "http": true, "sse": true },
+                "promptCapabilities": { "audio": false, "embeddedContext": false, "image": true },
+                "sessionCapabilities": { "list": {} }
+              },
+              "authMethods": [
+                {
+                  "id": "cursor_login",
+                  "name": "Cursor Login",
+                  "description": "Authenticate using existing Cursor login credentials. Run 'agent login' first if not logged in."
+                }
+              ]
             }
-          ]
-        }
-        """).RootElement.Clone();
+            """
+        )
+        .RootElement.Clone();
 
-    static readonly JsonElement ProbeConfirmedSessionNewResult = JsonDocument.Parse($$"""
-        {
-          "sessionId": "{{FixedSessionId}}",
-          "modes": {
-            "currentModeId": "agent",
-            "availableModes": [
-              { "id": "agent", "name": "Agent", "description": "Full agent capabilities with tool access" },
-              { "id": "plan", "name": "Plan", "description": "Read-only mode for planning and designing before implementation" },
-              { "id": "ask", "name": "Ask", "description": "Q&A mode - no edits or command execution" }
-            ]
-          },
-          "models": {
-            "currentModelId": "composer-2.5[fast=true]",
-            "availableModels": [
-              { "modelId": "composer-2.5[fast=true]", "name": "composer-2.5" }
-            ]
-          },
-          "configOptions": []
-        }
-        """).RootElement.Clone();
+    static readonly JsonElement ProbeConfirmedSessionNewResult = JsonDocument.Parse(
+            $$"""
+              {
+                "sessionId": "{{FixedSessionId}}",
+                "modes": {
+                  "currentModeId": "agent",
+                  "availableModes": [
+                    { "id": "agent", "name": "Agent", "description": "Full agent capabilities with tool access" },
+                    { "id": "plan", "name": "Plan", "description": "Read-only mode for planning and designing before implementation" },
+                    { "id": "ask", "name": "Ask", "description": "Q&A mode - no edits or command execution" }
+                  ]
+                },
+                "models": {
+                  "currentModelId": "composer-2.5[fast=true]",
+                  "availableModels": [
+                    { "modelId": "composer-2.5[fast=true]", "name": "composer-2.5" }
+                  ]
+                },
+                "configOptions": []
+              }
+              """
+        )
+        .RootElement.Clone();
 
     /// <summary>
     /// Builds a full <c>session/update</c> notification frame (probe-confirmed envelope shape):
@@ -245,6 +258,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// </summary>
     public static JsonElement BuildSessionUpdateNotification(string sessionId, JsonElement update) {
         using var stream = new MemoryStream();
+
         using (var writer = new Utf8JsonWriter(stream)) {
             writer.WriteStartObject();
             writer.WriteString("jsonrpc", "2.0");
@@ -266,6 +280,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// </summary>
     public static JsonElement BuildAgentMessageChunkUpdate(string text) {
         var escaped = JsonEncodedText.Encode(text);
+
         return JsonDocument.Parse($$$"""{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"{{{escaped}}}"}}""")
             .RootElement.Clone();
     }
@@ -282,16 +297,19 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// </summary>
     public static JsonElement BuildAvailableCommandsUpdate(IEnumerable<(string Name, string Description)> commands) {
         using var stream = new MemoryStream();
+
         using (var writer = new Utf8JsonWriter(stream)) {
             writer.WriteStartObject();
             writer.WriteString("sessionUpdate", "available_commands_update");
             writer.WriteStartArray("availableCommands");
+
             foreach (var (name, description) in commands) {
                 writer.WriteStartObject();
                 writer.WriteString("name", name);
                 writer.WriteString("description", description);
                 writer.WriteEndObject();
             }
+
             writer.WriteEndArray();
             writer.WriteEndObject();
         }
@@ -315,6 +333,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// </summary>
     public static JsonElement BuildAgentThoughtChunkUpdate(string text) {
         var escaped = JsonEncodedText.Encode(text);
+
         return JsonDocument.Parse($$$"""{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"{{{escaped}}}"}}""")
             .RootElement.Clone();
     }
@@ -327,8 +346,9 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// </summary>
     public static JsonElement BuildToolCallUpdate(string toolCallId, string title, string kind, string status) {
         var json = $$"""
-            {"sessionUpdate":"tool_call","toolCallId":"{{toolCallId}}","title":"{{title}}","kind":"{{kind}}","status":"{{status}}"}
-            """;
+                     {"sessionUpdate":"tool_call","toolCallId":"{{toolCallId}}","title":"{{title}}","kind":"{{kind}}","status":"{{status}}"}
+                     """;
+
         return JsonDocument.Parse(json).RootElement.Clone();
     }
 
@@ -339,6 +359,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// </summary>
     public static JsonElement BuildToolCallStatusUpdate(string toolCallId, string status) {
         var json = $$"""{"sessionUpdate":"tool_call_update","toolCallId":"{{toolCallId}}","status":"{{status}}"}""";
+
         return JsonDocument.Parse(json).RootElement.Clone();
     }
 
@@ -351,6 +372,7 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// </summary>
     public static JsonElement BuildPlanUpdate(string entriesJson) {
         var json = $$"""{"sessionUpdate":"plan","entries":{{entriesJson}}}""";
+
         return JsonDocument.Parse(json).RootElement.Clone();
     }
 
@@ -370,8 +392,9 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// </summary>
     public static JsonElement BuildRequestPermissionFrame(long id, string sessionId, string toolCallJson, string optionsJson) {
         var json = $$$"""
-            {"jsonrpc":"2.0","id":{{{id}}},"method":"session/request_permission","params":{"sessionId":"{{{sessionId}}}","toolCall":{{{toolCallJson}}},"options":{{{optionsJson}}}}}
-            """;
+                      {"jsonrpc":"2.0","id":{{{id}}},"method":"session/request_permission","params":{"sessionId":"{{{sessionId}}}","toolCall":{{{toolCallJson}}},"options":{{{optionsJson}}}}}
+                      """;
+
         return JsonDocument.Parse(json).RootElement.Clone();
     }
 
@@ -395,7 +418,8 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
     async Task WriteResponseAsync(JsonElement id, JsonElement result, CancellationToken ct) {
         using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream)) {
+
+        await using (var writer = new Utf8JsonWriter(stream)) {
             writer.WriteStartObject();
             writer.WriteString("jsonrpc", "2.0");
             writer.WritePropertyName("id");
@@ -410,7 +434,8 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
     async Task WriteErrorResponseAsync(JsonElement id, int code, string message, CancellationToken ct) {
         using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream)) {
+
+        await using (var writer = new Utf8JsonWriter(stream)) {
             writer.WriteStartObject();
             writer.WriteString("jsonrpc", "2.0");
             writer.WritePropertyName("id");

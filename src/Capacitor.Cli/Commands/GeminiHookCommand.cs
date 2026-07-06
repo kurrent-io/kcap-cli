@@ -3,7 +3,6 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
-using Capacitor.Cli.Core.Gemini;
 
 namespace Capacitor.Cli.Commands;
 

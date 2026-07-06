@@ -149,7 +149,7 @@ public class CursorTranscriptBackfillTests {
     sealed class RecordingHandler : HttpMessageHandler {
         readonly Func<HttpRequestMessage, HttpResponseMessage?>? _get;
         readonly Func<HttpRequestMessage, string, HttpResponseMessage>? _post;
-        public List<string> Sent { get; } = new();
+        public List<string> Sent { get; } = [];
 
         public RecordingHandler() { }
         public RecordingHandler(

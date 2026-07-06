@@ -173,8 +173,8 @@ static class PiHookCommand {
     /// neither yields a uuid (a stray, non-Pi <c>.jsonl</c>).
     /// </summary>
     internal static string? ExtractSessionId(string file, string? headerUuid) {
-        if (headerUuid is { Length: > 0 } h && Guid.TryParse(h, out _))
-            return h.Replace("-", "");
+        if (headerUuid is { Length: > 0 } && Guid.TryParse(headerUuid, out _))
+            return headerUuid.Replace("-", "");
 
         var stem      = Path.GetFileNameWithoutExtension(file);
         var candidate = stem.Contains('_') ? stem[(stem.LastIndexOf('_') + 1)..] : stem;

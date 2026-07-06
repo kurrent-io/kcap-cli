@@ -39,17 +39,19 @@ public enum ProactiveRefreshOutcome { NotDue, Refreshed, Failed, Contended }
 
 public static class TokenStore {
     static string LegacyTokenPath => PathHelpers.ConfigPath("tokens.json");
-    static string TokenDir         => PathHelpers.ConfigPath("tokens");
+    static string TokenDir        => PathHelpers.ConfigPath("tokens");
 
     static void ValidateProfileName(string profile) {
         if (string.IsNullOrWhiteSpace(profile)) {
             throw new ArgumentException("Profile name must not be empty.", nameof(profile));
         }
+
         if (profile is "." or "..") {
             throw new ArgumentException("Profile name is invalid.", nameof(profile));
         }
+
         if (profile.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
-            profile.Contains(Path.DirectorySeparatorChar) ||
+            profile.Contains(Path.DirectorySeparatorChar)           ||
             profile.Contains(Path.AltDirectorySeparatorChar)) {
             throw new ArgumentException("Profile name contains invalid filename characters.", nameof(profile));
         }
@@ -57,6 +59,7 @@ public static class TokenStore {
 
     static string ProfileTokenPath(string profile) {
         ValidateProfileName(profile);
+
         return Path.Combine(TokenDir, $"{profile}.json");
     }
 
@@ -72,6 +75,7 @@ public static class TokenStore {
     // propagate and must not be masked as unauthenticated.
     static async Task<(TokenFileState State, StoredTokens? Tokens)> ReadTokenFileAsync(string path) {
         string json;
+
         try {
             json = await File.ReadAllTextAsync(path);
         } catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) {
@@ -80,6 +84,7 @@ public static class TokenStore {
 
         try {
             var tokens = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.StoredTokens);
+
             return tokens is null ? (TokenFileState.Unusable, null) : (TokenFileState.Loaded, tokens);
         } catch (JsonException) {
             return (TokenFileState.Unusable, null);
@@ -91,12 +96,13 @@ public static class TokenStore {
     public static async Task<StoredTokens?> LoadAsync(string profile) {
         // Missing and Unusable both mean "no usable creds for this profile" → null.
         var (_, tokens) = await ReadTokenFileAsync(ProfileTokenPath(profile));
+
         return tokens;
     }
 
     public static async Task SaveAsync(string profile, StoredTokens tokens) {
         Directory.CreateDirectory(TokenDir);
-        var path     = ProfileTokenPath(profile);
+        var path = ProfileTokenPath(profile);
         // Unique per write so concurrent writers (hooks/watcher/daemon/MCP/login share this
         // store) never write the same temp file and splice each other's bytes. The atomic
         // File.Move then publishes one complete document, last-writer-wins.
@@ -108,21 +114,26 @@ public static class TokenStore {
         // mode at creation; it is ignored on Windows, so set it only on Unix. The rename then
         // carries 0600 onto the final file.
         var options = new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write, Share = FileShare.None };
+
         if (!OperatingSystem.IsWindows()) {
             options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         }
 
         try {
-            await using (var stream = new FileStream(tempPath, options))
-            await using (var writer = new StreamWriter(stream)) {
+            await using (var stream = new FileStream(tempPath, options)) {
+                await using var writer = new StreamWriter(stream);
+
                 await writer.WriteAsync(JsonSerializer.Serialize(tokens, CapacitorJsonContext.Default.StoredTokens));
             }
+
             await ReplaceWithRetryAsync(tempPath, path);
         } finally {
             // Success renames the temp away; only a failed write/move leaves it. Unlike the
             // old shared name, a leaked unique temp never gets reused, so clean it up.
             if (File.Exists(tempPath)) {
-                try { File.Delete(tempPath); } catch { /* best-effort */ }
+                try { File.Delete(tempPath); } catch {
+                    /* best-effort */
+                }
             }
         }
 
@@ -132,7 +143,9 @@ public static class TokenStore {
 
         // Migration: remove the pre-upgrade single-file token if it still exists
         if (File.Exists(LegacyTokenPath)) {
-            try { File.Delete(LegacyTokenPath); } catch { /* best-effort */ }
+            try { File.Delete(LegacyTokenPath); } catch {
+                /* best-effort */
+            }
         }
     }
 
@@ -149,12 +162,13 @@ public static class TokenStore {
     const int ReplaceBackoffBaseMs = 20;
 
     static async Task ReplaceWithRetryAsync(string tempPath, string path) {
-        for (var attempt = 1; ; attempt++) {
+        for (var attempt = 1;; attempt++) {
             try {
                 File.Move(tempPath, path, overwrite: true);
+
                 return;
             } catch (Exception ex) when ((ex is UnauthorizedAccessException or IOException)
-                                         && attempt < ReplaceMaxAttempts) {
+                                      && attempt < ReplaceMaxAttempts) {
                 // Linear backoff (20/40/60/80ms) to let the peer holding the target close it.
                 await Task.Delay(ReplaceBackoffBaseMs * attempt);
             }
@@ -173,14 +187,20 @@ public static class TokenStore {
     // prefix (not a glob) so a profile name containing a wildcard char can't widen it.
     static void SweepLeakedTemps(string? profile = null) {
         if (!Directory.Exists(TokenDir)) return;
+
         var prefix = profile is null ? null : $"{profile}.json.";
+
         try {
             foreach (var tmp in Directory.EnumerateFiles(TokenDir, "*.tmp")) {
                 if (prefix is null || Path.GetFileName(tmp).StartsWith(prefix, StringComparison.Ordinal)) {
-                    try { File.Delete(tmp); } catch { /* best-effort */ }
+                    try { File.Delete(tmp); } catch {
+                        /* best-effort */
+                    }
                 }
             }
-        } catch { /* best-effort */ }
+        } catch {
+            /* best-effort */
+        }
     }
 
     // ── Legacy (profile-resolving) overloads ────────────────────────────────
@@ -199,14 +219,16 @@ public static class TokenStore {
     static async Task<StoredTokens?> LoadWithLegacyFallbackAsync(string profile) {
         var (state, tokens) = await ReadTokenFileAsync(ProfileTokenPath(profile));
 
-        if (state == TokenFileState.Loaded) return tokens;
+        switch (state) {
+            case TokenFileState.Loaded:
+                return tokens;
+            case TokenFileState.Missing:
+                var (_, legacy) = await ReadTokenFileAsync(LegacyTokenPath);
 
-        if (state == TokenFileState.Missing) {
-            var (_, legacy) = await ReadTokenFileAsync(LegacyTokenPath);
-            return legacy;
+                return legacy;
+            default:
+                return null; // Unusable (corrupt) active profile
         }
-
-        return null; // Unusable (corrupt) active profile
     }
 
     public static async Task SaveAsync(StoredTokens tokens) {
@@ -216,15 +238,21 @@ public static class TokenStore {
 
     public static Task DeleteAsync() {
         if (File.Exists(LegacyTokenPath)) {
-            try { File.Delete(LegacyTokenPath); } catch { /* best-effort */ }
+            try { File.Delete(LegacyTokenPath); } catch {
+                /* best-effort */
+            }
         }
 
         if (Directory.Exists(TokenDir)) {
             try {
                 foreach (var file in Directory.EnumerateFiles(TokenDir, "*.json")) {
-                    try { File.Delete(file); } catch { /* best-effort */ }
+                    try { File.Delete(file); } catch {
+                        /* best-effort */
+                    }
                 }
-            } catch { /* best-effort */ }
+            } catch {
+                /* best-effort */
+            }
         }
 
         // Also remove any leaked temps (they carry token secrets) so logout leaves nothing behind.
@@ -235,6 +263,7 @@ public static class TokenStore {
 
     static async Task<string> ResolveActiveProfileAsync() {
         var cfg = await AppConfig.LoadProfileConfig();
+
         return string.IsNullOrEmpty(cfg.ActiveProfile) ? "default" : cfg.ActiveProfile;
     }
 
@@ -291,11 +320,7 @@ public static class TokenStore {
             return RefreshDecision.RefreshWorkOS;
         }
 
-        if (tokens.Provider is AuthProvider.GitHubApp) {
-            return RefreshDecision.RefreshGitHub;
-        }
-
-        return RefreshDecision.Unsupported;
+        return tokens.Provider is AuthProvider.GitHubApp ? RefreshDecision.RefreshGitHub : RefreshDecision.Unsupported;
     }
 
     // Proactively refresh the active profile's token when it is within `window` of expiry —
@@ -336,8 +361,14 @@ public static class TokenStore {
             : RefreshGitHubAsync;
 
         var contended = false;
-        var result    = await RefreshWithCrossProcessLockAsync(
-            profile, tokens!, refresh, ExpiringWithinWindow, onLockContended: () => contended = true);
+
+        var result = await RefreshWithCrossProcessLockAsync(
+            profile,
+            tokens!,
+            refresh,
+            ExpiringWithinWindow,
+            onLockContended: () => contended = true
+        );
 
         // Lock contention (a peer holds the lock, likely mid-refresh) is not a refresh failure —
         // don't let the daemon warn/back off as though the endpoint rejected us. Otherwise:

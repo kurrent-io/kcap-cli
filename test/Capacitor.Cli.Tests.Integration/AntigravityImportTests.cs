@@ -23,7 +23,10 @@ public class AntigravityImportTests : IDisposable {
 
     public void Dispose() {
         _server.Stop();
-        try { Directory.Delete(_home, recursive: true); } catch { /* best effort */ }
+
+        try { Directory.Delete(_home, recursive: true); } catch {
+            /* best effort */
+        }
     }
 
     string BrainDir(string convId) => Path.Combine(_home, ".gemini", "antigravity", "brain", convId);
@@ -31,17 +34,24 @@ public class AntigravityImportTests : IDisposable {
     void WriteTranscript(string convId, string firstUserText) {
         var dir = Path.Combine(BrainDir(convId), ".system_generated", "logs");
         Directory.CreateDirectory(dir);
-        File.WriteAllLines(Path.Combine(dir, "transcript_full.jsonl"), new[] {
-            $$"""{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-07-02T19:00:00Z","content":"<USER_REQUEST>{{firstUserText}}</USER_REQUEST>"}""",
-            """{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-07-02T19:00:05Z","content":"done"}"""
-        });
+
+        File.WriteAllLines(
+            Path.Combine(dir, "transcript_full.jsonl"),
+            [
+                $$"""{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-07-02T19:00:00Z","content":"<USER_REQUEST>{{firstUserText}}</USER_REQUEST>"}""",
+                """{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-07-02T19:00:05Z","content":"done"}"""
+            ]
+        );
     }
 
     void WriteLinkage() {
         var dir = Path.Combine(BrainDir(Root), ".system_generated", "messages");
         Directory.CreateDirectory(dir);
-        File.WriteAllText(Path.Combine(dir, Child + ".json"),
-            new JsonObject { ["sender"] = Child, ["recipient"] = Root }.ToJsonString());
+
+        File.WriteAllText(
+            Path.Combine(dir, Child + ".json"),
+            new JsonObject { ["sender"] = Child, ["recipient"] = Root }.ToJsonString()
+        );
     }
 
     [Test]
@@ -52,16 +62,17 @@ public class AntigravityImportTests : IDisposable {
 
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(404));
+
         foreach (var route in new[] {
-            "/hooks/session-start/antigravity", "/hooks/transcript",
-            "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/antigravity"
-        }) {
+                     "/hooks/session-start/antigravity", "/hooks/transcript",
+                     "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/antigravity"
+                 }) {
             _server.Given(Request.Create().WithPath(route).UsingPost())
                 .RespondWith(Response.Create().WithStatusCode(200));
         }
 
         using var client = new HttpClient();
-        var source = new AntigravityImportSource(home: _home, geminiCliHome: "");
+        var       source = new AntigravityImportSource(home: _home, geminiCliHome: "");
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         // The subagent conversation must NOT be discovered as its own top-level session.
@@ -71,11 +82,15 @@ public class AntigravityImportTests : IDisposable {
         var classified = await source.ClassifyAsync(
             discovered,
             new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
-            CancellationToken.None);
+            CancellationToken.None
+        );
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
 
         var outcome = await source.ImportSessionAsync(
-            classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+            classified[0],
+            new ImportContext(client, _server.Url!, ForcePrivate: false),
+            CancellationToken.None
+        );
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
 
         var posts = _server.LogEntries
@@ -83,10 +98,13 @@ public class AntigravityImportTests : IDisposable {
             .Select(e => e.RequestMessage.Path)
             .ToList();
 
-        await Assert.That(posts).IsEquivalentTo(new[] {
-            "/hooks/session-start/antigravity", "/hooks/transcript", "/hooks/subagent-start",
-            "/hooks/transcript", "/hooks/subagent-stop", "/hooks/session-end/antigravity"
-        });
+        await Assert.That(posts)
+            .IsEquivalentTo(
+                [
+                    "/hooks/session-start/antigravity", "/hooks/transcript", "/hooks/subagent-start",
+                    "/hooks/transcript", "/hooks/subagent-stop", "/hooks/session-end/antigravity"
+                ]
+            );
         // Fail-closed ordering: subagent registered before its content, stopped after.
         await Assert.That(posts.IndexOf("/hooks/subagent-start")).IsLessThan(posts.IndexOf("/hooks/subagent-stop"));
 
@@ -114,32 +132,41 @@ public class AntigravityImportTests : IDisposable {
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").WithParam("agentId", Child).UsingGet())
             .AtPriority(1)
             .RespondWith(Response.Create().WithStatusCode(404));
+
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
             .AtPriority(10)
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
+
         foreach (var route in new[] {
-            "/hooks/session-start/antigravity", "/hooks/transcript",
-            "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/antigravity"
-        }) {
+                     "/hooks/session-start/antigravity", "/hooks/transcript",
+                     "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/antigravity"
+                 }) {
             _server.Given(Request.Create().WithPath(route).UsingPost())
                 .RespondWith(Response.Create().WithStatusCode(200));
         }
 
         using var client = new HttpClient();
-        var source = new AntigravityImportSource(home: _home, geminiCliHome: "");
+        var       source = new AntigravityImportSource(home: _home, geminiCliHome: "");
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+
         var classified = await source.ClassifyAsync(
-            discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
-            CancellationToken.None);
+            discovered,
+            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None
+        );
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
 
         var outcome = await source.ImportSessionAsync(
-            classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+            classified[0],
+            new ImportContext(client, _server.Url!, ForcePrivate: false),
+            CancellationToken.None
+        );
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Skipped);
 
         var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST")
-            .Select(e => e.RequestMessage.Path).ToList();
+            .Select(e => e.RequestMessage.Path)
+            .ToList();
 
         // The parent transcript is not re-sent, but lifecycle IS re-asserted (repair — a prior
         // run may have failed session-end) and the missing child is repaired: session-start →
@@ -151,7 +178,8 @@ public class AntigravityImportTests : IDisposable {
 
         var childTranscript = _server.LogEntries
             .Where(e => e.RequestMessage.Path == "/hooks/transcript")
-            .Select(e => e.RequestMessage.Body!).Single();
+            .Select(e => e.RequestMessage.Body!)
+            .Single();
         await Assert.That(childTranscript).Contains($"\"agent_id\":\"{Child}\"");
     }
 
@@ -169,28 +197,36 @@ public class AntigravityImportTests : IDisposable {
         // (AI-1160 review, findings at :240 / :249).
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
+
         foreach (var route in new[] {
-            "/hooks/session-start/antigravity", "/hooks/transcript",
-            "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/antigravity"
-        }) {
+                     "/hooks/session-start/antigravity", "/hooks/transcript",
+                     "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/antigravity"
+                 }) {
             _server.Given(Request.Create().WithPath(route).UsingPost())
                 .RespondWith(Response.Create().WithStatusCode(200));
         }
 
         using var client = new HttpClient();
-        var source = new AntigravityImportSource(home: _home, geminiCliHome: "");
+        var       source = new AntigravityImportSource(home: _home, geminiCliHome: "");
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+
         var classified = await source.ClassifyAsync(
-            discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
-            CancellationToken.None);
+            discovered,
+            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None
+        );
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
 
         await source.ImportSessionAsync(
-            classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+            classified[0],
+            new ImportContext(client, _server.Url!, ForcePrivate: false),
+            CancellationToken.None
+        );
 
         var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST")
-            .Select(e => e.RequestMessage.Path).ToList();
+            .Select(e => e.RequestMessage.Path)
+            .ToList();
 
         // Lifecycle repaired (start re-marks active so stop can append completion), but no content
         // re-send.
@@ -226,27 +262,35 @@ public class AntigravityImportTests : IDisposable {
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").WithParam("agentId", Child).UsingGet())
             .AtPriority(1)
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":0}"""));
+
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
             .AtPriority(10)
             .RespondWith(Response.Create().WithStatusCode(404));
+
         foreach (var route in new[] {
-            "/hooks/session-start/antigravity", "/hooks/transcript",
-            "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/antigravity"
-        }) {
+                     "/hooks/session-start/antigravity", "/hooks/transcript",
+                     "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/antigravity"
+                 }) {
             _server.Given(Request.Create().WithPath(route).UsingPost())
                 .RespondWith(Response.Create().WithStatusCode(200));
         }
 
         using var client = new HttpClient();
-        var source = new AntigravityImportSource(home: _home, geminiCliHome: "");
+        var       source = new AntigravityImportSource(home: _home, geminiCliHome: "");
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+
         var classified = await source.ClassifyAsync(
-            discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
-            CancellationToken.None);
+            discovered,
+            new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
+            CancellationToken.None
+        );
 
         await source.ImportSessionAsync(
-            classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+            classified[0],
+            new ImportContext(client, _server.Url!, ForcePrivate: false),
+            CancellationToken.None
+        );
 
         var childTranscript = _server.LogEntries
             .Where(e => e.RequestMessage.Path == "/hooks/transcript")
@@ -264,6 +308,7 @@ public class AntigravityImportTests : IDisposable {
         // Server reports a high watermark → the transcript's last relevant line is already ingested.
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
+
         // AlreadyLoaded still re-asserts lifecycle (idempotent repair), so stub those POSTs.
         foreach (var route in new[] { "/hooks/session-start/antigravity", "/hooks/session-end/antigravity" }) {
             _server.Given(Request.Create().WithPath(route).UsingPost())
@@ -271,23 +316,29 @@ public class AntigravityImportTests : IDisposable {
         }
 
         using var client = new HttpClient();
-        var source = new AntigravityImportSource(home: _home, geminiCliHome: "");
+        var       source = new AntigravityImportSource(home: _home, geminiCliHome: "");
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+
         var classified = await source.ClassifyAsync(
             discovered,
             new ClassifyContext(client, _server.Url!, MinLines: 0, ExcludedRepos: null, ExcludedPaths: null),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
 
         var outcome = await source.ImportSessionAsync(
-            classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+            classified[0],
+            new ImportContext(client, _server.Url!, ForcePrivate: false),
+            CancellationToken.None
+        );
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Skipped);
 
         // No parent transcript re-send, but lifecycle IS re-asserted (repair path).
         var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST")
-            .Select(e => e.RequestMessage.Path).ToList();
+            .Select(e => e.RequestMessage.Path)
+            .ToList();
         await Assert.That(posts.Contains("/hooks/session-start/antigravity")).IsTrue();
         await Assert.That(posts.Contains("/hooks/session-end/antigravity")).IsTrue();
         await Assert.That(posts.Contains("/hooks/transcript")).IsFalse();

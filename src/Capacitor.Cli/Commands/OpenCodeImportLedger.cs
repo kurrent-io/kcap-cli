@@ -58,4 +58,4 @@ internal sealed class OpenCodeImportLedger {
 }
 
 [JsonSerializable(typeof(Dictionary<string, Dictionary<string, string>>))]
-internal partial class OpenCodeLedgerJsonContext : JsonSerializerContext { }
+internal partial class OpenCodeLedgerJsonContext : JsonSerializerContext;

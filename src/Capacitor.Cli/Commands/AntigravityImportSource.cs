@@ -29,34 +29,27 @@ namespace Capacitor.Cli.Commands;
 /// is a follow-up (it needs completeness tracking so a failed USAGE send after a complete
 /// transcript still retries) — so imported sessions currently carry content but not cost.</para>
 /// </summary>
-internal sealed class AntigravityImportSource : IImportSource {
+internal sealed class AntigravityImportSource(string? home = null, string? geminiCliHome = null) : IImportSource {
     static readonly HashSet<string> RelevantTypes = new(StringComparer.Ordinal) {
         "USER_INPUT", "PLANNER_RESPONSE", "RUN_COMMAND", "VIEW_FILE", "LIST_DIRECTORY", "CODE_ACTION"
     };
 
-    readonly string? _home;
-    readonly string? _geminiCliHome;
+    string BrainRoot => Path.Combine(AntigravityPaths.Root(home, geminiCliHome), "brain");
 
-    public AntigravityImportSource(string? home = null, string? geminiCliHome = null) {
-        _home          = home;
-        _geminiCliHome = geminiCliHome;
-    }
-
-    string BrainRoot => Path.Combine(AntigravityPaths.Root(_home, _geminiCliHome), "brain");
-
-    public string Vendor => "antigravity";
-    public bool   IsAvailable => Directory.Exists(BrainRoot);
+    public string Vendor                  => "antigravity";
+    public bool   IsAvailable             => Directory.Exists(BrainRoot);
     public bool   SupportsTitleGeneration => false; // server computes a fallback title at session-end
 
     public Task<IReadOnlyList<DiscoveredSession>> DiscoverAsync(DiscoveryFilters filters, CancellationToken ct) {
         var result = new List<DiscoveredSession>();
+
         if (!Directory.Exists(BrainRoot)) return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
 
         // Resolve every conversation to its top-level ancestor: roots (no parent) import as
         // sessions; ALL transitive descendants (children, grandchildren, …) import as their
         // root's subagents. Cycle-/non-tree-safe (BuildRootDescendants) so a deep chain isn't
         // lost and a cycle imports standalone rather than vanishing. Linkage is complete on disk.
-        var parentMap = AntigravitySubagents.BuildParentMap(_home, _geminiCliHome, ct);
+        var parentMap = AntigravitySubagents.BuildParentMap(home, geminiCliHome, ct);
         var convIds   = Directory.EnumerateDirectories(BrainRoot).Select(Path.GetFileName).OfType<string>().ToList();
         var byRoot    = AntigravitySubagents.BuildRootDescendants(convIds, parentMap);
 
@@ -69,61 +62,80 @@ internal sealed class AntigravityImportSource : IImportSource {
 
             if (filters.FilterSession is { } fs && !string.Equals(convId, fs, StringComparison.Ordinal)) continue;
 
-            var transcript = AntigravityPaths.TranscriptFullPath(convId, _home, _geminiCliHome);
+            var transcript = AntigravityPaths.TranscriptFullPath(convId, home, geminiCliHome);
+
             if (!File.Exists(transcript)) continue;
 
             var firstTimestamp = ReadFirstTimestamp(transcript);
+
             if (firstTimestamp is null) {
-                try { firstTimestamp = File.GetCreationTimeUtc(transcript); } catch { /* best effort */ }
+                try { firstTimestamp = File.GetCreationTimeUtc(transcript); } catch {
+                    /* best effort */
+                }
             }
+
             if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) continue;
 
-            result.Add(new DiscoveredSession(
-                SessionId:      convId,
-                Vendor:         Vendor,
-                Cwd:            null,
-                FirstTimestamp: firstTimestamp,
-                SourceMeta:     new Dictionary<string, object?> {
-                    ["TranscriptPath"] = transcript,
-                    ["Children"]       = descendants, // all transitive descendants, nested under this root
-                }));
+            result.Add(
+                new DiscoveredSession(
+                    SessionId: convId,
+                    Vendor: Vendor,
+                    Cwd: null,
+                    FirstTimestamp: firstTimestamp,
+                    SourceMeta: new Dictionary<string, object?> {
+                        ["TranscriptPath"] = transcript,
+                        ["Children"]       = descendants, // all transitive descendants, nested under this root
+                    }
+                )
+            );
         }
 
         return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
     }
 
     public async Task<IReadOnlyList<ImportCommand.SessionClassification>> ClassifyAsync(
-            IReadOnlyList<DiscoveredSession> sessions, ClassifyContext ctx, CancellationToken ct) {
+            IReadOnlyList<DiscoveredSession> sessions,
+            ClassifyContext                  ctx,
+            CancellationToken                ct
+        ) {
         var results = new List<ImportCommand.SessionClassification>(sessions.Count);
 
         foreach (var s in sessions) {
             var transcriptPath = (string)s.SourceMeta!["TranscriptPath"]!;
-            var meta = new SessionMetadata { SessionId = s.SessionId, Cwd = s.Cwd, FirstTimestamp = s.FirstTimestamp };
+            var meta           = new SessionMetadata { SessionId = s.SessionId, Cwd = s.Cwd, FirstTimestamp = s.FirstTimestamp };
 
-            int? lastNonBlank, lastRelevant; int nonBlank;
+            int? lastNonBlank, lastRelevant;
+            int  nonBlank;
+
             try {
                 (lastNonBlank, lastRelevant, nonBlank) = await ReadTranscriptStatsAsync(transcriptPath, ct);
             } catch {
                 results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, 0, "transcript read failed"));
+
                 continue;
             }
 
             if (lastNonBlank is null) {
                 results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, 0, "empty transcript"));
+
                 continue;
             }
+
             if (nonBlank < ctx.MinLines) {
                 results.Add(Make(s, meta, ImportCommand.ClassificationStatus.TooShort, nonBlank));
+
                 continue;
             }
 
             int? serverLastLine;
+
             try {
                 serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, agentId: null, ct);
             } catch (OperationCanceledException) {
                 throw;
             } catch {
                 results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, nonBlank, "watermark probe failed"));
+
                 continue;
             }
 
@@ -135,30 +147,40 @@ internal sealed class AntigravityImportSource : IImportSource {
             // normalizer-skipped steps (CHECKPOINT / GENERIC / SYSTEM_*), so a raw-tail compare
             // would re-classify a complete session Partial forever (mirrors Gemini).
             var lastImportable = lastRelevant ?? lastNonBlank.Value;
+
             if (serverLastLine is { } srv) {
                 if (srv >= lastImportable) status = ImportCommand.ClassificationStatus.AlreadyLoaded;
-                else { status = ImportCommand.ClassificationStatus.Partial; resume = srv + 1; }
+                else {
+                    status = ImportCommand.ClassificationStatus.Partial;
+                    resume = srv + 1;
+                }
             }
 
-            results.Add(new ImportCommand.SessionClassification {
-                SessionId      = s.SessionId,
-                FilePath       = "", // routed phase
-                EncodedCwd     = "",
-                Meta           = meta,
-                Status         = status,
-                Vendor         = Vendor,
-                ResumeFromLine = resume,
-                TotalLines     = nonBlank,
-                SourceMeta     = s.SourceMeta,
-            });
+            results.Add(
+                new ImportCommand.SessionClassification {
+                    SessionId      = s.SessionId,
+                    FilePath       = "", // routed phase
+                    EncodedCwd     = "",
+                    Meta           = meta,
+                    Status         = status,
+                    Vendor         = Vendor,
+                    ResumeFromLine = resume,
+                    TotalLines     = nonBlank,
+                    SourceMeta     = s.SourceMeta,
+                }
+            );
         }
 
         return results;
     }
 
     public async Task<ImportOutcome> ImportSessionAsync(
-            ImportCommand.SessionClassification c, ImportContext ctx, CancellationToken ct) {
+            ImportCommand.SessionClassification c,
+            ImportContext                       ctx,
+            CancellationToken                   ct
+        ) {
         var transcriptPath = (string)c.SourceMeta!["TranscriptPath"]!;
+
         if (!File.Exists(transcriptPath)) return ImportOutcome.Failed;
 
         // An AlreadyLoaded root's parent transcript is fully imported, but a prior run may have
@@ -171,14 +193,24 @@ internal sealed class AntigravityImportSource : IImportSource {
         // succeeded). If either lifecycle POST fails, return Failed so a re-run retries the repair
         // instead of reporting a falsely-complete Skipped (mirrors Cursor) (AI-1160 review).
         if (c.Status == ImportCommand.ClassificationStatus.AlreadyLoaded) {
-            if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/antigravity",
-                    BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate), ct))
+            if (!await PostHookAsync(
+                    ctx.HttpClient,
+                    ctx.BaseUrl,
+                    "session-start/antigravity",
+                    BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate),
+                    ct
+                ))
                 return ImportOutcome.Failed;
 
             await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, c.SourceMeta!, ct);
 
-            if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/antigravity",
-                    BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), ct))
+            if (!await PostHookAsync(
+                    ctx.HttpClient,
+                    ctx.BaseUrl,
+                    "session-end/antigravity",
+                    BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp),
+                    ct
+                ))
                 return ImportOutcome.Failed;
 
             return ImportOutcome.Skipped;
@@ -187,17 +219,29 @@ internal sealed class AntigravityImportSource : IImportSource {
         // Lifecycle-before-transcript (mirrors Gemini): a transcript that advances the
         // watermark past a failed lifecycle POST would leave the session lifecycle-less.
         // Re-runs are idempotent server-side (deterministic lifecycle ids).
-        if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/antigravity",
-                BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate), ct))
+        if (!await PostHookAsync(
+                ctx.HttpClient,
+                ctx.BaseUrl,
+                "session-start/antigravity",
+                BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate),
+                ct
+            ))
             return ImportOutcome.Failed;
 
         var startLine = c.Status == ImportCommand.ClassificationStatus.Partial ? c.ResumeFromLine : 0;
 
         int sent;
+
         try {
             sent = await SessionImporter.SendTranscriptBatches(
-                httpClient: ctx.HttpClient, baseUrl: ctx.BaseUrl, sessionId: c.SessionId,
-                filePath: transcriptPath, agentId: null, startLine: startLine, vendor: Vendor);
+                httpClient: ctx.HttpClient,
+                baseUrl: ctx.BaseUrl,
+                sessionId: c.SessionId,
+                filePath: transcriptPath,
+                agentId: null,
+                startLine: startLine,
+                vendor: Vendor
+            );
         } catch (OperationCanceledException) {
             throw;
         } catch {
@@ -208,29 +252,41 @@ internal sealed class AntigravityImportSource : IImportSource {
         // Subagent failures don't fail the (already-imported) parent; a re-import retries.
         await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, c.SourceMeta!, ct);
 
-        if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/antigravity",
-                BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), ct))
+        if (!await PostHookAsync(
+                ctx.HttpClient,
+                ctx.BaseUrl,
+                "session-end/antigravity",
+                BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp),
+                ct
+            ))
             return ImportOutcome.Failed;
 
         if (sent == 0) return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
+
         return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
     }
 
     async Task ImportChildrenAsync(
-            HttpClient client, string baseUrl, string rootId,
-            IReadOnlyDictionary<string, object?> sourceMeta, CancellationToken ct) {
+            HttpClient                           client,
+            string                               baseUrl,
+            string                               rootId,
+            IReadOnlyDictionary<string, object?> sourceMeta,
+            CancellationToken                    ct
+        ) {
         if (!sourceMeta.TryGetValue("Children", out var kidsObj) || kidsObj is not List<string> { Count: > 0 } children)
             return;
 
         foreach (var childId in children) {
             ct.ThrowIfCancellationRequested();
 
-            var childTranscript = AntigravityPaths.TranscriptFullPath(childId, _home, _geminiCliHome);
+            var childTranscript = AntigravityPaths.TranscriptFullPath(childId, home, geminiCliHome);
+
             if (!File.Exists(childTranscript)) continue;
 
             // Where the child's own (rootId, childId) stream is already ingested up to. agentId =
             // raw child conversation id (matches how live child events route).
             int? chwm;
+
             try {
                 chwm = await FetchServerLastLineAsync(client, baseUrl, rootId, childId, ct);
             } catch (OperationCanceledException) {
@@ -243,13 +299,15 @@ internal sealed class AntigravityImportSource : IImportSource {
             // parent uses for AlreadyLoaded): trailing normalizer-skipped steps mustn't force an
             // endless re-send, and a fully-ingested child is a no-op we skip before touching hooks.
             int? childLastImportable;
+
             try {
                 var (lastNonBlank, lastRelevant, _) = await ReadTranscriptStatsAsync(childTranscript, ct);
-                childLastImportable = lastRelevant ?? lastNonBlank;
+                childLastImportable                 = lastRelevant ?? lastNonBlank;
             } catch {
                 continue; // unreadable child transcript — retry on re-import
             }
-            if (childLastImportable is null) continue;                       // empty child
+
+            if (childLastImportable is null) continue; // empty child
 
             if (chwm is { } done && done >= childLastImportable) {
                 // Content is fully ingested, but subagent-stop is best-effort below and may have
@@ -269,10 +327,20 @@ internal sealed class AntigravityImportSource : IImportSource {
                 // (no active agent → no SubagentCompleted). strict surfaces the failure as non-2xx,
                 // so we only post stop when start truly re-marked the agent, and a re-import retries
                 // otherwise (AI-1160 review).
-                if (await PostHookAsync(client, baseUrl, "subagent-start",
-                        BuildSubagentStartPayload(rootId, childId, childTranscript, strict: true), ct))
-                    await PostHookAsync(client, baseUrl, "subagent-stop",
-                        BuildSubagentStopPayload(rootId, childId, childTranscript, strict: true), ct);
+                if (await PostHookAsync(
+                        client,
+                        baseUrl,
+                        "subagent-start",
+                        BuildSubagentStartPayload(rootId, childId, childTranscript, strict: true),
+                        ct
+                    ))
+                    await PostHookAsync(
+                        client,
+                        baseUrl,
+                        "subagent-stop",
+                        BuildSubagentStopPayload(rootId, childId, childTranscript, strict: true),
+                        ct
+                    );
 
                 continue;
             }
@@ -284,39 +352,57 @@ internal sealed class AntigravityImportSource : IImportSource {
             var childStartLine = chwm is { } v ? checked(v + 1) : 0;
 
             // Fail-closed: no content unless the subagent registered first.
-            if (!await PostHookAsync(client, baseUrl, "subagent-start",
-                    BuildSubagentStartPayload(rootId, childId, childTranscript), ct))
+            if (!await PostHookAsync(
+                    client,
+                    baseUrl,
+                    "subagent-start",
+                    BuildSubagentStartPayload(rootId, childId, childTranscript),
+                    ct
+                ))
                 continue;
 
             try {
                 await SessionImporter.SendTranscriptBatches(
-                    httpClient: client, baseUrl: baseUrl, sessionId: rootId,
-                    filePath: childTranscript, agentId: childId, startLine: childStartLine, vendor: Vendor);
+                    httpClient: client,
+                    baseUrl: baseUrl,
+                    sessionId: rootId,
+                    filePath: childTranscript,
+                    agentId: childId,
+                    startLine: childStartLine,
+                    vendor: Vendor
+                );
             } catch (OperationCanceledException) {
                 throw;
             } catch {
                 continue; // leave subagent-stop unsent; a re-import retries (idempotent)
             }
 
-            await PostHookAsync(client, baseUrl, "subagent-stop",
-                BuildSubagentStopPayload(rootId, childId, childTranscript), ct);
+            await PostHookAsync(
+                client,
+                baseUrl,
+                "subagent-stop",
+                BuildSubagentStopPayload(rootId, childId, childTranscript),
+                ct
+            );
         }
     }
 
     // ── payload builders ────────────────────────────────────────────────────────
 
     static JsonObject BuildSessionStartPayload(string sid, string? cwd, DateTimeOffset? startedAt, bool forcePrivate) {
-        var p = new JsonObject { ["hook_event_name"] = "sessionStart", ["session_id"] = sid };
-        if (cwd is not null) p["cwd"] = cwd;
-        if (startedAt is { } ts) p["started_at"] = ts.ToString("O");
+        var p                                     = new JsonObject { ["hook_event_name"] = "sessionStart", ["session_id"] = sid };
+        if (cwd is not null) p["cwd"]             = cwd;
+        if (startedAt is { } ts) p["started_at"]  = ts.ToString("O");
         if (forcePrivate) p["default_visibility"] = "private";
+
         return p;
     }
 
     static JsonObject BuildSessionEndPayload(string sid, string? cwd, DateTimeOffset? endedAt) {
-        var p = new JsonObject { ["hook_event_name"] = "sessionEnd", ["session_id"] = sid, ["reason"] = "antigravity-import" };
-        if (cwd is not null) p["cwd"] = cwd;
+        var p                                = new JsonObject { ["hook_event_name"] = "sessionEnd", ["session_id"] = sid, ["reason"] = "antigravity-import" };
+        if (cwd is not null) p["cwd"]        = cwd;
         if (endedAt is { } ts) p["ended_at"] = ts.ToString("O");
+
         return p;
     }
 
@@ -334,6 +420,7 @@ internal sealed class AntigravityImportSource : IImportSource {
             ["cwd"]             = "",
         };
         if (strict) p["strict"] = true;
+
         return p;
     }
 
@@ -355,13 +442,15 @@ internal sealed class AntigravityImportSource : IImportSource {
             ["last_assistant_message"] = "",
         };
         if (strict) p["strict"] = true;
+
         return p;
     }
 
     static async Task<bool> PostHookAsync(HttpClient client, string baseUrl, string route, JsonObject payload, CancellationToken ct) {
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{route}", content, ct: ct);
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{route}", content, ct: ct);
+
             return resp.IsSuccessStatusCode;
         } catch (OperationCanceledException) {
             throw;
@@ -376,25 +465,34 @@ internal sealed class AntigravityImportSource : IImportSource {
         try {
             foreach (var line in File.ReadLines(path)) {
                 if (string.IsNullOrWhiteSpace(line)) continue;
+
                 using var doc = JsonDocument.Parse(line);
+
                 if (doc.RootElement.ValueKind == JsonValueKind.Object
                  && doc.RootElement.TryGetProperty("created_at", out var ca)
                  && ca.GetString() is { } s
                  && DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ts))
                     return ts;
+
                 return null; // first non-blank line had no created_at — don't scan the whole file
             }
-        } catch { /* unreadable → null */ }
+        } catch {
+            /* unreadable → null */
+        }
+
         return null;
     }
 
     static async Task<(int? LastNonBlank, int? LastRelevant, int NonBlank)> ReadTranscriptStatsAsync(
-            string transcriptPath, CancellationToken ct) {
+            string            transcriptPath,
+            CancellationToken ct
+        ) {
         await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using var       reader = new StreamReader(stream);
 
         int? lastIdx = null, lastRelevantIdx = null;
-        var count = 0; var lineIdx = 0;
+        var  count   = 0;
+        var  lineIdx = 0;
 
         while (await reader.ReadLineAsync(ct) is { } line) {
             if (!string.IsNullOrWhiteSpace(line)) {
@@ -402,8 +500,10 @@ internal sealed class AntigravityImportSource : IImportSource {
                 count++;
                 if (IsImportRelevantLine(line)) lastRelevantIdx = lineIdx;
             }
+
             lineIdx++;
         }
+
         return (lastIdx, lastRelevantIdx, count);
     }
 
@@ -416,10 +516,11 @@ internal sealed class AntigravityImportSource : IImportSource {
     internal static bool IsImportRelevantLine(string line) {
         try {
             using var doc = JsonDocument.Parse(line);
+
             return doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty("type", out var t)
-                && t.GetString() is { } type
-                && RelevantTypes.Contains(type);
+             && doc.RootElement.TryGetProperty("type", out var t)
+             && t.GetString() is { } type
+             && RelevantTypes.Contains(type);
         } catch {
             return false;
         }
@@ -430,20 +531,34 @@ internal sealed class AntigravityImportSource : IImportSource {
     }
 
     static async Task<int?> FetchServerLastLineAsync(
-            HttpClient http, string baseUrl, string sessionId, string? agentId, CancellationToken ct) {
-        var url = $"{baseUrl}/api/sessions/{sessionId}/last-line" + (agentId is not null ? $"?agentId={Uri.EscapeDataString(agentId)}" : "");
+            HttpClient        http,
+            string            baseUrl,
+            string            sessionId,
+            string?           agentId,
+            CancellationToken ct
+        ) {
+        var       url  = $"{baseUrl}/api/sessions/{sessionId}/last-line" + (agentId is not null ? $"?agentId={Uri.EscapeDataString(agentId)}" : "");
         using var resp = await http.GetWithRetryAsync(url, ct: ct);
+
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
+
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
-        var body = await resp.Content.ReadAsStringAsync(ct);
-        using var doc = JsonDocument.Parse(body);
+
+        var       body = await resp.Content.ReadAsStringAsync(ct);
+        using var doc  = JsonDocument.Parse(body);
+
         return doc.RootElement.TryGetProperty("last_line_number", out var ln) && ln.ValueKind == JsonValueKind.Number
-            ? ln.GetInt32() : null;
+            ? ln.GetInt32()
+            : null;
     }
 
     static ImportCommand.SessionClassification Make(
-            DiscoveredSession s, SessionMetadata meta, ImportCommand.ClassificationStatus status,
-            int totalLines, string? probeError = null) => new() {
+            DiscoveredSession                  s,
+            SessionMetadata                    meta,
+            ImportCommand.ClassificationStatus status,
+            int                                totalLines,
+            string?                            probeError = null
+        ) => new() {
         SessionId        = s.SessionId,
         FilePath         = "",
         EncodedCwd       = "",

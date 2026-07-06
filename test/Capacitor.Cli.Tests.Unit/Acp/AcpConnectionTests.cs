@@ -1,4 +1,5 @@
 // test/Capacitor.Cli.Tests.Unit/Acp/AcpConnectionTests.cs
+
 using System.IO.Pipelines;
 using System.Text;
 using System.Text.Json;
@@ -49,6 +50,7 @@ public class AcpConnectionTests {
         /// <summary>Reads one newline-delimited frame the connection wrote, as raw text.</summary>
         public async Task<string> ReadFrameFromConnectionAsync() {
             var line = await ReadLineAsync(_agentReadsFromClient).WaitAsync(HangGuard);
+
             return line ?? throw new InvalidOperationException("stream completed before a frame arrived");
         }
 
@@ -65,10 +67,11 @@ public class AcpConnectionTests {
 
             while (true) {
                 var n = await stream.ReadAsync(one);
+
                 if (n == 0)
                     return buffer.Count == 0 ? null : Encoding.UTF8.GetString(buffer.ToArray());
 
-                if (one[0] == (byte) '\n')
+                if (one[0] == (byte)'\n')
                     return Encoding.UTF8.GetString(buffer.ToArray());
 
                 buffer.Add(one[0]);
@@ -82,13 +85,13 @@ public class AcpConnectionTests {
     public async Task RequestAsync_resolves_with_result_on_matching_response() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
-        var              runTask = harness.Connection.RunAsync(cts.Token);
+        var             runTask = harness.Connection.RunAsync(cts.Token);
 
         var requestTask = harness.Connection.RequestAsync("initialize", null, CancellationToken.None);
 
-        var frame = await harness.ReadFrameFromConnectionAsync();
-        using var doc = JsonDocument.Parse(frame);
-        var       id  = doc.RootElement.GetProperty("id").GetInt64();
+        var       frame = await harness.ReadFrameFromConnectionAsync();
+        using var doc   = JsonDocument.Parse(frame);
+        var       id    = doc.RootElement.GetProperty("id").GetInt64();
         await Assert.That(doc.RootElement.GetProperty("method").GetString()).IsEqualTo("initialize");
 
         await harness.WriteFrameToConnectionAsync(
@@ -106,7 +109,7 @@ public class AcpConnectionTests {
     public async Task Concurrent_requests_correlate_to_their_own_responses_when_interleaved() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
-        var              runTask = harness.Connection.RunAsync(cts.Token);
+        var             runTask = harness.Connection.RunAsync(cts.Token);
 
         var requestA = harness.Connection.RequestAsync("session/new", null, CancellationToken.None);
         var frameA   = await harness.ReadFrameFromConnectionAsync();
@@ -122,6 +125,7 @@ public class AcpConnectionTests {
         await harness.WriteFrameToConnectionAsync(
             $$$"""{"jsonrpc":"2.0","id":{{{idB}}},"result":{"marker":"B"}}"""
         );
+
         await harness.WriteFrameToConnectionAsync(
             $$$"""{"jsonrpc":"2.0","id":{{{idA}}},"result":{"marker":"A"}}"""
         );
@@ -140,7 +144,7 @@ public class AcpConnectionTests {
     public async Task Error_response_throws_AcpRpcException_with_code_and_message() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
-        var              runTask = harness.Connection.RunAsync(cts.Token);
+        var             runTask = harness.Connection.RunAsync(cts.Token);
 
         var requestTask = harness.Connection.RequestAsync("session/set_config_option", null, CancellationToken.None);
         var frame       = await harness.ReadFrameFromConnectionAsync();
@@ -162,7 +166,7 @@ public class AcpConnectionTests {
     public async Task Inbound_notification_raises_OnNotification_with_method_and_params() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
-        var              runTask = harness.Connection.RunAsync(cts.Token);
+        var             runTask = harness.Connection.RunAsync(cts.Token);
 
         var tcs = new TaskCompletionSource<AcpNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
         harness.Connection.OnNotification += n => tcs.TrySetResult(n);
@@ -184,10 +188,11 @@ public class AcpConnectionTests {
     public async Task Inbound_server_request_with_handler_set_invokes_handler_and_echoes_id() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
-        var              runTask = harness.Connection.RunAsync(cts.Token);
+        var             runTask = harness.Connection.RunAsync(cts.Token);
 
-        harness.Connection.OnServerRequest = (request, _) => {
+        harness.Connection.OnServerRequest = (_, _) => {
             var result = JsonSerializer.SerializeToElement(new { content = "file contents" });
+
             return Task.FromResult<JsonElement?>(result);
         };
 
@@ -195,10 +200,11 @@ public class AcpConnectionTests {
             """{"jsonrpc":"2.0","id":99,"method":"fs/read_text_file","params":{"path":"/tmp/x"}}"""
         );
 
-        var frame = await harness.ReadFrameFromConnectionAsync();
-        using var doc = JsonDocument.Parse(frame);
+        var       frame = await harness.ReadFrameFromConnectionAsync();
+        using var doc   = JsonDocument.Parse(frame);
         await Assert.That(doc.RootElement.GetProperty("id").GetInt64()).IsEqualTo(99L);
         await Assert.That(doc.RootElement.TryGetProperty("error", out _)).IsFalse();
+
         await Assert.That(doc.RootElement.GetProperty("result").GetProperty("content").GetString())
             .IsEqualTo("file contents");
 
@@ -216,7 +222,7 @@ public class AcpConnectionTests {
     public async Task Inbound_server_request_handler_throwing_still_writes_an_internal_error_response() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
-        var              runTask = harness.Connection.RunAsync(cts.Token);
+        var             runTask = harness.Connection.RunAsync(cts.Token);
 
         harness.Connection.OnServerRequest = (_, _) => throw new InvalidOperationException("boom");
 
@@ -224,8 +230,8 @@ public class AcpConnectionTests {
             """{"jsonrpc":"2.0","id":7,"method":"fs/read_text_file","params":{"path":"/tmp/x"}}"""
         );
 
-        var frame = await harness.ReadFrameFromConnectionAsync();
-        using var doc = JsonDocument.Parse(frame);
+        var       frame = await harness.ReadFrameFromConnectionAsync();
+        using var doc   = JsonDocument.Parse(frame);
         await Assert.That(doc.RootElement.GetProperty("id").GetInt64()).IsEqualTo(7L);
         await Assert.That(doc.RootElement.TryGetProperty("result", out _)).IsFalse();
         var error = doc.RootElement.GetProperty("error");
@@ -234,6 +240,7 @@ public class AcpConnectionTests {
         // Loop must still be alive afterward — a wedge would silently swallow this too.
         var tcs = new TaskCompletionSource<AcpNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
         harness.Connection.OnNotification += n => tcs.TrySetResult(n);
+
         await harness.WriteFrameToConnectionAsync(
             """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"still-alive"}}"""
         );
@@ -248,7 +255,7 @@ public class AcpConnectionTests {
     public async Task Inbound_server_request_handler_returning_null_writes_a_null_result_response() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
-        var              runTask = harness.Connection.RunAsync(cts.Token);
+        var             runTask = harness.Connection.RunAsync(cts.Token);
 
         harness.Connection.OnServerRequest = (_, _) => Task.FromResult<JsonElement?>(null);
 
@@ -256,8 +263,8 @@ public class AcpConnectionTests {
             """{"jsonrpc":"2.0","id":8,"method":"session/request_permission","params":{}}"""
         );
 
-        var frame = await harness.ReadFrameFromConnectionAsync();
-        using var doc = JsonDocument.Parse(frame);
+        var       frame = await harness.ReadFrameFromConnectionAsync();
+        using var doc   = JsonDocument.Parse(frame);
         await Assert.That(doc.RootElement.GetProperty("id").GetInt64()).IsEqualTo(8L);
         await Assert.That(doc.RootElement.TryGetProperty("error", out _)).IsFalse();
         await Assert.That(doc.RootElement.GetProperty("result").ValueKind).IsEqualTo(JsonValueKind.Null);
@@ -270,15 +277,15 @@ public class AcpConnectionTests {
     public async Task Inbound_server_request_with_no_handler_writes_method_not_found_error() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
-        var              runTask = harness.Connection.RunAsync(cts.Token);
+        var             runTask = harness.Connection.RunAsync(cts.Token);
 
         // OnServerRequest intentionally left unset (AI-684 default-decline posture).
         await harness.WriteFrameToConnectionAsync(
             """{"jsonrpc":"2.0","id":99,"method":"session/request_permission","params":{}}"""
         );
 
-        var frame = await harness.ReadFrameFromConnectionAsync();
-        using var doc = JsonDocument.Parse(frame);
+        var       frame = await harness.ReadFrameFromConnectionAsync();
+        using var doc   = JsonDocument.Parse(frame);
         await Assert.That(doc.RootElement.GetProperty("id").GetInt64()).IsEqualTo(99L);
         await Assert.That(doc.RootElement.TryGetProperty("result", out _)).IsFalse();
         var error = doc.RootElement.GetProperty("error");
@@ -292,9 +299,9 @@ public class AcpConnectionTests {
     public async Task Cancelling_token_abandons_pending_request_without_hanging() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
-        var              runTask = harness.Connection.RunAsync(cts.Token);
+        var             runTask = harness.Connection.RunAsync(cts.Token);
 
-        using var requestCts = new CancellationTokenSource();
+        using var requestCts  = new CancellationTokenSource();
         var       requestTask = harness.Connection.RequestAsync("session/prompt", null, requestCts.Token);
 
         // Make sure the request was actually sent before cancelling, so we're testing abandonment
@@ -313,12 +320,13 @@ public class AcpConnectionTests {
     public async Task Malformed_line_is_skipped_and_loop_still_delivers_next_valid_frame() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
-        var              runTask = harness.Connection.RunAsync(cts.Token);
+        var             runTask = harness.Connection.RunAsync(cts.Token);
 
         var tcs = new TaskCompletionSource<AcpNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
         harness.Connection.OnNotification += n => tcs.TrySetResult(n);
 
         await harness.WriteFrameToConnectionAsync("{not valid json at all");
+
         await harness.WriteFrameToConnectionAsync(
             """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"still-alive"}}"""
         );
@@ -334,7 +342,7 @@ public class AcpConnectionTests {
     public async Task Wrong_typed_field_in_well_formed_JSON_is_skipped_and_loop_still_delivers_next_valid_frame() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
-        var              runTask = harness.Connection.RunAsync(cts.Token);
+        var             runTask = harness.Connection.RunAsync(cts.Token);
 
         var tcs = new TaskCompletionSource<AcpNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
         harness.Connection.OnNotification += n => tcs.TrySetResult(n);
@@ -344,9 +352,11 @@ public class AcpConnectionTests {
         // shape-dispatch. Also probe an error frame with a non-integer `code` for the same class
         // of bug (FormatException out of GetInt32()).
         await harness.WriteFrameToConnectionAsync("""{"jsonrpc":"2.0","id":1,"method":123}""");
+
         await harness.WriteFrameToConnectionAsync(
             """{"jsonrpc":"2.0","id":2,"error":{"code":"oops","message":"bad"}}"""
         );
+
         await harness.WriteFrameToConnectionAsync(
             """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"still-alive"}}"""
         );
@@ -370,7 +380,7 @@ public class AcpConnectionTests {
     public async Task Wrong_typed_error_code_on_a_pending_request_faults_the_caller_instead_of_hanging() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
-        var              runTask = harness.Connection.RunAsync(cts.Token);
+        var             runTask = harness.Connection.RunAsync(cts.Token);
 
         var requestTask = harness.Connection.RequestAsync("session/prompt", null, CancellationToken.None);
         var frame       = await harness.ReadFrameFromConnectionAsync();
@@ -397,20 +407,20 @@ public class AcpConnectionTests {
     public async Task Non_object_error_payload_on_a_pending_request_faults_the_caller_instead_of_hanging() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
-        var              runTask = harness.Connection.RunAsync(cts.Token);
+        var             runTask = harness.Connection.RunAsync(cts.Token);
 
         var requestTask = harness.Connection.RequestAsync("session/prompt", null, CancellationToken.None);
         var frame       = await harness.ReadFrameFromConnectionAsync();
         var id          = JsonDocument.Parse(frame).RootElement.GetProperty("id").GetInt64();
 
         await harness.WriteFrameToConnectionAsync(
-            $$$"""{"jsonrpc":"2.0","id":{{{id}}},"error":"totally-not-an-object"}"""
+            $$"""{"jsonrpc":"2.0","id":{{id}},"error":"totally-not-an-object"}"""
         );
 
         var ex = await Assert.ThrowsAsync<AcpRpcException>(() => requestTask.WaitAsync(HangGuard));
         await Assert.That(ex).IsNotNull();
 
-        cts.Cancel();
+        await cts.CancelAsync();
         await SwallowCancellation(runTask);
     }
 
@@ -418,10 +428,11 @@ public class AcpConnectionTests {
     public async Task Server_request_with_string_id_echoes_the_same_string_id_verbatim() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
-        var              runTask = harness.Connection.RunAsync(cts.Token);
+        var             runTask = harness.Connection.RunAsync(cts.Token);
 
-        harness.Connection.OnServerRequest = (request, _) => {
+        harness.Connection.OnServerRequest = (_, _) => {
             var result = JsonSerializer.SerializeToElement(new { content = "file contents" });
+
             return Task.FromResult<JsonElement?>(result);
         };
 
@@ -429,11 +440,12 @@ public class AcpConnectionTests {
             """{"jsonrpc":"2.0","id":"agent-generated-string-id","method":"fs/read_text_file","params":{}}"""
         );
 
-        var frame = await harness.ReadFrameFromConnectionAsync();
-        using var doc = JsonDocument.Parse(frame);
-        var idElement = doc.RootElement.GetProperty("id");
+        var       frame     = await harness.ReadFrameFromConnectionAsync();
+        using var doc       = JsonDocument.Parse(frame);
+        var       idElement = doc.RootElement.GetProperty("id");
         await Assert.That(idElement.ValueKind).IsEqualTo(JsonValueKind.String);
         await Assert.That(idElement.GetString()).IsEqualTo("agent-generated-string-id");
+
         await Assert.That(doc.RootElement.GetProperty("result").GetProperty("content").GetString())
             .IsEqualTo("file contents");
 
@@ -442,6 +454,7 @@ public class AcpConnectionTests {
         // would throw on the string id and silently wedge the read loop).
         var tcs = new TaskCompletionSource<AcpNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
         harness.Connection.OnNotification += n => tcs.TrySetResult(n);
+
         await harness.WriteFrameToConnectionAsync(
             """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"still-alive"}}"""
         );
@@ -456,12 +469,12 @@ public class AcpConnectionTests {
     public async Task NotifyAsync_writes_notification_frame_without_id() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
-        var              runTask = harness.Connection.RunAsync(cts.Token);
+        var             runTask = harness.Connection.RunAsync(cts.Token);
 
         await harness.Connection.NotifyAsync("session/cancel", null).WaitAsync(HangGuard);
 
-        var frame = await harness.ReadFrameFromConnectionAsync();
-        using var doc = JsonDocument.Parse(frame);
+        var       frame = await harness.ReadFrameFromConnectionAsync();
+        using var doc   = JsonDocument.Parse(frame);
         await Assert.That(doc.RootElement.GetProperty("method").GetString()).IsEqualTo("session/cancel");
         await Assert.That(doc.RootElement.TryGetProperty("id", out _)).IsFalse();
 

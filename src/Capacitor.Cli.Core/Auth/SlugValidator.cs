@@ -42,7 +42,7 @@ public static partial class SlugValidator {
         var outSb = new StringBuilder(lowered.Length);
         var pendingHyphen = false;
         foreach (var ch in lowered) {
-            if (ch is (>= 'a' and <= 'z') or (>= '0' and <= '9')) {
+            if (ch is >= 'a' and <= 'z' or >= '0' and <= '9') {
                 if (pendingHyphen && outSb.Length > 0) outSb.Append('-');
                 pendingHyphen = false;
                 outSb.Append(ch);

@@ -42,7 +42,7 @@ public class PtyHostedAgentRuntimeTests {
         // CLI's TUI treats it as a single paste and the following Enter is an unambiguous submit
         // keypress, rather than racing the still-ingesting text.
         await Assert.That(pty.StringWrites.Count).IsEqualTo(2);
-        await Assert.That(pty.StringWrites[0]).IsEqualTo("\x1b[200~hello world\x1b[201~");
+        await Assert.That(pty.StringWrites[0]).IsEqualTo("\e[200~hello world\e[201~");
         await Assert.That(pty.StringWrites[1]).IsEqualTo("\r");
     }
 

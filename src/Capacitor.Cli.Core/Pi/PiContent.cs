@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Capacitor.Cli.Core; // explicit: the Str/Arr JsonElement extension members live here
 
 namespace Capacitor.Cli.Core.Pi;
 

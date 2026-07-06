@@ -157,7 +157,8 @@ internal static class SqliteNativeResolver {
 
         var url = $"{baseUrl}/{asset.AssetName}";
         try {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+            using var http = new HttpClient();
+            http.Timeout = TimeSpan.FromSeconds(60);
             http.DefaultRequestHeaders.UserAgent.ParseAdd($"kcap/{selfVersion}");
             return (http.GetByteArrayAsync(url).GetAwaiter().GetResult(), url);
         } catch (Exception ex) {

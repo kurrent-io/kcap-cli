@@ -521,7 +521,7 @@ public static class OAuthLoginFlow {
             return null;
         }
 
-        return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.WorkOSAuthResponse);
+        return json.Deserialize(CapacitorJsonContext.Default.WorkOSAuthResponse);
     }
 
     /// <summary>Maps an OidcClient WorkOS failure to a user-facing message, preserving the actionable detail.</summary>

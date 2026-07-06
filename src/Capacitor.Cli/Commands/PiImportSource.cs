@@ -27,11 +27,11 @@ internal sealed class PiImportSource : IImportSource {
     readonly Func<string, Task<RepositoryPayload?>> _repoDetector;
 
     public PiImportSource(
-        string?                                 sessionsDirOverride = null,
-        Func<string, Task<RepositoryPayload?>>? repoDetector        = null
-    ) {
+            string?                                 sessionsDirOverride = null,
+            Func<string, Task<RepositoryPayload?>>? repoDetector        = null
+        ) {
         _sessionsDir  = sessionsDirOverride ?? PiPaths.SessionsDir();
-        _repoDetector = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd, detectPullRequest: false));
+        _repoDetector = repoDetector        ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd, detectPullRequest: false));
     }
 
     static StringComparison PathComparison =>
@@ -69,7 +69,8 @@ internal sealed class PiImportSource : IImportSource {
 
         var sessionFilter = filters.FilterSession is { } sf ? ImportCommand.NormalizeGuid(sf) : null;
         var normalizedCwd = filters.FilterCwd is { } cwd ? NormalizeForComparison(cwd) : null;
-        var sinceUtc      = filters.Since is { } since
+
+        var sinceUtc = filters.Since is { } since
             ? new DateTimeOffset(since.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), TimeSpan.Zero)
             : (DateTimeOffset?)null;
 
@@ -80,6 +81,7 @@ internal sealed class PiImportSource : IImportSource {
             ct.ThrowIfCancellationRequested();
 
             var header = await TryReadHeaderAsync(jsonl, ct);
+
             if (header is null) continue; // not a Pi session file (no {"type":"session"} header)
 
             // Validate + normalize the session id the SAME way the live hook path
@@ -99,21 +101,27 @@ internal sealed class PiImportSource : IImportSource {
             // Session-start proxy: the header timestamp; fall back to the file's
             // birth time (Linux ext4 reports mtime — same degradation as Copilot).
             var firstTimestamp = header.Timestamp;
+
             if (firstTimestamp is null) {
-                try { firstTimestamp = File.GetCreationTimeUtc(jsonl); } catch { /* best effort */ }
+                try { firstTimestamp = File.GetCreationTimeUtc(jsonl); } catch {
+                    /* best effort */
+                }
             }
 
             if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) continue;
 
-            result.Add(new DiscoveredSession(
-                SessionId:      dashless,
-                Vendor:         Vendor,
-                Cwd:            header.Cwd,
-                FirstTimestamp: firstTimestamp,
-                SourceMeta:     new Dictionary<string, object?> {
-                    ["TranscriptPath"] = jsonl,
-                    ["Cwd"]            = header.Cwd,
-                }));
+            result.Add(
+                new DiscoveredSession(
+                    SessionId: dashless,
+                    Vendor: Vendor,
+                    Cwd: header.Cwd,
+                    FirstTimestamp: firstTimestamp,
+                    SourceMeta: new Dictionary<string, object?> {
+                        ["TranscriptPath"] = jsonl,
+                        ["Cwd"]            = header.Cwd,
+                    }
+                )
+            );
         }
 
         return result;
@@ -140,34 +148,41 @@ internal sealed class PiImportSource : IImportSource {
             int? lastNonBlankIndex;
             int? lastRelevantIndex;
             int  nonBlankCount;
+
             try {
                 (lastNonBlankIndex, lastRelevantIndex, nonBlankCount) = await ReadTranscriptStatsAsync(transcriptPath, ct);
             } catch {
                 results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, 0, "transcript read failed"));
+
                 continue;
             }
 
             if (lastNonBlankIndex is null) {
                 results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, 0, "empty transcript"));
+
                 continue;
             }
 
             if (nonBlankCount < ctx.MinLines) {
                 results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.TooShort, nonBlankCount));
+
                 continue;
             }
 
             int? serverLastLine;
+
             try {
                 serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, ct);
             } catch {
                 results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, nonBlankCount, "watermark probe failed"));
+
                 continue;
             }
 
             meta.LastTimestamp = TryGetLastWriteUtc(transcriptPath);
 
             string? repoKey = null;
+
             if (hasExcludes && s.Cwd is { } cwd) {
                 if (!repoCache.TryGetValue(cwd, out repoKey)) {
                     try {
@@ -176,6 +191,7 @@ internal sealed class PiImportSource : IImportSource {
                     } catch {
                         repoKey = null;
                     }
+
                     repoCache[cwd] = repoKey;
                 }
             }
@@ -203,19 +219,21 @@ internal sealed class PiImportSource : IImportSource {
                 }
             }
 
-            results.Add(new ImportCommand.SessionClassification {
-                SessionId       = s.SessionId,
-                FilePath        = "", // routed phase (ImportSessionAsync), like Cursor/Copilot
-                EncodedCwd      = "",
-                Meta            = meta,
-                Status          = status,
-                Vendor          = Vendor,
-                ResumeFromLine  = resumeFromLn,
-                ExcludedRepoKey = excludedRepoKey,
-                ExcludedPathKey = excludedPathKey,
-                TotalLines      = nonBlankCount,
-                SourceMeta      = s.SourceMeta,
-            });
+            results.Add(
+                new ImportCommand.SessionClassification {
+                    SessionId       = s.SessionId,
+                    FilePath        = "", // routed phase (ImportSessionAsync), like Cursor/Copilot
+                    EncodedCwd      = "",
+                    Meta            = meta,
+                    Status          = status,
+                    Vendor          = Vendor,
+                    ResumeFromLine  = resumeFromLn,
+                    ExcludedRepoKey = excludedRepoKey,
+                    ExcludedPathKey = excludedPathKey,
+                    TotalLines      = nonBlankCount,
+                    SourceMeta      = s.SourceMeta,
+                }
+            );
         }
 
         return results;
@@ -227,6 +245,7 @@ internal sealed class PiImportSource : IImportSource {
             CancellationToken                   ct
         ) {
         var transcriptPath = (string)classification.SourceMeta!["TranscriptPath"]!;
+
         if (!File.Exists(transcriptPath)) return ImportOutcome.Failed;
 
         var cwd = classification.SourceMeta!.TryGetValue("Cwd", out var cwdObj) ? cwdObj as string : null;
@@ -235,9 +254,13 @@ internal sealed class PiImportSource : IImportSource {
         // watermark past a failed lifecycle POST would leave the session
         // permanently lifecycle-less. Idempotent server-side (deterministic ids).
         var startOk = await PostSyntheticHookAsync(
-            ctx.HttpClient, ctx.BaseUrl, "session-start/pi",
+            ctx.HttpClient,
+            ctx.BaseUrl,
+            "session-start/pi",
             BuildSessionStartPayload(classification.SessionId, cwd, classification.Meta.FirstTimestamp, ctx.ForcePrivate),
-            ct);
+            ct
+        );
+
         if (!startOk) return ImportOutcome.Failed;
 
         var startLine = classification.Status switch {
@@ -247,26 +270,33 @@ internal sealed class PiImportSource : IImportSource {
         };
 
         int sent;
+
         try {
             sent = await SessionImporter.SendTranscriptBatches(
                 httpClient: ctx.HttpClient,
-                baseUrl:    ctx.BaseUrl,
-                sessionId:  classification.SessionId,
-                filePath:   transcriptPath,
-                agentId:    null,
-                startLine:  startLine,
-                vendor:     Vendor);
+                baseUrl: ctx.BaseUrl,
+                sessionId: classification.SessionId,
+                filePath: transcriptPath,
+                agentId: null,
+                startLine: startLine,
+                vendor: Vendor
+            );
         } catch {
             return ImportOutcome.Failed;
         }
 
         var endOk = await PostSyntheticHookAsync(
-            ctx.HttpClient, ctx.BaseUrl, "session-end/pi",
+            ctx.HttpClient,
+            ctx.BaseUrl,
+            "session-end/pi",
             BuildSessionEndPayload(classification.SessionId, cwd, classification.Meta.LastTimestamp),
-            ct);
+            ct
+        );
+
         if (!endOk) return ImportOutcome.Failed;
 
         if (sent == 0) return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
+
         return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
     }
 
@@ -278,9 +308,10 @@ internal sealed class PiImportSource : IImportSource {
             ["session_id"]      = sessionId,
             ["source"]          = "startup",
         };
-        if (cwd is not null) payload["cwd"] = cwd;
-        if (startedAt is { } ts) payload["started_at"] = ts.ToString("O");
+        if (cwd is not null) payload["cwd"]             = cwd;
+        if (startedAt is { } ts) payload["started_at"]  = ts.ToString("O");
         if (forcePrivate) payload["default_visibility"] = "private";
+
         return payload;
     }
 
@@ -290,17 +321,23 @@ internal sealed class PiImportSource : IImportSource {
             ["session_id"]      = sessionId,
             ["reason"]          = "pi-import",
         };
-        if (cwd is not null) payload["cwd"] = cwd;
+        if (cwd is not null) payload["cwd"]        = cwd;
         if (endedAt is { } ts) payload["ended_at"] = ts.ToString("O");
+
         return payload;
     }
 
     static async Task<bool> PostSyntheticHookAsync(
-        HttpClient client, string baseUrl, string routeSegment, JsonObject payload, CancellationToken ct
-    ) {
+            HttpClient        client,
+            string            baseUrl,
+            string            routeSegment,
+            JsonObject        payload,
+            CancellationToken ct
+        ) {
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
             using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, ct: ct);
+
             return resp.IsSuccessStatusCode;
         } catch {
             return false;
@@ -326,11 +363,16 @@ internal sealed class PiImportSource : IImportSource {
 
                 using var doc  = JsonDocument.Parse(line);
                 var       root = doc.RootElement;
+
                 if (root.Str("type") != "session") return null;
 
                 DateTimeOffset? ts = root.Str("timestamp") is { } raw
-                 && DateTimeOffset.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture,
-                        System.Globalization.DateTimeStyles.RoundtripKind, out var parsed)
+                 && DateTimeOffset.TryParse(
+                        raw,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.RoundtripKind,
+                        out var parsed
+                    )
                         ? parsed
                         : null;
 
@@ -339,12 +381,14 @@ internal sealed class PiImportSource : IImportSource {
         } catch {
             // Unreadable / malformed → not importable.
         }
+
         return null;
     }
 
     static async Task<(int? LastNonBlankIndex, int? LastRelevantIndex, int NonBlankCount)> ReadTranscriptStatsAsync(
-        string transcriptPath, CancellationToken ct
-    ) {
+            string            transcriptPath,
+            CancellationToken ct
+        ) {
         await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using var       reader = new StreamReader(stream);
 
@@ -359,8 +403,10 @@ internal sealed class PiImportSource : IImportSource {
                 count++;
                 if (IsImportRelevantLine(line)) lastRelevantIdx = lineIdx;
             }
+
             lineIdx++;
         }
+
         return (lastIdx, lastRelevantIdx, count);
     }
 
@@ -382,11 +428,12 @@ internal sealed class PiImportSource : IImportSource {
             var       root = doc.RootElement;
 
             switch (root.Str("type")) {
-                case "session":        return true;
-                case "compaction":     return true;
+                case "session":
+                case "compaction": return true;
                 case "branch_summary": return !string.IsNullOrWhiteSpace(root.Str("summary"));
                 case "message":
                     if (root.Obj("message") is not { } msg) return false;
+
                     return msg.Str("role") switch {
                         "user"          => PiContent.HasUserContent(msg),
                         "assistant"     => PiContent.HasAssistantContent(msg),
@@ -405,6 +452,7 @@ internal sealed class PiImportSource : IImportSource {
         using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct: ct);
 
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
+
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
 
         var       body = await resp.Content.ReadAsStringAsync(ct);
@@ -420,12 +468,12 @@ internal sealed class PiImportSource : IImportSource {
     }
 
     static ImportCommand.SessionClassification MakeClassification(
-        DiscoveredSession                  s,
-        SessionMetadata                    meta,
-        ImportCommand.ClassificationStatus status,
-        int                                totalLines,
-        string?                            probeErrorReason = null
-    ) => new() {
+            DiscoveredSession                  s,
+            SessionMetadata                    meta,
+            ImportCommand.ClassificationStatus status,
+            int                                totalLines,
+            string?                            probeErrorReason = null
+        ) => new() {
         SessionId        = s.SessionId,
         FilePath         = "",
         EncodedCwd       = "",
@@ -438,23 +486,29 @@ internal sealed class PiImportSource : IImportSource {
     };
 
     static (string? ExcludedRepoKey, string? ExcludedPathKey) ResolveExclusions(
-        string? cwd, string? repoKey, ClassifyContext ctx
-    ) {
+            string?         cwd,
+            string?         repoKey,
+            ClassifyContext ctx
+        ) {
         string? excludedRepoKey = null;
+
         if (repoKey is not null && ctx.ExcludedRepos is { Count: > 0 } repos
          && repos.Any(r => string.Equals(r, repoKey, StringComparison.OrdinalIgnoreCase))) {
             excludedRepoKey = repoKey;
         }
 
         string? excludedPathKey = null;
+
         if (cwd is not null && ctx.ExcludedPaths is { Count: > 0 } paths) {
             foreach (var entry in paths) {
                 if (PathExclusion.IsExcluded(cwd, [entry])) {
                     excludedPathKey = PathExclusion.Normalize(entry);
+
                     break;
                 }
             }
         }
+
         return (excludedRepoKey, excludedPathKey);
     }
 }

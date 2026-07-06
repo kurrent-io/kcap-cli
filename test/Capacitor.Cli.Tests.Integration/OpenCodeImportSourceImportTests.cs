@@ -11,15 +11,18 @@ namespace Capacitor.Cli.Tests.Integration;
 /// strict-send abort, subagent routing, repair-above-HWM, and ledger skip-on-rerun.
 /// </summary>
 public class OpenCodeImportSourceImportTests : IDisposable {
-    readonly WireMockServer    _server = WireMockServer.Start();
-    readonly OpenCodeDbFixtureIt _fix  = new();
+    readonly WireMockServer      _server = WireMockServer.Start();
+    readonly OpenCodeDbFixtureIt _fix    = new();
 
-    public void Dispose() { _server.Stop(); _fix.Dispose(); }
+    public void Dispose() {
+        _server.Stop();
+        _fix.Dispose();
+    }
 
     void StubOk(params string[] paths) {
         foreach (var p in paths)
             _server.Given(Request.Create().WithPath(p).UsingPost())
-                   .RespondWith(Response.Create().WithStatusCode(200));
+                .RespondWith(Response.Create().WithStatusCode(200));
     }
 
     [Test]
@@ -28,18 +31,25 @@ public class OpenCodeImportSourceImportTests : IDisposable {
         _fix.AddMessageWithText("ses_root", "msg_1", "hello", 1782241513760);
 
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
-               .RespondWith(Response.Create().WithStatusCode(404));
+            .RespondWith(Response.Create().WithStatusCode(404));
         StubOk("/hooks/session-start/opencode", "/hooks/transcript", "/hooks/set-title", "/hooks/session-end/opencode");
 
-        using var client = new HttpClient();
-        var source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
-        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
-        var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
+        using var client     = new HttpClient();
+        var       source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+        var       discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+
+        var classified = await source.ClassifyAsync(
+            discovered,
+            new ClassifyContext(client, _server.Url!, 0, null, null),
+            CancellationToken.None
+        );
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
 
-        var outcome = await source.ImportSessionAsync(classified[0],
-            new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+        var outcome = await source.ImportSessionAsync(
+            classified[0],
+            new ImportContext(client, _server.Url!, ForcePrivate: false),
+            CancellationToken.None
+        );
 
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
 
@@ -56,19 +66,27 @@ public class OpenCodeImportSourceImportTests : IDisposable {
         _fix.AddMessageWithText("ses_root", "msg_1", "hello", 110);
 
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
-               .RespondWith(Response.Create().WithStatusCode(404));
+            .RespondWith(Response.Create().WithStatusCode(404));
         StubOk("/hooks/session-start/opencode", "/hooks/session-end/opencode");
+
         _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
-               .RespondWith(Response.Create().WithStatusCode(500));
+            .RespondWith(Response.Create().WithStatusCode(500));
 
-        using var client = new HttpClient();
-        var source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
-        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
-        var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
+        using var client     = new HttpClient();
+        var       source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+        var       discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
 
-        var outcome = await source.ImportSessionAsync(classified[0],
-            new ImportContext(client, _server.Url!, false), CancellationToken.None);
+        var classified = await source.ClassifyAsync(
+            discovered,
+            new ClassifyContext(client, _server.Url!, 0, null, null),
+            CancellationToken.None
+        );
+
+        var outcome = await source.ImportSessionAsync(
+            classified[0],
+            new ImportContext(client, _server.Url!, false),
+            CancellationToken.None
+        );
 
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
         await Assert.That(_server.LogEntries.Select(e => e.RequestMessage.Path)).DoesNotContain("/hooks/session-end/opencode");
@@ -82,19 +100,33 @@ public class OpenCodeImportSourceImportTests : IDisposable {
         _fix.AddMessageWithTextAndAgent("ses_kid", "msg_c", "child work", 130, agent: "general");
 
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
-               .RespondWith(Response.Create().WithStatusCode(404));
-        StubOk("/hooks/session-start/opencode", "/hooks/transcript", "/hooks/set-title",
-               "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/opencode");
+            .RespondWith(Response.Create().WithStatusCode(404));
 
-        using var client = new HttpClient();
-        var source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
-        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
-        await Assert.That(discovered.Select(d => d.SessionId)).IsEquivalentTo(new[] { "ses_root" });
-        var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
+        StubOk(
+            "/hooks/session-start/opencode",
+            "/hooks/transcript",
+            "/hooks/set-title",
+            "/hooks/subagent-start",
+            "/hooks/subagent-stop",
+            "/hooks/session-end/opencode"
+        );
 
-        var outcome = await source.ImportSessionAsync(classified[0],
-            new ImportContext(client, _server.Url!, false), CancellationToken.None);
+        using var client     = new HttpClient();
+        var       source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+        var       discovered = await source.DiscoverAsync(new(null, null, null, 0), CancellationToken.None);
+        await Assert.That(discovered.Select(d => d.SessionId)).IsEquivalentTo(["ses_root"]);
+
+        var classified = await source.ClassifyAsync(
+            discovered,
+            new(client, _server.Url!, 0, null, null),
+            CancellationToken.None
+        );
+
+        var outcome = await source.ImportSessionAsync(
+            classified[0],
+            new(client, _server.Url!, false),
+            CancellationToken.None
+        );
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
 
         var entries = _server.LogEntries.OrderBy(e => e.RequestMessage.DateTime).ToList();
@@ -111,12 +143,19 @@ public class OpenCodeImportSourceImportTests : IDisposable {
         await Assert.That(startBody).Contains("\"agent_type\":\"general\"");
 
         var childTranscriptIdx = -1;
+
         for (var i = 0; i < entries.Count; i++) {
             var e = entries[i];
+
             if (e.RequestMessage.Path == "/hooks/transcript"
              && e.RequestMessage.Body!.Contains("\"opencode\"")
-             && e.RequestMessage.Body!.Contains("ses_kid")) { childTranscriptIdx = i; break; }
+             && e.RequestMessage.Body!.Contains("ses_kid")) {
+                childTranscriptIdx = i;
+
+                break;
+            }
         }
+
         await Assert.That(childTranscriptIdx).IsGreaterThan(subStart);
         await Assert.That(childTranscriptIdx).IsLessThan(subStop);
     }
@@ -127,22 +166,21 @@ public class OpenCodeImportSourceImportTests : IDisposable {
         _fix.AddMessageWithText("ses_root", "msg_1", "hello", 110);
 
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
-               .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":42}"""));
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":42}"""));
         StubOk("/hooks/session-start/opencode", "/hooks/transcript", "/hooks/set-title", "/hooks/session-end/opencode");
 
-        using var client = new HttpClient();
-        var source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
-        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
-        var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
+        using var client     = new HttpClient();
+        var       source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+        var       discovered = await source.DiscoverAsync(new(null, null, null, 0), CancellationToken.None);
+        var       classified = await source.ClassifyAsync(discovered, new(client, _server.Url!, 0, null, null), CancellationToken.None);
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
 
-        var outcome = await source.ImportSessionAsync(classified[0],
-            new ImportContext(client, _server.Url!, false), CancellationToken.None);
+        var outcome = await source.ImportSessionAsync(classified[0], new(client, _server.Url!, false), CancellationToken.None);
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Resumed);
 
-        var body = _server.LogEntries.First(e => e.RequestMessage.Path == "/hooks/transcript").RequestMessage.Body!;
-        using var doc = System.Text.Json.JsonDocument.Parse(body);
+        var       body = _server.LogEntries.First(e => e.RequestMessage.Path == "/hooks/transcript").RequestMessage.Body!;
+        using var doc  = System.Text.Json.JsonDocument.Parse(body);
+
         foreach (var n in doc.RootElement.GetProperty("line_numbers").EnumerateArray())
             await Assert.That(n.GetInt32() > 42).IsTrue();
 
@@ -155,24 +193,27 @@ public class OpenCodeImportSourceImportTests : IDisposable {
         _fix.AddMessageWithText("ses_root", "msg_1", "hello", 110);
 
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
-               .RespondWith(Response.Create().WithStatusCode(404));
+            .RespondWith(Response.Create().WithStatusCode(404));
         StubOk("/hooks/session-start/opencode", "/hooks/transcript", "/hooks/set-title", "/hooks/session-end/opencode");
 
-        using var client = new HttpClient();
-        var ctx       = new ClassifyContext(client, _server.Url!, 0, null, null);
-        var importCtx = new ImportContext(client, _server.Url!, false);
+        using var client    = new HttpClient();
+        var       ctx       = new ClassifyContext(client, _server.Url!, 0, null, null);
+        var       importCtx = new ImportContext(client, _server.Url!, false);
 
         var s1 = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
-        var c1 = await s1.ClassifyAsync(
-            await s1.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
+        var c1 = await s1.ClassifyAsync(await s1.DiscoverAsync(new(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
         await Assert.That(c1[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
         await Assert.That(await s1.ImportSessionAsync(c1[0], importCtx, CancellationToken.None)).IsEqualTo(ImportOutcome.Loaded);
 
         var transcriptCountAfterRun1 = _server.LogEntries.Count(e => e.RequestMessage.Path == "/hooks/transcript");
 
         var s2 = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+
         var c2 = await s2.ClassifyAsync(
-            await s2.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
+            await s2.DiscoverAsync(new(null, null, null, 0), CancellationToken.None),
+            ctx,
+            CancellationToken.None
+        );
         await Assert.That(c2[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
         await Assert.That(await s2.ImportSessionAsync(c2[0], importCtx, CancellationToken.None)).IsEqualTo(ImportOutcome.Skipped);
 
@@ -183,47 +224,63 @@ public class OpenCodeImportSourceImportTests : IDisposable {
     [Test]
     public async Task batch2_failure_then_rerun_repairs_above_hwm() {
         _fix.AddSession("ses_root", null, "/work/a", "T", 100);
+
         for (var i = 0; i < 150; i++)
             _fix.AddMessageWithText("ses_root", $"msg_{i:D3}", $"line {i}", 100 + i);
 
-        using var client = new HttpClient();
-        var ctx       = new ClassifyContext(client, _server.Url!, 0, null, null);
-        var importCtx = new ImportContext(client, _server.Url!, false);
-        var source    = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+        using var client    = new HttpClient();
+        var       ctx       = new ClassifyContext(client, _server.Url!, 0, null, null);
+        var       importCtx = new ImportContext(client, _server.Url!, false);
+        var       source    = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
 
         // Run 1: batch 1 → 200, batch 2 → 500 (WireMock scenario state machine).
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
-               .RespondWith(Response.Create().WithStatusCode(404));
+            .RespondWith(Response.Create().WithStatusCode(404));
+
         _server.Given(Request.Create().WithPath("/hooks/session-start/opencode").UsingPost())
-               .RespondWith(Response.Create().WithStatusCode(200));
+            .RespondWith(Response.Create().WithStatusCode(200));
+
         _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
-               .InScenario("b").WillSetStateTo("after1")
-               .RespondWith(Response.Create().WithStatusCode(200));
+            .InScenario("b")
+            .WillSetStateTo("after1")
+            .RespondWith(Response.Create().WithStatusCode(200));
+
         _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
-               .InScenario("b").WhenStateIs("after1")
-               .RespondWith(Response.Create().WithStatusCode(500));
+            .InScenario("b")
+            .WhenStateIs("after1")
+            .RespondWith(Response.Create().WithStatusCode(500));
 
         var c1 = await source.ClassifyAsync(
-            await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
+            await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None),
+            ctx,
+            CancellationToken.None
+        );
         await Assert.That(c1[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
         await Assert.That(await source.ImportSessionAsync(c1[0], importCtx, CancellationToken.None)).IsEqualTo(ImportOutcome.Failed);
         await Assert.That(_server.LogEntries.Select(e => e.RequestMessage.Path)).DoesNotContain("/hooks/session-end/opencode");
 
         // Run 2: server now reports the HWM left by batch 1 (line 99); all POSTs OK.
         _server.Reset();
+
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
-               .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
         StubOk("/hooks/session-start/opencode", "/hooks/transcript", "/hooks/set-title", "/hooks/session-end/opencode");
 
         var source2 = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+
         var c2 = await source2.ClassifyAsync(
-            await source2.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
+            await source2.DiscoverAsync(new(null, null, null, 0), CancellationToken.None),
+            ctx,
+            CancellationToken.None
+        );
         await Assert.That(c2[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.Partial);
         await Assert.That(await source2.ImportSessionAsync(c2[0], importCtx, CancellationToken.None)).IsEqualTo(ImportOutcome.Resumed);
 
         await Assert.That(_server.LogEntries.Select(e => e.RequestMessage.Path)).Contains("/hooks/session-end/opencode");
+
         foreach (var e in _server.LogEntries.Where(e => e.RequestMessage.Path == "/hooks/transcript")) {
             using var doc = System.Text.Json.JsonDocument.Parse(e.RequestMessage.Body!);
+
             foreach (var n in doc.RootElement.GetProperty("line_numbers").EnumerateArray())
                 await Assert.That(n.GetInt32() > 99).IsTrue();
         }

@@ -13,6 +13,7 @@ namespace Capacitor.Cli.Core.Pi;
 public static class PiPaths {
     public static string Root(string? home = null) {
         home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
         return Path.Combine(home, ".pi");
     }
 
@@ -23,9 +24,8 @@ public static class PiPaths {
     /// </summary>
     public static string AgentDir(string? home = null, string? agentDir = null) {
         agentDir ??= Environment.GetEnvironmentVariable("PI_CODING_AGENT_DIR");
-        if (!string.IsNullOrWhiteSpace(agentDir)) return ExpandTilde(agentDir, home);
 
-        return Path.Combine(Root(home), "agent");
+        return !string.IsNullOrWhiteSpace(agentDir) ? ExpandTilde(agentDir, home) : Path.Combine(Root(home), "agent");
     }
 
     /// <summary>Expand a leading <c>~</c>/<c>~/</c> against <paramref name="home"/>
@@ -34,6 +34,7 @@ public static class PiPaths {
         if (path != "~" && !path.StartsWith("~/") && !path.StartsWith("~\\")) return path;
 
         var baseDir = home ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
         return path.Length <= 1 ? baseDir : Path.Combine(baseDir, path[2..]);
     }
 

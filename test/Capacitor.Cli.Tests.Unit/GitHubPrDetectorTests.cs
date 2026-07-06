@@ -7,14 +7,7 @@ public class GitHubPrDetectorTests {
     public async Task Parses_gh_pr_view_json() {
         string? capturedCmd = null, capturedArgs = null;
 
-        CommandRunner fake = (cmd, args, cwd, _) => {
-            capturedCmd  = cmd;
-            capturedArgs = args;
-            return Task.FromResult<string?>(
-                """{"number":12,"title":"Add thing","url":"https://github.com/o/r/pull/12","headRefName":"feat/x"}""");
-        };
-
-        var pr = await GitHubPrDetector.DetectAsync("/cwd", TimeSpan.FromSeconds(2), fake);
+        var pr = await GitHubPrDetector.DetectAsync("/cwd", TimeSpan.FromSeconds(2), Fake);
 
         await Assert.That(capturedCmd).IsEqualTo("gh");
         await Assert.That(capturedArgs).Contains("pr view");
@@ -22,6 +15,15 @@ public class GitHubPrDetectorTests {
         await Assert.That(pr.Title).IsEqualTo("Add thing");
         await Assert.That(pr.Url).IsEqualTo("https://github.com/o/r/pull/12");
         await Assert.That(pr.HeadRef).IsEqualTo("feat/x");
+
+        return;
+
+        Task<string?> Fake(string cmd, string args, string s, TimeSpan timeSpan) {
+            capturedCmd  = cmd;
+            capturedArgs = args;
+
+            return Task.FromResult<string?>("""{"number":12,"title":"Add thing","url":"https://github.com/o/r/pull/12","headRefName":"feat/x"}""");
+        }
     }
 
     [Test]

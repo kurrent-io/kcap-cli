@@ -53,11 +53,11 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     static AgentOrchestrator BuildOrchestrator(
-            ServerConnection                                    server,
-            IPtyProcessFactory                                  ptyFactory,
-            IReadOnlyDictionary<string, IHostedAgentLauncher>   launchers,
-            string?                                             allowedRepoPath        = null,
-            IEnumerable<IHostedAgentRuntimeFactory>?            extraRuntimeFactories  = null
+            ServerConnection                                  server,
+            IPtyProcessFactory                                ptyFactory,
+            IReadOnlyDictionary<string, IHostedAgentLauncher> launchers,
+            string?                                           allowedRepoPath       = null,
+            IEnumerable<IHostedAgentRuntimeFactory>?          extraRuntimeFactories = null
         ) {
         var config = new DaemonConfig {
             Name                = "test",
@@ -82,7 +82,7 @@ public partial class AgentOrchestratorVendorTests {
         // extraRuntimeFactories lets a test inject a non-PTY factory (e.g. a fake "cursor" ACP
         // factory) without disturbing every other call site of this helper.
         IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> runtimeFactories = launchers.Values
-            .Select(l => (IHostedAgentRuntimeFactory) new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance))
+            .Select(IHostedAgentRuntimeFactory (l) => new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance))
             .Concat(extraRuntimeFactories ?? [])
             .ToDictionary(f => f.Vendor);
 
@@ -118,10 +118,19 @@ public partial class AgentOrchestratorVendorTests {
 
         await using var orch = BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
-        orch.RegisterAgentForTest(new AgentInstance(
-            "agent-rereg", null, "", null, "/tmp", "claude",
-            new PtyHostedAgentRuntime("claude", new StubPtyProcess()), new WorktreeInfo("/tmp", "", "/tmp", IsStandalone: true), new CancellationTokenSource()
-        ));
+        orch.RegisterAgentForTest(
+            new AgentInstance(
+                "agent-rereg",
+                null,
+                "",
+                null,
+                "/tmp",
+                "claude",
+                new PtyHostedAgentRuntime("claude", new StubPtyProcess()),
+                new WorktreeInfo("/tmp", "", "/tmp", IsStandalone: true),
+                new CancellationTokenSource()
+            )
+        );
 
         // The orchestrator wires ReRegisterAgentsHook in its ctor; invoking it runs the same
         // path RegisterDaemon awaits on reconnect.
@@ -318,10 +327,10 @@ public partial class AgentOrchestratorVendorTests {
         var (repoPath, cleanup) = CreateGitRepo();
 
         try {
-            var server      = new CaptureServerConnection();
-            var ptyFactory  = new SpyPtyProcessFactory();
-            var claudeSpy   = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
-            var cursorSpy   = new SpyHostedAgentRuntimeFactory("cursor");
+            var server     = new CaptureServerConnection();
+            var ptyFactory = new SpyPtyProcessFactory();
+            var claudeSpy  = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
+            var cursorSpy  = new SpyHostedAgentRuntimeFactory("cursor");
 
             var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
 
@@ -569,16 +578,18 @@ public partial class AgentOrchestratorVendorTests {
 
             await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
-            await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
-                AgentId: "agent-bp",
-                Prompt: "go",
-                Model: "opus",
-                Effort: null,
-                RepoPath: repoPath,
-                Tools: null,
-                AttachmentIds: null,
-                Vendor: "claude"
-            ));
+            await orch.HandleLaunchAgentForTest(
+                new LaunchAgentCommand(
+                    AgentId: "agent-bp",
+                    Prompt: "go",
+                    Model: "opus",
+                    Effort: null,
+                    RepoPath: repoPath,
+                    Tools: null,
+                    AttachmentIds: null,
+                    Vendor: "claude"
+                )
+            );
 
             // Wait until the read loop has produced a chunk and is parked in the blocked send.
             await sendEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -615,16 +626,18 @@ public partial class AgentOrchestratorVendorTests {
 
             await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
 
-            await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
-                AgentId: "agent-stop",
-                Prompt: "go",
-                Model: "opus",
-                Effort: null,
-                RepoPath: repoPath,
-                Tools: null,
-                AttachmentIds: null,
-                Vendor: "claude"
-            ));
+            await orch.HandleLaunchAgentForTest(
+                new LaunchAgentCommand(
+                    AgentId: "agent-stop",
+                    Prompt: "go",
+                    Model: "opus",
+                    Effort: null,
+                    RepoPath: repoPath,
+                    Tools: null,
+                    AttachmentIds: null,
+                    Vendor: "claude"
+                )
+            );
 
             // Fire-and-forget: before the fix, HandleStopAgent awaits the blocked
             // EndAgentSession and never reaches termination, so we must not await it here.
@@ -652,7 +665,7 @@ public partial class AgentOrchestratorVendorTests {
             var unregistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
             var server = new CaptureServerConnection {
-                EndSessionBlockUntil = neverRecovers,                  // end-session blocks for the whole test
+                EndSessionBlockUntil = neverRecovers,                    // end-session blocks for the whole test
                 OnAgentUnregistered  = () => unregistered.TrySetResult() // fires when cleanup completes
             };
             var ptyFactory = new FixedPtyProcessFactory(new ImmediateExitPtyProcess());
@@ -661,16 +674,18 @@ public partial class AgentOrchestratorVendorTests {
             await using var orch = BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
             orch.EndAgentSessionBudget = TimeSpan.FromMilliseconds(250); // don't wait the real 30s in a test
 
-            await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
-                AgentId: "agent-x",
-                Prompt: "go",
-                Model: "opus",
-                Effort: null,
-                RepoPath: repoPath,
-                Tools: null,
-                AttachmentIds: null,
-                Vendor: "claude"
-            ));
+            await orch.HandleLaunchAgentForTest(
+                new LaunchAgentCommand(
+                    AgentId: "agent-x",
+                    Prompt: "go",
+                    Model: "opus",
+                    Effort: null,
+                    RepoPath: repoPath,
+                    Tools: null,
+                    AttachmentIds: null,
+                    Vendor: "claude"
+                )
+            );
 
             // The PTY exits immediately → the read loop ends → FinalizeAgentRunAsync runs.
             // End-session blocks (never recovers), but cleanup must still run after the budget.
@@ -740,8 +755,8 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     sealed class SpyHostedAgentLauncher(string vendor, string cliPath) : IHostedAgentLauncher {
-        public string Vendor             { get; } = vendor;
-        public string CliPath            { get; } = cliPath;
+        public string Vendor             { get; }       = vendor;
+        public string CliPath            { get; }       = cliPath;
         public bool   SupportsUnattended { get; init; } = true;
 
         public int        PrepareCalls   { get; private set; }
@@ -825,19 +840,19 @@ public partial class AgentOrchestratorVendorTests {
         public TaskCompletionSource ExitGate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
-            var ctTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            await using var reg = ct.Register(() => ctTcs.TrySetResult());
+            var             ctTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using var reg   = ct.Register(() => ctTcs.TrySetResult());
             await Task.WhenAny(ExitGate.Task, ctTcs.Task).ConfigureAwait(false);
 
             yield break;
         }
 
-        public Task SendUserInputAsync(string    text) => Task.CompletedTask;
-        public Task SendSpecialKeyAsync(string    key) => Task.CompletedTask;
-        public Task SendRawInputAsync(byte[]      data) => Task.CompletedTask;
-        public void Resize(ushort                 cols, ushort rows) { }
+        public Task SendUserInputAsync(string  text) => Task.CompletedTask;
+        public Task SendSpecialKeyAsync(string key) => Task.CompletedTask;
+        public Task SendRawInputAsync(byte[]   data) => Task.CompletedTask;
+        public void Resize(ushort              cols, ushort rows) { }
         public Task RequestGracefulStopAsync() => Task.CompletedTask;
-        public Task WaitForExitAsync(TimeSpan?    timeout = null) => Task.CompletedTask;
+        public Task WaitForExitAsync(TimeSpan? timeout = null) => Task.CompletedTask;
 
         public Task TerminateAsync(TimeSpan? timeout = null) {
             ExitGate.TrySetResult();
@@ -878,8 +893,6 @@ public partial class AgentOrchestratorVendorTests {
             yield return "x"u8.ToArray();
 
             await Task.Delay(Timeout.InfiniteTimeSpan, ct);
-
-            yield break;
         }
 
         public Task WriteAsync(string _) => Task.CompletedTask;
@@ -997,7 +1010,7 @@ public partial class AgentOrchestratorVendorTests {
         /// <summary>Set both to make the send block (simulating a full/down terminal
         /// queue) until its <c>ct</c> is cancelled — used by the AI-846 back-pressure
         /// test. Left null for every other test, where the send is a no-op.</summary>
-        public TaskCompletionSource? SendEntered   { get; init; }
+        public TaskCompletionSource? SendEntered { get;   init; }
         public TaskCompletionSource? SendUnblocked { get; init; }
 
         public override async Task SendTerminalOutputAsync(string agentId, string base64Data, CancellationToken ct = default) {
@@ -1020,8 +1033,8 @@ public partial class AgentOrchestratorVendorTests {
         public override async Task<EndAgentSessionResult> EndAgentSessionAsync(string agentId, string reason) {
             EndSessionReasons.Add(reason);
 
-            if (EndSessionBlockUntil is { } cts) {
-                try { await Task.Delay(Timeout.InfiniteTimeSpan, cts.Token); } catch (OperationCanceledException) {
+            if (EndSessionBlockUntil != null) {
+                try { await Task.Delay(Timeout.InfiniteTimeSpan, EndSessionBlockUntil.Token); } catch (OperationCanceledException) {
                     /* released by the test */
                 }
             }

@@ -18,8 +18,8 @@ namespace Capacitor.Cli.Tests.Unit;
 /// PTY) and asserts the wire shape reaching the PTY.
 /// </summary>
 public partial class AgentOrchestratorVendorTests {
-    const string PasteStart = "\x1b[200~";
-    const string PasteEnd   = "\x1b[201~";
+    const string PasteStart = "\e[200~";
+    const string PasteEnd   = "\e[201~";
 
     [Test]
     public async Task HandleSendInput_wraps_the_message_in_a_bracketed_paste_and_submits_with_a_separate_Enter() {

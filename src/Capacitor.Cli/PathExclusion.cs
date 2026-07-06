@@ -94,13 +94,9 @@ static class PathExclusion {
                 var info     = new DirectoryInfo(next);
                 var resolved = info.ResolveLinkTarget(returnFinalTarget: true);
 
-                if (resolved is not null) {
-                    // The symlink target may live under a different symlinked ancestor.
-                    // Re-resolve from the root so every component of the target is canonical too.
-                    current = ResolveAllSymlinks(resolved.FullName, depth + 1);
-                } else {
-                    current = next;
-                }
+                // The symlink target may live under a different symlinked ancestor.
+                // Re-resolve from the root so every component of the target is canonical too.
+                current = resolved is not null ? ResolveAllSymlinks(resolved.FullName, depth + 1) : next;
             } catch {
                 current = next;
                 i++;

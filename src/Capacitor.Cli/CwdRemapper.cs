@@ -70,16 +70,17 @@ static class CwdRemapper {
 
     static string ExpandHome(string path, string home) {
         if (path.Length == 0 || path[0] != '~') return path;
-        if (path.Length == 1) return home;                  // "~"
-        if (IsSeparator(path[1])) return home + path[1..];  // "~/foo" or "~\foo"
-        return path;                                        // "~user" / "~foo" — leave alone
+        if (path.Length == 1) return home;                 // "~"
+        if (IsSeparator(path[1])) return home + path[1..]; // "~/foo" or "~\foo"
+
+        return path; // "~user" / "~foo" — leave alone
     }
 
     static bool IsPrefixMatch(string cwd, string from, StringComparison comparison) {
         if (!cwd.StartsWith(from, comparison)) return false;
-        if (cwd.Length == from.Length) return true;
-        return IsSeparator(cwd[from.Length]);
+
+        return cwd.Length == from.Length || IsSeparator(cwd[from.Length]);
     }
 
-    internal static bool IsSeparator(char c) => c == '/' || c == '\\';
+    internal static bool IsSeparator(char c) => c is '/' or '\\';
 }

@@ -18,7 +18,7 @@ static class ServiceEnvironment {
     static Dictionary<string, string> Snapshot() {
         var d = new Dictionary<string, string>();
         foreach (DictionaryEntry e in Environment.GetEnvironmentVariables())
-            if (e.Key is string k && e.Value is string v) d[k] = v;
+            if (e is { Key: string k, Value: string v }) d[k] = v;
         return d;
     }
 

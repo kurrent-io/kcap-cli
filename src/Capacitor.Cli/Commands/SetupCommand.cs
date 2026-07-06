@@ -17,27 +17,27 @@ namespace Capacitor.Cli.Commands;
 
 public static class SetupCommand {
     public static async Task<int> HandleAsync(string[] args) {
-        var serverUrlArg     = GetArg(args, "--server-url");
+        var serverUrlArg = GetArg(args, "--server-url");
 
         // `kcap setup <tenant>`: a leading positional arg (bare slug or full URL) is treated as the
         // server, equivalent to --server-url. A bare single label expands to {slug}.kcap.ai.
         if (serverUrlArg is null && args.Length > 1 && !args[1].StartsWith('-'))
             serverUrlArg = ResolveTenantArg(args[1]);
-        var noPrompt         = args.Contains("--no-prompt");
-        var forceDevice      = args.Contains("--device");
-        var skipClaudeFlag   = args.Contains("--skip-claude-hooks");
-        var skipCodexFlag    = args.Contains("--skip-codex-hooks");
+        var noPrompt             = args.Contains("--no-prompt");
+        var forceDevice          = args.Contains("--device");
+        var skipClaudeFlag       = args.Contains("--skip-claude-hooks");
+        var skipCodexFlag        = args.Contains("--skip-codex-hooks");
         var skipCodexNetworkFlag = args.Contains("--skip-codex-network-access");
-        var skipCursorFlag   = args.Contains("--skip-cursor-hooks");
-        var skipCopilotFlag  = args.Contains("--skip-copilot-hooks");
-        var skipGeminiFlag   = args.Contains("--skip-gemini-hooks");
-        var skipKiroFlag     = args.Contains("--skip-kiro-hooks");
-        var skipPiFlag       = args.Contains("--skip-pi-hooks");
-        var skipOpenCodeFlag = args.Contains("--skip-opencode-hooks");
-        var skipAntigravityFlag = args.Contains("--skip-antigravity-hooks");
-        var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
-        var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
-        var legacyProjectScope = legacyPluginScope == "project";
+        var skipCursorFlag       = args.Contains("--skip-cursor-hooks");
+        var skipCopilotFlag      = args.Contains("--skip-copilot-hooks");
+        var skipGeminiFlag       = args.Contains("--skip-gemini-hooks");
+        var skipKiroFlag         = args.Contains("--skip-kiro-hooks");
+        var skipPiFlag           = args.Contains("--skip-pi-hooks");
+        var skipOpenCodeFlag     = args.Contains("--skip-opencode-hooks");
+        var skipAntigravityFlag  = args.Contains("--skip-antigravity-hooks");
+        var legacyPluginScope    = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
+        var skipClaude           = skipClaudeFlag || legacyPluginScope == "skip";
+        var legacyProjectScope   = legacyPluginScope == "project";
 
         // Resolve repo root once and reuse for both the project-scope install path and the
         // non-repo tip at the end. --plugin-scope project writes hooks at <repo>/.claude/...,
@@ -49,9 +49,13 @@ public static class SetupCommand {
 
         if (legacyProjectScope && gitRoot is null) {
             await Console.Error.WriteLineAsync(
-                $"--plugin-scope project requires a git working tree, but '{Environment.CurrentDirectory}' is not inside one.");
+                $"--plugin-scope project requires a git working tree, but '{Environment.CurrentDirectory}' is not inside one."
+            );
+
             await Console.Error.WriteLineAsync(
-                "Either re-run `kcap setup` from inside your repo, or drop --plugin-scope project to install user-scope hooks.");
+                "Either re-run `kcap setup` from inside your repo, or drop --plugin-scope project to install user-scope hooks."
+            );
+
             return 1;
         }
 
@@ -66,7 +70,8 @@ public static class SetupCommand {
         if (existing?.ServerUrl is not null && existingTokens is not null && !noPrompt) {
             var rerun = AnsiConsole.Prompt(
                 new ConfirmationPrompt($"Already configured for [cyan]{Markup.Escape(existing.ServerUrl)}[/] as [cyan]{Markup.Escape(existingTokens.GitHubUsername ?? "?")}[/]. Re-run setup?")
-                    { DefaultValue = false });
+                    { DefaultValue = false }
+            );
 
             if (!rerun) {
                 AnsiConsole.MarkupLine("[dim]Setup cancelled.[/]");
@@ -77,19 +82,27 @@ public static class SetupCommand {
 
         // Step 1: Server
         AnsiConsole.Write(new Rule("[yellow]Step 1/5 — Server[/]").LeftJustified());
-        string serverUrl;
+        string  serverUrl;
         string? preAuthToken = null;
         string  provider;
         bool    loginComplete = false; // WorkOS discovery authenticates inline; skip the Step-2 login.
 
         if (serverUrlArg is not null) {
-            var normalized = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Checking server…",
-                async _ => await ServerUrlNormalizer.NormalizeAsync(
-                    serverUrlArg, skipProbe: false, CancellationToken.None));
+            var normalized = await AnsiConsole.Status()
+                .Spinner(Spinner.Known.Dots)
+                .StartAsync(
+                    "Checking server…",
+                    async _ => await ServerUrlNormalizer.NormalizeAsync(
+                        serverUrlArg,
+                        skipProbe: false,
+                        CancellationToken.None
+                    )
+                );
 
             if (!normalized.Reachable) {
                 AnsiConsole.MarkupLine($"  [red]✗[/] Cannot reach server: {Markup.Escape(normalized.Warning ?? serverUrlArg)}");
                 AnsiConsole.MarkupLine("  [dim]Check the URL is correct and the server is running.[/]");
+
                 return 1;
             }
 
@@ -105,14 +118,18 @@ public static class SetupCommand {
                 AnsiConsole.MarkupLine($"  [green]✓[/] Reachable · auth provider: [cyan]{Markup.Escape(provider)}[/]");
             } catch (Exception ex) {
                 AnsiConsole.MarkupLine($"  [red]✗[/] Cannot reach server: {Markup.Escape(ex.Message)}");
+
                 return 1;
             }
         } else if (noPrompt) {
             await Console.Error.WriteLineAsync("  --server-url is required with --no-prompt");
+
             return 1;
         } else {
             var discovered = await RunDiscoveryAsync(args, forceDevice);
+
             if (discovered is null) return 1;
+
             (serverUrl, preAuthToken, provider, loginComplete) = discovered.Value;
         }
 
@@ -130,10 +147,13 @@ public static class SetupCommand {
             await Console.Out.WriteLineAsync("  Auth provider is None — no login required.");
         } else if (preAuthToken is not null) {
             var exchangeResult = await OAuthLoginFlow.ExchangeAndSaveAsync(serverUrl, preAuthToken, provider);
+
             if (exchangeResult != 0) {
                 await Console.Error.WriteLineAsync("  Token exchange failed.");
+
                 return 1;
             }
+
             // Keep formatting consistent with the non-discovery branch
             var tokens = await TokenStore.LoadAsync();
             AnsiConsole.MarkupLine($"  [green]✓[/] Logged in as [cyan]{Markup.Escape(tokens?.GitHubUsername ?? "?")}[/]");
@@ -165,23 +185,22 @@ public static class SetupCommand {
 
                 return 1;
             }
-
-            await Console.Out.WriteLineAsync($"  Default visibility: {defaultVisibility}");
         } else {
             defaultVisibility = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
                     .Title("Which of your sessions should be readable by other users in the same Kurrent Capacitor account by default?")
                     .AddChoices("org_public", "private", "public")
                     .UseConverter(v => v switch {
-                        "private"    => "All private — only you can see your sessions",
-                        "org_public" => "Org repos public, others private (default)",
-                        "public"     => "All public — others can see all your sessions",
-                        _            => v
-                    }));
-
-            await Console.Out.WriteLineAsync($"  Default visibility: {defaultVisibility}");
+                            "private"    => "All private — only you can see your sessions",
+                            "org_public" => "Org repos public, others private (default)",
+                            "public"     => "All public — others can see all your sessions",
+                            _            => v
+                        }
+                    )
+            );
         }
 
+        await Console.Out.WriteLineAsync($"  Default visibility: {defaultVisibility}");
         await Console.Out.WriteLineAsync();
 
         // Step 4: Coding agents
@@ -190,30 +209,32 @@ public static class SetupCommand {
         await Console.Out.WriteLineAsync();
 
         var pluginPath = ResolvePluginPath();
-        var detected   = new CodingAgentsStep.DetectedAgents(
-            Claude:  AgentDetector.IsInstalled("claude"),
-            Codex:   AgentDetector.IsInstalled("codex"),
-            Cursor:  CursorPaths.IsInstalled(),
+
+        var detected = new CodingAgentsStep.DetectedAgents(
+            Claude: AgentDetector.IsInstalled("claude"),
+            Codex: AgentDetector.IsInstalled("codex"),
+            Cursor: CursorPaths.IsInstalled(),
             // Dir presence covers users who launch Copilot through an IDE
             // wrapper; the PATH probe covers fresh installs that haven't run
             // yet (no ~/.copilot until first launch).
             Copilot: CopilotPaths.IsInstalled() || AgentDetector.IsInstalled("copilot"),
             // Dir presence covers IDE-launched Gemini; the PATH probe covers a
             // fresh install that hasn't created ~/.gemini yet.
-            Gemini:  GeminiPaths.IsInstalled()  || AgentDetector.IsInstalled("gemini"),
+            Gemini: GeminiPaths.IsInstalled() || AgentDetector.IsInstalled("gemini"),
             // Same dual signal for Kiro: the ~/.kiro tree or the conversation DB
             // covers IDE-launched users; the PATH probe (kiro / kiro-cli) covers
             // fresh CLI installs.
-            Kiro:    KiroPaths.IsInstalled() || AgentDetector.IsInstalled("kiro") || AgentDetector.IsInstalled("kiro-cli"),
+            Kiro: KiroPaths.IsInstalled() || AgentDetector.IsInstalled("kiro") || AgentDetector.IsInstalled("kiro-cli"),
             // Pi keeps state under ~/.pi/agent; the PATH probe covers fresh
             // installs that haven't created it yet.
-            Pi:      PiPaths.IsInstalled() || AgentDetector.IsInstalled("pi"),
+            Pi: PiPaths.IsInstalled() || AgentDetector.IsInstalled("pi"),
             // OpenCode keeps config under ~/.config/opencode + data under
             // ~/.local/share/opencode; the PATH probe covers fresh installs.
             OpenCode: OpenCodePaths.IsInstalled() || AgentDetector.IsInstalled("opencode"),
             // Antigravity (GUI IDE) keeps state under ~/.gemini/antigravity; the PATH
             // probe covers a CLI/fresh install that hasn't created it yet.
-            Antigravity: AntigravityPaths.IsInstalled() || AgentDetector.IsInstalled("antigravity"));
+            Antigravity: AntigravityPaths.IsInstalled() || AgentDetector.IsInstalled("antigravity")
+        );
 
         // gitRoot is guaranteed non-null here when legacyProjectScope is true (the early
         // guard at the top of HandleAsync returns 1 otherwise).
@@ -222,57 +243,62 @@ public static class SetupCommand {
             : ClaudePaths.UserSettings;
 
         var stepOptions = new CodingAgentsStep.Options(
-            SkipClaude:  skipClaude,
-            SkipCodex:   skipCodexFlag,
-            SkipCursor:  skipCursorFlag,
+            SkipClaude: skipClaude,
+            SkipCodex: skipCodexFlag,
+            SkipCursor: skipCursorFlag,
             SkipCopilot: skipCopilotFlag,
-            SkipGemini:  skipGeminiFlag,
-            SkipKiro:    skipKiroFlag,
-            SkipPi:      skipPiFlag,
+            SkipGemini: skipGeminiFlag,
+            SkipKiro: skipKiroFlag,
+            SkipPi: skipPiFlag,
             SkipOpenCode: skipOpenCodeFlag,
             SkipAntigravity: skipAntigravityFlag,
-            NoPrompt:    noPrompt,
-            SkipCodexNetworkAccess: skipCodexNetworkFlag);
+            NoPrompt: noPrompt,
+            SkipCodexNetworkAccess: skipCodexNetworkFlag
+        );
 
         // AI-794 — allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
         // proxy; self-hosted servers are added as exact hosts. Derived from the active
         // server URL plus every configured profile so switching profiles still works.
         var profilesForDomains = await AppConfig.LoadProfileConfig();
-        var codexAllowDomains  = CodexConfigToml.BuildAllowDomains(
-            new[] { serverUrl }.Concat(profilesForDomains.Profiles.Values.Select(p => p.ServerUrl)));
+
+        var codexAllowDomains = CodexConfigToml.BuildAllowDomains(
+            new[] { serverUrl }.Concat(profilesForDomains.Profiles.Values.Select(p => p.ServerUrl))
+        );
 
         var stepPaths = new CodingAgentsStep.Paths(
-            ClaudeSettingsPath:   claudeSettingsPath,
-            ClaudeScopeLabel:     legacyProjectScope ? "project" : "user",
-            PluginDir:            pluginPath,
-            CodexHooksPath:       CodexPaths.UserHooksJson,
-            CursorHooksPath:      CursorPaths.UserHooksJson(),
-            CopilotHooksPath:     CopilotPaths.KcapHooksJson(),
-            GeminiSettingsPath:   GeminiPaths.SettingsJson(),
-            AgentsSkillsDir:      AgentsPaths.UserSkillsDir,
+            ClaudeSettingsPath: claudeSettingsPath,
+            ClaudeScopeLabel: legacyProjectScope ? "project" : "user",
+            PluginDir: pluginPath,
+            CodexHooksPath: CodexPaths.UserHooksJson,
+            CursorHooksPath: CursorPaths.UserHooksJson(),
+            CopilotHooksPath: CopilotPaths.KcapHooksJson(),
+            GeminiSettingsPath: GeminiPaths.SettingsJson(),
+            AgentsSkillsDir: AgentsPaths.UserSkillsDir,
             LegacyCodexSkillsDir: Path.Combine(CodexPaths.Home(), "skills"),
-            KiroHooksPath:        KiroPaths.KcapAgentJson(),
-            PiExtensionPath:      PiPaths.KcapExtension(),
+            KiroHooksPath: KiroPaths.KcapAgentJson(),
+            PiExtensionPath: PiPaths.KcapExtension(),
             OpenCodeExtensionPath: OpenCodePaths.KcapPlugin(),
             AntigravityHooksPath: AntigravityPaths.GlobalHooksJson(),
-            CodexConfigTomlPath:  Path.Combine(CodexPaths.Home(), "config.toml"));
+            CodexConfigTomlPath: Path.Combine(CodexPaths.Home(), "config.toml")
+        );
 
         var stepInstallers = new CodingAgentsStep.Installers(
-            InstallClaudePlugin:    InstallPlugin,
-            InstallCodexHooks:      PluginCommand.InstallCodexHooks,
-            InstallCursorHooks:     PluginCommand.InstallCursorHooks,
-            InstallCopilotHooks:    PluginCommand.InstallCopilotHooks,
-            InstallGeminiHooks:     PluginCommand.InstallGeminiHooks,
-            CapacitorOnPath:        () => AgentDetector.IsInstalled("kcap"),
-            InstallAgentSkills:     AgentsSkillsInstaller.Install,
+            InstallClaudePlugin: InstallPlugin,
+            InstallCodexHooks: PluginCommand.InstallCodexHooks,
+            InstallCursorHooks: PluginCommand.InstallCursorHooks,
+            InstallCopilotHooks: PluginCommand.InstallCopilotHooks,
+            InstallGeminiHooks: PluginCommand.InstallGeminiHooks,
+            CapacitorOnPath: () => AgentDetector.IsInstalled("kcap"),
+            InstallAgentSkills: AgentsSkillsInstaller.Install,
             CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny,
-            InstallKiroHooks:       PluginCommand.InstallKiroHooks,
-            InstallPiExtension:     PiExtensionInstaller.Install,
+            InstallKiroHooks: PluginCommand.InstallKiroHooks,
+            InstallPiExtension: PiExtensionInstaller.Install,
             InstallOpenCodeExtension: OpenCodeExtensionInstaller.Install,
-            InstallAntigravityHooks:  PluginCommand.InstallAntigravityHooks,
+            InstallAntigravityHooks: PluginCommand.InstallAntigravityHooks,
             EnableCodexNetworkAccess: () => CodexConfigToml.EnableNetworkAccess(codexAllowDomains),
-            RegisterCodexMcp:         () => CodexConfigToml.RegisterKcapMcpServers());
+            RegisterCodexMcp: () => CodexConfigToml.RegisterKcapMcpServers()
+        );
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
@@ -280,15 +306,21 @@ public static class SetupCommand {
         void WriteLine(string line) => AnsiConsole.MarkupLine(line);
 
         var installResult = await CodingAgentsStep.RunAsync(
-            stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
+            stepOptions,
+            detected,
+            stepPaths,
+            stepInstallers,
+            PromptYesNo,
+            WriteLine
+        );
 
         // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
         // from headless agent CLI spawns by default (AI-755) so subscription auth
         // wins. PAYG users with the keys set in their environment can opt back in
         // here; the rest never see this prompt.
-        var anthropicSet     = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
-        var openaiSet        = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
-        var promptApiKey      = (anthropicSet && !skipClaude) || (openaiSet && !skipCodexFlag);
+        var anthropicSet = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
+        var openaiSet    = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
+        var promptApiKey = (anthropicSet && !skipClaude) || (openaiSet && !skipCodexFlag);
         // Preserve any previous opt-in when no key is in the current env (we just
         // don't have anything to prompt about; the on-disk value is still valid).
         var useProviderApiKey = existing?.UseProviderApiKey ?? false;
@@ -309,19 +341,26 @@ public static class SetupCommand {
 
             if (noPrompt) {
                 var flagValue = GetArg(args, "--use-provider-api-key");
+
                 if (flagValue is not null) {
                     var parsed = ProviderApiKeyPolicy.TryParseBool(flagValue);
+
                     if (parsed is null) {
                         await Console.Error.WriteLineAsync(
-                            $"  Invalid value for --use-provider-api-key: '{flagValue}'. Must be true/1/yes/on or false/0/no/off.");
+                            $"  Invalid value for --use-provider-api-key: '{flagValue}'. Must be true/1/yes/on or false/0/no/off."
+                        );
+
                         return 1;
                     }
+
                     useProviderApiKey = parsed.Value;
                 }
+
                 await Console.Out.WriteLineAsync($"  Use provider API key: {useProviderApiKey}");
             } else {
                 useProviderApiKey = AnsiConsole.Prompt(
-                    new ConfirmationPrompt("  Use these API keys for kcap's headless calls?") { DefaultValue = useProviderApiKey });
+                    new ConfirmationPrompt("  Use these API keys for kcap's headless calls?") { DefaultValue = useProviderApiKey }
+                );
             }
         }
 
@@ -340,7 +379,8 @@ public static class SetupCommand {
             daemonName = AnsiConsole.Prompt(
                 new TextPrompt<string>("Daemon name:")
                     .DefaultValue(defaultName)
-                    .ShowDefaultValue());
+                    .ShowDefaultValue()
+            );
         }
 
         await Console.Out.WriteLineAsync();
@@ -351,10 +391,10 @@ public static class SetupCommand {
         var defaultProfile = profileConfig.Profiles.GetValueOrDefault(activeName) ?? new Profile();
 
         defaultProfile = defaultProfile with {
-            ServerUrl          = serverUrl,
-            DefaultVisibility  = defaultVisibility,
-            UseProviderApiKey  = useProviderApiKey,
-            Daemon             = (defaultProfile.Daemon ?? new DaemonSettings()) with { Name = daemonName }
+            ServerUrl = serverUrl,
+            DefaultVisibility = defaultVisibility,
+            UseProviderApiKey = useProviderApiKey,
+            Daemon = (defaultProfile.Daemon ?? new DaemonSettings()) with { Name = daemonName }
         };
 
         var profiles = new Dictionary<string, Profile>(profileConfig.Profiles) {
@@ -373,9 +413,9 @@ public static class SetupCommand {
         AnsiConsole.Write(new Rule("[green]Setup complete[/]").LeftJustified());
 
         var grid = new Grid().AddColumn().AddColumn();
-        grid.AddRow("[bold]Server[/]",     Markup.Escape(serverUrl));
+        grid.AddRow("[bold]Server[/]", Markup.Escape(serverUrl));
         grid.AddRow("[bold]Visibility[/]", Markup.Escape(defaultVisibility));
-        grid.AddRow("[bold]Daemon[/]",     Markup.Escape(daemonName));
+        grid.AddRow("[bold]Daemon[/]", Markup.Escape(daemonName));
 
         if (useProviderApiKey) {
             grid.AddRow("[bold]Provider API key[/]", "kept in headless spawns");
@@ -401,11 +441,16 @@ public static class SetupCommand {
         // RepositoryDetection.DetectRepositoryAsync), which weakens grouping in the UI.
         if (gitRoot is null) {
             AnsiConsole.MarkupLine(
-                $"\n[yellow]Tip:[/] you ran setup outside a git working tree ([dim]{Markup.Escape(Environment.CurrentDirectory)}[/]).");
+                $"\n[yellow]Tip:[/] you ran setup outside a git working tree ([dim]{Markup.Escape(Environment.CurrentDirectory)}[/])."
+            );
+
             AnsiConsole.MarkupLine(
-                "  Hooks fire from any directory, but sessions recorded outside a repo won't include owner/repo/branch context.");
+                "  Hooks fire from any directory, but sessions recorded outside a repo won't include owner/repo/branch context."
+            );
+
             AnsiConsole.MarkupLine(
-                "  [dim]cd[/] into your project before recording to capture full session context.");
+                "  [dim]cd[/] into your project before recording to capture full session context."
+            );
         }
 
         AnsiConsole.MarkupLine("\n[dim]Optional:[/] start the daemon with [cyan]kcap daemon start -d[/]");
@@ -415,16 +460,24 @@ public static class SetupCommand {
     }
 
     static async Task<(string ServerUrl, string? PreAuthToken, string Provider, bool LoginComplete)?> RunDiscoveryAsync(
-            string[] args, bool forceDevice) {
+            string[] args,
+            bool     forceDevice
+        ) {
         AnsiConsole.MarkupLine($"  Proxy: [dim]{Markup.Escape(AuthProxyEndpoint.Url)}[/]");
 
-        using var http  = new HttpClient();
-        var proxyClient = new AuthProxyClient(http);
+        using var http        = new HttpClient();
+        var       proxyClient = new AuthProxyClient(http);
 
-        var proxyConfig = await AnsiConsole.Status().Spinner(Spinner.Known.Dots).StartAsync("Contacting auth service…",
-            async _ => await proxyClient.GetConfigAsync(AuthProxyEndpoint.Url));
+        var proxyConfig = await AnsiConsole.Status()
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync(
+                "Contacting auth service…",
+                async _ => await proxyClient.GetConfigAsync(AuthProxyEndpoint.Url)
+            );
+
         if (proxyConfig is null) {
             AnsiConsole.MarkupLine("  [red]✗[/] Cannot reach the Kurrent auth service. Retry later, or pass --server-url <url>.");
+
             return null;
         }
 
@@ -438,26 +491,40 @@ public static class SetupCommand {
                 : new SpectreTenantProvisioner(new TenantProvisioningClient(new HttpClient()), ProvisioningEndpoint.Url);
 
             var exit = await WorkOSDiscovery.RunWithLiveAuthAsync(
-                AuthProxyEndpoint.Url, proxyConfig, proxyClient, new SpectreTenantPicker(), provisioner);
+                AuthProxyEndpoint.Url,
+                proxyConfig,
+                proxyClient,
+                new SpectreTenantPicker(),
+                provisioner
+            );
+
             if (exit != 0) return null;
 
             // WorkOSDiscovery saved + activated the picked profile; continue setup against it.
             var cfg    = await AppConfig.LoadProfileConfig();
             var active = cfg.Profiles.GetValueOrDefault(cfg.ActiveProfile);
+
             if (active?.ServerUrl is null) {
                 AnsiConsole.MarkupLine("  [red]✗[/] WorkOS sign-in did not set an active profile.");
+
                 return null;
             }
+
             return (active.ServerUrl, null, AuthProvider.WorkOS, true);
         }
 
         if (string.IsNullOrEmpty(proxyConfig.GitHubClientId)) {
             AnsiConsole.MarkupLine("  [red]✗[/] Cannot reach the Kurrent auth service. Retry later, or pass --server-url <url>.");
+
             return null;
         }
 
         var ghToken = await OAuthLoginFlow.AcquireGitHubTokenAsync(
-            proxyConfig.GitHubClientId, proxyConfig.GitHubCodeExchangeUrl, forceDevice);
+            proxyConfig.GitHubClientId,
+            proxyConfig.GitHubCodeExchangeUrl,
+            forceDevice
+        );
+
         if (ghToken is null) return null;
 
         var discovery = new TenantDiscovery(proxyClient, new SpectreTenantPicker());
@@ -465,11 +532,12 @@ public static class SetupCommand {
 
         if (outcome.ErrorMessage is not null) {
             AnsiConsole.MarkupLine($"  [red]✗[/] {Markup.Escape(outcome.ErrorMessage)}");
+
             return null;
         }
 
         var profileCfg = await AppConfig.LoadProfileConfig();
-        profileCfg     = TenantDiscovery.MergeProfiles(profileCfg, outcome.Tenants, outcome.Picked!);
+        profileCfg = TenantDiscovery.MergeProfiles(profileCfg, outcome.Tenants, outcome.Picked!);
         await AppConfig.SaveProfileConfig(profileCfg);
 
         AnsiConsole.MarkupLine($"  [green]✓[/] Discovered {outcome.Tenants.Length} tenant(s). Active: [cyan]{Markup.Escape(outcome.Picked!.OrgLogin)}[/]");
@@ -479,6 +547,7 @@ public static class SetupCommand {
 
     internal static string? ResolvePluginPath(string? overrideDir = null) {
         overrideDir ??= Environment.GetEnvironmentVariable("KCAP_PLUGIN_DIR");
+
         if (!string.IsNullOrWhiteSpace(overrideDir) && Directory.Exists(overrideDir)) {
             return overrideDir;
         }
@@ -537,13 +606,15 @@ public static class SetupCommand {
         // dashboard welcome modal never flips when it fails — e.g. a token the server
         // rejects or maps to a different identity. Set KCAP_DEBUG to surface the
         // outcome on stderr without changing the best-effort, non-blocking contract.
-        var  debug = Environment.GetEnvironmentVariable("KCAP_DEBUG") is { Length: > 0 };
+        var debug = Environment.GetEnvironmentVariable("KCAP_DEBUG") is { Length: > 0 };
+
         void Debug(string message) {
             if (debug) Console.Error.WriteLine($"[kcap] cli-setup ping: {message}");
         }
 
         try {
             var tokens = await TokenStore.LoadAsync();
+
             if (tokens is null || tokens.IsExpired) {
                 Debug(tokens is null ? "skipped — no stored token" : "skipped — token expired");
 
@@ -554,10 +625,12 @@ public static class SetupCommand {
             http.DefaultRequestHeaders.Authorization = new("Bearer", tokens.AccessToken);
 
             var version = typeof(SetupCommand).Assembly.GetName().Version?.ToString();
+
             var payload = new StringContent(
                 $$"""{"cliVersion":{{(version is null ? "null" : "\"" + version + "\"")}}}""",
                 System.Text.Encoding.UTF8,
-                "application/json");
+                "application/json"
+            );
 
             var pingTask = http.PostAsync($"{serverUrl.TrimEnd('/')}/api/users/me/cli-setup", payload);
             var winner   = await Task.WhenAny(pingTask, Task.Delay(TimeSpan.FromSeconds(5)));
@@ -572,12 +645,14 @@ public static class SetupCommand {
                 // cancels the in-flight POST; observe the orphan so its
                 // cancellation exception doesn't go unhandled.
                 Debug("timed out after 5s");
+
                 _ = pingTask.ContinueWith(
                     t => {
                         if (t.IsCompletedSuccessfully) t.Result.Dispose();
                         _ = t.Exception; // mark observed
                     },
-                    TaskScheduler.Default);
+                    TaskScheduler.Default
+                );
             }
         } catch (Exception e) {
             // Swallow — see method-doc. KCAP_DEBUG surfaces the reason.
@@ -627,7 +702,7 @@ public static class SetupCommand {
     /// </summary>
     internal static string ResolveTenantArg(string arg) =>
         arg.Contains("://") || arg.Contains('.') || arg.Contains(':')
-        || arg.Equals("localhost", StringComparison.OrdinalIgnoreCase) // bare loopback host, not a kcap.ai slug
+     || arg.Equals("localhost", StringComparison.OrdinalIgnoreCase) // bare loopback host, not a kcap.ai slug
             ? arg
             : $"https://{arg}.kcap.ai";
 

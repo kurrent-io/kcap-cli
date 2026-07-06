@@ -39,11 +39,6 @@ internal static class LocalAgentClient {
         var       detached   = false; // user pressed the detach sequence
         var       inputClosed = false; // local stdin reached EOF
 
-        async Task Send(LocalFrame f) {
-            await writeLock.WaitAsync(ct);
-            try { await FrameCodec.WriteAsync(stream, f, ct); } finally { writeLock.Release(); }
-        }
-
         // daemon → client
         var outPump = Task.Run(async () => {
             try {
@@ -130,6 +125,11 @@ internal static class LocalAgentClient {
 
         // raw mode is restored by `using raw` on return.
         return exitCode;
+
+        async Task Send(LocalFrame f) {
+            await writeLock.WaitAsync(ct);
+            try { await FrameCodec.WriteAsync(stream, f, ct); } finally { writeLock.Release(); }
+        }
 
         LocalFrame SizeFrame() { var (c, r) = TrySize(); return LocalFrame.Resize(c, r); }
     }

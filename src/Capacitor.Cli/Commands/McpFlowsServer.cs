@@ -18,6 +18,7 @@ static class McpFlowsServer {
         var tools    = BuildToolsList();
 
         RepositoryPayload? repoInfo = null;
+
         try {
             repoInfo = await RepositoryDetection.DetectRepositoryAsync(cwd);
         } catch {
@@ -62,6 +63,7 @@ static class McpFlowsServer {
                 // Unexpected: log the detail to stderr (not to the client, which could leak local
                 // paths from IO errors) and return a generic tool error, keeping the loop alive.
                 await Console.Error.WriteLineAsync($"kcap mcp flows: unexpected error handling tools/call: {ex}");
+
                 return BuildToolResult(callId, "Error: internal error handling the request.", isError: true);
             }
         }
@@ -113,13 +115,13 @@ static class McpFlowsServer {
     }
 
     static async Task<string> HandleToolCallAsync(
-            JsonNode            id,
-            JsonObject          request,
-            HttpClient          client,
-            string              baseUrl,
-            string              cwd,
-            string?             repoRoot,
-            RepositoryPayload?  repoInfo
+            JsonNode           id,
+            JsonObject         request,
+            HttpClient         client,
+            string             baseUrl,
+            string             cwd,
+            string?            repoRoot,
+            RepositoryPayload? repoInfo
         ) {
         var paramsNode = request["params"]?.AsObject();
         var toolName   = paramsNode?["name"]?.GetValue<string>();
@@ -138,7 +140,10 @@ static class McpFlowsServer {
                     "start_review_flow"   => await SendWithRefreshRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind")),
                     "start_flow"          => await SendWithRefreshRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id")),
                     "submit_review_round" => await SendWithRefreshRetryAsync(client, c => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true)),
-                    _                     => await SendWithRefreshRetryAsync(client, c => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: ParseAsyncArg(arguments)))
+                    _ => await SendWithRefreshRetryAsync(
+                        client,
+                        c => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: ParseAsyncArg(arguments))
+                    )
                 };
 
                 var postBody = await postResponse.Content.ReadAsStringAsync();
@@ -150,12 +155,13 @@ static class McpFlowsServer {
                     return BuildToolResult(id, $"Error: HTTP {(int)postResponse.StatusCode} — {postBody}", isError: true);
 
                 var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody, toolName);
+
                 return BuildToolResult(id, payload, isError);
             }
 
             using var httpResponse = toolName switch {
                 "get_review_flow_status" or "get_flow_status" => await SendWithRefreshRetryAsync(client, c => c.GetAsync(BuildFlowUrl(apiRoot, arguments))),
-                "close_review_flow"      or "close_flow"      => await SendWithRefreshRetryAsync(client, c => c.PostAsync(BuildFlowUrl(apiRoot, arguments) + "/close", null)),
+                "close_review_flow" or "close_flow"           => await SendWithRefreshRetryAsync(client, c => c.PostAsync(BuildFlowUrl(apiRoot, arguments) + "/close", null)),
                 _                                             => throw new ArgumentException($"Unknown tool: {toolName}")
             };
 
@@ -171,20 +177,25 @@ static class McpFlowsServer {
 
             string statusPayload;
 
-            if (toolName is "get_review_flow_status" or "get_flow_status") {
-                statusPayload = FormatStatusResponse(body, out var pendingIds);
+            switch (toolName) {
+                case "get_review_flow_status" or "get_flow_status": {
+                    statusPayload = FormatStatusResponse(body, out var pendingIds);
 
-                // AI-1127 E-c: ack exactly the ids that were actually rendered into the text
-                // above, after the text is fully built — never before, never a superset.
-                var flowRunId = arguments?["flow_run_id"]?.GetValue<string>();
-                if (flowRunId is not null)
-                    await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
-            } else if (toolName is "close_review_flow" or "close_flow") {
-                // AI-1127 E-c: render pending_messages but never ack them — the server delivers
-                // them atomically with the close, so there is nothing left to redeliver.
-                statusPayload = FormatCloseResponse(body, out _);
-            } else {
-                statusPayload = FormatRoundResponse(body);
+                    // AI-1127 E-c: ack exactly the ids that were actually rendered into the text
+                    // above, after the text is fully built — never before, never a superset.
+                    var flowRunId = arguments?["flow_run_id"]?.GetValue<string>();
+
+                    if (flowRunId is not null)
+                        await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
+
+                    break;
+                }
+                case "close_review_flow" or "close_flow":
+                    // AI-1127 E-c: render pending_messages but never ack them — the server delivers
+                    // them atomically with the close, so there is nothing left to redeliver.
+                    statusPayload = FormatCloseResponse(body, out _); break;
+                default:
+                    statusPayload = FormatRoundResponse(body); break;
             }
 
             return BuildToolResult(id, statusPayload);
@@ -245,21 +256,21 @@ static class McpFlowsServer {
         var sessionId = ArgParsing.ResolveSessionIdFromEnv();
 
         var body = new StartReviewFlowDto(
-            Kind:                 kind,
-            TargetKind:           targetKind,
-            TargetRef:            targetRef,
-            TargetTitle:          targetTitle,
-            Context:              context,
-            Instructions:         instructions,
-            RequestingSessionId:  sessionId,
-            RequestingCwd:        cwd,
-            RequestingRepoRoot:   repoRoot,
-            RepoOwner:            repoInfo?.Owner,
-            RepoName:             repoInfo?.RepoName,
-            DaemonName:           null,
-            RepoPath:             repoRoot,
-            Mode:                 mode,
-            Async:                true
+            Kind: kind,
+            TargetKind: targetKind,
+            TargetRef: targetRef,
+            TargetTitle: targetTitle,
+            Context: context,
+            Instructions: instructions,
+            RequestingSessionId: sessionId,
+            RequestingCwd: cwd,
+            RequestingRepoRoot: repoRoot,
+            RepoOwner: repoInfo?.Owner,
+            RepoName: repoInfo?.RepoName,
+            DaemonName: null,
+            RepoPath: repoRoot,
+            Mode: mode,
+            Async: true
         );
 
         return await client.PostAsync(
@@ -303,15 +314,17 @@ static class McpFlowsServer {
 
     static string BuildFlowUrl(string apiRoot, JsonObject? arguments) {
         var flowRunId = arguments?["flow_run_id"]?.GetValue<string>()
-            ?? throw new ArgumentException("Missing required argument: flow_run_id");
+         ?? throw new ArgumentException("Missing required argument: flow_run_id");
 
         return $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
     }
 
-    static readonly TimeSpan PollInterval   = TimeSpan.FromSeconds(3);
-    static readonly TimeSpan PollCap        = TimeSpan.FromMinutes(8);   // safely below MCP_TOOL_TIMEOUT
-    static readonly TimeSpan PerGetTimeout  = TimeSpan.FromSeconds(20);
-    static readonly TimeSpan NotFoundGrace  = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan PollInterval  = TimeSpan.FromSeconds(3);
+    static readonly TimeSpan PollCap       = TimeSpan.FromMinutes(8); // safely below MCP_TOOL_TIMEOUT
+    static readonly TimeSpan PerGetTimeout = TimeSpan.FromSeconds(20);
+
+    static readonly TimeSpan NotFoundGrace = TimeSpan.FromSeconds(10);
+
     // AI-1127 E-c final review, Important: the shared client has Timeout = InfiniteTimeSpan (the
     // review-flow endpoints long-poll), so without a per-attempt bound a hung ack POST would block
     // indefinitely — stalling the tool response the driver is waiting on. Mirrors PerGetTimeout's
@@ -338,22 +351,28 @@ static class McpFlowsServer {
 
         try {
             var node = JsonNode.Parse(postBody)?.AsObject();
+
             if (node is null) return null;
 
             var flowRunId = node["flow_run_id"]?.GetValue<string>();
             var status    = node["status"]?.GetValue<string>();
 
-            if (flowRunId is null || status != "running") return null;
+            if (flowRunId is null            || status != "running") return null;
             if (node["round_id"] is not null || node["round_number"] is not null) return null;
 
             var sb = new StringBuilder();
-            sb.Append("flow_run_id: "); AppendLine(sb, flowRunId);
+            sb.Append("flow_run_id: ");
+            AppendLine(sb, flowRunId);
             sb.AppendLine("status: running");
             sb.AppendLine();
-            sb.Append("Multi-participant flow started — no round is in flight yet. Address a role with " +
-                      "send_to_participant(flow_run_id, participant, message); each role's agent launches " +
-                      "lazily on its first message.");
+
+            sb.Append(
+                "Multi-participant flow started — no round is in flight yet. Address a role with "    +
+                "send_to_participant(flow_run_id, participant, message); each role's agent launches " +
+                "lazily on its first message."
+            );
             pendingIds = AppendPendingMessages(sb, node);
+
             return sb.ToString();
         } catch {
             return null;
@@ -401,43 +420,53 @@ static class McpFlowsServer {
         toolName is "start_review_flow" or "submit_review_round" ? "get_review_flow_status" : "get_flow_status";
 
     static async Task<PollResult> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber, string toolName) {
-        var url                   = $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
-        var pollStartedAt         = DateTimeOffset.UtcNow;
-        var deadline              = pollStartedAt + PollCap;
+        var url           = $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
+        var pollStartedAt = DateTimeOffset.UtcNow;
+        var deadline      = pollStartedAt + PollCap;
         // Fix #3: anchor the 404 grace window to poll start, not to first-seen-404.
         var notFoundGraceDeadline = pollStartedAt + NotFoundGrace;
         var consecutiveTransient  = 0;
-        var lastTransientError    = (string?)null;
 
         while (DateTimeOffset.UtcNow < deadline) {
-            using var getCts = new CancellationTokenSource(PerGetTimeout);
+            using var           getCts = new CancellationTokenSource(PerGetTimeout);
             HttpResponseMessage resp;
+
+            string? lastTransientError;
+
             try {
                 resp = await SendWithRefreshRetryAsync(client, c => c.GetAsync(url, getCts.Token));
             } catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException) {
                 // Fix #4: count network/TLS/timeout as transient; stop after budget.
                 consecutiveTransient++;
                 lastTransientError = ex.Message;
+
                 if (consecutiveTransient > MaxTransientRetries)
                     return new($"Error: poll failed after {MaxTransientRetries} consecutive network errors: {lastTransientError}", true);
-                await Task.Delay(PollInterval); continue;
+
+                await Task.Delay(PollInterval);
+
+                continue;
             }
 
             using (resp) {
-                if (resp.StatusCode == HttpStatusCode.NotFound) {
+                switch (resp.StatusCode) {
                     // Fix #3: 404 only gets the grace window anchored to poll start.
-                    if (DateTimeOffset.UtcNow > notFoundGraceDeadline)
+                    case HttpStatusCode.NotFound when DateTimeOffset.UtcNow > notFoundGraceDeadline:
                         return new($"Error: flow_run_id {flowRunId} not found.", true);
-                    await Task.Delay(PollInterval); continue;
-                }
+                    case HttpStatusCode.NotFound:
+                        await Task.Delay(PollInterval);
 
-                if (resp.StatusCode == HttpStatusCode.Unauthorized)
-                    return new("Not logged in. Run 'kcap login' on the host shell.", true);
+                        continue;
+                    case HttpStatusCode.Unauthorized:
+                        return new("Not logged in. Run 'kcap login' on the host shell.", true);
+                }
 
                 // Fix #4: non-transient 4xx (e.g. 400, 403) fail immediately.
                 var statusCode = (int)resp.StatusCode;
+
                 if (statusCode is >= 400 and < 500) {
                     var errBody = await resp.Content.ReadAsStringAsync();
+
                     return new($"Error: HTTP {statusCode} — {errBody}", true);
                 }
 
@@ -445,14 +474,17 @@ static class McpFlowsServer {
                 if (!resp.IsSuccessStatusCode) {
                     consecutiveTransient++;
                     lastTransientError = $"HTTP {statusCode}";
+
                     if (consecutiveTransient > MaxTransientRetries)
                         return new($"Error: poll failed after {MaxTransientRetries} consecutive server errors: {lastTransientError}", true);
-                    await Task.Delay(PollInterval); continue;
+
+                    await Task.Delay(PollInterval);
+
+                    continue;
                 }
 
                 // Successful response — reset transient counter.
                 consecutiveTransient = 0;
-                lastTransientError   = null;
 
                 var body      = await resp.Content.ReadAsStringAsync();
                 var node      = JsonNode.Parse(body)?.AsObject();
@@ -466,8 +498,10 @@ static class McpFlowsServer {
                     if (rn == roundNumber && rs is not null && TerminalRoundStatuses.Contains(rs)) {
                         var formatted = FormatPolledRoundResult(node!, flowRunId, out var pendingIds);
                         await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
+
                         return new(formatted, false);
                     }
+
                     // Run became terminal before our round produced a result — explicit error.
                     return new($"Error: review run {runStatus} before round {roundNumber} produced a result.", true);
                 }
@@ -476,14 +510,17 @@ static class McpFlowsServer {
                 if (rn == roundNumber && rs is not null && TerminalRoundStatuses.Contains(rs)) {
                     var formatted = FormatPolledRoundResult(node!, flowRunId, out var pendingIds);
                     await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, Task.Delay);
+
                     return new(formatted, false);
                 }
             }
+
             await Task.Delay(PollInterval);
         }
 
         // Genuine 8-min cap: round still legitimately running.
         var statusToolName = StatusToolNameFor(toolName);
+
         return new(
             $"Flow still running for flow_run_id {flowRunId} (round {roundNumber}). " +
             $"Call {statusToolName} to retrieve the result when ready.",
@@ -502,13 +539,26 @@ static class McpFlowsServer {
         var resultText  = node["round_result_text"]?.GetValue<string>();
 
         var sb = new StringBuilder();
-        sb.Append("flow_run_id: "); AppendLine(sb, flowRunId);
-        if (roundNumber.HasValue) { sb.Append("round_number: "); sb.AppendLine(roundNumber.Value.ToString()); }
-        sb.Append("status: ");      AppendLine(sb, node["status"]?.GetValue<string>() ?? "");
-        sb.Append("result_kind: "); AppendLine(sb, resultKind);
-        if (!string.IsNullOrEmpty(resultText)) { sb.AppendLine(); sb.Append(resultText); }
+        sb.Append("flow_run_id: ");
+        AppendLine(sb, flowRunId);
+
+        if (roundNumber.HasValue) {
+            sb.Append("round_number: ");
+            sb.AppendLine(roundNumber.Value.ToString());
+        }
+
+        sb.Append("status: ");
+        AppendLine(sb, node["status"]?.GetValue<string>() ?? "");
+        sb.Append("result_kind: ");
+        AppendLine(sb, resultKind);
+
+        if (!string.IsNullOrEmpty(resultText)) {
+            sb.AppendLine();
+            sb.Append(resultText);
+        }
 
         pendingIds = AppendPendingMessages(sb, node);
+
         return sb.ToString();
     }
 
@@ -522,19 +572,28 @@ static class McpFlowsServer {
     internal static string FormatRoundResponse(string body, out IReadOnlyList<string> pendingIds) {
         try {
             var node = JsonNode.Parse(body)?.AsObject();
-            if (node is null) { pendingIds = []; return body; }
 
-            var flowRunId   = node["flow_run_id"]?.GetValue<string>()   ?? "";
-            var roundId     = node["round_id"]?.GetValue<string>()     ?? "";
-            var status      = node["status"]?.GetValue<string>()      ?? "";
-            var resultKind  = node["result_kind"]?.GetValue<string>()  ?? "";
-            var resultText  = node["result_text"]?.GetValue<string>();
+            if (node is null) {
+                pendingIds = [];
+
+                return body;
+            }
+
+            var flowRunId  = node["flow_run_id"]?.GetValue<string>() ?? "";
+            var roundId    = node["round_id"]?.GetValue<string>()    ?? "";
+            var status     = node["status"]?.GetValue<string>()      ?? "";
+            var resultKind = node["result_kind"]?.GetValue<string>() ?? "";
+            var resultText = node["result_text"]?.GetValue<string>();
 
             var sb = new StringBuilder();
-            sb.Append("flow_run_id: "); AppendLine(sb, flowRunId);
-            sb.Append("round_id: ");    AppendLine(sb, roundId);
-            sb.Append("status: ");      AppendLine(sb, status);
-            sb.Append("result_kind: "); AppendLine(sb, resultKind);
+            sb.Append("flow_run_id: ");
+            AppendLine(sb, flowRunId);
+            sb.Append("round_id: ");
+            AppendLine(sb, roundId);
+            sb.Append("status: ");
+            AppendLine(sb, status);
+            sb.Append("result_kind: ");
+            AppendLine(sb, resultKind);
 
             if (!string.IsNullOrEmpty(resultText)) {
                 sb.AppendLine();
@@ -542,9 +601,11 @@ static class McpFlowsServer {
             }
 
             pendingIds = AppendPendingMessages(sb, node);
+
             return sb.ToString();
         } catch {
             pendingIds = [];
+
             return body;
         }
     }
@@ -555,21 +616,30 @@ static class McpFlowsServer {
     internal static string FormatStatusResponse(string body, out IReadOnlyList<string> pendingIds) {
         try {
             var node = JsonNode.Parse(body)?.AsObject();
-            if (node is null) { pendingIds = []; return body; }
 
-            var flowRunId      = node["flow_run_id"]?.GetValue<string>()      ?? "";
-            var status         = node["status"]?.GetValue<string>()         ?? "";
-            var definitionId   = node["definition_id"]?.GetValue<string>()   ?? "";
-            var targetTitle    = node["target_title"]?.GetValue<string>()    ?? "";
+            if (node is null) {
+                pendingIds = [];
+
+                return body;
+            }
+
+            var flowRunId      = node["flow_run_id"]?.GetValue<string>()   ?? "";
+            var status         = node["status"]?.GetValue<string>()        ?? "";
+            var definitionId   = node["definition_id"]?.GetValue<string>() ?? "";
+            var targetTitle    = node["target_title"]?.GetValue<string>()  ?? "";
             var roundCount     = node["round_count"]?.GetValue<int>();
             var lastResultKind = node["last_result_kind"]?.GetValue<string>();
             var lastResultText = node["last_result_text"]?.GetValue<string>();
 
             var sb = new StringBuilder();
-            sb.Append("flow_run_id: ");   AppendLine(sb, flowRunId);
-            sb.Append("status: ");        AppendLine(sb, status);
-            sb.Append("definition_id: "); AppendLine(sb, definitionId);
-            sb.Append("target_title: ");  AppendLine(sb, targetTitle);
+            sb.Append("flow_run_id: ");
+            AppendLine(sb, flowRunId);
+            sb.Append("status: ");
+            AppendLine(sb, status);
+            sb.Append("definition_id: ");
+            AppendLine(sb, definitionId);
+            sb.Append("target_title: ");
+            AppendLine(sb, targetTitle);
 
             if (roundCount.HasValue) {
                 sb.Append("round_count: ");
@@ -577,7 +647,8 @@ static class McpFlowsServer {
             }
 
             if (!string.IsNullOrEmpty(lastResultKind)) {
-                sb.Append("result_kind: "); AppendLine(sb, lastResultKind);
+                sb.Append("result_kind: ");
+                AppendLine(sb, lastResultKind);
             }
 
             if (!string.IsNullOrEmpty(lastResultText)) {
@@ -586,9 +657,11 @@ static class McpFlowsServer {
             }
 
             pendingIds = AppendPendingMessages(sb, node);
+
             return sb.ToString();
         } catch {
             pendingIds = [];
+
             return body;
         }
     }
@@ -603,19 +676,28 @@ static class McpFlowsServer {
     internal static string FormatCloseResponse(string body, out IReadOnlyList<string> pendingIds) {
         try {
             var node = JsonNode.Parse(body)?.AsObject();
-            if (node is null) { pendingIds = []; return body; }
+
+            if (node is null) {
+                pendingIds = [];
+
+                return body;
+            }
 
             var flowRunId = node["flow_run_id"]?.GetValue<string>() ?? "";
             var status    = node["status"]?.GetValue<string>()      ?? "";
 
             var sb = new StringBuilder();
-            sb.Append("flow_run_id: "); AppendLine(sb, flowRunId);
-            sb.Append("status: ");      AppendLine(sb, status);
+            sb.Append("flow_run_id: ");
+            AppendLine(sb, flowRunId);
+            sb.Append("status: ");
+            AppendLine(sb, status);
 
             pendingIds = AppendPendingMessages(sb, node);
+
             return sb.ToString();
         } catch {
             pendingIds = [];
+
             return body;
         }
     }
@@ -644,7 +726,11 @@ static class McpFlowsServer {
             var from = StringField(o, "from_participant");
             var text = StringField(o, "text");
 
-            entries.Append("- from "); entries.Append(from); entries.Append(" ["); entries.Append(id); entries.Append("]: ");
+            entries.Append("- from ");
+            entries.Append(from);
+            entries.Append(" [");
+            entries.Append(id);
+            entries.Append("]: ");
             entries.AppendLine(text);
             count++;
 
@@ -654,7 +740,9 @@ static class McpFlowsServer {
         if (count == 0) return [];
 
         sb.AppendLine();
-        sb.Append("pending_messages ("); sb.Append(count); sb.AppendLine("):");
+        sb.Append("pending_messages (");
+        sb.Append(count);
+        sb.AppendLine("):");
         sb.Append(entries);
 
         return ids;
@@ -691,10 +779,12 @@ static class McpFlowsServer {
                 // driver is waiting on. A timeout surfaces as OperationCanceledException, which
                 // falls into the existing swallow-and-retry-once path below.
                 using var postCts = new CancellationTokenSource(PerAckPostTimeout);
+
                 using var response = await SendWithRefreshRetryAsync(
                     client,
                     c => c.PostAsync(url, JsonContent.Create(body, McpJsonContext.Default.AckFlowMessagesDto), postCts.Token)
                 );
+
                 return response.IsSuccessStatusCode;
             } catch {
                 return false;
@@ -708,13 +798,15 @@ static class McpFlowsServer {
         if (await TryPostAsync()) return;
 
         await Console.Error.WriteLineAsync(
-            $"kcap mcp flows: failed to ack {messageIds.Count} rendered message(s) for flow_run_id {flowRunId}; will redeliver on next call.");
+            $"kcap mcp flows: failed to ack {messageIds.Count} rendered message(s) for flow_run_id {flowRunId}; will redeliver on next call."
+        );
     }
 
     static void AppendLine(StringBuilder sb, string value) => sb.AppendLine(value);
 
     static string GetRequiredArg(JsonObject? arguments, string name) {
         var value = arguments?[name]?.GetValue<string>();
+
         return value ?? throw new ArgumentException($"Missing required argument: {name}");
     }
 
@@ -728,9 +820,9 @@ static class McpFlowsServer {
     /// </summary>
     static bool ParseAsyncArg(JsonObject? arguments) =>
         arguments?["async"] switch {
-            null                                              => true,
+            null                                            => true,
             JsonValue v when v.TryGetValue<bool>(out var b) => b,
-            _                                                 => throw new ArgumentException("Invalid argument: async must be a boolean")
+            _                                               => throw new ArgumentException("Invalid argument: async must be a boolean")
         };
 
     static string BuildInitializeResponse(JsonNode id) =>
@@ -752,6 +844,7 @@ static class McpFlowsServer {
             ["id"]      = id.DeepClone(),
             ["error"]   = JsonSerializer.SerializeToNode(new McpError(code, message), McpJsonContext.Default.McpError)
         };
+
         return envelope.ToJsonString();
     }
 
@@ -761,6 +854,7 @@ static class McpFlowsServer {
             ["id"]      = id.DeepClone(),
             ["result"]  = JsonSerializer.SerializeToNode(result, typeInfo)
         };
+
         return envelope.ToJsonString();
     }
 
@@ -779,9 +873,15 @@ static class McpFlowsServer {
                     ["target_kind"]  = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
                     ["target_ref"]   = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
                     ["target_title"] = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
-                    ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done. State where the changes live — the reviewer sees a mirror of the working tree you launched from only; if the changeset is elsewhere or incomplete there, say so and inline the relevant diffs."),
+                    ["context"] = new(
+                        "string",
+                        "Background context for the reviewer: what to focus on, constraints, definition of done. State where the changes live — the reviewer sees a mirror of the working tree you launched from only; if the changeset is elsewhere or incomplete there, say so and inline the relevant diffs."
+                    ),
                     ["instructions"] = new("string", "Optional additional instructions for the reviewer agent."),
-                    ["mode"]         = new("string", "Optional. Pass 'context-only' to have the reviewer treat the submitted context/diff as authoritative rather than reading the repository. By default the reviewer runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the review in the actual source; passing 'context-only' opts out of that.")
+                    ["mode"] = new(
+                        "string",
+                        "Optional. Pass 'context-only' to have the reviewer treat the submitted context/diff as authoritative rather than reading the repository. By default the reviewer runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the review in the actual source; passing 'context-only' opts out of that."
+                    )
                 },
                 ["kind", "target_kind", "target_ref", "target_title", "context"]
             )
@@ -827,20 +927,26 @@ static class McpFlowsServer {
         new(
             "start_flow",
             "Start a new agent flow from the server's flow-definition catalog. This hands the work to a SEPARATE hosted agent and iterates to sign-off — it is NOT how you do the work yourself. " +
-            "Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. " +
-            "Returns a flow_run_id that identifies this flow run — save it to call send_to_participant or get_flow_status later. " +
-            "Multi-participant definitions start round-less — the response carries no round; address each role with send_to_participant (roles launch lazily on first message). " +
+            "Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. "                                                                                   +
+            "Returns a flow_run_id that identifies this flow run — save it to call send_to_participant or get_flow_status later. "                                                                 +
+            "Multi-participant definitions start round-less — the response carries no round; address each role with send_to_participant (roles launch lazily on first message). "                  +
             "Responses may carry pending_messages — out-of-band notes from participants. React to each message_id ONCE, when first shown: a message normally never reappears, but a failed delivery acknowledgment redelivers it on a later call — never react to the same message_id twice.",
             new(
                 "object",
                 new() {
                     ["definition_id"] = new("string", "Flow definition id from the catalog (e.g. 'code-review', or a custom definition)."),
-                    ["target_kind"]    = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
-                    ["target_ref"]     = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
-                    ["target_title"]   = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
-                    ["context"]        = new("string", "Background context for the agent: what to focus on, constraints, definition of done. State where the changes live — the participant sees a mirror of the working tree you launched from only; if the changeset is elsewhere or incomplete there, say so and inline the relevant diffs."),
-                    ["instructions"]   = new("string", "Optional additional instructions for the agent."),
-                    ["mode"]           = new("string", "Optional. Pass 'context-only' to have the agent treat the submitted context/diff as authoritative rather than reading the repository. By default the agent runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the work in the actual source; passing 'context-only' opts out of that.")
+                    ["target_kind"]   = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
+                    ["target_ref"]    = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
+                    ["target_title"]  = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
+                    ["context"] = new(
+                        "string",
+                        "Background context for the agent: what to focus on, constraints, definition of done. State where the changes live — the participant sees a mirror of the working tree you launched from only; if the changeset is elsewhere or incomplete there, say so and inline the relevant diffs."
+                    ),
+                    ["instructions"] = new("string", "Optional additional instructions for the agent."),
+                    ["mode"] = new(
+                        "string",
+                        "Optional. Pass 'context-only' to have the agent treat the submitted context/diff as authoritative rather than reading the repository. By default the agent runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the work in the actual source; passing 'context-only' opts out of that."
+                    )
                 },
                 ["definition_id", "target_kind", "target_ref", "target_title", "context"]
             )
@@ -852,8 +958,11 @@ static class McpFlowsServer {
             new(
                 "object",
                 new() {
-                    ["flow_run_id"]  = new("string", "Flow run ID returned by start_flow."),
-                    ["participant"]  = new("string", "The participant role to send to, as declared by the flow definition's participants map (single-participant definitions use 'reviewer'). The server rejects an unknown role, naming the valid ones."),
+                    ["flow_run_id"] = new("string", "Flow run ID returned by start_flow."),
+                    ["participant"] = new(
+                        "string",
+                        "The participant role to send to, as declared by the flow definition's participants map (single-participant definitions use 'reviewer'). The server rejects an unknown role, naming the valid ones."
+                    ),
                     ["message"]      = new("string", "Updated context or response to the participant's previous findings."),
                     ["instructions"] = new("string", "Optional instructions for this round."),
                     ["async"]        = new("boolean", "Optional. Defaults to true.")
@@ -890,22 +999,22 @@ static class McpFlowsServer {
 
 /// <summary>CLI-side DTO for POST /api/flows/review/start — mirrors the server's StartReviewFlowRequest fields.</summary>
 record StartReviewFlowDto(
-    [property: JsonPropertyName("kind")]                   string  Kind,
-    [property: JsonPropertyName("target_kind")]            string  TargetKind,
-    [property: JsonPropertyName("target_ref")]             string  TargetRef,
-    [property: JsonPropertyName("target_title")]           string  TargetTitle,
-    [property: JsonPropertyName("context")]                string  Context,
-    [property: JsonPropertyName("instructions")]           string? Instructions,
-    [property: JsonPropertyName("requesting_session_id")] string? RequestingSessionId,
-    [property: JsonPropertyName("requesting_cwd")]         string? RequestingCwd,
-    [property: JsonPropertyName("requesting_repo_root")]   string? RequestingRepoRoot,
-    [property: JsonPropertyName("repo_owner")]             string? RepoOwner,
-    [property: JsonPropertyName("repo_name")]              string? RepoName,
-    [property: JsonPropertyName("daemon_name")]            string? DaemonName,
-    [property: JsonPropertyName("repo_path")]              string? RepoPath,
-    [property: JsonPropertyName("mode")]                   string? Mode,
-    [property: JsonPropertyName("async")]                  bool    Async
-);
+        [property: JsonPropertyName("kind")]                  string  Kind,
+        [property: JsonPropertyName("target_kind")]           string  TargetKind,
+        [property: JsonPropertyName("target_ref")]            string  TargetRef,
+        [property: JsonPropertyName("target_title")]          string  TargetTitle,
+        [property: JsonPropertyName("context")]               string  Context,
+        [property: JsonPropertyName("instructions")]          string? Instructions,
+        [property: JsonPropertyName("requesting_session_id")] string? RequestingSessionId,
+        [property: JsonPropertyName("requesting_cwd")]        string? RequestingCwd,
+        [property: JsonPropertyName("requesting_repo_root")]  string? RequestingRepoRoot,
+        [property: JsonPropertyName("repo_owner")]            string? RepoOwner,
+        [property: JsonPropertyName("repo_name")]             string? RepoName,
+        [property: JsonPropertyName("daemon_name")]           string? DaemonName,
+        [property: JsonPropertyName("repo_path")]             string? RepoPath,
+        [property: JsonPropertyName("mode")]                  string? Mode,
+        [property: JsonPropertyName("async")]                 bool    Async
+    );
 
 /// <summary>
 /// CLI-side DTO for POST /api/flows/{flowRunId}/rounds — mirrors the server's SubmitReviewRoundRequest.
@@ -915,13 +1024,13 @@ record StartReviewFlowDto(
 /// always supplies it; the server validates it against the flow definition.
 /// </summary>
 record SubmitReviewRoundDto(
-    [property: JsonPropertyName("context")]      string  Context,
-    [property: JsonPropertyName("instructions")] string? Instructions,
-    [property: JsonPropertyName("async")]        bool    Async,
-    [property: JsonPropertyName("participant")]  string? Participant = null
-);
+        [property: JsonPropertyName("context")]      string  Context,
+        [property: JsonPropertyName("instructions")] string? Instructions,
+        [property: JsonPropertyName("async")]        bool    Async,
+        [property: JsonPropertyName("participant")]  string? Participant = null
+    );
 
 /// <summary>CLI-side DTO for POST /api/flows/{flowRunId}/messages/ack — AI-1127 E-c deliver-once ack.</summary>
 record AckFlowMessagesDto(
-    [property: JsonPropertyName("message_ids")] IReadOnlyList<string> MessageIds
-);
+        [property: JsonPropertyName("message_ids")] IReadOnlyList<string> MessageIds
+    );

@@ -83,7 +83,7 @@ internal static class CrashReporter {
     static void TrimIfLarge(string path) {
         try {
             var fi = new FileInfo(path);
-            if (fi.Exists && fi.Length > 256 * 1024) File.Delete(path);
+            if (fi is { Exists: true, Length: > 256 * 1024 }) File.Delete(path);
         } catch {
             // best-effort
         }

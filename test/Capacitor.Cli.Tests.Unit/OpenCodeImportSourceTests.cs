@@ -34,11 +34,11 @@ public class OpenCodeImportSourceTests {
 
         var source = new OpenCodeImportSource(tmp.DbPath, tmp.LedgerPath);
 
-        var byCwd = await source.DiscoverAsync(new DiscoveryFilters("/work/b", null, null, 0), CancellationToken.None);
-        await Assert.That(byCwd.Select(s => s.SessionId)).IsEquivalentTo(new[] { "ses_b" });
+        var byCwd = await source.DiscoverAsync(new("/work/b", null, null, 0), CancellationToken.None);
+        await Assert.That(byCwd.Select(s => s.SessionId)).IsEquivalentTo(["ses_b"]);
 
-        var bySession = await source.DiscoverAsync(new DiscoveryFilters(null, "ses_a", null, 0), CancellationToken.None);
-        await Assert.That(bySession.Select(s => s.SessionId)).IsEquivalentTo(new[] { "ses_a" });
+        var bySession = await source.DiscoverAsync(new(null, "ses_a", null, 0), CancellationToken.None);
+        await Assert.That(bySession.Select(s => s.SessionId)).IsEquivalentTo(["ses_a"]);
     }
 
     [Test]
@@ -57,7 +57,7 @@ public class OpenCodeImportSourceTests {
         tmp.AddMessageWithText("ses_sec", "m2", "x", 1782241513);
 
         var source = new OpenCodeImportSource(tmp.DbPath, tmp.LedgerPath);
-        var byId = (await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None))
+        var byId = (await source.DiscoverAsync(new(null, null, null, 0), CancellationToken.None))
             .ToDictionary(s => s.SessionId, s => s.FirstTimestamp);
 
         await Assert.That(byId["ses_ms"]).IsEqualTo(DateTimeOffset.FromUnixTimeMilliseconds(1782241513759));
@@ -72,10 +72,10 @@ public class OpenCodeImportSourceTests {
 
         var source = new OpenCodeImportSource(tmp.DbPath, tmp.LedgerPath);
 
-        var all = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var all = await source.DiscoverAsync(new(null, null, null, 0), CancellationToken.None);
         await Assert.That(all.Single().Cwd).IsNull();
 
-        var filtered = await source.DiscoverAsync(new DiscoveryFilters("/work/a", null, null, 0), CancellationToken.None);
+        var filtered = await source.DiscoverAsync(new("/work/a", null, null, 0), CancellationToken.None);
         await Assert.That(filtered.Count).IsEqualTo(0);
     }
 
@@ -91,9 +91,9 @@ public class OpenCodeImportSourceTests {
         using var client = new HttpClient();
 
         var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
-        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var discovered = await source.DiscoverAsync(new(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
+            new(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
             CancellationToken.None);
 
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
@@ -118,13 +118,13 @@ public class OpenCodeImportSourceTests {
 
         // First run records the ledger (with the internally-computed fingerprint) on session-end.
         var s1 = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
-        var c1 = await s1.ClassifyAsync(await s1.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
+        var c1 = await s1.ClassifyAsync(await s1.DiscoverAsync(new(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
         await Assert.That(c1[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
-        await s1.ImportSessionAsync(c1[0], new ImportContext(client, server.Url!, false), CancellationToken.None);
+        await s1.ImportSessionAsync(c1[0], new(client, server.Url!, false), CancellationToken.None);
 
         // Fresh source reloads the ledger → fingerprint matches → AlreadyLoaded.
         var s2 = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
-        var c2 = await s2.ClassifyAsync(await s2.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
+        var c2 = await s2.ClassifyAsync(await s2.DiscoverAsync(new(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
         await Assert.That(c2[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
     }
 
@@ -140,7 +140,7 @@ public class OpenCodeImportSourceTests {
         using var client = new HttpClient();
 
         var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
-        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var discovered = await source.DiscoverAsync(new(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
             new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
             CancellationToken.None);
@@ -161,9 +161,9 @@ public class OpenCodeImportSourceTests {
         using var client = new HttpClient();
 
         var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
-        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var discovered = await source.DiscoverAsync(new(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
+            new(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
             CancellationToken.None);
 
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.TooShort);
@@ -180,9 +180,9 @@ public class OpenCodeImportSourceTests {
         using var client = new HttpClient();
 
         var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
-        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var discovered = await source.DiscoverAsync(new(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered,
-            new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
+            new(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null),
             CancellationToken.None);
 
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.TooShort);

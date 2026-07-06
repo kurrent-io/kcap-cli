@@ -79,7 +79,8 @@ public class RegistrationGateTests {
             reRegisterAgents: async () => {
                 reRegisterStarted.SetResult();
                 await releaseReRegister.Task;
-            });
+            }
+        );
 
         // DaemonConnect has completed; per-agent re-registration is in flight — NOT ready yet.
         await reRegisterStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
@@ -106,15 +107,16 @@ public class RegistrationGateTests {
                 order.Add("reregister");
 
                 return Task.CompletedTask;
-            });
+            }
+        );
 
-        await Assert.That(order).IsEquivalentTo(new[] { "connect", "reregister" });
+        await Assert.That(order).IsEquivalentTo(["connect", "reregister"]);
         await Assert.That(gate.IsReady(HubConnectionState.Connected)).IsTrue();
     }
 
     [Test]
     public async Task RunRegistration_daemon_connect_failure_skips_reregistration_and_stays_unready() {
-        var gate         = new RegistrationGate();
+        var gate = new RegistrationGate();
         gate.MarkRegistered(); // pretend a prior connection had us ready
         var reRegistered = false;
 
@@ -124,7 +126,9 @@ public class RegistrationGateTests {
                         reRegistered = true;
 
                         return Task.CompletedTask;
-                    }))
+                    }
+                )
+            )
             .Throws<InvalidOperationException>();
 
         await Assert.That(reRegistered).IsFalse();

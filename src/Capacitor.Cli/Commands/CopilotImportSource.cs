@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -30,13 +31,13 @@ internal sealed class CopilotImportSource : IImportSource {
     readonly Func<string, Task<RepositoryPayload?>> _repoDetector;
 
     public CopilotImportSource(
-        string?                                 sessionStateDirOverride = null,
-        string?                                 legacyDirOverride       = null,
-        Func<string, Task<RepositoryPayload?>>? repoDetector            = null
-    ) {
+            string?                                 sessionStateDirOverride = null,
+            string?                                 legacyDirOverride       = null,
+            Func<string, Task<RepositoryPayload?>>? repoDetector            = null
+        ) {
         _sessionStateDir       = sessionStateDirOverride ?? CopilotPaths.SessionStateDir();
         _legacySessionStateDir = legacyDirOverride       ?? CopilotPaths.LegacySessionStateDir();
-        _repoDetector          = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd, detectPullRequest: false));
+        _repoDetector          = repoDetector            ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd, detectPullRequest: false));
     }
 
     static StringComparison PathComparison =>
@@ -66,7 +67,8 @@ internal sealed class CopilotImportSource : IImportSource {
     public Task<IReadOnlyList<DiscoveredSession>> DiscoverAsync(DiscoveryFilters filters, CancellationToken ct) {
         var sessionFilter = filters.FilterSession is { } sf ? ImportCommand.NormalizeGuid(sf) : null;
         var normalizedCwd = filters.FilterCwd is { } cwd ? NormalizeForComparison(cwd) : null;
-        var sinceUtc      = filters.Since is { } since
+
+        var sinceUtc = filters.Since is { } since
             ? new DateTimeOffset(since.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), TimeSpan.Zero)
             : (DateTimeOffset?)null;
 
@@ -89,6 +91,7 @@ internal sealed class CopilotImportSource : IImportSource {
                 var dashless = dirName.Replace("-", "");
 
                 if (!seen.Add(dashless)) continue;
+
                 if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
                     continue;
 
@@ -96,7 +99,7 @@ internal sealed class CopilotImportSource : IImportSource {
 
                 if (normalizedCwd is not null
                  && (meta?.Cwd is null
-                  || !NormalizeForComparison(meta.Cwd).Equals(normalizedCwd, PathComparison))) {
+                     || !NormalizeForComparison(meta.Cwd).Equals(normalizedCwd, PathComparison))) {
                     continue;
                 }
 
@@ -105,22 +108,28 @@ internal sealed class CopilotImportSource : IImportSource {
                 // filesystem birth time (same degradation notes as Cursor —
                 // Linux ext4 reports mtime).
                 var firstTimestamp = meta?.CreatedAt;
+
                 if (firstTimestamp is null) {
-                    try { firstTimestamp = File.GetCreationTimeUtc(jsonl); } catch { /* best effort */ }
+                    try { firstTimestamp = File.GetCreationTimeUtc(jsonl); } catch {
+                        /* best effort */
+                    }
                 }
 
                 if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) continue;
 
-                result.Add(new DiscoveredSession(
-                    SessionId:      dashless,
-                    Vendor:         Vendor,
-                    Cwd:            meta?.Cwd,
-                    FirstTimestamp: firstTimestamp,
-                    SourceMeta:     new Dictionary<string, object?> {
-                        ["TranscriptPath"] = jsonl,
-                        ["Cwd"]            = meta?.Cwd,
-                        ["Name"]           = meta?.Name,
-                    }));
+                result.Add(
+                    new DiscoveredSession(
+                        SessionId: dashless,
+                        Vendor: Vendor,
+                        Cwd: meta?.Cwd,
+                        FirstTimestamp: firstTimestamp,
+                        SourceMeta: new Dictionary<string, object?> {
+                            ["TranscriptPath"] = jsonl,
+                            ["Cwd"]            = meta?.Cwd,
+                            ["Name"]           = meta?.Name,
+                        }
+                    )
+                );
             }
 
             ct.ThrowIfCancellationRequested();
@@ -153,31 +162,58 @@ internal sealed class CopilotImportSource : IImportSource {
             int? lastNonBlankIndex;
             int? lastRelevantIndex;
             int  nonBlankCount;
+
             try {
                 (lastNonBlankIndex, lastRelevantIndex, nonBlankCount) = await ReadTranscriptStatsAsync(transcriptPath, ct);
             } catch {
-                results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, totalLines: 0,
-                                               probeErrorReason: "transcript read failed"));
+                results.Add(
+                    MakeClassification(
+                        s,
+                        meta,
+                        ImportCommand.ClassificationStatus.ProbeError,
+                        totalLines: 0,
+                        probeErrorReason: "transcript read failed"
+                    )
+                );
+
                 continue;
             }
 
             if (lastNonBlankIndex is null) {
-                results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, totalLines: 0,
-                                               probeErrorReason: "empty transcript"));
+                results.Add(
+                    MakeClassification(
+                        s,
+                        meta,
+                        ImportCommand.ClassificationStatus.ProbeError,
+                        totalLines: 0,
+                        probeErrorReason: "empty transcript"
+                    )
+                );
+
                 continue;
             }
 
             if (nonBlankCount < ctx.MinLines) {
                 results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.TooShort, totalLines: nonBlankCount));
+
                 continue;
             }
 
             int? serverLastLine;
+
             try {
                 serverLastLine = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, ct);
             } catch {
-                results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, totalLines: nonBlankCount,
-                                               probeErrorReason: "watermark probe failed"));
+                results.Add(
+                    MakeClassification(
+                        s,
+                        meta,
+                        ImportCommand.ClassificationStatus.ProbeError,
+                        totalLines: nonBlankCount,
+                        probeErrorReason: "watermark probe failed"
+                    )
+                );
+
                 continue;
             }
 
@@ -188,6 +224,7 @@ internal sealed class CopilotImportSource : IImportSource {
             meta.LastTimestamp = TryGetLastWriteUtc(transcriptPath);
 
             string? repoKey = null;
+
             if (hasExcludes && s.Cwd is { } cwd) {
                 if (!repoCache.TryGetValue(cwd, out repoKey)) {
                     try {
@@ -196,6 +233,7 @@ internal sealed class CopilotImportSource : IImportSource {
                     } catch {
                         repoKey = null;
                     }
+
                     repoCache[cwd] = repoKey;
                 }
             }
@@ -225,22 +263,24 @@ internal sealed class CopilotImportSource : IImportSource {
                 }
             }
 
-            results.Add(new ImportCommand.SessionClassification {
-                SessionId       = s.SessionId,
-                // Empty FilePath keeps Copilot on the routed phase
-                // (ImportSessionAsync below) instead of the Claude/Codex chain
-                // worker — same contract as CursorImportSource.
-                FilePath        = "",
-                EncodedCwd      = "",
-                Meta            = meta,
-                Status          = status,
-                Vendor          = Vendor,
-                ResumeFromLine  = resumeFromLn,
-                ExcludedRepoKey = excludedRepoKey,
-                ExcludedPathKey = excludedPathKey,
-                TotalLines      = nonBlankCount,
-                SourceMeta      = s.SourceMeta,
-            });
+            results.Add(
+                new ImportCommand.SessionClassification {
+                    SessionId = s.SessionId,
+                    // Empty FilePath keeps Copilot on the routed phase
+                    // (ImportSessionAsync below) instead of the Claude/Codex chain
+                    // worker — same contract as CursorImportSource.
+                    FilePath        = "",
+                    EncodedCwd      = "",
+                    Meta            = meta,
+                    Status          = status,
+                    Vendor          = Vendor,
+                    ResumeFromLine  = resumeFromLn,
+                    ExcludedRepoKey = excludedRepoKey,
+                    ExcludedPathKey = excludedPathKey,
+                    TotalLines      = nonBlankCount,
+                    SourceMeta      = s.SourceMeta,
+                }
+            );
         }
 
         return results;
@@ -263,9 +303,13 @@ internal sealed class CopilotImportSource : IImportSource {
         // permanently lifecycle-less. Re-runs are idempotent server-side
         // (deterministic lifecycle event ids).
         var startOk = await PostSyntheticHookAsync(
-            ctx.HttpClient, ctx.BaseUrl, "session-start/copilot",
+            ctx.HttpClient,
+            ctx.BaseUrl,
+            "session-start/copilot",
             BuildSessionStartPayload(classification.SessionId, cwd, classification.Meta.FirstTimestamp),
-            ct);
+            ct
+        );
+
         if (!startOk) return ImportOutcome.Failed;
 
         var startLine = classification.Status switch {
@@ -275,15 +319,17 @@ internal sealed class CopilotImportSource : IImportSource {
         };
 
         int sent;
+
         try {
             sent = await SessionImporter.SendTranscriptBatches(
                 httpClient: ctx.HttpClient,
-                baseUrl:    ctx.BaseUrl,
-                sessionId:  classification.SessionId,
-                filePath:   transcriptPath,
-                agentId:    null,
-                startLine:  startLine,
-                vendor:     Vendor);
+                baseUrl: ctx.BaseUrl,
+                sessionId: classification.SessionId,
+                filePath: transcriptPath,
+                agentId: null,
+                startLine: startLine,
+                vendor: Vendor
+            );
         } catch {
             return ImportOutcome.Failed;
         }
@@ -297,9 +343,13 @@ internal sealed class CopilotImportSource : IImportSource {
         }
 
         var endOk = await PostSyntheticHookAsync(
-            ctx.HttpClient, ctx.BaseUrl, "session-end/copilot",
+            ctx.HttpClient,
+            ctx.BaseUrl,
+            "session-end/copilot",
             BuildSessionEndPayload(classification.SessionId, cwd, classification.Meta.LastTimestamp),
-            ct);
+            ct
+        );
+
         if (!endOk) return ImportOutcome.Failed;
 
         if (sent == 0) return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
@@ -313,8 +363,9 @@ internal sealed class CopilotImportSource : IImportSource {
             ["session_id"]      = sessionId,
             ["source"]          = "startup",
         };
-        if (cwd is not null) payload["cwd"] = cwd;
+        if (cwd is not null) payload["cwd"]            = cwd;
         if (startedAt is { } ts) payload["started_at"] = ts.ToString("O");
+
         return payload;
     }
 
@@ -324,17 +375,23 @@ internal sealed class CopilotImportSource : IImportSource {
             ["session_id"]      = sessionId,
             ["reason"]          = "historical-import",
         };
-        if (cwd is not null) payload["cwd"] = cwd;
+        if (cwd is not null) payload["cwd"]        = cwd;
         if (endedAt is { } ts) payload["ended_at"] = ts.ToString("O");
+
         return payload;
     }
 
     static async Task<bool> PostSyntheticHookAsync(
-        HttpClient client, string baseUrl, string routeSegment, JsonObject payload, CancellationToken ct
-    ) {
+            HttpClient        client,
+            string            baseUrl,
+            string            routeSegment,
+            JsonObject        payload,
+            CancellationToken ct
+        ) {
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
             using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{routeSegment}", content, ct: ct);
+
             return resp.IsSuccessStatusCode;
         } catch {
             return false;
@@ -362,12 +419,12 @@ internal sealed class CopilotImportSource : IImportSource {
     }
 
     static ImportCommand.SessionClassification MakeClassification(
-        DiscoveredSession                  s,
-        SessionMetadata                    meta,
-        ImportCommand.ClassificationStatus status,
-        int                                totalLines,
-        string?                            probeErrorReason = null
-    ) => new() {
+            DiscoveredSession                  s,
+            SessionMetadata                    meta,
+            ImportCommand.ClassificationStatus status,
+            int                                totalLines,
+            string?                            probeErrorReason = null
+        ) => new() {
         SessionId        = s.SessionId,
         FilePath         = "",
         EncodedCwd       = "",
@@ -380,8 +437,9 @@ internal sealed class CopilotImportSource : IImportSource {
     };
 
     static async Task<(int? LastNonBlankIndex, int? LastRelevantIndex, int NonBlankCount)> ReadTranscriptStatsAsync(
-        string transcriptPath, CancellationToken ct
-    ) {
+            string            transcriptPath,
+            CancellationToken ct
+        ) {
         await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using var       reader = new StreamReader(stream);
 
@@ -397,8 +455,10 @@ internal sealed class CopilotImportSource : IImportSource {
 
                 if (IsImportRelevantLine(line)) lastRelevantIdx = lineIdx;
             }
+
             lineIdx++;
         }
+
         return (lastIdx, lastRelevantIdx, count);
     }
 
@@ -425,11 +485,11 @@ internal sealed class CopilotImportSource : IImportSource {
             if (root.Obj("data") is not { } data) return false;
 
             return root.Str("type") switch {
-                "session.start"           => true,
-                "user.message"            => data.Str("content") is { Length: > 0 },
-                "assistant.message"       => data.Str("content") is { Length: > 0 }
-                                          || data.Str("reasoningText") is { Length: > 0 }
-                                          || data.Arr("toolRequests") is { } requests && requests.GetArrayLength() > 0,
+                "session.start" => true,
+                "user.message"  => data.Str("content") is { Length: > 0 },
+                "assistant.message" => data.Str("content") is { Length: > 0 }
+                 || data.Str("reasoningText") is { Length: > 0 }
+                 || data.Arr("toolRequests") is { } requests && requests.GetArrayLength() > 0,
                 "tool.execution_complete" => data.Str("toolCallId") is not null,
                 _                         => false
             };
@@ -442,6 +502,7 @@ internal sealed class CopilotImportSource : IImportSource {
         using var resp = await http.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct: ct);
 
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
+
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
 
         var       body = await resp.Content.ReadAsStringAsync(ct);
@@ -453,23 +514,29 @@ internal sealed class CopilotImportSource : IImportSource {
     }
 
     static (string? ExcludedRepoKey, string? ExcludedPathKey) ResolveExclusions(
-        string? cwd, string? repoKey, ClassifyContext ctx
-    ) {
+            string?         cwd,
+            string?         repoKey,
+            ClassifyContext ctx
+        ) {
         string? excludedRepoKey = null;
+
         if (repoKey is not null && ctx.ExcludedRepos is { Count: > 0 } repos
          && repos.Any(r => string.Equals(r, repoKey, StringComparison.OrdinalIgnoreCase))) {
             excludedRepoKey = repoKey;
         }
 
         string? excludedPathKey = null;
+
         if (cwd is not null && ctx.ExcludedPaths is { Count: > 0 } paths) {
             foreach (var entry in paths) {
                 if (PathExclusion.IsExcluded(cwd, [entry])) {
                     excludedPathKey = PathExclusion.Normalize(entry);
+
                     break;
                 }
             }
         }
+
         return (excludedRepoKey, excludedPathKey);
     }
 }
@@ -485,13 +552,14 @@ internal sealed record CopilotWorkspaceYaml(string? Cwd, string? Name, DateTimeO
         try {
             if (!File.Exists(path)) return null;
 
-            string? cwd       = null;
-            string? name      = null;
+            string?         cwd       = null;
+            string?         name      = null;
             DateTimeOffset? createdAt = null;
             DateTimeOffset? updatedAt = null;
 
             foreach (var line in File.ReadLines(path)) {
                 var idx = line.IndexOf(": ", StringComparison.Ordinal);
+
                 if (idx <= 0) continue;
 
                 var key   = line[..idx].Trim();
@@ -500,14 +568,14 @@ internal sealed record CopilotWorkspaceYaml(string? Cwd, string? Name, DateTimeO
                 if (value.Length == 0) continue;
 
                 switch (key) {
-                    case "cwd":        cwd  = value; break;
-                    case "name":       name = value; break;
+                    case "cwd":        cwd       = value; break;
+                    case "name":       name      = value; break;
                     case "created_at": createdAt = ParseTimestamp(value); break;
                     case "updated_at": updatedAt = ParseTimestamp(value); break;
                 }
             }
 
-            return new CopilotWorkspaceYaml(cwd, name, createdAt, updatedAt);
+            return new(cwd, name, createdAt, updatedAt);
         } catch {
             return null;
         }
@@ -522,23 +590,20 @@ internal sealed record CopilotWorkspaceYaml(string? Cwd, string? Name, DateTimeO
     /// double-quotes inside double-quoted scalars.
     /// </summary>
     internal static string Unquote(string value) {
-        if (value.Length >= 2 && value[0] == '\'' && value[^1] == '\'') {
-            return value[1..^1].Replace("''", "'");
-        }
-
-        if (value.Length >= 2 && value[0] == '"' && value[^1] == '"') {
-            return value[1..^1].Replace("\\\"", "\"");
-        }
-
-        return value;
+        return value.Length switch {
+            >= 2 when value[0] == '\'' && value[^1] == '\'' => value[1..^1].Replace("''", "'"),
+            >= 2 when value[0] == '"'  && value[^1] == '"'  => value[1..^1].Replace("\\\"", "\""),
+            _                                               => value
+        };
     }
 
     static DateTimeOffset? ParseTimestamp(string value) =>
         DateTimeOffset.TryParse(
             value,
-            System.Globalization.CultureInfo.InvariantCulture,
-            System.Globalization.DateTimeStyles.RoundtripKind,
-            out var ts)
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind,
+            out var ts
+        )
             ? ts
             : null;
 }

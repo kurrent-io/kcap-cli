@@ -21,16 +21,15 @@ static partial class SecretRedactor {
         """{"type":"redacted_oversize_line","reason":"line exceeded SecretRedactor size limit"}""";
 
     public static string RedactLine(string rawJsonlLine) {
-        if (rawJsonlLine.Length > MaxRedactableLineChars) return OversizeLinePlaceholder;
-
-        // Scan every line, regardless of message type. The pipeline used to gate on
-        // `user`+`tool_result` on the assumption that secrets only enter the transcript via tool
-        // output, but the assistant routinely paraphrases tool output back into its own narrative
-        // (re-emitting tokens that were already redacted upstream), and human user turns can paste
-        // tokens too. Working on the serialized JSON string handles both `content` and
-        // `toolUseResult` without manual tree rewriting; the patterns are constructed to be safe
-        // against JSON delimiters (excluding `"` and `\` where needed).
-        return RedactSecrets(rawJsonlLine);
+        return rawJsonlLine.Length > MaxRedactableLineChars ? OversizeLinePlaceholder :
+            // Scan every line, regardless of message type. The pipeline used to gate on
+            // `user`+`tool_result` on the assumption that secrets only enter the transcript via tool
+            // output, but the assistant routinely paraphrases tool output back into its own narrative
+            // (re-emitting tokens that were already redacted upstream), and human user turns can paste
+            // tokens too. Working on the serialized JSON string handles both `content` and
+            // `toolUseResult` without manual tree rewriting; the patterns are constructed to be safe
+            // against JSON delimiters (excluding `"` and `\` where needed).
+            RedactSecrets(rawJsonlLine);
     }
 
     static string RedactSecrets(string text) {

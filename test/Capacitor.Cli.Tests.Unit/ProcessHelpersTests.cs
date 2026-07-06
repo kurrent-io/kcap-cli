@@ -167,8 +167,8 @@ public class ProcessHelpersTests {
     [Test]
     public async Task ParseExecPath_returns_null_for_a_buffer_too_short_for_a_path() {
         // Just the 4-byte argc with no path, and a buffer shorter than argc itself.
-        await Assert.That(ProcessHelpers.ParseExecPath(new byte[] { 1, 0, 0, 0 })).IsNull();
-        await Assert.That(ProcessHelpers.ParseExecPath(new byte[] { 0, 0 })).IsNull();
+        await Assert.That(ProcessHelpers.ParseExecPath([1, 0, 0, 0])).IsNull();
+        await Assert.That(ProcessHelpers.ParseExecPath("\0\0"u8)).IsNull();
     }
 
     [Test]

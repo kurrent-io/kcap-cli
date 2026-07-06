@@ -65,6 +65,7 @@ static class WindowsTaskUnit {
     /// </summary>
     public static string? BinaryFromWrapper(string wrapperText) {
         var line = wrapperText.Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.StartsWith('"'));
+        // ReSharper disable once UseNullPropagation
         if (line is null) return null;
         var end = line.IndexOf('"', 1);
         return end > 1 ? line[1..end].Replace("%%", "%") : null;

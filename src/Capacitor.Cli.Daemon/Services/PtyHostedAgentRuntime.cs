@@ -38,7 +38,7 @@ internal sealed class PtyHostedAgentRuntime(string vendor, IPtyProcess pty) : IH
     /// return as part of the buffer rather than a submit).
     /// </summary>
     public async Task SendUserInputAsync(string text) {
-        await pty.WriteAsync($"\x1b[200~{text}\x1b[201~");
+        await pty.WriteAsync($"\e[200~{text}\e[201~");
         await Task.Delay(InputSubmitDelay);
         await pty.WriteAsync("\r");
     }

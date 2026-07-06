@@ -213,9 +213,7 @@ static class RecapCommand {
             using var resp = await httpClient.GetWithRetryAsync(
                 $"{baseUrl}/api/sessions/{Uri.EscapeDataString(sessionId)}/turns");
 
-            if (!resp.IsSuccessStatusCode) return "";
-
-            return FormatTurnOutline(await resp.Content.ReadAsStringAsync());
+            return !resp.IsSuccessStatusCode ? "" : FormatTurnOutline(await resp.Content.ReadAsStringAsync());
         } catch (HttpRequestException) {
             // Outline is best-effort enrichment on top of the summary — never fail recap on it.
             return "";

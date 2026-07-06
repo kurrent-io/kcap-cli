@@ -974,10 +974,10 @@ public static class EvalService {
                     break;
 
                 case JsonValueKind.Object:
-                    var text         = ReadString(item, "text") ?? "";
-                    var audienceRaw  = ReadString(item, "audience");
-                    var normalized   = audienceRaw?.Trim().ToLowerInvariant();
-                    var audience     = normalized == "agent" || normalized == "human" ? normalized : "human";
+                    var text        = ReadString(item, "text") ?? "";
+                    var audienceRaw = ReadString(item, "audience");
+                    var normalized  = audienceRaw?.Trim().ToLowerInvariant();
+                    var audience    = normalized is "agent" or "human" ? normalized : "human";
                     list.Add(new RetrospectiveSuggestion { Text = text, Audience = audience });
                     break;
             }

@@ -66,21 +66,21 @@ public static class AntigravityPaths {
         if (!string.Equals(Path.GetFileName(transcriptPath), "transcript_full.jsonl", StringComparison.Ordinal))
             return null;
 
-        var logsDir = Path.GetDirectoryName(transcriptPath);                 // …/logs
-        var sysGen  = Path.GetDirectoryName(logsDir);                        // …/.system_generated
-        var convDir = Path.GetDirectoryName(sysGen);                         // …/<id>
-        var brain   = Path.GetDirectoryName(convDir);                        // …/brain
-        var root    = Path.GetDirectoryName(brain);                          // …/<root>
+        var logsDir = Path.GetDirectoryName(transcriptPath); // …/logs
+        var sysGen  = Path.GetDirectoryName(logsDir);        // …/.system_generated
+        var convDir = Path.GetDirectoryName(sysGen);         // …/<id>
+        var brain   = Path.GetDirectoryName(convDir);        // …/brain
+        var root    = Path.GetDirectoryName(brain);          // …/<root>
+
         if (convDir is null || brain is null || root is null) return null;
 
-        if (!string.Equals(Path.GetFileName(logsDir), "logs",              StringComparison.Ordinal)) return null;
-        if (!string.Equals(Path.GetFileName(sysGen),  ".system_generated", StringComparison.Ordinal)) return null;
-        if (!string.Equals(Path.GetFileName(brain),   "brain",             StringComparison.Ordinal)) return null;
+        if (!string.Equals(Path.GetFileName(logsDir), "logs", StringComparison.Ordinal)) return null;
+        if (!string.Equals(Path.GetFileName(sysGen), ".system_generated", StringComparison.Ordinal)) return null;
+        if (!string.Equals(Path.GetFileName(brain), "brain", StringComparison.Ordinal)) return null;
 
         var convId = Path.GetFileName(convDir);
-        if (string.IsNullOrEmpty(convId)) return null;
 
-        return Path.Combine(root, "conversations", $"{convId}.db");
+        return string.IsNullOrEmpty(convId) ? null : Path.Combine(root, "conversations", $"{convId}.db");
     }
 
     /// <summary>Global hooks config the kcap plugin installs into: <c>&lt;plugin-dir&gt;/hooks.json</c>.</summary>

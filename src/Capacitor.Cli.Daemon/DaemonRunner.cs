@@ -25,14 +25,16 @@ public static partial class DaemonRunner {
             ?.InformationalVersion ?? "unknown";
 
     public static async Task<int> RunAsync(string[] args) {
-        string?    logFile     = null;
-        string?    stderrFile  = null;
-        LogLevel?  logLevelArg = null;
-        var        config      = new DaemonConfig();
+        string?   logFile     = null;
+        string?   stderrFile  = null;
+        LogLevel? logLevelArg = null;
 
-        // Captured for self-respawn (detached restart-after-update) and to detect
-        // the successor's --await-lock handoff flag.
-        config.OriginalArgs = args;
+        var config = new DaemonConfig {
+            // Captured for self-respawn (detached restart-after-update) and to detect
+            // the successor's --await-lock handoff flag.
+            OriginalArgs = args
+        };
+
         var awaitLock = args.Contains("--await-lock");
 
         // Resolve server URL + active profile. The CLI does this in its own
@@ -47,9 +49,9 @@ public static partial class DaemonRunner {
         // supervisor), so we don't parse it here.
         for (var i = 0; i < args.Length - 1; i++) {
             switch (args[i]) {
-                case "--log-file": logFile = args[++i]; break;
-                case "--stderr-file": stderrFile = args[++i]; break;
-                case "--log-level": logLevelArg = ParseLogLevel(args[++i]); break;
+                case "--log-file":    logFile     = args[++i]; break;
+                case "--stderr-file": stderrFile  = args[++i]; break;
+                case "--log-level":   logLevelArg = ParseLogLevel(args[++i]); break;
                 case "--max-agents" when int.TryParse(args[i + 1], out var n) && n >= 1:
                     config.MaxConcurrentAgents = n;
                     i++;
@@ -81,8 +83,8 @@ public static partial class DaemonRunner {
         // --log-level or KCAP_DAEMON_LOG_LEVEL=debug. The --log-level arg wins
         // over the env var when both are set.
         var minLevel = logLevelArg
-                    ?? ParseLogLevel(Environment.GetEnvironmentVariable("KCAP_DAEMON_LOG_LEVEL"))
-                    ?? LogLevel.Information;
+         ?? ParseLogLevel(Environment.GetEnvironmentVariable("KCAP_DAEMON_LOG_LEVEL"))
+         ?? LogLevel.Information;
 
         builder.Logging.ClearProviders();
         builder.Logging.SetMinimumLevel(minLevel);
@@ -135,6 +137,7 @@ public static partial class DaemonRunner {
             config.Name = DaemonNameResolver.Resolve(args, profileDaemon?.Name);
         } catch (ArgumentException ex) {
             await Console.Error.WriteLineAsync(ex.Message);
+
             return 1;
         }
 
@@ -167,7 +170,7 @@ public static partial class DaemonRunner {
         if (daemonLock is null) {
             await Console.Error.WriteLineAsync(
                 $"Another kcap-daemon is already running under the name '{config.Name}' on this machine. "
-                + $"Either stop it (`kcap daemon stop --name {config.Name}`) or start this one with a different `--name`."
+              + $"Either stop it (`kcap daemon stop --name {config.Name}`) or start this one with a different `--name`."
             );
 
             return 2;
@@ -212,19 +215,21 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new PtyHostedAgentRuntimeFactory(
                 sp.GetServices<IHostedAgentLauncher>().SingleOrDefault(l => l.Vendor == "claude")
-                    ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'claude'"),
+             ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'claude'"),
                 sp.GetRequiredService<IPtyProcessFactory>(),
                 sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>()
             )
         );
+
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new PtyHostedAgentRuntimeFactory(
                 sp.GetServices<IHostedAgentLauncher>().SingleOrDefault(l => l.Vendor == "codex")
-                    ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'codex'"),
+             ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'codex'"),
                 sp.GetRequiredService<IPtyProcessFactory>(),
                 sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>()
             )
         );
+
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new AcpHostedAgentRuntimeFactory(sp.GetRequiredService<DaemonConfig>(), sp.GetRequiredService<ILoggerFactory>())
         );
@@ -245,17 +250,19 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<SupervisedExitStrategy>();
         builder.Services.AddSingleton<DetachedRespawnStrategy>();
         builder.Services.AddSingleton<ForegroundNoopStrategy>();
-        builder.Services.AddSingleton<IRestartStrategy>(sp => {
-            var cfg        = sp.GetRequiredService<DaemonConfig>();
-            var hasLogFile = cfg.OriginalArgs.Contains("--log-file");
-            var mode       = SupervisionDetector.DetectCurrent(DaemonLockPaths.Sanitize(cfg.Name), hasLogFile);
 
-            return mode switch {
-                SupervisionMode.Supervised => sp.GetRequiredService<SupervisedExitStrategy>(),
-                SupervisionMode.Detached   => sp.GetRequiredService<DetachedRespawnStrategy>(),
-                _                          => sp.GetRequiredService<ForegroundNoopStrategy>(),
-            };
-        });
+        builder.Services.AddSingleton<IRestartStrategy>(sp => {
+                var cfg        = sp.GetRequiredService<DaemonConfig>();
+                var hasLogFile = cfg.OriginalArgs.Contains("--log-file");
+                var mode       = SupervisionDetector.DetectCurrent(DaemonLockPaths.Sanitize(cfg.Name), hasLogFile);
+
+                return mode switch {
+                    SupervisionMode.Supervised => sp.GetRequiredService<SupervisedExitStrategy>(),
+                    SupervisionMode.Detached   => sp.GetRequiredService<DetachedRespawnStrategy>(),
+                    _                          => sp.GetRequiredService<ForegroundNoopStrategy>(),
+                };
+            }
+        );
         builder.Services.AddSingleton<RestartCoordinator>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<RestartCoordinator>());
 
@@ -313,13 +320,16 @@ public static partial class DaemonRunner {
         // we can distinguish a cooperative StopApplication (e.g. NameInUse,
         // Ctrl+C consumed by ConsoleLifetime) from an outside-the-runtime kill.
         lifetime.ApplicationStopping.Register(() => {
-            DeathRattle("Lifetime: ApplicationStopping fired");
-            LogLifetimeStopping(logger);
-        });
+                DeathRattle("Lifetime: ApplicationStopping fired");
+                LogLifetimeStopping(logger);
+            }
+        );
+
         lifetime.ApplicationStopped.Register(() => {
-            DeathRattle("Lifetime: ApplicationStopped fired");
-            LogLifetimeStopped(logger);
-        });
+                DeathRattle("Lifetime: ApplicationStopped fired");
+                LogLifetimeStopped(logger);
+            }
+        );
 
         // AI-630: if the server rejects our DaemonConnect because another
         // live daemon owns the (owner, name) slot, signal host shutdown
@@ -396,20 +406,24 @@ public static partial class DaemonRunner {
     /// source or the Information default rather than silently logging nothing.
     /// </summary>
     internal static LogLevel? ParseLogLevel(string? value) => value?.Trim().ToLowerInvariant() switch {
-        "trace" or "trce"              => LogLevel.Trace,
-        "debug" or "dbug"              => LogLevel.Debug,
-        "information" or "info"        => LogLevel.Information,
-        "warning" or "warn"            => LogLevel.Warning,
-        "error" or "fail"              => LogLevel.Error,
-        "critical" or "crit"           => LogLevel.Critical,
-        "none"                         => LogLevel.None,
-        _                              => null
+        "trace" or "trce"       => LogLevel.Trace,
+        "debug" or "dbug"       => LogLevel.Debug,
+        "information" or "info" => LogLevel.Information,
+        "warning" or "warn"     => LogLevel.Warning,
+        "error" or "fail"       => LogLevel.Error,
+        "critical" or "crit"    => LogLevel.Critical,
+        "none"                  => LogLevel.None,
+        _                       => null
     };
 
     [LoggerMessage(Level = LogLevel.Information, Message = "kcap daemon '{Name}' starting, connecting to {ServerUrl}")]
     static partial void LogDaemonStarting(ILogger logger, string name, string serverUrl);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Previous '{Name}' daemon (PID {Pid}) exited WITHOUT a graceful shutdown — its lock was left for the kernel to release. That is the signature of an uncatchable kill (macOS jetsam/OOM, `kill -9`), a power loss, or a hard native crash; an in-process signal handler cannot record it. If this recurs, run the daemon as a supervised service (`kcap daemon service install`) so it auto-restarts.")]
+    [LoggerMessage(
+        Level = LogLevel.Warning,
+        Message =
+            "Previous '{Name}' daemon (PID {Pid}) exited WITHOUT a graceful shutdown — its lock was left for the kernel to release. That is the signature of an uncatchable kill (macOS jetsam/OOM, `kill -9`), a power loss, or a hard native crash; an in-process signal handler cannot record it. If this recurs, run the daemon as a supervised service (`kcap daemon service install`) so it auto-restarts."
+    )]
     static partial void LogPriorUncleanExit(ILogger logger, string name, string pid);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Lifetime: ApplicationStopping fired")]
@@ -488,12 +502,17 @@ public static partial class DaemonRunner {
         // as long as the DaemonRunner type — i.e. the process.
         foreach (var signal in new[] { PosixSignal.SIGINT, PosixSignal.SIGTERM, PosixSignal.SIGHUP, PosixSignal.SIGQUIT }) {
             try {
-                _signalRegistrations.Add(PosixSignalRegistration.Create(signal, ctx => {
-                    DeathRattle($"Received POSIX signal {ctx.Signal} — requesting cooperative shutdown");
-                    LogPosixSignal(logger, ctx.Signal);
-                    ctx.Cancel = true;
-                    lifetime.StopApplication();
-                }));
+                _signalRegistrations.Add(
+                    PosixSignalRegistration.Create(
+                        signal,
+                        ctx => {
+                            DeathRattle($"Received POSIX signal {ctx.Signal} — requesting cooperative shutdown");
+                            LogPosixSignal(logger, ctx.Signal);
+                            ctx.Cancel = true;
+                            lifetime.StopApplication();
+                        }
+                    )
+                );
             } catch (PlatformNotSupportedException) {
                 // Signal not supported on this OS — skip silently. SIGHUP/SIGQUIT
                 // are unsupported on Windows; SIGINT/SIGTERM are supported

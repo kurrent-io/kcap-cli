@@ -181,7 +181,7 @@ static partial class ProcessHelpers {
             var handle = GetStdHandle(stdHandleId);
 
             // No handle for this stream (NULL/INVALID) — nothing to clear, not a failure.
-            if (handle == 0 || handle == -1) {
+            if (handle is 0 or -1) {
                 return;
             }
 
@@ -219,11 +219,7 @@ static partial class ProcessHelpers {
         // GetStdHandle returns NULL (0) when the stream has no handle and
         // INVALID_HANDLE_VALUE (-1) on error; SetHandleInformation fails harmlessly on
         // either, so reject them up front rather than make a doomed call.
-        if (handle == 0 || handle == -1) {
-            return false;
-        }
-
-        return SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
+        return handle is not (0 or -1) && SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
     }
 
     /// <summary>
@@ -361,7 +357,7 @@ static partial class ProcessHelpers {
         return OperatingSystem.IsMacOS() ? GetProcessInfoMac(pid) : GetProcessInfoLinux(pid);
     }
 
-    static unsafe (int ppid, string comm)? GetProcessInfoWindows(int pid) {
+    static (int ppid, string comm)? GetProcessInfoWindows(int pid) {
         var handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)pid);
 
         if (handle == 0) {

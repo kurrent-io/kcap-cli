@@ -25,11 +25,10 @@ public static class CuratedTextNormalizer {
         }
 
         var s = sb.ToString().Trim();
-        if (s.Length == 0) return null;
-
-        // Defang the comment terminator: a zero-width space (U+200B) breaks the "-->"
-        // token, which also neutralizes any embedded start/end marker (both end in "-->").
-        // Use the \u200b escape, never a literal ZWSP, so the source stays reviewable.
-        return s.Replace("-->", "--\u200b>");
+        return s.Length == 0 ? null :
+            // Defang the comment terminator: a zero-width space (U+200B) breaks the "-->"
+            // token, which also neutralizes any embedded start/end marker (both end in "-->").
+            // Use the \u200b escape, never a literal ZWSP, so the source stays reviewable.
+            s.Replace("-->", "--\u200b>");
     }
 }

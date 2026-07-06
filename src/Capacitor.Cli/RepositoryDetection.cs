@@ -65,8 +65,7 @@ static class RepositoryDetection {
     /// </summary>
     public static async Task<string> EnrichWithRepositoryInfoFromCwd(string json, string cwd, TimeSpan? budget = null) {
         try {
-            if (string.IsNullOrEmpty(cwd)) return json;
-            if (JsonNode.Parse(json) is not JsonObject obj) return json;
+            if (string.IsNullOrEmpty(cwd) || JsonNode.Parse(json) is not JsonObject obj) return json;
 
             var repo = await DetectRepositoryAsync(cwd, budget);
             if (repo is null) return json;

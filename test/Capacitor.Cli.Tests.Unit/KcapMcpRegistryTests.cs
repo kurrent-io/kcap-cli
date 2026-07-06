@@ -21,7 +21,7 @@ public class KcapMcpRegistryTests {
     public async Task Resolve_KnownId_CorrectArgs() {
         var result = KcapMcpRegistry.Resolve("kcap-review");
 
-        await Assert.That(result!.Args).IsEquivalentTo(new[] { "mcp", "review" });
+        await Assert.That(result!.Args).IsEquivalentTo(["mcp", "review"]);
     }
 
     [Test]
@@ -42,7 +42,7 @@ public class KcapMcpRegistryTests {
     public async Task Resolve_KcapSessions_CorrectArgs() {
         var result = KcapMcpRegistry.Resolve("kcap-sessions");
 
-        await Assert.That(result!.Args).IsEquivalentTo(new[] { "mcp", "sessions" });
+        await Assert.That(result!.Args).IsEquivalentTo(["mcp", "sessions"]);
     }
 
     [Test]
@@ -63,7 +63,7 @@ public class KcapMcpRegistryTests {
     public async Task Resolve_KcapMemory_CorrectArgs() {
         var result = KcapMcpRegistry.Resolve("kcap-memory");
 
-        await Assert.That(result!.Args).IsEquivalentTo(new[] { "mcp", "memory" });
+        await Assert.That(result!.Args).IsEquivalentTo(["mcp", "memory"]);
     }
 
     [Test]
@@ -84,7 +84,7 @@ public class KcapMcpRegistryTests {
     public async Task Resolve_KcapFlows_CorrectArgs() {
         var result = KcapMcpRegistry.Resolve("kcap-flows");
 
-        await Assert.That(result!.Args).IsEquivalentTo(new[] { "mcp", "flows" });
+        await Assert.That(result!.Args).IsEquivalentTo(["mcp", "flows"]);
     }
 
     [Test]

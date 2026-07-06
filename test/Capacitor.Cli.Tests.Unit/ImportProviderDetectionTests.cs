@@ -1,4 +1,3 @@
-using Capacitor.Cli;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit;
@@ -15,11 +14,14 @@ public class ImportProviderDetectionTests {
     // owner/repo/host resolve, and answers `gh pr view` with a PR so the live path can populate it.
     static CommandRunner Recording(List<string> log) => (cmd, args, _, _) => {
         log.Add($"{cmd} {args}");
-        if (cmd == "git" && args.StartsWith("remote get-url")) return Task.FromResult<string?>("https://github.com/foo/bar");
-        if (cmd == "git" && args.StartsWith("branch"))         return Task.FromResult<string?>("main");
-        if (cmd == "git")                                      return Task.FromResult<string?>("");
-        if (cmd == "gh")  return Task.FromResult<string?>("""{"number":7,"title":"t","url":"https://github.com/foo/bar/pull/7","headRefName":"main"}""");
-        return Task.FromResult<string?>(null);
+
+        return cmd switch {
+            "git" when args.StartsWith("remote get-url") => Task.FromResult<string?>("https://github.com/foo/bar"),
+            "git" when args.StartsWith("branch")         => Task.FromResult<string?>("main"),
+            "git"                                        => Task.FromResult<string?>(""),
+            "gh"                                         => Task.FromResult<string?>("""{"number":7,"title":"t","url":"https://github.com/foo/bar/pull/7","headRefName":"main"}"""),
+            _                                            => Task.FromResult<string?>(null)
+        };
     };
 
     [Test]

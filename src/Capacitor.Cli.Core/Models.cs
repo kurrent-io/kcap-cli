@@ -610,8 +610,6 @@ public record SessionEvalCompletedPayloadV3 {
     public List<EvalFactSnapshotPayload> FactsUsed { get; init; } = [];
 }
 
-enum HistorySessionStatus { New, Partial, AlreadyLoaded }
-
 class SessionMetadata {
     public string?         Cwd            { get; set; }
     public string?         Model          { get; set; }

@@ -229,7 +229,7 @@ internal sealed partial class CodexLauncher(
 
         foreach (var c in value) {
             switch (c) {
-                case '\\': sb.Append("\\\\"); break;
+                case '\\': sb.Append(@"\\"); break;
                 case '"':  sb.Append("\\\""); break;
                 case '\b': sb.Append("\\b");  break;
                 case '\t': sb.Append("\\t");  break;
@@ -238,7 +238,7 @@ internal sealed partial class CodexLauncher(
                 case '\r': sb.Append("\\r");  break;
                 default:
                     // Remaining C0 controls (and DEL) have no short escape — emit \uXXXX.
-                    if (c < ' ' || c == (char)0x7f) {
+                    if (c is < ' ' or (char)0x7f) {
                         sb.Append("\\u").Append(((int)c).ToString("X4"));
                     } else {
                         sb.Append(c);

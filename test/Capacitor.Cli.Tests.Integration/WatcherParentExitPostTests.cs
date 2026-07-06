@@ -35,12 +35,12 @@ public class WatcherParentExitPostTests : IDisposable {
         var sessionId = $"test-{Guid.NewGuid():N}";
 
         await WatchCommand.PostSessionEndOnParentExitAsync(
-            baseUrl:        _server.Url!,
-            sessionId:      sessionId,
+            baseUrl: _server.Url!,
+            sessionId: sessionId,
             transcriptPath: "/tmp/fake.jsonl",
-            cwd:            "/repo",
-            vendor:         "claude",
-            repository:     null
+            cwd: "/repo",
+            vendor: "claude",
+            repository: null
         );
 
         var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/claude").UsingPost());
@@ -65,11 +65,11 @@ public class WatcherParentExitPostTests : IDisposable {
         var sessionId = $"test-{Guid.NewGuid():N}";
 
         await WatchCommand.PostSessionEndOnParentExitAsync(
-            baseUrl:        _server.Url!,
-            sessionId:      sessionId,
+            baseUrl: _server.Url!,
+            sessionId: sessionId,
             transcriptPath: "/tmp/fake.jsonl",
-            cwd:            "/repo",
-            vendor:         "claude",
+            cwd: "/repo",
+            vendor: "claude",
             repository: new() {
                 Owner    = "kurrent-io",
                 RepoName = "kcap",
@@ -100,12 +100,12 @@ public class WatcherParentExitPostTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"generate_whats_done":false}"""));
 
         await WatchCommand.PostSessionEndOnParentExitAsync(
-            baseUrl:        _server.Url!,
-            sessionId:      $"test-{Guid.NewGuid():N}",
+            baseUrl: _server.Url!,
+            sessionId: $"test-{Guid.NewGuid():N}",
             transcriptPath: "/tmp/fake.jsonl",
-            cwd:            "/repo",
-            vendor:         "../admin",
-            repository:     null
+            cwd: "/repo",
+            vendor: "../admin",
+            repository: null
         );
 
         var hits = _server.FindLogEntries(Request.Create().WithPath("/hooks/*").UsingPost());
@@ -121,15 +121,15 @@ public class WatcherParentExitPostTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"generate_whats_done":false}"""));
 
         await WatchCommand.PostSessionEndOnParentExitAsync(
-            baseUrl:        _server.Url!,
-            sessionId:      $"test-{Guid.NewGuid():N}",
+            baseUrl: _server.Url!,
+            sessionId: $"test-{Guid.NewGuid():N}",
             transcriptPath: "/tmp/fake.jsonl",
-            cwd:            "/repo",
-            vendor:         "codex",
-            repository:     null
+            cwd: "/repo",
+            vendor: "codex",
+            repository: null
         );
 
-        var codexHits = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
+        var codexHits  = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
         var claudeHits = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/claude").UsingPost());
         await Assert.That(codexHits.Count).IsEqualTo(1);
         await Assert.That(claudeHits.Count).IsEqualTo(0);
@@ -147,12 +147,12 @@ public class WatcherParentExitPostTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"generate_whats_done":false}"""));
 
         await WatchCommand.PostSessionEndOnParentExitAsync(
-            baseUrl:        _server.Url!,
-            sessionId:      $"test-{Guid.NewGuid():N}",
+            baseUrl: _server.Url!,
+            sessionId: $"test-{Guid.NewGuid():N}",
             transcriptPath: "/tmp/fake.jsonl",
-            cwd:            "/repo",
-            vendor:         "kiro",
-            repository:     null
+            cwd: "/repo",
+            vendor: "kiro",
+            repository: null
         );
 
         var kiroHits = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/kiro").UsingPost());
@@ -171,12 +171,12 @@ public class WatcherParentExitPostTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"generate_whats_done":false}"""));
 
         await WatchCommand.PostSessionEndOnParentExitAsync(
-            baseUrl:        _server.Url!,
-            sessionId:      $"test-{Guid.NewGuid():N}",
+            baseUrl: _server.Url!,
+            sessionId: $"test-{Guid.NewGuid():N}",
             transcriptPath: "/tmp/fake.jsonl",
-            cwd:            "/repo",
-            vendor:         "pi",
-            repository:     null
+            cwd: "/repo",
+            vendor: "pi",
+            repository: null
         );
 
         var piHits = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/pi").UsingPost());
@@ -202,13 +202,13 @@ public class WatcherParentExitPostTests : IDisposable {
         var sessionId = $"test-{Guid.NewGuid():N}";
 
         await WatchCommand.PostSessionEndOnParentExitAsync(
-            baseUrl:        _server.Url!,
-            sessionId:      sessionId,
+            baseUrl: _server.Url!,
+            sessionId: sessionId,
             transcriptPath: "/tmp/fake.jsonl",
-            cwd:            "/repo",
-            vendor:         "codex",
-            repository:     null,
-            reason:         "idle_timeout"
+            cwd: "/repo",
+            vendor: "codex",
+            repository: null,
+            reason: "idle_timeout"
         );
 
         var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
@@ -233,41 +233,52 @@ public class WatcherParentExitPostTests : IDisposable {
         const string dashlessSub  = "57d9b49827054af5b060ebaba4878c96";
 
         var tmp = Directory.CreateTempSubdirectory("kcap-parentexit-sub").FullName;
+
         try {
             var chats = Path.Combine(tmp, "chats");
             Directory.CreateDirectory(chats);
 
             var parent = Path.Combine(chats, "session-2026-06-22T14-31-0a900000.jsonl");
-            File.WriteAllLines(parent, new[] {
-                $$"""{"sessionId":"{{dashedParent}}","projectHash":"h","kind":"main"}""",
-                $$"""{"id":"m1","type":"gemini","content":"","toolCalls":[{"id":"invoke_agent__x","name":"invoke_agent","args":{"agent_name":"codebase_investigator"},"agentId":"{{dashedSub}}","status":"success"}]}"""
-            });
+
+            File.WriteAllLines(
+                parent,
+                [
+                    $$"""{"sessionId":"{{dashedParent}}","projectHash":"h","kind":"main"}""",
+                    $$"""{"id":"m1","type":"gemini","content":"","toolCalls":[{"id":"invoke_agent__x","name":"invoke_agent","args":{"agent_name":"codebase_investigator"},"agentId":"{{dashedSub}}","status":"success"}]}"""
+                ]
+            );
 
             var subDir = Path.Combine(chats, dashedParent);
             Directory.CreateDirectory(subDir);
-            File.WriteAllLines(Path.Combine(subDir, dashedSub + ".jsonl"), new[] {
-                $$"""{"sessionId":"{{dashedSub}}","kind":"subagent","directories":[]}""",
-                """{"id":"s1","type":"gemini","content":"done"}"""
-            });
+
+            File.WriteAllLines(
+                Path.Combine(subDir, dashedSub + ".jsonl"),
+                [
+                    $$"""{"sessionId":"{{dashedSub}}","kind":"subagent","directories":[]}""",
+                    """{"id":"s1","type":"gemini","content":"done"}"""
+                ]
+            );
 
             _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
                 .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"provider":"None"}"""));
+
             // 404 watermark → inline drain finds no new lines and posts no transcript batch;
             // subagent-stop must still fire (that is the regression under test).
             _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
                 .RespondWith(Response.Create().WithStatusCode(404));
+
             foreach (var route in new[] { "/hooks/transcript", "/hooks/subagent-stop", "/hooks/session-end/gemini" }) {
                 _server.Given(Request.Create().WithPath(route).UsingPost())
                     .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"generate_whats_done":false}"""));
             }
 
             await WatchCommand.PostSessionEndOnParentExitAsync(
-                baseUrl:        _server.Url!,
-                sessionId:      "0a900000000040008000000000000777",
+                baseUrl: _server.Url!,
+                sessionId: "0a900000000040008000000000000777",
                 transcriptPath: parent,
-                cwd:            "/repo",
-                vendor:         "gemini",
-                repository:     null
+                cwd: "/repo",
+                vendor: "gemini",
+                repository: null
             );
 
             // subagent-stop was posted, carrying the canonical (dashless) agent_id.
@@ -280,6 +291,7 @@ public class WatcherParentExitPostTests : IDisposable {
                 .Where(e => e.RequestMessage.Method == "POST")
                 .Select(e => e.RequestMessage.Path)
                 .ToList();
+
             await Assert.That(postPaths.IndexOf("/hooks/subagent-stop"))
                 .IsLessThan(postPaths.IndexOf("/hooks/session-end/gemini"));
         } finally {

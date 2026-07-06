@@ -6,7 +6,7 @@ public class DetachedRespawnArgsTests {
     [Test]
     public async Task Appends_await_lock_once() {
         var args = DetachedRespawnStrategy.BuildChildArgs(["--name", "laptop", "--log-file", "/tmp/d.log"]);
-        await Assert.That(args).IsEquivalentTo(new[] { "--name", "laptop", "--log-file", "/tmp/d.log", "--await-lock" });
+        await Assert.That(args).IsEquivalentTo(["--name", "laptop", "--log-file", "/tmp/d.log", "--await-lock"]);
     }
 
     [Test]

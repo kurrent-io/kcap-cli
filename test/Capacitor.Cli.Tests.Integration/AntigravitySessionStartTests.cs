@@ -71,7 +71,7 @@ public class AntigravitySessionStartTests : IDisposable {
             $$"""
             {
               "conversationId":     "{{convId}}",
-              "transcriptPath":     "{{transcript.Replace("\\", "\\\\")}}",
+              "transcriptPath":     "{{transcript.Replace("\\", @"\\")}}",
               "workspacePaths":     ["/tmp"],
               "antigravityVersion": "2.2.1"
             }
@@ -117,8 +117,8 @@ public class AntigravitySessionStartTests : IDisposable {
             $$"""
             {
               "conversationId": "{{convId}}",
-              "transcriptPath": "{{transcript.Replace("\\", "\\\\")}}",
-              "workspacePaths": ["{{excludedDir.Replace("\\", "\\\\")}}"]
+              "transcriptPath": "{{transcript.Replace("\\", @"\\")}}",
+              "workspacePaths": ["{{excludedDir.Replace("\\", @"\\")}}"]
             }
             """;
 

@@ -10,9 +10,8 @@ internal sealed partial class ClaudeLauncher(
         DaemonConfig            config,
         ILogger<ClaudeLauncher> logger
     ) : IHostedAgentLauncher {
-
-    public string Vendor  => "claude";
-    public string CliPath => config.ClaudePath;
+    public string Vendor             => "claude";
+    public string CliPath            => config.ClaudePath;
     public bool   SupportsUnattended => true;
 
     public bool IsAvailable() => CliResolver.Exists(CliPath);
@@ -68,7 +67,7 @@ internal sealed partial class ClaudeLauncher(
     }
 
     public LaunchArgs BuildArgs(LauncherContext ctx) {
-        var args = new List<string>();
+        var     args          = new List<string>();
         string? mcpConfigPath = null;
 
         if (ctx is { IsReview: true, ReviewLaunch: { } launch }) {
@@ -140,16 +139,17 @@ internal sealed partial class ClaudeLauncher(
     string BuildReviewFlowMcpConfig(LauncherContext ctx) {
         if (string.IsNullOrWhiteSpace(config.ServerUrl) || string.IsNullOrWhiteSpace(config.CapacitorPath)) return EmptyMcpConfig;
 
-        var argsNode = new JsonArray();
-        argsNode.Add((JsonNode?)"mcp");
-        argsNode.Add((JsonNode?)"flow-result");
+        var argsNode = new JsonArray {
+            (JsonNode?)"mcp",
+            (JsonNode?)"flow-result"
+        };
 
         var server = new JsonObject {
-            ["command"] = (JsonNode?)config.CapacitorPath,
+            ["command"] = config.CapacitorPath,
             ["args"]    = argsNode,
-            ["env"]     = new JsonObject {
-                ["KCAP_URL"]            = (JsonNode?)config.ServerUrl,
-                ["KCAP_FLOW_AGENT_ID"] = (JsonNode?)ctx.AgentId
+            ["env"] = new JsonObject {
+                ["KCAP_URL"]           = config.ServerUrl,
+                ["KCAP_FLOW_AGENT_ID"] = ctx.AgentId
             }
         };
 
@@ -162,11 +162,13 @@ internal sealed partial class ClaudeLauncher(
                 // name may be null here — a wire-deserialized allowlist element — so log it
                 // defensively rather than let a null flow into the formatter unlabeled.
                 LogAllowlistEntryUnknown(name ?? "(null)", ctx.AgentId);
+
                 continue;
             }
 
             if (descriptor.StartsFlows) {
                 LogAllowlistEntryStripped(name, ctx.AgentId);
+
                 continue;
             }
 
@@ -174,10 +176,10 @@ internal sealed partial class ClaudeLauncher(
             foreach (var a in descriptor.Args) entryArgs.Add((JsonNode?)a);
 
             mcpServers[descriptor.Id] = new JsonObject {
-                ["command"] = (JsonNode?)config.CapacitorPath,
+                ["command"] = config.CapacitorPath,
                 ["args"]    = entryArgs,
-                ["env"]     = new JsonObject {
-                    ["KCAP_URL"] = (JsonNode?)config.ServerUrl
+                ["env"] = new JsonObject {
+                    ["KCAP_URL"] = config.ServerUrl
                 }
             };
         }

@@ -93,7 +93,7 @@ static class SystemdUnit {
     static bool NeedsQuote(string s) =>
         s.Length == 0 || s.Any(c => char.IsWhiteSpace(c) || c is '"' or '\\');
 
-    static string Esc(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    static string Esc(string s) => s.Replace("\\", @"\\").Replace("\"", "\\\"");
 
     /// <summary>An ExecStart argument, double-quoted only when it contains whitespace/quotes.</summary>
     static string QuoteArg(string a) => NeedsQuote(a) ? $"\"{Esc(a)}\"" : a;

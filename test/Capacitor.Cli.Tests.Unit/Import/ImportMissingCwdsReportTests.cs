@@ -103,7 +103,7 @@ public class ImportMissingCwdsReportTests {
 
         var roots = ImportCommand.CollapseDescendants(input);
 
-        await Assert.That(roots).IsEquivalentTo(new[] { "/dev/kapacitor" });
+        await Assert.That(roots).IsEquivalentTo(["/dev/kapacitor"]);
     }
 
     [Test]
@@ -113,7 +113,7 @@ public class ImportMissingCwdsReportTests {
 
         var roots = ImportCommand.CollapseDescendants(input);
 
-        await Assert.That(roots).IsEquivalentTo(new[] { "/a/x", "/a/y" });
+        await Assert.That(roots).IsEquivalentTo(["/a/x", "/a/y"]);
     }
 
     [Test, NotInParallel]

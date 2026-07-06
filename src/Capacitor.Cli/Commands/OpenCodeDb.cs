@@ -100,7 +100,7 @@ internal sealed class OpenCodeDb : IDisposable {
                 if (curMsgId is not null) yield return BuildLine(curMsgId, sessionId, curMsgData, parts!);
                 curMsgId   = msgId;
                 curMsgData = r.GetString(1);
-                parts      = new JsonArray();
+                parts      = [];
             }
             // p.* columns are null for a message with no parts (LEFT JOIN).
             if (!r.IsDBNull(2)) {

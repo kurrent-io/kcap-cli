@@ -1,5 +1,4 @@
 using System.Text.Json.Nodes;
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;

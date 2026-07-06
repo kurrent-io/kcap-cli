@@ -740,7 +740,7 @@ public static class PluginCommand {
                 }
             }
 
-            if (root["version"] is null) root["version"] = 1;
+            root["version"] ??= 1;
 
             if (root["hooks"] is not JsonObject hooks) {
                 hooks         = [];

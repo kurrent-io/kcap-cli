@@ -25,25 +25,25 @@ public static class KiroUsage {
     /// </summary>
     public static IReadOnlyDictionary<string, TurnUsage> AnchorMap(string? metadataJson) {
         var map = new Dictionary<string, TurnUsage>(StringComparer.Ordinal);
+
         if (string.IsNullOrWhiteSpace(metadataJson)) return map;
 
         try {
-            var turns = JsonNode.Parse(metadataJson)
-                ?["session_state"]?["conversation_metadata"]?["user_turn_metadatas"] as JsonArray;
-            if (turns is null) return map;
+            if (JsonNode.Parse(metadataJson)?["session_state"]?["conversation_metadata"]?["user_turn_metadatas"] is not JsonArray turns) return map;
 
             foreach (var t in turns) {
                 if (t?["message_ids"] is not JsonArray mids || mids.Count == 0) continue;
                 if (mids[^1]?.GetValue<string>() is not { Length: > 0 } anchor) continue;
 
-                double credits = 0;
-                var hasCredits = false;
+                double credits    = 0;
+                var    hasCredits = false;
+
                 if (t["metering_usage"] is JsonArray metering) {
                     foreach (var m in metering) {
                         if (m?["unit"]?.GetValue<string>() == "credit"
                          && m["value"] is JsonValue v && v.TryGetValue<double>(out var d)) {
-                            credits += d;
-                            hasCredits = true;
+                            credits    += d;
+                            hasCredits =  true;
                         }
                     }
                 }
@@ -69,14 +69,12 @@ public static class KiroUsage {
         if (anchors.Count == 0) return line;
 
         try {
-            if (JsonNode.Parse(line) is not JsonObject root) return line;
-            if (root["kind"]?.GetValue<string>() != "AssistantMessage") return line;
-            if (root["data"] is not JsonObject data) return line;
-            if (data["message_id"]?.GetValue<string>() is not { } mid || !anchors.TryGetValue(mid, out var u)) return line;
+            if (JsonNode.Parse(line) is not JsonObject root           || root["kind"]?.GetValue<string>() != "AssistantMessage" || root["data"] is not JsonObject data ||
+                data["message_id"]?.GetValue<string>() is not { } mid || !anchors.TryGetValue(mid, out var u)) return line;
 
             // bool/int/double assign to JsonObject is AOT-reflection-free; credits
             // and context% are doubles, so no JsonNode.Parse-for-strings dance.
-            var usage = new JsonObject { ["credits"] = u.Credits };
+            var usage                                                      = new JsonObject { ["credits"] = u.Credits };
             if (u.ContextPct is { } pct) usage["context_usage_percentage"] = pct;
             data["_kcap_usage"] = usage;
 

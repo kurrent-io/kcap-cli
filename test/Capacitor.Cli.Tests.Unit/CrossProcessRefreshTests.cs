@@ -115,7 +115,7 @@ public class CrossProcessRefreshTests {
         var refreshed     = Token("fresh", DateTimeOffset.UtcNow.AddHours(1));
         var refreshCalled = false;
 
-        var result = await TokenStore.RefreshWithCrossProcessLockAsync(
+        await TokenStore.RefreshWithCrossProcessLockAsync(
             "alpha", current,
             _ => { refreshCalled = true; return Task.FromResult<StoredTokens?>(refreshed); });
 

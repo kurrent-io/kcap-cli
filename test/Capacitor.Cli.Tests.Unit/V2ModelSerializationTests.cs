@@ -1,7 +1,5 @@
 using System.Text.Json;
 using Capacitor.Cli.Core;
-using TUnit.Core;
-using TUnit.Assertions;
 
 namespace Capacitor.Cli.Tests.Unit;
 

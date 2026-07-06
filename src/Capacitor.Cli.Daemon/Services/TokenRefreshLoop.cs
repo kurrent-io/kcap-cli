@@ -46,26 +46,16 @@ internal sealed class TokenStoreRefreshPort(TimeSpan window) : IProactiveTokenRe
 /// attempt and never arms the gate, so a healthy long-lived token is still refreshed promptly
 /// the moment it enters the window.</para>
 /// </summary>
-internal sealed class TokenRefreshLoop {
-    readonly IProactiveTokenRefreshPort _port;
-    readonly ILogger                    _logger;
-    readonly TimeSpan                   _minAttemptInterval;
-    readonly Func<DateTimeOffset>       _utcNow;
+internal sealed class TokenRefreshLoop(
+        IProactiveTokenRefreshPort port,
+        ILogger                    logger,
+        TimeSpan                   minAttemptInterval,
+        Func<DateTimeOffset>?      utcNow = null
+    ) {
+    readonly Func<DateTimeOffset> _utcNow = utcNow ?? (static () => DateTimeOffset.UtcNow);
 
     // Earliest time at which the next refresh ATTEMPT may run; advanced after every attempt.
     DateTimeOffset _nextAttemptAllowedAt = DateTimeOffset.MinValue;
-
-    public TokenRefreshLoop(
-            IProactiveTokenRefreshPort port,
-            ILogger                    logger,
-            TimeSpan                   minAttemptInterval,
-            Func<DateTimeOffset>?      utcNow = null
-        ) {
-        _port               = port;
-        _logger             = logger;
-        _minAttemptInterval = minAttemptInterval;
-        _utcNow             = utcNow ?? (static () => DateTimeOffset.UtcNow);
-    }
 
     /// <summary>
     /// Total — never throws (modulo outer cancellation, which is expected at shutdown). The
@@ -80,18 +70,19 @@ internal sealed class TokenRefreshLoop {
                 return;
             }
 
-            switch (await _port.RefreshIfExpiringAsync()) {
+            switch (await port.RefreshIfExpiringAsync()) {
                 case ProactiveRefreshOutcome.Refreshed:
-                    _nextAttemptAllowedAt = _utcNow() + _minAttemptInterval;
-                    _logger.LogDebug("Proactive token refresh: token inside the expiry window — refreshed ahead of expiry");
+                    _nextAttemptAllowedAt = _utcNow() + minAttemptInterval;
+                    logger.LogDebug("Proactive token refresh: token inside the expiry window — refreshed ahead of expiry");
 
                     break;
 
                 case ProactiveRefreshOutcome.Failed:
-                    _nextAttemptAllowedAt = _utcNow() + _minAttemptInterval;
-                    _logger.LogWarning(
+                    _nextAttemptAllowedAt = _utcNow() + minAttemptInterval;
+
+                    logger.LogWarning(
                         "Proactive token refresh failed — backing off for {BackoffSeconds:F0}s; run `kcap login` if this persists",
-                        _minAttemptInterval.TotalSeconds
+                        minAttemptInterval.TotalSeconds
                     );
 
                     break;
@@ -100,19 +91,19 @@ internal sealed class TokenRefreshLoop {
                     // A peer (hook/watcher/MCP) held the cross-process refresh lock — it is
                     // presumably refreshing. No endpoint call was made, so this is not a failure:
                     // stay quiet and retry on the next tick (no warning, no backoff).
-                    _logger.LogDebug("Proactive token refresh: another process holds the refresh lock — retrying next tick");
+                    logger.LogDebug("Proactive token refresh: another process holds the refresh lock — retrying next tick");
 
                     break;
 
                 case ProactiveRefreshOutcome.NotDue:
-                    _logger.LogTrace("Proactive token refresh: token still valid — nothing to do");
+                    logger.LogTrace("Proactive token refresh: token still valid — nothing to do");
 
                     break;
             }
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             // Outer cancellation (process shutting down) — let the loop exit.
         } catch (Exception ex) {
-            _logger.LogWarning(ex, "Proactive token refresh tick faulted — continuing loop");
+            logger.LogWarning(ex, "Proactive token refresh tick faulted — continuing loop");
         }
     }
 }

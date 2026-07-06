@@ -12,33 +12,24 @@ namespace Capacitor.Cli.Core.Auth;
 // secret) before it lapses so every status call carries a live token.
 //
 // Not thread-safe: the provisioning flow calls GetAsync serially.
-public sealed class WorkOSTokenSource {
-    readonly Func<string, CancellationToken, Task<WorkOSAuthResponse?>> refresh;
-    readonly Func<DateTimeOffset>                                       now;
-    readonly TimeSpan                                                   margin;
+public sealed class WorkOSTokenSource(
+        string                                                     accessToken,
+        string?                                                    refreshToken,
+        Func<string, CancellationToken, Task<WorkOSAuthResponse?>> refresh,
+        Func<DateTimeOffset>?                                      now    = null,
+        TimeSpan?                                                  margin = null
+    ) {
+    readonly Func<DateTimeOffset> _now    = now    ?? (() => DateTimeOffset.UtcNow);
+    readonly TimeSpan             _margin = margin ?? TimeSpan.FromSeconds(60);
 
-    string         accessToken;
-    string?        refreshToken;
-    DateTimeOffset expiresAt;
-
-    public WorkOSTokenSource(
-            string                                              accessToken,
-            string?                                             refreshToken,
-            Func<string, CancellationToken, Task<WorkOSAuthResponse?>> refresh,
-            Func<DateTimeOffset>?                               now    = null,
-            TimeSpan?                                           margin = null) {
-        this.accessToken  = accessToken;
-        this.refreshToken = refreshToken;
-        this.refresh      = refresh;
-        this.now          = now    ?? (() => DateTimeOffset.UtcNow);
-        this.margin       = margin ?? TimeSpan.FromSeconds(60);
-        expiresAt         = TokenStore.JwtExpiry(accessToken);
-    }
+    string         _accessToken  = accessToken;
+    string?        _refreshToken = refreshToken;
+    DateTimeOffset _expiresAt    = TokenStore.JwtExpiry(accessToken);
 
     // The latest refresh token, rotated on each successful refresh. Callers that re-use the refresh
     // token after polling (the final org-switch) must read this, not the login-time value — WorkOS
     // rotates refresh tokens single-use, so the original is invalid once GetAsync has refreshed.
-    public string? CurrentRefreshToken => refreshToken;
+    public string? CurrentRefreshToken => _refreshToken;
 
     // Returns a token expected to be valid for at least `margin`, refreshing first if the current
     // one is that close to (or past) expiry. A failed refresh — whether the delegate returns null or
@@ -46,23 +37,23 @@ public sealed class WorkOSTokenSource {
     // long provisioning poll; the caller's HTTP call still surfaces the eventual 401, and the next
     // tick retries. A genuine cancellation (via ct) is not swallowed.
     public async Task<string> GetAsync(CancellationToken ct) {
-        if (refreshToken is null) return accessToken;
-        if (now() < expiresAt - margin) return accessToken;
+        if (_refreshToken is null || _now() < _expiresAt - _margin) return _accessToken;
 
         WorkOSAuthResponse? refreshed;
+
         try {
-            refreshed = await refresh(refreshToken, ct);
+            refreshed = await refresh(_refreshToken, ct);
         } catch (Exception e) when (IsTransient(e) && !ct.IsCancellationRequested) {
-            return accessToken;
+            return _accessToken;
         }
 
         if (refreshed is { AccessToken.Length: > 0 }) {
-            accessToken  = refreshed.AccessToken;
-            refreshToken = refreshed.RefreshToken ?? refreshToken;
-            expiresAt    = TokenStore.JwtExpiry(refreshed.AccessToken);
+            _accessToken  = refreshed.AccessToken;
+            _refreshToken = refreshed.RefreshToken ?? _refreshToken;
+            _expiresAt    = TokenStore.JwtExpiry(refreshed.AccessToken);
         }
 
-        return accessToken;
+        return _accessToken;
     }
 
     // Network / timeout / unreadable-body failures the refresh degrades on. OperationCanceledException

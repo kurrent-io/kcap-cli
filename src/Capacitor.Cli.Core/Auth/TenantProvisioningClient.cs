@@ -24,11 +24,17 @@ public sealed record StatusOutcome(int StatusCode, StatusResponse? Body);
 // flow. Mirrors AuthProxyClient's swallow-and-degrade convention.
 public sealed class TenantProvisioningClient(HttpClient http) {
     public async Task<AvailabilityResponse?> CheckAvailabilityAsync(
-            string baseUrl, string token, string slug, CancellationToken ct) {
+            string            baseUrl,
+            string            token,
+            string            slug,
+            CancellationToken ct
+        ) {
         try {
-            using var req = Get($"{baseUrl}/api/signup/availability?slug={Uri.EscapeDataString(slug)}", token);
+            using var req  = Get($"{baseUrl}/api/signup/availability?slug={Uri.EscapeDataString(slug)}", token);
             using var resp = await http.SendAsync(req, ct);
+
             if (!resp.IsSuccessStatusCode) return null;
+
             return await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.AvailabilityResponse, ct);
         } catch (Exception e) when (IsTransient(e)) {
             return null;
@@ -36,21 +42,29 @@ public sealed class TenantProvisioningClient(HttpClient http) {
     }
 
     public async Task<ProvisionOutcome> ProvisionAsync(
-            string baseUrl, string token, string orgName, string slug, CancellationToken ct) {
+            string            baseUrl,
+            string            token,
+            string            orgName,
+            string            slug,
+            CancellationToken ct
+        ) {
         var payload = JsonSerializer.Serialize(
-            new ProvisionRequest { OrgName = orgName, Slug = slug, Tier = "free" },
-            CapacitorJsonContext.Default.ProvisionRequest);
+            new() { OrgName = orgName, Slug = slug, Tier = "free" },
+            CapacitorJsonContext.Default.ProvisionRequest
+        );
 
         try {
-            using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/signup/provision") {
-                Content = new StringContent(payload, Encoding.UTF8, "application/json")
-            };
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/signup/provision");
+            req.Content               = new StringContent(payload, Encoding.UTF8, "application/json");
             req.Headers.Authorization = new("Bearer", token);
 
-            using var resp = await http.SendAsync(req, ct);
+            using var          resp = await http.SendAsync(req, ct);
             ProvisionResponse? body = null;
-            try { body = await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.ProvisionResponse, ct); }
-            catch (Exception e) when (IsTransient(e)) { /* empty/non-JSON body — leave null */ }
+
+            try { body = await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.ProvisionResponse, ct); } catch (Exception e) when (IsTransient(e)) {
+                /* empty/non-JSON body — leave null */
+            }
+
             return new((int)resp.StatusCode, body);
         } catch (Exception e) when (IsTransient(e)) {
             return new(0, null); // transport failure — caller maps to a failed offer
@@ -58,15 +72,23 @@ public sealed class TenantProvisioningClient(HttpClient http) {
     }
 
     public async Task<StatusOutcome> GetStatusAsync(
-            string baseUrl, string token, string slug, CancellationToken ct) {
+            string            baseUrl,
+            string            token,
+            string            slug,
+            CancellationToken ct
+        ) {
         try {
-            using var req = Get($"{baseUrl}/api/signup/status?slug={Uri.EscapeDataString(slug)}", token);
+            using var req  = Get($"{baseUrl}/api/signup/status?slug={Uri.EscapeDataString(slug)}", token);
             using var resp = await http.SendAsync(req, ct);
+
             if (!resp.IsSuccessStatusCode) return new((int)resp.StatusCode, null);
 
             StatusResponse? body = null;
-            try { body = await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.StatusResponse, ct); }
-            catch (Exception e) when (IsTransient(e)) { /* 2xx with empty/non-JSON body — leave null */ }
+
+            try { body = await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.StatusResponse, ct); } catch (Exception e) when (IsTransient(e)) {
+                /* 2xx with empty/non-JSON body — leave null */
+            }
+
             return new((int)resp.StatusCode, body);
         } catch (Exception e) when (IsTransient(e)) {
             return new(0, null); // transport failure — caller treats as transient, keeps waiting
@@ -82,6 +104,7 @@ public sealed class TenantProvisioningClient(HttpClient http) {
     static HttpRequestMessage Get(string url, string token) {
         var req = new HttpRequestMessage(HttpMethod.Get, url);
         req.Headers.Authorization = new("Bearer", token);
+
         return req;
     }
 }

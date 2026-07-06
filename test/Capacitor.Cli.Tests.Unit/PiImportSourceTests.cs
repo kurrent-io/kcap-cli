@@ -14,6 +14,7 @@ public class PiImportSourceTests {
 
     static void WriteSession(string dir, string uuid, string cwd, string timestamp = "2026-06-12T10:00:00.000Z") {
         Directory.CreateDirectory(dir);
+
         var lines = new[] {
             $$"""{"type":"session","version":3,"id":"{{uuid}}","timestamp":"{{timestamp}}","cwd":"{{cwd}}"}""",
             """{"type":"message","id":"a1","parentId":null,"timestamp":"2026-06-12T10:00:01.000Z","message":{"role":"user","content":"hello"}}"""
@@ -63,14 +64,18 @@ public class PiImportSourceTests {
     [Test]
     public async Task discovery_skips_session_with_non_guid_header_id() {
         using var tmp = new TempDir();
+
         // Well-formed {"type":"session"} header but a corrupt, non-GUID id, in a
         // file whose name also yields no uuid. Discovery must skip it rather than
         // minting an arbitrary non-GUID session id — mirrors the live hook path
         // (PiHookCommand.ExtractSessionId rejects non-GUID headers/filenames).
-        await File.WriteAllLinesAsync(Path.Combine(tmp.Path, "corrupt.jsonl"), new[] {
-            """{"type":"session","version":3,"id":"not-a-guid","timestamp":"2026-06-12T10:00:00.000Z","cwd":"/work/x"}""",
-            """{"type":"message","id":"a1","parentId":null,"message":{"role":"user","content":"hello"}}"""
-        });
+        await File.WriteAllLinesAsync(
+            Path.Combine(tmp.Path, "corrupt.jsonl"),
+            [
+                """{"type":"session","version":3,"id":"not-a-guid","timestamp":"2026-06-12T10:00:00.000Z","cwd":"/work/x"}""",
+                """{"type":"message","id":"a1","parentId":null,"message":{"role":"user","content":"hello"}}"""
+            ]
+        );
 
         var source   = new PiImportSource(tmp.Path);
         var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
@@ -81,18 +86,20 @@ public class PiImportSourceTests {
     [Test]
     public async Task discovery_recovers_session_id_from_filename_when_header_id_missing() {
         using var tmp = new TempDir();
+
         // Header without an id, but the file is named "<timestamp>_<uuid>.jsonl"
         // (Pi's on-disk convention). Discovery falls back to the filename uuid,
         // the same recovery the live hook path uses for an unflushed header.
         await File.WriteAllLinesAsync(
             Path.Combine(tmp.Path, "2026-06-12T10-00-00_" + Sid1 + ".jsonl"),
-            new[] {
+            [
                 """{"type":"session","version":3,"timestamp":"2026-06-12T10:00:00.000Z","cwd":"/work/a"}""",
                 """{"type":"message","id":"a1","parentId":null,"message":{"role":"user","content":"hi"}}"""
-            });
+            ]
+        );
 
         var source   = new PiImportSource(tmp.Path);
-        var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var sessions = await source.DiscoverAsync(new(null, null, null, 0), CancellationToken.None);
 
         await Assert.That(sessions.Count).IsEqualTo(1);
         await Assert.That(sessions[0].SessionId).IsEqualTo(Sid1.Replace("-", ""));
@@ -106,19 +113,19 @@ public class PiImportSourceTests {
 
         var source = new PiImportSource(tmp.Path);
 
-        var bySession = await source.DiscoverAsync(new DiscoveryFilters(null, Sid1, null, 0), CancellationToken.None);
+        var bySession = await source.DiscoverAsync(new(null, Sid1, null, 0), CancellationToken.None);
         await Assert.That(bySession.Count).IsEqualTo(1);
         await Assert.That(bySession[0].SessionId).IsEqualTo(Sid1.Replace("-", ""));
 
-        var byCwd = await source.DiscoverAsync(new DiscoveryFilters("/work/b", null, null, 0), CancellationToken.None);
+        var byCwd = await source.DiscoverAsync(new("/work/b", null, null, 0), CancellationToken.None);
         await Assert.That(byCwd.Count).IsEqualTo(1);
         await Assert.That(byCwd[0].SessionId).IsEqualTo(Sid2.Replace("-", ""));
     }
 
     [Test]
     public async Task is_available_false_when_dir_missing() {
-        using var tmp = new TempDir();
-        var source = new PiImportSource(Path.Combine(tmp.Path, "nope"));
+        using var tmp    = new TempDir();
+        var       source = new PiImportSource(Path.Combine(tmp.Path, "nope"));
         await Assert.That(source.IsAvailable).IsFalse();
     }
 
@@ -139,7 +146,7 @@ public class PiImportSourceTests {
     [Arguments("""{"type":"message","id":"a","message":{"role":"toolResult","toolCallId":"c1","content":[]}}""", true)]
     [Arguments("""{"type":"message","id":"a","message":{"role":"bashExecution","command":"ls"}}""", true)]
     [Arguments("""{"type":"model_change","id":"a","modelId":"gpt-5"}""", false)]
-    [Arguments("""{"type":"compaction","id":"a","summary":"x"}""", true)]  // AI-892: compaction → ContextCompacted
+    [Arguments("""{"type":"compaction","id":"a","summary":"x"}""", true)]                       // AI-892: compaction → ContextCompacted
     [Arguments("""{"type":"branch_summary","id":"a","summary":"branch","fromId":"b"}""", true)] // AI-892: branch_summary → AssistantTextGenerated
     [Arguments("""{"type":"branch_summary","id":"a","summary":""}""", false)]
     [Arguments("""{"type":"branch_summary","id":"a","summary":"   "}""", false)]
@@ -164,8 +171,11 @@ public class PiImportSourceTests {
             $"kcap-pi-import-test-{Guid.NewGuid().ToString("N")[..8]}"
         );
         public TempDir() => Directory.CreateDirectory(Path);
+
         public void Dispose() {
-            try { Directory.Delete(Path, true); } catch { /* best effort */ }
+            try { Directory.Delete(Path, true); } catch {
+                /* best effort */
+            }
         }
     }
 }

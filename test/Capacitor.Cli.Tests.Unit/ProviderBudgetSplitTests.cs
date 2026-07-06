@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using Capacitor.Cli;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit;
@@ -20,22 +19,39 @@ public class ProviderBudgetSplitTests {
 
         // The probe "consumes" exactly half the cap: timestamp reads 0 at start, +1s afterwards.
         var calls = 0;
-        long Timestamp() => calls++ == 0 ? 0L : Stopwatch.Frequency; // Frequency ticks == 1 second
 
         TimeSpan? detectorCap = null;
-        CommandRunner run = (cmd, _, _, cap) => {
-            if (cmd == "glab") { detectorCap = cap; return Task.FromResult<string?>("[]"); }
-            return Task.FromResult<string?>("{}"); // gh auth status: custom host not a gh host → GitLab
-        };
 
         // Custom host → the router probes (consuming the injected time); GitLab detector then runs.
         await RepositoryDetection.ResolveAndDetectPrAsync(
-            "git.example.com", "owner", "repo", "main", "/cwd", providerCap, run, Timestamp);
+            "git.example.com",
+            "owner",
+            "repo",
+            "main",
+            "/cwd",
+            providerCap,
+            Run,
+            Timestamp
+        );
 
         await Assert.That(detectorCap).IsNotNull();
-        await Assert.That(detectorCap!.Value).IsLessThan(providerCap);                 // NOT the full cap
-        await Assert.That(detectorCap!.Value.TotalMilliseconds).IsGreaterThan(500);    // ≈ 1s remainder
+        await Assert.That(detectorCap!.Value).IsLessThan(providerCap);              // NOT the full cap
+        await Assert.That(detectorCap!.Value.TotalMilliseconds).IsGreaterThan(500); // ≈ 1s remainder
         await Assert.That(detectorCap!.Value.TotalMilliseconds).IsLessThan(1500);
+
+        return;
+
+        long Timestamp() => calls++ == 0 ? 0L : Stopwatch.Frequency; // Frequency ticks == 1 second
+
+        Task<string?> Run(string cmd, string s, string s1, TimeSpan cap) {
+            if (cmd == "glab") {
+                detectorCap = cap;
+
+                return Task.FromResult<string?>("[]");
+            }
+
+            return Task.FromResult<string?>("{}"); // gh auth status: custom host not a gh host → GitLab
+        }
     }
 
     [Test]
@@ -44,19 +60,32 @@ public class ProviderBudgetSplitTests {
 
         // Probe consumes the whole cap (0 → 2s) → no budget left → detector must not run.
         var calls = 0;
-        long Timestamp() => calls++ == 0 ? 0L : Stopwatch.Frequency * 2;
 
         var detectorRan = false;
-        CommandRunner run = (cmd, _, _, _) => {
-            if (cmd == "glab") detectorRan = true;
-            return Task.FromResult<string?>(cmd == "glab" ? "[]" : "{}");
-        };
 
         var pr = await RepositoryDetection.ResolveAndDetectPrAsync(
-            "git.example.com", "owner", "repo", "main", "/cwd", providerCap, run, Timestamp);
+            "git.example.com",
+            "owner",
+            "repo",
+            "main",
+            "/cwd",
+            providerCap,
+            Run,
+            Timestamp
+        );
 
         await Assert.That(detectorRan).IsFalse();
         await Assert.That(pr).IsNull();
+
+        return;
+
+        long Timestamp() => calls++ == 0 ? 0L : Stopwatch.Frequency * 2;
+
+        Task<string?> Run(string cmd, string s, string s1, TimeSpan timeSpan) {
+            if (cmd == "glab") detectorRan = true;
+
+            return Task.FromResult<string?>(cmd == "glab" ? "[]" : "{}");
+        }
     }
 
     [Test]
@@ -67,18 +96,35 @@ public class ProviderBudgetSplitTests {
         // negative and, unclamped, push detectCap above providerCap. The clamp must keep the
         // detector budget within the shared ceiling.
         var calls = 0;
-        long Timestamp() => calls++ == 0 ? Stopwatch.Frequency : 0L; // start high, end low → negative elapsed
 
         TimeSpan? detectorCap = null;
-        CommandRunner run = (cmd, _, _, cap) => {
-            if (cmd == "glab") { detectorCap = cap; return Task.FromResult<string?>("[]"); }
-            return Task.FromResult<string?>("{}");
-        };
 
         await RepositoryDetection.ResolveAndDetectPrAsync(
-            "git.example.com", "owner", "repo", "main", "/cwd", providerCap, run, Timestamp);
+            "git.example.com",
+            "owner",
+            "repo",
+            "main",
+            "/cwd",
+            providerCap,
+            Run,
+            Timestamp
+        );
 
         await Assert.That(detectorCap).IsNotNull();
         await Assert.That(detectorCap!.Value).IsLessThanOrEqualTo(providerCap); // never exceeds the ceiling
+
+        return;
+
+        long Timestamp() => calls++ == 0 ? Stopwatch.Frequency : 0L; // start high, end low → negative elapsed
+
+        Task<string?> Run(string cmd, string s, string s1, TimeSpan cap) {
+            if (cmd == "glab") {
+                detectorCap = cap;
+
+                return Task.FromResult<string?>("[]");
+            }
+
+            return Task.FromResult<string?>("{}");
+        }
     }
 }

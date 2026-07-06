@@ -100,9 +100,11 @@ static class CopilotFinalizeDrainCommand {
             }
         }
 
-        Log(sawShutdown
-            ? $"session.shutdown observed; draining tail for {sessionId}"
-            : $"poll budget ({pollBudget.TotalSeconds:0}s) elapsed without session.shutdown; best-effort tail drain for {sessionId}");
+        Log(
+            sawShutdown
+                ? $"session.shutdown observed; draining tail for {sessionId}"
+                : $"poll budget ({pollBudget.TotalSeconds:0}s) elapsed without session.shutdown; best-effort tail drain for {sessionId}"
+        );
 
         // Idempotent: resumes from the server watermark; deterministic event ids
         // dedupe anything the hook's inline-drain already delivered.
@@ -123,8 +125,9 @@ static class CopilotFinalizeDrainCommand {
 
             string? lastNonBlank = null;
 
-            using (var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-            using (var reader = new StreamReader(stream)) {
+            using (var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) {
+                using var reader = new StreamReader(stream);
+
                 while (reader.ReadLine() is { } line) {
                     if (!string.IsNullOrWhiteSpace(line)) {
                         lastNonBlank = line;

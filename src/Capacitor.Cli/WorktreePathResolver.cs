@@ -32,7 +32,7 @@ static class WorktreePathResolver {
         var stripped = StripWorktreeSuffix(cwd);
 
         if (stripped is null) return (cwd, false);
-        if (exists(cwd)) return (cwd, false);                 // pattern matches but worktree wasn't cleaned up — leave it alone
+        if (exists(cwd)) return (cwd, false); // pattern matches but worktree wasn't cleaned up — leave it alone
 
         return exists(stripped) ? (stripped, true) : (cwd, false);
     }
@@ -53,28 +53,37 @@ static class WorktreePathResolver {
             var dotStart = i + 1;
             var dotEnd   = NextSeparator(path, dotStart);
 
-            if (dotEnd < 0) continue;                              // no following separator → no triple
-            if (dotEnd - dotStart < 2) continue;                   // ".” alone is not a dot-segment
-            if (dotEnd - dotStart == 2 && path[dotStart + 1] == '.') continue; // ".."
+            if (dotEnd < 0) continue; // no following separator → no triple
+
+            switch (dotEnd - dotStart) {
+                case < 2:
+                // ".."
+                case 2 when path[dotStart + 1] == '.':
+                    continue; // ".” alone is not a dot-segment
+            }
 
             var wtStart = dotEnd + 1;
             var wtEnd   = NextSeparator(path, wtStart);
 
-            if (wtEnd < 0) continue;                                // need a separator after "worktrees"
-            if (!path.AsSpan(wtStart, wtEnd - wtStart).SequenceEqual("worktrees")) continue;
+            if (wtEnd < 0) continue; // need a separator after "worktrees"
+            if (path.AsSpan(wtStart, wtEnd - wtStart) is not "worktrees") continue;
 
             var slugStart = wtEnd + 1;
 
             if (slugStart >= path.Length || CwdRemapper.IsSeparator(path[slugStart])) continue;
 
-            // Found the pattern. Refuse if it sits at the very root —
-            // there's no meaningful project prefix to attribute to. "Root"
-            // covers both Unix (`/.X/worktrees/...` → i == 0) and Windows
-            // drive roots (`C:\.X\worktrees\...` → i == 2, prefix `C:`,
-            // also `C:/.X/...`).
-            if (i == 0) return null;
-            if (i == 2 && path[1] == ':' && char.IsLetter(path[0])) return null;
-            return path[..i];
+            switch (i) {
+                // Found the pattern. Refuse if it sits at the very root —
+                // there's no meaningful project prefix to attribute to. "Root"
+                // covers both Unix (`/.X/worktrees/...` → i == 0) and Windows
+                // drive roots (`C:\.X\worktrees\...` → i == 2, prefix `C:`,
+                // also `C:/.X/...`).
+                case 0:
+                case 2 when path[1] == ':' && char.IsLetter(path[0]):
+                    return null;
+                default:
+                    return path[..i];
+            }
         }
 
         return null;

@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Capacitor.Cli.Core; // JsonElement Str/Obj extensions
 
 namespace Capacitor.Cli.Core.OpenCode;
 

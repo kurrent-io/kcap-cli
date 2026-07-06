@@ -5,8 +5,7 @@ namespace Capacitor.Cli.Tests.Unit;
 
 public class VersionNudgeEmitterTests {
     static JsonNode? ResponseWithVersion(string? version) {
-        if (version is null) return JsonNode.Parse("{}");
-        return JsonNode.Parse($$"""{ "version": {{System.Text.Json.JsonSerializer.Serialize(version)}} }""");
+        return JsonNode.Parse(version is null ? "{}" : $$"""{ "version": {{System.Text.Json.JsonSerializer.Serialize(version)}} }""");
     }
 
     [Test]

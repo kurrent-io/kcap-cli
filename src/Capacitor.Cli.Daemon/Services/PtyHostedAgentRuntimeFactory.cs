@@ -53,7 +53,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             // NOT the vendor CLI (launcher.CliPath) — the review agent runs `kcap mcp review` to
             // talk to the review MCP tools. See RuntimeStartContext.CapacitorPath's doc (PR #244
             // review, Fix A).
-            ReviewLaunch: ctx.IsReview && ctx.Review is { } reviewArgs
+            ReviewLaunch: ctx is { IsReview: true, Review: { } reviewArgs }
                 ? await ReviewLaunchBuilder.BuildAsync(ctx.Vendor, ctx.CapacitorPath, ctx.ServerUrl ?? "", reviewArgs.Owner, reviewArgs.Repo, reviewArgs.PrNumber)
                 : null
         ) {
@@ -90,14 +90,14 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             env["KCAP_DAEMON_URL"] = ctx.DaemonBridgeUrl;
         }
 
-        if (ctx.IsReview && ctx.Review is { } reviewEnv) {
+        if (ctx is { IsReview: true, Review: { } reviewEnv }) {
             env["KCAP_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
         }
 
         var pty     = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows);
         var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty);
 
-        return new HostedRuntimeStart(runtime, mcpConfigPath);
+        return new(runtime, mcpConfigPath);
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Launcher Prepare soft-failure for agent {AgentId} (continuing)")]

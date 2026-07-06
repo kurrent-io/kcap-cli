@@ -7,7 +7,6 @@ using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Auth;
-using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;

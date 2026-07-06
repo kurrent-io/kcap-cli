@@ -34,9 +34,9 @@ public static class CodexConfigToml {
     /// through <c>kcap setup</c> get it alongside review/sessions.
     /// </summary>
     static readonly (string Name, string[] Args)[] KcapMcpServers = [
-        ("kcap-review",   ["mcp", "review"]),
+        ("kcap-review", ["mcp", "review"]),
         ("kcap-sessions", ["mcp", "sessions"]),
-        ("kcap-memory",   ["mcp", "memory"])
+        ("kcap-memory", ["mcp", "memory"])
     ];
 
     const string McpServerCommand = "kcap";
@@ -144,12 +144,13 @@ public static class CodexConfigToml {
     /// then hosts sorted) so repeated writes are idempotent.
     /// </summary>
     public static IReadOnlyList<string> BuildAllowDomains(IEnumerable<string?> serverUrls) {
-        var hosts              = new List<string>();
-        var seen               = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var hosts               = new List<string>();
+        var seen                = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var includeKcapWildcard = false;
 
         foreach (var url in serverUrls) {
             var host = TryGetHost(url);
+
             if (host is null) continue;
 
             if (host.Equals("kcap.ai", StringComparison.OrdinalIgnoreCase) ||
@@ -239,7 +240,7 @@ public static class CodexConfigToml {
         var entry    = GetOrAddTable(projects, worktreePath);
 
         if (entry.TryGetValue("trust_level", out var existing) &&
-            existing is string s && string.Equals(s, "trusted", StringComparison.Ordinal))
+            existing is string s                               && string.Equals(s, "trusted", StringComparison.Ordinal))
             return false;
 
         entry["trust_level"] = "trusted";
@@ -255,7 +256,8 @@ public static class CodexConfigToml {
         // we still won't clobber it.)
         if (root.TryGetValue("mcp_servers", out var existing) && existing is not TomlTable)
             throw new InvalidOperationException(
-                "~/.codex/config.toml has a non-table `mcp_servers` value; refusing to overwrite it.");
+                "~/.codex/config.toml has a non-table `mcp_servers` value; refusing to overwrite it."
+            );
 
         var servers = GetOrAddTable(root, "mcp_servers");
         var changed = false;
@@ -271,7 +273,7 @@ public static class CodexConfigToml {
                 ["args"]    = ToTomlArray(args)
             };
             servers[name] = entry;
-            changed        = true;
+            changed       = true;
         }
 
         return changed;
@@ -283,7 +285,8 @@ public static class CodexConfigToml {
         var changed = false;
 
         foreach (var (name, _) in KcapMcpServers)
-            if (servers.Remove(name)) changed = true;
+            if (servers.Remove(name))
+                changed = true;
 
         // Don't leave a bare [mcp_servers] behind if we emptied it.
         if (servers.Count == 0 && root.Remove("mcp_servers")) changed = true;
@@ -315,7 +318,7 @@ public static class CodexConfigToml {
 
             if (!networkOn) {
                 GetOrAddTable(root, "sandbox_workspace_write")["network_access"] = true;
-                changed = true;
+                changed                                                          = true;
             }
 
             return changed;

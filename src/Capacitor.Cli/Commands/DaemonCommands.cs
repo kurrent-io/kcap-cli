@@ -88,13 +88,13 @@ public static class DaemonCommands {
                 return 1;
             }
 
-            return await SpawnForegroundAsync(name, args);
+            return await SpawnForegroundAsync(args);
         } finally {
-            startLock.Dispose();
+            await startLock.DisposeAsync();
         }
     }
 
-    static async Task<int> SpawnForegroundAsync(string name, string[] args) {
+    static async Task<int> SpawnForegroundAsync(string[] args) {
         var daemonPath = ResolveDaemonBinary();
 
         if (daemonPath is null) {
@@ -309,9 +309,11 @@ public static class DaemonCommands {
 
     static int StopByName(string name) {
         var manager = TryServiceManager();
+
         if (manager is not null && manager.Status(ServiceText.ServiceId(name)).State != ServiceState.NotInstalled) {
             Console.Out.WriteLine(
-                $"Daemon '{name}' is managed by {manager.Describe()}; a raw stop would be auto-restarted.");
+                $"Daemon '{name}' is managed by {manager.Describe()}; a raw stop would be auto-restarted."
+            );
             Console.Out.WriteLine($"Use: kcap daemon service stop --name {name}  (or uninstall to remove it)");
 
             return 0;
@@ -339,7 +341,8 @@ public static class DaemonCommands {
 
             Console.Error.WriteLine(
                 $"Daemon '{name}' appears to be running (its lock is held) but its PID file is unreadable; "
-              + $"not removing it. Retry, or run `kcap daemon doctor`.");
+              + $"not removing it. Retry, or run `kcap daemon doctor`."
+            );
 
             return 1;
         }
@@ -348,19 +351,20 @@ public static class DaemonCommands {
             if (!IsOurDaemon(entry.Pid, entry.StartToken)) {
                 // A dead/foreign PID. Clean up under the flock so we don't unlink a
                 // PID a concurrent start wrote after our read (TOCTOU).
-                if (TryCleanupMarkersUnderLock(name))
-                    Console.Out.WriteLine($"Daemon '{name}' was not running (stale PID file).");
-                else
-                    Console.Out.WriteLine($"Daemon '{name}' is running (started concurrently); leaving it.");
+                Console.Out.WriteLine(TryCleanupMarkersUnderLock(name) ? $"Daemon '{name}' was not running (stale PID file)." : $"Daemon '{name}' is running (started concurrently); leaving it.");
 
                 return 0;
             }
 
             var process = Process.GetProcessById(entry.Pid);
             process.Kill(entireProcessTree: true);
+
             // Wait for it to actually exit so the kernel releases its flock before
             // we try to reclaim it for cleanup below.
-            try { process.WaitForExit(5000); } catch { /* best-effort */ }
+            try { process.WaitForExit(5000); } catch {
+                /* best-effort */
+            }
+
             Console.Out.WriteLine($"Daemon '{name}' stopped (PID {entry.Pid}).");
         } catch (ArgumentException) {
             Console.Out.WriteLine($"Daemon '{name}' was not running.");
@@ -394,14 +398,24 @@ public static class DaemonCommands {
 
         try {
             held = new FileStream(
-                DaemonLockPaths.LockPath(name), FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
+                DaemonLockPaths.LockPath(name),
+                FileMode.OpenOrCreate,
+                FileAccess.Write,
+                FileShare.None
+            );
         } catch (IOException) {
             return false; // a live daemon owns the name
         }
 
         using (held) {
-            try { File.Delete(DaemonLockPaths.PidPath(name)); } catch { /* best-effort */ }
-            try { File.Delete(DaemonLockPaths.RestartPendingPath(name)); } catch { /* best-effort */ }
+            try { File.Delete(DaemonLockPaths.PidPath(name)); } catch {
+                /* best-effort */
+            }
+
+            try { File.Delete(DaemonLockPaths.RestartPendingPath(name)); } catch {
+                /* best-effort */
+            }
+
             DaemonVersionMarker.Delete(name);
         }
 
@@ -412,7 +426,7 @@ public static class DaemonCommands {
 
     /// <summary>"force" &gt; "when-idle" &gt; "now" (bare). Force always wins.</summary>
     internal static string ParseRestartMode(string[] args) {
-        if (args.Contains("--force"))     return "force";
+        if (args.Contains("--force")) return "force";
         if (args.Contains("--when-idle")) return "when-idle";
 
         return "now";
@@ -498,7 +512,7 @@ public static class DaemonCommands {
         var serviceIds = manager?.ListInstalled() ?? [];
 
         var names = explicitName is not null
-            ? new List<string> { explicitName }
+            ? [explicitName]
             : EnumerateRunningNames().Concat(serviceIds).Distinct().Order().ToList();
 
         if (names.Count == 0) {
@@ -533,6 +547,7 @@ public static class DaemonCommands {
 
             if (manager is not null) {
                 var st = manager.Status(ServiceText.ServiceId(name)).State;
+
                 if (st != ServiceState.NotInstalled)
                     await Console.Out.WriteLineAsync($"  service: {st} ({manager.Describe()})");
             }
@@ -827,36 +842,60 @@ public static class DaemonCommands {
         var noStart = rest.Contains("--no-start");
 
         IServiceManager manager;
+
         try {
             manager = ServiceManagerFactory.ForCurrentOs();
         } catch (PlatformNotSupportedException ex) {
             await Console.Error.WriteLineAsync(ex.Message);
+
             return 1;
         }
 
         var id = ServiceText.ServiceId(ResolveName(rest));
 
         switch (action) {
-            case "install":   return await ServiceInstall(manager, rest, id, startNow: !noStart);
-            case "uninstall": manager.Uninstall(id); await Console.Out.WriteLineAsync($"Service '{id}' uninstalled ({manager.Describe()})."); return 0;
-            case "start":     manager.Start(id);     await Console.Out.WriteLineAsync($"Service '{id}' started.");   return 0;
-            case "stop":      manager.Stop(id);      await Console.Out.WriteLineAsync($"Service '{id}' stopped (still installed)."); return 0;
-            case "status":    return await ServiceStatus(manager, id);
-            default:          return ServiceUsage();
+            case "install": return await ServiceInstall(manager, rest, id, startNow: !noStart);
+            case "uninstall":
+                manager.Uninstall(id);
+                await Console.Out.WriteLineAsync($"Service '{id}' uninstalled ({manager.Describe()}).");
+
+                return 0;
+            case "start":
+                manager.Start(id);
+                await Console.Out.WriteLineAsync($"Service '{id}' started.");
+
+                return 0;
+            case "stop":
+                manager.Stop(id);
+                await Console.Out.WriteLineAsync($"Service '{id}' stopped (still installed).");
+
+                return 0;
+            case "status": return await ServiceStatus(manager, id);
+            default:       return ServiceUsage();
         }
     }
 
     static async Task<int> ServiceInstall(IServiceManager manager, string[] args, string id, bool startNow) {
         var daemonPath = ResolveDaemonBinary();
-        if (daemonPath is null) { await Console.Error.WriteLineAsync(DaemonNotFoundMessage()); return 1; }
+
+        if (daemonPath is null) {
+            await Console.Error.WriteLineAsync(DaemonNotFoundMessage());
+
+            return 1;
+        }
 
         var profileName = ExtractFlagValue(args, "--profile") ?? AppConfig.ResolvedProfile?.ProfileName;
+
         var env = new Dictionary<string, string>(ServiceEnvironment.Capture(profileName)) {
-            ["KCAP_DAEMON_SUPERVISED"] = id,   // name-specific; daemon honors it only when == its sanitized --name
+            ["KCAP_DAEMON_SUPERVISED"] = id, // name-specific; daemon honors it only when == its sanitized --name
         };
 
         var extra = new List<string>();
-        if (ExtractFlagValue(args, "--max-agents") is { } mx) { extra.Add("--max-agents"); extra.Add(mx); }
+
+        if (ExtractFlagValue(args, "--max-agents") is { } mx) {
+            extra.Add("--max-agents");
+            extra.Add(mx);
+        }
 
         var logPath = PathHelpers.ConfigPath($"daemon-{id}.log");
         var spec    = new ServiceSpec(id, daemonPath, logPath, env, extra);
@@ -868,6 +907,7 @@ public static class DaemonCommands {
         await Console.Out.WriteLineAsync($"  Log:       {logPath}");
         await Console.Out.WriteLineAsync($"  Stop:      kcap daemon service stop --name {id}");
         await Console.Out.WriteLineAsync($"  Remove:    kcap daemon service uninstall --name {id}");
+
         return 0;
     }
 
@@ -875,6 +915,7 @@ public static class DaemonCommands {
         var status = manager.Status(id);
         await Console.Out.WriteLineAsync($"Service '{id}': {status.State} ({manager.Describe()})");
         if (status.BinaryPath is { } bin) await Console.Out.WriteLineAsync($"  binary: {bin}");
+
         return 0;
     }
 
@@ -886,13 +927,13 @@ public static class DaemonCommands {
         Console.Error.WriteLine("  start [--name N]       Start the installed service now");
         Console.Error.WriteLine("  stop [--name N]        Stop the running service (stays installed)");
         Console.Error.WriteLine("  status [--name N]      Show installed/running state");
+
         return 1;
     }
 
     /// <summary>Service manager for this OS, or null if the OS is unsupported.</summary>
     static IServiceManager? TryServiceManager() {
-        try { return ServiceManagerFactory.ForCurrentOs(); }
-        catch (PlatformNotSupportedException) { return null; }
+        try { return ServiceManagerFactory.ForCurrentOs(); } catch (PlatformNotSupportedException) { return null; }
     }
 
     /// <summary>
@@ -902,9 +943,11 @@ public static class DaemonCommands {
     /// </summary>
     static async Task ReportInstalledServices() {
         var manager = TryServiceManager();
+
         if (manager is null) return;
 
         var installed = manager.ListInstalled();
+
         if (installed.Count == 0) return;
 
         await Console.Out.WriteLineAsync($"\nInstalled services ({manager.Describe()}):");

@@ -1,5 +1,3 @@
-using Capacitor.Cli;
-
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>

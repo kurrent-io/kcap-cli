@@ -44,7 +44,7 @@ public class HookSpoolTests {
             spool.Append(SidA, "session-start", """{"n":2}"""); // Drop (permanent)
             spool.Append(SidA, "session-end",   """{"n":3}"""); // TransientStop
 
-            await spool.DrainAllAsync(SidA, (route, body) =>
+            await spool.DrainAllAsync(SidA, (_, body) =>
                 Task.FromResult(body.Contains("2") ? DrainOutcome.Drop
                               : body.Contains("3") ? DrainOutcome.TransientStop
                               : DrainOutcome.Delivered),
@@ -69,7 +69,7 @@ public class HookSpoolTests {
             // Poster appends a NEW entry while the OLD one is being drained (live file
             // already rotated to a temp), simulating a racing hook on the same session.
             var appended = false;
-            await spool.DrainAllAsync(SidA, (route, body) => {
+            await spool.DrainAllAsync(SidA, (_, _) => {
                 if (!appended) { spool.Append(SidA, "session-end", """{"n":"new"}"""); appended = true; }
                 return Task.FromResult(DrainOutcome.Delivered);
             }, TimeSpan.FromSeconds(5), CancellationToken.None);
@@ -107,7 +107,7 @@ public class HookSpoolTests {
             spool.Append(SidA, "session-end", """{"n":"newlive"}""");
 
             var seen = new List<string>();
-            await spool.DrainAllAsync(SidA, (route, body) => { seen.Add(body); return Task.FromResult(DrainOutcome.Delivered); },
+            await spool.DrainAllAsync(SidA, (_, body) => { seen.Add(body); return Task.FromResult(DrainOutcome.Delivered); },
                 TimeSpan.FromSeconds(5), CancellationToken.None);
 
             await Assert.That(seen[0]).IsEqualTo("old"); // temp first

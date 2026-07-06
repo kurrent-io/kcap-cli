@@ -38,35 +38,24 @@ namespace Capacitor.Cli.Daemon.Services;
 /// </list>
 /// Cancellation (daemon shutdown) ends the loop even while a chunk is being held.
 /// </summary>
-internal sealed partial class TerminalOutputSender {
-    readonly Channel<(string AgentId, string Base64Data)> _channel;
-    readonly Func<string, string, CancellationToken, Task> _send;
-    readonly Func<bool>                                   _isConnected;
-    readonly ILogger                                       _logger;
-    readonly TimeSpan                                      _retryDelay;
-    readonly int                                           _maxConnectedAttempts;
-    long                                                   _dropped;
+internal sealed partial class TerminalOutputSender(
+        Func<string, string, CancellationToken, Task> send,
+        Func<bool>                                    isConnected,
+        ILogger                                       logger,
+        int                                           capacity             = 2000,
+        TimeSpan?                                     retryDelay           = null,
+        int                                           maxConnectedAttempts = 5
+    ) {
+    readonly Channel<(string AgentId, string Base64Data)> _channel = Channel.CreateBounded<(string, string)>(
+        new BoundedChannelOptions(capacity) {
+            FullMode     = BoundedChannelFullMode.Wait,
+            SingleReader = true
+        }
+    );
 
-    public TerminalOutputSender(
-            Func<string, string, CancellationToken, Task> send,
-            Func<bool>                                    isConnected,
-            ILogger                                       logger,
-            int                                           capacity             = 2000,
-            TimeSpan?                                     retryDelay           = null,
-            int                                           maxConnectedAttempts = 5
-        ) {
-        _send                 = send;
-        _isConnected          = isConnected;
-        _logger               = logger;
-        _retryDelay           = retryDelay ?? TimeSpan.FromMilliseconds(500);
-        _maxConnectedAttempts = Math.Max(1, maxConnectedAttempts);
-        _channel = Channel.CreateBounded<(string, string)>(
-            new BoundedChannelOptions(capacity) {
-                FullMode     = BoundedChannelFullMode.Wait,
-                SingleReader = true
-            }
-        );
-    }
+    readonly TimeSpan _retryDelay           = retryDelay ?? TimeSpan.FromMilliseconds(500);
+    readonly int      _maxConnectedAttempts = Math.Max(1, maxConnectedAttempts);
+    long              _dropped;
 
     /// <summary>Total chunks dropped because a connected send kept failing past the retry budget.</summary>
     public long DroppedChunks => Interlocked.Read(ref _dropped);
@@ -119,13 +108,13 @@ internal sealed partial class TerminalOutputSender {
 
                 while (true) {
                     try {
-                        await _send(agentId, base64, ct);
+                        await send(agentId, base64, ct);
 
                         break;
                     } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                         return;
                     } catch (Exception ex) {
-                        if (_isConnected()) {
+                        if (isConnected()) {
                             // Connected yet the send threw — not a transport outage.
                             // Bounded-retry so a transient blip still lands in order;
                             // give up (drop + count + log) once the budget is spent so
@@ -166,9 +155,15 @@ internal sealed partial class TerminalOutputSender {
     [LoggerMessage(Level = LogLevel.Debug, Message = "Terminal output send for agent {AgentId} failed while connected (attempt {Attempt}/{Max}), retrying")]
     partial void LogSendRetryConnected(Exception ex, string agentId, int attempt, int max);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Terminal output send for agent {AgentId} still failing while connected after {Attempts} attempts — dropping chunk (total dropped this session: {TotalDropped})")]
+    [LoggerMessage(
+        Level = LogLevel.Warning,
+        Message = "Terminal output send for agent {AgentId} still failing while connected after {Attempts} attempts — dropping chunk (total dropped this session: {TotalDropped})"
+    )]
     partial void LogSendDropped(Exception ex, string agentId, int attempts, long totalDropped);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Terminal output backlog full for local agent {AgentId}; dropping a chunk to keep the local terminal responsive (total dropped this session: {TotalDropped})")]
+    [LoggerMessage(
+        Level = LogLevel.Warning,
+        Message = "Terminal output backlog full for local agent {AgentId}; dropping a chunk to keep the local terminal responsive (total dropped this session: {TotalDropped})"
+    )]
     partial void LogOverflowDropped(string agentId, long totalDropped);
 }

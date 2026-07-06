@@ -20,9 +20,14 @@ public class ClaudeHookCommandTests {
     // uncancellable hang (e.g. TokenStore.RefreshAsync's untimed HttpClient.PostAsync).
     [Test]
     public async Task hard_cap_returns_zero_when_inner_ignores_cancellation() {
-        var inner = Task.Run(async () => { await Task.Delay(TimeSpan.FromSeconds(10)); return 42; });
-        var sw    = System.Diagnostics.Stopwatch.StartNew();
-        var exit  = await ClaudeHookCommand.WithHardCap(inner, TimeSpan.FromMilliseconds(50));
+        var inner = Task.Run(async () => {
+                await Task.Delay(TimeSpan.FromSeconds(10));
+
+                return 42;
+            }
+        );
+        var sw   = System.Diagnostics.Stopwatch.StartNew();
+        var exit = await ClaudeHookCommand.WithHardCap(inner, TimeSpan.FromMilliseconds(50));
         sw.Stop();
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
@@ -36,8 +41,8 @@ public class ClaudeHookCommandTests {
 
     [Test]
     public async Task session_end_on_5xx_is_spooled_and_returns_zero() {
-        using var fx = new Fixture(HttpStatusCode.InternalServerError);
-        var exit = await fx.HandleAsync($$"""{"hook_event_name":"SessionEnd","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp","reason":"other"}""");
+        using var fx   = new Fixture(HttpStatusCode.InternalServerError);
+        var       exit = await fx.HandleAsync($$"""{"hook_event_name":"SessionEnd","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp","reason":"other"}""");
         await Assert.That(exit).IsEqualTo(0);
         var files = fx.SpoolFiles.ToList();
         await Assert.That(files.Count).IsEqualTo(1);
@@ -51,9 +56,11 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture();
         fx.HoldOnPost = TimeSpan.FromSeconds(30); // server hangs past the bounded attempt
         var sw = System.Diagnostics.Stopwatch.StartNew();
+
         // processStart in the recent past leaves a small remaining budget.
         var exit = await fx.HandleAsync(
-            $$"""{"hook_event_name":"SessionEnd","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}""");
+            $$"""{"hook_event_name":"SessionEnd","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}"""
+        );
         sw.Stop();
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(15)); // did not wait the full 30s
@@ -75,6 +82,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(files.Count).IsEqualTo(1);
         var content = await File.ReadAllTextAsync(files[0]);
         await Assert.That(content).Contains("\"route\":\"session-start\"");
+
         await Assert.That(JsonNode.Parse(JsonNode.Parse(content.Split('\n')[0])!["body"]!.GetValue<string>())!["session_id"]!.GetValue<string>())
             .IsEqualTo(Sid);
     }
@@ -86,7 +94,7 @@ public class ClaudeHookCommandTests {
         // A fresh, unrelated stop hook with the server up flushes the backlog.
         await fx.HandleAsync($$"""{"hook_event_name":"Stop","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}""");
         await Assert.That(fx.RouteOrder).Contains("session-end"); // replayed
-        await Assert.That(fx.SpoolFiles.Any()).IsFalse();          // delivered + cleaned
+        await Assert.That(fx.SpoolFiles.Any()).IsFalse();         // delivered + cleaned
     }
 
     [Test]
@@ -106,19 +114,25 @@ public class ClaudeHookCommandTests {
     [Test]
     public async Task session_end_spooled_when_client_creation_exceeds_budget() {
         using var fx = new Fixture();
+
         // Slow factory: never completes within the cap (30s) so the budget elapses first.
         Func<Task<(HttpClient, AuthStatus)>> slowFactory = () =>
             Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => (new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
 
         // processStart ~13.4s in the past → session-end remaining = 15 - 13.4 - 1.5 ≈ 0.1s cap.
         var processStart = System.Diagnostics.Stopwatch.GetTimestamp()
-                         - (long)(13.4 * System.Diagnostics.Stopwatch.Frequency);
+          - (long)(13.4 * System.Diagnostics.Stopwatch.Frequency);
 
-        var sw   = System.Diagnostics.Stopwatch.StartNew();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
         var exit = await ClaudeHookCommand.HandleWithDeps(
-            fx.Spool, processStart, "http://localhost",
+            fx.Spool,
+            processStart,
+            "http://localhost",
             new StringReader($$"""{"hook_event_name":"SessionEnd","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}"""),
-            updateCheckTask: null, clientFactory: slowFactory);
+            updateCheckTask: null,
+            clientFactory: slowFactory
+        );
         sw.Stop();
 
         await Assert.That(exit).IsEqualTo(0);
@@ -153,8 +167,8 @@ public class ClaudeHookCommandTests {
 
     [Test]
     public async Task subagent_stop_on_5xx_is_spooled_and_returns_zero() {
-        using var fx = new Fixture(HttpStatusCode.InternalServerError);
-        var exit = await fx.HandleAsync($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}""");
+        using var fx   = new Fixture(HttpStatusCode.InternalServerError);
+        var       exit = await fx.HandleAsync($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}""");
         await Assert.That(exit).IsEqualTo(0);
         var files = fx.SpoolFiles.ToList();
         await Assert.That(files.Count).IsEqualTo(1);
@@ -166,7 +180,7 @@ public class ClaudeHookCommandTests {
     public async Task subagent_stop_against_hung_server_is_spooled_within_budget() {
         using var fx = new Fixture();
         fx.HoldOnPost = TimeSpan.FromSeconds(30); // server hangs past the bounded attempt
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var sw   = System.Diagnostics.Stopwatch.StartNew();
         var exit = await fx.HandleAsync($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}""");
         sw.Stop();
         await Assert.That(exit).IsEqualTo(0);
@@ -211,16 +225,23 @@ public class ClaudeHookCommandTests {
     [Test]
     public async Task subagent_stop_spooled_when_client_creation_exceeds_budget() {
         using var fx = new Fixture();
+
         Func<Task<(HttpClient, AuthStatus)>> slowFactory = () =>
             Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => (new HttpClient(), AuthStatus.Ok), TaskScheduler.Default);
+
         // processStart ~3.4s in the past → subagent-stop remaining = 5 - 3.4 - 1.5 ≈ 0.1s cap.
         var processStart = System.Diagnostics.Stopwatch.GetTimestamp()
-                         - (long)(3.4 * System.Diagnostics.Stopwatch.Frequency);
-        var sw   = System.Diagnostics.Stopwatch.StartNew();
+          - (long)(3.4 * System.Diagnostics.Stopwatch.Frequency);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
         var exit = await ClaudeHookCommand.HandleWithDeps(
-            fx.Spool, processStart, "http://localhost",
+            fx.Spool,
+            processStart,
+            "http://localhost",
             new StringReader($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}"""),
-            updateCheckTask: null, clientFactory: slowFactory);
+            updateCheckTask: null,
+            clientFactory: slowFactory
+        );
         sw.Stop();
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
@@ -260,42 +281,57 @@ public class ClaudeHookCommandTests {
     }
 
     sealed class Fixture : IDisposable {
-        readonly string _tmpHome = Path.Combine(Path.GetTempPath(), $"kcap-claude-hook-{Guid.NewGuid():N}");
-        readonly string _spoolPath;
-        public List<string> Sent { get; } = [];
-        public List<string> RouteOrder { get; } = [];
-        public HookSpool Spool { get; }
-        public HttpClient Client { get; }
-        public TimeSpan HoldOnPost { get; set; } = TimeSpan.Zero;
-        public string? RespondJson { get; set; }
-        readonly HttpStatusCode _postStatus;
+        readonly string       _tmpHome = Path.Combine(Path.GetTempPath(), $"kcap-claude-hook-{Guid.NewGuid():N}");
+        readonly string       _spoolPath;
+        public   List<string> Sent        { get; } = [];
+        public   List<string> RouteOrder  { get; } = [];
+        public   HookSpool    Spool       { get; }
+        public   HttpClient   Client      { get; }
+        public   TimeSpan     HoldOnPost  { get; set; } = TimeSpan.Zero;
+        public   string?      RespondJson { get; set; }
 
         public Fixture(HttpStatusCode postStatus = HttpStatusCode.OK) {
             Directory.CreateDirectory(_tmpHome);
-            _spoolPath  = Path.Combine(_tmpHome, "spool");
-            _postStatus = postStatus;
-            Spool = new HookSpool(_spoolPath);
-            Client = new HttpClient(new StubHandler(async (req, ct) => {
-                var body = req.Content is null ? "" : await req.Content.ReadAsStringAsync();
-                var path = req.RequestUri!.AbsolutePath;
-                Sent.Add($"{path}|{body}");
-                if (path.StartsWith("/hooks/")) RouteOrder.Add(path.Replace("/hooks/", ""));
-                if (req.Method == HttpMethod.Get) return new HttpResponseMessage(HttpStatusCode.NotFound);
-                if (HoldOnPost > TimeSpan.Zero) await Task.Delay(HoldOnPost, ct);
-                var resp = new HttpResponseMessage(_postStatus);
-                if (RespondJson is not null) resp.Content = new System.Net.Http.StringContent(RespondJson, System.Text.Encoding.UTF8, "application/json");
-                return resp;
-            }));
+            _spoolPath = Path.Combine(_tmpHome, "spool");
+            var postStatus1 = postStatus;
+            Spool = new(_spoolPath);
+
+            Client = new(
+                new StubHandler(async (req, ct) => {
+                        var body = req.Content is null ? "" : await req.Content.ReadAsStringAsync();
+                        var path = req.RequestUri!.AbsolutePath;
+                        Sent.Add($"{path}|{body}");
+                        if (path.StartsWith("/hooks/")) RouteOrder.Add(path.Replace("/hooks/", ""));
+
+                        if (req.Method == HttpMethod.Get) return new HttpResponseMessage(HttpStatusCode.NotFound);
+
+                        if (HoldOnPost > TimeSpan.Zero) await Task.Delay(HoldOnPost, ct);
+                        var resp                                  = new HttpResponseMessage(postStatus1);
+                        if (RespondJson is not null) resp.Content = new System.Net.Http.StringContent(RespondJson, System.Text.Encoding.UTF8, "application/json");
+
+                        return resp;
+                    }
+                )
+            );
         }
 
         public Task<int> HandleAsync(string stdin, long processStart = 0) =>
-            ClaudeHookCommand.HandleCore(Client, AuthStatus.Ok, Spool, processStart == 0 ? System.Diagnostics.Stopwatch.GetTimestamp() : processStart,
-                "http://localhost", new StringReader(stdin));
+            ClaudeHookCommand.HandleCore(
+                Client,
+                AuthStatus.Ok,
+                Spool,
+                processStart == 0 ? System.Diagnostics.Stopwatch.GetTimestamp() : processStart,
+                "http://localhost",
+                new StringReader(stdin)
+            );
 
         public IEnumerable<string> SpoolFiles =>
             Directory.Exists(_spoolPath) ? Directory.EnumerateFiles(_spoolPath) : [];
 
-        public void Dispose() { Client.Dispose(); try { Directory.Delete(_tmpHome, true); } catch { } }
+        public void Dispose() {
+            Client.Dispose();
+            try { Directory.Delete(_tmpHome, true); } catch { }
+        }
     }
 
     sealed class StubHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> impl) : HttpMessageHandler {

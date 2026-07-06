@@ -21,8 +21,8 @@ namespace Capacitor.Cli.Commands;
 static class McpFlowResultServer {
     internal const string AgentIdEnvVar = "KCAP_FLOW_AGENT_ID";
 
-    const int MaxAttempts = 5;
-    static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(3);
+    const           int      MaxAttempts = 5;
+    static readonly TimeSpan RetryDelay  = TimeSpan.FromSeconds(3);
 
     // AI-1127 E-0 (AI-1190): the server no longer reads the transcript — markers deliver
     // nothing, so the only useful guidance on failure is to retry the tool itself.
@@ -34,7 +34,9 @@ static class McpFlowResultServer {
 
         if (string.IsNullOrWhiteSpace(agentId)) {
             await Console.Error.WriteLineAsync(
-                $"kcap mcp flow-result: {AgentIdEnvVar} is not set. This server is launched by the kcap daemon for hosted review-flow reviewers; it is not meant to be run manually.");
+                $"kcap mcp flow-result: {AgentIdEnvVar} is not set. This server is launched by the kcap daemon for hosted review-flow reviewers; it is not meant to be run manually."
+            );
+
             return 2;
         }
 
@@ -51,8 +53,8 @@ static class McpFlowResultServer {
         // creation failure leaves it null and the next call retries, instead of a faulted task
         // sticking for the rest of the session. Safe without locking: the stdio loop handles
         // one request at a time.
-        HttpClient? client = null;
-        var apiRoot = baseUrl.TrimEnd('/');
+        HttpClient? client  = null;
+        var         apiRoot = baseUrl.TrimEnd('/');
 
         // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request. An
         // unusable server_url would otherwise reach EnsureAbsolute inside the auth-client factory,
@@ -68,14 +70,13 @@ static class McpFlowResultServer {
                 // not an object, name not a string) must yield a JSON-RPC error, not throw
                 // past the loop and kill the reviewer's only result-submission tool
                 // (Qodo review on #240; matches McpFlowsServer/McpReviewServer structure).
-                JsonObject? paramsNode;
                 string?     toolName;
                 JsonObject? arguments;
 
                 try {
-                    paramsNode = callRequest["params"]?.AsObject();
-                    toolName   = paramsNode?["name"]?.GetValue<string>();
-                    arguments  = paramsNode?["arguments"]?.AsObject();
+                    var paramsNode = callRequest["params"]?.AsObject();
+                    toolName  = paramsNode?["name"]?.GetValue<string>();
+                    arguments = paramsNode?["arguments"]?.AsObject();
                 } catch (InvalidOperationException) {
                     return BuildErrorResponse(callId, -32602, "Invalid params");
                 } catch (FormatException) {
@@ -92,7 +93,7 @@ static class McpFlowResultServer {
 
                 var (text, isError) = toolName switch {
                     "submit_review_result" => await SubmitCoreAsync(client, apiRoot, agentId, arguments, delay: Task.Delay),
-                    _                       => await SendMessageCoreAsync(client, apiRoot, agentId, arguments, delay: Task.Delay)
+                    _                      => await SendMessageCoreAsync(client, apiRoot, agentId, arguments, delay: Task.Delay)
                 };
 
                 return BuildToolResult(callId, text, isError);
@@ -100,6 +101,7 @@ static class McpFlowResultServer {
                 // Unexpected: log the detail to stderr (not to the client, which could leak local
                 // paths from IO errors) and return a generic tool error, keeping the loop alive.
                 await Console.Error.WriteLineAsync($"kcap mcp flow-result: unexpected error handling tools/call: {ex}");
+
                 return BuildToolResult(callId, "Error: internal error handling the request.", isError: true);
             }
         }
@@ -165,8 +167,10 @@ static class McpFlowResultServer {
 
         if (string.IsNullOrWhiteSpace(roundToken))
             return ("Error: round_token is required — copy it from the \"round token\" in your prompt.", true);
+
         if (kind is not ("findings" or "clean"))
             return ("Error: kind must be \"findings\" or \"clean\".", true);
+
         if (kind == "findings" && string.IsNullOrWhiteSpace(findings))
             return ("Error: findings text is required when kind is \"findings\".", true);
 
@@ -190,23 +194,23 @@ static class McpFlowResultServer {
             var code      = errorNode?["error"]?.GetValue<string>();
             var message   = errorNode?["message"]?.GetValue<string>() ?? responseBody;
 
-            if (code is "no_active_flow" or "no_open_round") {
+            switch (code) {
                 // Launch race: the server's flow-assignment/round events may not be projected
                 // yet when a fast reviewer submits. Retry inside the tool call.
-                if (attempt < MaxAttempts) {
+                case "no_active_flow" or "no_open_round" when attempt < MaxAttempts:
                     await delay(RetryDelay);
+
                     continue;
-                }
-                return ($"Error: {message}\n{FallbackHint}", true);
+                case "no_active_flow" or "no_open_round":
+                    return ($"Error: {message}\n{FallbackHint}", true);
+                default:
+                    return code == "stale_round_token"
+                        // Deliberately NO retry hint: a stale round token means this round is already
+                        // closed — the result must be discarded, never redelivered (spec-review round 2
+                        // finding; the AI-1139 round-token guard).
+                        ? ($"Error: {message}", true)
+                        : ($"Error: HTTP {(int)response.StatusCode} — {message}\n{FallbackHint}", true);
             }
-
-            if (code == "stale_round_token")
-                // Deliberately NO retry hint: a stale round token means this round is already
-                // closed — the result must be discarded, never redelivered (spec-review round 2
-                // finding; the AI-1139 round-token guard).
-                return ($"Error: {message}", true);
-
-            return ($"Error: HTTP {(int)response.StatusCode} — {message}\n{FallbackHint}", true);
         }
 
         return ("Error: unreachable", true); // loop always returns
@@ -234,7 +238,7 @@ static class McpFlowResultServer {
         // validation error, not throw into the dispatch guard's generic "internal error"
         // (Qodo review on #278; same JsonValue.TryGetValue pattern as ParseAsyncArg).
         if (arguments?["text"] is not JsonValue textValue ||
-            !textValue.TryGetValue<string>(out var text) ||
+            !textValue.TryGetValue<string>(out var text)  ||
             string.IsNullOrWhiteSpace(text))
             return ("Error: text must be a non-empty string.", true);
 
@@ -258,22 +262,22 @@ static class McpFlowResultServer {
             var code         = errorNode?["error"]?.GetValue<string>();
             var message      = errorNode?["message"]?.GetValue<string>() ?? responseBody;
 
-            if (code is "no_active_flow" or "concurrent_update") {
+            switch (code) {
                 // Launch race or a concurrent writer on the same flow's fold — retry with the
                 // SAME message_id so a redelivered POST dedupes instead of double-recording.
-                if (attempt < MaxAttempts) {
+                case "no_active_flow" or "concurrent_update" when attempt < MaxAttempts:
                     await delay(RetryDelay);
+
                     continue;
-                }
-                return ($"Error: {message}", true);
+                case "no_active_flow" or "concurrent_update":
+                    return ($"Error: {message}", true);
+                default:
+                    return code == "run_closed"
+                        // Terminal: the flow is already closed, so there is no driver left to deliver
+                        // this message to. No retry — unlike no_active_flow, more attempts can't help.
+                        ? ($"Error: {message}", true)
+                        : ($"Error: HTTP {(int)response.StatusCode} — {message}", true);
             }
-
-            if (code == "run_closed")
-                // Terminal: the flow is already closed, so there is no driver left to deliver
-                // this message to. No retry — unlike no_active_flow, more attempts can't help.
-                return ($"Error: {message}", true);
-
-            return ($"Error: HTTP {(int)response.StatusCode} — {message}", true);
         }
 
         return ("Error: unreachable", true); // loop always returns
@@ -324,6 +328,7 @@ static class McpFlowResultServer {
             ["id"]      = id.DeepClone(),
             ["error"]   = JsonSerializer.SerializeToNode(new McpError(code, message), McpJsonContext.Default.McpError)
         };
+
         return envelope.ToJsonString();
     }
 
@@ -333,13 +338,15 @@ static class McpFlowResultServer {
             ["id"]      = id.DeepClone(),
             ["result"]  = JsonSerializer.SerializeToNode(result, typeInfo)
         };
+
         return envelope.ToJsonString();
     }
 
     static McpTool[] BuildToolsList() => [
         new(
             Name: "submit_review_result",
-            Description: "Submit your review result for the current round. Call once. kind=\"findings\" with your findings text, or kind=\"clean\" when there are no actionable findings. round_token comes from the \"round token\" line in your prompt.",
+            Description:
+            "Submit your review result for the current round. Call once. kind=\"findings\" with your findings text, or kind=\"clean\" when there are no actionable findings. round_token comes from the \"round token\" line in your prompt.",
             InputSchema: new McpInputSchema(
                 Type: "object",
                 Properties: new Dictionary<string, McpSchemaProperty> {
@@ -352,7 +359,8 @@ static class McpFlowResultServer {
         ),
         new(
             Name: "send_flow_message",
-            Description: "Send a short out-of-band note to the flow DRIVER between rounds — e.g. a notable observation, a blocking question, or a heads-up about something outside the current round's scope. NOT for round results: deliver those with submit_review_result. The driver sees pending messages on its next flow call; delivery is not immediate.",
+            Description:
+            "Send a short out-of-band note to the flow DRIVER between rounds — e.g. a notable observation, a blocking question, or a heads-up about something outside the current round's scope. NOT for round results: deliver those with submit_review_result. The driver sees pending messages on its next flow call; delivery is not immediate.",
             InputSchema: new McpInputSchema(
                 Type: "object",
                 Properties: new Dictionary<string, McpSchemaProperty> {
@@ -366,15 +374,15 @@ static class McpFlowResultServer {
 
 /// <summary>CLI-side DTO for POST /api/flows/reviewer/result — mirrors the server's SubmitReviewerResultRequest.</summary>
 record SubmitReviewerResultDto(
-    [property: JsonPropertyName("agent_id")]    string  AgentId,
-    [property: JsonPropertyName("round_token")] string  RoundToken,
-    [property: JsonPropertyName("kind")]        string  Kind,
-    [property: JsonPropertyName("text")]        string? Text
-);
+        [property: JsonPropertyName("agent_id")]    string  AgentId,
+        [property: JsonPropertyName("round_token")] string  RoundToken,
+        [property: JsonPropertyName("kind")]        string  Kind,
+        [property: JsonPropertyName("text")]        string? Text
+    );
 
 /// <summary>CLI-side DTO for POST /api/flows/participant/message — mirrors the server's request shape (AI-1127 E-c).</summary>
 record SendFlowMessageDto(
-    [property: JsonPropertyName("agent_id")]   string AgentId,
-    [property: JsonPropertyName("message_id")] string MessageId,
-    [property: JsonPropertyName("text")]       string Text
-);
+        [property: JsonPropertyName("agent_id")]   string AgentId,
+        [property: JsonPropertyName("message_id")] string MessageId,
+        [property: JsonPropertyName("text")]       string Text
+    );

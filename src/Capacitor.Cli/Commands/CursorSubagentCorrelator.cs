@@ -29,8 +29,8 @@ public static class CursorSubagentCorrelator {
     /// Sessions with no match are absent from the map. A session is never linked to itself.
     /// </summary>
     public static Dictionary<string, SubagentLink> Correlate(
-        IEnumerable<(string SessionId, string TranscriptPath)> sessions
-    ) {
+            IEnumerable<(string SessionId, string TranscriptPath)> sessions
+        ) {
         var scanned = new List<(string Sid, string? FirstUserHash, List<(string Hash, string? SubType)> Tasks)>();
 
         // Deterministic iteration order — the caller feeds filesystem-discovery order, which
@@ -38,6 +38,7 @@ public static class CursorSubagentCorrelator {
         // "ambiguous" below rather than by picking a first writer.)
         foreach (var (sid, path) in sessions.OrderBy(s => s.SessionId, StringComparer.Ordinal)) {
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
+
             try {
                 var firstHash = ScanFirstUserHash(path, out var tasks);
                 scanned.Add((sid, firstHash, tasks));
@@ -53,19 +54,22 @@ public static class CursorSubagentCorrelator {
         // parent. A single parent Tasking the same prompt more than once is NOT ambiguous.
         var parentByPrompt = new Dictionary<string, (string Parent, string? SubType)>(StringComparer.Ordinal);
         var ambiguous      = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var s in scanned)
-            foreach (var (hash, subType) in s.Tasks) {
-                if (parentByPrompt.TryGetValue(hash, out var existing)) {
-                    if (!string.Equals(existing.Parent, s.Sid, StringComparison.Ordinal))
-                        ambiguous.Add(hash);
-                } else {
-                    parentByPrompt[hash] = (s.Sid, subType);
-                }
+        foreach (var (hash, subType) in s.Tasks) {
+            if (parentByPrompt.TryGetValue(hash, out var existing)) {
+                if (!string.Equals(existing.Parent, s.Sid, StringComparison.Ordinal))
+                    ambiguous.Add(hash);
+            } else {
+                parentByPrompt[hash] = (s.Sid, subType);
             }
+        }
 
         var links = new Dictionary<string, SubagentLink>(StringComparer.Ordinal);
+
         foreach (var s in scanned) {
             if (s.FirstUserHash is null || ambiguous.Contains(s.FirstUserHash)) continue;
+
             if (parentByPrompt.TryGetValue(s.FirstUserHash, out var p)
              && !string.Equals(p.Parent, s.Sid, StringComparison.Ordinal)) {
                 links[s.Sid] = new SubagentLink(p.Parent, p.SubType);
@@ -91,34 +95,50 @@ public static class CursorSubagentCorrelator {
 
             using (doc) {
                 var root = doc.RootElement;
+
                 if (root.ValueKind != JsonValueKind.Object) continue;
                 if (!root.TryGetProperty("role", out var roleEl)) continue;
+
                 var role = roleEl.GetString();
+
                 if (!root.TryGetProperty("message", out var msg)
                  || !msg.TryGetProperty("content", out var content)
                  || content.ValueKind != JsonValueKind.Array) continue;
 
-                if (role == "user" && firstUserHash is null) {
-                    foreach (var b in content.EnumerateArray()) {
-                        if (b.ValueKind == JsonValueKind.Object
-                         && b.TryGetProperty("type", out var ty) && ty.GetString() == "text"
-                         && b.TryGetProperty("text", out var tx) && tx.ValueKind == JsonValueKind.String) {
-                            firstUserHash = Hash(StripUserQueryWrapper(tx.GetString() ?? ""));
-                            break;
+                switch (role) {
+                    case "user" when firstUserHash is null: {
+                        foreach (var b in content.EnumerateArray()) {
+                            if (b.ValueKind                                            == JsonValueKind.Object
+                             && b.TryGetProperty("type", out var ty) && ty.GetString() == "text"
+                             && b.TryGetProperty("text", out var tx) && tx.ValueKind   == JsonValueKind.String) {
+                                firstUserHash = Hash(StripUserQueryWrapper(tx.GetString() ?? ""));
+
+                                break;
+                            }
                         }
+
+                        break;
                     }
-                } else if (role == "assistant") {
-                    foreach (var b in content.EnumerateArray()) {
-                        if (b.ValueKind != JsonValueKind.Object) continue;
-                        if (!b.TryGetProperty("type", out var ty) || ty.GetString() != "tool_use") continue;
-                        var name = b.TryGetProperty("name", out var n) ? n.GetString() : null;
-                        if (name is not ("Task" or "Agent")) continue;
-                        if (!b.TryGetProperty("input", out var inp) || inp.ValueKind != JsonValueKind.Object) continue;
-                        if (!inp.TryGetProperty("prompt", out var pr) || pr.ValueKind != JsonValueKind.String) continue;
-                        var prompt = pr.GetString();
-                        if (string.IsNullOrWhiteSpace(prompt)) continue;
-                        var subType = inp.TryGetProperty("subagent_type", out var st) ? st.GetString() : null;
-                        tasks.Add((Hash(prompt), subType));
+                    case "assistant": {
+                        foreach (var b in content.EnumerateArray()) {
+                            if (b.ValueKind != JsonValueKind.Object) continue;
+                            if (!b.TryGetProperty("type", out var ty) || ty.GetString() != "tool_use") continue;
+
+                            var name = b.TryGetProperty("name", out var n) ? n.GetString() : null;
+
+                            if (name is not ("Task" or "Agent")) continue;
+                            if (!b.TryGetProperty("input", out var inp)   || inp.ValueKind != JsonValueKind.Object) continue;
+                            if (!inp.TryGetProperty("prompt", out var pr) || pr.ValueKind  != JsonValueKind.String) continue;
+
+                            var prompt = pr.GetString();
+
+                            if (string.IsNullOrWhiteSpace(prompt)) continue;
+
+                            var subType = inp.TryGetProperty("subagent_type", out var st) ? st.GetString() : null;
+                            tasks.Add((Hash(prompt), subType));
+                        }
+
+                        break;
                     }
                 }
             }
@@ -128,8 +148,9 @@ public static class CursorSubagentCorrelator {
     }
 
     static string StripUserQueryWrapper(string text) {
-        var t = text.Trim();
+        var          t    = text.Trim();
         const string open = "<user_query>", close = "</user_query>";
+
         return t.StartsWith(open, StringComparison.Ordinal) && t.EndsWith(close, StringComparison.Ordinal)
             ? t[open.Length..^close.Length].Trim()
             : t;

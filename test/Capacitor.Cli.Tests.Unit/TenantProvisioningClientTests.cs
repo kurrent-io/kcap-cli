@@ -1,4 +1,3 @@
-using System.Net.Http;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Auth;
 using WireMock.RequestBuilders;

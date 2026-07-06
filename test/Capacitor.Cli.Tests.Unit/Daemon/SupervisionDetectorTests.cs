@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using Capacitor.Cli.Daemon.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Daemon;

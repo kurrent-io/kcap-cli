@@ -1558,7 +1558,7 @@ static class ImportCommand {
                         ? doc.RootElement.Obj("payload")?.Str("cwd")
                         : doc.RootElement.Str("cwd");
 
-                    if (cwd is { }) {
+                    if (cwd is not null) {
                         return cwd;
                     }
                 } catch (JsonException) { }
@@ -1612,7 +1612,7 @@ static class ImportCommand {
                     // IsCapacitorSubSession's first-5-line window so the two
                     // never disagree. A detected helper run wins over any cwd.
                     if (!codex
-                     && linesChecked <= 5
+                     && linesChecked          <= 5
                      && root.Str("type")      == "queue-operation"
                      && root.Str("operation") == "enqueue"
                      && root.Str("content") is { } content
@@ -1796,11 +1796,13 @@ static class ImportCommand {
     /// </summary>
     static async Task PersistImportOrgAsync(string profileName, string org) {
         if (string.IsNullOrWhiteSpace(org)) return;
+
         org = org.Trim();
 
         try {
             var cfg     = await AppConfig.LoadProfileConfig();
             var profile = cfg.Profiles.GetValueOrDefault(profileName) ?? new Core.Config.Profile();
+
             var updated = cfg with {
                 Profiles = new Dictionary<string, Core.Config.Profile>(cfg.Profiles) {
                     [profileName] = profile with { ImportOrg = org }
@@ -1833,7 +1835,7 @@ static class ImportCommand {
         var sortedRoots      = roots.OrderBy(c => c, StringComparer.Ordinal).ToList();
         var home             = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-        var sessionWord = sessionsAffected == 1 ? "session references" : "sessions reference";
+        var sessionWord = sessionsAffected  == 1 ? "session references" : "sessions reference";
         var pathWord    = sortedRoots.Count == 1 ? "path that no longer exists" : "distinct paths that no longer exist";
         display.Line($"{sessionsAffected} {sessionWord} {sortedRoots.Count} {pathWord} on disk:");
 
@@ -1877,6 +1879,7 @@ static class ImportCommand {
 
             while (parent is not null) {
                 if (set.Contains(parent)) return true;
+
                 parent = TrimLastSegment(parent);
             }
 
@@ -1917,6 +1920,7 @@ static class ImportCommand {
 
         if (string.IsNullOrEmpty(home) || !path.StartsWith(home, comparison)) return path;
         if (path.Length == home.Length) return "~";
+
         return CwdRemapper.IsSeparator(path[home.Length]) ? "~" + path[home.Length..] : path;
     }
 
@@ -1933,7 +1937,7 @@ static class ImportCommand {
             ISet<string>?            worktreeAttributed,
             string                   sessionId
         ) {
-        var remapped              = CwdRemapper.Apply(raw, cwdRemap);
+        var remapped = CwdRemapper.Apply(raw, cwdRemap);
         var (final, wasStripped) = WorktreePathResolver.Resolve(remapped);
 
         if (wasStripped) worktreeAttributed?.Add(sessionId);
@@ -1945,7 +1949,7 @@ static class ImportCommand {
             IReadOnlyList<(string SessionId, string FilePath, string EncodedCwd)> transcripts,
             bool                                                                  codex,
             ImportDisplay                                                         display,
-            IReadOnlyList<CwdRemap>?                                              cwdRemap            = null,
+            IReadOnlyList<CwdRemap>?                                              cwdRemap           = null,
             IDictionary<string, string>?                                          sessionCwds        = null,
             ISet<string>?                                                         worktreeAttributed = null
         ) {
@@ -2304,8 +2308,8 @@ static class ImportCommand {
                     // Only parent-transcript batches (AgentId == null) advance the
                     // slot bar; subagent batches are surfaced via the subagent events.
                     case BatchFlushed { AgentId: null } bf: events.OnSessionProgress(slot, bf.LinesAdded, sendableTotal); break;
-                    case SubagentStarted ss:               events.OnSubagentStarted(slot, session.SessionId, ss.AgentId); break;
-                    case SubagentFinished sf:              events.OnSubagentFinished(slot, session.SessionId, sf.AgentId, sf.LinesSent); break;
+                    case SubagentStarted ss:                events.OnSubagentStarted(slot, session.SessionId, ss.AgentId); break;
+                    case SubagentFinished sf:               events.OnSubagentFinished(slot, session.SessionId, sf.AgentId, sf.LinesSent); break;
                 }
             }
         );

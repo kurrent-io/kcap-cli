@@ -55,7 +55,7 @@ public class KiroImportSourceTests {
     [Arguments("""{"version":"v1","kind":"AssistantMessage","data":{}}""", true)]
     [Arguments("""{"version":"v1","kind":"ToolResults","data":{}}""", true)]
     [Arguments("""{"version":"v1","kind":"Thinking","data":{}}""", false)]
-    [Arguments("""not json""", false)]
+    [Arguments("not json", false)]
     public async Task is_import_relevant_line(string line, bool expected) {
         await Assert.That(KiroImportSource.IsImportRelevantLine(line)).IsEqualTo(expected);
     }

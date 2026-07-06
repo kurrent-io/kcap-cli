@@ -729,7 +729,7 @@ public class CursorImportSourceTests {
         // import (return Failed) BEFORE the parent session-end, so a re-run repairs it — rather
         // than posting subagent-stop + session-end over a child whose transcript wasn't accepted.
         using var fx = new ProjectsDirFixture();
-        var (parentId, childId, classified, src) = await SetupParentChildAsync(fx);
+        var (parentId, _, classified, src) = await SetupParentChildAsync(fx);
         var parentClass = classified.Single(c => c.SessionId == parentId);
 
         var posted = new List<string>();
@@ -758,16 +758,16 @@ public class CursorImportSourceTests {
         // the child would create a standalone top-level session AND post subagent lifecycle
         // out of order with the parent.
         using var fx = new ProjectsDirFixture();
-        var (parentId, childId, classified, src) = await SetupParentChildAsync(fx);
+        var (_, childId, classified, src) = await SetupParentChildAsync(fx);
 
         var childClass = classified.Single(c => c.SessionId == childId);
         await Assert.That(childClass.SourceMeta!.ContainsKey("IsSubagentChild")).IsTrue();
 
         var posted = new List<string>();
-        using var postHandler = new StubHandler(postCapture: (req, body) => { posted.Add(req.RequestUri!.AbsolutePath); return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var postHandler = new StubHandler(postCapture: (req, _) => { posted.Add(req.RequestUri!.AbsolutePath); return new HttpResponseMessage(HttpStatusCode.OK); });
         using var postClient = new HttpClient(postHandler);
 
-        var outcome = await src.ImportSessionAsync(childClass, new ImportContext(postClient, "http://localhost", ForcePrivate: false), CancellationToken.None);
+        var outcome = await src.ImportSessionAsync(childClass, new(postClient, "http://localhost", ForcePrivate: false), CancellationToken.None);
 
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Skipped);
         await Assert.That(posted.Count).IsEqualTo(0); // nothing posted — the parent owns this child
@@ -887,7 +887,7 @@ public class CursorImportSourceTests {
                 client,
                 "http://localhost",
                 MinLines: 1,
-                ExcludedRepos: new[] { "acme/secret" },
+                ExcludedRepos: ["acme/secret"],
                 ExcludedPaths: null
             ),
             CancellationToken.None
@@ -955,7 +955,7 @@ public class CursorImportSourceTests {
                 client,
                 "http://localhost",
                 MinLines: 0,
-                ExcludedRepos: new[] { "o/r" },
+                ExcludedRepos: ["o/r"],
                 ExcludedPaths: null
             ),
             CancellationToken.None

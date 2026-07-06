@@ -9,10 +9,13 @@ namespace Capacitor.Cli.Daemon.Services;
 internal enum RestartRequestResult {
     /// <summary>The restart is firing now (daemon shutting down / respawning).</summary>
     Restarting,
+
     /// <summary>Accepted but deferred — the daemon is busy; it will restart when idle.</summary>
     Queued,
+
     /// <summary>A restart was attempted but failed to start; it will be retried.</summary>
     Failed,
+
     /// <summary>Foreground daemon — no auto-restart; the user must restart it manually.</summary>
     ManualRequired,
 }
@@ -47,8 +50,12 @@ internal sealed partial class RestartCoordinator : BackgroundService {
 
     // Production constructor (DI).
     public RestartCoordinator(
-            DaemonConfig config, AgentOrchestrator orchestrator, EvalContextCache evalCache,
-            IRestartStrategy strategy, ILogger<RestartCoordinator> logger) {
+            DaemonConfig                config,
+            AgentOrchestrator           orchestrator,
+            EvalContextCache            evalCache,
+            IRestartStrategy            strategy,
+            ILogger<RestartCoordinator> logger
+        ) {
         _name      = DaemonLockPaths.Sanitize(config.Name);
         _version   = DaemonRunner.ResolveDaemonVersion();
         _logger    = logger;
@@ -58,7 +65,10 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     }
 
     RestartCoordinator(string name, string version, IRestartStrategy strategy, ILogger logger) {
-        _name = name; _version = version; Strategy = strategy; _logger = logger;
+        _name    = name;
+        _version = version;
+        Strategy = strategy;
+        _logger  = logger;
     }
 
     /// <summary>Test factory — bypasses DI; caller sets the seams.</summary>
@@ -78,8 +88,11 @@ internal sealed partial class RestartCoordinator : BackgroundService {
 
         try {
             var p = Environment.ProcessPath;
+
             if (p is null) return null;
+
             var fi = new FileInfo(p);
+
             return fi.Exists ? new BinaryStat(fi.Length, fi.LastWriteTimeUtc.Ticks) : null;
         } catch {
             return null; // transient (file being swapped mid-install)
@@ -95,11 +108,15 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     internal RestartRequestResult RequestRestart(bool force) {
         lock (_gate) {
             _pending = true;
-            if (force) _force = true;
 
-            if (!force) {
-                DaemonRestartMarker.Write(_name, new DaemonRestartMarker(_version, "requested", DateTimeOffset.UtcNow));
-                LogQueued(_logger, "requested");
+            switch (force) {
+                case true:
+                    _force = true; break;
+                case false:
+                    DaemonRestartMarker.Write(_name, new DaemonRestartMarker(_version, "requested", DateTimeOffset.UtcNow));
+                    LogQueued(_logger, "requested");
+
+                    break;
             }
         }
 
@@ -123,6 +140,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
 
             if (!_pending) {
                 var current = StatBinary();
+
                 if (RestartDecision.BinaryChanged(_baseline, current)) {
                     _pending  = true;
                     _baseline = current;
@@ -141,6 +159,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
 
         if (outcome == RestartOutcome.Retry) {
             lock (_gate) _fired = false; // un-claim so a later tick/request retries
+
             return RestartRequestResult.Failed;
         }
 
@@ -156,9 +175,12 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         DaemonRestartMarker.Delete(_name);
 
         using var timer = new PeriodicTimer(PollInterval);
+
         try {
             while (await timer.WaitForNextTickAsync(ct)) Tick();
-        } catch (OperationCanceledException) { /* shutdown */ }
+        } catch (OperationCanceledException) {
+            /* shutdown */
+        }
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Restart-after-update queued ({Reason}); will apply when idle")]

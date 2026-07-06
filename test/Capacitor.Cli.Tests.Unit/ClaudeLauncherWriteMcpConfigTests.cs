@@ -56,9 +56,7 @@ public class ClaudeLauncherWriteMcpConfigTests {
     static JsonObject? ReadWorktreeMcpServers(string worktree) {
         var path = Path.Combine(worktree, ".mcp.json");
 
-        if (!File.Exists(path)) return null;
-
-        return JsonNode.Parse(File.ReadAllText(path))?["mcpServers"]?.AsObject();
+        return !File.Exists(path) ? null : JsonNode.Parse(File.ReadAllText(path))?["mcpServers"]?.AsObject();
     }
 
     /// <summary>

@@ -7,7 +7,11 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Unit;
 
 public class McpFlowsServerTests {
-    static Func<TimeSpan, Task> NoDelay(List<TimeSpan> recorded) => ts => { recorded.Add(ts); return Task.CompletedTask; };
+    static Func<TimeSpan, Task> NoDelay(List<TimeSpan> recorded) => ts => {
+        recorded.Add(ts);
+
+        return Task.CompletedTask;
+    };
 
     [Test]
     public async Task Roundless_start_renders_started_envelope() {
@@ -25,18 +29,18 @@ public class McpFlowsServerTests {
     [Test]
     public async Task Roundless_start_renders_and_exposes_pending_messages() {
         var body = """
-            {"flow_run_id":"f1","round_id":null,"round_number":null,"status":"running",
-             "pending_messages":[
-                {"message_id":"msg-a1","from_participant":"tester","text":"early note","received_at":"2026-07-06T00:00:00Z"}
-             ]}
-            """;
+                   {"flow_run_id":"f1","round_id":null,"round_number":null,"status":"running",
+                    "pending_messages":[
+                       {"message_id":"msg-a1","from_participant":"tester","text":"early note","received_at":"2026-07-06T00:00:00Z"}
+                    ]}
+                   """;
 
         var text = McpFlowsServer.TryFormatRoundlessStart(body, out var pendingIds);
 
         await Assert.That(text).IsNotNull();
         await Assert.That(text!).Contains("pending_messages (1):");
         await Assert.That(text).Contains("- from tester [msg-a1]: early note");
-        await Assert.That(pendingIds).IsEquivalentTo(new[] { "msg-a1" });
+        await Assert.That(pendingIds).IsEquivalentTo(["msg-a1"]);
     }
 
     [Test]
@@ -53,30 +57,30 @@ public class McpFlowsServerTests {
     [Test]
     public async Task Wrong_typed_pending_fields_render_empty_instead_of_throwing() {
         var body = """
-            {"flow_run_id":"f1","status":"running","definition_id":"code-review","target_title":"t",
-             "pending_messages":[
-                {"message_id":123,"from_participant":{"x":1},"text":"still shown","received_at":"2026-07-06T00:00:00Z"},
-                {"message_id":"msg-ok","from_participant":"tester","text":"fine","received_at":"2026-07-06T00:00:00Z"}
-             ]}
-            """;
+                   {"flow_run_id":"f1","status":"running","definition_id":"code-review","target_title":"t",
+                    "pending_messages":[
+                       {"message_id":123,"from_participant":{"x":1},"text":"still shown","received_at":"2026-07-06T00:00:00Z"},
+                       {"message_id":"msg-ok","from_participant":"tester","text":"fine","received_at":"2026-07-06T00:00:00Z"}
+                    ]}
+                   """;
 
         var text = McpFlowsServer.FormatStatusResponse(body, out var pendingIds);
 
         await Assert.That(text).Contains("pending_messages (2):");
         await Assert.That(text).Contains("- from  []: still shown");
         await Assert.That(text).Contains("- from tester [msg-ok]: fine");
-        await Assert.That(pendingIds).IsEquivalentTo(new[] { "msg-ok" });
+        await Assert.That(pendingIds).IsEquivalentTo(["msg-ok"]);
     }
 
     [Test]
     public async Task Status_response_renders_pending_messages_and_returns_ids() {
         var body = """
-            {"flow_run_id":"f1","status":"running","definition_id":"code-review","target_title":"t",
-             "pending_messages":[
-                {"message_id":"msg-a1","from_participant":"tester","text":"found a broken symlink in scripts/","received_at":"2026-07-06T00:00:00Z"},
-                {"message_id":"msg-b2","from_participant":"reviewer","text":"heads-up, migration file also touched","received_at":"2026-07-06T00:00:01Z"}
-             ]}
-            """;
+                   {"flow_run_id":"f1","status":"running","definition_id":"code-review","target_title":"t",
+                    "pending_messages":[
+                       {"message_id":"msg-a1","from_participant":"tester","text":"found a broken symlink in scripts/","received_at":"2026-07-06T00:00:00Z"},
+                       {"message_id":"msg-b2","from_participant":"reviewer","text":"heads-up, migration file also touched","received_at":"2026-07-06T00:00:01Z"}
+                    ]}
+                   """;
 
         var text = McpFlowsServer.FormatStatusResponse(body, out var pendingIds);
 
@@ -106,12 +110,12 @@ public class McpFlowsServerTests {
     [Test]
     public async Task Round_response_renders_pending_messages() {
         var body = """
-            {"flow_run_id":"f1","round_id":"r1","status":"findings","result_kind":"findings","result_text":"some findings",
-             "pending_messages":[
-                {"message_id":"msg-a1","from_participant":"tester","text":"found a broken symlink in scripts/"},
-                {"message_id":"msg-b2","from_participant":"reviewer","text":"heads-up, migration file also touched"}
-             ]}
-            """;
+                   {"flow_run_id":"f1","round_id":"r1","status":"findings","result_kind":"findings","result_text":"some findings",
+                    "pending_messages":[
+                       {"message_id":"msg-a1","from_participant":"tester","text":"found a broken symlink in scripts/"},
+                       {"message_id":"msg-b2","from_participant":"reviewer","text":"heads-up, migration file also touched"}
+                    ]}
+                   """;
 
         var text = McpFlowsServer.FormatRoundResponse(body, out var pendingIds);
 
@@ -128,11 +132,11 @@ public class McpFlowsServerTests {
     [Test]
     public async Task Close_response_renders_pending_messages() {
         var body = """
-            {"flow_run_id":"f1","status":"closed",
-             "pending_messages":[
-                {"message_id":"msg-a1","from_participant":"tester","text":"found a broken symlink in scripts/"}
-             ]}
-            """;
+                   {"flow_run_id":"f1","status":"closed",
+                    "pending_messages":[
+                       {"message_id":"msg-a1","from_participant":"tester","text":"found a broken symlink in scripts/"}
+                    ]}
+                   """;
 
         var text = McpFlowsServer.FormatCloseResponse(body, out var pendingIds);
 
@@ -144,12 +148,12 @@ public class McpFlowsServerTests {
     [Test]
     public async Task Polled_round_result_renders_pending_messages() {
         var body = """
-            {"flow_run_id":"f1","round_number":2,"status":"closed","round_status":"clean","round_result_text":"all clean",
-             "pending_messages":[
-                {"message_id":"msg-a1","from_participant":"tester","text":"found a broken symlink in scripts/"},
-                {"message_id":"msg-b2","from_participant":"reviewer","text":"heads-up, migration file also touched"}
-             ]}
-            """;
+                   {"flow_run_id":"f1","round_number":2,"status":"closed","round_status":"clean","round_result_text":"all clean",
+                    "pending_messages":[
+                       {"message_id":"msg-a1","from_participant":"tester","text":"found a broken symlink in scripts/"},
+                       {"message_id":"msg-b2","from_participant":"reviewer","text":"heads-up, migration file also touched"}
+                    ]}
+                   """;
         var node = System.Text.Json.Nodes.JsonNode.Parse(body)!.AsObject();
 
         var text = McpFlowsServer.FormatPolledRoundResult(node, "f1", out var pendingIds);
@@ -167,13 +171,13 @@ public class McpFlowsServerTests {
     [Test]
     public async Task Malformed_pending_entry_is_skipped() {
         var body = """
-            {"flow_run_id":"f1","round_number":2,"status":"closed","round_status":"clean","round_result_text":"all clean",
-             "pending_messages":[
-                {"message_id":"msg-a1","from_participant":"tester","text":"first"},
-                "junk-string",
-                {"message_id":"msg-b2","from_participant":"reviewer","text":"second"}
-             ]}
-            """;
+                   {"flow_run_id":"f1","round_number":2,"status":"closed","round_status":"clean","round_result_text":"all clean",
+                    "pending_messages":[
+                       {"message_id":"msg-a1","from_participant":"tester","text":"first"},
+                       "junk-string",
+                       {"message_id":"msg-b2","from_participant":"reviewer","text":"second"}
+                    ]}
+                   """;
         var node = JsonNode.Parse(body)!.AsObject();
 
         // Pins the carried Minor from Task 2's review: a malformed (non-object) array entry must
@@ -195,8 +199,9 @@ public class McpFlowsServerTests {
     [Test]
     public async Task Ack_posts_rendered_ids_snake_case() {
         using var server = WireMockServer.Start();
+
         server.Given(Request.Create().WithPath("/api/flows/f1/messages/ack").UsingPost())
-              .RespondWith(Response.Create().WithStatusCode(200));
+            .RespondWith(Response.Create().WithStatusCode(200));
         using var client = new HttpClient();
 
         await McpFlowsServer.AckRenderedMessagesAsync(client, server.Url!, "f1", ["m1", "m2"], NoDelay([]));
@@ -212,15 +217,16 @@ public class McpFlowsServerTests {
     [Test]
     public async Task Ack_retries_once_then_swallows() {
         using var server = WireMockServer.Start();
+
         server.Given(Request.Create().WithPath("/api/flows/f1/messages/ack").UsingPost())
-              .RespondWith(Response.Create().WithStatusCode(500));
+            .RespondWith(Response.Create().WithStatusCode(500));
         using var client = new HttpClient();
 
         var delays = new List<TimeSpan>();
         await McpFlowsServer.AckRenderedMessagesAsync(client, server.Url!, "f1", ["m1"], NoDelay(delays));
 
-        await Assert.That(server.LogEntries.Count()).IsEqualTo(2);
-        await Assert.That(delays).HasCount().EqualTo(1);
+        await Assert.That(server.LogEntries.Count).IsEqualTo(2);
+        await Assert.That(delays).Count().IsEqualTo(1);
         await Assert.That(delays[0]).IsEqualTo(TimeSpan.FromSeconds(2));
     }
 
@@ -234,16 +240,18 @@ public class McpFlowsServerTests {
         // HttpClient with its OWN short Timeout produces the same OperationCanceledException
         // shape TryPostAsync's bare catch already swallows, deterministically and fast.
         using var server = WireMockServer.Start();
+
         server.Given(Request.Create().WithPath("/api/flows/f1/messages/ack").UsingPost())
-              .RespondWith(Response.Create().WithStatusCode(200).WithDelay(TimeSpan.FromMilliseconds(300)));
-        using var client = new HttpClient { Timeout = TimeSpan.FromMilliseconds(50) };
+            .RespondWith(Response.Create().WithStatusCode(200).WithDelay(TimeSpan.FromMilliseconds(300)));
+        using var client = new HttpClient();
+        client.Timeout = TimeSpan.FromMilliseconds(50);
 
         var delays = new List<TimeSpan>();
         await McpFlowsServer.AckRenderedMessagesAsync(client, server.Url!, "f1", ["m1"], NoDelay(delays));
 
         // No exception propagated, and the retry-after-delay path still ran once — i.e. both the
         // initial attempt and the retry timed out and were swallowed rather than thrown.
-        await Assert.That(delays).HasCount().EqualTo(1);
+        await Assert.That(delays).Count().IsEqualTo(1);
     }
 
     [Test]
@@ -253,7 +261,7 @@ public class McpFlowsServerTests {
 
         await McpFlowsServer.AckRenderedMessagesAsync(client, server.Url!, "f1", [], NoDelay([]));
 
-        await Assert.That(server.LogEntries.Count()).IsEqualTo(0);
+        await Assert.That(server.LogEntries.Count).IsEqualTo(0);
     }
 
     /// <summary>
@@ -268,19 +276,20 @@ public class McpFlowsServerTests {
     [Test]
     public async Task Ordering_pin_format_then_ack_sends_exactly_the_rendered_ids() {
         var statusBody = """
-            {"flow_run_id":"f1","status":"running","definition_id":"code-review","target_title":"t",
-             "pending_messages":[
-                {"message_id":"msg-a1","from_participant":"tester","text":"found a broken symlink in scripts/"},
-                {"message_id":"msg-b2","from_participant":"reviewer","text":"heads-up, migration file also touched"}
-             ]}
-            """;
+                         {"flow_run_id":"f1","status":"running","definition_id":"code-review","target_title":"t",
+                          "pending_messages":[
+                             {"message_id":"msg-a1","from_participant":"tester","text":"found a broken symlink in scripts/"},
+                             {"message_id":"msg-b2","from_participant":"reviewer","text":"heads-up, migration file also touched"}
+                          ]}
+                         """;
 
         var text = McpFlowsServer.FormatStatusResponse(statusBody, out var pendingIds);
         await Assert.That(text).Contains("pending_messages (2):");
 
         using var server = WireMockServer.Start();
+
         server.Given(Request.Create().WithPath("/api/flows/f1/messages/ack").UsingPost())
-              .RespondWith(Response.Create().WithStatusCode(200));
+            .RespondWith(Response.Create().WithStatusCode(200));
         using var client = new HttpClient();
 
         await McpFlowsServer.AckRenderedMessagesAsync(client, server.Url!, "f1", pendingIds, NoDelay([]));

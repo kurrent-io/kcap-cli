@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Capacitor.Cli.Tests.Unit;
+namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
 /// AI-842 / AI-844: the hosted-agent terminal mirror must reach the server in PTY

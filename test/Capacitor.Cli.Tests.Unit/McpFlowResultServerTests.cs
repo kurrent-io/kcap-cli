@@ -9,15 +9,15 @@ namespace Capacitor.Cli.Tests.Unit;
 public class McpFlowResultServerTests {
     static JsonObject Args(string? roundToken = "round-1", string? kind = "findings", string? findings = "1. issue") {
         var o = new JsonObject();
-        if (roundToken is not null) o["round_token"] = (JsonNode?)roundToken;
-        if (kind is not null) o["kind"] = (JsonNode?)kind;
-        if (findings is not null) o["findings"] = (JsonNode?)findings;
+        if (roundToken is not null) o["round_token"] = roundToken;
+        if (kind is not null) o["kind"] = kind;
+        if (findings is not null) o["findings"] = findings;
         return o;
     }
 
     static JsonObject MessageArgs(string? text = "heads up: found something outside this round's scope") {
         var o = new JsonObject();
-        if (text is not null) o["text"] = (JsonNode?)text;
+        if (text is not null) o["text"] = text;
         return o;
     }
 
@@ -76,7 +76,7 @@ public class McpFlowResultServerTests {
 
         await Assert.That(isError).IsFalse();
         await Assert.That(text).IsEqualTo("Result recorded. You may end your reply now.");
-        await Assert.That(delays).HasCount().EqualTo(1);
+        await Assert.That(delays).Count().IsEqualTo(1);
         await Assert.That(delays[0]).IsEqualTo(TimeSpan.FromSeconds(3));
     }
 
@@ -94,8 +94,8 @@ public class McpFlowResultServerTests {
         await Assert.That(text).Contains("no round awaiting a result");
         await Assert.That(text).Contains("Retry this tool call");
         await Assert.That(text).Contains("does not read the transcript");
-        await Assert.That(delays).HasCount().EqualTo(4); // 5 attempts = 4 delays
-        await Assert.That(server.LogEntries.Count()).IsEqualTo(5);
+        await Assert.That(delays).Count().IsEqualTo(4); // 5 attempts = 4 delays
+        await Assert.That(server.LogEntries.Count).IsEqualTo(5);
     }
 
     [Test]
@@ -111,8 +111,8 @@ public class McpFlowResultServerTests {
         await Assert.That(isError).IsTrue();
         await Assert.That(text).Contains("Discard this result entirely");
         await Assert.That(text).DoesNotContain("Retry this tool call");
-        await Assert.That(delays).HasCount().EqualTo(0);
-        await Assert.That(server.LogEntries.Count()).IsEqualTo(1);
+        await Assert.That(delays).Count().IsEqualTo(0);
+        await Assert.That(server.LogEntries.Count).IsEqualTo(1);
     }
 
     [Test]
@@ -128,7 +128,7 @@ public class McpFlowResultServerTests {
         await Assert.That(missingToken.Text).Contains("round_token");
         await Assert.That(badKind.IsError).IsTrue();
         await Assert.That(noFindings.IsError).IsTrue();
-        await Assert.That(server.LogEntries.Count()).IsEqualTo(0);
+        await Assert.That(server.LogEntries.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -178,10 +178,10 @@ public class McpFlowResultServerTests {
 
         await Assert.That(isError).IsFalse();
         await Assert.That(text).Contains("Message sent to the flow driver");
-        await Assert.That(delays).HasCount().EqualTo(2);
+        await Assert.That(delays).Count().IsEqualTo(2);
 
         var bodies = server.LogEntries.Select(e => e.RequestMessage.Body!).ToList();
-        await Assert.That(bodies).HasCount().EqualTo(3);
+        await Assert.That(bodies).Count().IsEqualTo(3);
         foreach (var b in bodies) {
             await Assert.That(b).Contains("msg-stable");
         }
@@ -201,8 +201,8 @@ public class McpFlowResultServerTests {
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).Contains("this flow run is already closed");
-        await Assert.That(delays).HasCount().EqualTo(0);
-        await Assert.That(server.LogEntries.Count()).IsEqualTo(1);
+        await Assert.That(delays).Count().IsEqualTo(0);
+        await Assert.That(server.LogEntries.Count).IsEqualTo(1);
     }
 
     [Test]
@@ -216,7 +216,7 @@ public class McpFlowResultServerTests {
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).IsEqualTo("Error: text must be a non-empty string.");
-        await Assert.That(server.LogEntries.Count()).IsEqualTo(0);
+        await Assert.That(server.LogEntries.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -232,7 +232,7 @@ public class McpFlowResultServerTests {
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).IsEqualTo("Error: text must be a non-empty string.");
-        await Assert.That(server.LogEntries.Count()).IsEqualTo(0);
+        await Assert.That(server.LogEntries.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -250,8 +250,8 @@ public class McpFlowResultServerTests {
         await Assert.That(isError).IsTrue();
         await Assert.That(text).Contains("not registered yet");
         await Assert.That(text).DoesNotContain("FINDINGS");
-        await Assert.That(delays).HasCount().EqualTo(4); // 5 attempts = 4 delays
-        await Assert.That(server.LogEntries.Count()).IsEqualTo(5);
+        await Assert.That(delays).Count().IsEqualTo(4); // 5 attempts = 4 delays
+        await Assert.That(server.LogEntries.Count).IsEqualTo(5);
     }
 
     [Test]

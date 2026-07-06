@@ -15,23 +15,19 @@ namespace Capacitor.Cli.Commands;
 /// server exposes no ended signal; repair replays above the server HWM (idempotent by
 /// prt_ id). See docs/superpowers/specs/2026-06-26-opencode-import-design.md.
 /// </summary>
-internal sealed class OpenCodeImportSource : IImportSource {
-    readonly string               _dbPath;
-    readonly OpenCodeImportLedger _ledger;
-    readonly object               _ledgerLock = new(); // routed imports may run concurrently
+internal sealed class OpenCodeImportSource(string? dbPathOverride = null, string? ledgerPathOverride = null) : IImportSource {
+    readonly string               _dbPath     = dbPathOverride ?? Path.Combine(OpenCodePaths.DataDir(), "opencode.db");
+    readonly OpenCodeImportLedger _ledger     = OpenCodeImportLedger.Load(ledgerPathOverride ?? OpenCodeImportLedger.DefaultPath());
+    readonly Lock                 _ledgerLock = new(); // routed imports may run concurrently
 
-    public OpenCodeImportSource(string? dbPathOverride = null, string? ledgerPathOverride = null) {
-        _dbPath = dbPathOverride ?? Path.Combine(OpenCodePaths.DataDir(), "opencode.db");
-        _ledger = OpenCodeImportLedger.Load(ledgerPathOverride ?? OpenCodeImportLedger.DefaultPath());
-    }
-
-    public string Vendor => "opencode";
-    public bool   IsAvailable => File.Exists(_dbPath);
+    public string Vendor                  => "opencode";
+    public bool   IsAvailable             => File.Exists(_dbPath);
     public bool   SupportsTitleGeneration => false; // routed; native title forwarded via /hooks/set-title
 
     static StringComparison PathComparison =>
         OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
-            ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
 
     static string Norm(string p) {
         try { return Path.GetFullPath(p).TrimEnd('/', '\\'); } catch { return p.TrimEnd('/', '\\'); }
@@ -48,43 +44,56 @@ internal sealed class OpenCodeImportSource : IImportSource {
         if (!File.Exists(_dbPath)) return Task.FromResult<IReadOnlyList<DiscoveredSession>>([]);
 
         var normalizedCwd = filters.FilterCwd is { } cwd ? Norm(cwd) : null;
+
         var sinceMs = filters.Since is { } s
             ? new DateTimeOffset(s.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)).ToUnixTimeMilliseconds()
             : (long?)null;
 
         var result = new List<DiscoveredSession>();
+
         try {
             // A corrupt / schema-drifted opencode.db must NOT crash the whole `kcap import`
             // (other vendors share the run). On open/query failure, warn and skip OpenCode.
             using var db = new OpenCodeDb(_dbPath);
+
             foreach (var row in db.QueryRoots()) {
                 ct.ThrowIfCancellationRequested();
+
                 if (filters.FilterSession is { } fs && !string.Equals(row.Id, fs, StringComparison.Ordinal)) continue;
+
                 if (normalizedCwd is not null &&
                     (row.Directory is null || !Norm(row.Directory).Equals(normalizedCwd, PathComparison))) continue;
                 if (sinceMs is { } cutoff && row.TimeCreated < cutoff) continue;
 
-                result.Add(new DiscoveredSession(
-                    SessionId:      row.Id, // raw ses_… — no GUID normalization
-                    Vendor:         Vendor,
-                    Cwd:            row.Directory,
-                    FirstTimestamp: FromEpoch(row.TimeCreated),
-                    SourceMeta:     new Dictionary<string, object?> {
-                        ["Title"]       = row.Title,
-                        ["TimeUpdated"] = row.TimeUpdated,
-                    }));
+                result.Add(
+                    new DiscoveredSession(
+                        SessionId: row.Id, // raw ses_… — no GUID normalization
+                        Vendor: Vendor,
+                        Cwd: row.Directory,
+                        FirstTimestamp: FromEpoch(row.TimeCreated),
+                        SourceMeta: new Dictionary<string, object?> {
+                            ["Title"]       = row.Title,
+                            ["TimeUpdated"] = row.TimeUpdated,
+                        }
+                    )
+                );
             }
         } catch (OperationCanceledException) {
             throw;
         } catch (Exception ex) {
             Console.Error.WriteLine($"[kcap] OpenCode discovery skipped ({_dbPath}): {SurfaceCause(ex)}");
+
             return Task.FromResult<IReadOnlyList<DiscoveredSession>>([]);
         }
+
         return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
     }
 
     public async Task<IReadOnlyList<ImportCommand.SessionClassification>> ClassifyAsync(
-        IReadOnlyList<DiscoveredSession> sessions, ClassifyContext ctx, CancellationToken ct) {
+            IReadOnlyList<DiscoveredSession> sessions,
+            ClassifyContext                  ctx,
+            CancellationToken                ct
+        ) {
         // DiscoverAsync defensively swallows db-open failures (returns []), but Classify
         // is still invoked for every source. Don't open the db for an empty slice — a
         // single vendor's unreadable db must skip OpenCode, not crash the whole import run.
@@ -95,31 +104,41 @@ internal sealed class OpenCodeImportSource : IImportSource {
         // Fail only OpenCode — mark the slice as probe errors instead of throwing out of the
         // multi-vendor probe task.
         OpenCodeDb opened;
+
         try {
             opened = new OpenCodeDb(_dbPath);
         } catch (Exception ex) {
             var reason = $"opencode.db open failed: {SurfaceCause(ex)}";
-            return [.. sessions.Select(s =>
-                Make(s, MetaFor(s), ImportCommand.ClassificationStatus.ProbeError, 0, reason))];
+
+            return [
+                .. sessions.Select(s =>
+                    Make(s, MetaFor(s), ImportCommand.ClassificationStatus.ProbeError, 0, reason)
+                )
+            ];
         }
-        using var db = opened;
-        var results = new List<ImportCommand.SessionClassification>(sessions.Count);
+
+        using var db      = opened;
+        var       results = new List<ImportCommand.SessionClassification>(sessions.Count);
 
         foreach (var s in sessions) {
             ct.ThrowIfCancellationRequested();
 
             var meta = MetaFor(s);
 
-            int total, importable; string fingerprint;
+            int    total, importable;
+            string fingerprint;
+
             try {
                 (total, importable, fingerprint) = ComputeClassificationInfo(db, s.SessionId);
             } catch {
                 results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, 0, "transcript read failed"));
+
                 continue;
             }
 
             if (importable < ctx.MinLines) {
                 results.Add(Make(s, meta, ImportCommand.ClassificationStatus.TooShort, total));
+
                 continue;
             }
 
@@ -129,6 +148,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
             lock (_ledgerLock) {
                 if (_ledger.IsComplete(ctx.BaseUrl, s.SessionId, fingerprint)) {
                     results.Add(Make(s, meta, ImportCommand.ClassificationStatus.AlreadyLoaded, total));
+
                     continue;
                 }
             }
@@ -137,26 +157,35 @@ internal sealed class OpenCodeImportSource : IImportSource {
             // present → replay ABOVE the HWM, idempotent via canonical prt_ ids). Carry the
             // fingerprint so ImportSessionAsync records it verbatim once session-end succeeds.
             int? hwm;
+
             try {
                 hwm = await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, s.SessionId, agentId: null, ct);
             } catch (OperationCanceledException) {
                 throw; // cancellation is not a probe error
             } catch {
                 results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, total, "watermark probe failed"));
+
                 continue;
             }
 
             var meta2 = WithFingerprint(s.SourceMeta!, fingerprint);
+
             var c = (hwm is { } h
                 ? Make(s, meta, ImportCommand.ClassificationStatus.Partial, total) with { ResumeFromLine = h }
-                : Make(s, meta, ImportCommand.ClassificationStatus.New, total)) with { SourceMeta = meta2 };
+                : Make(s, meta, ImportCommand.ClassificationStatus.New, total)) with {
+                SourceMeta = meta2
+            };
             results.Add(c);
         }
+
         return results;
     }
 
     public async Task<ImportOutcome> ImportSessionAsync(
-        ImportCommand.SessionClassification c, ImportContext ctx, CancellationToken ct) {
+            ImportCommand.SessionClassification c,
+            ImportContext                       ctx,
+            CancellationToken                   ct
+        ) {
         if (c.Status == ImportCommand.ClassificationStatus.AlreadyLoaded) return ImportOutcome.Skipped;
 
         var title  = c.SourceMeta!.TryGetValue("Title", out var t) ? t as string : null;
@@ -167,22 +196,37 @@ internal sealed class OpenCodeImportSource : IImportSource {
         var lineOffset = repair ? checked(c.ResumeFromLine + 1) : 0;
 
         // 1. session-start (lifecycle-before-transcript; idempotent server-side).
-        if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/opencode",
-                BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate), ct))
+        if (!await PostHookAsync(
+                ctx.HttpClient,
+                ctx.BaseUrl,
+                "session-start/opencode",
+                BuildSessionStartPayload(c.SessionId, c.Meta.Cwd, c.Meta.FirstTimestamp, ctx.ForcePrivate),
+                ct
+            ))
             return ImportOutcome.Failed;
 
         // 2. parent transcript (synthesize to a temp file; SendTranscriptBatches needs a path).
         int sent;
         var tmpFile = Path.Combine(Path.GetTempPath(), $"kcap-oc-{c.SessionId}-{Guid.NewGuid():N}.jsonl");
+
         try {
             using var db = new OpenCodeDb(_dbPath);
+
             await using (var w = new StreamWriter(tmpFile)) {
                 foreach (var line in db.SynthesizeLines(c.SessionId)) await w.WriteLineAsync(line);
             }
+
             sent = await SessionImporter.SendTranscriptBatches(
-                httpClient: ctx.HttpClient, baseUrl: ctx.BaseUrl, sessionId: c.SessionId,
-                filePath: tmpFile, agentId: null, startLine: 0, vendor: Vendor,
-                lineNumberOffset: lineOffset, failOnError: true);
+                httpClient: ctx.HttpClient,
+                baseUrl: ctx.BaseUrl,
+                sessionId: c.SessionId,
+                filePath: tmpFile,
+                agentId: null,
+                startLine: 0,
+                vendor: Vendor,
+                lineNumberOffset: lineOffset,
+                failOnError: true
+            );
         } catch (OperationCanceledException) {
             throw; // cancellation is not an import failure — let it propagate
         } catch {
@@ -208,8 +252,13 @@ internal sealed class OpenCodeImportSource : IImportSource {
             await PostSetTitleAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, title!, ct);
 
         // 5. session-end (posted only after parent transcript + all children succeeded).
-        if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/opencode",
-                BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), ct))
+        if (!await PostHookAsync(
+                ctx.HttpClient,
+                ctx.BaseUrl,
+                "session-end/opencode",
+                BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp),
+                ct
+            ))
             return ImportOutcome.Failed;
 
         // 6. Record completeness in the ledger — ONLY now, after session-end succeeded.
@@ -225,8 +274,8 @@ internal sealed class OpenCodeImportSource : IImportSource {
     }
 
     async Task ImportChildrenAsync(HttpClient client, string baseUrl, string rootId, CancellationToken ct) {
-        using var db = new OpenCodeDb(_dbPath);
-        var children = db.QueryChildren(rootId); // ordered (time_created, id)
+        using var db       = new OpenCodeDb(_dbPath);
+        var       children = db.QueryChildren(rootId); // ordered (time_created, id)
 
         foreach (var child in children) {
             ct.ThrowIfCancellationRequested();
@@ -236,27 +285,46 @@ internal sealed class OpenCodeImportSource : IImportSource {
             // No per-child completeness gate: a complete parent is skipped wholesale via the
             // ledger, so children are only reached during an incomplete parent's import. Offset
             // above the child's (rootId, agentId) HWM so a repair replays above ingested content.
-            var chwm = await FetchServerLastLineAsync(client, baseUrl, rootId, agentId, ct);
+            var chwm        = await FetchServerLastLineAsync(client, baseUrl, rootId, agentId, ct);
             var childOffset = chwm is { } v ? checked(v + 1) : 0;
 
             var tmp = Path.Combine(Path.GetTempPath(), $"kcap-oc-{child.Id}-{Guid.NewGuid():N}.jsonl");
+
             try {
                 await using (var w = new StreamWriter(tmp)) {
                     foreach (var line in db.SynthesizeLines(child.Id)) await w.WriteLineAsync(line);
                 }
 
                 // fail-closed: no content unless the subagent registered first.
-                var startOk = await PostHookAsync(client, baseUrl, "subagent-start",
-                    OpenCodeSubagentDiscovery.BuildStartPayload(rootId, agentId, agentType, tmp), ct);
+                var startOk = await PostHookAsync(
+                    client,
+                    baseUrl,
+                    "subagent-start",
+                    OpenCodeSubagentDiscovery.BuildStartPayload(rootId, agentId, agentType, tmp),
+                    ct
+                );
+
                 if (!startOk) throw new HttpRequestException($"subagent-start failed for {child.Id}");
 
                 await SessionImporter.SendTranscriptBatches(
-                    httpClient: client, baseUrl: baseUrl, sessionId: rootId,
-                    filePath: tmp, agentId: agentId, startLine: 0, vendor: Vendor,
-                    lineNumberOffset: childOffset, failOnError: true);
+                    httpClient: client,
+                    baseUrl: baseUrl,
+                    sessionId: rootId,
+                    filePath: tmp,
+                    agentId: agentId,
+                    startLine: 0,
+                    vendor: Vendor,
+                    lineNumberOffset: childOffset,
+                    failOnError: true
+                );
 
-                if (!await PostHookAsync(client, baseUrl, "subagent-stop",
-                        OpenCodeSubagentDiscovery.BuildStopPayload(rootId, agentId, agentType, tmp), ct))
+                if (!await PostHookAsync(
+                        client,
+                        baseUrl,
+                        "subagent-stop",
+                        OpenCodeSubagentDiscovery.BuildStopPayload(rootId, agentId, agentType, tmp),
+                        ct
+                    ))
                     throw new HttpRequestException($"subagent-stop failed for {child.Id}");
             } finally {
                 try { File.Delete(tmp); } catch { }
@@ -268,11 +336,13 @@ internal sealed class OpenCodeImportSource : IImportSource {
         foreach (var line in db.SynthesizeLines(childId)) {
             try {
                 using var doc = JsonDocument.Parse(line);
+
                 if (doc.RootElement.TryGetProperty("info", out var info) &&
-                    info.TryGetProperty("agent", out var a) && a.GetString() is { Length: > 0 } agent)
+                    info.TryGetProperty("agent", out var a)              && a.GetString() is { Length: > 0 } agent)
                     return agent;
             } catch { }
         }
+
         return "subagent";
     }
 
@@ -280,8 +350,9 @@ internal sealed class OpenCodeImportSource : IImportSource {
         SessionId      = s.SessionId,
         Cwd            = s.Cwd,
         FirstTimestamp = s.FirstTimestamp,
-        LastTimestamp  = s.SourceMeta!.TryGetValue("TimeUpdated", out var tu) && tu is long tums
-            ? FromEpoch(tums) : null,
+        LastTimestamp = s.SourceMeta!.TryGetValue("TimeUpdated", out var tu) && tu is long tums
+            ? FromEpoch(tums)
+            : null,
     };
 
     /// <summary>
@@ -293,16 +364,26 @@ internal sealed class OpenCodeImportSource : IImportSource {
     /// </summary>
     static string SurfaceCause(Exception ex) {
         Exception cause = ex.GetBaseException();
+
         for (var e = ex; e is not null; e = e.InnerException)
-            if (e is DllNotFoundException) { cause = e; break; }
+            if (e is DllNotFoundException) {
+                cause = e;
+
+                break;
+            }
+
         return cause.Message;
     }
 
     static ImportCommand.SessionClassification Make(
-        DiscoveredSession s, SessionMetadata meta, ImportCommand.ClassificationStatus status,
-        int totalLines, string? probeError = null) => new() {
+            DiscoveredSession                  s,
+            SessionMetadata                    meta,
+            ImportCommand.ClassificationStatus status,
+            int                                totalLines,
+            string?                            probeError = null
+        ) => new() {
         SessionId        = s.SessionId,
-        FilePath         = "",   // routed phase
+        FilePath         = "", // routed phase
         EncodedCwd       = "",
         Meta             = meta,
         Status           = status,
@@ -317,36 +398,55 @@ internal sealed class OpenCodeImportSource : IImportSource {
     // same-line-count mutation (tool completing, in-place edit, changed/added child) re-imports.
     static (int Total, int Importable, string Fingerprint) ComputeClassificationInfo(OpenCodeDb db, string sessionId) {
         using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
-        void Feed(string s) { hash.AppendData(Encoding.UTF8.GetBytes(s)); hash.AppendData("\n"u8); }
+
+        void Feed(string s) {
+            hash.AppendData(Encoding.UTF8.GetBytes(s));
+            hash.AppendData("\n"u8);
+        }
 
         int total = 0, importable = 0;
-        foreach (var line in db.SynthesizeLines(sessionId)) {  // parent reader fully drained before children query
+
+        foreach (var line in db.SynthesizeLines(sessionId)) {
+            // parent reader fully drained before children query
             total++;
             if (OpenCodeDb.IsImportRelevantLine(line)) importable++;
             Feed(line);
         }
+
         foreach (var child in db.QueryChildren(sessionId)) {
-            Feed("\u0000child:" + child.Id);
+            Feed($"\0child:{child.Id}");
             foreach (var line in db.SynthesizeLines(child.Id)) Feed(line);
         }
+
         return (total, importable, Convert.ToHexString(hash.GetHashAndReset()));
     }
 
     static Dictionary<string, object?> WithFingerprint(IReadOnlyDictionary<string, object?> src, string fingerprint) {
         var d = new Dictionary<string, object?>(src) { ["Fingerprint"] = fingerprint };
+
         return d;
     }
 
     static async Task<int?> FetchServerLastLineAsync(
-        HttpClient http, string baseUrl, string sessionId, string? agentId, CancellationToken ct) {
-        var url = $"{baseUrl}/api/sessions/{sessionId}/last-line" + (agentId is not null ? $"?agentId={agentId}" : "");
+            HttpClient        http,
+            string            baseUrl,
+            string            sessionId,
+            string?           agentId,
+            CancellationToken ct
+        ) {
+        var       url  = $"{baseUrl}/api/sessions/{sessionId}/last-line" + (agentId is not null ? $"?agentId={agentId}" : "");
         using var resp = await http.GetWithRetryAsync(url, ct: ct);
+
         if (resp.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.NoContent) return null;
+
         if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"watermark probe returned {(int)resp.StatusCode}");
-        var body = await resp.Content.ReadAsStringAsync(ct);
-        using var doc = JsonDocument.Parse(body);
+
+        var       body = await resp.Content.ReadAsStringAsync(ct);
+        using var doc  = JsonDocument.Parse(body);
+
         return doc.RootElement.TryGetProperty("last_line_number", out var ln) && ln.ValueKind == JsonValueKind.Number
-            ? ln.GetInt32() : null;
+            ? ln.GetInt32()
+            : null;
     }
 
     static JsonObject BuildSessionStartPayload(string sid, string? cwd, DateTimeOffset? startedAt, bool forcePrivate) {
@@ -355,9 +455,10 @@ internal sealed class OpenCodeImportSource : IImportSource {
             ["session_id"]      = sid,
             ["source"]          = "startup",
         };
-        if (cwd is not null) p["cwd"] = cwd;
-        if (startedAt is { } ts) p["started_at"] = ts.ToString("O");
+        if (cwd is not null) p["cwd"]             = cwd;
+        if (startedAt is { } ts) p["started_at"]  = ts.ToString("O");
         if (forcePrivate) p["default_visibility"] = "private";
+
         return p;
     }
 
@@ -367,15 +468,17 @@ internal sealed class OpenCodeImportSource : IImportSource {
             ["session_id"]      = sid,
             ["reason"]          = "opencode-import",
         };
-        if (cwd is not null) p["cwd"] = cwd;
+        if (cwd is not null) p["cwd"]        = cwd;
         if (endedAt is { } ts) p["ended_at"] = ts.ToString("O");
+
         return p;
     }
 
     static async Task<bool> PostHookAsync(HttpClient client, string baseUrl, string route, JsonObject payload, CancellationToken ct) {
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{route}", content, ct: ct);
+            using var resp    = await client.PostWithRetryAsync($"{baseUrl}/hooks/{route}", content, ct: ct);
+
             return resp.IsSuccessStatusCode;
         } catch (OperationCanceledException) {
             throw; // don't mask cancellation as a hook failure
@@ -384,10 +487,13 @@ internal sealed class OpenCodeImportSource : IImportSource {
 
     static async Task PostSetTitleAsync(HttpClient client, string baseUrl, string sid, string title, CancellationToken ct) {
         if (title.Length > 120) title = title[..120];
-        var payload = new JsonObject { ["session_id"] = sid, ["title"] = title };
+        var payload                   = new JsonObject { ["session_id"] = sid, ["title"] = title };
+
         try {
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _ = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, ct: ct);
-        } catch { /* best effort */ }
+            using var _       = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, ct: ct);
+        } catch {
+            /* best effort */
+        }
     }
 }
