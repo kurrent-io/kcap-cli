@@ -56,7 +56,7 @@ If `start_flow` / `send_to_participant` are not among the tools available in thi
 
 ## Pending messages
 
-Participants can push you out-of-band notes between rounds — observations that don't warrant a full round result (e.g. "found something odd, still looking"). These ride along as `pending_messages` on `get_flow_status`, `send_to_participant`/`submit_review_round`, and `close_flow` responses, rendered as a list of `from <role> [<id>]: <text>` entries. Each message is delivered **exactly once**: react to it the moment you see it, because it will not be shown again on a later call. `close_flow`'s response can carry final pending messages too — often the last thing a participant tells you — so read them before you report completion to the user.
+Participants can push you out-of-band notes between rounds — observations that don't warrant a full round result (e.g. "found something odd, still looking"). These ride along as `pending_messages` on `start_flow` (a single-participant start returns round 1's result, which can already carry them), `get_flow_status`, `send_to_participant`/`submit_review_round`, and `close_flow` responses, rendered as a list of `from <role> [<id>]: <text>` entries. Each message is delivered **exactly once**: react to it the moment you see it, because it will not be shown again on a later call. `close_flow`'s response can carry final pending messages too — often the last thing a participant tells you — so read them before you report completion to the user.
 
 ## Guardrail errors
 
