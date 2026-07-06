@@ -79,6 +79,24 @@ public class AntigravityWatchExtractorTests {
     }
 
     [Test]
+    public async Task PendingToolCalls_excludes_async_subagent_orchestration_so_a_parent_can_idle_end() {
+        // AI-1218: define_subagent/invoke_subagent resolve via a SEPARATE conversation (the child
+        // reports back through brain/<parent>/messages), never as a result step in this transcript.
+        // Counting them would pin the count > 0 forever and suppress idle-end, so a subagent-invoking
+        // parent would only end when Antigravity quits. They must be excluded from the in-flight count.
+        var state = new Capacitor.Cli.Core.WatchState();
+
+        WatchCommand.UpdateAntigravityPendingToolCalls(state,
+            """{"type":"PLANNER_RESPONSE","tool_calls":[{"name":"define_subagent"},{"name":"invoke_subagent"},{"name":"invoke_subagent"},{"name":"list_dir"}]}""");
+        // Only the real command (list_dir) counts as in flight — the 3 subagent calls are excluded.
+        await Assert.That(state.PendingAntigravityToolCalls).IsEqualTo(1);
+
+        // Its result step clears it → count 0 → idle-end is no longer suppressed.
+        WatchCommand.UpdateAntigravityPendingToolCalls(state, """{"type":"LIST_DIRECTORY","content":"…"}""");
+        await Assert.That(state.PendingAntigravityToolCalls).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task ShouldEndOnIdle_suppressed_while_a_tool_is_in_flight() {
         var now  = DateTimeOffset.UnixEpoch.AddHours(5);
         var idle = TimeSpan.FromMinutes(60);
