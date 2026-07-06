@@ -308,10 +308,15 @@ static class McpFlowsServer {
         return $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
     }
 
-    static readonly TimeSpan PollInterval  = TimeSpan.FromSeconds(3);
-    static readonly TimeSpan PollCap       = TimeSpan.FromMinutes(8);   // safely below MCP_TOOL_TIMEOUT
-    static readonly TimeSpan PerGetTimeout = TimeSpan.FromSeconds(20);
-    static readonly TimeSpan NotFoundGrace = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan PollInterval   = TimeSpan.FromSeconds(3);
+    static readonly TimeSpan PollCap        = TimeSpan.FromMinutes(8);   // safely below MCP_TOOL_TIMEOUT
+    static readonly TimeSpan PerGetTimeout  = TimeSpan.FromSeconds(20);
+    static readonly TimeSpan NotFoundGrace  = TimeSpan.FromSeconds(10);
+    // AI-1127 E-c final review, Important: the shared client has Timeout = InfiniteTimeSpan (the
+    // review-flow endpoints long-poll), so without a per-attempt bound a hung ack POST would block
+    // indefinitely — stalling the tool response the driver is waiting on. Mirrors PerGetTimeout's
+    // per-attempt bounding of PollUntilTerminalAsync's GETs.
+    static readonly TimeSpan PerAckPostTimeout = TimeSpan.FromSeconds(15);
 
     static readonly HashSet<string> TerminalRoundStatuses =
         new(StringComparer.Ordinal) { "findings", "clean", "waiting", "unclear", "failed", "cancelled" };
@@ -610,9 +615,13 @@ static class McpFlowsServer {
     internal static IReadOnlyList<string> AppendPendingMessages(StringBuilder sb, JsonObject node) {
         if (node["pending_messages"] is not JsonArray arr || arr.Count == 0) return [];
 
-        var ids = new List<string>();
-        sb.AppendLine();
-        sb.Append("pending_messages ("); sb.Append(arr.Count); sb.AppendLine("):");
+        // Render entries into a scratch buffer first so the header count reflects what actually
+        // got rendered, not the raw array length — a malformed (non-object) entry is skipped
+        // below, and the header must not overcount past what the driver will see (AI-1127 E-c
+        // final review, Minor: header used arr.Count while entries were filtered).
+        var ids     = new List<string>();
+        var entries = new StringBuilder();
+        var count   = 0;
 
         foreach (var item in arr) {
             if (item is not JsonObject o) continue;
@@ -621,11 +630,18 @@ static class McpFlowsServer {
             var from = o["from_participant"]?.GetValue<string>() ?? "";
             var text = o["text"]?.GetValue<string>() ?? "";
 
-            sb.Append("- from "); sb.Append(from); sb.Append(" ["); sb.Append(id); sb.Append("]: ");
-            sb.AppendLine(text);
+            entries.Append("- from "); entries.Append(from); entries.Append(" ["); entries.Append(id); entries.Append("]: ");
+            entries.AppendLine(text);
+            count++;
 
             if (id.Length > 0) ids.Add(id);
         }
+
+        if (count == 0) return [];
+
+        sb.AppendLine();
+        sb.Append("pending_messages ("); sb.Append(count); sb.AppendLine("):");
+        sb.Append(entries);
 
         return ids;
     }
@@ -652,9 +668,15 @@ static class McpFlowsServer {
 
         async Task<bool> TryPostAsync() {
             try {
+                // AI-1127 E-c final review, Important: bound each attempt — the shared client has
+                // no client-side deadline (Timeout = InfiniteTimeSpan, needed for the long-polling
+                // round endpoints), so an unbounded ack POST could hang the tool response the
+                // driver is waiting on. A timeout surfaces as OperationCanceledException, which
+                // falls into the existing swallow-and-retry-once path below.
+                using var postCts = new CancellationTokenSource(PerAckPostTimeout);
                 using var response = await SendWithRefreshRetryAsync(
                     client,
-                    c => c.PostAsync(url, JsonContent.Create(body, McpJsonContext.Default.AckFlowMessagesDto))
+                    c => c.PostAsync(url, JsonContent.Create(body, McpJsonContext.Default.AckFlowMessagesDto), postCts.Token)
                 );
                 return response.IsSuccessStatusCode;
             } catch {

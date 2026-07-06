@@ -148,6 +148,12 @@ public class McpFlowsServerTests {
         await Assert.That(text).Contains("from tester [msg-a1]: first");
         await Assert.That(text).Contains("from reviewer [msg-b2]: second");
         await Assert.That(pendingIds).IsEquivalentTo(["msg-a1", "msg-b2"]);
+
+        // Pins the E-c final-review Minor: the header count must reflect the RENDERED entries (2 —
+        // the two well-formed objects), not the raw array length (3, which also counts the
+        // "junk-string" entry that gets skipped).
+        await Assert.That(text).Contains("pending_messages (2):");
+        await Assert.That(text).DoesNotContain("pending_messages (3):");
     }
 
     [Test]
@@ -180,6 +186,28 @@ public class McpFlowsServerTests {
         await Assert.That(server.LogEntries.Count()).IsEqualTo(2);
         await Assert.That(delays).HasCount().EqualTo(1);
         await Assert.That(delays[0]).IsEqualTo(TimeSpan.FromSeconds(2));
+    }
+
+    [Test]
+    public async Task Ack_attempt_times_out_and_is_swallowed() {
+        // AI-1127 E-c final review, Important: the shared MCP client normally has
+        // Timeout = InfiniteTimeSpan (the review-flow endpoints long-poll), so
+        // AckRenderedMessagesAsync now bounds each POST attempt itself (PerAckPostTimeout, 15s).
+        // Driving the real 15s bound here would make this test slow without adding coverage —
+        // instead this pins the pre-existing swallow behavior the new bound feeds into: an
+        // HttpClient with its OWN short Timeout produces the same OperationCanceledException
+        // shape TryPostAsync's bare catch already swallows, deterministically and fast.
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/f1/messages/ack").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(200).WithDelay(TimeSpan.FromMilliseconds(300)));
+        using var client = new HttpClient { Timeout = TimeSpan.FromMilliseconds(50) };
+
+        var delays = new List<TimeSpan>();
+        await McpFlowsServer.AckRenderedMessagesAsync(client, server.Url!, "f1", ["m1"], NoDelay(delays));
+
+        // No exception propagated, and the retry-after-delay path still ran once — i.e. both the
+        // initial attempt and the retry timed out and were swallowed rather than thrown.
+        await Assert.That(delays).HasCount().EqualTo(1);
     }
 
     [Test]

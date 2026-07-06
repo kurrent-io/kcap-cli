@@ -68,8 +68,8 @@ The server enforces per-run budgets; watch for these in tool error responses:
 - **Idle runs are auto-reaped** after the definition's `idle_ttl` (server default 24h). Don't rely on this — always call `close_flow` yourself once you're done, whether the outcome was clean or you're abandoning the task.
 - **`400` starting `no_daemon_available:`** — no connected daemon has the repo checked out. Tell the user to run `kcap agent` on a machine with the repo cloned (or pass an explicit `daemon_name` + `repo_path`).
 - **`400` starting `daemon_outdated:`** — the daemon's kcap is too old to host flow participants. Tell the user to update (`npm i -g @kurrent/kcap`) and restart `kcap agent`.
-- **`400` containing `participant_unreachable`** — that role's agent is in an ambiguous liveness state (its daemon disconnected or is restarting), so the server won't guess whether it's still alive rather than risk a duplicate launch. Retry the send shortly, or stop the participant via the flow-aware stop and re-send to force a fresh relaunch.
-- **A round result of `unclear` whose text is exactly `participant_died` or `participant_stopped`** — that role's agent crashed or was stopped mid-round. The run stays **open**: address the same role again with `send_to_participant` and it relaunches automatically, carrying forward its prior session history and budget — there is no need to close and restart the flow. Other roles are unaffected and remain addressable in the meantime.
+- **`400` containing `participant_unreachable`** — that role's agent is in an ambiguous liveness state (its daemon disconnected or is restarting), so the server won't guess whether it's still alive rather than risk a duplicate launch. Retry the send shortly, or ask the user to stop the participant (dashboard/API) and then re-send to force a fresh relaunch.
+- **A round result of `unclear` whose text is exactly `participant_died` or `participant_stopped`** — that role's agent crashed or was stopped mid-round. The run stays **open**: address the same role again with `send_to_participant` and it relaunches automatically — the fresh agent has **no memory of prior rounds**, so restate any context it needs in your message; its earlier spend still counts against the run budget. No need to close and restart the flow. Other roles are unaffected and remain addressable in the meantime.
 
 ## Workflow
 
@@ -184,8 +184,9 @@ send_to_participant(
 
 # Step 4 — close only once EVERY addressed role's latest round is clean and none is
 # in flight: reviewer clean + tester clean (from step 2, still current) = aggregate clean.
-# One role going clean does not end the run by itself — get_flow_status lists every
-# participant's latest result if you need to check before closing.
+# One role going clean does not end the run by itself — track each role's latest result
+# from your own send_to_participant responses; the run's status only reads "clean" once
+# every addressed role's latest round is clean and none is in flight (the aggregate rule).
 close_flow(flow_run_id="flow_xyz789")
 # Report to user: flow complete, review and tests both clean
 ```
