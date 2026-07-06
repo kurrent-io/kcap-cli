@@ -82,4 +82,15 @@ public class McpMarkerTests {
         await Assert.That(m.Owned(cfgB)).IsEmpty();                 // B must NOT inherit A's marker
         await Assert.That(m.Owns(cfgB, "kcap-review", new JsonObject { ["command"] = "kcap" })).IsFalse(); // → preserved
     }
+
+    [Test]
+    public async Task Owned_matches_across_equivalent_path_forms() {
+        var dir = Directory.CreateTempSubdirectory("kcap-marker-norm-").FullName;
+        var shared = Path.Combine(dir, ".kcap-mcp-version");
+        var m = new McpMarker("test", _ => shared);
+        var abs   = Path.Combine(dir, "mcp.json");
+        var equiv = Path.Combine(dir, ".", "mcp.json"); // same file, non-canonical form
+        m.Record(abs, ["kcap-review"]);
+        await Assert.That(m.Owned(equiv)).Contains("kcap-review"); // equivalent path form still recognized
+    }
 }

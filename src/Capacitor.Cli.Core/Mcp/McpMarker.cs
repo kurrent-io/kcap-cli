@@ -39,7 +39,7 @@ public sealed class McpMarker(string harness, Func<string, string>? markerPathFo
         var doc = new JsonObject {
             ["version"] = Version,
             ["harness"] = harness,
-            ["config"]  = configPath,
+            ["config"]  = Path.GetFullPath(configPath),
             ["servers"] = new JsonArray(existing.Select(n => (JsonNode)n!).ToArray())
         };
         var dir = Path.GetDirectoryName(path);
@@ -61,7 +61,7 @@ public sealed class McpMarker(string harness, Func<string, string>? markerPathFo
             // A user-scope sidecar is per-directory and could be shared; only trust a marker
             // that pertains to THIS harness + config path (else treat as not-ours → preserve).
             if ((string?)root["harness"] != harness) return [];
-            if ((string?)root["config"] != configPath) return [];
+            if ((string?)root["config"] != Path.GetFullPath(configPath)) return [];
             return root["servers"] is JsonArray arr ? [.. arr.Select(n => (string)n!)] : [];
         } catch { return []; }
     }
