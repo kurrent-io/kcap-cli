@@ -48,6 +48,8 @@ internal sealed class AntigravityImportSource : IImportSource {
     public bool   IsAvailable => Directory.Exists(BrainRoot);
     public bool   SupportsTitleGeneration => false; // server computes a fallback title at session-end
 
+    static void Log(string message) => Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [antigravity-import] {message}");
+
     public Task<IReadOnlyList<DiscoveredSession>> DiscoverAsync(DiscoveryFilters filters, CancellationToken ct) {
         var result = new List<DiscoveredSession>();
         if (!Directory.Exists(BrainRoot)) return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
@@ -59,6 +61,15 @@ internal sealed class AntigravityImportSource : IImportSource {
         var parentMap = AntigravitySubagents.BuildParentMap(_home, _geminiCliHome, ct);
         var convIds   = Directory.EnumerateDirectories(BrainRoot).Select(Path.GetFileName).OfType<string>().ToList();
         var byRoot    = AntigravitySubagents.BuildRootDescendants(convIds, parentMap);
+
+        // AI-1218 drift observability: surface format drift without a messages fallback.
+        var allConversationIds = convIds;
+        var invokeEdges   = parentMap.Count;
+        var danglingChild = parentMap.Keys.Count(c => !allConversationIds.Contains(c));
+        var msgButNoInvoke = allConversationIds.Count(id =>
+            Directory.Exists(AntigravityPaths.MessagesDir(id, _home, _geminiCliHome))
+            && !parentMap.ContainsKey(id) && !parentMap.Values.Contains(id));
+        Log($"Antigravity import: {invokeEdges} invoke edge(s); {danglingChild} invoked child id(s) with no conversation dir; {msgButNoInvoke} conversation(s) with messages/ but no invoke edge");
 
         var sinceUtc = filters.Since is { } since
             ? new DateTimeOffset(since.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), TimeSpan.Zero)
