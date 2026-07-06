@@ -56,4 +56,62 @@ public class KiroUsageTests {
     public async Task anchor_map_empty_on_missing_or_malformed(string? json) {
         await Assert.That(KiroUsage.AnchorMap(json).Count).IsEqualTo(0);
     }
+
+    // ── token-count hedge (AI-1196) ──────────────────────────────────────────
+    // Kiro's schema carries input/output_token_count per turn and a session model
+    // id, but the CLI persists them as 0 today (upstream aws#2397). When a future
+    // release populates them, the CLI must forward the (non-zero) counts + model so
+    // the server can stamp a canonical $usage — no further code change needed.
+
+    // One turn WITH real token counts and a session-level model id.
+    const string MetaWithTokens = """
+        {"session_state":{
+          "rts_model_state":{"model_info":{"model_id":"minimax-m2.5","context_window_tokens":196000}},
+          "conversation_metadata":{"user_turn_metadatas":[
+            {"message_ids":["u1","a1"],
+             "input_token_count":1200,"output_token_count":340,
+             "context_usage_percentage":7.5,
+             "metering_usage":[{"value":0.1,"unit":"credit"}]}
+          ]}}}
+        """;
+
+    [Test]
+    public async Task anchor_map_captures_nonzero_token_counts_and_session_model() {
+        var map = KiroUsage.AnchorMap(MetaWithTokens);
+
+        await Assert.That(map.ContainsKey("a1")).IsTrue();
+        await Assert.That(map["a1"].InputTokens).IsEqualTo(1200L);
+        await Assert.That(map["a1"].OutputTokens).IsEqualTo(340L);
+        await Assert.That(map["a1"].Model).IsEqualTo("minimax-m2.5");
+    }
+
+    [Test]
+    public async Task enrich_line_injects_token_counts_and_model_when_present() {
+        var map    = KiroUsage.AnchorMap(MetaWithTokens);
+        var anchor = """{"version":"v1","kind":"AssistantMessage","data":{"message_id":"a1","content":[{"kind":"text","data":"done"}]}}""";
+
+        var enriched = KiroUsage.EnrichLine(anchor, map);
+
+        await Assert.That(enriched).Contains("input_token_count");
+        await Assert.That(enriched).Contains("1200");
+        await Assert.That(enriched).Contains("output_token_count");
+        await Assert.That(enriched).Contains("340");
+        await Assert.That(enriched).Contains("minimax-m2.5");
+    }
+
+    [Test]
+    public async Task zero_token_counts_stay_dormant() {
+        // The default fixture has input/output_token_count = 0 — the hedge must NOT
+        // fabricate token/model fields (today's behaviour: credits/context% only).
+        var map = KiroUsage.AnchorMap(Meta);
+
+        await Assert.That(map["a2"].InputTokens).IsNull();
+        await Assert.That(map["a2"].OutputTokens).IsNull();
+
+        var anchor   = """{"version":"v1","kind":"AssistantMessage","data":{"message_id":"a2","content":[{"kind":"text","data":"done"}]}}""";
+        var enriched = KiroUsage.EnrichLine(anchor, map);
+
+        await Assert.That(enriched).DoesNotContain("input_token_count");
+        await Assert.That(enriched).DoesNotContain("output_token_count");
+    }
 }
