@@ -450,7 +450,11 @@ static class McpFlowsServer {
     }
 
     /// <summary>Formats the terminal GET /api/flows/{id} response into the same envelope+text as FormatRoundResponse.</summary>
-    static string FormatPolledRoundResult(JsonObject node, string flowRunId) {
+    internal static string FormatPolledRoundResult(JsonObject node, string flowRunId) =>
+        FormatPolledRoundResult(node, flowRunId, out _);
+
+    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    internal static string FormatPolledRoundResult(JsonObject node, string flowRunId, out IReadOnlyList<string> pendingIds) {
         var roundNumber = node["round_number"]?.GetValue<int>();
         var resultKind  = node["round_result_kind"]?.GetValue<string>() ?? node["round_status"]?.GetValue<string>() ?? "";
         var resultText  = node["round_result_text"]?.GetValue<string>();
@@ -461,6 +465,8 @@ static class McpFlowsServer {
         sb.Append("status: ");      AppendLine(sb, node["status"]?.GetValue<string>() ?? "");
         sb.Append("result_kind: "); AppendLine(sb, resultKind);
         if (!string.IsNullOrEmpty(resultText)) { sb.AppendLine(); sb.Append(resultText); }
+
+        pendingIds = AppendPendingMessages(sb, node);
         return sb.ToString();
     }
 
@@ -468,10 +474,13 @@ static class McpFlowsServer {
     /// Formats a ReviewFlowRoundResponse or ReviewFlowStatusResponse (from start/submit) into a
     /// compact envelope followed by the result text.
     /// </summary>
-    static string FormatRoundResponse(string body) {
+    internal static string FormatRoundResponse(string body) => FormatRoundResponse(body, out _);
+
+    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    internal static string FormatRoundResponse(string body, out IReadOnlyList<string> pendingIds) {
         try {
             var node = JsonNode.Parse(body)?.AsObject();
-            if (node is null) return body;
+            if (node is null) { pendingIds = []; return body; }
 
             var flowRunId   = node["flow_run_id"]?.GetValue<string>()   ?? "";
             var roundId     = node["round_id"]?.GetValue<string>()     ?? "";
@@ -490,16 +499,21 @@ static class McpFlowsServer {
                 sb.Append(resultText);
             }
 
+            pendingIds = AppendPendingMessages(sb, node);
             return sb.ToString();
         } catch {
+            pendingIds = [];
             return body;
         }
     }
 
-    static string FormatStatusResponse(string body) {
+    internal static string FormatStatusResponse(string body) => FormatStatusResponse(body, out _);
+
+    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    internal static string FormatStatusResponse(string body, out IReadOnlyList<string> pendingIds) {
         try {
             var node = JsonNode.Parse(body)?.AsObject();
-            if (node is null) return body;
+            if (node is null) { pendingIds = []; return body; }
 
             var flowRunId      = node["flow_run_id"]?.GetValue<string>()      ?? "";
             var status         = node["status"]?.GetValue<string>()         ?? "";
@@ -529,8 +543,10 @@ static class McpFlowsServer {
                 sb.Append(lastResultText);
             }
 
+            pendingIds = AppendPendingMessages(sb, node);
             return sb.ToString();
         } catch {
+            pendingIds = [];
             return body;
         }
     }
@@ -539,10 +555,13 @@ static class McpFlowsServer {
     /// Formats a CloseReviewFlowResponse into a compact envelope.
     /// The server returns only <c>flow_run_id</c> and <c>status</c>.
     /// </summary>
-    static string FormatCloseResponse(string body) {
+    internal static string FormatCloseResponse(string body) => FormatCloseResponse(body, out _);
+
+    /// <summary>AI-1127 E-c: id-exposing overload — see <see cref="AppendPendingMessages"/>.</summary>
+    internal static string FormatCloseResponse(string body, out IReadOnlyList<string> pendingIds) {
         try {
             var node = JsonNode.Parse(body)?.AsObject();
-            if (node is null) return body;
+            if (node is null) { pendingIds = []; return body; }
 
             var flowRunId = node["flow_run_id"]?.GetValue<string>() ?? "";
             var status    = node["status"]?.GetValue<string>()      ?? "";
@@ -551,10 +570,39 @@ static class McpFlowsServer {
             sb.Append("flow_run_id: "); AppendLine(sb, flowRunId);
             sb.Append("status: ");      AppendLine(sb, status);
 
+            pendingIds = AppendPendingMessages(sb, node);
             return sb.ToString();
         } catch {
+            pendingIds = [];
             return body;
         }
+    }
+
+    /// <summary>AI-1127 E-c: renders the fold-computed undelivered sidecar messages carried on a
+    /// status/round/close response. Returns the rendered ids so the caller can ack exactly what
+    /// the driver will actually see (never more).</summary>
+    internal static IReadOnlyList<string> AppendPendingMessages(StringBuilder sb, JsonObject node) {
+        if (node["pending_messages"] is not JsonArray arr || arr.Count == 0) return [];
+
+        var ids = new List<string>();
+        sb.AppendLine();
+        sb.Append("pending_messages ("); sb.Append(arr.Count); sb.AppendLine("):");
+
+        foreach (var item in arr) {
+            var o = item?.AsObject();
+            if (o is null) continue;
+
+            var id   = o["message_id"]?.GetValue<string>() ?? "";
+            var from = o["from_participant"]?.GetValue<string>() ?? "";
+            var text = o["text"]?.GetValue<string>() ?? "";
+
+            sb.Append("- from "); sb.Append(from); sb.Append(" ["); sb.Append(id); sb.Append("]: ");
+            sb.AppendLine(text);
+
+            if (id.Length > 0) ids.Add(id);
+        }
+
+        return ids;
     }
 
     static void AppendLine(StringBuilder sb, string value) => sb.AppendLine(value);
