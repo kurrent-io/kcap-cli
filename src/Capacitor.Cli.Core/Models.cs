@@ -777,6 +777,16 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Acp.SessionPromptParams))]
 [JsonSerializable(typeof(Acp.PromptContentBlock))]
 [JsonSerializable(typeof(Acp.SessionCancelParams))]
+[JsonSerializable(typeof(Acp.SessionRequestPermissionParams))]
+[JsonSerializable(typeof(Acp.PermissionOptionDto))]
+[JsonSerializable(typeof(Acp.PermissionOutcomeResult))]
+[JsonSerializable(typeof(Acp.PermissionOutcomeDto))]
+[JsonSerializable(typeof(Acp.ElicitationCreateParams))]
+[JsonSerializable(typeof(Acp.ElicitationCreateResult))]
+[JsonSerializable(typeof(AcpInteractionRequest))]
+[JsonSerializable(typeof(AcpInteractionOption))]
+[JsonSerializable(typeof(AcpInteractionDecision))]
+[JsonSerializable(typeof(AcpInteractionResolution))]
 // UseStringEnumConverter=true matches the server's SignalR JSON protocol, which
 // serialises enums (e.g. LaunchKind) as camelCase strings. Without it the
 // source-gen LaunchKind JsonTypeInfo defaults to numeric and silently drops the
@@ -823,6 +833,60 @@ public readonly record struct HostedPermissionRequest(
 public readonly record struct PermissionResolution(
         string             RequestId,
         PermissionDecision Decision
+    );
+
+/// <summary>
+/// Single-argument payload for the <c>AcpRequestInteraction</c> hub invocation (AI-686). Mirrors
+/// the server-side record of the same name in <c>Capacitor.Server.Core</c> (<c>src/Capacitor.Server.Core/AcpInteraction.cs</c>);
+/// property names must stay in sync (snake_case on the wire via this context's naming policy).
+/// <b>Spec-review Finding 1:</b> <see cref="RequestedSchema"/> is a new OPTIONAL trailing field,
+/// mirroring the server-side <c>AcpInteractionRequest.RequestedSchema</c> exactly (same name,
+/// position, and nullability) — kept in lockstep across the wire boundary the same way every other
+/// field on this type already is (see Task A2's Interfaces note for the "server `record` / daemon
+/// `readonly record struct`, same JSON shape" convention this type follows).
+/// </summary>
+public readonly record struct AcpInteractionRequest(
+        string                 AgentId,
+        string                 AcpSessionId,
+        string                 Kind,
+        string?                ToolName,
+        JsonElement?           ToolInput,
+        string?                ToolCallId,
+        string?                Prompt,
+        AcpInteractionOption[]? Options,
+        bool                   IsMultiSelect,
+        JsonElement?           RequestedSchema = null
+    );
+
+/// <summary>
+/// One selectable option for an ACP permission or elicitation interaction (AI-686). Spec-review
+/// Finding 6: <see cref="OptionId"/> is the stable resolution key (mirrors
+/// <c>Acp.PermissionOptionDto.OptionId</c>) — <see cref="Label"/> is display-only.
+/// </summary>
+public readonly record struct AcpInteractionOption(string OptionId, string Label, string? Description, string? Kind = null);
+
+/// <summary>
+/// Decision for an ACP interaction (AI-686), pushed from the server. Mirrors the server-side
+/// record of the same name. Spec-review Finding 6: <see cref="SelectedOptionId"/> is what
+/// <c>AcpInteractionBridge.MapPermissionDecision</c> (Task B3) matches against — never
+/// <see cref="SelectedOptionLabel"/>, which is retained for display/attribution only.
+/// </summary>
+public readonly record struct AcpInteractionDecision(
+        string       Outcome,
+        string?      SelectedOptionId,
+        string?      SelectedOptionLabel,
+        int?         SelectedIndex,
+        string?      FreeText,
+        JsonElement? UpdatedToolInput
+    );
+
+/// <summary>
+/// Payload of the <c>AcpInteractionResolved</c> server→client push (AI-686), correlated by
+/// <see cref="RequestId"/>. Mirrors the server-side record of the same name.
+/// </summary>
+public readonly record struct AcpInteractionResolution(
+        string             RequestId,
+        AcpInteractionDecision Decision
     );
 
 /// <summary>Commands sent from the server to daemon clients via SignalR.</summary>
