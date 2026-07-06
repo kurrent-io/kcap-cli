@@ -93,4 +93,19 @@ public class McpMarkerTests {
         m.Record(abs, ["kcap-review"]);
         await Assert.That(m.Owned(equiv)).Contains("kcap-review"); // equivalent path form still recognized
     }
+
+    [Test]
+    public async Task Two_configs_in_same_dir_have_independent_ownership() {
+        var dir = Directory.CreateTempSubdirectory("kcap-marker-indep-").FullName;
+        var m = new McpMarker("test"); // real MarkerPath resolution (no override)
+        var a = Path.Combine(dir, "a.json");
+        var b = Path.Combine(dir, "b.json");
+        try {
+            m.Record(a, ["kcap-review"]);
+            await Assert.That(m.Owned(a)).Contains("kcap-review"); // a owns it
+            await Assert.That(m.Owned(b)).IsEmpty();               // b is independent of a
+        } finally {
+            m.Clear(a); // remove the central-state marker this test created under ~/.kcap
+        }
+    }
 }

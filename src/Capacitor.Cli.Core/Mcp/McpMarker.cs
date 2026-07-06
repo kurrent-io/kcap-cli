@@ -73,7 +73,9 @@ public sealed class McpMarker(string harness, Func<string, string>? markerPathFo
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var isUserScope = dir.StartsWith(home, StringComparison.Ordinal)
                           && !IsInsideRepo(dir);
-        if (isUserScope) return Path.Combine(dir, ".kcap-mcp-version");
+        // Per-config sidecar (include the config file name) so multiple configs sharing a
+        // directory never overwrite each other's ownership record.
+        if (isUserScope) return Path.Combine(dir, $".kcap-mcp-version-{Path.GetFileName(configPath)}");
 
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(configPath))))[..16].ToLowerInvariant();
         return Path.Combine(home, ".kcap", "mcp-markers", $"{harness}-{hash}.json");
