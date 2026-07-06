@@ -44,6 +44,14 @@ public class McpMarkerTests {
     }
 
     [Test]
+    public async Task Owns_false_for_malformed_nonstring_command_array() {
+        var (marker, cfg, _) = NewMarker();
+        marker.Record(cfg, ["kcap-review"]);
+        var entry = new JsonObject { ["command"] = new JsonArray { 123, "mcp" } };
+        await Assert.That(marker.Owns(cfg, "kcap-review", entry)).IsFalse(); // must not throw
+    }
+
+    [Test]
     public async Task Clear_removes_the_marker() {
         var (marker, cfg, markerFile) = NewMarker();
         marker.Record(cfg, ["kcap-review"]);

@@ -29,7 +29,7 @@ public sealed class McpMarker(string harness, Func<string, string>? markerPathFo
         // Command is "kcap" (string) or ["kcap", ...] (OpenCode array).
         var cmd = entry["command"];
         return cmd is JsonValue v && v.TryGetValue(out string? s) && s == KcapMcpServers.Command
-            || cmd is JsonArray a && a.Count > 0 && (string?)a[0] == KcapMcpServers.Command;
+            || cmd is JsonArray a && a.Count > 0 && a[0] is JsonValue fv && fv.TryGetValue(out string? fs) && fs == KcapMcpServers.Command;
     }
 
     public void Record(string configPath, IReadOnlyList<string> names) {
