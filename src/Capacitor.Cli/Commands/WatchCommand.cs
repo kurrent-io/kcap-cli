@@ -360,7 +360,7 @@ static partial class WatchCommand {
             Log($"Session below threshold ({state.BufferedLines.Count}/{WatchState.TranscriptThreshold} lines), skipping final drain");
         } else {
             Log("Draining remaining lines...");
-            await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, CancellationToken.None);
+            await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, CancellationToken.None, isFinalDrain: true);
         }
 
         // Signal drain complete to server.
@@ -765,42 +765,25 @@ static partial class WatchCommand {
             string?           agentId,
             WatchState        state,
             string            vendor,
-            CancellationToken ct
+            CancellationToken ct,
+            bool              isFinalDrain = false
         ) {
         try {
             if (!File.Exists(transcriptPath)) {
                 return;
             }
 
-            var newLines       = new List<string>();
-            var newLineNumbers = new List<int>();
+            // Read only newline-TERMINATED lines. A final line still being written by the agent
+            // (no trailing '\n' yet) is held back — sending its truncated prefix and advancing the
+            // position past it permanently drops the completed line (AI-1243: dropped Read results;
+            // large tool_result lines are slow to flush and get caught mid-write). The next drain
+            // re-reads it once complete.
+            var fileText  = await File.ReadAllTextAsync(transcriptPath, ct);
+            var drainRead = SplitNewCompleteLines(fileText, state.LinesProcessed, holdIncompleteFinalLine: !isFinalDrain);
 
-            await using var stream = new FileStream(
-                transcriptPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite
-            );
-            using var reader = new StreamReader(stream);
-
-            var lineIndex = 0;
-
-            while (await reader.ReadLineAsync(ct) is { } line) {
-                if (lineIndex < state.LinesProcessed) {
-                    lineIndex++;
-
-                    continue;
-                }
-
-                if (!string.IsNullOrWhiteSpace(line)) {
-                    newLines.Add(SecretRedactor.RedactLine(line));
-                    newLineNumbers.Add(lineIndex);
-                }
-
-                lineIndex++;
-            }
-
-            var linesRead = lineIndex;
+            var newLineNumbers = drainRead.LineNumbers;
+            var newLines       = drainRead.Lines.Select(SecretRedactor.RedactLine).ToList();
+            var linesRead      = drainRead.NextPosition;
 
             // Track Antigravity in-flight tool calls + the latest step timestamp from this
             // drain's transcript lines (BEFORE appending USAGE lines, which aren't transcript
@@ -1667,6 +1650,65 @@ static partial class WatchCommand {
     }
 
     static void Log(string message) => Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [watch] {message}");
+
+    /// <summary>
+    /// Result of a transcript drain read: the new non-blank <see cref="Lines"/> (beyond the
+    /// caller's processed position), their 0-based <see cref="LineNumbers"/>, and the
+    /// <see cref="NextPosition"/> the caller should advance its watermark to.
+    /// </summary>
+    public readonly record struct NewTranscriptLines(List<string> Lines, List<int> LineNumbers, int NextPosition);
+
+    /// <summary>
+    /// Split <paramref name="fileText"/> into the new complete (newline-terminated) transcript
+    /// lines beyond <paramref name="linesProcessed"/>. A final line that is NOT newline-terminated
+    /// means the agent is mid-write of it: it is held back — excluded from the batch AND from
+    /// <see cref="NewTranscriptLines.NextPosition"/> — so a later drain re-reads it once complete.
+    /// Consuming it would send a truncated line that fails to normalize server-side and permanently
+    /// drop the completed line (AI-1243, the "endless reads" bug; large Read tool_result lines were
+    /// the common victim). Blank lines are skipped from the output but still advance the position,
+    /// matching the long-standing drain behaviour.
+    /// </summary>
+    public static NewTranscriptLines SplitNewCompleteLines(
+            string fileText,
+            int    linesProcessed,
+            bool   holdIncompleteFinalLine = true
+        ) {
+        var newLines       = new List<string>();
+        var newLineNumbers = new List<int>();
+
+        var endsWithNewline = fileText.Length == 0 || fileText[^1] == '\n';
+
+        using var reader    = new StringReader(fileText);
+        var       lineIndex = 0;
+
+        while (reader.ReadLine() is { } line) {
+            if (lineIndex >= linesProcessed && !string.IsNullOrWhiteSpace(line)) {
+                newLines.Add(line);
+                newLineNumbers.Add(lineIndex);
+            }
+
+            lineIndex++;
+        }
+
+        var nextPosition = lineIndex;
+
+        // Hold back a still-being-written final line (no trailing newline yet): keep the position
+        // before it and drop it from this batch if it was collected. The final drain at session end
+        // opts out (holdIncompleteFinalLine: false) — the file is static then, so an unterminated
+        // last line is genuinely the end and must be delivered, not lost.
+        if (holdIncompleteFinalLine && !endsWithNewline && nextPosition > linesProcessed) {
+            var partialIndex = nextPosition - 1;
+
+            if (newLineNumbers.Count > 0 && newLineNumbers[^1] == partialIndex) {
+                newLines.RemoveAt(newLines.Count - 1);
+                newLineNumbers.RemoveAt(newLineNumbers.Count - 1);
+            }
+
+            nextPosition = partialIndex;
+        }
+
+        return new NewTranscriptLines(newLines, newLineNumbers, nextPosition);
+    }
 
     public static int CountFileLines(string path) {
         try {
