@@ -339,7 +339,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 "DaemonConnect",
                 new DaemonConnect(
                     _config.Name, platform, repoPaths, _config.MaxConcurrentAgents, liveIds,
-                    _config.InstanceId, _config.Version, _config.SupportedVendors
+                    _config.InstanceId, _config.Version, _config.SupportedVendors, MachineId.Get()
                 ),
                 cancellationToken: _ct
             );

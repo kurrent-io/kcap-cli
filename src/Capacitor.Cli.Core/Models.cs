@@ -756,6 +756,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(HostedPermissionRequest))]
 [JsonSerializable(typeof(PermissionResolution))]
 [JsonSerializable(typeof(EndAgentSessionResult))]
+[JsonSerializable(typeof(MachineIdFile))]
 [JsonSerializable(typeof(int))]
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(string[]))]
@@ -934,6 +935,12 @@ public readonly record struct ResizeTerminalCommand(
 /// <c>AssemblyInformationalVersion</c>. Logged on connect and surfaced on
 /// the server's <c>DaemonInfo</c> so the dashboard can show what version
 /// each connected daemon is running.</para>
+///
+/// <para><c>MachineId</c> (AI-1207) is this machine's stable id (see
+/// <see cref="MachineId"/>), reported so the server can later prove a daemon
+/// claiming a given repo path is actually running on the requester's
+/// machine. Trailing/optional so an older daemon that doesn't send it (or a
+/// newer daemon talking to an older server that ignores it) never breaks.</para>
 /// </summary>
 public readonly record struct DaemonConnect(
         string    Name,
@@ -943,7 +950,8 @@ public readonly record struct DaemonConnect(
         string[]  LiveAgentIds,
         string?   InstanceId       = null,
         string?   Version          = null,
-        string[]? SupportedVendors = null
+        string[]? SupportedVendors = null,
+        string?   MachineId        = null
     );
 
 public readonly record struct AgentRegistered(
