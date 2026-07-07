@@ -60,7 +60,29 @@ public static class MachineId {
         } catch (IOException) {
             // Lost the race: a peer created machine.json between our ReadPersisted() check
             // (inside Get()) and this create. Adopt whichever id won.
-            return ReadPersisted() ?? id;
+            return ReadPeerIdWithRetry() ?? id;
+        }
+    }
+
+    // Fallback read on the lost-race path. The winner holds the file exclusively (FileShare.None)
+    // between its FileStream construction and disposal; a plain ReadPersisted() (File.ReadAllText
+    // opens FileShare.Read) landing inside that sub-ms window throws an uncaught IOException that
+    // would otherwise propagate out of Get() and fail daemon registration. Retry a few times with
+    // a tiny backoff so the write completes and the id becomes readable; only return null (→ the
+    // caller keeps its locally-generated id) if it stays genuinely unreadable past the budget.
+    const int  PeerReadMaxAttempts = 10;
+    const int  PeerReadDelayMs     = 5;
+
+    static string? ReadPeerIdWithRetry() {
+        for (var attempt = 1; ; attempt++) {
+            try {
+                var peer = ReadPersisted();
+                if (peer is not null || attempt >= PeerReadMaxAttempts) return peer;
+            } catch (IOException) {
+                if (attempt >= PeerReadMaxAttempts) return null;
+            }
+
+            Thread.Sleep(PeerReadDelayMs);
         }
     }
 }
