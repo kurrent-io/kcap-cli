@@ -40,23 +40,13 @@ public class DaemonLockPathsTests {
     }
 
     [Test]
-    [NotInParallel(nameof(DaemonLockPaths) + ".OverrideDirectoryForTesting")]
     public async Task Directory_LivesUnderDaemonsFolder() {
-        // Verify the PRODUCTION fallback (no override, no KCAP_DAEMONS_DIR) uses the renamed
-        // ~/.config/kcap/daemons/ path, not the pre-AI-644 agents/ path. DaemonPathsGlobalSetup
-        // pins KCAP_DAEMONS_DIR to a temp path assembly-wide (so no test can reach the real
-        // daemon), so clear both here to observe the fallback — synchronously, with NO await
-        // between clear and restore, so the real dir is never visible to a parallel test.
-        var savedEnv = Environment.GetEnvironmentVariable(DaemonLockPaths.DaemonsDirEnvVar);
-        string resolved;
-        DaemonLockPaths.OverrideDirectoryForTesting(null);
-        Environment.SetEnvironmentVariable(DaemonLockPaths.DaemonsDirEnvVar, null);
-        try {
-            resolved = DaemonLockPaths.Directory;
-        } finally {
-            Environment.SetEnvironmentVariable(DaemonLockPaths.DaemonsDirEnvVar, savedEnv);
-        }
-
-        await Assert.That(resolved.Replace('\\', '/')).EndsWith("/.config/kcap/daemons");
+        // Verify the PRODUCTION fallback (no KCAP_DAEMONS_DIR set) uses the renamed
+        // ~/.config/kcap/daemons/ path, not the pre-AI-644 agents/ path. Asserted against the pure
+        // ResolveDefaultDir(null) rather than by clearing the process-global env var — clearing it
+        // would race any parallel test that reads DaemonLockPaths.Directory and briefly re-expose the
+        // real daemons dir (Qodo #289 finding 2/3). This is deterministic and touches no shared state.
+        await Assert.That(DaemonLockPaths.ResolveDefaultDir(null).Replace('\\', '/'))
+            .EndsWith("/.config/kcap/daemons");
     }
 }

@@ -34,13 +34,22 @@ public static partial class DaemonLockPaths {
     /// </summary>
     public const string DaemonsDirEnvVar = "KCAP_DAEMONS_DIR";
 
-    static string DefaultDirectory =>
-        Environment.GetEnvironmentVariable(DaemonsDirEnvVar) is { Length: > 0 } dir
-            ? dir
+    /// <summary>
+    /// Pure default-directory resolution: the supplied <see cref="DaemonsDirEnvVar"/> value when
+    /// non-empty, else the fixed <c>~/.config/kcap/daemons/</c> home location. Kept env-free so the
+    /// production fallback can be asserted with an explicit argument (see the test) without mutating
+    /// the process-global environment variable — clearing it at runtime would race any parallel test
+    /// that reads <see cref="Directory"/> and re-expose the real daemons dir this seam exists to hide.
+    /// </summary>
+    internal static string ResolveDefaultDir(string? envValue) =>
+        !string.IsNullOrEmpty(envValue)
+            ? envValue
             : Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 ".config", "kcap", "daemons"
             );
+
+    static string DefaultDirectory => ResolveDefaultDir(Environment.GetEnvironmentVariable(DaemonsDirEnvVar));
 
     static string? _overrideDir;
 
