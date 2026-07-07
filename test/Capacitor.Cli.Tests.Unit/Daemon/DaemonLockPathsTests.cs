@@ -40,10 +40,23 @@ public class DaemonLockPathsTests {
     }
 
     [Test]
+    [NotInParallel(nameof(DaemonLockPaths) + ".OverrideDirectoryForTesting")]
     public async Task Directory_LivesUnderDaemonsFolder() {
-        // Verify the production layout (no test override) uses the renamed
-        // ~/.config/kcap/daemons/ path, not the pre-AI-644 agents/ path.
-        await Assert.That(DaemonLockPaths.Directory.Replace('\\', '/'))
-            .EndsWith("/.config/kcap/daemons");
+        // Verify the PRODUCTION fallback (no override, no KCAP_DAEMONS_DIR) uses the renamed
+        // ~/.config/kcap/daemons/ path, not the pre-AI-644 agents/ path. DaemonPathsGlobalSetup
+        // pins KCAP_DAEMONS_DIR to a temp path assembly-wide (so no test can reach the real
+        // daemon), so clear both here to observe the fallback — synchronously, with NO await
+        // between clear and restore, so the real dir is never visible to a parallel test.
+        var savedEnv = Environment.GetEnvironmentVariable(DaemonLockPaths.DaemonsDirEnvVar);
+        string resolved;
+        DaemonLockPaths.OverrideDirectoryForTesting(null);
+        Environment.SetEnvironmentVariable(DaemonLockPaths.DaemonsDirEnvVar, null);
+        try {
+            resolved = DaemonLockPaths.Directory;
+        } finally {
+            Environment.SetEnvironmentVariable(DaemonLockPaths.DaemonsDirEnvVar, savedEnv);
+        }
+
+        await Assert.That(resolved.Replace('\\', '/')).EndsWith("/.config/kcap/daemons");
     }
 }
