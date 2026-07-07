@@ -25,8 +25,10 @@ namespace Capacitor.Cli.Commands;
 /// are no-ops here (the watcher already tails the transcript continuously).
 ///
 /// Fail-open throughout — a kcap/server problem must never disrupt the Antigravity IDE.
-/// Antigravity conversation ids are dashed UUIDs; the same raw form is used for BOTH the
-/// session-start payload and the watcher so they resolve to one stream (no dash-strip).
+/// Antigravity conversation ids are dashed UUIDs; kcap canonicalizes them to the DASHLESS form
+/// for BOTH the session-start payload and the watcher key so they resolve to one stream (the
+/// dashed id lives on only in the transcript file path). Historical import canonicalizes the
+/// same way, so a conversation captured live and later re-imported dedupes to one stream (AI-1238).
 /// </summary>
 static class AntigravityHookCommand {
     public static Task<int> Handle(string baseUrl, string[] args) =>
