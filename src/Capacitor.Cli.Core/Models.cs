@@ -725,6 +725,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(FindRepoForRemoteRequest))]
 [JsonSerializable(typeof(RefreshAgentWorktreeCommand))]
 [JsonSerializable(typeof(RefreshAgentWorktreeResult))]
+[JsonSerializable(typeof(BorrowProbeResult))]
 [JsonSerializable(typeof(SendInputCommand))]
 [JsonSerializable(typeof(ResizeTerminalCommand))]
 [JsonSerializable(typeof(PrepareEvalCommand))]
@@ -906,6 +907,21 @@ public readonly record struct RefreshAgentWorktreeCommand(
 public readonly record struct RefreshAgentWorktreeResult(
         bool    Success,
         string? Error
+    );
+
+/// <summary>
+/// Daemon reply to the server's <c>ProbeBorrowSource</c> client-result invocation (AI-1207 Phase A,
+/// task A3): "can you borrow this path?". <see cref="CanBorrow"/> mirrors
+/// <c>BorrowAuthResult.Allowed</c>; <see cref="CanonicalCwd"/>/<see cref="CanonicalGitRoot"/> are the
+/// daemon-computed canonical paths (non-null only when the path exists), and <see cref="Reason"/>
+/// carries the rejection reason (<c>path_absent</c> / <c>not_allowed</c>) when not borrowable. Wire
+/// keys (snake_case): <c>can_borrow</c>, <c>canonical_cwd</c>, <c>canonical_git_root</c>, <c>reason</c>.
+/// </summary>
+public record BorrowProbeResult(
+        bool    CanBorrow,
+        string? CanonicalCwd,
+        string? CanonicalGitRoot,
+        string? Reason
     );
 
 public readonly record struct SendInputCommand(

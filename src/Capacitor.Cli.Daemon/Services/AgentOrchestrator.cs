@@ -239,6 +239,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.ReRegisterAgentsHook          =  ReRegisterAgentsAsync;
         _server.FindRepoForRemoteHandler      =  HandleFindRepoForRemote;
         _server.RefreshAgentWorktreeHandler   =  HandleRefreshAgentWorktree;
+        _server.ProbeBorrowSourceHandler      =  HandleProbeBorrowSource;
 
         _server.GetLiveAgentIds = () => [
             .. _agents
@@ -1048,6 +1049,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     /// <summary>
+    /// Handles the server's <c>ProbeBorrowSource</c> client-result invocation (AI-1207 Phase A, task
+    /// A3): "can you borrow this path?". Delegates the actual policy (allowlist, git-root resolution,
+    /// symlink canonicalization) to <see cref="BorrowAuthorizer"/> — constructed fresh over the
+    /// daemon's current <see cref="DaemonConfig"/> so a config reload is picked up on the next probe —
+    /// and maps its <see cref="BorrowAuthResult"/> onto the wire-facing <see cref="BorrowProbeResult"/>.
+    /// </summary>
+    async Task<BorrowProbeResult> HandleProbeBorrowSource(string path) {
+        var result = await new BorrowAuthorizer(_config).AuthorizeBorrowAsync(path);
+
+        return new BorrowProbeResult(result.Allowed, result.CanonicalCwd, result.CanonicalGitRoot, result.Reason);
+    }
+
+    /// <summary>
     /// AI-1163: launch-time worktree sync for a mirror-requester review flow. Mirrors the requester's
     /// working-tree state (tracked + untracked, gitignore-respected) into the freshly-created reviewer
     /// worktree before the reviewer process is spawned, so round 1 sees in-progress/uncommitted code.
@@ -1563,6 +1577,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Test-only entry point to the private send-input handler (AI-30 bracketed-paste submit).</summary>
     internal Task HandleSendInputForTest(SendInputCommand cmd) => HandleSendInput(cmd);
+
+    /// <summary>Test-only entry point to the private probe-borrow-source handler (AI-1207 task A3).</summary>
+    internal Task<BorrowProbeResult> HandleProbeBorrowSourceForTest(string path) => HandleProbeBorrowSource(path);
 
     internal Task RegisterAgentForTestAsync(AgentInstance agent) => RegisterAgentAsync(agent);
     internal Task ReRegisterAgentsForTestAsync() => ReRegisterAgentsAsync();
