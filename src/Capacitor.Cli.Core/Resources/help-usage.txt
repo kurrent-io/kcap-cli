@@ -35,6 +35,10 @@ Daemon:
   repos add <path>                 Add a repo path (supports "." for cwd)
   repos remove <path>              Remove a repo path
 
+Projects:
+  projects                         List projects you can see (repos, members, your role)
+  project <slug>                   Show project detail (repos, members, join requests)
+
 Session:
   errors [--chain] [id]            List tool call errors for a session
   recap [--chain] [--full] [id]    Session summary (--full for raw transcript)

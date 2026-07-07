@@ -1,0 +1,8 @@
+kcap project — Show project detail
+
+Usage: kcap project <slug>
+
+Prints project metadata, the repo list, the member list, and (owners/admins
+only) pending join requests and invites.
+
+Requires the Team or Enterprise plan; the server returns a 403 on Free.

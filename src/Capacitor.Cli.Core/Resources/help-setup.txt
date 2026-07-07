@@ -5,7 +5,7 @@ Usage: kcap setup [options]
 Options:
   --server-url <url>          Server URL (skip prompt)
   --daemon-name <name>        Daemon name (skip prompt)
-  --default-visibility <vis>  Default visibility: private, org_public, public
+  --default-visibility <vis>  Default visibility: private, project, org_public, public
   --no-prompt                 Non-interactive mode (requires --server-url)
   --github                    Sign in with GitHub instead of org SSO during
                               the login step (default is org SSO when a

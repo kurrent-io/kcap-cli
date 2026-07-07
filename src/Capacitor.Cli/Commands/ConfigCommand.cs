@@ -80,8 +80,8 @@ public static class ConfigCommand {
             "disable_memory_index" => throw new ArgumentException($"Invalid value for disable_memory_index: '{value}'. Must be true or false."),
             "use_provider_api_key" when bool.TryParse(value, out var b) => profile with { UseProviderApiKey = b },
             "use_provider_api_key" => throw new ArgumentException($"Invalid value for use_provider_api_key: '{value}'. Must be true or false."),
-            "default_visibility" when value is "private" or "org_public" or "public" => profile with { DefaultVisibility = value },
-            "default_visibility" => throw new ArgumentException("Invalid value. Must be: private, org_public, or public"),
+            "default_visibility" when value is "private" or "project" or "org_public" or "public" => profile with { DefaultVisibility = value },
+            "default_visibility" => throw new ArgumentException("Invalid value. Must be: private, project, org_public, or public"),
             "excluded_repos" => profile with { ExcludedRepos = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) },
             _ => throw new ArgumentException($"Unknown config key: {key}")
         };
@@ -96,7 +96,7 @@ public static class ConfigCommand {
         Console.Error.WriteLine("  daemon.claude_path          Path to claude binary (default: claude)");
         Console.Error.WriteLine("  daemon.codex_path           Path to codex binary (default: codex)");
         Console.Error.WriteLine("  update_check                Enable update check (true/false)");
-        Console.Error.WriteLine("  default_visibility          Default session visibility (private, org_public, public)");
+        Console.Error.WriteLine("  default_visibility          Default session visibility (private, project, org_public, public)");
         Console.Error.WriteLine("  disable_session_guidelines  Skip injecting recurring-lessons context at SessionStart (true/false)");
         Console.Error.WriteLine("  use_provider_api_key        Keep ANTHROPIC_API_KEY/OPENAI_API_KEY in headless agent spawns (true/false)");
         Console.Error.WriteLine("  excluded_repos              Excluded repos, comma-separated (owner/repo,owner/repo)");
