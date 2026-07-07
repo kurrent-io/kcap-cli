@@ -245,6 +245,22 @@ static class McpFlowsServer {
 
         var sessionId = ArgParsing.ResolveSessionIdFromEnv();
 
+        // AI-1207 B2: this machine's stable id, matched server-side against each connected daemon's
+        // registration id to prove the reviewer would run on the SAME host as this requester. Same
+        // call the daemon reports at registration (ServerConnection), so the ids are identical — the
+        // last piece that lets the server pick the borrow path instead of a mirrored worktree.
+        // requester_machine_id is optional on the wire: if resolving it throws (e.g. an unwritable
+        // config dir on first-run create), degrade to null so the server just falls back to the
+        // mirror rather than aborting the whole flow-start.
+        string? machineId;
+        try {
+            machineId = MachineId.Get();
+        } catch (Exception e) {
+            await Console.Error.WriteLineAsync(
+                $"kcap mcp flows: could not resolve machine id ({e.Message}); starting review flow without requester_machine_id (server falls back to mirror)");
+            machineId = null;
+        }
+
         var body = new StartReviewFlowDto(
             Kind:                 kind,
             TargetKind:           targetKind,
@@ -261,12 +277,7 @@ static class McpFlowsServer {
             RepoPath:             repoRoot,
             Mode:                 mode,
             Async:                true,
-            // AI-1207 B2: this machine's stable id, matched server-side against each connected
-            // daemon's registration id to prove the reviewer would run on the SAME host as this
-            // requester. Same call the daemon reports at registration (ServerConnection), so the
-            // ids are identical — the last piece that lets the server pick the borrow path instead
-            // of a mirrored worktree. Absent it, the server always falls back (no same-host proof).
-            RequesterMachineId:   MachineId.Get()
+            RequesterMachineId:   machineId
         );
 
         return await client.PostAsync(
