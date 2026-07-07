@@ -102,8 +102,10 @@ public class BorrowAuthorizerTests {
             await Assert.That(result.Reason).IsEqualTo("not_allowed");
         } finally {
             // Remove the symlink itself first so recursive delete never has to reason about
-            // whether it would otherwise be followed into outsideRoot.
-            File.Delete(link);
+            // whether it would otherwise be followed into outsideRoot. Directory.Delete removes the
+            // reparse point cross-platform (File.Delete throws UnauthorizedAccessException on a
+            // Windows directory symlink).
+            Directory.Delete(link);
             allowedRoot.Delete(recursive: true);
             outsideRoot.Delete(recursive: true);
         }

@@ -29,7 +29,15 @@ public class BorrowAuthorizer(DaemonConfig config) {
             return Task.FromResult(new BorrowAuthResult(false, null, null, "path_absent"));
         }
 
-        var canonicalCwd    = Canonicalize(path);
+        string canonicalCwd;
+        try {
+            canonicalCwd = Canonicalize(path);
+        } catch {
+            // realpath resolution failed (permission on an ancestor, transient FS error, …). Fail
+            // CLOSED — never authorize against an unresolved path on this security boundary (Qodo #290 #3).
+            return Task.FromResult(new BorrowAuthResult(false, null, null, "not_allowed"));
+        }
+
         var canonicalGitRoot = GitRepository.FindRoot(canonicalCwd);
 
         var allowed = canonicalGitRoot is not null
@@ -52,16 +60,7 @@ public class BorrowAuthorizer(DaemonConfig config) {
     /// Also called by <c>WorktreeInfo.Borrowed</c> (Task A5) so both sides of a borrow compare
     /// canonical paths.
     /// </summary>
-    public static string Canonicalize(string path) {
-        var fullPath = Path.GetFullPath(path);
-
-        try {
-            return RealPath(fullPath);
-        } catch {
-            // Any I/O error during resolution — fall back to the lexical full path.
-            return fullPath;
-        }
-    }
+    public static string Canonicalize(string path) => RealPath(Path.GetFullPath(path));
 
     /// <summary>
     /// Walks the path root-first, resolving each accumulated prefix a single hop at a time: when a

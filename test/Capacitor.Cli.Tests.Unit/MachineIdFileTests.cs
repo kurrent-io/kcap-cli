@@ -60,4 +60,23 @@ public class MachineIdFileTests {
         await Assert.That(again).IsEqualTo(seeded);
         await Assert.That(File.ReadAllText(MachinePath)).IsEqualTo(before);
     }
+
+    [Test]
+    public async Task Get_WhenMachineJsonIsCorrupt_HealsTheFileAndReturnsAStableId() {
+        // A corrupt machine.json (partial/garbled write) makes ReadPersisted() return null, so Get()
+        // falls to Create(). Without the heal, Create()'s exclusive FileMode.CreateNew can't overwrite
+        // the existing corrupt file, so every Get() churns a fresh, UNPERSISTED GUID (Qodo #290 #2).
+        File.WriteAllText(MachinePath, "{ this is not valid json");
+
+        var first = MachineId.Get();
+        await Assert.That(first).IsNotNull();
+        await Assert.That(first).IsNotEmpty();
+
+        // Stable across calls — the corrupt file was healed, not re-generated each time.
+        var second = MachineId.Get();
+        await Assert.That(second).IsEqualTo(first);
+
+        // The heal actually persisted: a fresh read off disk returns the same id.
+        await Assert.That(MachineId.ReadPersisted()).IsEqualTo(first);
+    }
 }

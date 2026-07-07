@@ -37,7 +37,9 @@ public static class MachineId {
             var json = File.ReadAllText(MachinePath);
             var file = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.MachineIdFile);
             return string.IsNullOrWhiteSpace(file.Id) ? null : file.Id;
-        } catch (JsonException) {
+        } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException) {
+            // Corrupt/partial JSON, or a transient read error while a peer holds the file exclusively
+            // mid-write — treat all as "no readable id right now"; never throw out of Get() (Qodo #290 #1).
             return null;
         }
     }
@@ -53,35 +55,42 @@ public static class MachineId {
         Directory.CreateDirectory(dir);
 
         try {
-            using var stream = new FileStream(MachinePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-            using var writer = new StreamWriter(stream);
-            writer.Write(JsonSerializer.Serialize(new MachineIdFile(id), CapacitorJsonContext.Default.MachineIdFile));
+            WriteId(FileMode.CreateNew, id);   // exclusive create — the brand-new-machine case
             return id;
         } catch (IOException) {
-            // Lost the race: a peer created machine.json between our ReadPersisted() check
-            // (inside Get()) and this create. Adopt whichever id won.
-            return ReadPeerIdWithRetry() ?? id;
+            // machine.json already exists: adopt a peer's valid id if we can read one (the
+            // lost-the-race case — a peer created it between our ReadPersisted() check inside Get()
+            // and this create).
+            var peer = ReadPeerIdWithRetry();
+            if (peer is not null) return peer;
+            // ...else it's persistently unreadable (corrupt / stuck partial write). HEAL by overwriting
+            // once so Get() returns a STABLE persisted id instead of churning a new GUID each call
+            // (Qodo #290 #2). Best-effort: on a heal race we still return our id; the next Get() reads
+            // whichever heal won.
+            try { WriteId(FileMode.Create, id); } catch (IOException) { /* best effort */ }
+            return id;
         }
+    }
+
+    static void WriteId(FileMode mode, string id) {
+        using var stream = new FileStream(MachinePath, mode, FileAccess.Write, FileShare.None);
+        using var writer = new StreamWriter(stream);
+        writer.Write(JsonSerializer.Serialize(new MachineIdFile(id), CapacitorJsonContext.Default.MachineIdFile));
     }
 
     // Fallback read on the lost-race path. The winner holds the file exclusively (FileShare.None)
     // between its FileStream construction and disposal; a plain ReadPersisted() (File.ReadAllText
-    // opens FileShare.Read) landing inside that sub-ms window throws an uncaught IOException that
-    // would otherwise propagate out of Get() and fail daemon registration. Retry a few times with
-    // a tiny backoff so the write completes and the id becomes readable; only return null (→ the
-    // caller keeps its locally-generated id) if it stays genuinely unreadable past the budget.
+    // opens FileShare.Read) landing inside that sub-ms window fails to read and returns null (the
+    // IOException is now swallowed there — Qodo #290 #1). Retry a few times with a tiny backoff so
+    // the write completes and the id becomes readable; only return null (→ the caller heals with its
+    // own generated id) if it stays genuinely unreadable past the budget.
     const int  PeerReadMaxAttempts = 10;
     const int  PeerReadDelayMs     = 5;
 
     static string? ReadPeerIdWithRetry() {
         for (var attempt = 1; ; attempt++) {
-            try {
-                var peer = ReadPersisted();
-                if (peer is not null || attempt >= PeerReadMaxAttempts) return peer;
-            } catch (IOException) {
-                if (attempt >= PeerReadMaxAttempts) return null;
-            }
-
+            var peer = ReadPersisted();
+            if (peer is not null || attempt >= PeerReadMaxAttempts) return peer;
             Thread.Sleep(PeerReadDelayMs);
         }
     }
