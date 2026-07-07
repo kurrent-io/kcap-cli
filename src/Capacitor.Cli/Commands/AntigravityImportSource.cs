@@ -15,14 +15,19 @@ namespace Capacitor.Cli.Commands;
 /// the same lines the live watcher tails — so historical and live import converge on the
 /// server's <c>AntigravityTranscriptNormalizer</c> (routed phase, like Gemini).
 ///
-/// <para>The conversation id is the brain dir name and is used VERBATIM as the session id
-/// (matching live capture, which uses the dashed conversationId), so a session captured
-/// live and later re-imported dedupes to one stream. Subagents are separate conversations
-/// linked via <c>messages/*.json</c> (see <see cref="AntigravitySubagents"/>); roots are
-/// conversations that are never a child, and their children are imported as subagents under
-/// them. Antigravity records no machine-readable workspace path in the transcript, so import
-/// leaves <c>cwd</c> null (no repo enrichment / exclusion on historical import — a v1
-/// limitation shared with Gemini; live capture gets cwd from the hook payload).</para>
+/// <para>The conversation id is the brain dir name (a dashed UUID). The session id we surface
+/// is its DASHLESS canonical form — matching live capture (the Antigravity hook and
+/// <c>kcap watch</c> strip dashes) so a session captured live and later re-imported dedupes to
+/// one stream, and so <c>kcap import --antigravity --session &lt;id&gt;</c> filtering is
+/// format-insensitive (AI-1238). The dashed conversation id is kept only for filesystem paths
+/// (the brain-dir transcript). Subagents are separate conversations linked via
+/// <c>messages/*.json</c> (see <see cref="AntigravitySubagents"/>); roots are conversations
+/// that are never a child, and their children are imported as subagents under them — each with
+/// the DASHLESS child conversation id as its <c>agent_id</c> (the server canonicalizes agent_id
+/// to dashless on both ingest and watermark read, so this matches live routing; mirrors
+/// <c>GeminiImportSource</c>). Antigravity records no machine-readable workspace path in the
+/// transcript, so import leaves <c>cwd</c> null (no repo enrichment / exclusion on historical
+/// import — a v1 limitation shared with Gemini; live capture gets cwd from the hook payload).</para>
 ///
 /// <para>Token/model cost lives off-transcript in each conversation's <c>gen_metadata</c>
 /// db; the live path streams it as synthetic USAGE lines. Injecting it on historical import
@@ -60,6 +65,11 @@ internal sealed class AntigravityImportSource : IImportSource {
         var convIds   = Directory.EnumerateDirectories(BrainRoot).Select(Path.GetFileName).OfType<string>().ToList();
         var byRoot    = AntigravitySubagents.BuildRootDescendants(convIds, parentMap);
 
+        // Normalize the --session filter to the dashless canonical form so it matches the
+        // dashless session id we surface, whether the user passed a dashed or dashless id
+        // (mirrors GeminiImportSource) (AI-1238).
+        var sessionFilter = filters.FilterSession is { } fs ? ImportCommand.NormalizeGuid(fs) : null;
+
         var sinceUtc = filters.Since is { } since
             ? new DateTimeOffset(since.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), TimeSpan.Zero)
             : (DateTimeOffset?)null;
@@ -67,7 +77,11 @@ internal sealed class AntigravityImportSource : IImportSource {
         foreach (var (convId, descendants) in byRoot) {
             ct.ThrowIfCancellationRequested();
 
-            if (filters.FilterSession is { } fs && !string.Equals(convId, fs, StringComparison.Ordinal)) continue;
+            // Dashless canonical id — matches live capture and fixes format-sensitive --session
+            // filtering. The dashed convId still resolves the on-disk brain-dir transcript path.
+            var sessionId = ImportCommand.NormalizeGuid(convId);
+
+            if (sessionFilter is not null && !string.Equals(sessionId, sessionFilter, StringComparison.Ordinal)) continue;
 
             var transcript = AntigravityPaths.TranscriptFullPath(convId, _home, _geminiCliHome);
             if (!File.Exists(transcript)) continue;
@@ -79,12 +93,15 @@ internal sealed class AntigravityImportSource : IImportSource {
             if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) continue;
 
             result.Add(new DiscoveredSession(
-                SessionId:      convId,
+                SessionId:      sessionId,
                 Vendor:         Vendor,
                 Cwd:            null,
                 FirstTimestamp: firstTimestamp,
                 SourceMeta:     new Dictionary<string, object?> {
                     ["TranscriptPath"] = transcript,
+                    // Dashed conversation ids — kept dashed because they resolve on-disk brain-dir
+                    // transcript paths in ImportChildrenAsync; the server-facing agent_id is
+                    // canonicalized to dashless there.
                     ["Children"]       = descendants, // all transitive descendants, nested under this root
                 }));
         }
@@ -225,14 +242,20 @@ internal sealed class AntigravityImportSource : IImportSource {
         foreach (var childId in children) {
             ct.ThrowIfCancellationRequested();
 
+            // childId is the DASHED conversation id — it names the on-disk brain dir, so it
+            // resolves the transcript path. The server-facing agent_id is its DASHLESS canonical
+            // form: the server canonicalizes agent_id on both ingest and watermark read, so this
+            // matches live routing/correlation and the dashless session ids used everywhere else
+            // (mirrors GeminiImportSource) (AI-1238).
             var childTranscript = AntigravityPaths.TranscriptFullPath(childId, _home, _geminiCliHome);
             if (!File.Exists(childTranscript)) continue;
 
-            // Where the child's own (rootId, childId) stream is already ingested up to. agentId =
-            // raw child conversation id (matches how live child events route).
+            var childAgentId = ImportCommand.NormalizeGuid(childId);
+
+            // Where the child's own (rootId, childAgentId) stream is already ingested up to.
             int? chwm;
             try {
-                chwm = await FetchServerLastLineAsync(client, baseUrl, rootId, childId, ct);
+                chwm = await FetchServerLastLineAsync(client, baseUrl, rootId, childAgentId, ct);
             } catch (OperationCanceledException) {
                 throw;
             } catch {
@@ -270,9 +293,9 @@ internal sealed class AntigravityImportSource : IImportSource {
                 // so we only post stop when start truly re-marked the agent, and a re-import retries
                 // otherwise (AI-1160 review).
                 if (await PostHookAsync(client, baseUrl, "subagent-start",
-                        BuildSubagentStartPayload(rootId, childId, childTranscript, strict: true), ct))
+                        BuildSubagentStartPayload(rootId, childAgentId, childTranscript, strict: true), ct))
                     await PostHookAsync(client, baseUrl, "subagent-stop",
-                        BuildSubagentStopPayload(rootId, childId, childTranscript, strict: true), ct);
+                        BuildSubagentStopPayload(rootId, childAgentId, childTranscript, strict: true), ct);
 
                 continue;
             }
@@ -285,13 +308,13 @@ internal sealed class AntigravityImportSource : IImportSource {
 
             // Fail-closed: no content unless the subagent registered first.
             if (!await PostHookAsync(client, baseUrl, "subagent-start",
-                    BuildSubagentStartPayload(rootId, childId, childTranscript), ct))
+                    BuildSubagentStartPayload(rootId, childAgentId, childTranscript), ct))
                 continue;
 
             try {
                 await SessionImporter.SendTranscriptBatches(
                     httpClient: client, baseUrl: baseUrl, sessionId: rootId,
-                    filePath: childTranscript, agentId: childId, startLine: childStartLine, vendor: Vendor);
+                    filePath: childTranscript, agentId: childAgentId, startLine: childStartLine, vendor: Vendor);
             } catch (OperationCanceledException) {
                 throw;
             } catch {
@@ -299,7 +322,7 @@ internal sealed class AntigravityImportSource : IImportSource {
             }
 
             await PostHookAsync(client, baseUrl, "subagent-stop",
-                BuildSubagentStopPayload(rootId, childId, childTranscript), ct);
+                BuildSubagentStopPayload(rootId, childAgentId, childTranscript), ct);
         }
     }
 
