@@ -260,7 +260,13 @@ static class McpFlowsServer {
             DaemonName:           null,
             RepoPath:             repoRoot,
             Mode:                 mode,
-            Async:                true
+            Async:                true,
+            // AI-1207 B2: this machine's stable id, matched server-side against each connected
+            // daemon's registration id to prove the reviewer would run on the SAME host as this
+            // requester. Same call the daemon reports at registration (ServerConnection), so the
+            // ids are identical — the last piece that lets the server pick the borrow path instead
+            // of a mirrored worktree. Absent it, the server always falls back (no same-host proof).
+            RequesterMachineId:   MachineId.Get()
         );
 
         return await client.PostAsync(
@@ -905,7 +911,8 @@ record StartReviewFlowDto(
     [property: JsonPropertyName("daemon_name")]            string? DaemonName,
     [property: JsonPropertyName("repo_path")]              string? RepoPath,
     [property: JsonPropertyName("mode")]                   string? Mode,
-    [property: JsonPropertyName("async")]                  bool    Async
+    [property: JsonPropertyName("async")]                  bool    Async,
+    [property: JsonPropertyName("requester_machine_id")]  string? RequesterMachineId = null
 );
 
 /// <summary>
