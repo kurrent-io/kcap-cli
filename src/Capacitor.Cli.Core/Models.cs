@@ -848,8 +848,6 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(ReviewLaunchInfo))]
 [JsonSerializable(typeof(LaunchKind))]
 [JsonSerializable(typeof(FindRepoForRemoteRequest))]
-[JsonSerializable(typeof(RefreshAgentWorktreeCommand))]
-[JsonSerializable(typeof(RefreshAgentWorktreeResult))]
 [JsonSerializable(typeof(BorrowProbeResult))]
 [JsonSerializable(typeof(SendInputCommand))]
 [JsonSerializable(typeof(ResizeTerminalCommand))]
@@ -1029,18 +1027,11 @@ public readonly record struct LaunchAgentCommand(
         LaunchKind        Kind            = LaunchKind.Default,
         ReviewLaunchInfo? Review          = null,
         string?           BaseRef         = null,
-        // AI-1163: for a mirror-requester review flow, the requester's repo root. When set, the
-        // daemon syncs its working tree (uncommitted + untracked) into the freshly-created reviewer
-        // worktree BEFORE spawning, so round 1 sees in-progress code — not just committed HEAD. The
-        // daemon validates the source is a checkout of the same repo (origin match) before copying;
-        // a mismatch (e.g. a different machine, where the path doesn't resolve) skips the sync.
-        // Appended last as an optional field so the SignalR positional binding stays wire-compatible
-        // with older daemons/servers.
-        string?           SyncFromRepoRoot = null,
         // AI-1126 D-c: for a review-flow launch, the flow definition's MCP allowlist — server-owned
         // names the daemon resolves against the kcap-owned KcapMcpRegistry and materializes into the
         // launcher's MCP config (flow-starting servers are stripped regardless of listing). Appended
-        // last, same wire-compat rule as SyncFromRepoRoot above.
+        // last as an optional field so the SignalR positional binding stays wire-compatible with
+        // older daemons/servers.
         string[]?         McpAllowlist = null,
         // AI-1207 Phase A: launch against the user's own checkout instead of a fresh daemon-owned
         // worktree. A bool on the wire (not the WorkLocation enum) — WorkLocation's numeric values
@@ -1082,28 +1073,6 @@ public readonly record struct FindRepoForRemoteRequest(
         string   Owner,
         string   Repo,
         string[] CandidatePaths
-    );
-
-/// <summary>
-/// Server → daemon command to sync the source repo's current working-tree state (tracked +
-/// untracked non-ignored files) into the reviewer agent's daemon-created worktree, so the
-/// reviewer sees Claude's latest uncommitted changes before a code-review follow-up round.
-/// Wire keys (snake_case): <c>agent_id</c>, <c>source_repo_root</c>, <c>exclude_paths</c>.
-/// </summary>
-public readonly record struct RefreshAgentWorktreeCommand(
-        string   AgentId,
-        string   SourceRepoRoot,
-        string[] ExcludePaths
-    );
-
-/// <summary>
-/// Daemon reply to <see cref="RefreshAgentWorktreeCommand"/>. <see cref="Success"/> is
-/// <c>false</c> when a guard prevented the sync or the sync itself threw; <see cref="Error"/>
-/// carries the reason. Wire keys: <c>success</c>, <c>error</c>.
-/// </summary>
-public readonly record struct RefreshAgentWorktreeResult(
-        bool    Success,
-        string? Error
     );
 
 /// <summary>

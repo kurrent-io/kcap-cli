@@ -46,7 +46,6 @@ public partial class AgentOrchestratorVendorTests {
                 Tools: null,
                 AttachmentIds: ["would-be-attachment"], // set so we prove the attachment download-into-cwd is skipped
                 Vendor: "claude",
-                SyncFromRepoRoot: cwd,                   // set so we prove the launch-time mirror is skipped
                 Borrowed: true,
                 BorrowCwd: cwd
             );

@@ -7,9 +7,8 @@ public readonly record struct BorrowAuthResult(bool Allowed, string? CanonicalCw
 
 /// <summary>
 /// Decides whether a given cwd may be <i>borrowed</i> — a read-only reviewer run in it on
-/// this daemon. This repurposes the intent of <c>AgentOrchestrator.IsAllowedSyncSourceAsync</c>
-/// (the mirror-sync guard) but is deliberately a new, standalone type: unlike that guard, borrow
-/// authorization has no same-origin check, since cross-repo borrowing is expected.
+/// this daemon. Deliberately a standalone type with no same-origin check, since cross-repo
+/// borrowing is expected (unlike the retired mirror-sync guard, which required an origin match).
 ///
 /// Depends only on <see cref="DaemonConfig.IsRepoAllowed"/> and <see cref="GitRepository.FindRoot"/>,
 /// both cheap/local, so this is unit-testable without a running daemon.
