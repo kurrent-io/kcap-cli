@@ -92,6 +92,16 @@ public static class HttpClientExtensions {
         // the same actionable message the retry guards print.
         EnsureAbsolute(baseUrl);
 
+        // Cross-process cache: each hook invocation is a fresh process, so the in-process static
+        // above never helps a hook. Skip the /auth/config round-trip when a recent result is on disk.
+        var cached = AuthProviderCache.TryGet(baseUrl);
+
+        if (cached is not null) {
+            cachedProvider = cached;
+
+            return cached;
+        }
+
         using var http = new HttpClient();
 
         try {
@@ -100,7 +110,8 @@ public static class HttpClientExtensions {
             if (response.IsSuccessStatusCode) {
                 var config   = await response.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.AuthDiscoveryResponse, ct);
                 var provider = config?.Provider ?? "None";
-                cachedProvider = provider; // Only cache successful discovery
+                cachedProvider = provider;          // in-process
+                AuthProviderCache.Set(baseUrl, provider); // cross-process; only cache successful discovery
 
                 return provider;
             }
