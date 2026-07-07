@@ -89,52 +89,10 @@ public class LaunchAgentCommandWireFormatTests {
     }
 
     [Test]
-    public async Task DaemonDeserialises_SyncFromRepoRoot_WhenPresent() {
-        // AI-1163: a mirror-requester review-flow launch carries the requester's repo root so the
-        // daemon can sync its live working tree into the reviewer worktree before spawning.
-        var cmd = new LaunchAgentCommand(
-            AgentId:          "sync1234",
-            Prompt:           null,
-            Model:            "default",
-            Effort:           null,
-            RepoPath:         "/tmp/repo",
-            Tools:            null,
-            AttachmentIds:    null,
-            Vendor:           "codex",
-            Kind:             LaunchKind.ReviewFlow,
-            SyncFromRepoRoot: "/home/me/dev/kcap"
-        );
-
-        var wire   = JsonSerializer.Serialize(cmd, ServerWireOptions);
-        var parsed = JsonSerializer.Deserialize(wire, CapacitorJsonContext.Default.LaunchAgentCommand);
-
-        await Assert.That(wire).Contains("\"sync_from_repo_root\":\"/home/me/dev/kcap\"");
-        await Assert.That(parsed.SyncFromRepoRoot).IsEqualTo("/home/me/dev/kcap");
-        await Assert.That(parsed.Kind).IsEqualTo(LaunchKind.ReviewFlow);
-    }
-
-    [Test]
-    public async Task DaemonDeserialises_SyncFromRepoRoot_DefaultsToNull_WhenAbsent() {
-        // Version skew: an older server that predates AI-1163 omits the field entirely. The daemon
-        // must still bind the command (positional SignalR binding) and default the field to null —
-        // i.e. no launch-time sync — rather than failing to invoke LaunchAgent (cf. DEV-1665).
-        const string legacyWire =
-            """
-            {"agent_id":"legacy01","prompt":null,"model":"opus","effort":null,"repo_path":"/tmp/repo","tools":null,"attachment_ids":null,"vendor":"claude","kind":"reviewFlow"}
-            """;
-
-        var parsed = JsonSerializer.Deserialize(legacyWire, CapacitorJsonContext.Default.LaunchAgentCommand);
-
-        await Assert.That(parsed.SyncFromRepoRoot).IsNull();
-        await Assert.That(parsed.Kind).IsEqualTo(LaunchKind.ReviewFlow);
-        await Assert.That(parsed.RepoPath).IsEqualTo("/tmp/repo");
-    }
-
-    [Test]
     public async Task Mcp_allowlist_round_trips_snake_case() {
         // AI-1126 D-c: the server sends the flow definition's MCP allowlist so the daemon can
         // thread it to the launcher (Task 6 materializes it). Appended last after
-        // SyncFromRepoRoot so older daemons/servers stay wire-compatible.
+        // BaseRef so older daemons/servers stay wire-compatible.
         var cmd = new LaunchAgentCommand(
             AgentId:       "mcp00001",
             Prompt:        null,
