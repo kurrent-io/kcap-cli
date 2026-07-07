@@ -1,15 +1,27 @@
-using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Unit tests for <see cref="AntigravityImportSource"/> discovery (AI-1160): roots are
-/// conversations that are not a subagent of another (per the messages linkage), children
-/// are attached for subagent import, and IsImportRelevantLine matches the normalizer's
-/// event-producing step types.
+/// Unit tests for <see cref="AntigravityImportSource"/> discovery. AI-1218 redesign: roots are
+/// conversations that are never invoked as a child (per the parent transcript's
+/// INVOKE_SUBAGENT steps — see <c>AntigravitySubagents.BuildParentMap</c>), children are
+/// attached for subagent import, and IsImportRelevantLine matches the normalizer's
+/// event-producing step types. Conversation ids here are GUID-shaped because
+/// ChildConversationIdsFromLine only recognizes GUID-shaped ids (matching real brain-dir names).
 /// </summary>
 public class AntigravityImportSourceTests {
+    const string Root  = "aaaaaaaa-0000-0000-0000-00000000a001";
+    const string Child = "bbbbbbbb-0000-0000-0000-00000000b001";
+    const string Grand = "cccccccc-0000-0000-0000-00000000c001";
+    const string SessA = "aaaaaaaa-0000-0000-0000-00000000a00a";
+    const string SessB = "bbbbbbbb-0000-0000-0000-00000000b00b";
+
+    // The brain-dir conversation id is dashed on disk, but the surfaced session id is the
+    // dashless canonical form (matching live capture — AI-1238). Children stay dashed because
+    // they resolve on-disk brain-dir transcript paths.
+    static string Dashless(string id) => Guid.Parse(id).ToString("N");
+
     static string NewHome() {
         var home = Path.Combine(Path.GetTempPath(), "kcap-agimp-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(home);
@@ -25,11 +37,15 @@ public class AntigravityImportSourceTests {
         File.WriteAllLines(Path.Combine(dir, "transcript_full.jsonl"), lines);
     }
 
-    static void WriteMessage(string home, string owner, string sender, string recipient) {
-        var dir = Path.Combine(BrainDir(home, owner), ".system_generated", "messages");
+    // Appends an INVOKE_SUBAGENT step to convId's transcript naming childId as the spawned
+    // conversation — the AI-1218 spawn-time linkage BuildParentMap now reads instead of
+    // messages/*.json.
+    static void AppendInvoke(string home, string convId, string childId) {
+        var dir = Path.Combine(BrainDir(home, convId), ".system_generated", "logs");
         Directory.CreateDirectory(dir);
-        File.WriteAllText(Path.Combine(dir, sender + ".json"),
-            new JsonObject { ["sender"] = sender, ["recipient"] = recipient }.ToJsonString());
+        File.AppendAllLines(Path.Combine(dir, "transcript_full.jsonl"), [
+            $$"""{"type":"INVOKE_SUBAGENT","content":"{\"conversationId\":\"{{childId}}\"}"}"""
+        ]);
     }
 
     static string UserLine(string ts) =>
@@ -39,9 +55,9 @@ public class AntigravityImportSourceTests {
     public async Task Discover_returns_roots_only_and_attaches_children() {
         var home = NewHome();
         try {
-            WriteTranscript(home, "ROOT", UserLine("2026-07-02T19:00:00Z"));
-            WriteTranscript(home, "CHILD", UserLine("2026-07-02T19:01:00Z"));
-            WriteMessage(home, owner: "ROOT", sender: "CHILD", recipient: "ROOT"); // CHILD is a subagent of ROOT
+            WriteTranscript(home, Root, UserLine("2026-07-02T19:00:00Z"));
+            WriteTranscript(home, Child, UserLine("2026-07-02T19:01:00Z"));
+            AppendInvoke(home, Root, Child); // Root invokes Child as a subagent
 
             var source = new AntigravityImportSource(home: home, geminiCliHome: "");
             await Assert.That(source.IsAvailable).IsTrue();
@@ -50,15 +66,15 @@ public class AntigravityImportSourceTests {
                 new DiscoveryFilters(FilterCwd: null, FilterSession: null, Since: null, MinLines: 0),
                 CancellationToken.None);
 
-            // Only ROOT is a top-level session; CHILD is imported under it.
+            // Only Root is a top-level session; Child is imported under it.
             await Assert.That(discovered.Count).IsEqualTo(1);
             var root = discovered[0];
-            await Assert.That(root.SessionId).IsEqualTo("ROOT");
+            await Assert.That(root.SessionId).IsEqualTo(Dashless(Root));
             await Assert.That(root.Vendor).IsEqualTo("antigravity");
             await Assert.That(root.FirstTimestamp).IsEqualTo(DateTimeOffset.Parse("2026-07-02T19:00:00Z"));
 
             var children = (List<string>)root.SourceMeta!["Children"]!;
-            await Assert.That(children).Contains("CHILD");
+            await Assert.That(children).Contains(Child);
         } finally { Directory.Delete(home, recursive: true); }
     }
 
@@ -66,12 +82,12 @@ public class AntigravityImportSourceTests {
     public async Task Discover_nests_transitive_descendants_under_the_top_level_root() {
         var home = NewHome();
         try {
-            // Chain ROOT ← CHILD ← GRAND. Only ROOT is a session; CHILD *and* GRAND import under it.
-            WriteTranscript(home, "ROOT",  UserLine("2026-07-02T19:00:00Z"));
-            WriteTranscript(home, "CHILD", UserLine("2026-07-02T19:01:00Z"));
-            WriteTranscript(home, "GRAND", UserLine("2026-07-02T19:02:00Z"));
-            WriteMessage(home, owner: "ROOT",  sender: "CHILD", recipient: "ROOT");
-            WriteMessage(home, owner: "CHILD", sender: "GRAND", recipient: "CHILD");
+            // Chain Root ← Child ← Grand. Only Root is a session; Child *and* Grand import under it.
+            WriteTranscript(home, Root,  UserLine("2026-07-02T19:00:00Z"));
+            WriteTranscript(home, Child, UserLine("2026-07-02T19:01:00Z"));
+            WriteTranscript(home, Grand, UserLine("2026-07-02T19:02:00Z"));
+            AppendInvoke(home, Root,  Child);
+            AppendInvoke(home, Child, Grand);
 
             var source = new AntigravityImportSource(home: home, geminiCliHome: "");
             var discovered = await source.DiscoverAsync(
@@ -79,9 +95,9 @@ public class AntigravityImportSourceTests {
                 CancellationToken.None);
 
             await Assert.That(discovered.Count).IsEqualTo(1);
-            await Assert.That(discovered[0].SessionId).IsEqualTo("ROOT");
+            await Assert.That(discovered[0].SessionId).IsEqualTo(Dashless(Root));
             var children = (List<string>)discovered[0].SourceMeta!["Children"]!;
-            await Assert.That(children.OrderBy(x => x).ToList()).IsEquivalentTo(new List<string> { "CHILD", "GRAND" });
+            await Assert.That(children.OrderBy(x => x).ToList()).IsEquivalentTo(new List<string> { Child, Grand }.OrderBy(x => x).ToList());
         } finally { Directory.Delete(home, recursive: true); }
     }
 
@@ -89,16 +105,16 @@ public class AntigravityImportSourceTests {
     public async Task Discover_honors_the_session_filter() {
         var home = NewHome();
         try {
-            WriteTranscript(home, "A", UserLine("2026-07-02T19:00:00Z"));
-            WriteTranscript(home, "B", UserLine("2026-07-02T19:00:00Z"));
+            WriteTranscript(home, SessA, UserLine("2026-07-02T19:00:00Z"));
+            WriteTranscript(home, SessB, UserLine("2026-07-02T19:00:00Z"));
 
             var source = new AntigravityImportSource(home: home, geminiCliHome: "");
             var discovered = await source.DiscoverAsync(
-                new DiscoveryFilters(FilterCwd: null, FilterSession: "B", Since: null, MinLines: 0),
+                new DiscoveryFilters(FilterCwd: null, FilterSession: SessB, Since: null, MinLines: 0),
                 CancellationToken.None);
 
             await Assert.That(discovered.Count).IsEqualTo(1);
-            await Assert.That(discovered[0].SessionId).IsEqualTo("B");
+            await Assert.That(discovered[0].SessionId).IsEqualTo(Dashless(SessB));
         } finally { Directory.Delete(home, recursive: true); }
     }
 

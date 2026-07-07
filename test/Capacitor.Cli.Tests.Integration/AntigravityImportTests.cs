@@ -1,4 +1,3 @@
-using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -9,10 +8,11 @@ namespace Capacitor.Cli.Tests.Integration;
 /// <summary>
 /// Wire-contract test for Antigravity historical import (AI-1160). Drives the full
 /// discover → classify → import path over an on-disk brain tree (a root conversation plus
-/// a subagent conversation linked via the parent's messages/*.json) and asserts the
-/// lifecycle the server expects: session-start/antigravity → parent transcript →
-/// subagent-start → child transcript (routed by agent_id) → subagent-stop →
-/// session-end/antigravity, all tagged vendor=antigravity.
+/// a subagent conversation linked via an INVOKE_SUBAGENT step in the parent's
+/// transcript_full.jsonl — the AI-1218 spawn-time signal, see
+/// <c>AntigravitySubagents.BuildParentMap</c>) and asserts the lifecycle the server expects:
+/// session-start/antigravity → parent transcript → subagent-start → child transcript (routed
+/// by agent_id) → subagent-stop → session-end/antigravity, all tagged vendor=antigravity.
 /// </summary>
 public class AntigravityImportTests : IDisposable {
     readonly WireMockServer _server = WireMockServer.Start();
@@ -42,11 +42,16 @@ public class AntigravityImportTests : IDisposable {
         });
     }
 
+    // Appends an INVOKE_SUBAGENT step to Root's transcript naming Child as the spawned
+    // conversation — the AI-1218 spawn-time linkage BuildParentMap reads (messages/*.json is
+    // no longer consulted). Root's transcript must already exist (WriteTranscript(Root, ...)
+    // is called before this at every call site).
     void WriteLinkage() {
-        var dir = Path.Combine(BrainDir(Root), ".system_generated", "messages");
+        var dir = Path.Combine(BrainDir(Root), ".system_generated", "logs");
         Directory.CreateDirectory(dir);
-        File.WriteAllText(Path.Combine(dir, Child + ".json"),
-            new JsonObject { ["sender"] = Child, ["recipient"] = Root }.ToJsonString());
+        File.AppendAllLines(Path.Combine(dir, "transcript_full.jsonl"), new[] {
+            $$"""{"type":"INVOKE_SUBAGENT","content":"{\"conversationId\":\"{{Child}}\"}"}"""
+        });
     }
 
     [Test]
@@ -107,10 +112,13 @@ public class AntigravityImportTests : IDisposable {
         await Assert.That(startBody).Contains($"\"agent_id\":\"{Dashless(Child)}\"");
 
         // The child transcript batch is tagged vendor=antigravity and routed by the dashless agent_id.
+        // Matched via "agent_id":"<Dashless(Child)>" rather than a bare Contains(Dashless(Child)),
+        // because the root's own transcript batch also contains the Child id embedded in its
+        // INVOKE_SUBAGENT step.
         var subTranscript = _server.LogEntries
             .Where(e => e.RequestMessage.Path == "/hooks/transcript")
             .Select(e => e.RequestMessage.Body!)
-            .Single(b => b.Contains(Dashless(Child)));
+            .Single(b => b.Contains($"\"agent_id\":\"{Dashless(Child)}\""));
         await Assert.That(subTranscript).Contains("\"vendor\":\"antigravity\"");
     }
 

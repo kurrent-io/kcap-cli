@@ -21,7 +21,8 @@ namespace Capacitor.Cli.Commands;
 /// one stream, and so <c>kcap import --antigravity --session &lt;id&gt;</c> filtering is
 /// format-insensitive (AI-1238). The dashed conversation id is kept only for filesystem paths
 /// (the brain-dir transcript). Subagents are separate conversations linked via
-/// <c>messages/*.json</c> (see <see cref="AntigravitySubagents"/>); roots are conversations
+/// <c>INVOKE_SUBAGENT</c> steps in the parent's transcript (the spawn-time signal;
+/// see <see cref="AntigravitySubagents"/>); roots are conversations
 /// that are never a child, and their children are imported as subagents under them — each with
 /// the DASHLESS child conversation id as its <c>agent_id</c> (the server canonicalizes agent_id
 /// to dashless on both ingest and watermark read, so this matches live routing; mirrors
@@ -53,6 +54,8 @@ internal sealed class AntigravityImportSource : IImportSource {
     public bool   IsAvailable => Directory.Exists(BrainRoot);
     public bool   SupportsTitleGeneration => false; // server computes a fallback title at session-end
 
+    static void Log(string message) => Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [antigravity-import] {message}");
+
     public Task<IReadOnlyList<DiscoveredSession>> DiscoverAsync(DiscoveryFilters filters, CancellationToken ct) {
         var result = new List<DiscoveredSession>();
         if (!Directory.Exists(BrainRoot)) return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
@@ -64,6 +67,17 @@ internal sealed class AntigravityImportSource : IImportSource {
         var parentMap = AntigravitySubagents.BuildParentMap(_home, _geminiCliHome, ct);
         var convIds   = Directory.EnumerateDirectories(BrainRoot).Select(Path.GetFileName).OfType<string>().ToList();
         var byRoot    = AntigravitySubagents.BuildRootDescendants(convIds, parentMap);
+
+        // AI-1218 drift observability: surface format drift without a messages fallback.
+        // HashSet membership so the counters stay O(n), not O(n²), on large brain trees (qodo #285).
+        var allConversationIds = convIds.ToHashSet(StringComparer.Ordinal);
+        var linkedChildIds     = parentMap.Values.ToHashSet(StringComparer.Ordinal);
+        var invokeEdges   = parentMap.Count;
+        var danglingChild = parentMap.Keys.Count(c => !allConversationIds.Contains(c));
+        var msgButNoInvoke = convIds.Count(id =>
+            Directory.Exists(AntigravityPaths.MessagesDir(id, _home, _geminiCliHome))
+            && !parentMap.ContainsKey(id) && !linkedChildIds.Contains(id));
+        Log($"Antigravity import: {invokeEdges} invoke edge(s); {danglingChild} invoked child id(s) with no conversation dir; {msgButNoInvoke} conversation(s) with messages/ but no invoke edge");
 
         // Normalize the --session filter to the dashless canonical form so it matches the
         // dashless session id we surface, whether the user passed a dashed or dashless id
