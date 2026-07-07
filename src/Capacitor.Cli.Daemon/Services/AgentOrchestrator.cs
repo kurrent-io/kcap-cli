@@ -290,6 +290,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         WorktreeInfo? worktree      = null;
         string?       mcpConfigPath = null;
 
+        // Declared OUTSIDE the try so it is in scope in the catch blocks below: the failed-launch
+        // cleanup must consult it to decide whether the worktree is ours to remove. A borrowed cwd
+        // is the user's real checkout — never removed on any path (spec's top safety invariant).
+        var work = cmd.Borrowed ? WorkLocation.BorrowedCwd : WorkLocation.OwnedWorktree;
+
         try {
             if (ActiveCount >= _config.MaxConcurrentAgents) {
                 await _server.LaunchFailedAsync(agentId, $"At max capacity ({_config.MaxConcurrentAgents} agents)");
@@ -356,34 +361,46 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ? $"refs/pull/{reviewInfo.PrNumber}/head"
                 : cmd.BaseRef;
 
-            worktree = await _worktreeManager.CreateAsync(repoPath, baseRef: baseRef);
+            if (cmd.Borrowed) {
+                // Defense-in-depth re-authorization: the server already probed this cwd, but the
+                // daemon NEVER borrows a path just because the server said so (TOCTOU-safe). The
+                // reason is surfaced verbatim to the server via the catch → LaunchFailedAsync below;
+                // Phase B (server) keys off the `borrow_auth_failed:` prefix.
+                var auth = await new BorrowAuthorizer(_config).AuthorizeBorrowAsync(cmd.BorrowCwd ?? "");
 
-            // AI-1163: for a mirror-requester review flow the server sends the requester's repo root
-            // in SyncFromRepoRoot. Mirror its live working tree (uncommitted + untracked) into the
-            // fresh worktree BEFORE spawning, so round 1 sees in-progress code rather than committed
-            // HEAD. Daemon-validated + best-effort (see the helper); never fails the launch.
-            if (!string.IsNullOrEmpty(cmd.SyncFromRepoRoot)) {
-                await TrySyncWorktreeAtLaunchAsync(agentId, cmd.SyncFromRepoRoot, repoPath, worktree.Path);
-            }
+                if (!auth.Allowed) {
+                    throw new InvalidOperationException($"borrow_auth_failed: {auth.Reason}");
+                }
 
-            // Download attachments into worktree (best-effort)
-            if (attachmentIds is { Length: > 0 }) {
-                try {
-                    var paths = await DownloadAttachmentsAsync(worktree.Path, attachmentIds);
+                // Run IN the user's real (canonicalized) checkout. Deliberately SKIP CreateAsync, any
+                // base fetch / `git worktree add`, the launch-time mirror, and the attachment
+                // download-into-cwd — every one of those would mutate the user's own tree.
+                worktree = WorktreeInfo.Borrowed(auth.CanonicalCwd!);
+            } else {
+                worktree = await _worktreeManager.CreateAsync(repoPath, baseRef: baseRef);
 
-                    if (paths.Count > 0) {
-                        var suffix = $"\n\n[Attached files: {string.Join(", ", paths)}]";
-                        prompt = string.IsNullOrEmpty(prompt) ? suffix.TrimStart() : prompt + suffix;
+                // AI-1163: for a mirror-requester review flow the server sends the requester's repo root
+                // in SyncFromRepoRoot. Mirror its live working tree (uncommitted + untracked) into the
+                // fresh worktree BEFORE spawning, so round 1 sees in-progress code rather than committed
+                // HEAD. Daemon-validated + best-effort (see the helper); never fails the launch.
+                if (!string.IsNullOrEmpty(cmd.SyncFromRepoRoot)) {
+                    await TrySyncWorktreeAtLaunchAsync(agentId, cmd.SyncFromRepoRoot, repoPath, worktree.Path);
+                }
+
+                // Download attachments into worktree (best-effort)
+                if (attachmentIds is { Length: > 0 }) {
+                    try {
+                        var paths = await DownloadAttachmentsAsync(worktree.Path, attachmentIds);
+
+                        if (paths.Count > 0) {
+                            var suffix = $"\n\n[Attached files: {string.Join(", ", paths)}]";
+                            prompt = string.IsNullOrEmpty(prompt) ? suffix.TrimStart() : prompt + suffix;
+                        }
+                    } catch (Exception ex) {
+                        LogAttachmentDownloadFailed(ex, agentId);
                     }
-                } catch (Exception ex) {
-                    LogAttachmentDownloadFailed(ex, agentId);
                 }
             }
-
-            // AI-1207 Phase A: pure plumbing — Borrowed=false (the only case exercised today)
-            // resolves to the same OwnedWorktree the pipeline always used. The borrowed launch
-            // branch (skip worktree creation) is a follow-up task.
-            var work = cmd.Borrowed ? WorkLocation.BorrowedCwd : WorkLocation.OwnedWorktree;
 
             var runtimeCtx = new RuntimeStartContext(
                 AgentId: agentId,
@@ -413,9 +430,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             } catch (CodexHooksNotInstalledException ex) {
                 await _server.LaunchFailedAsync(agentId, ex.Message);
 
-                // Still need to clean up the worktree before returning
-                try { await WorktreeManager.RemoveAsync(worktree); } catch {
-                    /* best-effort */
+                // Still need to clean up the worktree before returning — but ONLY if we own it.
+                // A borrowed cwd is the user's real checkout; removing it here would `git worktree
+                // remove` the user's tree (spec's top safety invariant; mirrors CleanupAgentAsync).
+                if (work == WorkLocation.OwnedWorktree) {
+                    try { await WorktreeManager.RemoveAsync(worktree); } catch {
+                        /* best-effort */
+                    }
                 }
 
                 return;
@@ -468,7 +489,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         } catch (Exception ex) {
             LogLaunchFailed(ex, agentId);
 
-            if (worktree != null) {
+            // Only tear down a worktree we OWN. A borrowed cwd is the user's real checkout — never
+            // remove it, its branch, or its Claude project symlink on a failed launch (spec's top
+            // safety invariant; mirrors the normal-stop guard in CleanupAgentAsync). For a borrowed
+            // launch there is nothing daemon-created to clean up anyway (no CreateAsync, no mirror,
+            // no attachments), and StartAsync throwing means mcpConfigPath was never assigned.
+            if (worktree != null && work == WorkLocation.OwnedWorktree) {
                 if (_launchers.TryGetValue(cmd.Vendor, out var launcherForCleanup)) {
                     try {
                         // Build a transient AgentInstance with a no-op PTY just so launcher.Cleanup
@@ -1572,6 +1598,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Test-only: register a pre-built agent so cleanup/lifecycle can be driven directly.</summary>
     internal void RegisterAgentForTest(AgentInstance agent) => _agents[agent.Id] = agent;
+
+    /// <summary>Test-only: look up a tracked agent by id (null if absent), so a launch test can
+    /// assert the resolved <see cref="AgentInstance.Work"/> / <see cref="AgentInstance.Worktree"/>.</summary>
+    internal AgentInstance? GetAgentForTest(string agentId) => _agents.GetValueOrDefault(agentId);
 
     /// <summary>Test-only entry point to the private cleanup path.</summary>
     internal Task CleanupAgentForTest(string agentId) => CleanupAgentAsync(agentId);
