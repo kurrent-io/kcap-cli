@@ -109,6 +109,66 @@ public class BorrowAuthorizerTests {
         }
     }
 
+    [Test]
+    public async Task Ancestor_symlink_escaping_nonempty_allowlist_is_not_allowed() {
+        // Allowlisted tree: allowedRoot/*. Inside it, an ANCESTOR dir is a symlink pointing OUT of
+        // the tree; the leaf (cwd) is a real, non-symlink dir under that ancestor. A leaf-only
+        // canonicalization would leave the path textually under allowedRoot and wrongly allow it.
+        var allowedRoot  = Directory.CreateTempSubdirectory("kcap-borrow-anc-allowed-");
+        var outsideRoot  = Directory.CreateTempSubdirectory("kcap-borrow-anc-outside-");
+        var realLeaf     = Path.Combine(outsideRoot.FullName, "x");
+        var linkAncestor = Path.Combine(allowedRoot.FullName, "linkdir");
+        try {
+            Directory.CreateDirectory(realLeaf);
+            Directory.CreateSymbolicLink(linkAncestor, outsideRoot.FullName);
+
+            var cwd = Path.Combine(linkAncestor, "x"); // allowedRoot/linkdir/x → outsideRoot/x
+
+            var authorizer = new BorrowAuthorizer(
+                new DaemonConfig { AllowedRepoPaths = [BorrowAuthorizer.Canonicalize(allowedRoot.FullName) + "/*"] }
+            );
+
+            var result = await authorizer.AuthorizeBorrowAsync(cwd);
+
+            await Assert.That(result.Allowed).IsFalse();
+            await Assert.That(result.Reason).IsEqualTo("not_allowed");
+            await Assert.That(result.CanonicalCwd).IsEqualTo(BorrowAuthorizer.Canonicalize(realLeaf));
+        } finally {
+            Directory.Delete(linkAncestor); // remove symlink before recursing into the roots
+            allowedRoot.Delete(recursive: true);
+            outsideRoot.Delete(recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task Ancestor_symlink_resolving_into_allowed_root_is_allowed() {
+        // The reverse: an ancestor symlink that resolves INTO the allowlisted tree is allowed, and
+        // CanonicalCwd is the resolved real path (not the link path).
+        var allowedRoot  = Directory.CreateTempSubdirectory("kcap-borrow-anc-in-allowed-");
+        var linkParent   = Directory.CreateTempSubdirectory("kcap-borrow-anc-in-link-");
+        var realLeaf     = Path.Combine(allowedRoot.FullName, "proj", "x");
+        var linkAncestor = Path.Combine(linkParent.FullName, "to-allowed");
+        try {
+            Directory.CreateDirectory(realLeaf);
+            Directory.CreateSymbolicLink(linkAncestor, allowedRoot.FullName);
+
+            var cwd = Path.Combine(linkAncestor, "proj", "x"); // linkParent/to-allowed/proj/x → allowedRoot/proj/x
+
+            var authorizer = new BorrowAuthorizer(
+                new DaemonConfig { AllowedRepoPaths = [BorrowAuthorizer.Canonicalize(allowedRoot.FullName) + "/*"] }
+            );
+
+            var result = await authorizer.AuthorizeBorrowAsync(cwd);
+
+            await Assert.That(result.Allowed).IsTrue();
+            await Assert.That(result.CanonicalCwd).IsEqualTo(BorrowAuthorizer.Canonicalize(realLeaf));
+        } finally {
+            Directory.Delete(linkAncestor); // remove symlink before recursing into the roots
+            linkParent.Delete(recursive: true);
+            allowedRoot.Delete(recursive: true);
+        }
+    }
+
     static string MakeTempRepo() {
         var root = Path.Combine(Path.GetTempPath(), "kcap-borrow-repo-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(root);
