@@ -18,7 +18,8 @@ static class RepositoryDetection {
 
     internal static CommandRunner DefaultRunner => RunCommandAsync;
 
-    public static async Task<string> EnrichWithRepositoryInfo(string json, TimeSpan? budget = null) {
+    public static async Task<string> EnrichWithRepositoryInfo(
+            string json, TimeSpan? budget = null, bool detectPullRequest = true, CommandRunner? run = null) {
         try {
             var node = JsonNode.Parse(json);
 
@@ -32,7 +33,7 @@ static class RepositoryDetection {
                 return json;
             }
 
-            var repo = await DetectRepositoryAsync(cwd, budget);
+            var repo = await DetectRepositoryAsync(cwd, budget, detectPullRequest, run);
 
             if (repo is null) {
                 return json;

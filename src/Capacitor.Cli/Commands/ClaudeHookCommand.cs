@@ -256,17 +256,20 @@ public static class ClaudeHookCommand {
         // after EnsureWatcherRunning. Other commands enrich inline.
         Task<string>? deferredRepoTask = null;
 
+        // detectPullRequest:false everywhere: a live `gh pr view` / `glab` round-trip (~600ms to
+        // GitHub) is the single biggest client cost on the hook path and would push the facts
+        // envelope past Claude's 5s SessionStart timeout. PR info is not needed here — the watcher
+        // runs its own DetectRepositoryAsync (with PR detection) and backfills it independently.
         if (command == "session-start") {
-            // Budgeted so a slow git/gh probe self-skips under deadline pressure (repo info
-            // still arrives via the watcher's own detection). Awaited INSIDE the session-start
-            // block after EnsureWatcherRunning so it never delays transcript-capture start.
-            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body, HookBudget.Remaining(processStart, command));
+            // Awaited INSIDE the session-start block after EnsureWatcherRunning so it never delays
+            // transcript-capture start.
+            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body, HookBudget.Remaining(processStart, command), detectPullRequest: false);
         } else if (command is "session-end" or "subagent-stop") {
-            // Budgeted like session-start so a slow git/gh probe can't push the bounded POST/spool
-            // path past the hook deadline. The await below is also budget-bounded as a hard backstop.
-            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body, HookBudget.Remaining(processStart, command));
+            // Budgeted so a slow git probe can't push the bounded POST/spool path past the hook
+            // deadline. The await below is also budget-bounded as a hard backstop.
+            deferredRepoTask = RepositoryDetection.EnrichWithRepositoryInfo(body, HookBudget.Remaining(processStart, command), detectPullRequest: false);
         } else {
-            body = await RepositoryDetection.EnrichWithRepositoryInfo(body);
+            body = await RepositoryDetection.EnrichWithRepositoryInfo(body, detectPullRequest: false);
         }
 
         // Resolve the V2 profile once for repo/path exclusion and
@@ -810,7 +813,8 @@ public static class ClaudeHookCommand {
     static async Task<string?> TryResolveRepoHashAsync(string? sessionCwd) {
         try {
             var cwd      = string.IsNullOrWhiteSpace(sessionCwd) ? Directory.GetCurrentDirectory() : sessionCwd;
-            var repoInfo = await RepositoryDetection.DetectRepositoryAsync(cwd);
+            // Memory-index scoping needs only owner/repo → skip the PR round-trip.
+            var repoInfo = await RepositoryDetection.DetectRepositoryAsync(cwd, detectPullRequest: false);
             if (repoInfo?.Owner is null || repoInfo.RepoName is null) return null;
 
             return RepoHashHelper.ComputeRepoHash(repoInfo.Owner, repoInfo.RepoName);

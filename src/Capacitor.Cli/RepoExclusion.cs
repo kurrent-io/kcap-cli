@@ -28,7 +28,8 @@ static class RepoExclusion {
 
             if (cwd is null) return false;
 
-            var repo = await RepositoryDetection.DetectRepositoryAsync(cwd, budget);
+            // Exclusion matches on owner/repo only → skip the PR round-trip (~600ms to GitHub).
+            var repo = await RepositoryDetection.DetectRepositoryAsync(cwd, budget, detectPullRequest: false);
 
             if (repo?.Owner is not null && repo.RepoName is not null) {
                 return excludedRepos.Contains($"{repo.Owner}/{repo.RepoName}", StringComparer.OrdinalIgnoreCase);
