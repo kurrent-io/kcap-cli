@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.IO;
 using Capacitor.Cli.Daemon.Acp;
 using Microsoft.Extensions.Logging;
 
@@ -27,9 +26,9 @@ namespace Capacitor.Cli.Daemon.Services;
 /// nothing about production behavior, since the default IS the real `Process.Start`-backed path.
 /// </summary>
 internal sealed class AcpHostedAgentRuntimeFactory(
-        DaemonConfig      config,
-        ILoggerFactory    loggerFactory,
-        ServerConnection  connection,
+        DaemonConfig                                                                   config,
+        ILoggerFactory                                                                 loggerFactory,
+        ServerConnection                                                               connection,
         Func<RuntimeStartContext, (Stream Input, Stream Output, IAcpProcess Process)>? connectionSource = null
     ) : IHostedAgentRuntimeFactory {
     readonly Func<RuntimeStartContext, (Stream Input, Stream Output, IAcpProcess Process)> _connectionSource =
@@ -91,7 +90,7 @@ internal sealed class AcpHostedAgentRuntimeFactory(
         }
 
         var process = Process.Start(psi)
-            ?? throw new InvalidOperationException($"Failed to start '{config.CursorPath} acp' (Process.Start returned null).");
+         ?? throw new InvalidOperationException($"Failed to start '{config.CursorPath} acp' (Process.Start returned null).");
 
         var processLogger = loggerFactory.CreateLogger<AcpChildProcess>();
         var acpProcess    = new AcpChildProcess(process, processLogger);
