@@ -60,6 +60,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public Func<RefreshAgentWorktreeCommand, Task<RefreshAgentWorktreeResult>>? RefreshAgentWorktreeHandler { get; set; }
 
     /// <summary>
+    /// Handler for the server's <c>ProbeBorrowSource</c> client-result invocation (AI-1207 Phase A,
+    /// task A3): "can you borrow this path?". Receives a filesystem path and returns the
+    /// daemon-computed authorization + canonical paths. Set by <see cref="AgentOrchestrator"/> at
+    /// startup; when null, returns <c>BorrowProbeResult(false, null, null, "no handler")</c>.
+    /// </summary>
+    public Func<string, Task<BorrowProbeResult>>? ProbeBorrowSourceHandler { get; set; }
+
+    /// <summary>
     /// Callback invoked at <see cref="RegisterDaemon"/> time to snapshot the
     /// agent IDs currently hosted by this daemon. The server uses this to
     /// reconcile its registry against the daemon's view. Set by
@@ -148,6 +156,13 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _hub.On<RefreshAgentWorktreeCommand, RefreshAgentWorktreeResult>("RefreshAgentWorktree",
             cmd => RefreshAgentWorktreeHandler?.Invoke(cmd)
                 ?? Task.FromResult(new RefreshAgentWorktreeResult(false, "no handler")));
+
+        // Client-result invocation: "can you borrow this path?" (AI-1207 Phase A, task A3). Lets the
+        // server prove co-location before offering a borrow-cwd launch target. "no handler" is
+        // returned when the orchestrator hasn't wired the handler yet (e.g. early startup).
+        _hub.On<string, BorrowProbeResult>("ProbeBorrowSource",
+            path => ProbeBorrowSourceHandler?.Invoke(path)
+                ?? Task.FromResult(new BorrowProbeResult(false, null, null, "no handler")));
 
         // Server→client push carrying the user's decision for a hosted-agent permission request
         // (AI-864). Paired with the RequestPermission2 invocation in RequestPermissionAsync: that
@@ -339,7 +354,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 "DaemonConnect",
                 new DaemonConnect(
                     _config.Name, platform, repoPaths, _config.MaxConcurrentAgents, liveIds,
-                    _config.InstanceId, _config.Version, _config.SupportedVendors
+                    _config.InstanceId, _config.Version, _config.SupportedVendors, MachineId.Get()
                 ),
                 cancellationToken: _ct
             );

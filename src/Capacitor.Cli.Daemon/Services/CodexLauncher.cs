@@ -74,7 +74,11 @@ internal sealed partial class CodexLauncher(
             "--cd",
             ctx.Worktree.Path,
             "--sandbox",
-            "workspace-write",
+            // A borrowed reviewer runs in the user's REAL checkout (not a daemon-owned,
+            // throwaway worktree) — workspace-write would let it mutate that real repo.
+            // read-only is already proven in the headless runner (CodexCliRunner), including
+            // with MCP injection, so the flow-result MCP tool still works (AI-1207).
+            ctx.Work == WorkLocation.BorrowedCwd ? "read-only" : "workspace-write",
             // Review-flow reviewers (LaunchKind.ReviewFlow) run unattended → never pause for
             // approval (writes stay confined by the workspace-write sandbox). Interactive rendered
             // agents keep the default on-request approval so the user stays in the loop.
