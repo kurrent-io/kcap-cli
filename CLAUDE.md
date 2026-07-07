@@ -48,6 +48,12 @@ This is a public repository — we develop in the open.
 - **Open issues in GitHub Issues**, not Linear. Linear auto-imports GitHub issues, so there is no need to create the issue in Linear by hand.
 - **PRs must reference both the Linear issue and the GitHub issue.** Put these references in the PR *description*, not the title (the title stays clean and human-readable). Reference the GitHub issue with a closing keyword (e.g. `Closes #123`) and include the Linear issue (e.g. `AI-774`) so Linear links the PR back to the imported issue.
 
+## Dos and donts
+
+- DO use `JsonElementExtensions` instead of checking JSON value kind.
+- DO NOT use Linear issue numbers in comments. If you absolutely need an issue number, use the GitHub issue number.
+- DO NOT get too verbose in comments. Write self-explanatory code instead.
+
 ## Common mistakes to avoid
 
 - **AOT warnings only show on publish** — `dotnet build` does NOT surface IL3050/IL2026 trimming warnings. Run `dotnet publish -c Release` after changes.
