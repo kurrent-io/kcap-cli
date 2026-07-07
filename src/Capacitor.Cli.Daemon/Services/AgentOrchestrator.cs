@@ -380,6 +380,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
 
+            // AI-1207 Phase A: pure plumbing — Borrowed=false (the only case exercised today)
+            // resolves to the same OwnedWorktree the pipeline always used. The borrowed launch
+            // branch (skip worktree creation) is a follow-up task.
+            var work = cmd.Borrowed ? WorkLocation.BorrowedCwd : WorkLocation.OwnedWorktree;
+
             var runtimeCtx = new RuntimeStartContext(
                 AgentId: agentId,
                 Vendor: cmd.Vendor,
@@ -397,7 +402,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ServerUrl: _config.ServerUrl,
                 DaemonBridgeUrl: _permissionBridge.BaseUrl,
                 CapacitorPath: _config.CapacitorPath,
-                McpAllowlist: cmd.McpAllowlist
+                McpAllowlist: cmd.McpAllowlist,
+                Work: work
             );
 
             HostedRuntimeStart start;
@@ -426,7 +432,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 McpConfigPath      = mcpConfigPath,
                 SyncSourceRepoRoot = string.IsNullOrEmpty(cmd.SyncFromRepoRoot) ? null : cmd.SyncFromRepoRoot,
                 CurrentCols        = HostedPtyCols,
-                CurrentRows        = HostedPtyRows
+                CurrentRows        = HostedPtyRows,
+                Work               = work
             };
             _agents[agentId] = agent;
 

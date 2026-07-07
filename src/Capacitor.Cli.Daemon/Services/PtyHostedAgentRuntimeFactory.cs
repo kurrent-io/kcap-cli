@@ -57,7 +57,8 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
                 ? await ReviewLaunchBuilder.BuildAsync(ctx.Vendor, ctx.CapacitorPath, ctx.ServerUrl ?? "", reviewArgs.Owner, reviewArgs.Repo, reviewArgs.PrNumber)
                 : null
         ) {
-            McpAllowlist = ctx.McpAllowlist
+            McpAllowlist = ctx.McpAllowlist,
+            Work         = ctx.Work
         };
 
         try {

@@ -852,7 +852,15 @@ public readonly record struct LaunchAgentCommand(
         // names the daemon resolves against the kcap-owned KcapMcpRegistry and materializes into the
         // launcher's MCP config (flow-starting servers are stripped regardless of listing). Appended
         // last, same wire-compat rule as SyncFromRepoRoot above.
-        string[]?         McpAllowlist = null
+        string[]?         McpAllowlist = null,
+        // AI-1207 Phase A: launch against the user's own checkout instead of a fresh daemon-owned
+        // worktree. A bool on the wire (not the WorkLocation enum) — WorkLocation's numeric values
+        // are BorrowedCwd=0/OwnedWorktree=1, the reverse of what you'd guess, so a raw enum int
+        // would be a footgun; the daemon maps Borrowed -> WorkLocation internally. BorrowCwd is the
+        // absolute path to borrow when Borrowed is true. Appended last, same wire-compat rule as the
+        // fields above.
+        bool               Borrowed = false,
+        string?            BorrowCwd = null
     );
 
 /// <summary>

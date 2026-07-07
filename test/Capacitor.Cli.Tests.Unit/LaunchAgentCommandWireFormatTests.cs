@@ -198,6 +198,50 @@ public class LaunchAgentCommandWireFormatTests {
     }
 
     [Test]
+    public async Task Borrowed_and_BorrowCwd_round_trip_snake_case() {
+        // AI-1207 Phase A: the server tells the daemon to launch against the user's own checkout
+        // (skip worktree creation) instead of a fresh daemon-owned worktree. Appended last after
+        // McpAllowlist, same wire-compat rule as the fields before it.
+        var cmd = new LaunchAgentCommand(
+            AgentId:       "borrow001",
+            Prompt:        null,
+            Model:         "opus",
+            Effort:        null,
+            RepoPath:      "/tmp/repo",
+            Tools:         null,
+            AttachmentIds: null,
+            Vendor:        "claude",
+            Borrowed:      true,
+            BorrowCwd:     "/some/path"
+        );
+
+        var wire   = JsonSerializer.Serialize(cmd, ServerWireOptions);
+        var parsed = JsonSerializer.Deserialize(wire, CapacitorJsonContext.Default.LaunchAgentCommand);
+
+        await Assert.That(wire).Contains("\"borrowed\":true");
+        await Assert.That(wire).Contains("\"borrow_cwd\":\"/some/path\"");
+        await Assert.That(parsed.Borrowed).IsTrue();
+        await Assert.That(parsed.BorrowCwd).IsEqualTo("/some/path");
+    }
+
+    [Test]
+    public async Task Legacy_payload_without_borrowed_fields_deserializes_defaults() {
+        // Version skew: an older server that predates AI-1207 never sends borrowed/borrow_cwd. The
+        // daemon must still bind the command (positional SignalR binding) and default Borrowed to
+        // false / BorrowCwd to null — i.e. behave exactly as an owned-worktree launch.
+        const string legacyWire =
+            """
+            {"agent_id":"legacy03","prompt":null,"model":"opus","effort":null,"repo_path":"/tmp/repo","tools":null,"attachment_ids":null,"vendor":"claude"}
+            """;
+
+        var parsed = JsonSerializer.Deserialize(legacyWire, CapacitorJsonContext.Default.LaunchAgentCommand);
+
+        await Assert.That(parsed.Borrowed).IsFalse();
+        await Assert.That(parsed.BorrowCwd).IsNull();
+        await Assert.That(parsed.RepoPath).IsEqualTo("/tmp/repo");
+    }
+
+    [Test]
     public async Task Vendor_field_round_trips_through_json_serializer() {
         var cmd = new LaunchAgentCommand(
             AgentId:       "agent-1",
