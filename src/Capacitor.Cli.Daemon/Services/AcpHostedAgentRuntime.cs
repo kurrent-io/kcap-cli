@@ -27,6 +27,7 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
     readonly AcpConnection _connection;
     readonly IAcpProcess   _process;
     readonly ILogger       _logger;
+    readonly AcpInteractionBridge? _interactionBridge;
     readonly CancellationTokenSource _cts = new();
     readonly Channel<AcpSessionUpdate> _updates = Channel.CreateUnbounded<AcpSessionUpdate>(
         new UnboundedChannelOptions { SingleReader = false, SingleWriter = true });
@@ -42,12 +43,43 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
     string? _sessionId;
     int     _disposed;
 
-    public AcpHostedAgentRuntime(AcpConnection connection, IAcpProcess process, ILogger logger) {
+    /// <summary>
+    /// <paramref name="requestInteraction"/> is optional (AI-686) — when null, matches AI-684's
+    /// original behavior exactly: <see cref="AcpConnection.OnServerRequest"/> stays unset, and any
+    /// <c>session/request_permission</c>/<c>elicitation/create</c> the agent sends gets the
+    /// connection's default JSON-RPC "Method not found" response. When provided, it is forwarded
+    /// into a new <see cref="AcpInteractionBridge"/> and wired as <see cref="AcpConnection.OnServerRequest"/>.
+    ///
+    /// <b>Qodo daemon-review Q2:</b> this wiring no longer closes over this runtime's
+    /// <see cref="_sessionId"/> — <see cref="AcpInteractionBridge.HandleAsync"/> now sources the ACP
+    /// session id solely from the inbound request's OWN params. The prior shape passed
+    /// <c>_sessionId ?? ""</c>, which was correct ONLY because a permission/elicitation request can
+    /// normally arrive no earlier than a <c>session/prompt</c> turn, by which point
+    /// <see cref="StartAsync"/>'s <c>session/new</c> has already resolved <see cref="_sessionId"/> —
+    /// but <see cref="AcpConnection"/>'s read loop is started (via <see cref="RunConnectionLoopAsync"/>)
+    /// BEFORE that handshake completes, so a server request arriving out of turn (a buggy or
+    /// malicious agent) would have forwarded an <see cref="AcpInteractionRequest"/> with
+    /// <c>AcpSessionId == ""</c>, silently breaking server-side correlation instead of failing loud
+    /// or safe. Trusting the request's own params removes this whole class of bug and this runtime
+    /// no longer needs to expose <see cref="_sessionId"/> to the bridge at all.
+    /// </summary>
+    public AcpHostedAgentRuntime(
+            AcpConnection                                                                  connection,
+            IAcpProcess                                                                    process,
+            ILogger                                                                        logger,
+            string                                                                         agentId = "",
+            Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>?   requestInteraction = null
+        ) {
         _connection = connection;
         _process    = process;
         _logger     = logger;
 
         _connection.OnNotification += HandleNotification;
+
+        if (requestInteraction is not null) {
+            _interactionBridge = new AcpInteractionBridge(requestInteraction, agentId, logger);
+            _connection.OnServerRequest = (request, ct) => _interactionBridge.HandleAsync(request, ct);
+        }
     }
 
     public string Vendor              => "cursor";
@@ -55,6 +87,9 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
     public bool   HasExited           => _process.HasExited;
     public int?   ExitCode            => _process.ExitCode;
     public bool   EmitsTerminalOutput => false;
+
+    /// <summary>The ACP <c>sessionId</c> once <see cref="StartAsync"/>'s <c>session/new</c> has resolved; null before that.</summary>
+    public string? SessionId => _sessionId;
 
     /// <summary>
     /// Reduced <c>session/update</c> notifications, in arrival order. Unbounded so a mapper that

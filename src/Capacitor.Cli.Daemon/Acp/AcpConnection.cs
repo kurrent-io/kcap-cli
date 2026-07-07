@@ -309,19 +309,34 @@ internal sealed class AcpConnection : IAsyncDisposable {
         }
 
         try {
-            await WriteServerResponseAsync(idClone, result, error, ct).ConfigureAwait(false);
-        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            // AI-686: the final response write deliberately uses CancellationToken.None, not `ct` —
+            // this method's own doc comment guarantees exactly one response frame is written "no
+            // matter what happens", and `ct` is the SAME token AcpHostedAgentRuntime.DisposeAsync
+            // cancels to unblock a pending OnServerRequest handler (e.g. AcpInteractionBridge
+            // resolving to a well-formed `cancelled` result on disconnect — Task B3/B4). Gating the
+            // WRITE itself on that already-cancelled token would make WriteLineAsync's write-gate
+            // wait (`_writeGate.WaitAsync(ct)`) throw OperationCanceledException before a single byte
+            // goes out, silently violating the "always exactly one response frame" invariant (the
+            // exception propagates through this method's `when (ex is not OperationCanceledException)`
+            // guard, then DispatchLineAsync's identical guard, and is swallowed by RunAsync's
+            // "normal shutdown" catch) — the agent would see NO response at all instead of the
+            // well-formed cancelled/error result the handler already computed. The write is a single
+            // best-effort attempt against a stream that may itself be torn down (e.g. the process
+            // already exited) — that failure mode is unrelated to `ct` and is exactly what the
+            // fallback below still handles.
+            await WriteServerResponseAsync(idClone, result, error, CancellationToken.None).ConfigureAwait(false);
+        } catch (Exception ex) {
             // Serializing/writing the chosen response itself failed (e.g. a malformed JsonElement,
-            // or a transient write fault). The agent is still owed a response for this id — never
-            // leave it log-and-skipped by DispatchLineAsync's outer catch — so fall back to a
-            // minimal internal-error response. Best-effort: if even THIS write fails, there is
-            // nothing left to try (the wire itself is broken and the read loop will observe that
-            // via its own exception handling on the next read).
+            // or the underlying stream already closed). The agent is still owed a response for this
+            // id — never leave it log-and-skipped by DispatchLineAsync's outer catch — so fall back
+            // to a minimal internal-error response. Best-effort: if even THIS write fails, there is
+            // nothing left to try (the wire itself is broken and the read loop will observe that via
+            // its own exception handling on the next read).
             _logger.LogDebug(ex, "ACP: failed to write server-request response for method={Method}; sending internal-error fallback", method);
 
             try {
-                await WriteServerResponseAsync(idClone, null, new AcpError(-32603, "Internal error", null), ct).ConfigureAwait(false);
-            } catch (Exception fallbackEx) when (fallbackEx is not OperationCanceledException) {
+                await WriteServerResponseAsync(idClone, null, new AcpError(-32603, "Internal error", null), CancellationToken.None).ConfigureAwait(false);
+            } catch (Exception fallbackEx) {
                 _logger.LogDebug(fallbackEx, "ACP: internal-error fallback response also failed to write for method={Method}", method);
             }
         }
