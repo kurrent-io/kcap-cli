@@ -79,5 +79,9 @@ internal sealed record RuntimeStartContext(
         // LaunchAgentCommand.McpAllowlist through to LauncherContext.McpAllowlist for the PTY
         // launchers to materialize. Unused by the ACP factory (Cursor has no MCP-allowlist
         // materialization yet).
-        string[]?         McpAllowlist = null
+        string[]?         McpAllowlist = null,
+        // AI-1207 Phase A: owned worktree (daemon-created) vs borrowed cwd (the user's own
+        // checkout), carried from LaunchAgentCommand.Borrowed through to LauncherContext.Work.
+        // Defaults to OwnedWorktree — today's only exercised path — unchanged.
+        WorkLocation       Work = WorkLocation.OwnedWorktree
     );

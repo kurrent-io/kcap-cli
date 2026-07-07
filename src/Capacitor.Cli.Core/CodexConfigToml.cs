@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Mcp;
 using Tomlyn;
 using Tomlyn.Model;
 using Tomlyn.Serialization;
@@ -23,23 +24,6 @@ public static class CodexConfigToml {
     public enum Change { Unchanged, Updated, Failed }
 
     static string DefaultConfigPath => Path.Combine(CodexPaths.Home(), "config.toml");
-
-    /// <summary>
-    /// The kcap MCP servers auto-registered for Codex CLI in <c>~/.codex/config.toml</c>.
-    /// Codex reads MCP servers from the snake_case <c>[mcp_servers]</c> TOML table — note
-    /// this is NOT the camelCase <c>mcpServers</c> key used by the Claude/Codex plugin
-    /// *descriptor* JSON. <c>kcap-flows</c> is intentionally excluded: it launches a paid
-    /// hosted reviewer and stays Claude-only (AI-1056). <c>kcap-memory</c> IS included
-    /// (AI-1146): it is a free, harness-agnostic team-memory server, so Codex users going
-    /// through <c>kcap setup</c> get it alongside review/sessions.
-    /// </summary>
-    static readonly (string Name, string[] Args)[] KcapMcpServers = [
-        ("kcap-review",   ["mcp", "review"]),
-        ("kcap-sessions", ["mcp", "sessions"]),
-        ("kcap-memory",   ["mcp", "memory"])
-    ];
-
-    const string McpServerCommand = "kcap";
 
     /// <summary>
     /// AI-794 — enable network access for Codex's <c>workspace-write</c> sandbox so
@@ -260,18 +244,17 @@ public static class CodexConfigToml {
         var servers = GetOrAddTable(root, "mcp_servers");
         var changed = false;
 
-        foreach (var (name, args) in KcapMcpServers) {
+        foreach (var server in KcapMcpServers.ForCodex) {
             // Never clobber an existing entry: a prior kcap registration is already
             // correct, and a user may have customized it (e.g. an absolute-path command
             // for a GUI host). Only create the server when it's missing entirely.
-            if (servers.ContainsKey(name)) continue;
+            if (servers.ContainsKey(server.Name)) continue;
 
-            var entry = new TomlTable {
-                ["command"] = McpServerCommand,
-                ["args"]    = ToTomlArray(args)
+            servers[server.Name] = new TomlTable {
+                ["command"] = KcapMcpServers.Command,
+                ["args"]    = ToTomlArray(server.Args)
             };
-            servers[name] = entry;
-            changed        = true;
+            changed = true;
         }
 
         return changed;
@@ -282,8 +265,8 @@ public static class CodexConfigToml {
 
         var changed = false;
 
-        foreach (var (name, _) in KcapMcpServers)
-            if (servers.Remove(name)) changed = true;
+        foreach (var server in KcapMcpServers.ForCodex)
+            if (servers.Remove(server.Name)) changed = true;
 
         // Don't leave a bare [mcp_servers] behind if we emptied it.
         if (servers.Count == 0 && root.Remove("mcp_servers")) changed = true;

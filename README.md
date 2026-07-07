@@ -300,7 +300,7 @@ It provides four tools:
 - **`get_session_transcript`** — speaker-tagged events from a session. Pair `around_event` (and `agent_id` if the hit was in a subagent) with the values returned by `search_sessions` to fetch the exact decision context.
 - **`get_turn`** — the full event transcript for one turn (user prompt, tool calls + results, assistant text) by `session_id` + `turn_index`. A turn is one user message and the assistant's full response up to the next user message.
 
-The server is repo-aware — it resolves the current working directory to a repo hash at startup, and `search_sessions` defaults its `repo` filter to that hash unless you override it.
+The server is repo-aware — it resolves the current working directory to a repo hash at startup, and `search_sessions` defaults its `repo` filter to that hash unless you override it. **If the current repo can't be resolved** (run outside a git checkout, or a missing/unparseable `origin` remote), `search_sessions` returns an error asking you to pass `repo: "owner/name"` or `repo: "all"` — it will not silently search across all repos.
 
 ### Flows MCP server (for agents)
 
@@ -588,7 +588,7 @@ kcap plugin install --antigravity           # install the kcap plugin to ~/.gemi
 kcap plugin remove --antigravity            # remove the kcap plugin
 ```
 
-Antigravity fires a distinct control hook per lifecycle/tool event; kcap acts on the first `PreInvocation` of a conversation (POSTs lifecycle + spawns a watcher tailing that conversation's `transcript_full.jsonl`, `vendor=antigravity`) — so kcap must be on `PATH`. Antigravity is a GUI whose process outlives any one conversation (like the Codex desktop app), so there is no per-conversation exit signal: the watcher ends a session after it goes idle (default 60 min; override with `KCAP_ANTIGRAVITY_IDLE_MINUTES`), and a later turn reactivates it. Token/model usage lives in each conversation's sibling SQLite db (`conversations/<id>.db`), not the JSONL, so the watcher decodes it and streams the per-generation cost (priced on read; cost is never stored). **Subagents** (Antigravity's nested agents) are separate conversations; both *live* capture and historical `kcap import --antigravity` nest them under the parent, derived from the `INVOKE_SUBAGENT` step in the parent's `transcript_full.jsonl` (the spawn-time linkage signal). Live capture POSTs a subagent-link as each child is spawned; import reads the same `INVOKE_SUBAGENT` steps across all conversations on disk. Historical import reads `~/.gemini/antigravity/brain/*/…/transcript_full.jsonl` and backfills sessions from before the hooks were installed; it's watermark-idempotent (safe to re-run) and leaves the working dir empty (Antigravity records no machine-readable cwd in the transcript — live capture gets it from the hook payload). Imported sessions currently carry content but not cost (cost injection on import is a follow-up).
+Antigravity fires a distinct control hook per lifecycle/tool event; kcap acts on the first `PreInvocation` of a conversation (POSTs lifecycle + spawns a watcher tailing that conversation's `transcript_full.jsonl`, `vendor=antigravity`) — so kcap must be on `PATH`. Antigravity is a GUI whose process outlives any one conversation (like the Codex desktop app), so there is no per-conversation exit signal: the watcher ends a session after it goes idle (default 60 min; override with `KCAP_ANTIGRAVITY_IDLE_MINUTES`), and a later turn reactivates it. Token/model usage lives in each conversation's sibling SQLite db (`conversations/<id>.db`), not the JSONL, so the watcher decodes it and streams the per-generation cost (priced on read; cost is never stored). **Subagents** (Antigravity's nested agents) are separate conversations; both *live* capture and historical `kcap import --antigravity` nest them under the parent, derived from the `INVOKE_SUBAGENT` step in the parent's `transcript_full.jsonl` (the spawn-time linkage signal). Live capture POSTs a subagent-link as each child is spawned; import reads the same `INVOKE_SUBAGENT` steps across all conversations on disk. Historical import reads `~/.gemini/antigravity/brain/*/…/transcript_full.jsonl` and backfills sessions from before the hooks were installed; it's watermark-idempotent (safe to re-run) and leaves the working dir empty (Antigravity records no machine-readable cwd in the transcript — live capture gets it from the hook payload). Imported sessions currently carry content but not cost (cost injection on import is a follow-up). To import one conversation, `kcap import --antigravity --session <id>` accepts the id in **either** form — the dashed brain-dir conversation id or its dashless canonical form (the id kcap shows for the session) — because import canonicalizes to the same dashless id that live capture uses.
 
 Cursor uses a single user-scope `hooks.json`; there is no project-scope variant.
 
@@ -686,6 +686,17 @@ kcap repos remove ~/dev/old   # remove a path
 
 Known repos are persisted to `~/.config/kcap/repos.json` and reported to the server when the daemon connects, so the launch dialog always shows previously-used repos even after restarts.
 
+### Projects
+
+List and inspect projects — a Team/Enterprise-plan grouping of repos and members that sessions can be scoped to (see `default_visibility project` below).
+
+```bash
+kcap projects            # table: slug, name, repos, members, your role
+kcap project <slug>      # metadata, repo list, member list, and (owner/admin) pending join requests
+```
+
+Requires the Team or Enterprise plan — the server 403s on Free with a message telling you so.
+
 ### Profiles
 
 Profiles let you work with multiple Capacitor servers — for example, a company server for work repos and a separate one for open-source projects. Each profile stores its own server URL, visibility settings, and daemon configuration.
@@ -733,6 +744,7 @@ kcap config set <key> <value>
 
 ```bash
 kcap config set default_visibility private      # only you can see your sessions
+kcap config set default_visibility project      # visible to the repo's project members (see `kcap projects`)
 kcap config set default_visibility org_public   # org repos visible, others private (default)
 kcap config set default_visibility public       # all sessions visible to others in your account
 ```

@@ -673,6 +673,123 @@ public record RepoEntry {
     public required DateTimeOffset LastUsed { get; init; }
 }
 
+// ── Projects (`kcap projects` / `kcap project <slug>`) — mirrors the server's
+// ProjectSummaryDto / ProjectDetailDto (src/Capacitor.Server.Core/Projects/ProjectContracts.cs) ──
+
+/// <summary>A single row from <c>GET /api/projects</c>.</summary>
+public sealed record CliProjectSummary {
+    [JsonPropertyName("project_id")]
+    public required string ProjectId { get; init; }
+
+    [JsonPropertyName("slug")]
+    public required string Slug { get; init; }
+
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    [JsonPropertyName("description")]
+    public string? Description { get; init; }
+
+    [JsonPropertyName("owner_user_id")]
+    public required string OwnerUserId { get; init; }
+
+    [JsonPropertyName("repo_count")]
+    public int RepoCount { get; init; }
+
+    [JsonPropertyName("member_count")]
+    public int MemberCount { get; init; }
+
+    /// <summary>"owner" | "member" | "none".</summary>
+    [JsonPropertyName("viewer_membership")]
+    public required string ViewerMembership { get; init; }
+
+    /// <summary>"request" | "invite" | null.</summary>
+    [JsonPropertyName("viewer_pending")]
+    public string? ViewerPending { get; init; }
+
+    [JsonPropertyName("pending_request_count")]
+    public int PendingRequestCount { get; init; }
+
+    [JsonPropertyName("repo_hashes")]
+    public List<string> RepoHashes { get; init; } = [];
+}
+
+/// <summary>A repo entry inside <see cref="CliProjectDetail"/>.</summary>
+public sealed record CliProjectRepo {
+    [JsonPropertyName("repo_hash")]
+    public required string RepoHash { get; init; }
+
+    [JsonPropertyName("repo_slug")]
+    public required string RepoSlug { get; init; }
+}
+
+/// <summary>A member entry inside <see cref="CliProjectDetail"/>.</summary>
+public sealed record CliProjectMember {
+    [JsonPropertyName("member_kind")]
+    public required string MemberKind { get; init; }
+
+    [JsonPropertyName("member_id")]
+    public required string MemberId { get; init; }
+
+    [JsonPropertyName("display_name")]
+    public required string DisplayName { get; init; }
+}
+
+/// <summary>A pending join request/invite inside <see cref="CliProjectDetail"/>. Empty unless the viewer is owner/admin.</summary>
+public sealed record CliProjectJoinRequest {
+    [JsonPropertyName("user_id")]
+    public required string UserId { get; init; }
+
+    /// <summary>"request" | "invite".</summary>
+    [JsonPropertyName("direction")]
+    public required string Direction { get; init; }
+
+    [JsonPropertyName("requested_at")]
+    public DateTimeOffset RequestedAt { get; init; }
+}
+
+/// <summary>The body of <c>GET /api/projects/{slug}</c>.</summary>
+public sealed record CliProjectDetail {
+    [JsonPropertyName("project_id")]
+    public required string ProjectId { get; init; }
+
+    [JsonPropertyName("slug")]
+    public required string Slug { get; init; }
+
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    [JsonPropertyName("description")]
+    public string? Description { get; init; }
+
+    [JsonPropertyName("owner_user_id")]
+    public required string OwnerUserId { get; init; }
+
+    [JsonPropertyName("viewer_membership")]
+    public required string ViewerMembership { get; init; }
+
+    [JsonPropertyName("viewer_pending")]
+    public string? ViewerPending { get; init; }
+
+    [JsonPropertyName("repos")]
+    public List<CliProjectRepo> Repos { get; init; } = [];
+
+    [JsonPropertyName("members")]
+    public List<CliProjectMember> Members { get; init; } = [];
+
+    [JsonPropertyName("join_requests")]
+    public List<CliProjectJoinRequest> JoinRequests { get; init; } = [];
+}
+
+/// <summary>Error body shared by every <c>/api/projects*</c> route on failure (e.g. <c>projects_not_in_plan</c>).</summary>
+public sealed record CliProjectError {
+    [JsonPropertyName("error")]
+    public required string Error { get; init; }
+
+    [JsonPropertyName("message")]
+    public required string Message { get; init; }
+}
+
 public sealed record CurationApplyItem {
     [JsonPropertyName("category")]      public string?               Category     { get; init; }
     [JsonPropertyName("cluster_id")]    public string?               ClusterId    { get; init; }
@@ -706,6 +823,9 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalCatalogQuestionDto))]
 [JsonSerializable(typeof(SessionEvalCompletedPayloadV3))]
 [JsonSerializable(typeof(List<ErrorEntry>))]
+[JsonSerializable(typeof(List<CliProjectSummary>))]
+[JsonSerializable(typeof(CliProjectDetail))]
+[JsonSerializable(typeof(CliProjectError))]
 [JsonSerializable(typeof(RepositoryPayload))]
 [JsonSerializable(typeof(GitCacheEntry))]
 [JsonSerializable(typeof(TranscriptBatch))]
@@ -730,6 +850,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(FindRepoForRemoteRequest))]
 [JsonSerializable(typeof(RefreshAgentWorktreeCommand))]
 [JsonSerializable(typeof(RefreshAgentWorktreeResult))]
+[JsonSerializable(typeof(BorrowProbeResult))]
 [JsonSerializable(typeof(SendInputCommand))]
 [JsonSerializable(typeof(ResizeTerminalCommand))]
 [JsonSerializable(typeof(PrepareEvalCommand))]
@@ -761,6 +882,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(HostedPermissionRequest))]
 [JsonSerializable(typeof(PermissionResolution))]
 [JsonSerializable(typeof(EndAgentSessionResult))]
+[JsonSerializable(typeof(MachineIdFile))]
 [JsonSerializable(typeof(int))]
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(string[]))]
@@ -855,7 +977,15 @@ public readonly record struct LaunchAgentCommand(
         // names the daemon resolves against the kcap-owned KcapMcpRegistry and materializes into the
         // launcher's MCP config (flow-starting servers are stripped regardless of listing). Appended
         // last, same wire-compat rule as SyncFromRepoRoot above.
-        string[]?         McpAllowlist = null
+        string[]?         McpAllowlist = null,
+        // AI-1207 Phase A: launch against the user's own checkout instead of a fresh daemon-owned
+        // worktree. A bool on the wire (not the WorkLocation enum) — WorkLocation's numeric values
+        // are BorrowedCwd=0/OwnedWorktree=1, the reverse of what you'd guess, so a raw enum int
+        // would be a footgun; the daemon maps Borrowed -> WorkLocation internally. BorrowCwd is the
+        // absolute path to borrow when Borrowed is true. Appended last, same wire-compat rule as the
+        // fields above.
+        bool               Borrowed = false,
+        string?            BorrowCwd = null
     );
 
 /// <summary>
@@ -912,6 +1042,21 @@ public readonly record struct RefreshAgentWorktreeResult(
         string? Error
     );
 
+/// <summary>
+/// Daemon reply to the server's <c>ProbeBorrowSource</c> client-result invocation (AI-1207 Phase A,
+/// task A3): "can you borrow this path?". <see cref="CanBorrow"/> mirrors
+/// <c>BorrowAuthResult.Allowed</c>; <see cref="CanonicalCwd"/>/<see cref="CanonicalGitRoot"/> are the
+/// daemon-computed canonical paths (non-null only when the path exists), and <see cref="Reason"/>
+/// carries the rejection reason (<c>path_absent</c> / <c>not_allowed</c>) when not borrowable. Wire
+/// keys (snake_case): <c>can_borrow</c>, <c>canonical_cwd</c>, <c>canonical_git_root</c>, <c>reason</c>.
+/// </summary>
+public record BorrowProbeResult(
+        bool    CanBorrow,
+        string? CanonicalCwd,
+        string? CanonicalGitRoot,
+        string? Reason
+    );
+
 public readonly record struct SendInputCommand(
         string    AgentId,
         string    Text,
@@ -939,6 +1084,12 @@ public readonly record struct ResizeTerminalCommand(
 /// <c>AssemblyInformationalVersion</c>. Logged on connect and surfaced on
 /// the server's <c>DaemonInfo</c> so the dashboard can show what version
 /// each connected daemon is running.</para>
+///
+/// <para><c>MachineId</c> (AI-1207) is this machine's stable id (see
+/// <see cref="MachineId"/>), reported so the server can later prove a daemon
+/// claiming a given repo path is actually running on the requester's
+/// machine. Trailing/optional so an older daemon that doesn't send it (or a
+/// newer daemon talking to an older server that ignores it) never breaks.</para>
 /// </summary>
 public readonly record struct DaemonConnect(
         string    Name,
@@ -948,7 +1099,8 @@ public readonly record struct DaemonConnect(
         string[]  LiveAgentIds,
         string?   InstanceId       = null,
         string?   Version          = null,
-        string[]? SupportedVendors = null
+        string[]? SupportedVendors = null,
+        string?   MachineId        = null
     );
 
 public readonly record struct AgentRegistered(

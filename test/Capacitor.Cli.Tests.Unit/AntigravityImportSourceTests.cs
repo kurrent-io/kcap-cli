@@ -17,6 +17,11 @@ public class AntigravityImportSourceTests {
     const string SessA = "aaaaaaaa-0000-0000-0000-00000000a00a";
     const string SessB = "bbbbbbbb-0000-0000-0000-00000000b00b";
 
+    // The brain-dir conversation id is dashed on disk, but the surfaced session id is the
+    // dashless canonical form (matching live capture — AI-1238). Children stay dashed because
+    // they resolve on-disk brain-dir transcript paths.
+    static string Dashless(string id) => Guid.Parse(id).ToString("N");
+
     static string NewHome() {
         var home = Path.Combine(Path.GetTempPath(), "kcap-agimp-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(home);
@@ -64,7 +69,7 @@ public class AntigravityImportSourceTests {
             // Only Root is a top-level session; Child is imported under it.
             await Assert.That(discovered.Count).IsEqualTo(1);
             var root = discovered[0];
-            await Assert.That(root.SessionId).IsEqualTo(Root);
+            await Assert.That(root.SessionId).IsEqualTo(Dashless(Root));
             await Assert.That(root.Vendor).IsEqualTo("antigravity");
             await Assert.That(root.FirstTimestamp).IsEqualTo(DateTimeOffset.Parse("2026-07-02T19:00:00Z"));
 
@@ -90,7 +95,7 @@ public class AntigravityImportSourceTests {
                 CancellationToken.None);
 
             await Assert.That(discovered.Count).IsEqualTo(1);
-            await Assert.That(discovered[0].SessionId).IsEqualTo(Root);
+            await Assert.That(discovered[0].SessionId).IsEqualTo(Dashless(Root));
             var children = (List<string>)discovered[0].SourceMeta!["Children"]!;
             await Assert.That(children.OrderBy(x => x).ToList()).IsEquivalentTo(new List<string> { Child, Grand }.OrderBy(x => x).ToList());
         } finally { Directory.Delete(home, recursive: true); }
@@ -109,7 +114,57 @@ public class AntigravityImportSourceTests {
                 CancellationToken.None);
 
             await Assert.That(discovered.Count).IsEqualTo(1);
-            await Assert.That(discovered[0].SessionId).IsEqualTo(SessB);
+            await Assert.That(discovered[0].SessionId).IsEqualTo(Dashless(SessB));
+        } finally { Directory.Delete(home, recursive: true); }
+    }
+
+    [Test]
+    public async Task Discover_surfaces_a_dashless_session_id_for_a_dashed_conversation_id() {
+        // Real Antigravity conversation ids are dashed UUIDs (the brain-dir name). The
+        // discovered session id must be the DASHLESS canonical form — matching live capture
+        // (the Antigravity hook + `kcap watch` strip dashes) so a session captured live and
+        // later re-imported dedupes to one stream, and so `--session` filtering is
+        // format-insensitive (AI-1238).
+        const string dashed = "11110000-0000-4000-8000-000000000001";
+        var dashless = Guid.Parse(dashed).ToString("N");
+
+        var home = NewHome();
+        try {
+            WriteTranscript(home, dashed, UserLine("2026-07-02T19:00:00Z"));
+
+            var source = new AntigravityImportSource(home: home, geminiCliHome: "");
+            var discovered = await source.DiscoverAsync(
+                new DiscoveryFilters(FilterCwd: null, FilterSession: null, Since: null, MinLines: 0),
+                CancellationToken.None);
+
+            await Assert.That(discovered.Count).IsEqualTo(1);
+            await Assert.That(discovered[0].SessionId).IsEqualTo(dashless);
+        } finally { Directory.Delete(home, recursive: true); }
+    }
+
+    [Test]
+    public async Task Discover_session_filter_accepts_either_dashed_or_dashless_form() {
+        const string dashed = "11110000-0000-4000-8000-000000000001";
+        var dashless = Guid.Parse(dashed).ToString("N");
+
+        var home = NewHome();
+        try {
+            WriteTranscript(home, dashed, UserLine("2026-07-02T19:00:00Z"));
+            var source = new AntigravityImportSource(home: home, geminiCliHome: "");
+
+            // Dashed input matches.
+            var byDashed = await source.DiscoverAsync(
+                new DiscoveryFilters(FilterCwd: null, FilterSession: dashed, Since: null, MinLines: 0),
+                CancellationToken.None);
+            await Assert.That(byDashed.Count).IsEqualTo(1);
+            await Assert.That(byDashed[0].SessionId).IsEqualTo(dashless);
+
+            // Dashless input (the form live capture reports) also matches.
+            var byDashless = await source.DiscoverAsync(
+                new DiscoveryFilters(FilterCwd: null, FilterSession: dashless, Since: null, MinLines: 0),
+                CancellationToken.None);
+            await Assert.That(byDashless.Count).IsEqualTo(1);
+            await Assert.That(byDashless[0].SessionId).IsEqualTo(dashless);
         } finally { Directory.Delete(home, recursive: true); }
     }
 

@@ -168,4 +168,27 @@ public class ConfigCommandTests {
 
         await Assert.That(updated.ServerUrl).IsEqualTo("https://example.com");
     }
+
+    // ── default_visibility (AI-1206: "project" added to the ladder) ────────────
+
+    [Test]
+    [Arguments("private")]
+    [Arguments("project")]
+    [Arguments("org_public")]
+    [Arguments("public")]
+    public async Task ApplySet_DefaultVisibility_AcceptsEachValidValue(string value) {
+        var profile = new Profile();
+
+        var updated = ConfigCommand.ApplySet(profile, "default_visibility", value);
+
+        await Assert.That(updated.DefaultVisibility).IsEqualTo(value);
+    }
+
+    [Test]
+    public async Task ApplySet_DefaultVisibility_InvalidValue_Throws() {
+        var profile = new Profile();
+
+        await Assert.That(() => ConfigCommand.ApplySet(profile, "default_visibility", "team"))
+            .Throws<ArgumentException>();
+    }
 }

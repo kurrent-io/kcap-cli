@@ -160,8 +160,8 @@ public static class SetupCommand {
         if (noPrompt) {
             defaultVisibility = (GetArg(args, "--default-visibility") ?? "org_public").ToLowerInvariant();
 
-            if (defaultVisibility is not "private" and not "org_public" and not "public") {
-                await Console.Error.WriteLineAsync($"  Invalid default-visibility: {defaultVisibility}. Must be: private, org_public, or public");
+            if (!AppConfig.ValidVisibilities.Contains(defaultVisibility)) {
+                await Console.Error.WriteLineAsync($"  Invalid default-visibility: {defaultVisibility}. Must be: {string.Join(", ", AppConfig.ValidVisibilities)}");
 
                 return 1;
             }
@@ -171,9 +171,10 @@ public static class SetupCommand {
             defaultVisibility = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
                     .Title("Which of your sessions should be readable by other users in the same Kurrent Capacitor account by default?")
-                    .AddChoices("org_public", "private", "public")
+                    .AddChoices(AppConfig.ValidVisibilities)
                     .UseConverter(v => v switch {
                         "private"    => "All private — only you can see your sessions",
+                        "project"    => "Project repos public to fellow project members, others private",
                         "org_public" => "Org repos public, others private (default)",
                         "public"     => "All public — others can see all your sessions",
                         _            => v

@@ -365,7 +365,7 @@ static partial class WatchCommand {
             Log($"Session below threshold ({state.BufferedLines.Count}/{WatchState.TranscriptThreshold} lines), skipping final drain");
         } else {
             Log("Draining remaining lines...");
-            var finalDrained = await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, CancellationToken.None);
+            var finalDrained = await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, CancellationToken.None, isFinalDrain: true);
 
             // One last subagent-link scan on the way out — the parent may have emitted an
             // INVOKE_SUBAGENT step after the main loop's last tick but before exit, and this is
@@ -777,42 +777,29 @@ static partial class WatchCommand {
             string?           agentId,
             WatchState        state,
             string            vendor,
-            CancellationToken ct
+            CancellationToken ct,
+            bool              isFinalDrain = false
         ) {
         try {
             if (!File.Exists(transcriptPath)) {
                 return [];
             }
 
-            var newLines       = new List<string>();
-            var newLineNumbers = new List<int>();
-
-            await using var stream = new FileStream(
-                transcriptPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite
-            );
-            using var reader = new StreamReader(stream);
-
-            var lineIndex = 0;
-
-            while (await reader.ReadLineAsync(ct) is { } line) {
-                if (lineIndex < state.LinesProcessed) {
-                    lineIndex++;
-
-                    continue;
-                }
-
-                if (!string.IsNullOrWhiteSpace(line)) {
-                    newLines.Add(SecretRedactor.RedactLine(line));
-                    newLineNumbers.Add(lineIndex);
-                }
-
-                lineIndex++;
+            // Read only newline-TERMINATED lines. A final line still being written by the agent
+            // (no trailing '\n' yet) is held back — sending its truncated prefix and advancing the
+            // position past it permanently drops the completed line (AI-1243: dropped Read results;
+            // large tool_result lines are slow to flush and get caught mid-write). The next drain
+            // re-reads it once complete.
+            NewTranscriptLines drainRead;
+            await using (var stream = new FileStream(
+                    transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) {
+                drainRead = await ReadNewCompleteLinesAsync(
+                    stream, state.LinesProcessed, holdIncompleteFinalLine: !isFinalDrain, ct);
             }
 
-            var linesRead = lineIndex;
+            var newLineNumbers = drainRead.LineNumbers;
+            var newLines       = drainRead.Lines.Select(SecretRedactor.RedactLine).ToList();
+            var linesRead      = drainRead.NextPosition;
 
             // Track Antigravity in-flight tool calls + the latest step timestamp from this
             // drain's transcript lines (BEFORE appending USAGE lines, which aren't transcript
@@ -1758,6 +1745,154 @@ static partial class WatchCommand {
     }
 
     static void Log(string message) => Console.Error.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss.fff}] [watch] {message}");
+
+    /// <summary>
+    /// Result of a transcript drain read: the new non-blank <see cref="Lines"/> (beyond the
+    /// caller's processed position), their 0-based <see cref="LineNumbers"/>, and the
+    /// <see cref="NextPosition"/> the caller should advance its watermark to.
+    /// </summary>
+    public readonly record struct NewTranscriptLines(List<string> Lines, List<int> LineNumbers, int NextPosition);
+
+    /// <summary>
+    /// Split <paramref name="fileText"/> into the new complete (newline-terminated) transcript
+    /// lines beyond <paramref name="linesProcessed"/>. A final line that is NOT newline-terminated
+    /// means the agent is mid-write of it: it is held back — excluded from the batch AND from
+    /// <see cref="NewTranscriptLines.NextPosition"/> — so a later drain re-reads it once complete.
+    /// Consuming it would send a truncated line that fails to normalize server-side and permanently
+    /// drop the completed line (AI-1243, the "endless reads" bug; large Read tool_result lines were
+    /// the common victim). Blank lines are skipped from the output but still advance the position,
+    /// matching the long-standing drain behaviour.
+    /// </summary>
+    public static NewTranscriptLines SplitNewCompleteLines(
+            string fileText,
+            int    linesProcessed,
+            bool   holdIncompleteFinalLine = true
+        ) {
+        var newLines       = new List<string>();
+        var newLineNumbers = new List<int>();
+
+        var endsWithNewline = fileText.Length == 0 || fileText[^1] == '\n';
+
+        using var reader    = new StringReader(fileText);
+        var       lineIndex = 0;
+
+        while (reader.ReadLine() is { } line) {
+            if (lineIndex >= linesProcessed && !string.IsNullOrWhiteSpace(line)) {
+                newLines.Add(line);
+                newLineNumbers.Add(lineIndex);
+            }
+
+            lineIndex++;
+        }
+
+        return ApplyPartialLineHoldback(
+            newLines, newLineNumbers, nextPosition: lineIndex, linesProcessed, endsWithNewline, holdIncompleteFinalLine);
+    }
+
+    /// <summary>
+    /// Streams the new complete transcript lines from <paramref name="stream"/> WITHOUT materializing
+    /// the whole file (Qodo #291 #2): only lines beyond <paramref name="linesProcessed"/> are retained.
+    /// The file length is sampled once and the end-of-file newline is read from the last byte, then the
+    /// read is CAPPED at that length — so a concurrent append after the sample can't make an as-yet
+    /// unterminated final line look complete and get consumed (which would re-drop it — AI-1243).
+    /// Opened by the caller with FileShare.ReadWrite (Qodo #291 #1) so the writing agent is never blocked.
+    /// </summary>
+    internal static async Task<NewTranscriptLines> ReadNewCompleteLinesAsync(
+            FileStream        stream,
+            int               linesProcessed,
+            bool              holdIncompleteFinalLine,
+            CancellationToken ct) {
+        var length = stream.Length;
+
+        bool endsWithNewline;
+        if (length == 0) {
+            endsWithNewline = true;
+        } else {
+            stream.Seek(length - 1, SeekOrigin.Begin);
+            endsWithNewline = stream.ReadByte() == '\n';
+            stream.Seek(0, SeekOrigin.Begin);
+        }
+
+        var newLines       = new List<string>();
+        var newLineNumbers = new List<int>();
+        var lineIndex      = 0;
+
+        using var reader = new StreamReader(new LengthLimitedReadStream(stream, length), leaveOpen: true);
+        while (await reader.ReadLineAsync(ct) is { } line) {
+            if (lineIndex >= linesProcessed && !string.IsNullOrWhiteSpace(line)) {
+                newLines.Add(line);
+                newLineNumbers.Add(lineIndex);
+            }
+
+            lineIndex++;
+        }
+
+        return ApplyPartialLineHoldback(
+            newLines, newLineNumbers, nextPosition: lineIndex, linesProcessed, endsWithNewline, holdIncompleteFinalLine);
+    }
+
+    // Hold back a still-being-written final line (no trailing newline yet): keep the position
+    // before it and drop it from this batch if it was collected. The final drain at session end
+    // opts out (holdIncompleteFinalLine: false) — the file is static then, so an unterminated
+    // last line is genuinely the end and must be delivered, not lost. Shared by the string helper
+    // (SplitNewCompleteLines) and the streaming reader (ReadNewCompleteLinesAsync).
+    static NewTranscriptLines ApplyPartialLineHoldback(
+            List<string> newLines,
+            List<int>    newLineNumbers,
+            int          nextPosition,
+            int          linesProcessed,
+            bool         endsWithNewline,
+            bool         holdIncompleteFinalLine) {
+        if (holdIncompleteFinalLine && !endsWithNewline && nextPosition > linesProcessed) {
+            var partialIndex = nextPosition - 1;
+
+            if (newLineNumbers.Count > 0 && newLineNumbers[^1] == partialIndex) {
+                newLines.RemoveAt(newLines.Count - 1);
+                newLineNumbers.RemoveAt(newLineNumbers.Count - 1);
+            }
+
+            nextPosition = partialIndex;
+        }
+
+        return new NewTranscriptLines(newLines, newLineNumbers, nextPosition);
+    }
+
+    /// <summary>Read-only view of <c>inner</c> that reports EOF after <c>limit</c> bytes, so a
+    /// StreamReader over it can't read past a length sampled before a concurrent append.</summary>
+    internal sealed class LengthLimitedReadStream(Stream inner, long limit) : Stream {
+        long _consumed;
+
+        public override int Read(byte[] buffer, int offset, int count) {
+            var allowed = (int)Math.Min(count, limit - _consumed);
+            if (allowed <= 0) return 0;
+            var n = inner.Read(buffer, offset, allowed);
+            _consumed += n;
+            return n;
+        }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) {
+            var allowed = (int)Math.Min(buffer.Length, limit - _consumed);
+            if (allowed <= 0) return 0;
+            var n = await inner.ReadAsync(buffer[..allowed], ct);
+            _consumed += n;
+            return n;
+        }
+
+        public override bool CanRead  => true;
+        public override bool CanSeek  => false;
+        public override bool CanWrite => false;
+        public override long Length   => limit;
+
+        public override long Position {
+            get => _consumed;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
 
     public static int CountFileLines(string path) {
         try {

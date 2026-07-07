@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Commands;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -549,5 +550,38 @@ public class CodexLauncherTests {
         var argsEmpty = launcher.BuildArgs(NewFlowCtx([])).Args;
 
         await Assert.That(argsEmpty).IsEquivalentTo(argsNull, CollectionOrdering.Matching);
+    }
+
+    // === AI-1207 Phase A: read-only sandbox for a borrowed reviewer ===
+
+    [Test]
+    public async Task BuildArgs_borrowed_cwd_uses_read_only_sandbox() {
+        // A borrowed reviewer runs in the user's REAL checkout — never workspace-write.
+        var ctx  = NewCtx(isReviewFlow: true) with { Work = WorkLocation.BorrowedCwd };
+        var args = NewLauncher().BuildArgs(ctx).Args;
+
+        await Assert.That(args).Contains("--sandbox");
+        var sIdx = Array.IndexOf(args, "--sandbox");
+        await Assert.That(args[sIdx + 1]).IsEqualTo("read-only");
+        await Assert.That(args).DoesNotContain("workspace-write");
+
+        await Assert.That(args).Contains("--ask-for-approval");
+        await Assert.That(args).Contains("never");
+
+        var cdIdx = Array.IndexOf(args, "--cd");
+        await Assert.That(cdIdx).IsGreaterThan(-1);
+        await Assert.That(args[cdIdx + 1]).IsEqualTo("/tmp/wt");
+    }
+
+    [Test]
+    public async Task BuildArgs_owned_worktree_keeps_workspace_write_sandbox() {
+        // Regression: the owned path's sandbox value must stay exactly as it is today.
+        var ctx  = NewCtx(isReviewFlow: true) with { Work = WorkLocation.OwnedWorktree };
+        var args = NewLauncher().BuildArgs(ctx).Args;
+
+        var sIdx = Array.IndexOf(args, "--sandbox");
+        await Assert.That(sIdx).IsGreaterThan(-1);
+        await Assert.That(args[sIdx + 1]).IsEqualTo("workspace-write");
+        await Assert.That(args).DoesNotContain("read-only");
     }
 }

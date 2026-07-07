@@ -21,6 +21,11 @@ public class AntigravityImportTests : IDisposable {
     const string Root  = "11110000-0000-4000-8000-000000000001";
     const string Child = "22220000-0000-4000-8000-000000000002";
 
+    // The brain-dir conversation id is dashed on disk, but the id surfaced to the server
+    // (session id + subagent agent_id) is the dashless canonical form — matching live capture
+    // so live + imported captures of one conversation land on the same stream (AI-1238).
+    static string Dashless(string id) => Guid.Parse(id).ToString("N");
+
     public void Dispose() {
         _server.Stop();
         try { Directory.Delete(_home, recursive: true); } catch { /* best effort */ }
@@ -71,7 +76,7 @@ public class AntigravityImportTests : IDisposable {
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         // The subagent conversation must NOT be discovered as its own top-level session.
         await Assert.That(discovered.Count).IsEqualTo(1);
-        await Assert.That(discovered[0].SessionId).IsEqualTo(Root);
+        await Assert.That(discovered[0].SessionId).IsEqualTo(Dashless(Root));
 
         var classified = await source.ClassifyAsync(
             discovered,
@@ -95,17 +100,25 @@ public class AntigravityImportTests : IDisposable {
         // Fail-closed ordering: subagent registered before its content, stopped after.
         await Assert.That(posts.IndexOf("/hooks/subagent-start")).IsLessThan(posts.IndexOf("/hooks/subagent-stop"));
 
-        // subagent-start carries the child conversation id as agent_id.
-        var startBody = _server.LogEntries.Single(e => e.RequestMessage.Path == "/hooks/subagent-start").RequestMessage.Body!;
-        await Assert.That(startBody).Contains($"\"agent_id\":\"{Child}\"");
+        // The session lifecycle carries the dashless session id (matching live capture).
+        var sessionStartBody = _server.LogEntries
+            .Single(e => e.RequestMessage.Path == "/hooks/session-start/antigravity").RequestMessage.Body!;
+        await Assert.That(sessionStartBody).Contains($"\"session_id\":\"{Dashless(Root)}\"");
 
-        // The child transcript batch is tagged vendor=antigravity and routed by the agent_id.
-        // Matched via "agent_id":"<Child>" rather than a bare Contains(Child), because the root's
-        // own transcript batch also contains the Child id embedded in its INVOKE_SUBAGENT step.
+        // subagent-start carries the DASHLESS child conversation id as agent_id (server
+        // canonicalizes agent_id to dashless on both ingest and watermark read, so this matches
+        // live routing/correlation — mirrors GeminiImportSource).
+        var startBody = _server.LogEntries.Single(e => e.RequestMessage.Path == "/hooks/subagent-start").RequestMessage.Body!;
+        await Assert.That(startBody).Contains($"\"agent_id\":\"{Dashless(Child)}\"");
+
+        // The child transcript batch is tagged vendor=antigravity and routed by the dashless agent_id.
+        // Matched via "agent_id":"<Dashless(Child)>" rather than a bare Contains(Dashless(Child)),
+        // because the root's own transcript batch also contains the Child id embedded in its
+        // INVOKE_SUBAGENT step.
         var subTranscript = _server.LogEntries
             .Where(e => e.RequestMessage.Path == "/hooks/transcript")
             .Select(e => e.RequestMessage.Body!)
-            .Single(b => b.Contains($"\"agent_id\":\"{Child}\""));
+            .Single(b => b.Contains($"\"agent_id\":\"{Dashless(Child)}\""));
         await Assert.That(subTranscript).Contains("\"vendor\":\"antigravity\"");
     }
 
@@ -115,10 +128,10 @@ public class AntigravityImportTests : IDisposable {
         WriteTranscript(Child, "sub task");
         WriteLinkage();
 
-        // Parent (no agentId) fully ingested → AlreadyLoaded; the child (agentId=Child) was never
-        // imported (404). The AlreadyLoaded branch must STILL run the child-repair pass, else a
-        // once-skipped subagent is lost forever (AI-1160 review, finding 1).
-        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").WithParam("agentId", Child).UsingGet())
+        // Parent (no agentId) fully ingested → AlreadyLoaded; the child (agentId=dashless Child)
+        // was never imported (404). The AlreadyLoaded branch must STILL run the child-repair pass,
+        // else a once-skipped subagent is lost forever (AI-1160 review, finding 1).
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").WithParam("agentId", Dashless(Child)).UsingGet())
             .AtPriority(1)
             .RespondWith(Response.Create().WithStatusCode(404));
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
@@ -159,7 +172,7 @@ public class AntigravityImportTests : IDisposable {
         var childTranscript = _server.LogEntries
             .Where(e => e.RequestMessage.Path == "/hooks/transcript")
             .Select(e => e.RequestMessage.Body!).Single();
-        await Assert.That(childTranscript).Contains($"\"agent_id\":\"{Child}\"");
+        await Assert.That(childTranscript).Contains($"\"agent_id\":\"{Dashless(Child)}\"");
     }
 
     [Test]
@@ -230,7 +243,7 @@ public class AntigravityImportTests : IDisposable {
         // Parent not yet imported (404) → New; child partially imported up to line 0 → resume from
         // file line 1, numbered by TRUE position (1). The pre-fix code fed the HWM as
         // lineNumberOffset and re-sent the whole file as [1,2] (AI-1160 review, finding 2).
-        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").WithParam("agentId", Child).UsingGet())
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").WithParam("agentId", Dashless(Child)).UsingGet())
             .AtPriority(1)
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":0}"""));
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
@@ -258,7 +271,7 @@ public class AntigravityImportTests : IDisposable {
         var childTranscript = _server.LogEntries
             .Where(e => e.RequestMessage.Path == "/hooks/transcript")
             .Select(e => e.RequestMessage.Body!)
-            .Single(b => b.Contains($"\"agent_id\":\"{Child}\""));
+            .Single(b => b.Contains($"\"agent_id\":\"{Dashless(Child)}\""));
 
         // Only file line 1 is re-sent, numbered 1 — not the whole file shifted to [1,2].
         await Assert.That(childTranscript).Contains("\"line_numbers\":[1]");
