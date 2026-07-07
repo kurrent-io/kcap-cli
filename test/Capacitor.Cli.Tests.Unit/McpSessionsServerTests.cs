@@ -6,10 +6,11 @@ namespace Capacitor.Cli.Tests.Unit;
 
 public class McpSessionsServerTests {
     [Test]
-    public async Task BuildSearchUrl_no_args_no_cwd_hash() {
-        var url = McpSessionsServer.BuildSearchUrl("http://srv", args: null, cwdRepoHash: null);
-
-        await Assert.That(url).IsEqualTo("http://srv/api/sessions/search");
+    public async Task BuildSearchUrl_no_args_no_cwd_hash_fails_closed() {
+        // Superseded fail-open expectation: with no repo resolvable and none requested, this now
+        // throws instead of silently searching cross-repo. See BuildSearchUrl_fails_closed_when_no_repo_resolves_and_none_requested.
+        await Assert.That(() => McpSessionsServer.BuildSearchUrl("http://srv", args: null, cwdRepoHash: null))
+            .Throws<ArgumentException>();
     }
 
     [Test]
@@ -17,10 +18,10 @@ public class McpSessionsServerTests {
         var url = McpSessionsServer.BuildSearchUrl(
             "http://srv",
             new JsonObject { ["query"] = "batch" },
-            cwdRepoHash: null
+            cwdRepoHash: "abc1234567890def"
         );
 
-        await Assert.That(url).IsEqualTo("http://srv/api/sessions/search?q=batch");
+        await Assert.That(url).IsEqualTo("http://srv/api/sessions/search?q=batch&repo=abc1234567890def");
     }
 
     [Test]
@@ -32,7 +33,7 @@ public class McpSessionsServerTests {
                 ["author"] = "alice",
                 ["limit"]  = 25
             },
-            cwdRepoHash: null
+            cwdRepoHash: "abc1234567890def"
         );
 
         await Assert.That(url).Contains("q=retry%20logic");
@@ -100,10 +101,10 @@ public class McpSessionsServerTests {
         var url = McpSessionsServer.BuildSearchUrl(
             "http://srv",
             new JsonObject { ["author_github_id"] = 12345 },
-            cwdRepoHash: null
+            cwdRepoHash: "abc1234567890def"
         );
 
-        await Assert.That(url).IsEqualTo("http://srv/api/sessions/search?author_github_id=12345");
+        await Assert.That(url).IsEqualTo("http://srv/api/sessions/search?author_github_id=12345&repo=abc1234567890def");
     }
 
     [Test]
@@ -229,7 +230,7 @@ public class McpSessionsServerTests {
         var url = McpSessionsServer.BuildSearchUrl(
             "http://srv",
             new JsonObject { ["author_github_id"] = 5_000_000_000L },
-            cwdRepoHash: null
+            cwdRepoHash: "abc1234567890def"
         );
 
         await Assert.That(url).Contains("author_github_id=5000000000");
@@ -258,6 +259,38 @@ public class McpSessionsServerTests {
         var ok = McpSessionsServer.TryReadInt(args, "limit", out _);
 
         await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task BuildSearchUrl_fails_closed_when_no_repo_resolves_and_none_requested() {
+        var args = new JsonObject { ["query"] = "hi" }; // no repo arg, cwdRepoHash null
+        await Assert.That(() => McpSessionsServer.BuildSearchUrl("http://x", args, cwdRepoHash: null))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task BuildSearchUrl_rejects_nonstring_repo_with_clean_error() {
+        var args = new JsonObject { ["query"] = "hi", ["repo"] = 123 };
+        await Assert.That(() => McpSessionsServer.BuildSearchUrl("http://x", args, cwdRepoHash: "abc"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task BuildSearchUrl_allows_explicit_cross_repo_all() {
+        var url = McpSessionsServer.BuildSearchUrl("http://x", new JsonObject { ["query"] = "hi", ["repo"] = "all" }, cwdRepoHash: null);
+        await Assert.That(url).DoesNotContain("repo="); // cross-repo → repo param omitted, no throw
+    }
+
+    [Test]
+    public async Task BuildSearchUrl_uses_explicit_repo_when_cwd_absent() {
+        var url = McpSessionsServer.BuildSearchUrl("http://x", new JsonObject { ["query"] = "hi", ["repo"] = "owner/name" }, cwdRepoHash: null);
+        await Assert.That(url).Contains("repo=owner%2Fname");
+    }
+
+    [Test]
+    public async Task BuildSearchUrl_uses_cwd_repo_when_no_explicit() {
+        var url = McpSessionsServer.BuildSearchUrl("http://x", new JsonObject { ["query"] = "hi" }, cwdRepoHash: "abc123");
+        await Assert.That(url).Contains("repo=abc123");
     }
 
     [Test]

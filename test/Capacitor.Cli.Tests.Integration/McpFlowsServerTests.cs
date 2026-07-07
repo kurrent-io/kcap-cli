@@ -219,6 +219,80 @@ public class McpFlowsServerTests : IDisposable {
         }
     }
 
+    /// <summary>
+    /// Handshake probe (AI-1233): clients that send <c>resources/list</c> / <c>prompts/list</c> /
+    /// <c>ping</c> before treating the server as ready must get empty-but-successful responses,
+    /// not <c>-32601 Method not found</c> — and the negotiated protocolVersion must echo back a
+    /// client-requested version we support, not always the hardcoded baseline.
+    /// </summary>
+    [Test]
+    public async Task ResourcesList_and_PromptsList_return_empty_not_method_not_found() {
+        using var proc = SpawnMcpServer();
+        try {
+            var init = await SendRequest(proc, new JsonObject {
+                ["jsonrpc"] = "2.0",
+                ["id"]      = 1,
+                ["method"]  = "initialize",
+                ["params"]  = new JsonObject { ["protocolVersion"] = "2025-06-18" }
+            });
+            await Assert.That(init["result"]?["protocolVersion"]?.GetValue<string>()).IsEqualTo("2025-06-18");
+
+            var resources = await SendRequest(proc, new JsonObject {
+                ["jsonrpc"] = "2.0",
+                ["id"]      = 2,
+                ["method"]  = "resources/list"
+            });
+            await Assert.That(resources["error"]).IsNull();
+            await Assert.That(resources["result"]?["resources"]?.AsArray()?.Count).IsEqualTo(0);
+
+            var prompts = await SendRequest(proc, new JsonObject {
+                ["jsonrpc"] = "2.0",
+                ["id"]      = 3,
+                ["method"]  = "prompts/list"
+            });
+            await Assert.That(prompts["error"]).IsNull();
+            await Assert.That(prompts["result"]?["prompts"]?.AsArray()?.Count).IsEqualTo(0);
+
+            var ping = await SendRequest(proc, new JsonObject {
+                ["jsonrpc"] = "2.0",
+                ["id"]      = 4,
+                ["method"]  = "ping"
+            });
+            await Assert.That(ping["error"]).IsNull();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
+    /// Malformed-initialize survival probe (AI-1233): a client sending a non-string
+    /// <c>protocolVersion</c> (e.g. a bare JSON number) must not crash <c>McpProtocol.NegotiateVersion</c> —
+    /// the initialize dispatch arm has no try/catch, so an uncaught exception there would kill the
+    /// whole stdio server. The server must fall back to the baseline version and stay responsive.
+    /// </summary>
+    [Test]
+    public async Task Initialize_with_non_string_protocol_version_falls_back_and_server_survives() {
+        using var proc = SpawnMcpServer();
+        try {
+            var response = await SendRequest(proc, new JsonObject {
+                ["jsonrpc"] = "2.0",
+                ["id"]      = 1,
+                ["method"]  = "initialize",
+                ["params"]  = new JsonObject { ["protocolVersion"] = 2025 }
+            });
+
+            var result = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["protocolVersion"]?.GetValue<string>()).IsEqualTo("2024-11-05");
+
+            // Server survived the malformed request — a follow-up still gets a response.
+            var again = await SendRequest(proc, ToolsListRequest(2));
+            await Assert.That(again["result"]?["tools"]).IsNotNull();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
     [Test]
     public async Task Tools_list_returns_eight_flow_tools() {
         using var proc = SpawnMcpServer();
