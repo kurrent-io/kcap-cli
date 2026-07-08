@@ -26,4 +26,9 @@ public class CursorPathsTests {
     public async Task ProjectsDir_is_under_dot_cursor_on_every_platform() {
         await Assert.That(CursorPaths.ProjectsDir(home: "/Users/me")).IsEqualTo(Path.Combine("/Users/me", ".cursor", "projects"));
     }
+
+    [Test]
+    public async Task UserMcpJson_is_dot_cursor_mcp_json_under_home() {
+        await Assert.That(CursorPaths.UserMcpJson("/h")).IsEqualTo(Path.Combine("/h", ".cursor", "mcp.json"));
+    }
 }

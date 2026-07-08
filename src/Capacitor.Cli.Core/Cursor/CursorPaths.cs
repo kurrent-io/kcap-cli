@@ -55,6 +55,12 @@ public sealed record CursorPaths(string UserDir, string WorkspaceStorageDir) {
         return Path.Combine(home, ".cursor", "hooks.json");
     }
 
+    /// <summary>Path to <c>~/.cursor/mcp.json</c> — same on every OS.</summary>
+    public static string UserMcpJson(string? home = null) {
+        home ??= PathHelpers.HomeDirectory;
+        return Path.Combine(home, ".cursor", "mcp.json");
+    }
+
     /// <summary>Hook-event spool directory at <c>~/.cursor/kcap-pending/</c>.</summary>
     public static string SpoolDir(string? home = null) {
         home ??= PathHelpers.HomeDirectory;

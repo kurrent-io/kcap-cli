@@ -2,6 +2,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
+using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Services;
 
@@ -142,6 +143,7 @@ public static class UninstallCommand {
         ClaudePluginInstaller.DeleteMarker(ClaudePaths.UserSettings);
         CodexHooksInstaller.DeleteMarker(CodexPaths.UserHooksJson);
         CursorHooksInstaller.DeleteMarker(CursorPaths.UserHooksJson());
+        new McpMarker("cursor").Clear(CursorPaths.UserMcpJson());
         GeminiHooksInstaller.DeleteMarker(GeminiPaths.SettingsJson());
         KiroHooksInstaller.DeleteMarker(KiroPaths.KcapAgentJson());
 

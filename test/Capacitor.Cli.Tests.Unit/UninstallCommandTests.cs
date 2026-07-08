@@ -3,6 +3,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
+using Capacitor.Cli.Core.Mcp;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -437,6 +438,31 @@ public class UninstallCommandTests {
         await Assert.That(File.Exists(Path.Combine(claudeDir, ClaudePluginInstaller.MarkerFileName))).IsFalse();
         await Assert.That(File.Exists(Path.Combine(codexDir,  CodexHooksInstaller.MarkerFileName))).IsFalse();
         await Assert.That(File.Exists(Path.Combine(cursorDir, CursorHooksInstaller.MarkerFileName))).IsFalse();
+    }
+
+    [Test]
+    public async Task User_level_uninstall_purges_cursor_mcp_marker_even_when_json_has_no_kcap_entries() {
+        // Same "marker survives manual JSON edit" story as the hooks/skills
+        // markers above (AI-699): if a user hand-edited ~/.cursor/mcp.json to
+        // remove the kcap entries, JsonMcpConfigWriter.Unregister sees nothing
+        // to change and never clears the sidecar marker. uninstall's
+        // belt-and-braces sweep must nuke it regardless.
+        await using var fixture = await Fixture.CreateAsync();
+
+        var cursorDir = Path.Combine(fixture.Home, ".cursor");
+        Directory.CreateDirectory(cursorDir);
+
+        var mcpPath = Path.Combine(cursorDir, "mcp.json");
+        await File.WriteAllTextAsync(mcpPath, """{"mcpServers":{}}""");
+
+        var marker = new McpMarker("cursor");
+        marker.Record(mcpPath, ["kcap-review"]); // simulates a marker surviving a manual JSON edit
+        await Assert.That(marker.Owned(mcpPath).ToArray()).IsNotEmpty();
+
+        var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes", "--keep-config"]);
+        await Assert.That(exit).IsEqualTo(0);
+
+        await Assert.That(new McpMarker("cursor").Owned(mcpPath).ToArray()).IsEmpty();
     }
 
     [Test]

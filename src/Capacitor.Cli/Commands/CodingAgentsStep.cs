@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Mcp;
 using Spectre.Console;
 
 namespace Capacitor.Cli.Commands;
@@ -13,7 +14,7 @@ internal static class CodingAgentsStep {
     // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini
     // (AI-887), Kiro (AI-888), and Pi (AI-886) were all added after the original
     // four vendors.
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false);
 
     internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false);
 
@@ -31,7 +32,8 @@ internal static class CodingAgentsStep {
             string  PiExtensionPath = "",
             string  OpenCodeExtensionPath = "",
             string  CodexConfigTomlPath = "",
-            string  AntigravityHooksPath = ""
+            string  AntigravityHooksPath = "",
+            string  CursorMcpPath = ""
         );
 
     internal record Installers(
@@ -48,7 +50,8 @@ internal static class CodingAgentsStep {
             Func<string /*pluginPath*/, bool>?                        InstallOpenCodeExtension = null,
             Func<CodexConfigToml.Change>?                            EnableCodexNetworkAccess = null,
             Func<CodexConfigToml.Change>?                            RegisterCodexMcp = null,
-            Func<string /*hooksPath*/, bool>?                        InstallAntigravityHooks = null
+            Func<string /*hooksPath*/, bool>?                        InstallAntigravityHooks = null,
+            Func<JsonMcpConfigWriter.Change>?                        RegisterCursorMcp = null
         );
 
     internal record Result(
@@ -63,7 +66,8 @@ internal static class CodingAgentsStep {
             bool OpenCodeExtensionInstalled = false,
             bool CodexNetworkAccessApplied = false,
             bool CodexMcpRegistered = false,
-            bool AntigravityHooksInstalled = false
+            bool AntigravityHooksInstalled = false,
+            bool CursorMcpRegistered = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -95,6 +99,7 @@ internal static class CodingAgentsStep {
         var codexNetworkApplied   = HandleCodexNetworkAccess(options, paths, installers, prompt, writeLine, codexHooksInstalled);
         var codexMcpRegistered    = HandleCodexMcp(paths, installers, writeLine, codexHooksInstalled);
         var cursorHooksInstalled  = HandleCursorHooks(options, detected, paths, installers, prompt, writeLine);
+        var cursorMcpRegistered   = HandleCursorMcp(options, paths, installers, writeLine, cursorHooksInstalled);
         var copilotHooksInstalled = HandleCopilotHooks(options, detected, paths, installers, prompt, writeLine);
         var geminiHooksInstalled  = HandleGeminiHooks(options, detected, paths, installers, prompt, writeLine);
         var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, prompt, writeLine);
@@ -119,7 +124,8 @@ internal static class CodingAgentsStep {
                 openCodeExtensionInstalled,
                 codexNetworkApplied,
                 codexMcpRegistered,
-                antigravityHooksInstalled
+                antigravityHooksInstalled,
+                CursorMcpRegistered: cursorMcpRegistered
             )
         );
     }
@@ -660,6 +666,41 @@ internal static class CodingAgentsStep {
         writeLine($"  [green]✓[/] Cursor hooks installed ({Markup.Escape(paths.CursorHooksPath)})");
 
         return true;
+    }
+
+    /// <summary>
+    /// Registers the kcap MCP servers in <c>~/.cursor/mcp.json</c> via
+    /// <see cref="Installers.RegisterCursorMcp"/> so Cursor picks them up with no manual
+    /// JSON edit. Gated on Cursor hooks installing — the same "full Cursor integration"
+    /// trigger used by <see cref="HandleCodexMcp"/> — and on <see cref="Options.SkipCursorMcp"/>.
+    /// No prompt: registration is non-destructive (only adds missing kcap servers) and
+    /// mirrors how the Claude plugin auto-registers its MCP servers.
+    /// </summary>
+    static bool HandleCursorMcp(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           cursorHooksInstalled
+        ) {
+        if (installers.RegisterCursorMcp is null || !cursorHooksInstalled || options.SkipCursorMcp) return false;
+
+        var configPath = Markup.Escape(paths.CursorMcpPath);
+
+        switch (installers.RegisterCursorMcp()) {
+            case JsonMcpConfigWriter.Change.Updated:
+                writeLine($"  [green]✓[/] Cursor MCP servers registered ([dim]{configPath}[/])");
+
+                return true;
+            case JsonMcpConfigWriter.Change.Unchanged:
+                writeLine("  [dim]· Cursor MCP servers already registered — no change needed[/]");
+
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not register Cursor MCP servers in {configPath} — see README to add them manually.");
+
+                return false;
+        }
     }
 
     static bool HandleClaude(
