@@ -74,7 +74,7 @@ mcp:
 
 **Mandatory approval step:** before calling `start_flow` with `definition_yaml`, show the user the composed flow — each role's vendor/model, round prompts, and the limits (rounds/budget/timeouts) — and get an explicit yes. Do not submit a dynamic flow without that confirmation.
 
-**Error handling:** a coded `Error (<code>): <message>` is an actionable server rejection — fix the YAML per the message and retry. An uncoded error whose text mentions "may not support dynamic flows" means the server predates this feature — fall back to a catalog `definition_id` instead of retrying the same YAML.
+**Error handling:** a coded `Error (<code>): <message>` is an actionable server rejection — fix the YAML per the message and retry. An uncoded error whose text mentions "may not support dynamic flows" means the server predates this feature — fall back to a catalog `definition_id` instead of retrying the same YAML. Other coded rejections you may see: `dynamic_run_limit` (you already have the maximum number of active dynamic runs — close one with `close_flow` first), `dynamic_flows_disabled` (the admin turned dynamic flows off — use a catalog definition or ask an admin), and `budget_unverifiable` on a later send (retryable — the server can't read the run's cost data yet; wait briefly and resend, or close the run).
 
 ## If the flows MCP tools are not loaded
 
