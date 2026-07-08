@@ -1049,11 +1049,40 @@ public static class PluginCommand {
                 : $"Copilot hooks installed ({hooksPath})"
         );
 
+        // Register the kcap MCP servers in ~/.copilot/mcp-config.json so Copilot picks them
+        // up with no manual JSON edit. Non-destructive + idempotent. Never fails the install:
+        // a write error is a warning, not an error code (mirrors Cursor/Codex).
+        if (!args.Contains("--skip-copilot-mcp"))
+            await RegisterCopilotMcpServersAsync(env);
+
         return 0;
+    }
+
+    /// <summary>
+    /// Registers the kcap MCP servers in <c>~/.copilot/mcp-config.json</c> so Copilot loads
+    /// them without a manual JSON edit. Never fails the install: a write error is a warning,
+    /// not an error code.
+    /// </summary>
+    static async Task RegisterCopilotMcpServersAsync(PluginEnvironment env) {
+        var change = JsonMcpConfigWriter.Register(
+            env.CopilotMcpConfigJson, KcapMcpServers.All, McpConfigShape.Copilot, cwd: null, new McpMarker("copilot"));
+
+        switch (change) {
+            case JsonMcpConfigWriter.Change.Updated:
+                await env.Stdout.WriteLineAsync($"Copilot MCP servers registered ({env.CopilotMcpConfigJson}).");
+                break;
+            case JsonMcpConfigWriter.Change.Failed:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {env.CopilotMcpConfigJson} to register Copilot MCP servers.");
+                break;
+            // Unchanged: silent — same as Cursor's already-registered case.
+        }
     }
 
     static async Task<int> RemoveCopilot(string[] args, PluginEnvironment env) {
         var hooksPath = GetArg(args, "--copilot-hooks-path") ?? env.CopilotKcapHooksJson;
+
+        var hooksFailed = false;
 
         try {
             var removed = RemoveCopilotHooks(hooksPath);
@@ -1063,13 +1092,25 @@ public static class PluginCommand {
                     ? $"Copilot hooks removed ({hooksPath})"
                     : "Nothing to remove — Copilot hooks file not found."
             );
-
-            return 0;
         } catch (Exception ex) {
             await env.Stderr.WriteLineAsync($"Could not remove Copilot hooks at {hooksPath}: {ex.Message}");
-
-            return 1;
+            hooksFailed = true;
         }
+
+        // Copilot MCP servers live in a separate file (~/.copilot/mcp-config.json), so
+        // unregister them independently of whether the hooks file existed. Unregister owns
+        // the ownership-marker cleanup: it clears the marker on any non-Failed outcome and
+        // retains it on Failed so a retry can still identify the kcap-owned entries.
+        var mcpChange = JsonMcpConfigWriter.Unregister(env.CopilotMcpConfigJson, McpConfigShape.Copilot, new McpMarker("copilot"));
+        var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
+
+        if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
+            await env.Stdout.WriteLineAsync($"Copilot MCP servers removed ({env.CopilotMcpConfigJson}).");
+        } else if (mcpFailed) {
+            await env.Stderr.WriteLineAsync($"Could not update {env.CopilotMcpConfigJson} to remove Copilot MCP servers.");
+        }
+
+        return hooksFailed || mcpFailed ? 1 : 0;
     }
 
     /// <summary>

@@ -31,6 +31,8 @@ Options:
                               (~/.cursor/mcp.json).
   --skip-copilot-hooks        Don't install Copilot CLI hooks even if Copilot
                               is detected (~/.copilot/ or copilot on PATH).
+  --skip-copilot-mcp          Skip registering the kcap MCP servers for Copilot
+                              (~/.copilot/mcp-config.json).
   --skip-gemini-hooks         Don't install Gemini CLI hooks even if Gemini
                               is detected (~/.gemini/ or gemini on PATH).
   --skip-kiro-hooks           Don't install Kiro CLI hooks even if Kiro is

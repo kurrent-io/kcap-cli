@@ -58,6 +58,11 @@ Options:
                       registers all 4 kcap MCP servers there (non-destructive,
                       idempotent — preserves any user-authored servers) so
                       Cursor picks them up with no manual JSON edit.
+  --skip-copilot-mcp  With --copilot: skip registering the kcap MCP servers in
+                      ~/.copilot/mcp-config.json. By default `install --copilot`
+                      also registers all 4 kcap MCP servers there (non-destructive,
+                      idempotent — preserves any user-authored servers) so Copilot
+                      picks them up with no manual JSON edit.
   --if-installed      Refresh-only mode: no-op unless the user has previously
                       installed the target (marker file or pre-marker entry
                       detected). Used by the npm postinstall hook to refresh
@@ -85,7 +90,9 @@ Notes:
 
   --copilot writes the four events kcap subscribes to (sessionStart, sessionEnd,
   agentStop, notification) with the event name embedded in each command —
-  Copilot hook payloads don't carry one. Copilot loads hook config at startup,
+  Copilot hook payloads don't carry one — and then registers all 4 kcap MCP
+  servers in ~/.copilot/mcp-config.json (non-destructive, idempotent — see
+  --skip-copilot-mcp to opt out). Copilot loads hook + MCP config at startup,
   so restart any running copilot session after install. Copilot has no
   project-scope hooks dir, so --project has no effect with --copilot.
 

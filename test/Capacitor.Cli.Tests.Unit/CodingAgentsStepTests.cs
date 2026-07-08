@@ -460,6 +460,70 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
+    public async Task Copilot_mcp_registered_when_hooks_installed() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CopilotMcpRegistered).IsTrue();
+        await Assert.That(calls.RegisterCopilotMcpCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("MCP servers registered"));
+    }
+
+    [Test]
+    public async Task Copilot_mcp_not_registered_when_hooks_fail() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CopilotHooksReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CopilotHooksInstalled).IsFalse();
+        await Assert.That(calls.RegisterCopilotMcpCalled).IsFalse();
+        await Assert.That(result.CopilotMcpRegistered).IsFalse();
+    }
+
+    [Test]
+    public async Task Copilot_mcp_skipped_by_flag() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: true, SkipCopilotMcp: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CopilotHooksInstalled).IsTrue();
+        await Assert.That(result.CopilotMcpRegistered).IsFalse();
+        await Assert.That(calls.RegisterCopilotMcpCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Copilot_mcp_registration_failure_emits_warning() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { RegisterCopilotMcpReturns = JsonMcpConfigWriter.Change.Failed };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.RegisterCopilotMcpCalled).IsTrue();
+        await Assert.That(result.CopilotMcpRegistered).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not register Copilot MCP"));
+    }
+
+    [Test]
     public async Task Codex_network_access_not_attempted_when_hooks_fail() {
         var sink     = new Sink();
         var calls    = new InstallerCalls { CodexHooksReturns = false };
@@ -1121,7 +1185,8 @@ public class CodingAgentsStepTests {
         PiExtensionPath:      "/fake/.pi/agent/extensions/kcap.ts",
         OpenCodeExtensionPath: "/fake/.config/opencode/plugins/kcap.ts",
         CodexConfigTomlPath:  "/fake/.codex/config.toml",
-        CursorMcpPath:        "/fake/.cursor/mcp.json"
+        CursorMcpPath:        "/fake/.cursor/mcp.json",
+        CopilotMcpPath:       "/fake/.copilot/mcp-config.json"
     );
 
     sealed class Sink {
@@ -1181,6 +1246,9 @@ public class CodingAgentsStepTests {
 
         public bool                     RegisterCursorMcpCalled  { get; private set; }
         public JsonMcpConfigWriter.Change RegisterCursorMcpReturns { get; set; } = JsonMcpConfigWriter.Change.Updated;
+
+        public bool                     RegisterCopilotMcpCalled  { get; private set; }
+        public JsonMcpConfigWriter.Change RegisterCopilotMcpReturns { get; set; } = JsonMcpConfigWriter.Change.Updated;
 
         public Installers AsInstallers() => new(
             InstallClaudePlugin: (s, p) => {
@@ -1261,6 +1329,11 @@ public class CodingAgentsStepTests {
                 RegisterCursorMcpCalled = true;
 
                 return RegisterCursorMcpReturns;
+            },
+            RegisterCopilotMcp: () => {
+                RegisterCopilotMcpCalled = true;
+
+                return RegisterCopilotMcpReturns;
             }
         );
     }

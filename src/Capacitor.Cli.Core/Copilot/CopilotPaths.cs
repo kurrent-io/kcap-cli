@@ -36,6 +36,14 @@ public static class CopilotPaths {
         => Path.Combine(HooksDir(home, copilotHome), "kcap.json");
 
     /// <summary>
+    /// User-level MCP server config (<c>mcpServers</c> object, each entry
+    /// <c>type: "stdio"</c>). Copilot reads it from the root dir, so it honors
+    /// <c>$COPILOT_HOME</c> like the rest of the layout.
+    /// </summary>
+    public static string McpConfigJson(string? home = null, string? copilotHome = null)
+        => Path.Combine(Root(home, copilotHome), "mcp-config.json");
+
+    /// <summary>
     /// Per-session state root: one subdirectory per session (named with the
     /// dashed session uuid) containing <c>events.jsonl</c> (append-only
     /// transcript), <c>workspace.yaml</c> (cwd/repo/title metadata), and
