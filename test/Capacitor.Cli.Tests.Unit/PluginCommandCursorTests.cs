@@ -179,22 +179,31 @@ public class PluginCommandCursorTests {
         Stderr:            TextWriter.Null
     );
 
-    // Fake home for one test, rooted UNDER the real user profile (not
-    // Path.GetTempPath()). McpMarker treats a config as user-scope — and so writes
-    // its ownership marker as a sidecar next to the config — only when the config
-    // lives under Environment.GetFolderPath(UserProfile). That call ignores $HOME
-    // on Windows, and the process temp dir can sit outside the profile (e.g.
-    // TEMP=D:\Temp), which would otherwise send the marker to the real
-    // ~/.kcap/mcp-markers. Rooting here keeps the marker a sidecar under this dir
-    // on every OS — for both the test's direct McpMarker calls and the production
-    // `plugin --cursor` path — so it's removed with the dir on Dispose. The class
-    // is [NotInParallel("HomeEnvVarMutation")] so the profile/$HOME McpMarker reads
-    // can't shift underneath it.
+    // Fake home for one test, rooted under the real user profile (not
+    // Path.GetTempPath()). McpMarker classifies a config as user-scope — writing
+    // its marker as a sidecar next to the config rather than centrally under
+    // ~/.kcap/mcp-markers — via Environment.GetFolderPath(UserProfile), which
+    // ignores $HOME on Windows and where the temp dir may sit outside the profile
+    // (e.g. TEMP=D:\Temp). Rooting under the profile makes the common case a
+    // contained sidecar on every OS.
+    //
+    // That classification still has one hole: if the real profile is itself a git
+    // repo (~/.git — e.g. tracked dotfiles), McpMarker.IsInsideRepo walks up to it
+    // and treats the config as NON-user-scope, so the production `plugin --cursor`
+    // path writes the marker centrally under the real ~/.kcap/mcp-markers. To
+    // guarantee no leak regardless of OS or repo layout, Dispose explicitly clears
+    // the marker for this test's cursor config: McpMarker.Clear resolves the exact
+    // same path the production code used to write it (sidecar or central), so the
+    // marker can never persist past the test. [NotInParallel("HomeEnvVarMutation")]
+    // keeps the profile/$HOME McpMarker reads stable underneath the test.
     sealed class TempDir : IDisposable {
         public string Path { get; } = System.IO.Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             $"kcap-pluginc-cursor-test-{Guid.NewGuid().ToString("N")[..8]}");
         public TempDir() => Directory.CreateDirectory(Path);
-        public void Dispose() { try { Directory.Delete(Path, true); } catch { } }
+        public void Dispose() {
+            try { new McpMarker("cursor").Clear(System.IO.Path.Combine(Path, ".cursor", "mcp.json")); } catch { }
+            try { Directory.Delete(Path, true); } catch { }
+        }
     }
 }
