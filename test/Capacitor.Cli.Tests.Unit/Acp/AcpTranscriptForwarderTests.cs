@@ -163,6 +163,76 @@ public class AcpTranscriptForwarderTests {
         await Assert.That(callCount).IsEqualTo(2); // never retried/resent once terminal
     }
 
+    // ── Hot-loop guard (AI-688 review): stalled gap → terminal ─────────────────────────────────────
+
+    [Test]
+    public async Task Stalled_gap_with_no_progress_stops_and_marks_terminal_after_the_cap() {
+        var channel = NewChannel();
+        channel.Writer.TryWrite(NewTextEnvelope("a")); // seq 1
+        channel.Writer.TryWrite(NewTextEnvelope("b")); // seq 2
+        // Deliberately never completed: without the guard the gap path would resend from the SAME
+        // ExpectedNextSeq forever (a hot spin) and WaitAsync(HangGuard) below would time out — the
+        // fact that RunAsync returns is the proof the guard stopped it.
+
+        const int cap        = 3;
+        var       gapResends = 0;
+
+        Task<AcpBatchAck> Send(AcpEventEnvelope[] batch, CancellationToken _) {
+            // Initial (seq 0) → normal ack. Every batch after that → the SAME gap (ExpectedNextSeq=1,
+            // AcceptedSeq never advancing): the pathological already-terminal-binding signature that's
+            // indistinguishable on the wire from a genuine gap.
+            if (batch[0].Seq == 0)
+                return Task.FromResult(new AcpBatchAck(0, 0));
+
+            gapResends++;
+            return Task.FromResult(new AcpBatchAck(0, 0, ExpectedNextSeq: 1));
+        }
+
+        var forwarder = new AcpTranscriptForwarder(
+            Send, InitialEnvelope, channel.Reader, NullLogger.Instance,
+            FastRetryDelay, FastRetryDelay, maxStalledGapResends: cap, stalledGapResendDelay: FastRetryDelay);
+
+        await forwarder.RunAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(forwarder.IsTerminal).IsTrue();
+        await Assert.That(forwarder.UnackedCount).IsEqualTo(0);
+        // Bounded, not infinite: the guard stops after ~cap consecutive no-progress resends.
+        await Assert.That(gapResends).IsLessThanOrEqualTo(cap + 1);
+    }
+
+    [Test]
+    public async Task Gaps_that_make_progress_do_not_trip_the_stall_guard() {
+        var channel = NewChannel();
+        channel.Writer.TryWrite(NewTextEnvelope("a")); // seq 1
+        channel.Writer.TryWrite(NewTextEnvelope("b")); // seq 2
+        channel.Writer.TryWrite(NewTextEnvelope("c")); // seq 3
+        channel.Writer.Complete();
+
+        var callCount = 0;
+
+        Task<AcpBatchAck> Send(AcpEventEnvelope[] batch, CancellationToken _) {
+            callCount++;
+            // A DIFFERENT (advancing) ExpectedNextSeq each round = genuine progress — the guard must
+            // reset its no-progress counter and never trip, even though there are several gaps in a row.
+            return callCount switch {
+                1 => Task.FromResult(new AcpBatchAck(0, 0)),                     // initial seq 0 — normal
+                2 => Task.FromResult(new AcpBatchAck(0, 0, ExpectedNextSeq: 1)), // gap, wants 1
+                3 => Task.FromResult(new AcpBatchAck(1, 1, ExpectedNextSeq: 2)), // progress: accepted 1, wants 2
+                4 => Task.FromResult(new AcpBatchAck(2, 2, ExpectedNextSeq: 3)), // progress: accepted 2, wants 3
+                _ => Task.FromResult(new AcpBatchAck(batch[^1].Seq, batch[^1].Seq)), // accepted fully
+            };
+        }
+
+        var forwarder = new AcpTranscriptForwarder(
+            Send, InitialEnvelope, channel.Reader, NullLogger.Instance,
+            FastRetryDelay, FastRetryDelay, maxStalledGapResends: 3, stalledGapResendDelay: FastRetryDelay);
+
+        await forwarder.RunAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(forwarder.IsTerminal).IsFalse(); // advancing gaps never trip the guard
+        await Assert.That(forwarder.UnackedCount).IsEqualTo(0);
+    }
+
     // ── Send-throw-then-recover ──────────────────────────────────────────────────────────────────
 
     [Test]

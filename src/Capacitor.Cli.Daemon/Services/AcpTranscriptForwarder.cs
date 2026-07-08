@@ -44,9 +44,11 @@ namespace Capacitor.Cli.Daemon.Services;
 /// loop drops the first (matching) envelope silently, then reports the SECOND envelope as a "gap"
 /// (<see cref="AcpBatchAck.ExpectedNextSeq"/> set to the very seq it just dropped) — indistinguishable
 /// on the wire from a genuine gap. Resending in that state would loop forever against a terminal
-/// binding. This forwarder implements the three rules above exactly as specified (design spec §2.3);
-/// closing this residual ambiguity (e.g. no-progress-after-resend detection) is left to AI-689's
-/// "deeper reconnect resilience", per the design spec's own deferral.
+/// binding — so a <b>hot-loop guard</b> (AI-688 review) caps consecutive same-<c>ExpectedNextSeq</c>
+/// resends that make no progress (with a small backoff) and, once the cap is hit, treats the binding
+/// as terminal (stop + clear + <see cref="IsTerminal"/>) rather than spinning. A legitimate gap
+/// advances its <c>ExpectedNextSeq</c> each round and so never trips the guard. Deeper reconnect
+/// resilience beyond this remains AI-689 per the design spec's deferral.
 ///
 /// NOT this task's job (task 4's): building/emitting the <c>SessionStarted</c> envelope (it is passed
 /// in pre-built as <paramref name="initialEnvelope"/>) or calling <c>AcpSessionStarted</c> — the bind
@@ -56,6 +58,8 @@ namespace Capacitor.Cli.Daemon.Services;
 internal sealed class AcpTranscriptForwarder {
     static readonly TimeSpan DefaultInitialSendRetryDelay = TimeSpan.FromSeconds(1);
     static readonly TimeSpan DefaultMaxSendRetryDelay     = TimeSpan.FromSeconds(30);
+    static readonly TimeSpan DefaultStalledGapResendDelay = TimeSpan.FromSeconds(1);
+    const int                DefaultMaxStalledGapResends  = 5;
 
     readonly Func<AcpEventEnvelope[], CancellationToken, Task<AcpBatchAck>> _send;
     readonly ChannelReader<AcpEventEnvelope>                                _envelopes;
@@ -63,6 +67,8 @@ internal sealed class AcpTranscriptForwarder {
     readonly AcpEventEnvelope                                              _initialEnvelope;
     readonly TimeSpan                                                      _initialSendRetryDelay;
     readonly TimeSpan                                                      _maxSendRetryDelay;
+    readonly int                                                           _maxStalledGapResends;
+    readonly TimeSpan                                                      _stalledGapResendDelay;
 
     /// <summary>
     /// Every sent-but-not-yet-acked envelope, keyed by seq, always in ascending order (a
@@ -74,6 +80,12 @@ internal sealed class AcpTranscriptForwarder {
 
     long _nextSeq     = 1; // seq 0 is reserved for the initial envelope
     long _highestSent = -1;
+
+    // Hot-loop guard (AI-688 review): the "already-terminal binding reporting an indistinguishable
+    // gap" edge (see this class's remarks) would otherwise make the gap path resend forever from the
+    // same ExpectedNextSeq. Track consecutive same-point resends that made no progress; cap them.
+    long? _lastResendFrom;
+    int   _stalledGapResends;
 
     /// <summary>
     /// Set once a terminal-drop ack stops the loop (design spec §2.3's "Forwarder terminal-drop
@@ -96,7 +108,9 @@ internal sealed class AcpTranscriptForwarder {
             ChannelReader<AcpEventEnvelope>                                envelopes,
             ILogger                                                        logger,
             TimeSpan?                                                      initialSendRetryDelay = null,
-            TimeSpan?                                                      maxSendRetryDelay = null
+            TimeSpan?                                                      maxSendRetryDelay = null,
+            int?                                                           maxStalledGapResends = null,
+            TimeSpan?                                                      stalledGapResendDelay = null
         ) {
         _send                   = send;
         _envelopes              = envelopes;
@@ -104,6 +118,8 @@ internal sealed class AcpTranscriptForwarder {
         _initialEnvelope        = initialEnvelope with { Seq = 0 };
         _initialSendRetryDelay  = initialSendRetryDelay ?? DefaultInitialSendRetryDelay;
         _maxSendRetryDelay      = maxSendRetryDelay ?? DefaultMaxSendRetryDelay;
+        _maxStalledGapResends   = maxStalledGapResends ?? DefaultMaxStalledGapResends;
+        _stalledGapResendDelay  = stalledGapResendDelay ?? DefaultStalledGapResendDelay;
     }
 
     /// <summary>
@@ -163,11 +179,34 @@ internal sealed class AcpTranscriptForwarder {
                 var ack = await SendWithRetryAsync(batch, ct).ConfigureAwait(false);
 
                 if (ack.ExpectedNextSeq is { } expectedNextSeq) {
+                    // A legitimate gap resolves on the first resend (the server wanted an earlier seq,
+                    // then catches up — a NEW ExpectedNextSeq each round = progress). But the server's
+                    // per-envelope loop makes an ALREADY-terminal binding report a dropped envelope as
+                    // a gap indistinguishable from a real one (this class's "Known edge case"): the
+                    // SAME ExpectedNextSeq comes back with no progress, and a bare `continue` here would
+                    // hot-spin forever. Guard it: cap consecutive same-point resends (with a small
+                    // backoff), then treat the binding as terminal — stop + clear rather than hammer.
+                    if (expectedNextSeq == _lastResendFrom) {
+                        if (++_stalledGapResends >= _maxStalledGapResends) {
+                            LogGapStall(expectedNextSeq, _stalledGapResends);
+                            _unacked.Clear();
+                            IsTerminal = true;
+                            return;
+                        }
+
+                        await Task.Delay(_stalledGapResendDelay, ct).ConfigureAwait(false);
+                    } else {
+                        _lastResendFrom    = expectedNextSeq;
+                        _stalledGapResends = 0;
+                    }
+
                     resendFrom = expectedNextSeq;
                     continue;
                 }
 
-                resendFrom = null;
+                resendFrom         = null;
+                _lastResendFrom    = null;
+                _stalledGapResends = 0;
 
                 if (ack.AcceptedSeq < _highestSent) {
                     LogTerminalDrop(ack.AcceptedSeq, _highestSent);
@@ -230,6 +269,11 @@ internal sealed class AcpTranscriptForwarder {
             }
         }
     }
+
+    void LogGapStall(long expectedNextSeq, int attempts) =>
+        _logger.LogWarning(
+            "ACP transcript forwarder: gap ack stalled at ExpectedNextSeq={ExpectedNextSeq} for {Attempts} consecutive no-progress resends — treating the binding as terminal and stopping (likely an already-terminal binding reporting an indistinguishable gap; see AcpTranscriptForwarder remarks).",
+            expectedNextSeq, attempts);
 
     void LogTerminalDrop(long acceptedSeq, long highestSent) =>
         _logger.LogWarning(
