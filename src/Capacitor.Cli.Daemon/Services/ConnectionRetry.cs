@@ -32,6 +32,30 @@ namespace Capacitor.Cli.Daemon.Services;
 /// still surfaces (→ deny) instead of looping forever.
 /// </summary>
 internal static class ConnectionRetry {
+    /// <summary>
+    /// Non-generic overload for a hub invocation with no return value (e.g. <c>AcpSessionStarted</c>,
+    /// AI-688 Option B task 3) — delegates to the generic overload with a discarded
+    /// <see langword="object?"/> result so void-returning callers get the exact same gating/retry
+    /// semantics as <see cref="InvokeWithConnectionRetryAsync{T}"/> without duplicating the loop.
+    /// </summary>
+    public static Task InvokeWithConnectionRetryAsync(
+            Func<Task>             invoke,
+            Func<bool>             isReady,
+            TimeSpan               pollInterval,
+            Action<int>            onRetry,
+            CancellationToken      ct,
+            Func<Exception, bool>? isRetriableServerError = null,
+            int                    maxServerErrorRetries = 0
+        ) => InvokeWithConnectionRetryAsync<object?>(
+            async () => { await invoke(); return null; },
+            isReady,
+            pollInterval,
+            onRetry,
+            ct,
+            isRetriableServerError,
+            maxServerErrorRetries
+        );
+
     public static async Task<T> InvokeWithConnectionRetryAsync<T>(
             Func<Task<T>>      invoke,
             Func<bool>         isReady,

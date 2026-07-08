@@ -918,7 +918,12 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(AcpInteractionDecision))]
 [JsonSerializable(typeof(AcpInteractionResolution))]
 [JsonSerializable(typeof(AcpEventEnvelope))]
+[JsonSerializable(typeof(AcpEventEnvelope[]))]
 [JsonSerializable(typeof(AcpBatchAck))]
+// AI-688 Option B task 3: the AcpSessionStarted hub method's optional metadata argument. Registered
+// as its own root type (not just nested inside another JsonSerializable graph) because SignalR's
+// JsonHubProtocol serializes each hub-invocation argument independently by its declared type.
+[JsonSerializable(typeof(IReadOnlyDictionary<string, string>))]
 // UseStringEnumConverter=true matches the server's SignalR JSON protocol, which
 // serialises enums (e.g. LaunchKind) as camelCase strings. Without it the
 // source-gen LaunchKind JsonTypeInfo defaults to numeric and silently drops the
