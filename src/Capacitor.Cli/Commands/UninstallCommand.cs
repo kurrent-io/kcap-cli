@@ -2,7 +2,6 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
-using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Services;
 
@@ -133,17 +132,23 @@ public static class UninstallCommand {
         // hooks file).
         if (await PluginCommand.HandleAsync(["plugin", "remove", "--skills"]) != 0) hadFailures = true;
 
-        // Belt-and-braces marker cleanup. Plugin remove deletes the marker
-        // only when JSON entries changed; if the user manually pruned the
+        // Belt-and-braces marker cleanup. These hooks installers delete their
+        // marker only when JSON entries changed; if the user manually pruned the
         // entries earlier (or installed via a pre-marker build that later
         // wrote a marker on first refresh), the marker survives and IsInstalled
         // still reports kcap as installed. uninstall promises a full
         // wipe, so always nuke the markers regardless of what the JSON state
         // looked like going in.
+        //
+        // The Cursor MCP marker is intentionally NOT swept here: `plugin remove
+        // --cursor` above owns it via JsonMcpConfigWriter.Unregister, which clears
+        // it on any non-Failed outcome (including hand-pruned entries) but
+        // deliberately RETAINS it when the unregister fails, so a retry can still
+        // identify the kcap-owned entries. An unconditional clear here would
+        // defeat that recovery path.
         ClaudePluginInstaller.DeleteMarker(ClaudePaths.UserSettings);
         CodexHooksInstaller.DeleteMarker(CodexPaths.UserHooksJson);
         CursorHooksInstaller.DeleteMarker(CursorPaths.UserHooksJson());
-        new McpMarker("cursor").Clear(CursorPaths.UserMcpJson());
         GeminiHooksInstaller.DeleteMarker(GeminiPaths.SettingsJson());
         KiroHooksInstaller.DeleteMarker(KiroPaths.KcapAgentJson());
 

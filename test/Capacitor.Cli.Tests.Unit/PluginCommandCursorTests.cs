@@ -141,6 +141,37 @@ public class PluginCommandCursorTests {
         await Assert.That(servers["my-tool"]).IsNotNull(); // user server preserved
     }
 
+    [Test]
+    public async Task remove_cursor_retains_marker_on_failed_unregister_then_retry_removes_entries() {
+        using var fakeHome = new TempDir();
+        var cursorDir = System.IO.Path.Combine(fakeHome.Path, ".cursor");
+        Directory.CreateDirectory(cursorDir);
+
+        // A prior real install: kcap entries + sidecar ownership marker.
+        var mcpPath = System.IO.Path.Combine(cursorDir, "mcp.json");
+        JsonMcpConfigWriter.Register(mcpPath, KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("cursor"));
+        var installed = await File.ReadAllTextAsync(mcpPath); // valid content to restore after the "fix"
+        await Assert.That(new McpMarker("cursor").Owned(mcpPath).ToArray()).IsNotEmpty();
+
+        // The config is temporarily malformed/unreadable → Unregister fails-closed.
+        await File.WriteAllTextAsync(mcpPath, "{ not valid json");
+
+        var failExit = await PluginCommand.HandleAsync(["plugin", "remove", "--cursor"], TestEnv(fakeHome.Path));
+        await Assert.That(failExit).IsEqualTo(1);                                          // failed MCP unregister propagates
+        await Assert.That(new McpMarker("cursor").Owned(mcpPath).ToArray()).IsNotEmpty();  // marker RETAINED for retry
+
+        // User fixes the file (kcap entries intact); the retry now succeeds and cleans up.
+        await File.WriteAllTextAsync(mcpPath, installed);
+        var retryExit = await PluginCommand.HandleAsync(["plugin", "remove", "--cursor"], TestEnv(fakeHome.Path));
+        await Assert.That(retryExit).IsEqualTo(0);
+
+        var root    = JsonNode.Parse(await File.ReadAllTextAsync(mcpPath))!.AsObject();
+        var servers = root["mcpServers"] as JsonObject;
+        var keys    = servers?.Select(kv => kv.Key).ToArray() ?? [];
+        await Assert.That(keys).DoesNotContain("kcap-review");
+        await Assert.That(new McpMarker("cursor").Owned(mcpPath).ToArray()).IsEmpty();     // marker cleared after clean removal
+    }
+
     static PluginEnvironment TestEnv(string fakeHome) => new(
         HomeDirectory:     fakeHome,
         ResolvePluginPath: () => null,
