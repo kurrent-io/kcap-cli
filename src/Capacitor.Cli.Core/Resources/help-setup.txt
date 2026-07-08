@@ -27,6 +27,8 @@ Options:
                               leave ~/.codex/config.toml untouched.
   --skip-cursor-hooks         Don't install Cursor hooks even if the Cursor
                               user-dir is detected (~/.cursor/).
+  --skip-cursor-mcp           Skip registering the kcap MCP servers for Cursor
+                              (~/.cursor/mcp.json).
   --skip-copilot-hooks        Don't install Copilot CLI hooks even if Copilot
                               is detected (~/.copilot/ or copilot on PATH).
   --skip-gemini-hooks         Don't install Gemini CLI hooks even if Gemini
