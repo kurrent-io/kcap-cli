@@ -1,6 +1,6 @@
 // src/Capacitor.Cli.Daemon/Services/AcpHostedAgentRuntime.cs
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
@@ -20,27 +20,84 @@ namespace Capacitor.Cli.Daemon.Services;
 /// posture answers any inbound server request with a method-not-found error; AI-686 wires the real
 /// bridge). Local-attach (raw byte input) and terminal output are PTY-only surfaces the ACP runtime
 /// does not support until AI-687 adds a terminal capability.
+///
+/// <b>AI-688 Option B task 2 (design spec §2.1/§2.4):</b> also owns a serialized, single-flight
+/// prompt-turn worker (<see cref="RunTurnWorkerAsync"/>/<see cref="ProcessTurnAsync"/>) and a chunk
+/// aggregator (<see cref="AggregateUpdate"/>) that together turn the raw <c>session/update</c> stream
+/// into an ORDERED, per-turn-aggregated <see cref="AcpEventEnvelope"/> transcript, exposed via
+/// <see cref="IAcpTranscriptSource"/> for the orchestrator (task 3/4) to bind + forward. Prompt turns
+/// (the initial launch prompt, and every <see cref="SendUserInputAsync"/>) are enqueued onto a FIFO
+/// queue rather than fired as independent background work, so exactly one turn's chunks are ever
+/// aggregating at a time — a `stopReason` always flushes the buffer belonging to ITS OWN turn, never
+/// a concurrently-fired one. See <see cref="_aggregationLock"/>'s remarks for the thread-safety
+/// mechanism between the worker's turn-end flush and the connection read-loop's kind-transition
+/// flush.
 /// </summary>
-internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
+internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscriptSource {
     static readonly object[] NoMcpServers = [];
 
     readonly AcpConnection _connection;
     readonly IAcpProcess   _process;
     readonly ILogger       _logger;
+    readonly TimeProvider  _timeProvider;
     readonly AcpInteractionBridge? _interactionBridge;
     readonly CancellationTokenSource _cts = new();
     readonly Channel<AcpSessionUpdate> _updates = Channel.CreateUnbounded<AcpSessionUpdate>(
         new UnboundedChannelOptions { SingleReader = false, SingleWriter = true });
 
-    // Tracks every session/prompt turn fired as untracked-by-the-caller background work (the
-    // initial prompt from StartAsync, plus every SendUserInputAsync) so DisposeAsync can wait for
-    // them to wind down and so a fault never becomes an unobserved task exception. A
-    // ConcurrentDictionary-as-set (value is unused) rather than a List so concurrent
-    // SendUserInputAsync calls can register/remove their own task without a lock.
-    readonly ConcurrentDictionary<Task, byte> _backgroundPromptTasks = new();
+    /// <summary>
+    /// AI-688 Option B task 2 (§2.1): the ordered, aggregated <see cref="AcpEventEnvelope"/>
+    /// transcript — every write goes through <see cref="EmitEnvelope"/>, which always holds
+    /// <see cref="_aggregationLock"/>, so this channel's FIFO write order matches lock-acquisition
+    /// order across the two call sites that can write to it (the turn worker, and the connection's
+    /// notification handler). SingleReader: task 3/4's forwarder is the only intended consumer.
+    /// </summary>
+    readonly Channel<AcpEventEnvelope> _transcript = Channel.CreateUnbounded<AcpEventEnvelope>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+
+    /// <summary>
+    /// AI-688 Option B task 2 (§2.1): FIFO queue of pending prompt-turn texts. Public entry points
+    /// (<see cref="StartAsync"/>'s initial prompt, <see cref="SendUserInputAsync"/>) call
+    /// <see cref="EnqueueTurn"/> and return immediately; the single <see cref="RunTurnWorkerAsync"/>
+    /// worker task drains this strictly in order, one turn fully at a time (see
+    /// <see cref="ProcessTurnAsync"/>). SingleReader: only the worker reads; SingleWriter=false since
+    /// both StartAsync and (potentially concurrent) SendUserInputAsync calls enqueue.
+    /// </summary>
+    readonly Channel<string> _pendingTurns = Channel.CreateUnbounded<string>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+
+    /// <summary>
+    /// AI-688 Option B task 2 (§2.1 thread-safety invariant): guards the open aggregation run
+    /// (<see cref="_openRunKind"/>/<see cref="_openRunText"/>) AND every write to
+    /// <see cref="_transcript"/> (via <see cref="EmitEnvelope"/>). Two call sites can mutate/flush the
+    /// run: the connection's read loop (synchronously, via <see cref="HandleNotification"/> →
+    /// <see cref="AggregateUpdate"/>, on a kind transition) and the turn worker (via
+    /// <see cref="ProcessTurnAsync"/>'s turn-end flush, which runs as the continuation of an awaited
+    /// <c>session/prompt</c> response and so is NOT guaranteed to run on the read-loop's own thread —
+    /// <see cref="AcpConnection.RequestAsync"/>'s <c>TaskCompletionSource</c> is created with
+    /// <c>RunContinuationsAsynchronously</c> specifically so completing it never runs the awaiter's
+    /// continuation inline). Because turns are serialized (§2.1), these two call sites are never
+    /// ACTUALLY contending in practice — the worker only sends turn N+1's <c>session/prompt</c> (and
+    /// so only that turn's updates can start arriving) after turn N's flush has already completed —
+    /// but a plain <c>lock</c> (reentrant on the same thread, so <see cref="FlushOpenRunLocked"/>
+    /// calling back into <see cref="EmitEnvelope"/> cannot self-deadlock) is a cheap, simple guarantee
+    /// against that invariant ever silently breaking (a future change to the worker, an agent that
+    /// violates the one-turn-at-a-time assumption, etc.) rather than relying solely on the timing
+    /// argument. A single loop reading both the update stream and the turn-boundary signal was the
+    /// other option considered — rejected because it would require plumbing the connection's
+    /// notification callback through a channel too, adding a second unbounded channel + consumer loop
+    /// for no additional safety over a lock given the happens-before analysis above.
+    /// </summary>
+    readonly object _aggregationLock = new();
+
+    AcpUpdateKind?  _openRunKind;
+    StringBuilder?  _openRunText;
 
     Task    _connectionRunTask = Task.CompletedTask;
+    Task    _turnWorkerTask    = Task.CompletedTask;
     string? _sessionId;
+    string? _cwd;
+    string? _resolvedModel;
     int     _disposed;
 
     /// <summary>
@@ -68,11 +125,13 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
             IAcpProcess                                                                    process,
             ILogger                                                                        logger,
             string                                                                         agentId = "",
-            Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>?   requestInteraction = null
+            Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>?   requestInteraction = null,
+            TimeProvider?                                                                  timeProvider = null
         ) {
-        _connection = connection;
-        _process    = process;
-        _logger     = logger;
+        _connection   = connection;
+        _process      = process;
+        _logger       = logger;
+        _timeProvider = timeProvider ?? TimeProvider.System;
 
         _connection.OnNotification += HandleNotification;
 
@@ -94,9 +153,30 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
     /// <summary>
     /// Reduced <c>session/update</c> notifications, in arrival order. Unbounded so a mapper that
     /// attaches slightly late (or is momentarily busy) never misses an update — the alternative
-    /// (a plain event) would drop anything raised before a subscriber attaches.
+    /// (a plain event) would drop anything raised before a subscriber attaches. Every update written
+    /// here is ALSO fed into <see cref="AggregateUpdate"/> (AI-688 Option B task 2) to build the
+    /// aggregated <see cref="Envelopes"/> transcript — the two are independent sinks of the same
+    /// reduced update, not a producer/consumer pair.
     /// </summary>
     public ChannelReader<AcpSessionUpdate> Updates => _updates.Reader;
+
+    // ── IAcpTranscriptSource (AI-688 Option B task 2, design spec §2.4) ─────────────────────────
+    // Exposed here for task 3/4 to pick up; NOT wired onto HostedRuntimeStart/the orchestrator by
+    // this task (see IAcpTranscriptSource's remarks).
+
+    /// <inheritdoc cref="IAcpTranscriptSource.AcpSessionId"/>
+    /// <remarks>Only meaningful once <see cref="StartAsync"/> has resolved <see cref="_sessionId"/> —
+    /// callers (the orchestrator, post-registration) only ever see this runtime after that.</remarks>
+    public string AcpSessionId => _sessionId!;
+
+    /// <inheritdoc cref="IAcpTranscriptSource.Cwd"/>
+    public string Cwd => _cwd!;
+
+    /// <inheritdoc cref="IAcpTranscriptSource.ResolvedModel"/>
+    public string? ResolvedModel => _resolvedModel;
+
+    /// <inheritdoc cref="IAcpTranscriptSource.Envelopes"/>
+    public ChannelReader<AcpEventEnvelope> Envelopes => _transcript.Reader;
 
     /// <summary>
     /// Performs the ACP handshake: starts the connection's read loop, then
@@ -104,9 +184,9 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
     /// (AI-688 gap 1) an optional model-selection step — resolves <paramref name="requestedModel"/>
     /// against <c>session/new</c>'s <c>availableModels</c> and, if it matches, sends
     /// <c>session/set_config_option</c> and awaits the response BEFORE the first turn fires (see
-    /// <see cref="TrySelectModelAsync"/>). If <paramref name="initialPrompt"/> is non-empty, fires
-    /// the initial <c>session/prompt</c> as tracked background work (see
-    /// <see cref="FireAndTrackPromptAsync"/>) and returns as soon as the session is established — it
+    /// <see cref="TrySelectModelAsync"/>). If <paramref name="initialPrompt"/> is non-empty,
+    /// <see cref="EnqueueTurn"/>s it onto the serialized prompt-turn worker (AI-688 Option B task 2 —
+    /// see <see cref="RunTurnWorkerAsync"/>) and returns as soon as the session is established — it
     /// does NOT await that prompt turn to completion (AI-684 Fix E). Not part of
     /// <see cref="IHostedAgentRuntime"/> — called directly by the Task 10 factory (and by tests)
     /// once the connection/process are constructed. A failed handshake surfaces a clear exception
@@ -117,7 +197,10 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
     /// (see <see cref="TrySelectModelAsync"/>'s remarks).
     /// </summary>
     public async Task StartAsync(string cwd, string? initialPrompt, CancellationToken ct, string? requestedModel = null) {
+        _cwd = cwd;
+
         _connectionRunTask = RunConnectionLoopAsync(_cts.Token);
+        _turnWorkerTask    = RunTurnWorkerAsync(_cts.Token);
 
         JsonElement sessionNewResult;
 
@@ -151,12 +234,12 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
         await TrySelectModelAsync(sessionNewResult, requestedModel, ct).ConfigureAwait(false);
 
         // The session is established (initialize + session/new both completed) — the caller
-        // (orchestrator) can now treat this agent as live. Fire the initial turn without awaiting
-        // it: a real ACP turn can run arbitrarily long, and blocking StartAsync on it would delay
-        // agent registration/stoppability for the whole turn (AI-684 Fix E). Completion is
-        // observed via the Updates channel, not this method's return.
+        // (orchestrator) can now treat this agent as live. Enqueue the initial turn without
+        // awaiting it: a real ACP turn can run arbitrarily long, and blocking StartAsync on it would
+        // delay agent registration/stoppability for the whole turn (AI-684 Fix E). Completion is
+        // observed via the Updates/Envelopes channels, not this method's return.
         if (!string.IsNullOrEmpty(initialPrompt))
-            FireAndTrackPromptAsync(initialPrompt);
+            EnqueueTurn(initialPrompt);
     }
 
     /// <summary>
@@ -204,6 +287,12 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
 
         try {
             await _connection.RequestAsync("session/set_config_option", setConfigOptionParams, ct).ConfigureAwait(false);
+
+            // AI-688 Option B task 2 (§2.4): only record the model as "resolved" once the agent has
+            // actually confirmed it — a rejected/errored set_config_option (below) falls back to
+            // Cursor's own default, so IAcpTranscriptSource.ResolvedModel must stay null in that case
+            // too, not report a model that was never actually applied.
+            _resolvedModel = resolvedModelId;
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             // Covers AcpRpcException (a well-formed JSON-RPC error response) and any other
             // non-cancellation failure — per the probe findings this is explicitly non-fatal.
@@ -215,25 +304,63 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
     }
 
     /// <summary>
-    /// Fires a <c>session/prompt</c> turn as tracked, untracked-by-the-caller background work:
-    /// registers the task in <see cref="_backgroundPromptTasks"/> (removing itself on completion)
-    /// so <see cref="DisposeAsync"/> can wait for in-flight turns to wind down, and swallows/logs
-    /// any fault so it never becomes an unobserved task exception. Used by both
+    /// AI-688 Option B task 2 (§2.1): enqueues a prompt-turn's text onto <see cref="_pendingTurns"/>
+    /// and returns immediately — never blocks on, or observes, that turn's completion. Used by both
     /// <see cref="StartAsync"/> (initial prompt) and <see cref="SendUserInputAsync"/> (follow-up
-    /// turns) — neither caller may block on turn completion; that's what <see cref="Updates"/> is
-    /// for.
+    /// turns), preserving AI-684 Fix E's non-blocking contract for both callers. The single
+    /// <see cref="RunTurnWorkerAsync"/> worker drains this queue strictly in order; turn completion is
+    /// observed via <see cref="Updates"/>/<see cref="Envelopes"/>, not this method's return.
     /// </summary>
-    void FireAndTrackPromptAsync(string text) {
-        Task? task = null;
+    void EnqueueTurn(string text) {
+        if (!_pendingTurns.Writer.TryWrite(text))
+            _logger.LogDebug("ACP: dropped a prompt turn — pending-turns channel already completed.");
+    }
 
-        task = SendPromptAsync(text, _cts.Token).ContinueWith(t => {
-            _backgroundPromptTasks.TryRemove(task!, out _);
+    /// <summary>
+    /// AI-688 Option B task 2 (§2.1): the single, long-running prompt-turn worker. Drains
+    /// <see cref="_pendingTurns"/> strictly FIFO, processing exactly one turn
+    /// (<see cref="ProcessTurnAsync"/>) fully to completion before starting the next — this single-
+    /// flight serialization is what makes "the aggregation buffer unambiguously belongs to the active
+    /// turn" true, per the design spec. Cancellable: <c>ChannelReader.ReadAllAsync(ct)</c> observes
+    /// <paramref name="ct"/> both between turns and (via <see cref="ProcessTurnAsync"/>'s own use of
+    /// <paramref name="ct"/> in <see cref="SendPromptAsync"/>) inside an in-flight turn, so a turn
+    /// whose <c>stopReason</c> never arrives cannot pin <see cref="DisposeAsync"/>.
+    /// </summary>
+    async Task RunTurnWorkerAsync(CancellationToken ct) {
+        try {
+            await foreach (var text in _pendingTurns.Reader.ReadAllAsync(ct).ConfigureAwait(false))
+                await ProcessTurnAsync(text, ct).ConfigureAwait(false);
+        } catch (OperationCanceledException) {
+            // normal shutdown — see this method's remarks.
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "ACP: prompt-turn worker ended unexpectedly.");
+        }
+    }
 
-            if (t.IsFaulted)
-                _logger.LogDebug(t.Exception, "ACP: background session/prompt turn faulted.");
-        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    /// <summary>
+    /// AI-688 Option B task 2 (§2.1): processes exactly one serialized prompt turn: (a) emits this
+    /// turn's <c>UserMessage</c> envelope (written directly, not through the aggregation lock — it
+    /// happens-before any update for this turn can possibly arrive, since it is written before
+    /// <c>session/prompt</c> is even sent); (b) sends <c>session/prompt</c> and awaits its
+    /// <c>stopReason</c> response (reusing <see cref="SendPromptAsync"/>); (c) performs this turn's
+    /// end-of-turn flush of the aggregation buffer in a <c>finally</c> — this runs whether the turn
+    /// completed normally, faulted (logged, non-fatal — mirrors the old
+    /// <c>FireAndTrackPromptAsync</c>'s swallow-and-log behavior), or was cancelled (a courtesy flush
+    /// of whatever partial text had accumulated; see <see cref="_aggregationLock"/>'s remarks on why
+    /// this can never hang <see cref="DisposeAsync"/> — flushing is a pure in-memory operation, never
+    /// I/O). A cancellation still propagates out of this method (the <c>when</c> filter below only
+    /// catches non-cancellation faults) so <see cref="RunTurnWorkerAsync"/>'s loop stops promptly.
+    /// </summary>
+    async Task ProcessTurnAsync(string text, CancellationToken ct) {
+        EmitEnvelope(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), text));
 
-        _backgroundPromptTasks[task] = 0;
+        try {
+            await SendPromptAsync(text, ct).ConfigureAwait(false);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            _logger.LogDebug(ex, "ACP: session/prompt turn faulted; flushing this turn's partial buffer.");
+        } finally {
+            FlushOpenRun();
+        }
     }
 
     async Task RunConnectionLoopAsync(CancellationToken ct) {
@@ -274,15 +401,17 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
 
     /// <summary>
     /// Sends a follow-up <c>session/prompt</c> for hosted-UI text input (server <c>SendInput</c>).
-    /// Returns as soon as the request is WRITTEN to the wire — it does NOT await the turn's
-    /// <c>stopReason</c> response (AI-684 Fix E): a real turn can run arbitrarily long, and the
+    /// Returns as soon as the text is enqueued (see <see cref="EnqueueTurn"/>) — it does NOT await the
+    /// turn's <c>stopReason</c> response (AI-684 Fix E): a real turn can run arbitrarily long, and the
     /// pre-fix behavior (awaiting the full round trip) blocked this call — and therefore the
-    /// orchestrator's <c>HandleSendInput</c> — for the whole turn. Turn completion is observed via
-    /// <see cref="Updates"/>, not this method's return.
+    /// orchestrator's <c>HandleSendInput</c> — for the whole turn. AI-688 Option B task 2: if a prior
+    /// turn is still in flight, this text is queued FIFO and the worker sends it only once that
+    /// turn's own <c>stopReason</c> has been received and its buffer flushed — turn completion is
+    /// observed via <see cref="Updates"/>/<see cref="Envelopes"/>, not this method's return.
     /// </summary>
     public Task SendUserInputAsync(string text) {
         RequireSessionId();
-        FireAndTrackPromptAsync(text);
+        EnqueueTurn(text);
 
         return Task.CompletedTask;
     }
@@ -338,6 +467,12 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
         var reduced = Reduce(updateElement.Clone());
         if (!_updates.Writer.TryWrite(reduced))
             _logger.LogDebug("ACP: dropped a session/update — updates channel already completed.");
+
+        // AI-688 Option B task 2 (§2.1): fed synchronously, on THIS notification callback's own
+        // thread — AcpConnection.RunAsync's single read loop calls HandleNotification directly
+        // (never concurrently with itself), so every update this runtime ever sees is aggregated in
+        // strict arrival order without needing its own queue/consumer loop.
+        AggregateUpdate(reduced);
     }
 
     static AcpSessionUpdate Reduce(JsonElement update) {
@@ -433,6 +568,97 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
         return GetRawTextOrNull(update, "rawOutput");
     }
 
+    // ── AI-688 Option B task 2 (§2.1): chunk aggregation ─────────────────────────────────────────
+
+    /// <summary>
+    /// Aggregates ONE reduced update per the design spec's rules: a same-kind
+    /// <see cref="AcpUpdateKind.AgentMessageChunk"/>/<see cref="AcpUpdateKind.AgentThoughtChunk"/> run
+    /// grows the open buffer; any other kind (or a kind transition between message/thought) flushes
+    /// the open run first, then — for the non-aggregated kinds — translates <paramref name="update"/>
+    /// 1:1 and emits it if non-null (tool_call/tool_call_update/plan/available_commands/unknown all
+    /// take this path; §2.2). Entirely under <see cref="_aggregationLock"/> so the
+    /// check-open-run-kind-then-append-or-flush decision is atomic against a concurrent turn-end
+    /// flush from the worker (see the lock field's remarks for why that matters even though the two
+    /// call sites are serialized in practice).
+    /// </summary>
+    void AggregateUpdate(AcpSessionUpdate update) {
+        lock (_aggregationLock) {
+            switch (update.Kind) {
+                case AcpUpdateKind.AgentMessageChunk:
+                case AcpUpdateKind.AgentThoughtChunk:
+                    if (_openRunKind == update.Kind) {
+                        _openRunText!.Append(update.Text);
+                    } else {
+                        FlushOpenRunLocked();
+                        _openRunKind = update.Kind;
+                        _openRunText = new StringBuilder(update.Text ?? "");
+                    }
+                    break;
+
+                default:
+                    FlushOpenRunLocked(); // kind-transition — the open run (if any) ends here
+                    var envelope = AcpEventTranslator.Translate(update, seq: 0, NowIso(), logger: _logger);
+                    if (envelope is { } e)
+                        EmitEnvelope(e);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Turn-end / session-end flush entry point (§2.1): flushes the open aggregation run, if any.
+    /// Called by <see cref="ProcessTurnAsync"/> on its turn's <c>stopReason</c>/fault/cancellation,
+    /// and defensively by <see cref="DisposeAsync"/> as a session-end safety net. Idempotent — a
+    /// second call with no open run is a no-op.
+    /// </summary>
+    void FlushOpenRun() {
+        lock (_aggregationLock) FlushOpenRunLocked();
+    }
+
+    /// <summary>
+    /// Flushes the open run — MUST be called while already holding <see cref="_aggregationLock"/>.
+    /// Builds a representative <see cref="AcpSessionUpdate"/> carrying only the run's
+    /// <see cref="AcpUpdateKind"/> (the translator only needs the kind to pick
+    /// <see cref="AcpEventKind.AssistantText"/> vs <see cref="AcpEventKind.AssistantThinking"/> when
+    /// <c>aggregatedText</c> is supplied — see <c>AcpEventTranslator.Translate</c>'s remarks) and
+    /// translates it with the accumulated buffer as <c>aggregatedText</c>, emitting exactly ONE
+    /// envelope for the whole run.
+    /// </summary>
+    void FlushOpenRunLocked() {
+        if (_openRunKind is not { } kind)
+            return;
+
+        var text = _openRunText!.ToString();
+        _openRunKind = null;
+        _openRunText = null;
+
+        var representative = new AcpSessionUpdate(kind);
+        var envelope        = AcpEventTranslator.Translate(representative, seq: 0, NowIso(), aggregatedText: text, logger: _logger);
+        if (envelope is { } e)
+            EmitEnvelope(e);
+    }
+
+    /// <summary>
+    /// The ONLY call site that writes to <see cref="_transcript"/> — always under
+    /// <see cref="_aggregationLock"/> (reentrant, so callers already holding it from
+    /// <see cref="AggregateUpdate"/>/<see cref="FlushOpenRunLocked"/> do not deadlock) so envelope
+    /// order on the channel matches lock-acquisition order across every writer.
+    /// </summary>
+    void EmitEnvelope(AcpEventEnvelope envelope) {
+        lock (_aggregationLock) {
+            if (!_transcript.Writer.TryWrite(envelope))
+                _logger.LogDebug("ACP: dropped an ACP transcript envelope (Kind={Kind}) — transcript channel already completed.", envelope.Kind);
+        }
+    }
+
+    /// <summary>
+    /// AI-688 Option B task 2: a REAL timestamp for every envelope this runtime emits (Seq itself
+    /// stays a <c>0</c> placeholder — task 3's forwarder assigns the real monotonic seq on dequeue).
+    /// Uses <see cref="_timeProvider"/> (defaults to <see cref="TimeProvider.System"/>, overridable in
+    /// tests for determinism) rather than <see cref="DateTimeOffset.UtcNow"/> directly.
+    /// </summary>
+    string NowIso() => _timeProvider.GetUtcNow().ToString("O");
+
     void RequireSessionId() {
         if (_sessionId is not { Length: > 0 })
             throw new InvalidOperationException("AcpHostedAgentRuntime.SendUserInputAsync called before StartAsync established a session.");
@@ -446,18 +672,25 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
 
         await _cts.CancelAsync().ConfigureAwait(false);
         _updates.Writer.TryComplete();
+        _pendingTurns.Writer.TryComplete();
 
-        // Every background session/prompt turn (StartAsync's initial prompt, and each
-        // SendUserInputAsync) is keyed off _cts.Token via AcpConnection.RequestAsync's own
-        // cancellation registration, so cancelling _cts above already unblocks each one — this is
-        // just a bounded wait for them to actually finish removing themselves from the tracking set
-        // (FireAndTrackPromptAsync's continuation already swallows/logs any fault, so nothing here
-        // can throw or need re-observing).
+        // The turn worker's in-flight SendPromptAsync await is keyed off _cts.Token via
+        // AcpConnection.RequestAsync's own cancellation registration, so cancelling _cts above
+        // already unblocks it — ProcessTurnAsync's own `finally` still runs a courtesy flush of that
+        // turn's partial buffer (see FlushOpenRun) before the worker loop observes the cancellation
+        // and returns. This is just a bounded wait for that to actually happen.
         try {
-            await Task.WhenAll(_backgroundPromptTasks.Keys).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            await _turnWorkerTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         } catch {
-            // Best-effort — a stuck background turn must never hang dispose.
+            // Best-effort — a stuck turn worker must never hang dispose.
         }
+
+        // Session-end flush (§2.1): a belt-and-suspenders flush of any still-open aggregation run.
+        // In the normal shutdown path ProcessTurnAsync's own finally already flushed the active
+        // turn's buffer above, making this a no-op — it only matters for the (currently unreachable
+        // in practice) case where the worker task itself never ran a turn to begin with.
+        FlushOpenRun();
+        _transcript.Writer.TryComplete();
 
         try {
             await _connectionRunTask.ConfigureAwait(false);
