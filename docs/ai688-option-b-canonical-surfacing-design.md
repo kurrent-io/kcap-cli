@@ -9,6 +9,9 @@ elicitation bridge) and on AI-688 **gap 1** (model selection, landed: `eb0d221`)
 > **Revision r1 (2026-07-07):** Codex spec review — 3 blocking + 2 non-blocking, all addressed (§6).
 > **Revision r2 (2026-07-07):** Codex spec review round 2 — 2 blocking + 1 non-blocking, all addressed (§6):
 > reconnect re-bind (§2.3), bounded final-drain (§2.3), concrete bind-handoff record (§2.4).
+> **Revision r3 (2026-07-07):** Codex spec review round 3 — **NO BLOCKING FINDINGS**; 3 non-blocking clarifications
+> folded in (§6): reconnect gating via `ConnectionRetry`/`IsReady` (§2.3), forwarder emits NO `session_ended`
+> (`EndAgentSession` is the owner) (§2.3), daemon-local wire DTOs + `CapacitorJsonContext` (§2.4). **Spec LOCKED.**
 
 ## 1. Problem & key finding
 
@@ -88,7 +91,8 @@ flush the wrong buffer. Decisions:
   shapes are preserved + logged via `Raw`; the **live tool-using E2E gates** enabling the tool assertions.
 
 **Synthesized daemon-side:** `SessionStarted` (`Seq 0`, paired with the `AcpSessionStarted` bind); `UserMessage`
-(per serialized turn); `SessionEnded` (§2.3 terminal ownership).
+(per serialized turn). **`SessionEnded` is NOT synthesized by the forwarder** — under the current server contract
+`CapacitorHub.EndAgentSession` is the ACP `SessionEnded` owner (§2.3).
 
 ### 2.3 Forwarding, bind ordering, reconnect & terminal ownership (findings 1 + 3, r1; findings 1 + 2, r2)
 
@@ -111,6 +115,11 @@ unacked buffer survive the reconnect in-memory). Wire this into the same re-regi
 for agents on reconnect. Deeper resilience (backoff tuning, long-outage replay depth) is AI-689; the re-bind itself
 is in scope here because without it the transcript breaks on the first reconnect.
 
+**Enforcement (r3 finding 1):** the new `AcpSessionStartedAsync` / `SendAcpEventsAsync` calls MUST go through the
+same `ConnectionRetry` + `IsReady` gating as existing `ServerConnection` hub calls. `RegisterDaemon` runs agent
+re-registration (which now includes the ACP re-bind) **before** `IsReady` returns, and `IsReady` is the retry gate —
+so post-reconnect event batches cannot beat the re-bind (they block on `IsReady` until the re-bind has run).
+
 **Forwarding + seq/retry.** `ServerConnection.SendAcpEventsAsync(agentId, acpSessionId, AcpEventEnvelope[]) →
 AcpBatchAck` invokes the hub; envelopes carry a monotonic `Seq` (from 0), `ContractVersion = 1`, `TimestampIso`.
 Per-session seq counter + a buffer of sent-but-unacked envelopes; on an `AcpBatchAck` reporting a gap, resend from
@@ -127,10 +136,10 @@ a synthesized `SessionEnded` racing the finalizer AND to preserve that outage bu
   proceeds** to `EndAgentSessionAsync`/cleanup when the budget elapses — logging best-effort transcript loss rather
   than pinning shutdown. The final flush is *attempted* before finalization but never at the cost of the cleanup
   guarantee.
-- **Exactly one owner emits the canonical `SessionEnded`.** Implementation MUST first determine whether
-  `EndAgentSessionAsync` already writes a canonical `SessionEnded`: if it does, the forwarder does NOT; if it does
-  not, the forwarder emits `SessionEnded` as the last drained envelope before `EndAgentSessionAsync`. Never both,
-  never after finalization.
+- **`SessionEnded` owner is the server (r3 finding 2):** under the current contract `CapacitorHub.EndAgentSession`
+  is already the ACP-vendor `SessionEnded` owner and marks the binding terminal on confirmed success. Therefore the
+  AI-688 forwarder **does NOT emit a `session_ended` envelope at all** — it drains the transcript envelopes (message/
+  tool) under the budget, then always calls `EndAgentSessionAsync`, which produces the terminal `SessionEnded`.
 - **Forwarder terminal-drop handling:** on a terminal-drop ack (`AcceptedSeq` < max-sent AND
   `ExpectedNextSeq == null`), the forwarder treats the session as terminal — stops retrying and clears the unacked
   buffer (no infinite resend against a terminal binding).
@@ -145,6 +154,13 @@ concrete (r2 finding 3):** the ACP factory returns an ACP-specific transcript so
 or re-deriving state. `IHostedAgentRuntime`/PTY runtimes leave it null. At the existing `EmitsTerminalOutput`
 special-case in `HandleLaunchAgent` (and **after** `RegisterAgentAsync`, §2.3), the orchestrator fires
 `_ = ForwardAcpTranscriptAsync(agent, transcriptSource)` when the source is non-null — vendor-neutral, no PTY branch.
+
+**Wire DTOs (r3 finding 3):** the daemon (`Capacitor.Cli.Daemon`) currently references only `Capacitor.Cli.Core`
+and has **no** `AcpEventEnvelope` / `AcpBatchAck` definitions. Add **daemon-local wire records** mirroring the
+server contract (field-for-field: `AcpEventEnvelope` with `Seq`/`Kind`/`ContractVersion`/`TimestampIso`/text/
+`ToolInputJson`/`ToolResult`/etc.; `AcpBatchAck` with `AcceptedSeq`/`ExpectedNextSeq`) in `Capacitor.Cli.Core`, and
+**register them in `CapacitorJsonContext`** (source-gen) for NativeAOT-safe SignalR serialization — the same
+pattern the existing daemon↔server DTOs use.
 
 ## 3. Scope & deferrals
 
@@ -180,8 +196,8 @@ special-case in `HandleLaunchAgent` (and **after** `RegisterAgentAsync`, §2.3),
   re-bind** (simulated reconnect → `AcpSessionStarted` re-invoked before any resend, then resume from the ack
   cursor); **bounded final-drain** (a turn with no `stopReason` at exit → drain times out → `EndAgentSessionAsync`
   still proceeds, transcript-loss logged); lifecycle synthesis (SessionStarted seq 0 emitted by the orchestrator
-  after registration + before events; UserMessage per turn; SessionEnded ownership); failure isolation (a
-  translate/forward error never kills the live agent or the turn).
+  after registration + before events; UserMessage per turn; **forwarder emits NO `session_ended` — `EndAgentSession`
+  owns it**); failure isolation (a translate/forward error never kills the live agent or the turn).
 - **Live E2E (Team tier, `KCAP_ACP_LIVE=1` gated):** a real **tool-using** prompt ("run `echo hi` and tell me the
   output") through the real daemon → assert the canonical transcript persists (assistant text + tool_call +
   tool_result) AND observe whether Cursor triggers the AI-686 permission path. Combined proof for AI-688's
@@ -204,3 +220,11 @@ special-case in `HandleLaunchAgent` (and **after** `RegisterAgentAsync`, §2.3),
    always proceed to `EndAgentSessionAsync` after the budget, preserving the existing outage-cleanup guarantee).
 3. [NON-BLOCKING] Concrete bind-handoff API → §2.4 (`IAcpTranscriptSource`/`AcpTranscript` record carrying
    `AcpSessionId`/`Cwd`/`ResolvedModel`/`Envelopes`, so the orchestrator binds without downcasting/re-deriving).
+
+**Round 3 (r3) — NO BLOCKING FINDINGS:**
+1. [NON-BLOCKING] Reconnect enforcement → §2.3 (new hub calls use the same `ConnectionRetry`/`IsReady` gating;
+   `RegisterDaemon` re-binds before `IsReady` returns, so post-reconnect batches can't beat the re-bind).
+2. [NON-BLOCKING] `SessionEnded` owner made concrete → §2.2/§2.3 (server `EndAgentSession` is the owner; the
+   forwarder emits no `session_ended` — drains transcript, then always calls `EndAgentSessionAsync`).
+3. [NON-BLOCKING] Daemon wire DTOs → §2.4 (add daemon-local `AcpEventEnvelope`/`AcpBatchAck` mirror records in
+   `Capacitor.Cli.Core` + register in `CapacitorJsonContext` for NativeAOT SignalR).
