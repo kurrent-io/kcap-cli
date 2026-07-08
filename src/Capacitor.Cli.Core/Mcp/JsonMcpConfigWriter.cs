@@ -41,8 +41,8 @@ public static class JsonMcpConfigWriter {
             return changed;
         });
 
-    public static Change Unregister(string configPath, McpConfigShape shape, IMcpMarker marker) =>
-        Update(configPath, root => {
+    public static Change Unregister(string configPath, McpConfigShape shape, IMcpMarker marker) {
+        var change = Update(configPath, root => {
             if (root[shape.BlockKey] is not JsonObject block) return false;
             var changed = false;
 
@@ -51,9 +51,15 @@ public static class JsonMcpConfigWriter {
                     changed = true;
 
             if (block.Count == 0 && root.Remove(shape.BlockKey)) changed = true;
-            if (changed) marker.Clear(configPath);
             return changed;
         });
+
+        // Always clear kcap's ownership marker on unregister — even when there were no JSON entries
+        // to remove (e.g. the user hand-deleted them) — so no orphaned marker is left. Skip only on a
+        // hard failure (couldn't read/parse the config) so state stays recoverable.
+        if (change != Change.Failed) marker.Clear(configPath);
+        return change;
+    }
 
     static JsonObject RenderEntry(KcapMcpServer s, McpConfigShape shape, string? cwd) {
         var o = new JsonObject();

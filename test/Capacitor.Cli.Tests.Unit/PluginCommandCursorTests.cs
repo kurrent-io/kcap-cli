@@ -34,7 +34,7 @@ public class PluginCommandCursorTests {
         await Assert.That(File.ReadAllText(hooksPath)).IsEqualTo("{}");
     }
 
-    // AI-699: `plugin install/remove --cursor` also (un)registers the kcap MCP
+    // `plugin install/remove --cursor` also (un)registers the kcap MCP
     // servers in ~/.cursor/mcp.json. These use an explicit PluginEnvironment
     // (not PluginEnvironment.FromProcess()) so env.CursorMcpJson resolves under
     // a temp home instead of the real machine's ~/.cursor — mirrors
