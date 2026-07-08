@@ -135,6 +135,11 @@ static class McpFlowsServer {
 
             // The start/submit tools (and their generic aliases) may need async poll — handle separately.
             if (toolName is "start_review_flow" or "start_flow" or "submit_review_round" or "send_to_participant") {
+                // Dynamic flows: whether THIS call carried an inline definition_yaml. Uncoded
+                // (non-JSON `{"error":...}`) failures on such a start get the "server may not
+                // support dynamic flows" hint — coded rejections never do (new-server signal).
+                var wasDynamicStart = toolName is "start_flow" && arguments?["definition_yaml"] is not null;
+
                 using var postResponse = toolName switch {
                     "start_review_flow"   => await SendWithRefreshRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind")),
                     "start_flow"          => await SendWithRefreshRetryAsync(client, c => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id")),
@@ -148,9 +153,9 @@ static class McpFlowsServer {
                     return BuildToolResult(id, "Not logged in. Run 'kcap login' on the host shell.", isError: true);
 
                 if (!postResponse.IsSuccessStatusCode)
-                    return BuildToolResult(id, $"Error: HTTP {(int)postResponse.StatusCode} — {postBody}", isError: true);
+                    return BuildToolResult(id, FormatFlowStartError((int)postResponse.StatusCode, postBody, wasDynamicStart), isError: true);
 
-                var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody, toolName);
+                var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody, toolName, wasDynamicStart);
                 return BuildToolResult(id, payload, isError);
             }
 
@@ -225,6 +230,9 @@ static class McpFlowsServer {
     /// Posts to POST /api/flows/review/start. Shared by start_review_flow (reads the flow
     /// kind from the "kind" arg) and its generic alias start_flow (reads it from
     /// "definition_id" — the server treats kind == definition id, AI-1126 phase C).
+    /// start_flow additionally accepts an inline "definition_yaml" (dynamic flows): the MCP
+    /// schema can't express the xor, so exactly-one is enforced here, BEFORE any HTTP call;
+    /// start_review_flow stays catalog-only (kind remains required there).
     /// </summary>
     static async Task<System.Net.Http.HttpResponseMessage> StartFlowAsync(
             HttpClient         client,
@@ -235,7 +243,20 @@ static class McpFlowsServer {
             RepositoryPayload? repoInfo,
             string             kindArgName
         ) {
-        var kind         = GetRequiredArg(arguments, kindArgName);
+        string? kind;
+        string? definitionYaml = null;
+
+        if (kindArgName == "definition_id") {
+            kind           = arguments?[kindArgName]?.GetValue<string>();
+            definitionYaml = arguments?["definition_yaml"]?.GetValue<string>();
+
+            if ((kind is null) == (definitionYaml is null))
+                throw new ArgumentException(
+                    "provide exactly one of definition_id (catalog flow) or definition_yaml (dynamic flow).");
+        } else {
+            kind = GetRequiredArg(arguments, kindArgName);
+        }
+
         var targetKind   = GetRequiredArg(arguments, "target_kind");
         var targetRef    = GetRequiredArg(arguments, "target_ref");
         var targetTitle  = GetRequiredArg(arguments, "target_title");
@@ -277,7 +298,8 @@ static class McpFlowsServer {
             RepoPath:             repoRoot,
             Mode:                 mode,
             Async:                true,
-            RequesterMachineId:   machineId
+            RequesterMachineId:   machineId,
+            DefinitionYaml:       definitionYaml
         );
 
         return await client.PostAsync(
@@ -378,12 +400,36 @@ static class McpFlowsServer {
         }
     }
 
+    /// <summary>Maps a non-2xx start/submit (or poll) response body to the tool error text.
+    /// Status-agnostic contract (dynamic flows): ANY body carrying a string "error" code plus a
+    /// "message" is a coded rejection from a dynamic-flows-aware server — surface the server
+    /// message verbatim, prefixed with the code, and never add the old-server hint. Only an
+    /// UNCODED failure on a start that included definition_yaml gets the "may not support
+    /// dynamic flows" hint (the coded body is the new-server capability signal), keeping the
+    /// raw body either way.</summary>
+    internal static string FormatFlowStartError(int status, string body, bool wasDynamicStart) {
+        try {
+            var node = JsonNode.Parse(body)?.AsObject();
+            if (node?["error"] is JsonValue ev && ev.TryGetValue<string>(out var code) && code.Length > 0
+                && node["message"] is JsonValue mv && mv.TryGetValue<string>(out var message))
+                return $"Error ({code}): {message}";
+        } catch (JsonException) {
+            // not JSON — fall through to the uncoded path
+        }
+
+        var hint = wasDynamicStart
+            ? "dynamic start failed — this server may not support dynamic flows (upgrade the server or use a catalog definition). "
+            : "";
+
+        return $"Error: {hint}HTTP {status} — {body}";
+    }
+
     /// <summary>If the POST already carries a terminal result (old/blocking server), return it.
     /// Otherwise poll GET /api/flows/{id} until the started round is terminal (AI-1061).
     /// <paramref name="toolName"/> is the tool that initiated the round (one of
     /// start_review_flow/submit_review_round/start_flow/send_to_participant) — threaded through
     /// so the graceful-cap timeout message can point back at the matching status tool.</summary>
-    static async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody, string toolName) {
+    static async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody, string toolName, bool wasDynamicStart) {
         if (TryFormatRoundlessStart(postBody, out var roundlessPendingIds) is { } roundless) {
             if (roundlessPendingIds.Count > 0 &&
                 JsonNode.Parse(postBody)?.AsObject()?["flow_run_id"]?.GetValue<string>() is { } roundlessRunId)
@@ -408,7 +454,7 @@ static class McpFlowsServer {
             return new(formatted, false);
         }
 
-        return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value, toolName);
+        return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value, toolName, wasDynamicStart);
     }
 
     /// <summary>Tool family that started the round determines which status tool the graceful-cap
@@ -418,7 +464,7 @@ static class McpFlowsServer {
     static string StatusToolNameFor(string toolName) =>
         toolName is "start_review_flow" or "submit_review_round" ? "get_review_flow_status" : "get_flow_status";
 
-    static async Task<PollResult> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber, string toolName) {
+    static async Task<PollResult> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber, string toolName, bool wasDynamicStart) {
         var url                   = $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
         var pollStartedAt         = DateTimeOffset.UtcNow;
         var deadline              = pollStartedAt + PollCap;
@@ -452,11 +498,12 @@ static class McpFlowsServer {
                 if (resp.StatusCode == HttpStatusCode.Unauthorized)
                     return new("Not logged in. Run 'kcap login' on the host shell.", true);
 
-                // Fix #4: non-transient 4xx (e.g. 400, 403) fail immediately.
+                // Fix #4: non-transient 4xx (e.g. 400, 403, 409 budget_unverifiable) fail
+                // immediately — coded bodies surface via FormatFlowStartError like the POST path.
                 var statusCode = (int)resp.StatusCode;
                 if (statusCode is >= 400 and < 500) {
                     var errBody = await resp.Content.ReadAsStringAsync();
-                    return new($"Error: HTTP {statusCode} — {errBody}", true);
+                    return new(FormatFlowStartError(statusCode, errBody, wasDynamicStart), true);
                 }
 
                 // Fix #4: 5xx / other non-success counts toward the transient budget.
@@ -844,7 +891,7 @@ static class McpFlowsServer {
         ),
         new(
             "start_flow",
-            "Start a new agent flow from the server's flow-definition catalog. This hands the work to a SEPARATE hosted agent and iterates to sign-off — it is NOT how you do the work yourself. " +
+            "Start a new agent flow from the server's flow-definition catalog (definition_id) or from an inline YAML definition (definition_yaml — dynamic flows). This hands the work to a SEPARATE hosted agent and iterates to sign-off — it is NOT how you do the work yourself. " +
             "Returns findings (same UX); the server runs the flow asynchronously and the CLI polls internally. " +
             "Returns a flow_run_id that identifies this flow run — save it to call send_to_participant or get_flow_status later. " +
             "Multi-participant definitions start round-less — the response carries no round; address each role with send_to_participant (roles launch lazily on first message). " +
@@ -852,7 +899,8 @@ static class McpFlowsServer {
             new(
                 "object",
                 new() {
-                    ["definition_id"] = new("string", "Flow definition id from the catalog (e.g. 'code-review', or a custom definition)."),
+                    ["definition_id"]   = new("string", "Flow definition id from the catalog (e.g. 'code-review', or a custom definition). Provide exactly one of definition_id or definition_yaml — never both, never neither."),
+                    ["definition_yaml"] = new("string", "Inline flow-definition YAML document for a dynamic (non-catalog) flow — the full definition, same schema as catalog definitions. Provide exactly one of definition_id or definition_yaml — never both, never neither. Requires a server with dynamic flows enabled. Every participant MUST declare 'workspace: none' (the parser rejects a missing workspace) and a concrete model id (no 'default')."),
                     ["target_kind"]    = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
                     ["target_ref"]     = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
                     ["target_title"]   = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
@@ -860,7 +908,7 @@ static class McpFlowsServer {
                     ["instructions"]   = new("string", "Optional additional instructions for the agent."),
                     ["mode"]           = new("string", "Optional. Pass 'context-only' to have the agent treat the submitted context/diff as authoritative rather than reading the repository. By default the agent runs in a worktree mirrored from your working tree (uncommitted changes included) when it runs on the same machine, so it can ground the work in the actual source; passing 'context-only' opts out of that.")
                 },
-                ["definition_id", "target_kind", "target_ref", "target_title", "context"]
+                ["target_kind", "target_ref", "target_title", "context"]
             )
         ),
         new(
@@ -906,9 +954,13 @@ static class McpFlowsServer {
     ];
 }
 
-/// <summary>CLI-side DTO for POST /api/flows/review/start — mirrors the server's StartReviewFlowRequest fields.</summary>
+/// <summary>CLI-side DTO for POST /api/flows/review/start — mirrors the server's StartReviewFlowRequest fields.
+/// Kind and DefinitionYaml are mutually exclusive (server-enforced too): a catalog start carries kind and
+/// null-omits definition_yaml; a dynamic start carries definition_yaml and null-omits kind — the
+/// WhenWritingNull context config keeps the absent one off the wire entirely, so catalog starts stay
+/// byte-compatible with servers that predate dynamic flows.</summary>
 record StartReviewFlowDto(
-    [property: JsonPropertyName("kind")]                   string  Kind,
+    [property: JsonPropertyName("kind")]                   string? Kind,
     [property: JsonPropertyName("target_kind")]            string  TargetKind,
     [property: JsonPropertyName("target_ref")]             string  TargetRef,
     [property: JsonPropertyName("target_title")]           string  TargetTitle,
@@ -923,7 +975,8 @@ record StartReviewFlowDto(
     [property: JsonPropertyName("repo_path")]              string? RepoPath,
     [property: JsonPropertyName("mode")]                   string? Mode,
     [property: JsonPropertyName("async")]                  bool    Async,
-    [property: JsonPropertyName("requester_machine_id")]  string? RequesterMachineId = null
+    [property: JsonPropertyName("requester_machine_id")]  string? RequesterMachineId = null,
+    [property: JsonPropertyName("definition_yaml")]        string? DefinitionYaml = null
 );
 
 /// <summary>
