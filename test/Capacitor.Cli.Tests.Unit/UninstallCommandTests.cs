@@ -468,7 +468,7 @@ public class UninstallCommandTests {
 
     [Test]
     public async Task User_level_uninstall_keeps_cursor_mcp_marker_when_unregister_fails() {
-        // Regression (AI-699 self-review): when ~/.cursor/mcp.json can't be
+        // Regression (self-review): when ~/.cursor/mcp.json can't be
         // parsed/rewritten, JsonMcpConfigWriter.Unregister fails-closed and
         // deliberately RETAINS the ownership marker so a later retry can still
         // identify the kcap-* entries as kcap-owned. uninstall records the
