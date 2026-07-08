@@ -9,7 +9,7 @@ namespace Capacitor.Cli.Tests.Unit;
 public class PluginCommandCursorTests {
     [Test]
     public async Task install_cursor_if_installed_noops_when_marker_absent() {
-        using var tmp = new TempDir();
+        using var tmp = new FakeUserHome();
         var hooksPath = Path.Combine(tmp.Path, "hooks.json");
 
         var exit = await PluginCommand.HandleAsync(
@@ -20,7 +20,7 @@ public class PluginCommandCursorTests {
 
     [Test]
     public async Task install_cursor_if_installed_short_circuits_on_same_version_marker() {
-        using var tmp = new TempDir();
+        using var tmp = new FakeUserHome();
         var hooksPath = Path.Combine(tmp.Path, "hooks.json");
         CursorHooksInstaller.WriteMarker(hooksPath);
         File.WriteAllText(hooksPath, "{}");
@@ -44,7 +44,7 @@ public class PluginCommandCursorTests {
     // only runs on the non-refresh path) never comes into play.
     [Test]
     public async Task install_cursor_registers_mcp_servers_preserving_user_entries() {
-        using var fakeHome = new TempDir();
+        using var fakeHome = new FakeUserHome();
         var cursorDir = System.IO.Path.Combine(fakeHome.Path, ".cursor");
         Directory.CreateDirectory(cursorDir);
 
@@ -74,7 +74,7 @@ public class PluginCommandCursorTests {
 
     [Test]
     public async Task install_cursor_if_installed_does_not_write_mcp_json_when_never_opted_in() {
-        using var fakeHome = new TempDir();
+        using var fakeHome = new FakeUserHome();
 
         // Hooks were never installed, so the refresh-only postinstall path
         // no-ops before ever touching hooks.json OR mcp.json.
@@ -89,7 +89,7 @@ public class PluginCommandCursorTests {
 
     [Test]
     public async Task install_cursor_skip_cursor_mcp_flag_leaves_mcp_json_untouched() {
-        using var fakeHome = new TempDir();
+        using var fakeHome = new FakeUserHome();
         var cursorDir = System.IO.Path.Combine(fakeHome.Path, ".cursor");
         Directory.CreateDirectory(cursorDir);
 
@@ -109,7 +109,7 @@ public class PluginCommandCursorTests {
 
     [Test]
     public async Task remove_cursor_unregisters_mcp_servers_preserving_user_entries() {
-        using var fakeHome = new TempDir();
+        using var fakeHome = new FakeUserHome();
         var cursorDir = System.IO.Path.Combine(fakeHome.Path, ".cursor");
         Directory.CreateDirectory(cursorDir);
 
@@ -143,7 +143,7 @@ public class PluginCommandCursorTests {
 
     [Test]
     public async Task remove_cursor_retains_marker_on_failed_unregister_then_retry_removes_entries() {
-        using var fakeHome = new TempDir();
+        using var fakeHome = new FakeUserHome();
         var cursorDir = System.IO.Path.Combine(fakeHome.Path, ".cursor");
         Directory.CreateDirectory(cursorDir);
 
@@ -179,31 +179,4 @@ public class PluginCommandCursorTests {
         Stderr:            TextWriter.Null
     );
 
-    // Fake home for one test, rooted under the real user profile (not
-    // Path.GetTempPath()). McpMarker classifies a config as user-scope — writing
-    // its marker as a sidecar next to the config rather than centrally under
-    // ~/.kcap/mcp-markers — via Environment.GetFolderPath(UserProfile), which
-    // ignores $HOME on Windows and where the temp dir may sit outside the profile
-    // (e.g. TEMP=D:\Temp). Rooting under the profile makes the common case a
-    // contained sidecar on every OS.
-    //
-    // That classification still has one hole: if the real profile is itself a git
-    // repo (~/.git — e.g. tracked dotfiles), McpMarker.IsInsideRepo walks up to it
-    // and treats the config as NON-user-scope, so the production `plugin --cursor`
-    // path writes the marker centrally under the real ~/.kcap/mcp-markers. To
-    // guarantee no leak regardless of OS or repo layout, Dispose explicitly clears
-    // the marker for this test's cursor config: McpMarker.Clear resolves the exact
-    // same path the production code used to write it (sidecar or central), so the
-    // marker can never persist past the test. [NotInParallel("HomeEnvVarMutation")]
-    // keeps the profile/$HOME McpMarker reads stable underneath the test.
-    sealed class TempDir : IDisposable {
-        public string Path { get; } = System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            $"kcap-pluginc-cursor-test-{Guid.NewGuid().ToString("N")[..8]}");
-        public TempDir() => Directory.CreateDirectory(Path);
-        public void Dispose() {
-            try { new McpMarker("cursor").Clear(System.IO.Path.Combine(Path, ".cursor", "mcp.json")); } catch { }
-            try { Directory.Delete(Path, true); } catch { }
-        }
-    }
 }
