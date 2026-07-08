@@ -360,12 +360,15 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
                 ToolTitle: GetStringOrNull(update, "title"),
                 ToolKind: GetStringOrNull(update, "kind"),
                 ToolStatus: GetStringOrNull(update, "status"),
+                ToolInputJson: GetRawTextOrNull(update, "rawInput"),
                 Raw: update),
 
             "tool_call_update" => new AcpSessionUpdate(
                 AcpUpdateKind.ToolCallUpdate,
                 ToolCallId: GetStringOrNull(update, "toolCallId"),
                 ToolStatus: GetStringOrNull(update, "status"),
+                ToolResultText: ExtractToolResultText(update),
+                ToolIsError: GetStringOrNull(update, "status") == "failed",
                 Raw: update),
 
             "plan" => new AcpSessionUpdate(AcpUpdateKind.Plan, Raw: update),
@@ -383,6 +386,52 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
 
     static string? GetStringOrNull(JsonElement element, string propertyName) =>
         element.TryGetProperty(propertyName, out var value) ? value.GetString() : null;
+
+    /// <summary>
+    /// AI-688 Option B task 1 (§2.2 footnote 2): verbatim JSON text of <paramref name="propertyName"/>
+    /// (e.g. a <c>tool_call</c>'s <c>rawInput</c> object) if present and not JSON <c>null</c>, else
+    /// <see langword="null"/> — used to populate <see cref="AcpSessionUpdate.ToolInputJson"/> without
+    /// re-serializing/reshaping the tool's input args (the mapper on the server side parses this raw
+    /// text itself; see <c>AcpSessionMapper.BuildToolCall</c>).
+    /// </summary>
+    static string? GetRawTextOrNull(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var value) && value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined
+            ? value.GetRawText()
+            : null;
+
+    /// <summary>
+    /// AI-688 Option B task 1 (§2.2 footnote 2, defensive/spec-derived — the tool_call_update result
+    /// shape is NOT probe-confirmed, see docs/acp-probe-findings.md): extracts a tool_call_update's
+    /// RESULT text for <see cref="AcpSessionUpdate.ToolResultText"/>, mechanically and regardless of
+    /// <c>status</c> (the terminal-status gate lives in <c>AcpEventTranslator</c>, not here). Prefers
+    /// the ACP-spec <c>content</c> array's text-block shape (<c>ToolCallContent</c>:
+    /// <c>{type:"content", content:{type:"text", text:"..."}}</c>) — concatenating every such block
+    /// found (newline-joined); non-text content variants (<c>diff</c>/<c>terminal</c>) are not
+    /// extracted here, degrading to "no result text from this block" rather than throwing. Falls back
+    /// to the verbatim <c>rawOutput</c> JSON text when no text content block is present. Returns
+    /// <see langword="null"/> when neither is present/extractable, so
+    /// <c>AcpEventTranslator.Translate</c> never emits an empty <c>ToolResultReceived</c>.
+    /// </summary>
+    static string? ExtractToolResultText(JsonElement update) {
+        if (update.TryGetProperty("content", out var contentEl) && contentEl.ValueKind == JsonValueKind.Array) {
+            List<string>? texts = null;
+
+            foreach (var block in contentEl.EnumerateArray()) {
+                if (block.ValueKind != JsonValueKind.Object) continue;
+                if (!block.TryGetProperty("type", out var blockType) || blockType.GetString() != "content") continue;
+                if (!block.TryGetProperty("content", out var inner) || inner.ValueKind != JsonValueKind.Object) continue;
+                if (!inner.TryGetProperty("type", out var innerType) || innerType.GetString() != "text") continue;
+                if (!inner.TryGetProperty("text", out var textEl) || textEl.GetString() is not { } text) continue;
+
+                (texts ??= []).Add(text);
+            }
+
+            if (texts is { Count: > 0 })
+                return string.Join("\n", texts);
+        }
+
+        return GetRawTextOrNull(update, "rawOutput");
+    }
 
     void RequireSessionId() {
         if (_sessionId is not { Length: > 0 })

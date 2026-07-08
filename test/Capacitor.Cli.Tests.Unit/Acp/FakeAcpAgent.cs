@@ -552,24 +552,67 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// <summary>
     /// Spec-derived, NOT yet verified against cursor-agent (the probe account was plan-gated before
     /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
-    /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call","toolCallId":"...","title":"...","kind":"...","status":"..."}</c>.
+    /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call","toolCallId":"...","title":"...","kind":"...","status":"...","rawInput":{...}}</c>
+    /// (<c>rawInput</c> only when <paramref name="rawInputJson"/> is non-null — AI-688 task 1's
+    /// <c>AcpSessionUpdate.Reduce()</c> extraction target for <c>ToolInputJson</c>).
     /// <paramref name="status"/> is one of <c>pending</c> / <c>in_progress</c> / <c>completed</c> / <c>failed</c>.
     /// </summary>
-    public static JsonElement BuildToolCallUpdate(string toolCallId, string title, string kind, string status) {
-        var json = $$"""
-            {"sessionUpdate":"tool_call","toolCallId":"{{toolCallId}}","title":"{{title}}","kind":"{{kind}}","status":"{{status}}"}
-            """;
-        return JsonDocument.Parse(json).RootElement.Clone();
+    public static JsonElement BuildToolCallUpdate(string toolCallId, string title, string kind, string status, string? rawInputJson = null) {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteString("sessionUpdate", "tool_call");
+            writer.WriteString("toolCallId", toolCallId);
+            writer.WriteString("title", title);
+            writer.WriteString("kind", kind);
+            writer.WriteString("status", status);
+            if (rawInputJson is not null) {
+                writer.WritePropertyName("rawInput");
+                using var doc = JsonDocument.Parse(rawInputJson);
+                doc.RootElement.WriteTo(writer);
+            }
+            writer.WriteEndObject();
+        }
+
+        return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
     }
 
     /// <summary>
     /// Spec-derived, NOT yet verified against cursor-agent (the probe account was plan-gated before
     /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
-    /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call_update","toolCallId":"...","status":"..."}</c>.
+    /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call_update","toolCallId":"...","status":"...","content":[{"type":"content","content":{"type":"text","text":"..."}}],"rawOutput":{...}}</c>
+    /// — <c>content</c>/<c>rawOutput</c> are included only when <paramref name="resultText"/>/
+    /// <paramref name="rawOutputJson"/> are non-null (AI-688 task 1's
+    /// <c>AcpSessionUpdate.Reduce()</c> extraction targets for <c>ToolResultText</c>: the ACP-spec
+    /// <c>ToolCallContent</c> text-block shape, falling back to <c>rawOutput</c> verbatim).
     /// </summary>
-    public static JsonElement BuildToolCallStatusUpdate(string toolCallId, string status) {
-        var json = $$"""{"sessionUpdate":"tool_call_update","toolCallId":"{{toolCallId}}","status":"{{status}}"}""";
-        return JsonDocument.Parse(json).RootElement.Clone();
+    public static JsonElement BuildToolCallStatusUpdate(string toolCallId, string status, string? resultText = null, string? rawOutputJson = null) {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteString("sessionUpdate", "tool_call_update");
+            writer.WriteString("toolCallId", toolCallId);
+            writer.WriteString("status", status);
+            if (resultText is not null) {
+                writer.WriteStartArray("content");
+                writer.WriteStartObject();
+                writer.WriteString("type", "content");
+                writer.WriteStartObject("content");
+                writer.WriteString("type", "text");
+                writer.WriteString("text", resultText);
+                writer.WriteEndObject();
+                writer.WriteEndObject();
+                writer.WriteEndArray();
+            }
+            if (rawOutputJson is not null) {
+                writer.WritePropertyName("rawOutput");
+                using var doc = JsonDocument.Parse(rawOutputJson);
+                doc.RootElement.WriteTo(writer);
+            }
+            writer.WriteEndObject();
+        }
+
+        return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
     }
 
     /// <summary>
