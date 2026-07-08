@@ -52,7 +52,7 @@ participants:
       follow_up_prompt: "Here's the updated diff — re-review."
   fixer:
     vendor: claude
-    model: claude-sonnet-5
+    model: claude-sonnet-4-5
     workspace: none
     rounds:
       initial_prompt: "Address the reviewer's findings on branch feature/x and report what changed."
