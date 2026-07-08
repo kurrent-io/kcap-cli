@@ -179,29 +179,22 @@ public class PluginCommandCursorTests {
         Stderr:            TextWriter.Null
     );
 
-    // Fake home for one test. Beyond redirecting PluginEnvironment.HomeDirectory
-    // (via TestEnv), it also points the *process* HOME here for its lifetime:
-    // McpMarker resolves its sidecar/central storage from
-    // Environment.GetFolderPath(UserProfile) (→ $HOME on Unix), NOT from
-    // PluginEnvironment.HomeDirectory. Without this, on Unix a temp-dir config is
-    // treated as non-user-scope and the ownership marker leaks into the real
-    // ~/.kcap/mcp-markers. Pinning HOME keeps all marker state under this dir (for
-    // both the test's direct McpMarker calls and the production plugin --cursor
-    // path) so it's cleaned on Dispose. Safe because the class is
-    // [NotInParallel("HomeEnvVarMutation")].
+    // Fake home for one test, rooted UNDER the real user profile (not
+    // Path.GetTempPath()). McpMarker treats a config as user-scope — and so writes
+    // its ownership marker as a sidecar next to the config — only when the config
+    // lives under Environment.GetFolderPath(UserProfile). That call ignores $HOME
+    // on Windows, and the process temp dir can sit outside the profile (e.g.
+    // TEMP=D:\Temp), which would otherwise send the marker to the real
+    // ~/.kcap/mcp-markers. Rooting here keeps the marker a sidecar under this dir
+    // on every OS — for both the test's direct McpMarker calls and the production
+    // `plugin --cursor` path — so it's removed with the dir on Dispose. The class
+    // is [NotInParallel("HomeEnvVarMutation")] so the profile/$HOME McpMarker reads
+    // can't shift underneath it.
     sealed class TempDir : IDisposable {
-        readonly string? _originalHome;
         public string Path { get; } = System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             $"kcap-pluginc-cursor-test-{Guid.NewGuid().ToString("N")[..8]}");
-        public TempDir() {
-            Directory.CreateDirectory(Path);
-            _originalHome = Environment.GetEnvironmentVariable("HOME");
-            Environment.SetEnvironmentVariable("HOME", Path);
-        }
-        public void Dispose() {
-            Environment.SetEnvironmentVariable("HOME", _originalHome);
-            try { Directory.Delete(Path, true); } catch { }
-        }
+        public TempDir() => Directory.CreateDirectory(Path);
+        public void Dispose() { try { Directory.Delete(Path, true); } catch { } }
     }
 }
