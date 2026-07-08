@@ -58,6 +58,49 @@ public sealed record SessionCancelParams(
 );
 
 /// <summary>
+/// <c>session/set_config_option</c> params (AI-688 gap 1 — model selection). Sent AFTER
+/// <c>session/new</c> resolves and BEFORE the first <c>session/prompt</c>, with the response
+/// awaited so the model is set before the turn starts. Wire shape probe-confirmed against real
+/// <c>cursor-agent</c> (<c>docs/ai-688-cursor-prototype-findings.md</c>): <see cref="ConfigId"/> is
+/// the literal <c>"model"</c> (the field is named <c>configId</c> on the wire, NOT <c>id</c> — an
+/// earlier attempt using <c>id</c> got a Zod <c>invalid_type</c> error at path <c>configId</c>), and
+/// <see cref="Value"/> must be the EXACT, parameterized <c>modelId</c> from
+/// <see cref="SessionModelsInfo.AvailableModels"/> (e.g.
+/// <c>claude-sonnet-4-5[thinking=true,context=200k]</c>) — a bare family name is not a valid wire
+/// value. See <c>Capacitor.Cli.Core.Acp.AcpModelResolver</c> for how a requested family name/exact
+/// id is resolved to this exact value.
+/// </summary>
+public sealed record SetConfigOptionParams(
+    [property: JsonPropertyName("sessionId")] string SessionId,
+    [property: JsonPropertyName("configId")]  string ConfigId,
+    [property: JsonPropertyName("value")]     string Value
+);
+
+/// <summary>
+/// Typed shape for <c>session/new</c>'s <c>result.models</c> object (AI-688 gap 1) — the daemon
+/// otherwise treats the <c>session/new</c> result as an opaque <see cref="JsonElement"/> (only
+/// <c>sessionId</c> is read out of it today); this record exists purely so
+/// <c>Capacitor.Cli.Core.Acp.AcpModelResolver</c> can resolve a requested model against
+/// <see cref="AvailableModels"/> without ad hoc <see cref="JsonElement"/> digging. Probe-confirmed
+/// shape: <c>{"currentModelId":"...","availableModels":[{"modelId":"...","name":"..."}]}</c>.
+/// </summary>
+public sealed record SessionModelsInfo(
+    [property: JsonPropertyName("currentModelId")]  string?              CurrentModelId,
+    [property: JsonPropertyName("availableModels")] AvailableModelDto[]? AvailableModels
+);
+
+/// <summary>
+/// One entry in <see cref="SessionModelsInfo.AvailableModels"/>. <see cref="ModelId"/> is the
+/// exact, parameterized wire value <c>session/set_config_option</c>'s <c>value</c> requires (e.g.
+/// <c>claude-sonnet-4-5[thinking=true,context=200k]</c>); <see cref="Name"/> is the shorter
+/// human-readable family name (e.g. <c>claude-sonnet-4-5</c>) a caller is more likely to request.
+/// </summary>
+public sealed record AvailableModelDto(
+    [property: JsonPropertyName("modelId")] string  ModelId,
+    [property: JsonPropertyName("name")]    string? Name
+);
+
+/// <summary>
 /// <c>session/request_permission</c> params sent BY THE AGENT (server-initiated request, handled
 /// via <see cref="Daemon.Acp.AcpConnection.OnServerRequest"/>) — AI-686. Spec-derived, NOT
 /// probe-confirmed: the AI-684 probe never observed a real <c>session/request_permission</c> frame

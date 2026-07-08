@@ -121,6 +121,51 @@ public class AcpHostedAgentRuntimeFactoryTests {
     }
 
     /// <summary>
+    /// AI-688 gap 1: <c>ctx.Model</c> (the launch's own model override) must take precedence over
+    /// <c>DaemonConfig.CursorModel</c> (the daemon-wide family-prefix default) — proves the full
+    /// chain (factory merges the two, runtime resolves against `session/new`'s `availableModels`,
+    /// sends `session/set_config_option`) picks the PER-LAUNCH model, not the daemon default.
+    /// </summary>
+    [Test]
+    public async Task StartAsync_CtxModelOverridesConfigCursorModel_AndSendsSetConfigOptionForIt() {
+        var fake = new FakeAcpAgent();
+        fake.SetSessionNewResult(FakeAcpAgent.BuildSessionNewResult(
+            FakeAcpAgent.FixedSessionId,
+            currentModelId: "composer-2.5[fast=true]",
+            availableModels: [
+                ("composer-2.5[fast=true]", "composer-2.5"),
+                ("claude-sonnet-4-5[thinking=true,context=200k]", "claude-sonnet-4-5"),
+                ("claude-opus-4-8[thinking=true]", "claude-opus-4-8"),
+            ]));
+        var connection = new CaptureServerConnection();
+
+        var factory = new AcpHostedAgentRuntimeFactory(
+            config: new DaemonConfig { CursorPath = "cursor-agent", CursorModel = "claude-sonnet-4-5" },
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: connection,
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
+        );
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var ctx = MakeContext("agent-1") with { Model = "claude-opus-4-8" };
+        var started = await factory.StartAsync(ctx, cts.Token).WaitAsync(HangGuard);
+
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (!fake.ReceivedCalls.Any(c => c.Method == "session/set_config_option") && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        var setConfigCall = fake.ReceivedCalls.Single(c => c.Method == "session/set_config_option");
+        await Assert.That(setConfigCall.Params!.Value.GetProperty("value").GetString()).IsEqualTo("claude-opus-4-8[thinking=true]");
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    /// <summary>
     /// Negative control proving this test suite WOULD catch the round-4 regression it replaces: a
     /// factory built with <c>connectionSource</c> returning a runtime whose <c>requestInteraction</c>
     /// is deliberately left <see langword="null"/> (simulating the pre-Finding-4 defect) answers the

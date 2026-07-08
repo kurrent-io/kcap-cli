@@ -100,18 +100,26 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
 
     /// <summary>
     /// Performs the ACP handshake: starts the connection's read loop, then
-    /// <c>initialize</c> → <c>session/new</c> (with the absolute <paramref name="cwd"/>). If
-    /// <paramref name="initialPrompt"/> is non-empty, fires the initial <c>session/prompt</c> as
-    /// tracked background work (see <see cref="FireAndTrackPromptAsync"/>) and returns as soon as
-    /// the session is established — it does NOT await that prompt turn to completion (AI-684 Fix
-    /// E). Not part of <see cref="IHostedAgentRuntime"/> — called directly by the Task 10 factory
-    /// (and by tests) once the connection/process are constructed. A failed handshake surfaces a
-    /// clear exception (never hangs): the read loop is started before any request is sent, and
-    /// every request goes through <see cref="AcpConnection.RequestAsync"/>, which itself never
-    /// hangs past <paramref name="ct"/> cancellation.
+    /// <c>initialize</c> → <c>session/new</c> (with the absolute <paramref name="cwd"/>) →
+    /// (AI-688 gap 1) an optional model-selection step — resolves <paramref name="requestedModel"/>
+    /// against <c>session/new</c>'s <c>availableModels</c> and, if it matches, sends
+    /// <c>session/set_config_option</c> and awaits the response BEFORE the first turn fires (see
+    /// <see cref="TrySelectModelAsync"/>). If <paramref name="initialPrompt"/> is non-empty, fires
+    /// the initial <c>session/prompt</c> as tracked background work (see
+    /// <see cref="FireAndTrackPromptAsync"/>) and returns as soon as the session is established — it
+    /// does NOT await that prompt turn to completion (AI-684 Fix E). Not part of
+    /// <see cref="IHostedAgentRuntime"/> — called directly by the Task 10 factory (and by tests)
+    /// once the connection/process are constructed. A failed handshake surfaces a clear exception
+    /// (never hangs): the read loop is started before any request is sent, and every request goes
+    /// through <see cref="AcpConnection.RequestAsync"/>, which itself never hangs past
+    /// <paramref name="ct"/> cancellation. Model selection is NEVER part of that "failed handshake"
+    /// exception path — an unresolved or rejected model just falls back to Cursor's own default
+    /// (see <see cref="TrySelectModelAsync"/>'s remarks).
     /// </summary>
-    public async Task StartAsync(string cwd, string? initialPrompt, CancellationToken ct) {
+    public async Task StartAsync(string cwd, string? initialPrompt, CancellationToken ct, string? requestedModel = null) {
         _connectionRunTask = RunConnectionLoopAsync(_cts.Token);
+
+        JsonElement sessionNewResult;
 
         try {
             var initializeParams = JsonSerializer.SerializeToElement(
@@ -128,7 +136,7 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
                 new SessionNewParams(Cwd: cwd, McpServers: NoMcpServers),
                 CapacitorJsonContext.Default.SessionNewParams);
 
-            var sessionNewResult = await _connection.RequestAsync("session/new", sessionNewParams, ct).ConfigureAwait(false);
+            sessionNewResult = await _connection.RequestAsync("session/new", sessionNewParams, ct).ConfigureAwait(false);
 
             if (!sessionNewResult.TryGetProperty("sessionId", out var sessionIdElement) || sessionIdElement.GetString() is not { Length: > 0 } sessionId)
                 throw new InvalidOperationException("ACP session/new response did not contain a sessionId.");
@@ -138,6 +146,10 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
             throw new InvalidOperationException("ACP handshake (initialize/session-new) failed.", ex);
         }
 
+        // AI-688 gap 1: select the requested model (if any) BEFORE the first prompt fires. Awaited,
+        // but never fatal — see TrySelectModelAsync's remarks.
+        await TrySelectModelAsync(sessionNewResult, requestedModel, ct).ConfigureAwait(false);
+
         // The session is established (initialize + session/new both completed) — the caller
         // (orchestrator) can now treat this agent as live. Fire the initial turn without awaiting
         // it: a real ACP turn can run arbitrarily long, and blocking StartAsync on it would delay
@@ -145,6 +157,61 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
         // observed via the Updates channel, not this method's return.
         if (!string.IsNullOrEmpty(initialPrompt))
             FireAndTrackPromptAsync(initialPrompt);
+    }
+
+    /// <summary>
+    /// AI-688 gap 1: resolves <paramref name="requestedModel"/> (already merged by the caller from
+    /// <c>ctx.Model</c>/<c>DaemonConfig.CursorModel</c> — see
+    /// <c>AcpHostedAgentRuntimeFactory.ResolveRequestedModel</c>) against
+    /// <paramref name="sessionNewResult"/>'s <c>models.availableModels</c> via
+    /// <see cref="AcpModelResolver.Resolve"/> and, if it resolves, sends
+    /// <c>session/set_config_option</c> and AWAITS the response before returning — the model must
+    /// be set before <see cref="SendPromptAsync"/> fires the first turn. Never throws: no requested
+    /// model, an unparsable/missing <c>models</c> object, no match, or a JSON-RPC error response are
+    /// all logged (where relevant) and treated as "use Cursor's default model" — per the AI-688
+    /// probe findings (<c>docs/ai-688-cursor-prototype-findings.md</c>), model selection is a
+    /// nice-to-have, never a launch precondition.
+    /// </summary>
+    async Task TrySelectModelAsync(JsonElement sessionNewResult, string? requestedModel, CancellationToken ct) {
+        if (string.IsNullOrWhiteSpace(requestedModel))
+            return;
+
+        AvailableModelDto[]? availableModels = null;
+
+        if (sessionNewResult.TryGetProperty("models", out var modelsElement)) {
+            try {
+                availableModels = JsonSerializer
+                    .Deserialize(modelsElement.GetRawText(), CapacitorJsonContext.Default.SessionModelsInfo)
+                    ?.AvailableModels;
+            } catch (JsonException ex) {
+                _logger.LogDebug(ex, "ACP: failed to parse session/new 'models' object; skipping model selection.");
+                return;
+            }
+        }
+
+        var resolvedModelId = AcpModelResolver.Resolve(requestedModel, availableModels);
+
+        if (resolvedModelId is null) {
+            _logger.LogWarning(
+                "ACP: requested model '{RequestedModel}' was not found in session/new's availableModels; continuing with Cursor's default model.",
+                requestedModel);
+            return;
+        }
+
+        var setConfigOptionParams = JsonSerializer.SerializeToElement(
+            new SetConfigOptionParams(SessionId: _sessionId!, ConfigId: "model", Value: resolvedModelId),
+            CapacitorJsonContext.Default.SetConfigOptionParams);
+
+        try {
+            await _connection.RequestAsync("session/set_config_option", setConfigOptionParams, ct).ConfigureAwait(false);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            // Covers AcpRpcException (a well-formed JSON-RPC error response) and any other
+            // non-cancellation failure — per the probe findings this is explicitly non-fatal.
+            _logger.LogWarning(
+                ex,
+                "ACP: session/set_config_option failed for model '{ResolvedModelId}'; continuing with Cursor's default model.",
+                resolvedModelId);
+        }
     }
 
     /// <summary>
