@@ -1667,6 +1667,37 @@ public class McpFlowsServerTests : IDisposable {
     }
 
     /// <summary>
+    /// A non-2xx body that IS valid JSON but not an object (e.g. a proxy's quoted scalar string)
+    /// must not throw past the coded-rejection check — <c>JsonNode.Parse(...).AsObject()</c> would
+    /// throw <see cref="InvalidOperationException"/> on a scalar/array node, which used to escape to
+    /// the dispatcher catch-all and replace the useful status/body/hint with a generic internal
+    /// error. It must fall through to the uncoded path exactly like non-JSON bodies do.
+    /// </summary>
+    [Test]
+    public async Task NonObject_json_body_falls_through_to_uncoded_path() {
+        _server.Given(Request.Create().WithPath("/api/flows/review/start").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(502).WithHeader("Content-Type", "application/json").WithBody("\"Bad Gateway\""));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var dynamicArgs = DynamicStartTargetArgs();
+            dynamicArgs["definition_yaml"] = DynamicDefinitionYaml;
+
+            var response = await SendRequest(proc, ToolsCallRequest(66, "start_flow", dynamicArgs));
+            var result   = response["result"]?.AsObject();
+            await Assert.That(result).IsNotNull();
+            await Assert.That(result!["isError"]?.GetValue<bool>()).IsTrue();
+
+            var text = result["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(text).IsNotNull();
+            await Assert.That(text!.Contains("may not support dynamic flows")).IsTrue();
+            await Assert.That(text.Contains("\"Bad Gateway\"")).IsTrue();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>
     /// Pins the start_flow schema after the dynamic-flows change: definition_yaml is offered,
     /// required drops definition_id (the xor can't be expressed in the schema — it lives in both
     /// property descriptions and is enforced by the handler), and the definition_yaml description

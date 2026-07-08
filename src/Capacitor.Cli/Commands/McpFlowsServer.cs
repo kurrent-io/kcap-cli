@@ -409,7 +409,7 @@ static class McpFlowsServer {
     /// raw body either way.</summary>
     internal static string FormatFlowStartError(int status, string body, bool wasDynamicStart) {
         try {
-            var node = JsonNode.Parse(body)?.AsObject();
+            var node = JsonNode.Parse(body) as JsonObject;
             if (node?["error"] is JsonValue ev && ev.TryGetValue<string>(out var code) && code.Length > 0
                 && node["message"] is JsonValue mv && mv.TryGetValue<string>(out var message))
                 return $"Error ({code}): {message}";
