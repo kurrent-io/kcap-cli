@@ -130,6 +130,20 @@ public class JsonMcpConfigWriterTests {
     }
 
     [Test]
+    public async Task Unregister_clears_marker_even_when_no_kcap_entries_to_remove() {
+        var dir = Directory.CreateTempSubdirectory("kcap-unreg-").FullName;
+        var path = Path.Combine(dir, "mcp.json");
+        var marker = new McpMarker("test", _ => Path.Combine(dir, "marker.json"));
+        // Marker recorded, but the JSON has a user server and NO kcap entries (a hand-edit removed them).
+        File.WriteAllText(path, """{ "mcpServers": { "my-tool": { "command": "x" } } }""");
+        marker.Record(path, ["kcap-review"]);
+
+        var change = JsonMcpConfigWriter.Unregister(path, McpConfigShape.Standard, marker);
+        await Assert.That(change).IsEqualTo(JsonMcpConfigWriter.Change.Unchanged); // nothing kcap to remove; user server stays
+        await Assert.That(marker.Owned(path)).IsEmpty();                          // marker cleared regardless
+    }
+
+    [Test]
     public async Task Register_preserves_unrecorded_kcap_named_user_server() {
         var dir = Directory.CreateTempSubdirectory("kcap-collide-").FullName;
         var path = Path.Combine(dir, "mcp.json");

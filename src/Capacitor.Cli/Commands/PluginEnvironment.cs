@@ -32,6 +32,7 @@ public sealed record PluginEnvironment(
     public string CodexUserHooksJson  => Path.Combine(CodexHome, "hooks.json");
     public string CodexConfigTomlPath => Path.Combine(CodexHome, "config.toml");
     public string CursorUserHooksJson => CursorPaths.UserHooksJson(HomeDirectory);
+    public string CursorMcpJson       => CursorPaths.UserMcpJson(HomeDirectory);
     public string CopilotKcapHooksJson => CopilotPaths.KcapHooksJson(HomeDirectory);
     public string GeminiSettingsJson   => GeminiPaths.SettingsJson(HomeDirectory);
     public string KiroKcapAgentJson    => KiroPaths.KcapAgentJson(HomeDirectory);

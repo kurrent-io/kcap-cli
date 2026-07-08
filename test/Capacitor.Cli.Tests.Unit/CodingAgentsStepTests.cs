@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Mcp;
 using static Capacitor.Cli.Commands.CodingAgentsStep;
 
 namespace Capacitor.Cli.Tests.Unit;
@@ -392,6 +393,70 @@ public class CodingAgentsStepTests {
         await Assert.That(calls.RegisterCodexMcpCalled).IsTrue();
         await Assert.That(result.CodexMcpRegistered).IsFalse();
         await Assert.That(sink.Lines).Contains(l => l.Contains("Could not register Codex MCP"));
+    }
+
+    [Test]
+    public async Task Cursor_mcp_registered_when_hooks_installed() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CursorMcpRegistered).IsTrue();
+        await Assert.That(calls.RegisterCursorMcpCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("MCP servers registered"));
+    }
+
+    [Test]
+    public async Task Cursor_mcp_not_registered_when_hooks_fail() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CursorHooksReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CursorHooksInstalled).IsFalse();
+        await Assert.That(calls.RegisterCursorMcpCalled).IsFalse();
+        await Assert.That(result.CursorMcpRegistered).IsFalse();
+    }
+
+    [Test]
+    public async Task Cursor_mcp_skipped_by_flag() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: true, SkipCursorMcp: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CursorHooksInstalled).IsTrue();
+        await Assert.That(result.CursorMcpRegistered).IsFalse();
+        await Assert.That(calls.RegisterCursorMcpCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Cursor_mcp_registration_failure_emits_warning() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { RegisterCursorMcpReturns = JsonMcpConfigWriter.Change.Failed };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.RegisterCursorMcpCalled).IsTrue();
+        await Assert.That(result.CursorMcpRegistered).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not register Cursor MCP"));
     }
 
     [Test]
@@ -1055,7 +1120,8 @@ public class CodingAgentsStepTests {
         KiroHooksPath:        "/fake/.kiro/agents/kcap.json",
         PiExtensionPath:      "/fake/.pi/agent/extensions/kcap.ts",
         OpenCodeExtensionPath: "/fake/.config/opencode/plugins/kcap.ts",
-        CodexConfigTomlPath:  "/fake/.codex/config.toml"
+        CodexConfigTomlPath:  "/fake/.codex/config.toml",
+        CursorMcpPath:        "/fake/.cursor/mcp.json"
     );
 
     sealed class Sink {
@@ -1112,6 +1178,9 @@ public class CodingAgentsStepTests {
 
         public bool                   RegisterCodexMcpCalled  { get; private set; }
         public CodexConfigToml.Change RegisterCodexMcpReturns { get; set; } = CodexConfigToml.Change.Updated;
+
+        public bool                     RegisterCursorMcpCalled  { get; private set; }
+        public JsonMcpConfigWriter.Change RegisterCursorMcpReturns { get; set; } = JsonMcpConfigWriter.Change.Updated;
 
         public Installers AsInstallers() => new(
             InstallClaudePlugin: (s, p) => {
@@ -1187,6 +1256,11 @@ public class CodingAgentsStepTests {
                 RegisterCodexMcpCalled = true;
 
                 return RegisterCodexMcpReturns;
+            },
+            RegisterCursorMcp: () => {
+                RegisterCursorMcpCalled = true;
+
+                return RegisterCursorMcpReturns;
             }
         );
     }

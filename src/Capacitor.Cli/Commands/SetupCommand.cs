@@ -8,6 +8,7 @@ using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
+using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
 using Spectre.Console;
@@ -29,6 +30,7 @@ public static class SetupCommand {
         var skipCodexFlag    = args.Contains("--skip-codex-hooks");
         var skipCodexNetworkFlag = args.Contains("--skip-codex-network-access");
         var skipCursorFlag   = args.Contains("--skip-cursor-hooks");
+        var skipCursorMcpFlag = args.Contains("--skip-cursor-mcp");
         var skipCopilotFlag  = args.Contains("--skip-copilot-hooks");
         var skipGeminiFlag   = args.Contains("--skip-gemini-hooks");
         var skipKiroFlag     = args.Contains("--skip-kiro-hooks");
@@ -233,7 +235,8 @@ public static class SetupCommand {
             SkipOpenCode: skipOpenCodeFlag,
             SkipAntigravity: skipAntigravityFlag,
             NoPrompt:    noPrompt,
-            SkipCodexNetworkAccess: skipCodexNetworkFlag);
+            SkipCodexNetworkAccess: skipCodexNetworkFlag,
+            SkipCursorMcp: skipCursorMcpFlag);
 
         // AI-794 — allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
@@ -257,7 +260,8 @@ public static class SetupCommand {
             PiExtensionPath:      PiPaths.KcapExtension(),
             OpenCodeExtensionPath: OpenCodePaths.KcapPlugin(),
             AntigravityHooksPath: AntigravityPaths.GlobalHooksJson(),
-            CodexConfigTomlPath:  Path.Combine(CodexPaths.Home(), "config.toml"));
+            CodexConfigTomlPath:  Path.Combine(CodexPaths.Home(), "config.toml"),
+            CursorMcpPath:        CursorPaths.UserMcpJson());
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -273,7 +277,9 @@ public static class SetupCommand {
             InstallOpenCodeExtension: OpenCodeExtensionInstaller.Install,
             InstallAntigravityHooks:  PluginCommand.InstallAntigravityHooks,
             EnableCodexNetworkAccess: () => CodexConfigToml.EnableNetworkAccess(codexAllowDomains),
-            RegisterCodexMcp:         () => CodexConfigToml.RegisterKcapMcpServers());
+            RegisterCodexMcp:         () => CodexConfigToml.RegisterKcapMcpServers(),
+            RegisterCursorMcp:        () => JsonMcpConfigWriter.Register(
+                CursorPaths.UserMcpJson(), KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("cursor")));
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });

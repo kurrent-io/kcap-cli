@@ -8,6 +8,7 @@ using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
+using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
 
@@ -694,33 +695,71 @@ public static class PluginCommand {
                 : $"Cursor hooks installed ({hooksPath})"
         );
 
+        // Register the kcap MCP servers in ~/.cursor/mcp.json so Cursor picks them up
+        // with no manual JSON edit. Non-destructive + idempotent. Never fails the
+        // install: a write error is a warning, not an error code (mirrors Codex).
+        if (!args.Contains("--skip-cursor-mcp"))
+            await RegisterCursorMcpServersAsync(env);
+
         return 0;
+    }
+
+    /// <summary>
+    /// Registers the kcap MCP servers in <c>~/.cursor/mcp.json</c> so Cursor loads them
+    /// without a manual JSON edit. Never fails the install: a write error is a warning,
+    /// not an error code.
+    /// </summary>
+    static async Task RegisterCursorMcpServersAsync(PluginEnvironment env) {
+        var change = JsonMcpConfigWriter.Register(
+            env.CursorMcpJson, KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("cursor"));
+
+        switch (change) {
+            case JsonMcpConfigWriter.Change.Updated:
+                await env.Stdout.WriteLineAsync($"Cursor MCP servers registered ({env.CursorMcpJson}).");
+                break;
+            case JsonMcpConfigWriter.Change.Failed:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {env.CursorMcpJson} to register Cursor MCP servers.");
+                break;
+            // Unchanged: silent — same as Codex's already-registered case.
+        }
     }
 
     static async Task<int> RemoveCursor(string[] args, PluginEnvironment env) {
         var hooksPath = GetArg(args, "--cursor-hooks-path") ?? env.CursorUserHooksJson;
 
+        var hooksFailed = false;
+
         if (!File.Exists(hooksPath)) {
             await env.Stdout.WriteLineAsync("Nothing to remove — Cursor hooks file not found.");
+        } else {
+            try {
+                var removed = RemoveCursorHooks(hooksPath);
 
-            return 0;
+                await env.Stdout.WriteLineAsync(
+                    removed
+                        ? $"Cursor hooks removed ({hooksPath})"
+                        : "Cursor hooks were not installed."
+                );
+            } catch (Exception ex) {
+                await env.Stderr.WriteLineAsync($"Could not update Cursor hooks at {hooksPath}: {ex.Message}");
+                hooksFailed = true;
+            }
         }
 
-        try {
-            var removed = RemoveCursorHooks(hooksPath);
+        // Cursor is user-scope only (no --project split like Codex), so the kcap MCP
+        // entries are always unregistered here, independent of whether hooks.json
+        // existed — the two files are unrelated on disk.
+        var mcpChange = JsonMcpConfigWriter.Unregister(env.CursorMcpJson, McpConfigShape.Standard, new McpMarker("cursor"));
+        var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
 
-            await env.Stdout.WriteLineAsync(
-                removed
-                    ? $"Cursor hooks removed ({hooksPath})"
-                    : "Cursor hooks were not installed."
-            );
-
-            return 0;
-        } catch (Exception ex) {
-            await env.Stderr.WriteLineAsync($"Could not update Cursor hooks at {hooksPath}: {ex.Message}");
-
-            return 1;
+        if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
+            await env.Stdout.WriteLineAsync($"Cursor MCP servers removed ({env.CursorMcpJson})");
+        } else if (mcpFailed) {
+            await env.Stderr.WriteLineAsync($"Could not update {env.CursorMcpJson} to remove Cursor MCP servers.");
         }
+
+        return hooksFailed || mcpFailed ? 1 : 0;
     }
 
     /// <summary>

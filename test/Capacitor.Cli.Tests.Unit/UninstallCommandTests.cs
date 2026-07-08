@@ -3,6 +3,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
+using Capacitor.Cli.Core.Mcp;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -437,6 +438,60 @@ public class UninstallCommandTests {
         await Assert.That(File.Exists(Path.Combine(claudeDir, ClaudePluginInstaller.MarkerFileName))).IsFalse();
         await Assert.That(File.Exists(Path.Combine(codexDir,  CodexHooksInstaller.MarkerFileName))).IsFalse();
         await Assert.That(File.Exists(Path.Combine(cursorDir, CursorHooksInstaller.MarkerFileName))).IsFalse();
+    }
+
+    [Test]
+    public async Task User_level_uninstall_purges_cursor_mcp_marker_even_when_json_has_no_kcap_entries() {
+        // If a user hand-edited ~/.cursor/mcp.json to remove the kcap entries,
+        // `plugin remove --cursor` still clears the sidecar ownership marker:
+        // JsonMcpConfigWriter.Unregister clears it on any non-Failed outcome,
+        // including when there were no entries left to remove. (The failure
+        // path — where the marker is deliberately retained for retry — is
+        // covered by User_level_uninstall_keeps_cursor_mcp_marker_when_unregister_fails.)
+        await using var fixture = await Fixture.CreateAsync();
+
+        var cursorDir = Path.Combine(fixture.Home, ".cursor");
+        Directory.CreateDirectory(cursorDir);
+
+        var mcpPath = Path.Combine(cursorDir, "mcp.json");
+        await File.WriteAllTextAsync(mcpPath, """{"mcpServers":{}}""");
+
+        var marker = new McpMarker("cursor");
+        marker.Record(mcpPath, ["kcap-review"]); // simulates a marker surviving a manual JSON edit
+        await Assert.That(marker.Owned(mcpPath).ToArray()).IsNotEmpty();
+
+        var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes", "--keep-config"]);
+        await Assert.That(exit).IsEqualTo(0);
+
+        await Assert.That(new McpMarker("cursor").Owned(mcpPath).ToArray()).IsEmpty();
+    }
+
+    [Test]
+    public async Task User_level_uninstall_keeps_cursor_mcp_marker_when_unregister_fails() {
+        // Regression (self-review): when ~/.cursor/mcp.json can't be
+        // parsed/rewritten, JsonMcpConfigWriter.Unregister fails-closed and
+        // deliberately RETAINS the ownership marker so a later retry can still
+        // identify the kcap-* entries as kcap-owned. uninstall records the
+        // failure but must NOT then wipe the marker — doing so would orphan
+        // those entries (a retry would preserve them as user-authored). The
+        // Cursor MCP marker is owned by `plugin remove --cursor`, not the sweep.
+        await using var fixture = await Fixture.CreateAsync();
+
+        var cursorDir = Path.Combine(fixture.Home, ".cursor");
+        Directory.CreateDirectory(cursorDir);
+
+        var mcpPath = Path.Combine(cursorDir, "mcp.json");
+        await File.WriteAllTextAsync(mcpPath, "{ this is not valid json"); // → Unregister returns Failed
+
+        var marker = new McpMarker("cursor");
+        marker.Record(mcpPath, ["kcap-review"]);
+        await Assert.That(marker.Owned(mcpPath).ToArray()).IsNotEmpty();
+
+        var exit = await UninstallCommand.HandleAsync(["uninstall", "--yes", "--keep-config"]);
+        await Assert.That(exit).IsNotEqualTo(0); // the failed cursor MCP unregister propagates
+
+        // Marker retained → a retry after the user fixes the file can still find + remove the kcap entries.
+        await Assert.That(new McpMarker("cursor").Owned(mcpPath).ToArray()).IsNotEmpty();
     }
 
     [Test]
