@@ -34,7 +34,7 @@ public class AntigravityPathsTests {
             .IsEqualTo(Path.Combine(pluginDir, "plugin.json"));
     }
 
-    // AI-1230: MCP config is Antigravity's OWN file under the GUI config root (NOT the Gemini CLI's
+    // MCP config is Antigravity's OWN file under the GUI config root (NOT the Gemini CLI's
     // settings.json); the steering file + skills dir are SHARED with Gemini under ~/.gemini.
     [Test]
     public async Task McpConfigJson_is_under_gui_config() {

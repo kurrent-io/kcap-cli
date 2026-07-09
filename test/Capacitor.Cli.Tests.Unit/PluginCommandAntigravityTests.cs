@@ -124,6 +124,30 @@ public class PluginCommandAntigravityTests {
         await Assert.That(content).DoesNotContain(AgentInstructionsWriter.BeginMarker);
     }
 
+    [Test]
+    public async Task remove_antigravity_keeps_shared_instructions_when_gemini_installed() {
+        using var _    = new EnvScope("GEMINI_CLI_HOME", null);
+        using var home = new FakeUserHome();
+        var env = TestEnv(home.Path);
+
+        // Gemini CLI is installed (its hooks live in the shared ~/.gemini/settings.json) and the
+        // shared GEMINI.md carries kcap's block. Removing Antigravity must NOT strip that block —
+        // it belongs to the still-installed Gemini integration too.
+        Directory.CreateDirectory(Path.GetDirectoryName(env.GeminiSettingsJson)!);
+        PluginCommand.InstallGeminiHooks(env.GeminiSettingsJson);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(env.AntigravityInstructionsMd)!);
+        await File.WriteAllTextAsync(env.AntigravityInstructionsMd, "# My rules\n\nAlways use tabs.\n");
+        AgentInstructionsWriter.Write(env.AntigravityInstructionsMd, KcapAgentInstructions.Body);
+
+        var exit = await PluginCommand.HandleAsync(["plugin", "remove", "--antigravity"], env);
+        await Assert.That(exit).IsEqualTo(0);
+
+        var content = await File.ReadAllTextAsync(env.AntigravityInstructionsMd);
+        await Assert.That(content).Contains("Always use tabs.");                    // user content preserved
+        await Assert.That(content).Contains(AgentInstructionsWriter.BeginMarker);   // kcap block LEFT for Gemini
+    }
+
     static PluginEnvironment TestEnv(string fakeHome) => new(
         HomeDirectory:     fakeHome,
         ResolvePluginPath: () => null,   // skills source unavailable → skills install no-ops (covered elsewhere)

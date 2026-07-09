@@ -899,7 +899,7 @@ public class CodingAgentsStepTests {
 
     [Test]
     public async Task Antigravity_mcp_not_fired_for_gemini_only_machine() {
-        // AI-1230 non-conflation: Antigravity + Gemini CLI share ~/.gemini but use different files.
+        // Non-conflation: Antigravity + Gemini CLI share ~/.gemini but use different files.
         // A Gemini-only machine (Antigravity NOT detected) must NOT register Antigravity's MCP into
         // ~/.gemini/config/mcp_config.json, nor write ~/.gemini/skills.
         var sink = new Sink();

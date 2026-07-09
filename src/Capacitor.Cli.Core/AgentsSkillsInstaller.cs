@@ -133,6 +133,20 @@ public static class AgentsSkillsInstaller {
     public static string CurrentVersion() => CapacitorVersion.Current();
 
     /// <summary>
+    /// True when the on-disk skills already match this build: the version
+    /// marker equals <see cref="CurrentVersion"/> AND every owned
+    /// <c>kcap-&lt;name&gt;</c> folder is present. A matching marker whose skill
+    /// folders were deleted or corrupted reads as NOT current, so callers
+    /// reinstall and self-heal — the marker alone can't be trusted to mean the
+    /// skills are actually on disk (mirrors the hooks "marker present but host
+    /// file missing" guard). Reinstall is non-destructive: <see cref="Install"/>
+    /// overwrites only the owned folders and rewrites the marker.
+    /// </summary>
+    public static bool IsCurrent(string targetDir) =>
+        ReadMarker(targetDir) == CurrentVersion()
+        && SourceNames.All(name => Directory.Exists(Path.Combine(targetDir, "kcap-" + name)));
+
+    /// <summary>
     /// Deletes every <c>kcap-&lt;name&gt;</c> folder this installer owns
     /// from <paramref name="targetDir"/>. User-authored folders are left alone.
     /// Returns a <see cref="RemovalResult"/> indicating whether any folder was

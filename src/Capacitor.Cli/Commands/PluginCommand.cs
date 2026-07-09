@@ -1036,8 +1036,8 @@ public static class PluginCommand {
     /// <summary>Copies the kcap skills into <c>~/.gemini/skills</c> (where Antigravity reads them, unlike
     /// the agent-agnostic <c>~/.agents/skills</c>). Idempotent (version marker); never fails the install.</summary>
     static async Task InstallAntigravitySkillsAsync(PluginEnvironment env, bool refreshOnly) {
-        // Fast path: on-disk skills already match this build.
-        if (AgentsSkillsInstaller.ReadMarker(env.AntigravitySkillsDir) == AgentsSkillsInstaller.CurrentVersion()) return;
+        // Fast path: on-disk skills already match this build (marker + all folders present).
+        if (AgentsSkillsInstaller.IsCurrent(env.AntigravitySkillsDir)) return;
 
         var pluginPath = env.ResolvePluginPath();
         var src        = pluginPath is null ? null : Path.Combine(pluginPath, "skills");
@@ -1082,15 +1082,25 @@ public static class PluginCommand {
             await env.Stderr.WriteLineAsync($"Could not update {env.AntigravityMcpConfigJson} to remove Antigravity MCP servers.");
         }
 
-        // Strip kcap's steering block from the shared ~/.gemini/GEMINI.md, preserving user content.
-        // (If the user also has Gemini installed, its next install/refresh re-adds the shared block.)
-        var instrChange = AgentInstructionsWriter.Remove(env.AntigravityInstructionsMd);
-        var instrFailed = instrChange == AgentInstructionsWriter.Change.Failed;
+        // kcap's steering block lives in ~/.gemini/GEMINI.md, which is SHARED with the Gemini CLI.
+        // Only strip it when Gemini itself isn't installed — otherwise removing Antigravity would
+        // yank Gemini's still-wanted block (and AgentInstructionsWriter.Remove would delete GEMINI.md
+        // outright if the block were its sole content). When Gemini is still installed we leave the
+        // shared block in place for `remove --gemini` to handle.
+        var instrFailed = false;
 
-        if (instrChange == AgentInstructionsWriter.Change.Updated) {
-            await env.Stdout.WriteLineAsync($"Antigravity instructions removed ({env.AntigravityInstructionsMd}).");
-        } else if (instrFailed) {
-            await env.Stderr.WriteLineAsync($"Could not update {env.AntigravityInstructionsMd} to remove Antigravity instructions.");
+        if (GeminiHooksInstaller.IsInstalled(env.GeminiSettingsJson)) {
+            await env.Stdout.WriteLineAsync(
+                $"Antigravity instructions left in place ({env.AntigravityInstructionsMd}) — shared with the still-installed Gemini CLI.");
+        } else {
+            var instrChange = AgentInstructionsWriter.Remove(env.AntigravityInstructionsMd);
+            instrFailed = instrChange == AgentInstructionsWriter.Change.Failed;
+
+            if (instrChange == AgentInstructionsWriter.Change.Updated) {
+                await env.Stdout.WriteLineAsync($"Antigravity instructions removed ({env.AntigravityInstructionsMd}).");
+            } else if (instrFailed) {
+                await env.Stderr.WriteLineAsync($"Could not update {env.AntigravityInstructionsMd} to remove Antigravity instructions.");
+            }
         }
 
         // Remove the kcap skills kcap copied into ~/.gemini/skills.
