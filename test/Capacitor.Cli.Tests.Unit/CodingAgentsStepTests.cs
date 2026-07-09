@@ -418,6 +418,44 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
+    public async Task Legacy_codex_cleanup_runs_when_skills_current_and_codex_detected() {
+        // Codex detected + shared skills already current → the new skills ARE in place,
+        // so the stale ~/.codex/skills legacy folders should still be swept even though
+        // we short-circuit the (re)install.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { AgentSkillsCurrentReturns = true };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.AgentSkillsInstalled).IsFalse();
+        await Assert.That(calls.AgentSkillsCalled).IsFalse();
+        await Assert.That(calls.LegacyCleanupCalled).IsTrue();
+        await Assert.That(calls.LegacyCleanupArg).IsEqualTo("/fake/.codex/skills");
+    }
+
+    [Test]
+    public async Task Legacy_codex_cleanup_not_invoked_when_skills_declined() {
+        // Declining the skills prompt means the new skills are NOT in place — don't
+        // strand a Codex user by sweeping their legacy folders with no replacement.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: t => !t.Contains("agent skills", StringComparison.OrdinalIgnoreCase),
+            writeLine: sink.Write);
+
+        await Assert.That(calls.AgentSkillsCalled).IsFalse();
+        await Assert.That(calls.LegacyCleanupCalled).IsFalse();
+    }
+
+    [Test]
     public async Task Codex_hooks_prompt_no_longer_mentions_skills() {
         // Skills got their own standalone prompt, so the Codex hooks prompt must
         // not double-ask about skills.

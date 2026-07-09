@@ -492,6 +492,11 @@ internal static class CodingAgentsStep {
         if (installers.AgentSkillsCurrent?.Invoke(paths.AgentsSkillsDir) == true) {
             writeLine("  [dim]· Agent skills already up to date — no change needed[/]");
 
+            // The shared skills are in place, so still sweep any stale legacy
+            // ~/.codex/skills (Codex-only) — a Cursor-first install could have made the
+            // marker current without ever running this Codex-specific cleanup.
+            SweepLegacyCodexSkills(detected, paths, installers);
+
             return false;
         }
 
@@ -521,10 +526,20 @@ internal static class CodingAgentsStep {
         writeLine($"  [green]✓[/] Agent skills installed (user: {Markup.Escape(paths.AgentsSkillsDir)})");
         writeLine("    [dim]kcap-recap, kcap-errors, kcap-hide, kcap-disable, kcap-validate-plan, review-flows[/]");
 
-        // Legacy ~/.codex/skills sweep stays Codex-specific (AI-1285).
-        if (detected.Codex) installers.CleanLegacyCodexSkills(paths.LegacyCodexSkillsDir);
+        SweepLegacyCodexSkills(detected, paths, installers);
 
         return true;
+    }
+
+    /// <summary>
+    /// AI-1285 — Codex-specific: removes the legacy <c>~/.codex/skills/kcap-*</c> folders
+    /// left by pre-migration installer versions (Codex reads <c>~/.agents/skills</c> now).
+    /// Runs only when Codex is detected <em>and</em> the shared skills are in place this
+    /// run (freshly installed or already current) — never on the declined / copy-failed /
+    /// no-plugin paths, so we don't strip a Codex user's skills with no replacement.
+    /// </summary>
+    static void SweepLegacyCodexSkills(DetectedAgents detected, Paths paths, Installers installers) {
+        if (detected.Codex) installers.CleanLegacyCodexSkills(paths.LegacyCodexSkillsDir);
     }
 
     static bool HandleCodexHooks(
