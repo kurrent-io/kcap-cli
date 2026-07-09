@@ -1383,6 +1383,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 new AcpBindInfo(vendor, transcript.AcpSessionId, transcript.Cwd, transcript.ResolvedModel)
             );
 
+            // Post-register re-check (TOCTOU): finalize can run between the liveness check above and
+            // this register, having already cancelled/unregistered+cleaned up the agent — leaving the
+            // binding we just registered stale (replayed on reconnect for a dead agent). Undo it. The
+            // finalizer's own unconditional UnregisterAcpBinding covers the mirror case (finalize after
+            // this point); UnregisterAcpBinding is idempotent so a double-remove is harmless.
+            if (acpCts.IsCancellationRequested || !_agents.ContainsKey(agent.Id)) {
+                _server.UnregisterAcpBinding(agent.Id);
+                LogAcpBindAbortedAgentGone(agent.Id);
+
+                return;
+            }
+
             var sessionStarted = AcpEventTranslator.BuildSessionStarted(
                 seq: 0,
                 DateTimeOffset.UtcNow.ToString("O"),

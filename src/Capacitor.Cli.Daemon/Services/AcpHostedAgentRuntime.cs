@@ -42,8 +42,11 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     readonly TimeProvider  _timeProvider;
     readonly AcpInteractionBridge? _interactionBridge;
     readonly CancellationTokenSource _cts = new();
-    readonly Channel<AcpSessionUpdate> _updates = Channel.CreateUnbounded<AcpSessionUpdate>(
-        new UnboundedChannelOptions { SingleReader = false, SingleWriter = true });
+    // Raw reduced-update surface, used only for test/live-inspection — the production transcript
+    // pipeline reads Envelopes, not this. Bounded + DropOldest so a long session with no reader
+    // can't grow it without bound (the transcript channel is bounded for the same reason).
+    readonly Channel<AcpSessionUpdate> _updates = Channel.CreateBounded<AcpSessionUpdate>(
+        new BoundedChannelOptions(2000) { SingleReader = false, SingleWriter = true, FullMode = BoundedChannelFullMode.DropOldest });
 
     /// <summary>
     /// Default cap for <see cref="_transcript"/> — generous relative to a realistic session's
