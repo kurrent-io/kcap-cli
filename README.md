@@ -625,6 +625,12 @@ The Cursor CLI path (`cursor-agent` by default, used to spawn the `cursor` hoste
 KCAP_CURSOR_PATH=/opt/cursor/bin/cursor-agent kcap daemon
 ```
 
+`KCAP_CURSOR_MODEL` overrides the model a `cursor` hosted agent runs (default `claude-sonnet-4-5`; the per-launch model from the dashboard takes precedence). It is matched against the models the Cursor account actually offers, so a family name like `claude-sonnet-4-5` resolves to the exact available variant; an unrecognized value falls back to Cursor's own default.
+
+```bash
+KCAP_CURSOR_MODEL=claude-opus-4-8 kcap daemon
+```
+
 **Codex session-end tuning.** Because Codex has no session-end hook, the watcher owns session-end via two triggers: parent `codex` process exit, and rollout-file idle timeout. The idle trigger is particularly important for the Codex desktop app, whose shared `codex app-server` process never exits per-conversation.
 
 | Environment variable | Default | Description |
