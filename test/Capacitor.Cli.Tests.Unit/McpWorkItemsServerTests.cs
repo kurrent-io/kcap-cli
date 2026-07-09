@@ -15,9 +15,18 @@ public class McpWorkItemsServerTests {
 
     [Test]
     public async Task Resolve_session_id_prefers_explicit_argument() {
-        var id = McpWorkItemsServer.ResolveSessionId(Args("""{"session_id":"explicit-1"}"""));
+        var id = McpWorkItemsServer.ResolveSessionId(Args("""{"session_id":"explicit1"}"""));
 
-        await Assert.That(id).IsEqualTo("explicit-1");
+        await Assert.That(id).IsEqualTo("explicit1");
+    }
+
+    [Test]
+    public async Task Resolve_session_id_strips_dashes_from_explicit_argument() {
+        // Matches ArgParsing.ResolveSessionIdFromEnv's normalization so an explicit dashed GUID
+        // (e.g. copy-pasted from a UI) resolves to the same dashless key as the ambient env var.
+        var id = McpWorkItemsServer.ResolveSessionId(Args("""{"session_id":"1234abcd-56ef-78ab-90cd-1234567890ab"}"""));
+
+        await Assert.That(id).IsEqualTo("1234abcd56ef78ab90cd1234567890ab");
     }
 
     [Test]

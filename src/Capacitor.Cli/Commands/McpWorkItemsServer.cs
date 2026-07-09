@@ -18,7 +18,7 @@ static class McpWorkItemsServer {
     internal const string NotLoggedInMessage = "Not logged in. Run 'kcap login' on the host shell.";
 
     internal const string NoSessionIdMessage =
-        "No session id: pass session_id explicitly or run inside a kcap-hooked session (KCAP_SESSION_ID).";
+        "No session id: pass session_id explicitly or run inside a kcap-hooked session (KCAP_SESSION_ID or CODEX_THREAD_ID).";
 
     public static async Task<int> RunAsync(string baseUrl) {
         var tools = BuildToolsList();
@@ -181,10 +181,13 @@ static class McpWorkItemsServer {
     /// else the ambient <c>KCAP_SESSION_ID</c> (or <c>CODEX_THREAD_ID</c>) env var via
     /// <see cref="ArgParsing.ResolveSessionIdFromEnv"/>. Throws when neither is available, so
     /// the caller (via <see cref="HandleToolCallAsync"/>) surfaces a clean tool error instead
-    /// of sending a request with a missing/blank session id.
+    /// of sending a request with a missing/blank session id. Dashes are stripped from the
+    /// explicit argument too — matching <see cref="ArgParsing.ResolveSessionIdFromEnv"/> — so a
+    /// caller passing a dashed GUID (e.g. copy-pasted from a UI) still resolves to the same
+    /// dashless key the server expects, instead of silently missing the intended session.
     /// </summary>
     internal static string ResolveSessionId(JsonObject? args) {
-        if (args?["session_id"]?.GetValue<string>() is { Length: > 0 } explicitId) return explicitId;
+        if (args?["session_id"]?.GetValue<string>() is { Length: > 0 } explicitId) return explicitId.Replace("-", "");
         if (ArgParsing.ResolveSessionIdFromEnv() is { Length: > 0 } fromEnv) return fromEnv;
 
         throw new ArgumentException(NoSessionIdMessage);
