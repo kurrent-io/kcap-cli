@@ -7,14 +7,9 @@ using Capacitor.Cli.Core.Mcp;
 
 namespace Capacitor.Cli.Tests.Unit;
 
-// `plugin install/remove --gemini` also (un)registers the kcap MCP servers and installs the kcap
-// steering-instructions block. Unlike Copilot (dedicated mcp-config.json), Gemini's MCP servers live
-// in the SHARED ~/.gemini/settings.json (McpConfigShape.Standard → no per-entry `type`), the same file
-// the hooks merge into — so the writer must be non-destructive. Instructions live in a SEPARATE global
-// context file, ~/.gemini/GEMINI.md. These tests root an explicit PluginEnvironment at a FakeUserHome
-// and clear GEMINI_CLI_HOME for the test's duration so GeminiPaths resolves under the fake home. The
-// `--if-installed` refresh branch is used (hooks pre-seeded) so the "kcap on PATH" fresh-install
-// precheck never runs.
+// `plugin install/remove --gemini` (un)registers kcap's MCP servers in the SHARED ~/.gemini/settings.json
+// and installs the steering block in the separate ~/.gemini/GEMINI.md. FakeUserHome + a cleared
+// GEMINI_CLI_HOME isolate GeminiPaths under a temp home.
 [NotInParallel("HomeEnvVarMutation")]
 public class PluginCommandGeminiTests {
     [Test]
@@ -121,6 +116,27 @@ public class PluginCommandGeminiTests {
         await Assert.That(await File.ReadAllTextAsync(env.GeminiSettingsJson)).IsEqualTo("{ not valid json"); // untouched
         await Assert.That(File.Exists(env.GeminiInstructionsMd)).IsTrue();                                     // instructions healed
         await Assert.That(await File.ReadAllTextAsync(env.GeminiInstructionsMd)).Contains("Prefer kcap tools");
+    }
+
+    [Test]
+    public async Task install_gemini_if_installed_reinstalls_hooks_when_settings_deleted() {
+        using var _    = new EnvScope("GEMINI_CLI_HOME", null);
+        using var home = new FakeUserHome();
+        var env = TestEnv(home.Path);
+
+        // Hooks installed (marker current), then the user deletes settings.json by hand — the marker
+        // sidecar survives. A "marker is current" check alone would skip the hook write and let MCP
+        // registration recreate settings.json with ONLY mcpServers. hooksCurrent must also require the
+        // file to exist, so hooks are rewritten before MCP touches the recreated file.
+        PluginCommand.InstallGeminiHooks(env.GeminiSettingsJson);  // hooks + current marker
+        File.Delete(env.GeminiSettingsJson);
+
+        var exit = await PluginCommand.HandleAsync(["plugin", "install", "--gemini", "--if-installed"], env);
+        await Assert.That(exit).IsEqualTo(0);
+
+        var root = JsonNode.Parse(await File.ReadAllTextAsync(env.GeminiSettingsJson))!.AsObject();
+        await Assert.That(root["hooks"]).IsNotNull();       // hooks restored — not just mcpServers
+        await Assert.That(root["mcpServers"]).IsNotNull();  // MCP also registered
     }
 
     [Test]

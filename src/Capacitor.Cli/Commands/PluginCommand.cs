@@ -1512,7 +1512,13 @@ public static class PluginCommand {
         // write is skipped, still (re)register MCP + install instructions below: MCP shares settings.json
         // but instructions live in a separate GEMINI.md, and both must be healed if a prior write failed
         // (warning-only) or was deleted.
-        var hooksCurrent = refreshOnly && GeminiHooksInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current();
+        // Treat hooks as "current" only when the host file ALSO exists. A lone marker (settings.json
+        // deleted by hand) must NOT let a refresh skip the hook write — otherwise the MCP registration
+        // below would recreate settings.json with only `mcpServers`, leaving hooks missing while the
+        // marker stays current, so later refreshes never restore them.
+        var hooksCurrent = refreshOnly && File.Exists(settingsPath)
+                        && GeminiHooksInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current();
+        var freshHookFailure = false;
         if (!hooksCurrent) {
             if (InstallGeminiHooks(settingsPath)) {
                 await env.Stdout.WriteLineAsync(
@@ -1521,14 +1527,16 @@ public static class PluginCommand {
                         : $"Gemini hooks installed ({settingsPath})"
                 );
             } else if (!refreshOnly) {
-                // Fresh install: hooks are the whole point — fail.
+                // Fresh install: the shared settings.json hook write failed (e.g. invalid JSON). Report
+                // it and return non-zero, but DON'T bail early — the independent ~/.gemini/GEMINI.md
+                // block still installs below (MCP shares settings.json, so it just fails-closed too).
                 await env.Stderr.WriteLineAsync(
                     $"Could not install Gemini hooks. If {settingsPath} exists, make sure it is valid JSON — "
                   + "kcap leaves an unparseable settings.json untouched rather than overwrite your settings. "
                   + "Fix or remove it, then re-run."
                 );
 
-                return 1;
+                freshHookFailure = true;
             } else {
                 // Refresh: the hook write failed, but instructions live in a separate file and MCP is
                 // independent + idempotent — warn and still heal them below rather than bail.
@@ -1548,7 +1556,9 @@ public static class PluginCommand {
         if (!args.Contains("--skip-gemini-instructions"))
             await InstallGeminiInstructionsAsync(env);
 
-        return 0;
+        // Non-zero only when a FRESH hook install failed (the integration is incomplete) — the
+        // independent GEMINI.md steering above was still installed.
+        return freshHookFailure ? 1 : 0;
     }
 
     /// <summary>

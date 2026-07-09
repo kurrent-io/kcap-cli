@@ -902,9 +902,28 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
-    public async Task Gemini_instructions_not_installed_when_hooks_fail() {
+    public async Task Gemini_instructions_installed_even_when_hook_write_fails() {
+        // The user SELECTED Gemini (detected + opted-in + kcap on PATH) but the shared settings.json
+        // hook write failed (e.g. malformed JSON). GEMINI.md is a separate file, so it still installs.
         var sink     = new Sink();
         var calls    = new InstallerCalls { GeminiHooksReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.GeminiHooksInstalled).IsFalse();               // hook write failed
+        await Assert.That(calls.InstallGeminiInstructionsCalled).IsTrue();      // but GEMINI.md still installs
+        await Assert.That(result.GeminiInstructionsInstalled).IsTrue();
+    }
+
+    [Test]
+    public async Task Gemini_instructions_not_installed_when_not_selected() {
+        // kcap not on PATH → Gemini integration NOT selected → GEMINI.md must NOT install either.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CapacitorOnPathReturns = false };
         var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
         var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: true);
 

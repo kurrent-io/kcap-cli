@@ -115,9 +115,12 @@ internal static class CodingAgentsStep {
         var copilotHooksInstalled = HandleCopilotHooks(options, detected, paths, installers, prompt, writeLine);
         var copilotMcpRegistered  = HandleCopilotMcp(options, paths, installers, writeLine, copilotHooksInstalled);
         var copilotInstructionsInstalled = HandleCopilotInstructions(options, paths, installers, writeLine, copilotHooksInstalled);
-        var geminiHooksInstalled  = HandleGeminiHooks(options, detected, paths, installers, prompt, writeLine);
+        var geminiHooksInstalled  = HandleGeminiHooks(options, detected, paths, installers, prompt, writeLine, out var geminiSelected);
         var geminiMcpRegistered   = HandleGeminiMcp(options, paths, installers, writeLine, geminiHooksInstalled);
-        var geminiInstructionsInstalled = HandleGeminiInstructions(options, paths, installers, writeLine, geminiHooksInstalled);
+        // Instructions live in the independent ~/.gemini/GEMINI.md — gate them on the user having
+        // SELECTED Gemini (not on hook-write success), so a malformed settings.json that fails the
+        // shared hooks/MCP write doesn't also block healing GEMINI.md.
+        var geminiInstructionsInstalled = HandleGeminiInstructions(options, paths, installers, writeLine, geminiSelected);
         var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, prompt, writeLine);
         var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, prompt, writeLine);
         var openCodeExtensionInstalled = HandleOpenCodeExtension(options, detected, paths, installers, prompt, writeLine);
@@ -267,8 +270,15 @@ internal static class CodingAgentsStep {
             Paths              paths,
             Installers         installers,
             Func<string, bool> prompt,
-            Action<string>     writeLine
+            Action<string>     writeLine,
+            out bool           selected
         ) {
+        // `selected` = the user opted into Gemini (detected + not skipped + prompt-yes/NoPrompt) AND
+        // kcap is on PATH — i.e. a full Gemini integration was requested. It stays true even when the
+        // hook WRITE fails (malformed shared settings.json), so the independent ~/.gemini/GEMINI.md can
+        // still be healed; the bool return still reflects only actual hook-write success.
+        selected = false;
+
         if (!detected.Gemini) {
             writeLine("  [dim]· Gemini CLI not detected — skipping[/]");
 
@@ -299,6 +309,8 @@ internal static class CodingAgentsStep {
 
             return false;
         }
+
+        selected = true;  // opted in + kcap on PATH → GEMINI.md may install even if the hook write fails
 
         var ok = installers.InstallGeminiHooks(paths.GeminiSettingsPath);
 
@@ -898,9 +910,9 @@ internal static class CodingAgentsStep {
             Paths          paths,
             Installers     installers,
             Action<string> writeLine,
-            bool           geminiHooksInstalled
+            bool           geminiSelected
         ) {
-        if (installers.InstallGeminiInstructions is null || !geminiHooksInstalled || options.SkipGeminiInstructions) return false;
+        if (installers.InstallGeminiInstructions is null || !geminiSelected || options.SkipGeminiInstructions) return false;
 
         var path = Markup.Escape(paths.GeminiInstructionsPath);
 
