@@ -279,7 +279,11 @@ public static class SetupCommand {
             EnableCodexNetworkAccess: () => CodexConfigToml.EnableNetworkAccess(codexAllowDomains),
             RegisterCodexMcp:         () => CodexConfigToml.RegisterKcapMcpServers(),
             RegisterCursorMcp:        () => JsonMcpConfigWriter.Register(
-                CursorPaths.UserMcpJson(), KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("cursor")));
+                CursorPaths.UserMcpJson(), KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("cursor")),
+            // AI-1285 — skills are already current when the on-disk marker matches this
+            // build; used to skip the prompt + re-copy (mirrors PluginCommand's postinstall
+            // fast path). A missing/stale marker reads as "not current" → prompt + install.
+            AgentSkillsCurrent:       dir => AgentsSkillsInstaller.ReadMarker(dir) == AgentsSkillsInstaller.CurrentVersion());
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });

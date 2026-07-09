@@ -51,13 +51,14 @@ internal static class CodingAgentsStep {
             Func<CodexConfigToml.Change>?                            EnableCodexNetworkAccess = null,
             Func<CodexConfigToml.Change>?                            RegisterCodexMcp = null,
             Func<string /*hooksPath*/, bool>?                        InstallAntigravityHooks = null,
-            Func<JsonMcpConfigWriter.Change>?                        RegisterCursorMcp = null
+            Func<JsonMcpConfigWriter.Change>?                        RegisterCursorMcp = null,
+            Func<string /*skillsDir*/, bool>?                        AgentSkillsCurrent = null
         );
 
     internal record Result(
             bool ClaudeInstalled,
             bool CodexHooksInstalled,
-            bool CodexSkillsInstalled,
+            bool AgentSkillsInstalled,
             bool CursorHooksInstalled,
             bool CopilotHooksInstalled,
             bool GeminiHooksInstalled = false,
@@ -95,7 +96,6 @@ internal static class CodingAgentsStep {
         ) {
         var claudeInstalled       = HandleClaude(options, detected, paths, installers, prompt, writeLine);
         var codexHooksInstalled   = HandleCodexHooks(options, detected, paths, installers, prompt, writeLine);
-        var codexSkillsInstalled  = codexHooksInstalled && HandleCodexSkills(paths, installers, writeLine);
         var codexNetworkApplied   = HandleCodexNetworkAccess(options, paths, installers, prompt, writeLine, codexHooksInstalled);
         var codexMcpRegistered    = HandleCodexMcp(paths, installers, writeLine, codexHooksInstalled);
         var cursorHooksInstalled  = HandleCursorHooks(options, detected, paths, installers, prompt, writeLine);
@@ -107,6 +107,11 @@ internal static class CodingAgentsStep {
         var openCodeExtensionInstalled = HandleOpenCodeExtension(options, detected, paths, installers, prompt, writeLine);
         var antigravityHooksInstalled  = HandleAntigravityHooks(options, detected, paths, installers, prompt, writeLine);
 
+        // AI-1285 — the shared ~/.agents/skills/ install is decoupled from Codex: run it
+        // once when any non-Claude agent is detected, independent of that agent's hook
+        // install. Placed last so the single skills prompt follows the per-agent steps.
+        var agentSkillsInstalled  = HandleAgentSkills(options, detected, paths, installers, prompt, writeLine);
+
         if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: false, Kiro: false, Pi: false, OpenCode: false, Antigravity: false }) {
             writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, Pi, OpenCode, or Antigravity to start capturing sessions.");
         }
@@ -115,7 +120,7 @@ internal static class CodingAgentsStep {
             new Result(
                 claudeInstalled,
                 codexHooksInstalled,
-                codexSkillsInstalled,
+                agentSkillsInstalled,
                 cursorHooksInstalled,
                 copilotHooksInstalled,
                 geminiHooksInstalled,
@@ -456,13 +461,50 @@ internal static class CodingAgentsStep {
         return true;
     }
 
-    static bool HandleCodexSkills(
-            Paths          paths,
-            Installers     installers,
-            Action<string> writeLine
+    /// <summary>
+    /// AI-1285 — installs the agent-agnostic kcap skills to <c>~/.agents/skills/</c>,
+    /// decoupled from Codex. Every non-Claude coding agent reads (or may read) the
+    /// cross-agent skills tree, so install once when any is detected — independent of
+    /// whether that agent's hooks were installed. Claude is excluded: it gets skills
+    /// through the bundled plugin, not this directory. Idempotent: skips the prompt and
+    /// the copy when the on-disk skills already match this build. The legacy
+    /// <c>~/.codex/skills</c> sweep stays Codex-specific.
+    /// </summary>
+    static bool HandleAgentSkills(
+            Options            options,
+            DetectedAgents     detected,
+            Paths              paths,
+            Installers         installers,
+            Func<string, bool> prompt,
+            Action<string>     writeLine
         ) {
+        var anyNonClaudeDetected =
+            detected.Codex || detected.Cursor || detected.Copilot || detected.Gemini
+         || detected.Kiro  || detected.Pi     || detected.OpenCode || detected.Antigravity;
+
+        // Nothing that reads ~/.agents/skills/ is present (Claude-only or nothing) — the
+        // Claude plugin install handles Claude's skills, so there's nothing to do here.
+        if (!anyNonClaudeDetected) return false;
+
+        // Idempotent: a marker matching this build means the on-disk skills are already
+        // current — no prompt, no re-copy (mirrors PluginCommand's npm-postinstall fast
+        // path). Checked before the plugin-dir probe: current skills need no source.
+        if (installers.AgentSkillsCurrent?.Invoke(paths.AgentsSkillsDir) == true) {
+            writeLine("  [dim]· Agent skills already up to date — no change needed[/]");
+
+            return false;
+        }
+
         if (paths.PluginDir is null) {
-            writeLine("  [yellow]⚠[/] Codex hooks installed but agent skills could not be copied (plugin directory not found).");
+            writeLine("  [yellow]⚠[/] Agent skills could not be installed (plugin directory not found).");
+
+            return false;
+        }
+
+        var shouldInstall = options.NoPrompt || prompt("Install kcap agent skills?");
+
+        if (!shouldInstall) {
+            writeLine("  [dim]· Agent skills not installed (you can run kcap plugin install --skills later)[/]");
 
             return false;
         }
@@ -471,14 +513,16 @@ internal static class CodingAgentsStep {
         var ok  = installers.InstallAgentSkills(src, paths.AgentsSkillsDir);
 
         if (!ok) {
-            writeLine($"  [yellow]⚠[/] Codex hooks installed but agent skills could not be copied to {Markup.Escape(paths.AgentsSkillsDir)}");
+            writeLine($"  [yellow]⚠[/] Agent skills could not be copied to {Markup.Escape(paths.AgentsSkillsDir)}");
 
             return false;
         }
 
         writeLine($"  [green]✓[/] Agent skills installed (user: {Markup.Escape(paths.AgentsSkillsDir)})");
-        writeLine("    [dim]kcap-recap, kcap-errors, kcap-hide, kcap-disable, kcap-validate-plan[/]");
-        installers.CleanLegacyCodexSkills(paths.LegacyCodexSkillsDir);
+        writeLine("    [dim]kcap-recap, kcap-errors, kcap-hide, kcap-disable, kcap-validate-plan, review-flows[/]");
+
+        // Legacy ~/.codex/skills sweep stays Codex-specific (AI-1285).
+        if (detected.Codex) installers.CleanLegacyCodexSkills(paths.LegacyCodexSkillsDir);
 
         return true;
     }
@@ -505,7 +549,7 @@ internal static class CodingAgentsStep {
             return false;
         }
 
-        var shouldInstall = options.NoPrompt || prompt("Install Codex CLI hooks and kcap agent skills?");
+        var shouldInstall = options.NoPrompt || prompt("Install Codex CLI hooks?");
 
         if (!shouldInstall) {
             writeLine("  [dim]· Codex CLI hooks not installed (you can run kcap plugin install --codex later)[/]");
