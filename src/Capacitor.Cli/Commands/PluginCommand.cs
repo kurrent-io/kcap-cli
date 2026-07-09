@@ -711,7 +711,7 @@ public static class PluginCommand {
     /// </summary>
     static async Task RegisterCursorMcpServersAsync(PluginEnvironment env) {
         var change = JsonMcpConfigWriter.Register(
-            env.CursorMcpJson, KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("cursor"));
+            env.CursorMcpJson, KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("cursor"));
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:

@@ -9,10 +9,11 @@ public sealed record KcapMcpServerDescriptor(string Id, string[] Args, bool Star
 
 public static class KcapMcpRegistry {
     static readonly Dictionary<string, KcapMcpServerDescriptor> Entries = new(StringComparer.OrdinalIgnoreCase) {
-        ["kcap-review"]   = new("kcap-review",   ["mcp", "review"],   false),
-        ["kcap-sessions"] = new("kcap-sessions", ["mcp", "sessions"], false),
-        ["kcap-memory"]   = new("kcap-memory",   ["mcp", "memory"],   false),
-        ["kcap-flows"]    = new("kcap-flows",    ["mcp", "flows"],    true),
+        ["kcap-review"]    = new("kcap-review",    ["mcp", "review"],    false),
+        ["kcap-sessions"]  = new("kcap-sessions",  ["mcp", "sessions"],  false),
+        ["kcap-memory"]    = new("kcap-memory",    ["mcp", "memory"],    false),
+        ["kcap-flows"]     = new("kcap-flows",     ["mcp", "flows"],     true),
+        ["kcap-workitems"] = new("kcap-workitems", ["mcp", "workitems"], false),
     };
 
     /// <summary>Resolves an allowlist entry to its descriptor. Case-insensitive, trims

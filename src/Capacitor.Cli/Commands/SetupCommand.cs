@@ -279,7 +279,7 @@ public static class SetupCommand {
             EnableCodexNetworkAccess: () => CodexConfigToml.EnableNetworkAccess(codexAllowDomains),
             RegisterCodexMcp:         () => CodexConfigToml.RegisterKcapMcpServers(),
             RegisterCursorMcp:        () => JsonMcpConfigWriter.Register(
-                CursorPaths.UserMcpJson(), KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("cursor")));
+                CursorPaths.UserMcpJson(), KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("cursor")));
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
