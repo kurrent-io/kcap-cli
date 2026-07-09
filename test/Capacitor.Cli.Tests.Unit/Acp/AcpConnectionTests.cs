@@ -2,6 +2,7 @@
 using System.IO.Pipelines;
 using System.Text;
 using System.Text.Json;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Daemon.Acp;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -209,9 +210,11 @@ public class AcpConnectionTests {
     // PR #244 review (Fix #3): OnServerRequest's contract is now Task<JsonElement?> — the handler
     // can no longer return an un-serializable CLR object that WriteServerResponseAsync could only
     // reject with a throw OUTSIDE any try/catch, silently orphaning the agent's request (no
-    // response ever written, wedging its wait on this id forever). These three tests assert the
-    // "always answered" guarantee holds across the three shapes a handler can produce: a value, a
-    // thrown exception, and a null result.
+    // response ever written, wedging its wait on this id forever). These tests assert the
+    // "always answered" guarantee holds across the three shapes a handler can produce: a value
+    // becomes the JSON-RPC `result`, a thrown exception becomes a `-32603 Internal error`, and a
+    // null return (the method ran but declined to handle it) becomes a `-32601 Method not found` —
+    // the same shape a fully unset handler produces, never a null-result success.
     [Test]
     public async Task Inbound_server_request_handler_throwing_still_writes_an_internal_error_response() {
         await using var harness = new Harness();
@@ -245,22 +248,73 @@ public class AcpConnectionTests {
     }
 
     [Test]
-    public async Task Inbound_server_request_handler_returning_null_writes_a_null_result_response() {
+    public async Task Inbound_server_request_handler_returning_null_writes_method_not_found_error() {
         await using var harness = new Harness();
         using var       cts     = new CancellationTokenSource();
         var              runTask = harness.Connection.RunAsync(cts.Token);
 
         harness.Connection.OnServerRequest = (_, _) => Task.FromResult<JsonElement?>(null);
 
+        // fs/read_text_file is unadvertised (the daemon sends fs.readTextFile=false in its
+        // initialize params) — a wired handler declining it must never look like a successful
+        // no-op file read.
         await harness.WriteFrameToConnectionAsync(
-            """{"jsonrpc":"2.0","id":8,"method":"session/request_permission","params":{}}"""
+            """{"jsonrpc":"2.0","id":8,"method":"fs/read_text_file","params":{"path":"/tmp/x"}}"""
         );
 
         var frame = await harness.ReadFrameFromConnectionAsync();
         using var doc = JsonDocument.Parse(frame);
         await Assert.That(doc.RootElement.GetProperty("id").GetInt64()).IsEqualTo(8L);
-        await Assert.That(doc.RootElement.TryGetProperty("error", out _)).IsFalse();
-        await Assert.That(doc.RootElement.GetProperty("result").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(doc.RootElement.TryGetProperty("result", out _)).IsFalse();
+        var error = doc.RootElement.GetProperty("error");
+        await Assert.That(error.GetProperty("code").GetInt32()).IsEqualTo(-32601);
+
+        // Loop must still be alive afterward — mirrors the throw-test's liveness check, re-locking
+        // the "always answered" guarantee at this new response shape.
+        var tcs = new TaskCompletionSource<AcpNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Connection.OnNotification += n => tcs.TrySetResult(n);
+        await harness.WriteFrameToConnectionAsync(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"still-alive"}}"""
+        );
+        var notification = await tcs.Task.WaitAsync(HangGuard);
+        await Assert.That(notification.Params!.Value.GetProperty("sessionId").GetString()).IsEqualTo("still-alive");
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
+    }
+
+    // Proves the PRODUCTION wiring (a real AcpInteractionBridge, not a fake null-returning
+    // delegate) declines an unadvertised method cleanly. The bridge's `requestInteraction` delegate
+    // is never invoked here — terminal/create doesn't match either method the bridge recognizes, so
+    // it never reaches that delegate; asserting `called` stays false pins that.
+    [Test]
+    public async Task Inbound_unadvertised_terminal_request_through_real_bridge_writes_method_not_found_error() {
+        await using var harness = new Harness();
+        using var       cts     = new CancellationTokenSource();
+        var              runTask = harness.Connection.RunAsync(cts.Token);
+
+        var called = false;
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (_, _) => {
+                called = true;
+                return Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null));
+            },
+            agentId: "agent-1",
+            logger: NullLogger.Instance);
+
+        harness.Connection.OnServerRequest = bridge.HandleAsync;
+
+        await harness.WriteFrameToConnectionAsync(
+            """{"jsonrpc":"2.0","id":42,"method":"terminal/create","params":{"command":"ls"}}"""
+        );
+
+        var frame = await harness.ReadFrameFromConnectionAsync();
+        using var doc = JsonDocument.Parse(frame);
+        await Assert.That(doc.RootElement.GetProperty("id").GetInt64()).IsEqualTo(42L);
+        await Assert.That(doc.RootElement.TryGetProperty("result", out _)).IsFalse();
+        var error = doc.RootElement.GetProperty("error");
+        await Assert.That(error.GetProperty("code").GetInt32()).IsEqualTo(-32601);
+        await Assert.That(called).IsFalse();
 
         cts.Cancel();
         await SwallowCancellation(runTask);
