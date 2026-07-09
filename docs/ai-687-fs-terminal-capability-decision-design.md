@@ -66,9 +66,43 @@ Mapping to the acceptance criteria:
 | Acceptance criterion | How this design meets it |
 |---|---|
 | Never advertise a capability we can't enforce safely | We advertise none. §4 additionally makes an unadvertised capability request *fail closed* (declined), so even a request we never advertised can't be mis-served. |
-| File and terminal operations bounded to the hosted worktree | Cursor runs them in the `cwd` we pass, which is the hosted worktree. We do not serve fs/terminal, so there is no client-side path we could fail to bound. The bounding that exists is Cursor's own (cwd + its permission model, bridged by AI-686) — see §6 for the honest limit. |
-| Terminal output visible through the existing remote terminal path | N/A — we serve no `terminal/*`. Cursor's shell output surfaces as `execute` tool `rawOutput` in the canonical transcript (AI-688), not via `terminal:{agentId}`. |
+| File and terminal operations bounded to the hosted worktree | **Explicitly re-scoped — see §3.1.** Met at the ACP-client layer (we serve no fs/terminal, so there is no client-served operation we could fail to bound). *Hard* OS-level enforcement of the locally-running `cursor-agent` process is **not** delivered by AI-687 and is deferred to AI-689; this matches how every hosted agent already runs. |
+| Terminal output visible through the existing remote terminal path | N/A — the criterion is conditional ("*if* implemented"); we serve no `terminal/*`, so nothing is implemented. Cursor's shell output surfaces as `execute` tool `rawOutput` in the canonical transcript (AI-688), not via `terminal:{agentId}`. |
 | Capability behavior covered by tests, including path-escape rejection | §5. We reject the *whole method* (`-32601`), so there is no fs path to escape — the "path-escape rejection" case is satisfied at a coarser, stronger granularity (method refused before any path is parsed), and a test asserts that. |
+
+### 3.1 Scope boundary — acceptance criteria #2 and #3 are re-scoped (issue-owner sign-off)
+
+Criteria #2 ("operations bounded to the hosted worktree") and #3 ("terminal output visible via the
+existing remote terminal path") are written as consequences of the Scope section's **conditional**
+bullets — *"**If** file-system support is required, constrain all paths…"* and *"**If** terminal
+support is required, run commands in the hosted worktree…"*. The probe (§2) shows neither is
+required: Cursor never issues client `fs/*`/`terminal/*`; it does file/shell work itself. So the
+conditional implementation work does not trigger, and with it the path-constraining / terminal-
+streaming obligations those criteria describe.
+
+That leaves one honestly-unmet reading of #2: the file/shell operations Cursor performs **itself**,
+as a local child process, are not *hard*-bounded to the worktree by anything AI-687 builds. AI-687
+does **not** provide OS-level enforcement, and this design does not claim to. Three reasons this is
+the right scope line, not a gap to paper over:
+
+1. **It is not achievable at the ACP-client layer.** The operations never cross the ACP boundary as
+   `fs/*`/`terminal/*` requests, so no client-side handler — bounded or not — can intercept them. The
+   only enforcement point is the OS/process layer (a sandbox, restricted user, or filesystem view),
+   which is a different mechanism from "the ACP client capabilities Kapacitor can safely provide"
+   that this issue is scoped to.
+2. **It is not a new or Cursor-specific exposure.** Every hosted agent the daemon runs today (Claude,
+   Codex, …) runs as a local child process in an *isolated git worktree* but is **not** OS-sandboxed —
+   it executes with the daemon's own filesystem/process privileges. Cursor-via-ACP has exactly this
+   posture. AI-687 introduces no new attack surface relative to the established hosted-agent model;
+   it explicitly adds **zero** client-served fs/terminal surface (§4 makes the decline correct).
+3. **Hardening is already a separate issue.** AI-689 (hardening) owns OS-level sandboxing of hosted
+   agents. Duplicating that scope into AI-687 would balloon a client-capability *decision* into a
+   cross-platform sandboxing project the evidence does not call for.
+
+**Decision (flagged for issue-owner confirmation at PR review):** AI-687 satisfies #2/#3 at the
+client-capability layer and **defers hard OS-level worktree enforcement to AI-689**. If the issue
+owner wants hard enforcement delivered under AI-687 instead, that is a materially larger,
+cross-platform effort and should be re-scoped explicitly before implementation.
 
 ## 4. The one code change — make the default-decline correct
 
