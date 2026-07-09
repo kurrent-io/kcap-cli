@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Antigravity;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Copilot;
+using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
@@ -32,6 +33,8 @@ public static class SetupCommand {
         var skipCursorFlag   = args.Contains("--skip-cursor-hooks");
         var skipCursorMcpFlag = args.Contains("--skip-cursor-mcp");
         var skipCopilotFlag  = args.Contains("--skip-copilot-hooks");
+        var skipCopilotMcpFlag = args.Contains("--skip-copilot-mcp");
+        var skipCopilotInstructionsFlag = args.Contains("--skip-copilot-instructions");
         var skipGeminiFlag   = args.Contains("--skip-gemini-hooks");
         var skipKiroFlag     = args.Contains("--skip-kiro-hooks");
         var skipPiFlag       = args.Contains("--skip-pi-hooks");
@@ -236,7 +239,9 @@ public static class SetupCommand {
             SkipAntigravity: skipAntigravityFlag,
             NoPrompt:    noPrompt,
             SkipCodexNetworkAccess: skipCodexNetworkFlag,
-            SkipCursorMcp: skipCursorMcpFlag);
+            SkipCursorMcp: skipCursorMcpFlag,
+            SkipCopilotMcp: skipCopilotMcpFlag,
+            SkipCopilotInstructions: skipCopilotInstructionsFlag);
 
         // AI-794 — allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
@@ -261,7 +266,9 @@ public static class SetupCommand {
             OpenCodeExtensionPath: OpenCodePaths.KcapPlugin(),
             AntigravityHooksPath: AntigravityPaths.GlobalHooksJson(),
             CodexConfigTomlPath:  Path.Combine(CodexPaths.Home(), "config.toml"),
-            CursorMcpPath:        CursorPaths.UserMcpJson());
+            CursorMcpPath:        CursorPaths.UserMcpJson(),
+            CopilotMcpPath:       CopilotPaths.McpConfigJson(),
+            CopilotInstructionsPath: CopilotPaths.InstructionsMd());
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -280,6 +287,10 @@ public static class SetupCommand {
             RegisterCodexMcp:         () => CodexConfigToml.RegisterKcapMcpServers(),
             RegisterCursorMcp:        () => JsonMcpConfigWriter.Register(
                 CursorPaths.UserMcpJson(), KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("cursor")),
+            RegisterCopilotMcp:       () => JsonMcpConfigWriter.Register(
+                CopilotPaths.McpConfigJson(), KcapMcpServers.All, McpConfigShape.Copilot, cwd: null, new McpMarker("copilot")),
+            InstallCopilotInstructions: () => AgentInstructionsWriter.Write(
+                CopilotPaths.InstructionsMd(), KcapAgentInstructions.Body),
             // AI-1285 — skills are already current when the on-disk marker matches this
             // build; used to skip the prompt + re-copy (mirrors PluginCommand's postinstall
             // fast path). A missing/stale marker reads as "not current" → prompt + install.

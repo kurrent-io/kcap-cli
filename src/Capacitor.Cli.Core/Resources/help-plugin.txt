@@ -58,6 +58,17 @@ Options:
                       registers all 4 kcap MCP servers there (non-destructive,
                       idempotent — preserves any user-authored servers) so
                       Cursor picks them up with no manual JSON edit.
+  --skip-copilot-mcp  With --copilot: skip registering the kcap MCP servers in
+                      ~/.copilot/mcp-config.json. By default `install --copilot`
+                      also registers all 4 kcap MCP servers there (non-destructive,
+                      idempotent — preserves any user-authored servers) so Copilot
+                      picks them up with no manual JSON edit.
+  --skip-copilot-instructions
+                      With --copilot: skip installing kcap's steering-instructions
+                      block into ~/.copilot/copilot-instructions.md. By default
+                      `install --copilot` writes a small kcap-owned, marker-delimited
+                      block (non-destructive — preserves your own instructions) that
+                      nudges Copilot to use the kcap tools for why/history questions.
   --if-installed      Refresh-only mode: no-op unless the user has previously
                       installed the target (marker file or pre-marker entry
                       detected). Used by the npm postinstall hook to refresh
@@ -85,9 +96,13 @@ Notes:
 
   --copilot writes the four events kcap subscribes to (sessionStart, sessionEnd,
   agentStop, notification) with the event name embedded in each command —
-  Copilot hook payloads don't carry one. Copilot loads hook config at startup,
-  so restart any running copilot session after install. Copilot has no
-  project-scope hooks dir, so --project has no effect with --copilot.
+  Copilot hook payloads don't carry one — registers all 4 kcap MCP servers in
+  ~/.copilot/mcp-config.json (see --skip-copilot-mcp to opt out), and installs a
+  kcap-owned steering block into ~/.copilot/copilot-instructions.md (see
+  --skip-copilot-instructions to opt out). All three are non-destructive and
+  idempotent. Copilot loads hook + MCP + instructions config at startup, so
+  restart any running copilot session after install. Copilot has no project-scope
+  hooks dir, so --project has no effect with --copilot.
 
   --gemini merges SessionStart/SessionEnd/Notification entries into the shared
   ~/.gemini/settings.json (like --cursor's shared hooks.json — your other Gemini
