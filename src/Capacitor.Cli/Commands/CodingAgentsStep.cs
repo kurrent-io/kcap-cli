@@ -15,7 +15,7 @@ internal static class CodingAgentsStep {
     // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini
     // (AI-887), Kiro (AI-888), and Pi (AI-886) were all added after the original
     // four vendors.
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false, bool SkipAntigravityMcp = false, bool SkipAntigravityInstructions = false, bool SkipAntigravitySkills = false);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false, bool SkipAntigravityMcp = false, bool SkipAntigravityInstructions = false, bool SkipAntigravitySkills = false, bool SkipOpenCodeMcp = false, bool SkipOpenCodeInstructions = false);
 
     internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false);
 
@@ -40,7 +40,9 @@ internal static class CodingAgentsStep {
             string  GeminiInstructionsPath = "",
             string  AntigravityMcpPath = "",
             string  AntigravityInstructionsPath = "",
-            string  AntigravitySkillsDir = ""
+            string  AntigravitySkillsDir = "",
+            string  OpenCodeMcpPath = "",
+            string  OpenCodeInstructionsPath = ""
         );
 
     internal record Installers(
@@ -65,7 +67,9 @@ internal static class CodingAgentsStep {
             Func<JsonMcpConfigWriter.Change>?                        RegisterGeminiMcp = null,
             Func<AgentInstructionsWriter.Change>?                    InstallGeminiInstructions = null,
             Func<JsonMcpConfigWriter.Change>?                        RegisterAntigravityMcp = null,
-            Func<AgentInstructionsWriter.Change>?                    InstallAntigravityInstructions = null
+            Func<AgentInstructionsWriter.Change>?                    InstallAntigravityInstructions = null,
+            Func<JsonMcpConfigWriter.Change>?                        RegisterOpenCodeMcp = null,
+            Func<AgentInstructionsWriter.Change>?                    InstallOpenCodeInstructions = null
         );
 
     internal record Result(
@@ -88,7 +92,9 @@ internal static class CodingAgentsStep {
             bool GeminiInstructionsInstalled = false,
             bool AntigravityMcpRegistered = false,
             bool AntigravityInstructionsInstalled = false,
-            bool AntigravitySkillsInstalled = false
+            bool AntigravitySkillsInstalled = false,
+            bool OpenCodeMcpRegistered = false,
+            bool OpenCodeInstructionsInstalled = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -132,6 +138,8 @@ internal static class CodingAgentsStep {
         var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, prompt, writeLine);
         var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, prompt, writeLine);
         var openCodeExtensionInstalled = HandleOpenCodeExtension(options, detected, paths, installers, prompt, writeLine);
+        var openCodeMcpRegistered      = HandleOpenCodeMcp(options, paths, installers, writeLine, openCodeExtensionInstalled);
+        var openCodeInstructionsInstalled = HandleOpenCodeInstructions(options, paths, installers, writeLine, openCodeExtensionInstalled);
         var antigravityHooksInstalled  = HandleAntigravityHooks(options, detected, paths, installers, prompt, writeLine, out var antigravitySelected);
         // Antigravity's MCP (own mcp_config.json), instructions (shared GEMINI.md) and skills
         // (~/.gemini/skills) live in files SEPARATE from its hooks.json, so gate them on the user
@@ -170,7 +178,9 @@ internal static class CodingAgentsStep {
                 GeminiInstructionsInstalled: geminiInstructionsInstalled,
                 AntigravityMcpRegistered: antigravityMcpRegistered,
                 AntigravityInstructionsInstalled: antigravityInstructionsInstalled,
-                AntigravitySkillsInstalled: antigravitySkillsInstalled
+                AntigravitySkillsInstalled: antigravitySkillsInstalled,
+                OpenCodeMcpRegistered: openCodeMcpRegistered,
+                OpenCodeInstructionsInstalled: openCodeInstructionsInstalled
             )
         );
     }
@@ -1060,6 +1070,72 @@ internal static class CodingAgentsStep {
                 return false;
             default:
                 writeLine($"  [yellow]⚠[/] Could not write Gemini instructions to {path}.");
+
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Registers the kcap MCP servers in OpenCode's <c>~/.config/opencode/opencode.json</c> via
+    /// <see cref="Installers.RegisterOpenCodeMcp"/>. Gated on the OpenCode plugin installing — the
+    /// same "full OpenCode integration" trigger as the plugin step — and on
+    /// <see cref="Options.SkipOpenCodeMcp"/>. Non-destructive + idempotent.
+    /// </summary>
+    static bool HandleOpenCodeMcp(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           openCodeExtensionInstalled
+        ) {
+        if (installers.RegisterOpenCodeMcp is null || !openCodeExtensionInstalled || options.SkipOpenCodeMcp) return false;
+
+        var configPath = Markup.Escape(paths.OpenCodeMcpPath);
+
+        switch (installers.RegisterOpenCodeMcp()) {
+            case JsonMcpConfigWriter.Change.Updated:
+                writeLine($"  [green]✓[/] OpenCode MCP servers registered ([dim]{configPath}[/])");
+
+                return true;
+            case JsonMcpConfigWriter.Change.Unchanged:
+                writeLine("  [dim]· OpenCode MCP servers already registered — no change needed[/]");
+
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not register OpenCode MCP servers in {configPath} — see README to add them manually.");
+
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Installs kcap's agent-instructions block into OpenCode's <c>~/.config/opencode/AGENTS.md</c>
+    /// via <see cref="Installers.InstallOpenCodeInstructions"/>. Gated on the OpenCode plugin
+    /// installing and on <see cref="Options.SkipOpenCodeInstructions"/>. Non-destructive: only
+    /// kcap's marker-delimited block is written.
+    /// </summary>
+    static bool HandleOpenCodeInstructions(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           openCodeExtensionInstalled
+        ) {
+        if (installers.InstallOpenCodeInstructions is null || !openCodeExtensionInstalled || options.SkipOpenCodeInstructions) return false;
+
+        var path = Markup.Escape(paths.OpenCodeInstructionsPath);
+
+        switch (installers.InstallOpenCodeInstructions()) {
+            case AgentInstructionsWriter.Change.Updated:
+                writeLine($"  [green]✓[/] OpenCode instructions installed ([dim]{path}[/])");
+
+                return true;
+            case AgentInstructionsWriter.Change.Unchanged:
+                writeLine("  [dim]· OpenCode instructions already up to date — no change needed[/]");
+
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not write OpenCode instructions to {path}.");
 
                 return false;
         }

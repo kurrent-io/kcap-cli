@@ -41,6 +41,8 @@ public static class SetupCommand {
         var skipKiroFlag     = args.Contains("--skip-kiro-hooks");
         var skipPiFlag       = args.Contains("--skip-pi-hooks");
         var skipOpenCodeFlag = args.Contains("--skip-opencode-hooks");
+        var skipOpenCodeMcpFlag = args.Contains("--skip-opencode-mcp");
+        var skipOpenCodeInstructionsFlag = args.Contains("--skip-opencode-instructions");
         var skipAntigravityFlag = args.Contains("--skip-antigravity-hooks");
         var skipAntigravityMcpFlag = args.Contains("--skip-antigravity-mcp");
         var skipAntigravityInstructionsFlag = args.Contains("--skip-antigravity-instructions");
@@ -251,7 +253,9 @@ public static class SetupCommand {
             SkipGeminiInstructions: skipGeminiInstructionsFlag,
             SkipAntigravityMcp: skipAntigravityMcpFlag,
             SkipAntigravityInstructions: skipAntigravityInstructionsFlag,
-            SkipAntigravitySkills: skipAntigravitySkillsFlag);
+            SkipAntigravitySkills: skipAntigravitySkillsFlag,
+            SkipOpenCodeMcp: skipOpenCodeMcpFlag,
+            SkipOpenCodeInstructions: skipOpenCodeInstructionsFlag);
 
         // AI-794 — allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
@@ -282,7 +286,9 @@ public static class SetupCommand {
             GeminiInstructionsPath: GeminiPaths.GeminiMd(),
             AntigravityMcpPath:       AntigravityPaths.McpConfigJson(),
             AntigravityInstructionsPath: AntigravityPaths.InstructionsMd(),
-            AntigravitySkillsDir:     AntigravityPaths.SkillsDir());
+            AntigravitySkillsDir:     AntigravityPaths.SkillsDir(),
+            OpenCodeMcpPath:      OpenCodePaths.McpConfigJson(),
+            OpenCodeInstructionsPath: OpenCodePaths.AgentsMd());
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -310,6 +316,10 @@ public static class SetupCommand {
             // (mirrors PluginCommand's postinstall fast path). A missing/stale marker — or a
             // deleted skill folder — reads as "not current" → prompt + install (self-heals).
             AgentSkillsCurrent:       AgentsSkillsInstaller.IsCurrent,
+            RegisterOpenCodeMcp:      () => JsonMcpConfigWriter.Register(
+                OpenCodePaths.McpConfigJson(), KcapMcpServers.All, McpConfigShape.OpenCode, cwd: null, new McpMarker("opencode")),
+            InstallOpenCodeInstructions: () => AgentInstructionsWriter.Write(
+                OpenCodePaths.AgentsMd(), KcapAgentInstructions.Body),
             RegisterGeminiMcp:        () => JsonMcpConfigWriter.Register(
                 GeminiPaths.SettingsJson(), KcapMcpServers.All, McpConfigShape.Gemini, cwd: null, new McpMarker("gemini")),
             InstallGeminiInstructions: () => AgentInstructionsWriter.Write(

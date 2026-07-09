@@ -42,6 +42,8 @@ public sealed record PluginEnvironment(
     public string KiroSettingsJson     => KiroPaths.SettingsFile(HomeDirectory);
     public string PiKcapExtension      => PiPaths.KcapExtension(HomeDirectory);
     public string OpenCodeKcapPlugin    => OpenCodePaths.KcapPlugin(HomeDirectory);
+    public string OpenCodeMcpConfigJson => OpenCodePaths.McpConfigJson(HomeDirectory);
+    public string OpenCodeAgentsMd      => OpenCodePaths.AgentsMd(HomeDirectory);
     public string AntigravityHooksJson  => AntigravityPaths.GlobalHooksJson(HomeDirectory);
     public string AntigravityMcpConfigJson  => AntigravityPaths.McpConfigJson(HomeDirectory);
     public string AntigravityInstructionsMd => AntigravityPaths.InstructionsMd(HomeDirectory);
