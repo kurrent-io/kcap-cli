@@ -13,6 +13,13 @@ namespace Capacitor.Cli.Tests.Unit;
 public partial class AgentOrchestratorVendorTests {
     static HttpClient ReviewerClient() => new() { Timeout = TimeSpan.FromSeconds(5) };
 
+    // Secrecy: the reviewer token rides in KCAP_DAEMON_URL, so it must be in PtyEnvScrub's
+    // scrub list — otherwise it could leak into a recorded/child env another hosted agent reads.
+    [Test]
+    public async Task Reviewer_token_env_var_KCAP_DAEMON_URL_is_scrubbed() {
+        await Assert.That(Capacitor.Cli.Daemon.Pty.PtyEnvScrub.HostedAgentVars).Contains("KCAP_DAEMON_URL");
+    }
+
     [Test, NotInParallel("LocalPermissionBridgeTests")]   // starts a real bridge (binds a port) — serialize with the other port-binding tests
     public async Task ReviewFlow_launch_mints_a_live_reviewer_bridge_token() {
         var (repoPath, cleanup) = CreateGitRepo();
