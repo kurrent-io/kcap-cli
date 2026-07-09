@@ -50,6 +50,13 @@ Options:
   --skip-antigravity-hooks    Don't install the Antigravity hooks block even if
                               Antigravity is detected (~/.gemini/antigravity/ or
                               antigravity on PATH).
+  --skip-antigravity-mcp      Skip registering the kcap MCP servers for Antigravity
+                              (~/.gemini/config/mcp_config.json).
+  --skip-antigravity-instructions
+                              Skip installing kcap's steering instructions for
+                              Antigravity (the shared ~/.gemini/GEMINI.md).
+  --skip-antigravity-skills   Skip copying the kcap skills into ~/.gemini/skills
+                              (where Antigravity reads them, not ~/.agents/skills).
   --use-provider-api-key <v>  In --no-prompt mode, set whether kcap keeps
                               ANTHROPIC_API_KEY / OPENAI_API_KEY in headless
                               agent spawns. Accepts true/1/yes/on or

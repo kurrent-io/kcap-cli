@@ -946,41 +946,117 @@ public static class PluginCommand {
 
         var refreshOnly = args.Contains("--if-installed");
 
-        switch (refreshOnly) {
-            case true when !AntigravityHooksInstaller.IsInstalled(hooksPath):
-            case true when AntigravityHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current():
-                return 0;
-            // The block runs the bare `kcap hook --antigravity` command, so Antigravity
-            // (and therefore kcap) must find kcap on PATH. Skipped on the postinstall
-            // (--if-installed) refresh path, like the other vendors.
-            case false when !AgentDetector.IsInstalled("kcap"):
-                await env.Stderr.WriteLineAsync(
-                    "Cannot install Antigravity hooks: 'kcap' is not on PATH. "
-                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
-                );
+        // Refresh-only mode never touches a machine that never opted in.
+        if (refreshOnly && !AntigravityHooksInstaller.IsInstalled(hooksPath)) return 0;
 
-                return 1;
-        }
-
-        if (!InstallAntigravityHooks(hooksPath)) {
-            if (refreshOnly) return 0;
-
-            await env.Stderr.WriteLineAsync($"Could not install Antigravity hooks at {hooksPath}.");
+        // Fresh install needs kcap on PATH: hooks.json runs the bare `kcap hook --antigravity`
+        // command. Skipped on the --if-installed (postinstall) refresh path.
+        if (!refreshOnly && !AgentDetector.IsInstalled("kcap")) {
+            await env.Stderr.WriteLineAsync(
+                "Cannot install Antigravity hooks: 'kcap' is not on PATH. "
+              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+            );
 
             return 1;
         }
 
-        await env.Stdout.WriteLineAsync(
-            refreshOnly
-                ? $"Antigravity hooks refreshed ({hooksPath})"
-                : $"Antigravity hooks installed ({hooksPath})"
-        );
+        // Treat hooks as current only when the host file ALSO exists — a lone marker (plugin
+        // hooks.json deleted) must not let a refresh skip the rewrite and leave hooks missing.
+        // MCP (mcp_config.json), instructions (GEMINI.md), and skills (~/.gemini/skills) all live
+        // in SEPARATE files, so we heal them below even when the hooks write fails.
+        var hooksCurrent = refreshOnly && File.Exists(hooksPath)
+                        && AntigravityHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current();
+        var freshHookFailure = false;
+        if (!hooksCurrent) {
+            if (InstallAntigravityHooks(hooksPath)) {
+                await env.Stdout.WriteLineAsync(
+                    refreshOnly
+                        ? $"Antigravity hooks refreshed ({hooksPath})"
+                        : $"Antigravity hooks installed ({hooksPath})"
+                );
+            } else if (!refreshOnly) {
+                await env.Stderr.WriteLineAsync($"Could not install Antigravity hooks at {hooksPath}.");
+                freshHookFailure = true;  // don't bail — the independent MCP/instructions/skills still install
+            } else {
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not refresh Antigravity hooks ({hooksPath}); continuing with MCP + instructions + skills.");
+            }
+        }
 
-        return 0;
+        // Register the kcap MCP servers into Antigravity's OWN ~/.gemini/config/mcp_config.json
+        // (Standard shape — NOT the Gemini CLI's settings.json). Non-destructive + idempotent.
+        if (!args.Contains("--skip-antigravity-mcp"))
+            await RegisterAntigravityMcpServersAsync(env);
+
+        // Install kcap's steering block into the shared ~/.gemini/GEMINI.md (Antigravity + Gemini
+        // both read it; the marker block is single + idempotent).
+        if (!args.Contains("--skip-antigravity-instructions"))
+            await InstallAntigravityInstructionsAsync(env);
+
+        // Install kcap skills into ~/.gemini/skills — Antigravity does NOT read ~/.agents/skills.
+        if (!args.Contains("--skip-antigravity-skills"))
+            await InstallAntigravitySkillsAsync(env, refreshOnly);
+
+        return freshHookFailure ? 1 : 0;
+    }
+
+    /// <summary>Registers the kcap MCP servers in Antigravity's own <c>~/.gemini/config/mcp_config.json</c>
+    /// (Standard shape). Never fails the install: a write error is a warning.</summary>
+    static async Task RegisterAntigravityMcpServersAsync(PluginEnvironment env) {
+        var change = JsonMcpConfigWriter.Register(
+            env.AntigravityMcpConfigJson, KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("antigravity"));
+
+        switch (change) {
+            case JsonMcpConfigWriter.Change.Updated:
+                await env.Stdout.WriteLineAsync($"Antigravity MCP servers registered ({env.AntigravityMcpConfigJson}).");
+                break;
+            case JsonMcpConfigWriter.Change.Failed:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {env.AntigravityMcpConfigJson} to register Antigravity MCP servers.");
+                break;
+        }
+    }
+
+    /// <summary>Installs kcap's marker-delimited steering block into the shared <c>~/.gemini/GEMINI.md</c>.
+    /// Non-destructive (only our block). Never fails the install: a write error is a warning.</summary>
+    static async Task InstallAntigravityInstructionsAsync(PluginEnvironment env) {
+        var change = AgentInstructionsWriter.Write(env.AntigravityInstructionsMd, KcapAgentInstructions.Body);
+
+        switch (change) {
+            case AgentInstructionsWriter.Change.Updated:
+                await env.Stdout.WriteLineAsync($"Antigravity instructions installed ({env.AntigravityInstructionsMd}).");
+                break;
+            case AgentInstructionsWriter.Change.Failed:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {env.AntigravityInstructionsMd} to install Antigravity instructions.");
+                break;
+        }
+    }
+
+    /// <summary>Copies the kcap skills into <c>~/.gemini/skills</c> (where Antigravity reads them, unlike
+    /// the agent-agnostic <c>~/.agents/skills</c>). Idempotent (version marker); never fails the install.</summary>
+    static async Task InstallAntigravitySkillsAsync(PluginEnvironment env, bool refreshOnly) {
+        // Fast path: on-disk skills already match this build.
+        if (AgentsSkillsInstaller.ReadMarker(env.AntigravitySkillsDir) == AgentsSkillsInstaller.CurrentVersion()) return;
+
+        var pluginPath = env.ResolvePluginPath();
+        var src        = pluginPath is null ? null : Path.Combine(pluginPath, "skills");
+        if (src is null || !Directory.Exists(src)) {
+            if (!refreshOnly)
+                await env.Stderr.WriteLineAsync("Warning: could not install Antigravity skills — kcap plugin 'skills' folder not found.");
+            return;
+        }
+
+        if (AgentsSkillsInstaller.Install(src, env.AntigravitySkillsDir))
+            await env.Stdout.WriteLineAsync($"Antigravity skills installed ({env.AntigravitySkillsDir}).");
+        else
+            await env.Stderr.WriteLineAsync($"Warning: could not install Antigravity skills to {env.AntigravitySkillsDir}.");
     }
 
     static async Task<int> RemoveAntigravity(string[] args, PluginEnvironment env) {
         var hooksPath = GetArg(args, "--antigravity-hooks-path") ?? env.AntigravityHooksJson;
+
+        var hooksFailed = false;
 
         try {
             var removed = RemoveAntigravityHooks(hooksPath);
@@ -990,13 +1066,42 @@ public static class PluginCommand {
                     ? $"Antigravity hooks removed ({hooksPath})"
                     : "Antigravity hooks were not installed."
             );
-
-            return 0;
         } catch (Exception ex) {
             await env.Stderr.WriteLineAsync($"Could not update Antigravity hooks at {hooksPath}: {ex.Message}");
-
-            return 1;
+            hooksFailed = true;
         }
+
+        // MCP servers live in a separate mcp_config.json — unregister regardless (Unregister owns the
+        // ownership-marker cleanup and no-ops when the file is absent).
+        var mcpChange = JsonMcpConfigWriter.Unregister(env.AntigravityMcpConfigJson, McpConfigShape.Standard, new McpMarker("antigravity"));
+        var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
+
+        if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
+            await env.Stdout.WriteLineAsync($"Antigravity MCP servers removed ({env.AntigravityMcpConfigJson}).");
+        } else if (mcpFailed) {
+            await env.Stderr.WriteLineAsync($"Could not update {env.AntigravityMcpConfigJson} to remove Antigravity MCP servers.");
+        }
+
+        // Strip kcap's steering block from the shared ~/.gemini/GEMINI.md, preserving user content.
+        // (If the user also has Gemini installed, its next install/refresh re-adds the shared block.)
+        var instrChange = AgentInstructionsWriter.Remove(env.AntigravityInstructionsMd);
+        var instrFailed = instrChange == AgentInstructionsWriter.Change.Failed;
+
+        if (instrChange == AgentInstructionsWriter.Change.Updated) {
+            await env.Stdout.WriteLineAsync($"Antigravity instructions removed ({env.AntigravityInstructionsMd}).");
+        } else if (instrFailed) {
+            await env.Stderr.WriteLineAsync($"Could not update {env.AntigravityInstructionsMd} to remove Antigravity instructions.");
+        }
+
+        // Remove the kcap skills kcap copied into ~/.gemini/skills.
+        var skills = AgentsSkillsInstaller.Remove(env.AntigravitySkillsDir);
+        if (skills.RemovedAny) {
+            await env.Stdout.WriteLineAsync($"Antigravity skills removed ({env.AntigravitySkillsDir}).");
+        } else if (skills.HadErrors) {
+            await env.Stderr.WriteLineAsync($"Could not fully remove Antigravity skills from {env.AntigravitySkillsDir}.");
+        }
+
+        return hooksFailed || mcpFailed || instrFailed || skills.HadErrors ? 1 : 0;
     }
 
     /// <summary>Setup-step delegate: install the kcap block, reporting success as a bool.</summary>

@@ -43,6 +43,9 @@ public sealed record PluginEnvironment(
     public string PiKcapExtension      => PiPaths.KcapExtension(HomeDirectory);
     public string OpenCodeKcapPlugin    => OpenCodePaths.KcapPlugin(HomeDirectory);
     public string AntigravityHooksJson  => AntigravityPaths.GlobalHooksJson(HomeDirectory);
+    public string AntigravityMcpConfigJson  => AntigravityPaths.McpConfigJson(HomeDirectory);
+    public string AntigravityInstructionsMd => AntigravityPaths.InstructionsMd(HomeDirectory);
+    public string AntigravitySkillsDir      => AntigravityPaths.SkillsDir(HomeDirectory);
     public string AgentsSkillsDir     => Path.Combine(HomeDirectory, ".agents", "skills");
     public string LegacyCodexSkills   => Path.Combine(CodexHome, "skills");
 

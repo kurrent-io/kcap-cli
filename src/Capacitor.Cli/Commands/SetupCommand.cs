@@ -42,6 +42,9 @@ public static class SetupCommand {
         var skipPiFlag       = args.Contains("--skip-pi-hooks");
         var skipOpenCodeFlag = args.Contains("--skip-opencode-hooks");
         var skipAntigravityFlag = args.Contains("--skip-antigravity-hooks");
+        var skipAntigravityMcpFlag = args.Contains("--skip-antigravity-mcp");
+        var skipAntigravityInstructionsFlag = args.Contains("--skip-antigravity-instructions");
+        var skipAntigravitySkillsFlag = args.Contains("--skip-antigravity-skills");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
@@ -245,7 +248,10 @@ public static class SetupCommand {
             SkipCopilotMcp: skipCopilotMcpFlag,
             SkipCopilotInstructions: skipCopilotInstructionsFlag,
             SkipGeminiMcp: skipGeminiMcpFlag,
-            SkipGeminiInstructions: skipGeminiInstructionsFlag);
+            SkipGeminiInstructions: skipGeminiInstructionsFlag,
+            SkipAntigravityMcp: skipAntigravityMcpFlag,
+            SkipAntigravityInstructions: skipAntigravityInstructionsFlag,
+            SkipAntigravitySkills: skipAntigravitySkillsFlag);
 
         // AI-794 — allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
@@ -273,7 +279,10 @@ public static class SetupCommand {
             CursorMcpPath:        CursorPaths.UserMcpJson(),
             CopilotMcpPath:       CopilotPaths.McpConfigJson(),
             CopilotInstructionsPath: CopilotPaths.InstructionsMd(),
-            GeminiInstructionsPath: GeminiPaths.GeminiMd());
+            GeminiInstructionsPath: GeminiPaths.GeminiMd(),
+            AntigravityMcpPath:       AntigravityPaths.McpConfigJson(),
+            AntigravityInstructionsPath: AntigravityPaths.InstructionsMd(),
+            AntigravitySkillsDir:     AntigravityPaths.SkillsDir());
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -303,7 +312,11 @@ public static class SetupCommand {
             RegisterGeminiMcp:        () => JsonMcpConfigWriter.Register(
                 GeminiPaths.SettingsJson(), KcapMcpServers.All, McpConfigShape.Gemini, cwd: null, new McpMarker("gemini")),
             InstallGeminiInstructions: () => AgentInstructionsWriter.Write(
-                GeminiPaths.GeminiMd(), KcapAgentInstructions.Body));
+                GeminiPaths.GeminiMd(), KcapAgentInstructions.Body),
+            RegisterAntigravityMcp:   () => JsonMcpConfigWriter.Register(
+                AntigravityPaths.McpConfigJson(), KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("antigravity")),
+            InstallAntigravityInstructions: () => AgentInstructionsWriter.Write(
+                AntigravityPaths.InstructionsMd(), KcapAgentInstructions.Body));
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });

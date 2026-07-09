@@ -34,6 +34,26 @@ public class AntigravityPathsTests {
             .IsEqualTo(Path.Combine(pluginDir, "plugin.json"));
     }
 
+    // AI-1230: MCP config is Antigravity's OWN file under the GUI config root (NOT the Gemini CLI's
+    // settings.json); the steering file + skills dir are SHARED with Gemini under ~/.gemini.
+    [Test]
+    public async Task McpConfigJson_is_under_gui_config() {
+        await Assert.That(AntigravityPaths.McpConfigJson(home: "/h", geminiCliHome: P))
+            .IsEqualTo(Path.Combine(GeminiRoot, "config", "mcp_config.json"));
+    }
+
+    [Test]
+    public async Task InstructionsMd_is_the_shared_gemini_md() {
+        await Assert.That(AntigravityPaths.InstructionsMd(home: "/h", geminiCliHome: P))
+            .IsEqualTo(Path.Combine(GeminiRoot, "GEMINI.md"));
+    }
+
+    [Test]
+    public async Task SkillsDir_is_gemini_skills_not_agents_skills() {
+        await Assert.That(AntigravityPaths.SkillsDir(home: "/h", geminiCliHome: P))
+            .IsEqualTo(Path.Combine(GeminiRoot, "skills"));
+    }
+
     [Test]
     public async Task TranscriptFullPath_matches_captured_layout() {
         await Assert.That(AntigravityPaths.TranscriptFullPath("conv1", home: "/h", geminiCliHome: P))

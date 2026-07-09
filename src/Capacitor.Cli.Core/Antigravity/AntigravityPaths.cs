@@ -35,6 +35,23 @@ public static class AntigravityPaths {
     public static string PluginDir(string? home = null, string? geminiCliHome = null)
         => Path.Combine(GuiConfigRoot(home, geminiCliHome), "plugins", AntigravityHooks.BlockName);
 
+    /// <summary>MCP server config the Antigravity IDE reads: <c>&lt;gui-config&gt;/mcp_config.json</c>.
+    /// This is Antigravity's OWN MCP file — NOT the Gemini CLI's <c>~/.gemini/settings.json</c> — with
+    /// the plain <c>mcpServers</c> command/args/env shape (<c>McpConfigShape.Standard</c>).</summary>
+    public static string McpConfigJson(string? home = null, string? geminiCliHome = null)
+        => Path.Combine(GuiConfigRoot(home, geminiCliHome), "mcp_config.json");
+
+    /// <summary>Global steering/context file the IDE loads: <c>&lt;gemini-root&gt;/GEMINI.md</c> —
+    /// SHARED with the Gemini CLI (both hardcode <c>~/.gemini/GEMINI.md</c>), so kcap's single
+    /// marker-delimited block serves both. Honors <c>GEMINI_CLI_HOME</c> via <see cref="GeminiPaths.Root"/>.</summary>
+    public static string InstructionsMd(string? home = null, string? geminiCliHome = null)
+        => Path.Combine(GeminiPaths.Root(home, geminiCliHome), "GEMINI.md");
+
+    /// <summary>Global skills dir the IDE reads: <c>&lt;gemini-root&gt;/skills</c>. Antigravity does NOT
+    /// read the agent-agnostic <c>~/.agents/skills</c>, so kcap installs its skills here instead.</summary>
+    public static string SkillsDir(string? home = null, string? geminiCliHome = null)
+        => Path.Combine(GeminiPaths.Root(home, geminiCliHome), "skills");
+
     /// <summary>Per-conversation "brain" dir: <c>&lt;root&gt;/brain/&lt;id&gt;</c>.</summary>
     public static string BrainDir(string conversationId, string? home = null, string? geminiCliHome = null)
         => Path.Combine(Root(home, geminiCliHome), "brain", conversationId);
