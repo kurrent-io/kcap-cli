@@ -16,13 +16,9 @@ namespace Capacitor.Cli.Tests.Unit;
 /// by OpenCodeExtensionInstallerTests). Uses <c>--opencode-plugin-path</c> to stay
 /// isolated from the real ~/.config/opencode and any ambient XDG_CONFIG_HOME.
 ///
-/// The MCP + instructions cases (AI-1229) additionally register the kcap MCP servers
-/// in <c>~/.config/opencode/opencode.json</c> (McpConfigShape.OpenCode → <c>mcp</c>
-/// block, <c>type:"local"</c>, command-as-array, <c>enabled:true</c>) and install the
-/// steering block into <c>~/.config/opencode/AGENTS.md</c>. Those use a FakeUserHome and
-/// clear OPENCODE_CONFIG_DIR + XDG_CONFIG_HOME so OpenCodePaths resolves under the fake
-/// home; the <c>--if-installed</c> refresh branch (plugin pre-seeded) skips the fresh
-/// "kcap on PATH" precheck. Env mutation → the class runs NotInParallel.
+/// The MCP + instructions cases also register the kcap servers in opencode.json and
+/// install the AGENTS.md block; they use a FakeUserHome + clear OPENCODE_CONFIG_DIR /
+/// XDG_CONFIG_HOME so OpenCodePaths resolves under it (env mutation → NotInParallel).
 /// </summary>
 [NotInParallel("HomeEnvVarMutation")]
 public class PluginCommandOpenCodeTests {
@@ -51,8 +47,11 @@ public class PluginCommandOpenCodeTests {
         // refresh path should rewrite it in place and stamp the version marker.
         await File.WriteAllTextAsync(pluginPath, "// stale plugin body");
 
+        // Plugin-only: skip MCP/instructions so this stays isolated to the plugin file
+        // (their config path derives from ambient OPENCODE_CONFIG_DIR/XDG, not this TempDir).
         var exit = await PluginCommand.HandleAsync(
-            ["plugin", "install", "--opencode", "--opencode-plugin-path", pluginPath, "--if-installed"],
+            ["plugin", "install", "--opencode", "--opencode-plugin-path", pluginPath, "--if-installed",
+             "--skip-opencode-mcp", "--skip-opencode-instructions"],
             TestEnv(tmp.Path));
         await Assert.That(exit).IsEqualTo(0);
 
@@ -63,7 +62,31 @@ public class PluginCommandOpenCodeTests {
     }
 
     [Test]
+    public async Task Install_opencode_if_installed_recreates_plugin_when_file_missing_but_marker_current() {
+        using var tmp = new TempDir();
+        var dir = Path.Combine(tmp.Path, "plugins");
+        Directory.CreateDirectory(dir);
+        var pluginPath = Path.Combine(dir, "kcap.ts");
+        // Marker at the CURRENT version but NO kcap.ts on disk (user deleted it). IsInstalled is true
+        // via the marker, so --if-installed must still RECREATE the missing plugin, not skip it.
+        await File.WriteAllTextAsync(Path.Combine(dir, ".kcap-extension-version"), CapacitorVersion.Current());
+
+        var exit = await PluginCommand.HandleAsync(
+            ["plugin", "install", "--opencode", "--opencode-plugin-path", pluginPath, "--if-installed",
+             "--skip-opencode-mcp", "--skip-opencode-instructions"],
+            TestEnv(tmp.Path));
+        await Assert.That(exit).IsEqualTo(0);
+
+        await Assert.That(File.Exists(pluginPath)).IsTrue();  // recreated despite the current marker
+        await Assert.That(await File.ReadAllTextAsync(pluginPath)).Contains("export const KcapPlugin");
+    }
+
+    [Test]
     public async Task Remove_opencode_deletes_plugin_and_marker() {
+        // remove also unregisters MCP + strips AGENTS.md (both under ConfigDir); clear
+        // OPENCODE_CONFIG_DIR/XDG so those resolve under the TempDir, not the real config.
+        using var _   = new EnvScope("OPENCODE_CONFIG_DIR", null);
+        using var __  = new EnvScope("XDG_CONFIG_HOME", null);
         using var tmp = new TempDir();
         var dir = Path.Combine(tmp.Path, "plugins");
         Directory.CreateDirectory(dir);
@@ -81,7 +104,7 @@ public class PluginCommandOpenCodeTests {
         await Assert.That(File.Exists(marker)).IsFalse();
     }
 
-    // ── MCP + instructions (AI-1229) ─────────────────────────────────────────
+    // ── MCP + instructions ───────────────────────────────────────────────────
 
     // Seed an installed OpenCode plugin so `--if-installed` proceeds to the MCP/instructions
     // steps (and the fresh "kcap on PATH" precheck is skipped).

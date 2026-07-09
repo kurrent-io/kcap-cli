@@ -901,10 +901,14 @@ public static class PluginCommand {
             return 1;
         }
 
-        // Write the plugin unless a refresh finds it already at the current version. Even when the
-        // plugin write is skipped, still (re)register MCP + install instructions below: they live in
-        // separate files and must be healed if a prior write failed (warning-only) or was deleted.
-        var pluginCurrent = refreshOnly && OpenCodeExtensionInstaller.ReadMarker(pluginPath) == CapacitorVersion.Current();
+        // Write the plugin unless a refresh finds it already on disk AND at the current version.
+        // The File.Exists guard matters because OpenCodeExtensionInstaller.IsInstalled treats a lone
+        // marker as "installed" — so a deleted kcap.ts with a current marker must still be rewritten,
+        // not skipped. Even when the plugin write IS skipped, still (re)register MCP + install
+        // instructions below: they live in separate files and must be healed if deleted or failed.
+        var pluginCurrent = refreshOnly
+            && File.Exists(pluginPath)
+            && OpenCodeExtensionInstaller.ReadMarker(pluginPath) == CapacitorVersion.Current();
         if (!pluginCurrent) {
             if (OpenCodeExtensionInstaller.Install(pluginPath)) {
                 await env.Stdout.WriteLineAsync(

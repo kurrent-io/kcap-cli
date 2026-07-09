@@ -1710,7 +1710,7 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write the OpenCode plugin"));
     }
 
-    // ── OpenCode MCP + instructions (AI-1229) ────────────────────────────────
+    // ── OpenCode MCP + instructions ──────────────────────────────────────────
 
     [Test]
     public async Task OpenCode_mcp_and_instructions_registered_when_plugin_installed() {
