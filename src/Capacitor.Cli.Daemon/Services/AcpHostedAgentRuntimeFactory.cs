@@ -66,7 +66,10 @@ internal sealed class AcpHostedAgentRuntimeFactory(
             throw;
         }
 
-        return new HostedRuntimeStart(runtime, McpConfigPath: null);
+        // AI-688 Option B task 4 (§2.4): the runtime IS the transcript source (it implements
+        // IAcpTranscriptSource directly) — hand it back on HostedRuntimeStart so the orchestrator can
+        // bind + forward without downcasting Runtime.
+        return new HostedRuntimeStart(runtime, McpConfigPath: null, Transcript: runtime);
     }
 
     /// <summary>

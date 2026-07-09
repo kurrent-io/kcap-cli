@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Daemon.Pty;
+using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Auth;
@@ -101,7 +102,27 @@ internal record AgentInstance(
     /// atomic, and stale-by-one-resize is harmless for best-effort dims.</summary>
     public ushort CurrentCols { get; set; }
     public ushort CurrentRows { get; set; }
+
+    /// <summary>
+    /// AI-688 Option B task 4 (design spec §2.3/§2.4): the live ACP transcript forwarder for this
+    /// agent, set once <see cref="AgentOrchestrator.HandleLaunchAgent"/>'s post-registration bind
+    /// (<c>AcpSessionStarted</c>) succeeds and the forwarder is constructed. <see langword="null"/>
+    /// for every PTY agent (claude/codex — <see cref="HostedRuntimeStart.Transcript"/> is null for
+    /// them) and for an ACP agent whose initial bind failed (nothing to drain in that case — see
+    /// <see cref="AgentOrchestrator.StartAcpForwardingAsync"/>). Read by
+    /// <see cref="AgentOrchestrator.FinalizeAgentRunAsync"/> to run the bounded final-drain before
+    /// ending the session.
+    /// </summary>
+    public AcpForwarderHandle? AcpForwarder { get; set; }
 }
+
+/// <summary>
+/// AI-688 Option B task 4: pairs a started <see cref="AcpTranscriptForwarder"/> with its
+/// fire-and-forget run task (<see cref="AgentOrchestrator.ForwardAcpTranscriptAsync"/>'s return
+/// value) so <see cref="AgentOrchestrator.FinalizeAgentRunAsync"/> can await the SAME task (bounded)
+/// at teardown without re-deriving or re-wrapping it.
+/// </summary>
+internal sealed record AcpForwarderHandle(AcpTranscriptForwarder Forwarder, Task RunTask);
 
 /// <summary>Ring buffer that keeps the last 2 MB of terminal output.</summary>
 public class TerminalOutputBuffer {
@@ -474,6 +495,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (!agent.IsPrivate) _ = _server.AgentStatusChangedAsync(agent.Id, "Running", agent.SessionId);
             }
 
+            // AI-688 Option B task 4 (design spec §2.3/§2.4): bind + start live transcript
+            // forwarding for any runtime that exposes an ACP transcript source (Cursor today; null
+            // for every PTY runtime — no branch taken for claude/codex). Fire-and-forget from here,
+            // exactly like ReadAgentOutputAsync below: the bind call is IsReady-gated and can block
+            // across a reconnect outage (ConnectionRetry), and HandleLaunchAgent must never stall on
+            // it — a stalled launch would queue every OTHER inbound hub command behind it on this
+            // daemon's single SignalR connection. StartAcpForwardingAsync itself still enforces the
+            // load-bearing ordering (bind strictly after RegisterAgentAsync above, strictly before
+            // any AcpSessionEvents) by awaiting the bind before constructing the forwarder.
+            if (start.Transcript is { } transcript) {
+                _ = StartAcpForwardingAsync(agent, transcript, cmd.Vendor);
+            }
+
             // Start reading output
             _ = ReadAgentOutputAsync(agent);
 
@@ -737,6 +771,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             LogAgentExited(agent.Id, exitCode);
 
+            // AI-688 Option B task 4 (design spec §2.3 "terminal ownership... bounded flush-before-
+            // finalize"): for an ACP agent with a live forwarder, give the transcript a bounded
+            // chance to drain BEFORE ending the session — this must NEVER pin shutdown (see
+            // FinalDrainAcpTranscriptAsync's remarks); it always returns within AcpFinalDrainBudget
+            // regardless of outcome. PTY agents have no AcpForwarder and take none of this path — the
+            // runtime is disposed exactly where it always was, inside CleanupAgentAsync below.
+            if (agent.AcpForwarder is { } acpForwarder) {
+                await FinalDrainAcpTranscriptAsync(agent, acpForwarder);
+            }
+
             // Tell the server to end the AgentSession. Claude doesn't reliably fire
             // its own session-end hook on SIGTERM/exit, so without this call the
             // session would stay "active" forever in the read model. Server-side is
@@ -775,6 +819,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 } catch (Exception ex) {
                     LogEndSessionFailed(ex, agent.Id);
                 }
+            }
+
+            // AI-688 Option B task 4: drop the reconnect re-bind registration now that
+            // EndAgentSessionAsync above has (best-effort) made this binding terminal server-side —
+            // a later reconnect must not try to re-bind a session that's already ended.
+            if (agent.AcpForwarder is not null) {
+                _server.UnregisterAcpBinding(agent.Id);
             }
 
             // Clean up worktree and unregister from server. Runs unconditionally — even
@@ -1242,6 +1293,122 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         );
     }
 
+    /// <summary>
+    /// AI-688 Option B task 4 (design spec §2.3 bind ordering, §2.4 handoff): binds the ACP
+    /// canonical session to <paramref name="agent"/> (<c>AcpSessionStarted</c>) — this call MUST run
+    /// after <see cref="RegisterAgentAsync"/> has already registered the agent (the server rejects a
+    /// bind for an unregistered agent) and strictly before any transcript event reaches the server;
+    /// callers (<see cref="HandleLaunchAgent"/>) enforce the first half by only calling this after
+    /// <c>await RegisterAgentAsync(agent)</c>, and this method enforces the second half itself by
+    /// awaiting the bind before ever constructing the forwarder. Once bound, registers the binding
+    /// for reconnect re-bind (<see cref="ServerConnection.RegisterAcpBinding"/>), builds the
+    /// synthesized <c>SessionStarted@Seq0</c> envelope (<see cref="AcpEventTranslator.BuildSessionStarted"/>),
+    /// and starts <see cref="ForwardAcpTranscriptAsync"/> as background work — the resulting task is
+    /// kept on <see cref="AgentInstance.AcpForwarder"/> so <see cref="FinalizeAgentRunAsync"/> can
+    /// coordinate the bounded final-drain at teardown.
+    ///
+    /// Best-effort: any failure in the bind/setup step is logged and swallowed, never propagated to
+    /// the caller. By the time this runs, <paramref name="agent"/> is already registered with the
+    /// server and its ACP process is already live — letting a transcript-plumbing failure escape
+    /// into <see cref="HandleLaunchAgent"/>'s outer catch would incorrectly route it through the
+    /// failed-launch cleanup path (worktree removal) against an agent that is actually running.
+    /// Degrades to "no live transcript for this session" rather than failing the launch.
+    /// </summary>
+    async Task StartAcpForwardingAsync(AgentInstance agent, IAcpTranscriptSource transcript, string vendor) {
+        try {
+            await _server.AcpSessionStartedAsync(
+                agent.Id,
+                vendor,
+                transcript.AcpSessionId,
+                transcript.Cwd,
+                transcript.ResolvedModel,
+                null, // metadata: no wire-contract fields required for the prototype (design spec §2.4)
+                _shutdownCts.Token
+            );
+
+            _server.RegisterAcpBinding(
+                agent.Id,
+                new AcpBindInfo(vendor, transcript.AcpSessionId, transcript.Cwd, transcript.ResolvedModel)
+            );
+
+            var sessionStarted = AcpEventTranslator.BuildSessionStarted(
+                seq: 0,
+                DateTimeOffset.UtcNow.ToString("O"),
+                cwd: transcript.Cwd,
+                model: transcript.ResolvedModel,
+                rawSessionId: transcript.AcpSessionId
+            );
+
+            var forwarder = new AcpTranscriptForwarder(
+                send: (batch, ct) => _server.SendAcpEventsAsync(agent.Id, transcript.AcpSessionId, batch, ct),
+                initialEnvelope: sessionStarted,
+                envelopes: transcript.Envelopes,
+                logger: _logger
+            );
+
+            var runTask = ForwardAcpTranscriptAsync(agent, forwarder, _shutdownCts.Token);
+            agent.AcpForwarder = new AcpForwarderHandle(forwarder, runTask);
+        } catch (Exception ex) {
+            LogAcpBindFailed(ex, agent.Id);
+        }
+    }
+
+    /// <summary>
+    /// AI-688 Option B task 4 (design spec §2.3, load-bearing correctness point 3): fire-and-forget
+    /// wrapper around <see cref="AcpTranscriptForwarder.RunAsync"/> — a forwarder fault must NEVER
+    /// crash the agent or the daemon. <see cref="AcpTranscriptForwarder.RunAsync"/> already swallows
+    /// its own cancellation and retries indefinitely on a send failure, but this wrapper is the outer
+    /// safety net for anything else that could still escape it (e.g. the transcript channel itself
+    /// faulting from a translator bug upstream) — logged, never rethrown, so the returned task always
+    /// completes successfully and <see cref="FinalizeAgentRunAsync"/> can safely await it.
+    /// </summary>
+    async Task ForwardAcpTranscriptAsync(AgentInstance agent, AcpTranscriptForwarder forwarder, CancellationToken ct) {
+        try {
+            await forwarder.RunAsync(ct);
+        } catch (Exception ex) {
+            LogAcpForwarderFaulted(ex, agent.Id);
+        }
+    }
+
+    /// <summary>
+    /// Time budget for the ACP bounded final-drain (design spec §2.3) — how long
+    /// <see cref="FinalDrainAcpTranscriptAsync"/> waits for the forwarder's run task to finish
+    /// draining (after the runtime is disposed) before giving up and letting
+    /// <see cref="FinalizeAgentRunAsync"/> proceed to <see cref="ServerConnection.EndAgentSessionAsync"/>
+    /// regardless. Deliberately small and independent of <see cref="EndAgentSessionBudget"/> — a
+    /// slow/stuck drain degrades to "no trailing transcript", never a stacked delay on top of the
+    /// session-end budget, and never pins shutdown (the primary invariant this exists to protect).
+    /// Settable so tests don't wait for the real value.
+    /// </summary>
+    internal TimeSpan AcpFinalDrainBudget { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// AI-688 Option B task 4 (design spec §2.3 "terminal ownership... bounded flush-before-
+    /// finalize"): disposes the ACP runtime FIRST so task 2's <c>DisposeAsync</c> completes the
+    /// transcript channel (courtesy-flushing any still-open aggregation run) — <paramref name="acpForwarder"/>'s
+    /// run task can only ever return once that channel completes — then gives the forwarder a FINITE
+    /// budget (<see cref="AcpFinalDrainBudget"/>) to drain whatever's left to the server before
+    /// returning UNCONDITIONALLY. Never throws and never blocks past the budget: a disposal fault or
+    /// a drain that exceeds it is logged, not propagated, so <see cref="FinalizeAgentRunAsync"/>'s
+    /// own outage-cleanup guarantee (<see cref="EndAgentSessionBudget"/>) is never compounded by this
+    /// call. This is also what keeps the forwarder stopped BEFORE the binding goes terminal (the
+    /// caller ends the session immediately after this returns) — the ordering the task-3 hot-loop
+    /// guard's edge case relies on in the normal (non-outage) flow.
+    /// </summary>
+    async Task FinalDrainAcpTranscriptAsync(AgentInstance agent, AcpForwarderHandle acpForwarder) {
+        try {
+            await agent.Runtime.DisposeAsync();
+        } catch (Exception ex) {
+            LogCleanupStepFailed(ex, "disposing ACP runtime for final transcript drain", agent.Id);
+        }
+
+        var completed = await Task.WhenAny(acpForwarder.RunTask, Task.Delay(AcpFinalDrainBudget));
+
+        if (completed != acpForwarder.RunTask) {
+            LogAcpFinalDrainTimedOut(agent.Id, AcpFinalDrainBudget.TotalSeconds);
+        }
+    }
+
     Task HandleResizeTerminal(ResizeTerminalCommand cmd) {
         // Ignore server-origin resize for private agents (defence-in-depth; see HandleStopAgent).
         if (_agents.TryGetValue(cmd.AgentId, out var agent) && !agent.IsPrivate) {
@@ -1586,6 +1753,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to persist repo path for agent {AgentId}")]
     partial void LogRepoPathPersistFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "ACP bind/forwarder setup failed for agent {AgentId} — proceeding with no live transcript for this session")]
+    partial void LogAcpBindFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "ACP transcript forwarder faulted for agent {AgentId}")]
+    partial void LogAcpForwarderFaulted(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "ACP final transcript drain for agent {AgentId} exceeded its {Seconds}s budget — proceeding to end the session; any undrained transcript is lost")]
+    partial void LogAcpFinalDrainTimedOut(string agentId, double seconds);
 
     [GeneratedRegex(@"\x1B\[[0-9;]*[A-Za-z]|\x1B\].*?\x07|\x1B[()][AB012]|\x1B\[[\?]?[0-9;]*[hlm]")]
     private static partial Regex StripAnsiRegex();
