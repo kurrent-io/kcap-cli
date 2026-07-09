@@ -1008,7 +1008,13 @@ public partial class AgentOrchestratorVendorTests {
         /// "eventually" go through regardless of the ordering under test.</summary>
         public TaskCompletionSource? PendingAcpEventsGate { get; set; }
 
-        internal override Task InvokeAcpSessionStartedRawAsync(
+        /// <summary>One-shot gate: when set, the NEXT raw AcpSessionStarted invoke awaits this task
+        /// before returning (then the field is cleared) — models a bind call still in flight across
+        /// a reconnect outage (AI-688 reliability fix's stale-binding-race test), independent of
+        /// <paramref name="ct"/> so the test controls exactly when the "late bind" resolves.</summary>
+        public TaskCompletionSource? PendingAcpBindGate { get; set; }
+
+        internal override async Task InvokeAcpSessionStartedRawAsync(
                 string agentId, string vendor, string acpSessionId, string? cwd, string? model,
                 IReadOnlyDictionary<string, string>? metadata, CancellationToken ct
             ) {
@@ -1017,7 +1023,10 @@ public partial class AgentOrchestratorVendorTests {
                 AcpSessionStartedCalls.Add((agentId, vendor, acpSessionId, cwd, model));
             }
 
-            return Task.CompletedTask;
+            if (PendingAcpBindGate is { } gate) {
+                PendingAcpBindGate = null;
+                await gate.Task;
+            }
         }
 
         internal override async Task<AcpBatchAck> InvokeAcpSessionEventsRawAsync(
@@ -1032,8 +1041,20 @@ public partial class AgentOrchestratorVendorTests {
             }
 
             if (AcpEventsBlockUntil is { } blockCts) {
-                try { await Task.Delay(Timeout.InfiniteTimeSpan, blockCts.Token); } catch (OperationCanceledException) {
-                    /* released by the test */
+                // Linked with ct (unlike a bare blockCts.Token wait) so a per-agent CTS cancellation
+                // propagates through exactly like a real _hub.InvokeAsync(..., cancellationToken: ct)
+                // call would (AI-688 reliability fix: forwarder-cancel-on-drain-timeout relies on
+                // this). A ct-driven cancellation PROPAGATES (mirrors the real hub); blockCts alone
+                // is purely test cleanup (releases an otherwise-abandoned background call) and falls
+                // through to a normal successful return.
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(blockCts.Token, ct);
+
+                try {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, linked.Token);
+                } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                    throw;
+                } catch (OperationCanceledException) {
+                    /* released by the test (blockCts) */
                 }
             }
 

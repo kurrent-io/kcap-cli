@@ -46,14 +46,44 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
         new UnboundedChannelOptions { SingleReader = false, SingleWriter = true });
 
     /// <summary>
+    /// AI-688 PR #301 reliability fix (Qodo #6): default cap for <see cref="_transcript"/> — generous
+    /// relative to a realistic session's envelope volume (aggregation already collapses chunk runs
+    /// into one envelope each; even a long turn with dozens of tool calls stays well under this), so
+    /// it only ever bites during a genuinely stalled/outaged forwarder. Overridable via the
+    /// constructor so tests can exercise the drop path with a small cap.
+    /// </summary>
+    const int DefaultTranscriptCapacity = 2000;
+
+    /// <summary>
+    /// AI-688 PR #301 reliability fix (Qodo #6): default cap for <see cref="_pendingTurns"/> — user
+    /// inputs are low-volume (a human typing follow-ups), so a modest cap is enough to absorb a burst
+    /// without ever realistically filling up in normal use.
+    /// </summary>
+    const int DefaultPendingTurnsCapacity = 50;
+
+    readonly int _transcriptCapacity;
+    readonly int _pendingTurnsCapacity;
+    int          _droppedTranscriptEnvelopes;
+    int          _droppedPendingTurns;
+
+    /// <summary>
     /// AI-688 Option B task 2 (§2.1): the ordered, aggregated <see cref="AcpEventEnvelope"/>
     /// transcript — every write goes through <see cref="EmitEnvelope"/>, which always holds
     /// <see cref="_aggregationLock"/>, so this channel's FIFO write order matches lock-acquisition
     /// order across the two call sites that can write to it (the turn worker, and the connection's
     /// notification handler). SingleReader: task 3/4's forwarder is the only intended consumer.
+    ///
+    /// <b>AI-688 PR #301 reliability fix (Qodo #6):</b> bounded (see <see cref="DefaultTranscriptCapacity"/>)
+    /// with <see cref="BoundedChannelFullMode.DropOldest"/> — NEVER <see cref="BoundedChannelFullMode.Wait"/>.
+    /// The sole writer (<see cref="EmitEnvelope"/>) always uses the non-blocking <c>TryWrite</c>, which
+    /// never blocks regardless of <see cref="BoundedChannelFullMode"/> — but <c>EmitEnvelope</c> runs
+    /// SYNCHRONOUSLY on the ACP connection's own read loop (via <see cref="HandleNotification"/>), so
+    /// a future change toward an awaited <c>WriteAsync</c> under <c>Wait</c> would stall that read
+    /// loop, not just this session's transcript, if the forwarder (the reader) is itself stalled —
+    /// <c>DropOldest</c> forecloses that class of bug entirely: a stalled forwarder degrades to
+    /// "lost some trailing transcript", never a blocked connection or unbounded memory growth.
     /// </summary>
-    readonly Channel<AcpEventEnvelope> _transcript = Channel.CreateUnbounded<AcpEventEnvelope>(
-        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+    readonly Channel<AcpEventEnvelope> _transcript;
 
     /// <summary>
     /// AI-688 Option B task 2 (§2.1): FIFO queue of pending prompt-turn texts. Public entry points
@@ -62,9 +92,13 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     /// worker task drains this strictly in order, one turn fully at a time (see
     /// <see cref="ProcessTurnAsync"/>). SingleReader: only the worker reads; SingleWriter=false since
     /// both StartAsync and (potentially concurrent) SendUserInputAsync calls enqueue.
+    ///
+    /// <b>AI-688 PR #301 reliability fix (Qodo #6):</b> bounded (see <see cref="DefaultPendingTurnsCapacity"/>)
+    /// with <see cref="BoundedChannelFullMode.DropWrite"/> — a burst of input while the worker is
+    /// stuck on a stalled turn drops the NEW input rather than evicting an earlier, still-pending one
+    /// (either is a pathological case; this queue realistically never gets anywhere near the cap).
     /// </summary>
-    readonly Channel<string> _pendingTurns = Channel.CreateUnbounded<string>(
-        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+    readonly Channel<string> _pendingTurns;
 
     /// <summary>
     /// AI-688 Option B task 2 (§2.1 thread-safety invariant): guards the open aggregation run
@@ -126,12 +160,27 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
             ILogger                                                                        logger,
             string                                                                         agentId = "",
             Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>?   requestInteraction = null,
-            TimeProvider?                                                                  timeProvider = null
+            TimeProvider?                                                                  timeProvider = null,
+            int?                                                                           transcriptCapacity = null,
+            int?                                                                           pendingTurnsCapacity = null
         ) {
         _connection   = connection;
         _process      = process;
         _logger       = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
+
+        // AI-688 PR #301 reliability fix (Qodo #6): bounded, not unbounded — see the fields' own
+        // remarks for the FullMode rationale. transcriptCapacity/pendingTurnsCapacity are
+        // production-null (defaults apply); tests override them to exercise the drop path with a
+        // small cap instead of writing thousands of envelopes.
+        _transcriptCapacity  = transcriptCapacity ?? DefaultTranscriptCapacity;
+        _pendingTurnsCapacity = pendingTurnsCapacity ?? DefaultPendingTurnsCapacity;
+
+        _transcript = Channel.CreateBounded<AcpEventEnvelope>(
+            new BoundedChannelOptions(_transcriptCapacity) { SingleReader = true, SingleWriter = false, FullMode = BoundedChannelFullMode.DropOldest });
+
+        _pendingTurns = Channel.CreateBounded<string>(
+            new BoundedChannelOptions(_pendingTurnsCapacity) { SingleReader = true, SingleWriter = false, FullMode = BoundedChannelFullMode.DropWrite });
 
         _connection.OnNotification += HandleNotification;
 
@@ -310,8 +359,22 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     /// turns), preserving AI-684 Fix E's non-blocking contract for both callers. The single
     /// <see cref="RunTurnWorkerAsync"/> worker drains this queue strictly in order; turn completion is
     /// observed via <see cref="Updates"/>/<see cref="Envelopes"/>, not this method's return.
+    ///
+    /// <b>AI-688 PR #301 reliability fix (Qodo #6):</b> <see cref="_pendingTurns"/> is bounded
+    /// (<see cref="BoundedChannelFullMode.DropWrite"/>) — checked explicitly BEFORE writing so a
+    /// full queue logs a clear warning (with a running dropped-count) rather than silently
+    /// discarding the input via the channel's own drop-write behavior.
     /// </summary>
     void EnqueueTurn(string text) {
+        if (_pendingTurns.Reader.Count >= _pendingTurnsCapacity) {
+            var dropped = Interlocked.Increment(ref _droppedPendingTurns);
+            _logger.LogWarning(
+                "ACP: pending-turns queue full (capacity={Capacity}) — dropping this input; {DroppedCount} dropped this session so far (the turn worker is likely stuck on a stalled turn).",
+                _pendingTurnsCapacity, dropped);
+
+            return;
+        }
+
         if (!_pendingTurns.Writer.TryWrite(text))
             _logger.LogDebug("ACP: dropped a prompt turn — pending-turns channel already completed.");
     }
@@ -643,9 +706,23 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     /// <see cref="_aggregationLock"/> (reentrant, so callers already holding it from
     /// <see cref="AggregateUpdate"/>/<see cref="FlushOpenRunLocked"/> do not deadlock) so envelope
     /// order on the channel matches lock-acquisition order across every writer.
+    ///
+    /// <b>AI-688 PR #301 reliability fix (Qodo #6):</b> <see cref="_transcript"/> is bounded
+    /// (<see cref="BoundedChannelFullMode.DropOldest"/>) — checked explicitly BEFORE writing (under
+    /// the same lock, so no other writer can race this check) so a full channel logs a clear warning
+    /// (with a running dropped-count) at the exact write that triggers the eviction, rather than
+    /// relying on <c>TryWrite</c>'s return value, which is <see langword="true"/> for BOTH a normal
+    /// write and a drop-and-evict write under this FullMode — it cannot distinguish the two.
     /// </summary>
     void EmitEnvelope(AcpEventEnvelope envelope) {
         lock (_aggregationLock) {
+            if (_transcript.Reader.Count >= _transcriptCapacity) {
+                var dropped = Interlocked.Increment(ref _droppedTranscriptEnvelopes);
+                _logger.LogWarning(
+                    "ACP: transcript channel full (capacity={Capacity}) — dropping the oldest buffered envelope to make room for Kind={Kind}; {DroppedCount} dropped this session so far (the forwarder is likely stalled).",
+                    _transcriptCapacity, envelope.Kind, dropped);
+            }
+
             if (!_transcript.Writer.TryWrite(envelope))
                 _logger.LogDebug("ACP: dropped an ACP transcript envelope (Kind={Kind}) — transcript channel already completed.", envelope.Kind);
         }

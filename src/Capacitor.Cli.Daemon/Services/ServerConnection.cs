@@ -690,6 +690,22 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public void UnregisterAcpBinding(string agentId) => _acpBindings.TryRemove(agentId, out _);
 
     /// <summary>
+    /// Bounded backoff between re-bind attempts inside <see cref="ReBindAcpSessionsAsync"/> (Codex
+    /// P1 #1) — short by design since this runs INSIDE the registration bracket, before
+    /// <see cref="IsReady"/> flips true, so a slow bound here delays every other inbound/outbound
+    /// call on this connection. Settable so tests don't wait for the real value.
+    /// </summary>
+    internal TimeSpan AcpRebindRetryDelay { get; set; } = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// How many times <see cref="ReBindAcpSessionsAsync"/> retries a single binding's re-bind before
+    /// giving up on it (Codex P1 #1). Bounded so a binding that can never be re-established (the
+    /// server has forgotten it, or the agent it belongs to has ended) isn't replayed forever on every
+    /// future reconnect.
+    /// </summary>
+    internal const int AcpRebindMaxAttempts = 3;
+
+    /// <summary>
     /// Re-invokes <c>AcpSessionStarted</c> directly on the hub — bypassing the gated
     /// <see cref="AcpSessionStartedAsync"/>/<see cref="IsReady"/> path on purpose — for every
     /// currently-registered ACP binding (design spec §2.3 "reconnect re-bind"). Called from
@@ -702,16 +718,45 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <see cref="RegisterDaemon"/> runs (that is what triggered it), so invoking the raw hub method
     /// here is safe — exactly the same reasoning that lets <see cref="AgentRegisteredAsync"/>/
     /// <see cref="AgentStatusChangedAsync"/> be called ungated from
-    /// <c>AgentOrchestrator.ReRegisterAgentsAsync</c>. Best-effort per binding: one failed re-bind is
-    /// logged and does not stop the others or withhold daemon readiness for the rest of this
-    /// connection, mirroring <c>ReRegisterAgentsAsync</c>'s per-agent isolation.
+    /// <c>AgentOrchestrator.ReRegisterAgentsAsync</c>. Best-effort per binding: one binding's re-bind
+    /// failure does not stop the others or withhold daemon readiness for the rest of this connection,
+    /// mirroring <c>ReRegisterAgentsAsync</c>'s per-agent isolation.
+    ///
+    /// <b>Codex P1 #1 (bounded re-bind-miss):</b> a binding that fails to re-establish would
+    /// otherwise be silently skipped and left registered — <see cref="IsReady"/> flips true
+    /// regardless once this whole pass returns, so the forwarder's <see cref="SendAcpEventsAsync"/>
+    /// calls would start retrying the SAME batch against a binding the server never got, forever
+    /// (nothing replays the bind itself until another reconnect). Retry each binding up to
+    /// <see cref="AcpRebindMaxAttempts"/> times (short <see cref="AcpRebindRetryDelay"/> backoff
+    /// between attempts) before giving up on it; on a bound-exhausting permanent failure,
+    /// <see cref="UnregisterAcpBinding"/> removes it so a LATER reconnect doesn't replay it either.
     /// </summary>
     internal async Task ReBindAcpSessionsAsync() {
         foreach (var (agentId, bind) in _acpBindings) {
-            try {
-                await InvokeAcpSessionStartedRawAsync(agentId, bind.Vendor, bind.AcpSessionId, bind.Cwd, bind.Model, bind.Metadata, _ct);
-            } catch (Exception ex) {
-                LogAcpRebindFailed(ex, agentId, bind.AcpSessionId);
+            var rebound = false;
+
+            for (var attempt = 1; attempt <= AcpRebindMaxAttempts; attempt++) {
+                try {
+                    await InvokeAcpSessionStartedRawAsync(agentId, bind.Vendor, bind.AcpSessionId, bind.Cwd, bind.Model, bind.Metadata, _ct);
+                    rebound = true;
+
+                    break;
+                } catch (Exception ex) {
+                    LogAcpRebindFailed(ex, agentId, bind.AcpSessionId, attempt, AcpRebindMaxAttempts);
+
+                    if (attempt == AcpRebindMaxAttempts) break;
+
+                    try {
+                        await Task.Delay(AcpRebindRetryDelay, _ct);
+                    } catch (OperationCanceledException) {
+                        return; // shutting down mid-retry — nothing more to do here
+                    }
+                }
+            }
+
+            if (!rebound) {
+                LogAcpRebindGivingUp(agentId, bind.AcpSessionId, AcpRebindMaxAttempts);
+                UnregisterAcpBinding(agentId);
             }
         }
     }
@@ -974,8 +1019,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     [LoggerMessage(Level = LogLevel.Information, Message = "AcpSessionEvents for agent {AgentId} interrupted by a connection drop (retry {Attempt}); waiting for the daemon connection to recover before retrying")]
     partial void LogAcpEventsRetry(string agentId, int attempt);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Reconnect re-bind of ACP session {AcpSessionId} for agent {AgentId} failed — a future reconnect will retry")]
-    partial void LogAcpRebindFailed(Exception ex, string agentId, string acpSessionId);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Reconnect re-bind of ACP session {AcpSessionId} for agent {AgentId} failed (attempt {Attempt}/{MaxAttempts})")]
+    partial void LogAcpRebindFailed(Exception ex, string agentId, string acpSessionId, int attempt, int maxAttempts);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Reconnect re-bind of ACP session {AcpSessionId} for agent {AgentId} failed after {MaxAttempts} attempts — unregistering the binding so it isn't replayed forever")]
+    partial void LogAcpRebindGivingUp(string agentId, string acpSessionId, int maxAttempts);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to post agent run event, retrying in {Delay}s")]
     partial void LogEventPostFailed(Exception ex, double delay);

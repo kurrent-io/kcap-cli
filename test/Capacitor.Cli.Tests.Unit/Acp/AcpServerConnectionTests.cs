@@ -42,12 +42,24 @@ public class AcpServerConnectionTests {
         /// observe ordering/gating state at the exact moment the (re-)bind call happens.</summary>
         public Action? OnRawSessionStartedInvoked { get; set; }
 
+        /// <summary>AI-688 reliability fix (Codex P1 #1): how many MORE times the raw
+        /// AcpSessionStarted invoke should throw for a given agentId before it starts succeeding —
+        /// drives <see cref="ReBindAcpSessionsAsyncBoundedRetryTests"/>'s bounded-retry-then-give-up
+        /// and transient-failure-then-recover cases. Absent/zero entries always succeed.</summary>
+        public Dictionary<string, int> FailSessionStartedRemaining { get; } = [];
+
         internal override Task InvokeAcpSessionStartedRawAsync(
                 string agentId, string vendor, string acpSessionId, string? cwd, string? model,
                 IReadOnlyDictionary<string, string>? metadata, CancellationToken ct
             ) {
             SessionStartedCalls.Add((agentId, vendor, acpSessionId, cwd, model, metadata));
             OnRawSessionStartedInvoked?.Invoke();
+
+            if (FailSessionStartedRemaining.TryGetValue(agentId, out var remaining) && remaining > 0) {
+                FailSessionStartedRemaining[agentId] = remaining - 1;
+
+                return Task.FromException(new InvalidOperationException($"simulated AcpSessionStarted failure for {agentId}"));
+            }
 
             return Task.CompletedTask;
         }
@@ -175,6 +187,75 @@ public class AcpServerConnectionTests {
         await conn.ReBindAcpSessionsAsync().WaitAsync(HangGuard);
 
         await Assert.That(conn.SessionStartedCalls).IsEmpty();
+    }
+
+    // ── Bounded re-bind retry (Codex P1 #1: a re-bind-miss must not stall the transcript forever) ─
+
+    /// <summary>
+    /// A binding whose re-bind NEVER succeeds must not be retried forever — <see cref="ServerConnection.ReBindAcpSessionsAsync"/>
+    /// bounds the attempts (<see cref="ServerConnection.AcpRebindMaxAttempts"/>) and then unregisters
+    /// the binding so it isn't replayed on the NEXT reconnect either (the permanent-failure half of
+    /// the fix — otherwise <c>IsReady</c> flips true regardless and the forwarder retries the same
+    /// batch against a binding the server never got, forever).
+    /// </summary>
+    [Test]
+    public async Task ReBindAcpSessionsAsync_retries_a_permanently_failing_binding_up_to_the_bound_then_unregisters_it() {
+        var conn = new TestServerConnection();
+        conn.AcpRebindRetryDelay = TimeSpan.FromMilliseconds(5); // don't slow the test down
+
+        conn.RegisterAcpBinding("agentA", new AcpBindInfo("cursor", "sess-a", "/wt-a", null));
+        conn.FailSessionStartedRemaining["agentA"] = int.MaxValue; // never succeeds
+
+        await conn.ReBindAcpSessionsAsync().WaitAsync(HangGuard);
+
+        await Assert.That(conn.SessionStartedCalls.Count(c => c.AgentId == "agentA")).IsEqualTo(ServerConnection.AcpRebindMaxAttempts);
+
+        // The binding was unregistered on permanent failure: a LATER reconnect must not replay it —
+        // no additional SessionStarted calls for agentA.
+        var callsBefore = conn.SessionStartedCalls.Count;
+        await conn.ReBindAcpSessionsAsync().WaitAsync(HangGuard);
+        await Assert.That(conn.SessionStartedCalls.Count).IsEqualTo(callsBefore);
+    }
+
+    /// <summary>
+    /// The other half: a re-bind that fails a few times but recovers WITHIN the bound must succeed —
+    /// the binding stays registered (a later reconnect still replays it), proving the bound doesn't
+    /// give up too eagerly on a merely-transient failure.
+    /// </summary>
+    [Test]
+    public async Task ReBindAcpSessionsAsync_retries_a_transient_failure_and_recovers_within_the_bound() {
+        var conn = new TestServerConnection();
+        conn.AcpRebindRetryDelay = TimeSpan.FromMilliseconds(5);
+
+        conn.RegisterAcpBinding("agentA", new AcpBindInfo("cursor", "sess-a", "/wt-a", null));
+        conn.FailSessionStartedRemaining["agentA"] = ServerConnection.AcpRebindMaxAttempts - 1; // fails all but the last attempt
+
+        await conn.ReBindAcpSessionsAsync().WaitAsync(HangGuard);
+
+        await Assert.That(conn.SessionStartedCalls.Count(c => c.AgentId == "agentA")).IsEqualTo(ServerConnection.AcpRebindMaxAttempts);
+
+        // Still registered — a later reconnect replays it again (proof it was NOT unregistered).
+        var callsBefore = conn.SessionStartedCalls.Count;
+        await conn.ReBindAcpSessionsAsync().WaitAsync(HangGuard);
+        await Assert.That(conn.SessionStartedCalls.Count).IsEqualTo(callsBefore + 1);
+    }
+
+    /// <summary>One binding permanently failing must not stop a DIFFERENT binding from being
+    /// re-bound in the same <see cref="ServerConnection.ReBindAcpSessionsAsync"/> pass — per-binding
+    /// isolation, mirroring the existing best-effort-per-binding guarantee.</summary>
+    [Test]
+    public async Task ReBindAcpSessionsAsync_isolates_a_permanently_failing_binding_from_others() {
+        var conn = new TestServerConnection();
+        conn.AcpRebindRetryDelay = TimeSpan.FromMilliseconds(5);
+
+        conn.RegisterAcpBinding("agentA", new AcpBindInfo("cursor", "sess-a", "/wt-a", null));
+        conn.RegisterAcpBinding("agentB", new AcpBindInfo("cursor", "sess-b", "/wt-b", null));
+        conn.FailSessionStartedRemaining["agentA"] = int.MaxValue;
+
+        await conn.ReBindAcpSessionsAsync().WaitAsync(HangGuard);
+
+        await Assert.That(conn.SessionStartedCalls.Count(c => c.AgentId == "agentB")).IsEqualTo(1);
+        await Assert.That(conn.SessionStartedCalls.Count(c => c.AgentId == "agentA")).IsEqualTo(ServerConnection.AcpRebindMaxAttempts);
     }
 
     // ── Reconnect re-bind ordering (design spec §2.3) ────────────────────────────────────────────

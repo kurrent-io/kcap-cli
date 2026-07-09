@@ -257,6 +257,126 @@ public partial class AgentOrchestratorVendorTests {
         }
     }
 
+    // ── Reliability fixes (AI-688 PR #301 review: per-agent CTS) ───────────────────────────────
+
+    /// <summary>
+    /// Qodo #4: a drain that misses its budget must not leave the forwarder's <c>RunTask</c> running
+    /// forever in the background. The per-agent CTS created at launch is cancelled specifically on
+    /// drain-timeout (<see cref="AgentOrchestrator.FinalDrainAcpTranscriptAsync"/>) — this test proves
+    /// that cancellation actually reaches the forwarder's blocked send (via
+    /// <c>SendAcpEventsAsync</c>'s <c>ct</c> parameter, which the test double now honors like a real
+    /// hub invoke would) so <c>RunTask</c> completes ON ITS OWN, without the test manually releasing
+    /// the block the way the (unrelated) budget test above has to.
+    /// </summary>
+    [Test]
+    public async Task Drain_timeout_cancels_the_forwarder_so_its_RunTask_completes_without_leaking() {
+        var (repoPath, cleanup) = CreateGitRepo();
+        using var neverRecovers = new CancellationTokenSource();
+
+        try {
+            var unregistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var server = new CaptureServerConnection {
+                OnAgentUnregistered = () => unregistered.TrySetResult(),
+                AcpEventsBlockUntil = neverRecovers // every AcpSessionEvents call hangs until cancelled
+            };
+            var ptyFactory    = new SpyPtyProcessFactory();
+            var cursorFactory = new SpyAcpHostedAgentRuntimeFactory();
+
+            await using var orch = BuildOrchestrator(
+                server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
+                allowedRepoPath: repoPath, extraRuntimeFactories: [cursorFactory]
+            );
+            var budget = TimeSpan.FromMilliseconds(300);
+            orch.AcpFinalDrainBudget = budget; // must NOT wait the real 5s default
+
+            var cmd = NewCursorLaunch("agent-acp-cancel-on-timeout", repoPath);
+
+            await orch.HandleLaunchAgentForTest(cmd);
+
+            // Give the fire-and-forget bind + forwarder start a moment to actually begin its (now
+            // permanently blocked) first send before ending the agent.
+            await Task.Delay(TimeSpan.FromMilliseconds(100));
+
+            var forwarderHandle = orch.GetAgentForTest(cmd.AgentId)!.AcpForwarder!;
+
+            await orch.HandleStopAgentForTest(cmd.AgentId).WaitAsync(AcpHangGuard);
+            await unregistered.Task.WaitAsync(AcpHangGuard);
+
+            // The crux of the fix: cancelling the per-agent CTS on drain-timeout must actually reach
+            // the forwarder's in-flight send and unwind it — RunTask completes on its own, with NO
+            // help from this test (contrast the budget test above, which has to Cancel() its own
+            // blockCts in a `finally` to avoid leaking the background task).
+            await forwarderHandle.RunTask.WaitAsync(AcpHangGuard);
+        } finally {
+            neverRecovers.Cancel(); // belt-and-suspenders — a no-op if the fix already released it
+            cleanup();
+        }
+    }
+
+    /// <summary>
+    /// Qodo #5 / Codex P1 #2: the bind-vs-finalize stale-binding race. <c>AcpSessionStartedAsync</c>'s
+    /// <c>ConnectionRetry</c> gating can block across a reconnect outage; if the agent's WHOLE
+    /// lifecycle (launch → exit → finalize → cleanup) runs to completion while that bind is still
+    /// in flight, the late bind resolving afterwards must NOT register a binding for the now-dead
+    /// agent — <see cref="AgentOrchestrator.StartAcpForwardingAsync"/>'s liveness check (per-agent
+    /// CTS cancelled + <c>agent</c> no longer tracked) must abort before ever reaching
+    /// <c>RegisterAcpBinding</c>, and the finalizer's own unconditional
+    /// <c>UnregisterAcpBinding(agent.Id)</c> must leave nothing registered even if it ran first.
+    /// </summary>
+    [Test]
+    public async Task Agent_finalized_before_the_bind_completes_registers_no_binding_for_the_late_bind() {
+        var (repoPath, cleanup) = CreateGitRepo();
+
+        try {
+            var unregistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var server        = new CaptureServerConnection { OnAgentUnregistered = () => unregistered.TrySetResult() };
+            var ptyFactory    = new SpyPtyProcessFactory();
+            var cursorFactory = new SpyAcpHostedAgentRuntimeFactory();
+
+            await using var orch = BuildOrchestrator(
+                server, ptyFactory, new Dictionary<string, IHostedAgentLauncher>(),
+                allowedRepoPath: repoPath, extraRuntimeFactories: [cursorFactory]
+            );
+            orch.AcpFinalDrainBudget = TimeSpan.FromMilliseconds(200);
+
+            // Gate the bind call so it's still pending when the agent finalizes — models the launch
+            // racing a reconnect outage that outlasts the agent's whole lifetime.
+            var bindGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            server.PendingAcpBindGate = bindGate;
+
+            var cmd = NewCursorLaunch("agent-acp-stale-bind", repoPath);
+
+            await orch.HandleLaunchAgentForTest(cmd);
+
+            // The bind call has actually been ISSUED (recorded before the gate await) — give it a
+            // moment, then confirm it landed and is now gated/pending.
+            await Task.Delay(TimeSpan.FromMilliseconds(150));
+            await Assert.That(server.AcpSessionStartedCalls.Count(c => c.AgentId == cmd.AgentId)).IsEqualTo(1);
+            await Assert.That(orch.GetAgentForTest(cmd.AgentId)!.AcpForwarder).IsNull(); // bind hasn't resolved yet
+
+            // Run the agent's WHOLE lifecycle to completion WHILE the bind is still pending.
+            await orch.HandleStopAgentForTest(cmd.AgentId).WaitAsync(AcpHangGuard);
+            await unregistered.Task.WaitAsync(AcpHangGuard);
+            await Assert.That(orch.GetAgentForTest(cmd.AgentId)).IsNull(); // CleanupAgentAsync removed it
+
+            // NOW the late bind "succeeds" server-side.
+            bindGate.TrySetResult();
+
+            // Give the late setup task a moment to resume past the bind and reach its liveness check.
+            await Task.Delay(TimeSpan.FromMilliseconds(150));
+
+            // The liveness check must have aborted BEFORE RegisterAcpBinding — a reconnect re-bind
+            // must never see this dead agent (proof no binding leaked, whether from the late setup
+            // OR from the finalizer running before the bind resolved).
+            var bindCallsBefore = server.AcpSessionStartedCalls.Count;
+            await server.ReBindAcpSessionsAsync();
+            await Assert.That(server.AcpSessionStartedCalls.Count).IsEqualTo(bindCallsBefore);
+        } finally {
+            cleanup();
+        }
+    }
+
     // ── PTY unaffected ───────────────────────────────────────────────────────────────────────────
 
     [Test]

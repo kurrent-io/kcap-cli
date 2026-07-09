@@ -114,6 +114,20 @@ internal record AgentInstance(
     /// ending the session.
     /// </summary>
     public AcpForwarderHandle? AcpForwarder { get; set; }
+
+    /// <summary>
+    /// AI-688 PR #301 reliability fix (Qodo #4/#5, Codex P1 #2): per-agent/per-setup
+    /// <see cref="CancellationTokenSource"/>, linked to the daemon's shutdown token, created in
+    /// <see cref="AgentOrchestrator.HandleLaunchAgent"/> BEFORE the fire-and-forget
+    /// <see cref="AgentOrchestrator.StartAcpForwardingAsync"/> call — so it exists immediately,
+    /// independent of whether the bind ever resolves. Both the bind/setup task and (once started) the
+    /// forwarder's run task use ITS token rather than the raw daemon-wide shutdown token, so
+    /// <see cref="AgentOrchestrator.FinalizeAgentRunAsync"/> can cancel just this agent's ACP work
+    /// (on drain-timeout, and unconditionally at finalize) without touching any other agent or the
+    /// daemon's own shutdown gate. <see langword="null"/> for every PTY agent (claude/codex) and set
+    /// exactly once, at launch, for every ACP-capable runtime — never re-created for the same agent.
+    /// </summary>
+    public CancellationTokenSource? AcpCts { get; set; }
 }
 
 /// <summary>
@@ -505,7 +519,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // load-bearing ordering (bind strictly after RegisterAgentAsync above, strictly before
             // any AcpSessionEvents) by awaiting the bind before constructing the forwarder.
             if (start.Transcript is { } transcript) {
-                _ = StartAcpForwardingAsync(agent, transcript, cmd.Vendor);
+                // AI-688 reliability fix (Qodo #4/#5, Codex P1 #2): create + store the per-agent CTS
+                // BEFORE firing the setup task, so it exists for FinalizeAgentRunAsync to cancel even
+                // if the agent finalizes before the bind below ever resolves (see AgentInstance.AcpCts).
+                var acpCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token);
+                agent.AcpCts = acpCts;
+                _ = StartAcpForwardingAsync(agent, transcript, cmd.Vendor, acpCts);
             }
 
             // Start reading output
@@ -781,6 +800,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 await FinalDrainAcpTranscriptAsync(agent, acpForwarder);
             }
 
+            // AI-688 reliability fix (Qodo #5 / Codex P1 #2): cancel the per-agent ACP CTS
+            // unconditionally here — not only inside FinalDrainAcpTranscriptAsync's own timeout
+            // branch above — so a bind/setup task that's STILL in flight (the agent exited before
+            // its bind ever completed, so AcpForwarder is still null and the drain step above never
+            // ran at all) observes cancellation now and can abort at its liveness check
+            // (StartAcpForwardingAsync) before it ever registers a binding for an agent that is
+            // finalizing right now. Runs BEFORE EndAgentSessionAsync so any forwarder is fully
+            // stopped before the binding goes terminal server-side (the same ordering the drain
+            // above already protects). Idempotent/harmless if already cancelled by the drain step.
+            if (agent.AcpCts is { } acpCts) {
+                try { await acpCts.CancelAsync(); } catch { /* best-effort */ }
+            }
+
             // Tell the server to end the AgentSession. Claude doesn't reliably fire
             // its own session-end hook on SIGTERM/exit, so without this call the
             // session would stay "active" forever in the read model. Server-side is
@@ -821,12 +853,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
 
-            // AI-688 Option B task 4: drop the reconnect re-bind registration now that
-            // EndAgentSessionAsync above has (best-effort) made this binding terminal server-side —
-            // a later reconnect must not try to re-bind a session that's already ended.
-            if (agent.AcpForwarder is not null) {
-                _server.UnregisterAcpBinding(agent.Id);
-            }
+            // AI-688 Option B task 4 / reliability fix (Qodo #5, Codex P1 #2): drop the reconnect
+            // re-bind registration now that EndAgentSessionAsync above has (best-effort) made this
+            // binding terminal server-side — a later reconnect must not try to re-bind a session
+            // that's already ended. Unconditional — NOT gated on AcpForwarder having ever been set
+            // — so a binding a late/racing setup managed to register despite the cancellation above
+            // (StartAcpForwardingAsync's liveness check narrows but can't fully eliminate that
+            // window) still gets cleaned up here; UnregisterAcpBinding is a no-op when nothing was
+            // ever registered, so this call is always safe to make unconditionally.
+            _server.UnregisterAcpBinding(agent.Id);
 
             // Clean up worktree and unregister from server. Runs unconditionally — even
             // when end-session timed out and is still retrying in the background — so a
@@ -1313,8 +1348,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// into <see cref="HandleLaunchAgent"/>'s outer catch would incorrectly route it through the
     /// failed-launch cleanup path (worktree removal) against an agent that is actually running.
     /// Degrades to "no live transcript for this session" rather than failing the launch.
+    ///
+    /// <b>AI-688 reliability fix (Qodo #5, Codex P1 #2 — bind-vs-finalize stale-binding race):</b>
+    /// <paramref name="acpCts"/> is <paramref name="agent"/>'s <see cref="AgentInstance.AcpCts"/>,
+    /// created by the caller BEFORE this task was fired. Its token — not the raw daemon shutdown
+    /// token — gates the bind call below AND (once built) the forwarder's run task, so
+    /// <see cref="FinalizeAgentRunAsync"/> can cancel just this setup/forwarder. The bind call can
+    /// block for the length of a reconnect outage (<c>ConnectionRetry</c>); if the agent's whole
+    /// lifecycle finalizes while it's still in flight, a LATE successful bind must not register a
+    /// binding for what is by then a dead agent (it would leak into <c>_acpBindings</c> and be
+    /// replayed on every future reconnect with nothing left to ever drain it) — the liveness check
+    /// immediately below the bind await closes that race.
     /// </summary>
-    async Task StartAcpForwardingAsync(AgentInstance agent, IAcpTranscriptSource transcript, string vendor) {
+    async Task StartAcpForwardingAsync(AgentInstance agent, IAcpTranscriptSource transcript, string vendor, CancellationTokenSource acpCts) {
         try {
             await _server.AcpSessionStartedAsync(
                 agent.Id,
@@ -1323,8 +1369,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 transcript.Cwd,
                 transcript.ResolvedModel,
                 null, // metadata: no wire-contract fields required for the prototype (design spec §2.4)
-                _shutdownCts.Token
+                acpCts.Token
             );
+
+            // Liveness check (Qodo #5 / Codex P1 #2): the await above can span a reconnect outage.
+            // If finalize already ran (cancelling acpCts and/or removing the agent from _agents)
+            // while we were waiting, abort here — do not register a binding, build a forwarder, or
+            // start it for an agent that's finalizing or already gone.
+            if (acpCts.IsCancellationRequested || !_agents.ContainsKey(agent.Id)) {
+                LogAcpBindAbortedAgentGone(agent.Id);
+
+                return;
+            }
 
             _server.RegisterAcpBinding(
                 agent.Id,
@@ -1346,7 +1402,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 logger: _logger
             );
 
-            var runTask = ForwardAcpTranscriptAsync(agent, forwarder, _shutdownCts.Token);
+            var runTask = ForwardAcpTranscriptAsync(agent, forwarder, acpCts.Token);
             agent.AcpForwarder = new AcpForwarderHandle(forwarder, runTask);
         } catch (Exception ex) {
             LogAcpBindFailed(ex, agent.Id);
@@ -1394,6 +1450,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// call. This is also what keeps the forwarder stopped BEFORE the binding goes terminal (the
     /// caller ends the session immediately after this returns) — the ordering the task-3 hot-loop
     /// guard's edge case relies on in the normal (non-outage) flow.
+    ///
+    /// <b>AI-688 reliability fix (Qodo #4):</b> when the drain misses its budget, the forwarder is
+    /// presumably still blocked/retrying a send against an unresponsive connection —
+    /// <see cref="AcpTranscriptForwarder.RunAsync"/> otherwise retries indefinitely. Cancel
+    /// <paramref name="agent"/>'s per-agent <see cref="AgentInstance.AcpCts"/> so it unwinds
+    /// promptly (it is <c>ct</c>-aware at every await point) instead of leaking an orphaned task
+    /// that keeps sending against an agent that's finalizing right now.
     /// </summary>
     async Task FinalDrainAcpTranscriptAsync(AgentInstance agent, AcpForwarderHandle acpForwarder) {
         try {
@@ -1406,6 +1469,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (completed != acpForwarder.RunTask) {
             LogAcpFinalDrainTimedOut(agent.Id, AcpFinalDrainBudget.TotalSeconds);
+
+            if (agent.AcpCts is { } acpCts) {
+                try { await acpCts.CancelAsync(); } catch { /* best-effort — never let this pin teardown */ }
+            }
         }
     }
 
@@ -1756,6 +1823,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "ACP bind/forwarder setup failed for agent {AgentId} — proceeding with no live transcript for this session")]
     partial void LogAcpBindFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP bind for agent {AgentId} resolved after the agent had already finalized — aborting setup without registering a binding")]
+    partial void LogAcpBindAbortedAgentGone(string agentId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "ACP transcript forwarder faulted for agent {AgentId}")]
     partial void LogAcpForwarderFaulted(Exception ex, string agentId);

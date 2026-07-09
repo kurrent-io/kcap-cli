@@ -3,6 +3,7 @@ using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit.Acp;
@@ -46,11 +47,14 @@ public class AcpTranscriptAggregationTests {
 
         Task _fakeRunTask = Task.CompletedTask;
 
-        public Harness() {
+        /// <summary>AI-688 reliability fix (Qodo #6): <paramref name="logger"/>/<paramref name="transcriptCapacity"/>
+        /// let the bounded-channel drop test inject a capturing logger and a tiny cap without every
+        /// other <c>Harness()</c> call site having to care.</summary>
+        public Harness(ILogger? logger = null, int? transcriptCapacity = null) {
             Fake    = new FakeAcpAgent();
             Conn    = new AcpConnection(Fake.ClientWriteStream, Fake.ClientReadStream, NullLogger.Instance);
             Process = new FakeAcpProcess();
-            Runtime = new AcpHostedAgentRuntime(Conn, Process, NullLogger.Instance);
+            Runtime = new AcpHostedAgentRuntime(Conn, Process, logger ?? NullLogger.Instance, transcriptCapacity: transcriptCapacity);
         }
 
         public void StartFakeAgentLoop() => _fakeRunTask = Fake.RunAsync(Cts.Token);
@@ -326,5 +330,63 @@ public class AcpTranscriptAggregationTests {
         await Assert.That(h.Runtime.Envelopes.Completion.IsCompleted).IsTrue();
 
         h.Fake.HoldPromptResponses.TrySetResult();
+    }
+
+    // ── Bounded transcript channel (AI-688 PR #301 review, Qodo #6) ────────────────────────────
+
+    /// <summary>Records every log call — mirrors <c>TokenRefreshLoopTests.CaptureLogger</c>'s
+    /// established pattern for asserting on a warning without a real logging sink.</summary>
+    sealed class CaptureLogger : ILogger {
+        public readonly List<(LogLevel Level, string Message)> Entries = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool         IsEnabled(LogLevel logLevel)                            => true;
+
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? ex, Func<TState, Exception?, string> formatter)
+            => Entries.Add((level, formatter(state, ex)));
+    }
+
+    /// <summary>
+    /// Qodo #6: an unbounded transcript channel could grow without limit if the forwarder stalls
+    /// (outage, blocked send) while the turn keeps producing envelopes. With a small test cap, a
+    /// stalled reader (nobody drains <see cref="AcpHostedAgentRuntime.Envelopes"/> here, modelling a
+    /// stuck forwarder) must not block/crash the aggregation path — it drops the OLDEST buffered
+    /// envelopes (<see cref="System.Threading.Channels.BoundedChannelFullMode.DropOldest"/>) and logs
+    /// a warning, keeping only the most recent ones.
+    /// </summary>
+    [Test]
+    public async Task Transcript_channel_at_capacity_drops_the_oldest_envelopes_and_logs_a_warning_instead_of_growing_unbounded() {
+        var logger = new CaptureLogger();
+        await using var h = new Harness(logger, transcriptCapacity: 3);
+
+        // 5 tool_call notifications, each translated 1:1 (no aggregation) — plus the turn's own
+        // UserMessage envelope, this writes 6 envelopes total against a capacity of 3.
+        var toolCalls = Enumerable.Range(1, 5)
+            .Select(i => FakeAcpAgent.BuildSessionUpdateNotification(
+                FakeAcpAgent.FixedSessionId,
+                FakeAcpAgent.BuildToolCallUpdate($"call-{i}", $"Tool {i}", "execute", "pending")))
+            .ToArray();
+        h.Fake.EnqueuePromptScript(toolCalls, EndTurnResult);
+
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "go", h.Cts.Token).WaitAsync(HangGuard);
+        await WaitForPromptCallCountAsync(h.Fake, minCount: 1);
+        await Task.Delay(300); // let every notification propagate through the pipe and get aggregated
+                                // — deliberately NOT reading Envelopes yet, so nothing is drained and
+                                // the bounded channel actually has to drop.
+
+        // The runtime kept running (no exception/hang) — draining now must succeed and return
+        // exactly `capacity` envelopes: the LAST 3 written (the earlier ones — UserMessage,
+        // call-1, call-2 — were dropped to make room).
+        var drained = new List<AcpEventEnvelope>();
+        while (h.Runtime.Envelopes.TryRead(out var e)) drained.Add(e);
+
+        await Assert.That(drained.Count).IsEqualTo(3);
+        await Assert.That(drained.Select(e => e.ToolCallId)).IsEquivalentTo(new[] { "call-3", "call-4", "call-5" });
+        await Assert.That(drained.All(e => e.Kind == AcpEventKind.ToolCall)).IsTrue();
+
+        await Assert.That(logger.Entries).Contains(e => e.Level == LogLevel.Warning && e.Message.Contains("transcript", StringComparison.OrdinalIgnoreCase));
+
+        h.Fake.HoldPromptResponses?.TrySetResult();
     }
 }
