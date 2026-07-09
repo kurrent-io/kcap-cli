@@ -1,14 +1,14 @@
 namespace Capacitor.Cli.Core.Instructions;
 
 /// <summary>
-/// Read-modify-write engine for a harness's markdown agent-instructions file (Copilot's
-/// <c>copilot-instructions.md</c>, Gemini's <c>GEMINI.md</c>, <c>AGENTS.md</c>, …). kcap owns only a
-/// marker-delimited block inside the file, so user-authored content around it is preserved:
-/// non-destructive, idempotent, atomic, fail-closed. The inline markers are self-identifying — no
-/// sidecar ownership file is needed (unlike the JSON MCP config).
+/// Writes kcap's marker-delimited block into a harness's markdown agent-instructions file,
+/// preserving user content around it. Non-destructive, idempotent, atomic, fail-closed; the inline
+/// markers are self-identifying, so no sidecar ownership file is needed.
 /// </summary>
 public static class AgentInstructionsWriter {
     public enum Change { Unchanged, Updated, Failed }
+
+    enum BlockState { Absent, Present, Malformed }
 
     // HTML comments so the block is valid Markdown and clearly delimited. Kept stable across
     // versions so an older block is always found and replaced/removed rather than duplicated.
@@ -21,7 +21,12 @@ public static class AgentInstructionsWriter {
         var block = BeginMarker + "\n" + body.Trim('\n') + "\n" + EndMarker;
         try {
             var existing = File.Exists(path) ? File.ReadAllText(path) : "";
-            var updated  = ReplaceOrAppendBlock(existing, block);
+            var (state, start, end) = FindBlock(existing);
+            if (state == BlockState.Malformed) return Change.Failed;   // BEGIN without END — refuse rather than duplicate
+
+            var updated = state == BlockState.Present
+                ? existing[..start] + block + existing[end..]          // replace in place
+                : AppendBlock(existing, block);
             if (updated == existing) return Change.Unchanged;
 
             var dir = Path.GetDirectoryName(path);
@@ -39,7 +44,11 @@ public static class AgentInstructionsWriter {
         try {
             if (!File.Exists(path)) return Change.Unchanged;
             var existing = File.ReadAllText(path);
-            var stripped = StripBlock(existing);
+            var (state, start, end) = FindBlock(existing);
+            if (state == BlockState.Malformed) return Change.Failed;   // BEGIN without END — can't safely strip
+            if (state == BlockState.Absent) return Change.Unchanged;
+
+            var stripped = StripBlock(existing, start, end);
             if (stripped == existing) return Change.Unchanged;
 
             if (string.IsNullOrWhiteSpace(stripped)) {
@@ -53,17 +62,13 @@ public static class AgentInstructionsWriter {
         }
     }
 
-    static string ReplaceOrAppendBlock(string content, string block) {
-        var (start, end) = FindBlock(content);
-        if (start >= 0) return content[..start] + block + content[end..]; // replace in place
-        if (content.Length == 0) return block + "\n";                     // fresh file
-        var sep = content.EndsWith("\n") ? "\n" : "\n\n";                 // one blank line before ours
+    static string AppendBlock(string content, string block) {
+        if (content.Length == 0) return block + "\n";        // fresh file
+        var sep = content.EndsWith("\n") ? "\n" : "\n\n";    // one blank line before ours
         return content + sep + block + "\n";
     }
 
-    static string StripBlock(string content) {
-        var (start, end) = FindBlock(content);
-        if (start < 0) return content;
+    static string StripBlock(string content, int start, int end) {
         var before = content[..start].TrimEnd('\n');
         var after  = content[end..].TrimStart('\n');
         if (before.Length == 0) return after;
@@ -71,13 +76,14 @@ public static class AgentInstructionsWriter {
         return before + "\n\n" + after;
     }
 
-    // Returns the [start, end) span of the whole block (markers inclusive), or (-1, -1) if absent.
-    static (int start, int end) FindBlock(string content) {
+    // Locates kcap's block. Malformed = a BEGIN marker with no following END (truncated write, merge
+    // conflict, or hand-edit); callers refuse rather than duplicate or strand it.
+    static (BlockState State, int Start, int End) FindBlock(string content) {
         var start = content.IndexOf(BeginMarker, StringComparison.Ordinal);
-        if (start < 0) return (-1, -1);
+        if (start < 0) return (BlockState.Absent, -1, -1);
         var end = content.IndexOf(EndMarker, start, StringComparison.Ordinal);
-        if (end < 0) return (-1, -1);
-        return (start, end + EndMarker.Length);
+        if (end < 0) return (BlockState.Malformed, -1, -1);
+        return (BlockState.Present, start, end + EndMarker.Length);
     }
 
     static void WriteAtomic(string path, string content) {

@@ -74,6 +74,25 @@ public class PluginCommandCopilotTests {
     }
 
     [Test]
+    public async Task install_copilot_if_installed_heals_mcp_and_instructions_when_hooks_current() {
+        using var _    = new EnvScope("COPILOT_HOME", null);
+        using var home = new FakeUserHome();
+        var env = TestEnv(home.Path);
+
+        // Hooks installed AND marker already current → the refresh must NOT rewrite hooks, but must
+        // still (re)create the separate MCP + instructions files if they're missing (self-heal).
+        PluginCommand.InstallCopilotHooks(env.CopilotKcapHooksJson); // writes hooks + current marker
+
+        var exit = await PluginCommand.HandleAsync(["plugin", "install", "--copilot", "--if-installed"], env);
+        await Assert.That(exit).IsEqualTo(0);
+
+        await Assert.That(File.Exists(env.CopilotMcpConfigJson)).IsTrue();
+        await Assert.That(File.Exists(env.CopilotInstructionsMd)).IsTrue();
+        var servers = JsonNode.Parse(await File.ReadAllTextAsync(env.CopilotMcpConfigJson))!.AsObject()["mcpServers"]!.AsObject();
+        await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-review");
+    }
+
+    [Test]
     public async Task remove_copilot_unregisters_mcp_servers_preserving_user_entries() {
         using var _    = new EnvScope("COPILOT_HOME", null);
         using var home = new FakeUserHome();

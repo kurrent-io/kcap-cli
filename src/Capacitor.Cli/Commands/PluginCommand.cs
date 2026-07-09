@@ -1020,35 +1020,39 @@ public static class PluginCommand {
 
         var refreshOnly = args.Contains("--if-installed");
 
-        switch (refreshOnly) {
-            case true when !CopilotHooksInstaller.IsInstalled(hooksPath):
-            case true when CopilotHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current():
-                return 0;
-            // Same PATH precheck rationale as Cursor: kcap.json writes the bare
-            // `kcap hook --copilot` command, so Copilot must find kcap on PATH.
-            // Skipped on the postinstall (--if-installed) path — see InstallCursor.
-            case false when !AgentDetector.IsInstalled("kcap"):
-                await env.Stderr.WriteLineAsync(
-                    "Cannot install Copilot hooks: 'kcap' is not on PATH. "
-                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
-                );
+        // Refresh-only mode never touches a machine that never opted in.
+        if (refreshOnly && !CopilotHooksInstaller.IsInstalled(hooksPath)) return 0;
 
-                return 1;
-        }
-
-        if (!InstallCopilotHooks(hooksPath)) {
-            if (refreshOnly) return 0;
-
-            await env.Stderr.WriteLineAsync("Could not write Copilot hooks file.");
+        // Fresh install needs kcap on PATH: kcap.json writes the bare `kcap hook --copilot` command,
+        // so Copilot must find kcap on PATH. Skipped on the --if-installed (postinstall) path.
+        if (!refreshOnly && !AgentDetector.IsInstalled("kcap")) {
+            await env.Stderr.WriteLineAsync(
+                "Cannot install Copilot hooks: 'kcap' is not on PATH. "
+              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+            );
 
             return 1;
         }
 
-        await env.Stdout.WriteLineAsync(
-            refreshOnly
-                ? $"Copilot hooks refreshed ({hooksPath})"
-                : $"Copilot hooks installed ({hooksPath})"
-        );
+        // Write hooks unless a refresh finds them already at the current version. Even when the
+        // hooks write is skipped, still (re)register MCP + install instructions below: they live in
+        // separate files and must be healed if a prior write failed (warning-only) or was deleted.
+        var hooksCurrent = refreshOnly && CopilotHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current();
+        if (!hooksCurrent) {
+            if (!InstallCopilotHooks(hooksPath)) {
+                if (refreshOnly) return 0;
+
+                await env.Stderr.WriteLineAsync("Could not write Copilot hooks file.");
+
+                return 1;
+            }
+
+            await env.Stdout.WriteLineAsync(
+                refreshOnly
+                    ? $"Copilot hooks refreshed ({hooksPath})"
+                    : $"Copilot hooks installed ({hooksPath})"
+            );
+        }
 
         // Register the kcap MCP servers in ~/.copilot/mcp-config.json so Copilot picks them
         // up with no manual JSON edit. Non-destructive + idempotent. Never fails the install:

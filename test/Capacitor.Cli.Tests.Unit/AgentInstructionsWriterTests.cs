@@ -107,6 +107,33 @@ public class AgentInstructionsWriterTests {
             .IsEqualTo(AgentInstructionsWriter.Change.Failed);
     }
 
+    [Test]
+    public async Task Write_fails_on_orphan_begin_marker_instead_of_duplicating() {
+        using var tmp = new TempDir();
+        var path = Path.Combine(tmp.Path, "copilot-instructions.md");
+        // BEGIN marker but no END (truncation / hand-edit / merge conflict).
+        var orphan = "# rules\n\n" + AgentInstructionsWriter.BeginMarker + "\nhalf a block, no end\n";
+        await File.WriteAllTextAsync(path, orphan);
+
+        var change = AgentInstructionsWriter.Write(path, KcapAgentInstructions.Body);
+
+        await Assert.That(change).IsEqualTo(AgentInstructionsWriter.Change.Failed);  // refuse, don't append a duplicate
+        await Assert.That(await File.ReadAllTextAsync(path)).IsEqualTo(orphan);      // file left untouched
+    }
+
+    [Test]
+    public async Task Remove_fails_on_orphan_begin_marker() {
+        using var tmp = new TempDir();
+        var path = Path.Combine(tmp.Path, "copilot-instructions.md");
+        var orphan = AgentInstructionsWriter.BeginMarker + "\nhalf a block, no end\n";
+        await File.WriteAllTextAsync(path, orphan);
+
+        var change = AgentInstructionsWriter.Remove(path);
+
+        await Assert.That(change).IsEqualTo(AgentInstructionsWriter.Change.Failed);  // can't safely strip a partial block
+        await Assert.That(await File.ReadAllTextAsync(path)).IsEqualTo(orphan);      // file left untouched
+    }
+
     static int CountOccurrences(string haystack, string needle) {
         int count = 0, i = 0;
         while ((i = haystack.IndexOf(needle, i, StringComparison.Ordinal)) >= 0) { count++; i += needle.Length; }
