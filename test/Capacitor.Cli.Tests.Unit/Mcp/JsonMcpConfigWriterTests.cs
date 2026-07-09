@@ -99,6 +99,30 @@ public class JsonMcpConfigWriterTests {
     }
 
     [Test]
+    public async Task Register_on_empty_file_writes_all_servers() {
+        // Antigravity (and others) ship a 0-byte mcp_config.json on first run. An empty file has
+        // nothing to preserve, so it must be treated as an empty config — NOT fail-closed as malformed.
+        var path = TempConfig();
+        File.WriteAllText(path, "");
+        var change = JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Standard, null, new FakeMarker());
+
+        await Assert.That(change).IsEqualTo(JsonMcpConfigWriter.Change.Updated);
+        var servers = (JsonObject)Read(path)["mcpServers"]!;
+        await Assert.That(servers.Count).IsEqualTo(4);
+        await Assert.That(servers.ContainsKey("kcap-review")).IsTrue();
+    }
+
+    [Test]
+    public async Task Register_on_whitespace_only_file_writes_all_servers() {
+        var path = TempConfig();
+        File.WriteAllText(path, "  \n\t\n");
+        var change = JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Standard, null, new FakeMarker());
+
+        await Assert.That(change).IsEqualTo(JsonMcpConfigWriter.Change.Updated);
+        await Assert.That(((JsonObject)Read(path)["mcpServers"]!).ContainsKey("kcap-review")).IsTrue();
+    }
+
+    [Test]
     public async Task Register_fails_closed_when_block_is_wrong_type() {
         var path = TempConfig();
         File.WriteAllText(path, """{ "mcpServers": "oops" }""");

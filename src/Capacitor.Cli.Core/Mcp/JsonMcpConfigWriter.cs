@@ -96,9 +96,17 @@ public static class JsonMcpConfigWriter {
 
             if (File.Exists(configPath)) {
                 try {
-                    var parsed = JsonNode.Parse(File.ReadAllText(configPath));
-                    if (parsed is not JsonObject obj) return Change.Failed; // wrong top-level type
-                    root = obj;
+                    var text = File.ReadAllText(configPath);
+                    // An empty or whitespace-only file has nothing to preserve, so treat it as an
+                    // empty config rather than fail-closed malformed JSON — some harnesses (e.g.
+                    // Antigravity) ship a 0-byte mcp_config.json on first run.
+                    if (string.IsNullOrWhiteSpace(text)) {
+                        root = new JsonObject();
+                    } else {
+                        var parsed = JsonNode.Parse(text);
+                        if (parsed is not JsonObject obj) return Change.Failed; // wrong top-level type
+                        root = obj;
+                    }
                 } catch {
                     return Change.Failed; // malformed — never clobber
                 }
