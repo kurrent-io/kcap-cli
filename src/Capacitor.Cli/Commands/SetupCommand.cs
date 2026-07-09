@@ -36,6 +36,8 @@ public static class SetupCommand {
         var skipCopilotMcpFlag = args.Contains("--skip-copilot-mcp");
         var skipCopilotInstructionsFlag = args.Contains("--skip-copilot-instructions");
         var skipGeminiFlag   = args.Contains("--skip-gemini-hooks");
+        var skipGeminiMcpFlag = args.Contains("--skip-gemini-mcp");
+        var skipGeminiInstructionsFlag = args.Contains("--skip-gemini-instructions");
         var skipKiroFlag     = args.Contains("--skip-kiro-hooks");
         var skipPiFlag       = args.Contains("--skip-pi-hooks");
         var skipOpenCodeFlag = args.Contains("--skip-opencode-hooks");
@@ -241,7 +243,9 @@ public static class SetupCommand {
             SkipCodexNetworkAccess: skipCodexNetworkFlag,
             SkipCursorMcp: skipCursorMcpFlag,
             SkipCopilotMcp: skipCopilotMcpFlag,
-            SkipCopilotInstructions: skipCopilotInstructionsFlag);
+            SkipCopilotInstructions: skipCopilotInstructionsFlag,
+            SkipGeminiMcp: skipGeminiMcpFlag,
+            SkipGeminiInstructions: skipGeminiInstructionsFlag);
 
         // AI-794 — allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
@@ -268,7 +272,8 @@ public static class SetupCommand {
             CodexConfigTomlPath:  Path.Combine(CodexPaths.Home(), "config.toml"),
             CursorMcpPath:        CursorPaths.UserMcpJson(),
             CopilotMcpPath:       CopilotPaths.McpConfigJson(),
-            CopilotInstructionsPath: CopilotPaths.InstructionsMd());
+            CopilotInstructionsPath: CopilotPaths.InstructionsMd(),
+            GeminiInstructionsPath: GeminiPaths.GeminiMd());
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -294,7 +299,11 @@ public static class SetupCommand {
             // AI-1285 — skills are already current when the on-disk marker matches this
             // build; used to skip the prompt + re-copy (mirrors PluginCommand's postinstall
             // fast path). A missing/stale marker reads as "not current" → prompt + install.
-            AgentSkillsCurrent:       dir => AgentsSkillsInstaller.ReadMarker(dir) == AgentsSkillsInstaller.CurrentVersion());
+            AgentSkillsCurrent:       dir => AgentsSkillsInstaller.ReadMarker(dir) == AgentsSkillsInstaller.CurrentVersion(),
+            RegisterGeminiMcp:        () => JsonMcpConfigWriter.Register(
+                GeminiPaths.SettingsJson(), KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("gemini")),
+            InstallGeminiInstructions: () => AgentInstructionsWriter.Write(
+                GeminiPaths.GeminiMd(), KcapAgentInstructions.Body));
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });

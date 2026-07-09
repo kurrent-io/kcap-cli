@@ -15,7 +15,7 @@ internal static class CodingAgentsStep {
     // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini
     // (AI-887), Kiro (AI-888), and Pi (AI-886) were all added after the original
     // four vendors.
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false);
 
     internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false);
 
@@ -36,7 +36,8 @@ internal static class CodingAgentsStep {
             string  AntigravityHooksPath = "",
             string  CursorMcpPath = "",
             string  CopilotMcpPath = "",
-            string  CopilotInstructionsPath = ""
+            string  CopilotInstructionsPath = "",
+            string  GeminiInstructionsPath = ""
         );
 
     internal record Installers(
@@ -57,7 +58,9 @@ internal static class CodingAgentsStep {
             Func<JsonMcpConfigWriter.Change>?                        RegisterCursorMcp = null,
             Func<JsonMcpConfigWriter.Change>?                        RegisterCopilotMcp = null,
             Func<AgentInstructionsWriter.Change>?                    InstallCopilotInstructions = null,
-            Func<string /*skillsDir*/, bool>?                        AgentSkillsCurrent = null
+            Func<string /*skillsDir*/, bool>?                        AgentSkillsCurrent = null,
+            Func<JsonMcpConfigWriter.Change>?                        RegisterGeminiMcp = null,
+            Func<AgentInstructionsWriter.Change>?                    InstallGeminiInstructions = null
         );
 
     internal record Result(
@@ -75,7 +78,9 @@ internal static class CodingAgentsStep {
             bool AntigravityHooksInstalled = false,
             bool CursorMcpRegistered = false,
             bool CopilotMcpRegistered = false,
-            bool CopilotInstructionsInstalled = false
+            bool CopilotInstructionsInstalled = false,
+            bool GeminiMcpRegistered = false,
+            bool GeminiInstructionsInstalled = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -111,6 +116,8 @@ internal static class CodingAgentsStep {
         var copilotMcpRegistered  = HandleCopilotMcp(options, paths, installers, writeLine, copilotHooksInstalled);
         var copilotInstructionsInstalled = HandleCopilotInstructions(options, paths, installers, writeLine, copilotHooksInstalled);
         var geminiHooksInstalled  = HandleGeminiHooks(options, detected, paths, installers, prompt, writeLine);
+        var geminiMcpRegistered   = HandleGeminiMcp(options, paths, installers, writeLine, geminiHooksInstalled);
+        var geminiInstructionsInstalled = HandleGeminiInstructions(options, paths, installers, writeLine, geminiHooksInstalled);
         var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, prompt, writeLine);
         var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, prompt, writeLine);
         var openCodeExtensionInstalled = HandleOpenCodeExtension(options, detected, paths, installers, prompt, writeLine);
@@ -141,7 +148,9 @@ internal static class CodingAgentsStep {
                 antigravityHooksInstalled,
                 CursorMcpRegistered: cursorMcpRegistered,
                 CopilotMcpRegistered: copilotMcpRegistered,
-                CopilotInstructionsInstalled: copilotInstructionsInstalled
+                CopilotInstructionsInstalled: copilotInstructionsInstalled,
+                GeminiMcpRegistered: geminiMcpRegistered,
+                GeminiInstructionsInstalled: geminiInstructionsInstalled
             )
         );
     }
@@ -836,6 +845,76 @@ internal static class CodingAgentsStep {
                 return false;
             default:
                 writeLine($"  [yellow]⚠[/] Could not write Copilot instructions to {path}.");
+
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Registers the kcap MCP servers into Gemini's shared <c>~/.gemini/settings.json</c>
+    /// (<c>mcpServers</c> block) via <see cref="Installers.RegisterGeminiMcp"/> so Gemini picks them
+    /// up with no manual JSON edit. Gated on Gemini hooks installing — the same "full Gemini
+    /// integration" trigger used by the Cursor/Copilot MCP handlers — and on
+    /// <see cref="Options.SkipGeminiMcp"/>. No prompt: registration is non-destructive (only adds
+    /// missing kcap servers, preserving the user's other settings).
+    /// </summary>
+    static bool HandleGeminiMcp(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           geminiHooksInstalled
+        ) {
+        if (installers.RegisterGeminiMcp is null || !geminiHooksInstalled || options.SkipGeminiMcp) return false;
+
+        // MCP servers live in the same settings.json as the hooks.
+        var configPath = Markup.Escape(paths.GeminiSettingsPath);
+
+        switch (installers.RegisterGeminiMcp()) {
+            case JsonMcpConfigWriter.Change.Updated:
+                writeLine($"  [green]✓[/] Gemini MCP servers registered ([dim]{configPath}[/])");
+
+                return true;
+            case JsonMcpConfigWriter.Change.Unchanged:
+                writeLine("  [dim]· Gemini MCP servers already registered — no change needed[/]");
+
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not register Gemini MCP servers in {configPath} — see README to add them manually.");
+
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Installs kcap's agent-instructions block into Gemini's global <c>~/.gemini/GEMINI.md</c> via
+    /// <see cref="Installers.InstallGeminiInstructions"/> so Gemini's model is steered toward the
+    /// kcap MCP tools. Gated on Gemini hooks installing — same "full Gemini integration" trigger as
+    /// <see cref="HandleGeminiMcp"/> — and on <see cref="Options.SkipGeminiInstructions"/>.
+    /// Non-destructive: only kcap's marker-delimited block is written.
+    /// </summary>
+    static bool HandleGeminiInstructions(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           geminiHooksInstalled
+        ) {
+        if (installers.InstallGeminiInstructions is null || !geminiHooksInstalled || options.SkipGeminiInstructions) return false;
+
+        var path = Markup.Escape(paths.GeminiInstructionsPath);
+
+        switch (installers.InstallGeminiInstructions()) {
+            case AgentInstructionsWriter.Change.Updated:
+                writeLine($"  [green]✓[/] Gemini instructions installed ([dim]{path}[/])");
+
+                return true;
+            case AgentInstructionsWriter.Change.Unchanged:
+                writeLine("  [dim]· Gemini instructions already up to date — no change needed[/]");
+
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not write Gemini instructions to {path}.");
 
                 return false;
         }

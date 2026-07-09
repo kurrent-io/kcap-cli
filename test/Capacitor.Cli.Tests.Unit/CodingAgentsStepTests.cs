@@ -822,6 +822,134 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
+    public async Task Gemini_mcp_registered_when_hooks_installed() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.GeminiMcpRegistered).IsTrue();
+        await Assert.That(calls.RegisterGeminiMcpCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Gemini MCP servers registered"));
+    }
+
+    [Test]
+    public async Task Gemini_mcp_not_registered_when_hooks_fail() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { GeminiHooksReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.GeminiHooksInstalled).IsFalse();
+        await Assert.That(calls.RegisterGeminiMcpCalled).IsFalse();
+        await Assert.That(result.GeminiMcpRegistered).IsFalse();
+    }
+
+    [Test]
+    public async Task Gemini_mcp_skipped_by_flag() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipGeminiMcp: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.GeminiHooksInstalled).IsTrue();
+        await Assert.That(result.GeminiMcpRegistered).IsFalse();
+        await Assert.That(calls.RegisterGeminiMcpCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Gemini_mcp_registration_failure_emits_warning() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { RegisterGeminiMcpReturns = JsonMcpConfigWriter.Change.Failed };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.RegisterGeminiMcpCalled).IsTrue();
+        await Assert.That(result.GeminiMcpRegistered).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not register Gemini MCP"));
+    }
+
+    [Test]
+    public async Task Gemini_instructions_installed_when_hooks_installed() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.GeminiInstructionsInstalled).IsTrue();
+        await Assert.That(calls.InstallGeminiInstructionsCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Gemini instructions installed"));
+    }
+
+    [Test]
+    public async Task Gemini_instructions_not_installed_when_hooks_fail() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { GeminiHooksReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.GeminiHooksInstalled).IsFalse();
+        await Assert.That(calls.InstallGeminiInstructionsCalled).IsFalse();
+        await Assert.That(result.GeminiInstructionsInstalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Gemini_instructions_skipped_by_flag() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipGeminiInstructions: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.GeminiHooksInstalled).IsTrue();
+        await Assert.That(result.GeminiInstructionsInstalled).IsFalse();
+        await Assert.That(calls.InstallGeminiInstructionsCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Gemini_instructions_failure_emits_warning() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { InstallGeminiInstructionsReturns = AgentInstructionsWriter.Change.Failed };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.InstallGeminiInstructionsCalled).IsTrue();
+        await Assert.That(result.GeminiInstructionsInstalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write Gemini instructions"));
+    }
+
+    [Test]
     public async Task Codex_network_access_not_attempted_when_hooks_fail() {
         var sink     = new Sink();
         var calls    = new InstallerCalls { CodexHooksReturns = false };
@@ -1485,7 +1613,8 @@ public class CodingAgentsStepTests {
         CodexConfigTomlPath:  "/fake/.codex/config.toml",
         CursorMcpPath:        "/fake/.cursor/mcp.json",
         CopilotMcpPath:       "/fake/.copilot/mcp-config.json",
-        CopilotInstructionsPath: "/fake/.copilot/copilot-instructions.md"
+        CopilotInstructionsPath: "/fake/.copilot/copilot-instructions.md",
+        GeminiInstructionsPath: "/fake/.gemini/GEMINI.md"
     );
 
     sealed class Sink {
@@ -1555,6 +1684,12 @@ public class CodingAgentsStepTests {
 
         public bool                          InstallCopilotInstructionsCalled  { get; private set; }
         public AgentInstructionsWriter.Change InstallCopilotInstructionsReturns { get; set; } = AgentInstructionsWriter.Change.Updated;
+
+        public bool                     RegisterGeminiMcpCalled  { get; private set; }
+        public JsonMcpConfigWriter.Change RegisterGeminiMcpReturns { get; set; } = JsonMcpConfigWriter.Change.Updated;
+
+        public bool                          InstallGeminiInstructionsCalled  { get; private set; }
+        public AgentInstructionsWriter.Change InstallGeminiInstructionsReturns { get; set; } = AgentInstructionsWriter.Change.Updated;
 
         public Installers AsInstallers() => new(
             InstallClaudePlugin: (s, p) => {
@@ -1651,6 +1786,16 @@ public class CodingAgentsStepTests {
                 AgentSkillsCurrentArg    = dir;
 
                 return AgentSkillsCurrentReturns;
+            },
+            RegisterGeminiMcp: () => {
+                RegisterGeminiMcpCalled = true;
+
+                return RegisterGeminiMcpReturns;
+            },
+            InstallGeminiInstructions: () => {
+                InstallGeminiInstructionsCalled = true;
+
+                return InstallGeminiInstructionsReturns;
             }
         );
     }
