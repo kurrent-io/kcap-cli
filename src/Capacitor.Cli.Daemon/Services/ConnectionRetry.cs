@@ -33,8 +33,8 @@ namespace Capacitor.Cli.Daemon.Services;
 /// </summary>
 internal static class ConnectionRetry {
     /// <summary>
-    /// Non-generic overload for a hub invocation with no return value (e.g. <c>AcpSessionStarted</c>,
-    /// AI-688 Option B task 3) — delegates to the generic overload with a discarded
+    /// Non-generic overload for a hub invocation with no return value (e.g. <c>AcpSessionStarted</c>)
+    /// — delegates to the generic overload with a discarded
     /// <see langword="object?"/> result so void-returning callers get the exact same gating/retry
     /// semantics as <see cref="InvokeWithConnectionRetryAsync{T}"/> without duplicating the loop.
     /// </summary>

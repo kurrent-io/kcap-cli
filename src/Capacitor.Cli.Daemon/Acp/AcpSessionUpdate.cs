@@ -31,10 +31,10 @@ internal enum AcpUpdateKind {
 /// notably the untyped <c>plan</c> entries and any fields on spec-derived variants that drift once
 /// AI-684's probe follow-up re-verifies them against a non-plan-gated account.
 ///
-/// AI-688 Option B task 1 (§2.2 footnote 2) added <see cref="ToolInputJson"/> (the tool_call's
-/// <c>rawInput</c>, feeding <c>AcpEventEnvelope.ToolInputJson</c>) and
-/// <see cref="ToolResultText"/>/<see cref="ToolIsError"/> (a tool_call_update's extracted result
-/// content + failed-status flag, feeding <c>AcpEventEnvelope.ToolResult</c>/<c>ToolIsError</c>) —
+/// <see cref="ToolInputJson"/> carries the tool_call's
+/// <c>rawInput</c>, feeding <c>AcpEventEnvelope.ToolInputJson</c>, and
+/// <see cref="ToolResultText"/>/<see cref="ToolIsError"/> carry a tool_call_update's extracted result
+/// content + failed-status flag, feeding <c>AcpEventEnvelope.ToolResult</c>/<c>ToolIsError</c> —
 /// both extracted mechanically by <c>AcpHostedAgentRuntime.Reduce()</c> from <see cref="Raw"/>,
 /// regardless of terminal status; deciding WHETHER a given update should emit a <c>ToolResult</c>
 /// envelope (terminal + extractable content) is <c>AcpEventTranslator</c>'s job, not Reduce()'s.

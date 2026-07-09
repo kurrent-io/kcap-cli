@@ -21,12 +21,12 @@ namespace Capacitor.Cli.Daemon.Services;
 /// bridge). Local-attach (raw byte input) and terminal output are PTY-only surfaces the ACP runtime
 /// does not support until AI-687 adds a terminal capability.
 ///
-/// <b>AI-688 Option B task 2 (design spec §2.1/§2.4):</b> also owns a serialized, single-flight
-/// prompt-turn worker (<see cref="RunTurnWorkerAsync"/>/<see cref="ProcessTurnAsync"/>) and a chunk
-/// aggregator (<see cref="AggregateUpdate"/>) that together turn the raw <c>session/update</c> stream
-/// into an ORDERED, per-turn-aggregated <see cref="AcpEventEnvelope"/> transcript, exposed via
-/// <see cref="IAcpTranscriptSource"/> for the orchestrator (task 3/4) to bind + forward. Prompt turns
-/// (the initial launch prompt, and every <see cref="SendUserInputAsync"/>) are enqueued onto a FIFO
+/// Also owns a serialized, single-flight prompt-turn worker (<see cref="RunTurnWorkerAsync"/>/
+/// <see cref="ProcessTurnAsync"/>) and a chunk aggregator (<see cref="AggregateUpdate"/>) that
+/// together turn the raw <c>session/update</c> stream into an ORDERED, per-turn-aggregated
+/// <see cref="AcpEventEnvelope"/> transcript, exposed via <see cref="IAcpTranscriptSource"/> for the
+/// orchestrator to bind and forward. Prompt turns (the initial launch prompt, and every
+/// <see cref="SendUserInputAsync"/>) are enqueued onto a FIFO
 /// queue rather than fired as independent background work, so exactly one turn's chunks are ever
 /// aggregating at a time — a `stopReason` always flushes the buffer belonging to ITS OWN turn, never
 /// a concurrently-fired one. See <see cref="_aggregationLock"/>'s remarks for the thread-safety
@@ -46,18 +46,18 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
         new UnboundedChannelOptions { SingleReader = false, SingleWriter = true });
 
     /// <summary>
-    /// AI-688 PR #301 reliability fix (Qodo #6): default cap for <see cref="_transcript"/> — generous
-    /// relative to a realistic session's envelope volume (aggregation already collapses chunk runs
-    /// into one envelope each; even a long turn with dozens of tool calls stays well under this), so
-    /// it only ever bites during a genuinely stalled/outaged forwarder. Overridable via the
-    /// constructor so tests can exercise the drop path with a small cap.
+    /// Default cap for <see cref="_transcript"/> — generous relative to a realistic session's
+    /// envelope volume (aggregation already collapses chunk runs into one envelope each; even a long
+    /// turn with dozens of tool calls stays well under this), so it only ever bites during a
+    /// genuinely stalled/outaged forwarder. Overridable via the constructor so tests can exercise the
+    /// drop path with a small cap.
     /// </summary>
     const int DefaultTranscriptCapacity = 2000;
 
     /// <summary>
-    /// AI-688 PR #301 reliability fix (Qodo #6): default cap for <see cref="_pendingTurns"/> — user
-    /// inputs are low-volume (a human typing follow-ups), so a modest cap is enough to absorb a burst
-    /// without ever realistically filling up in normal use.
+    /// Default cap for <see cref="_pendingTurns"/> — user inputs are low-volume (a human typing
+    /// follow-ups), so a modest cap is enough to absorb a burst without ever realistically filling up
+    /// in normal use.
     /// </summary>
     const int DefaultPendingTurnsCapacity = 50;
 
@@ -67,14 +67,14 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     int          _droppedPendingTurns;
 
     /// <summary>
-    /// AI-688 Option B task 2 (§2.1): the ordered, aggregated <see cref="AcpEventEnvelope"/>
-    /// transcript — every write goes through <see cref="EmitEnvelope"/>, which always holds
-    /// <see cref="_aggregationLock"/>, so this channel's FIFO write order matches lock-acquisition
-    /// order across the two call sites that can write to it (the turn worker, and the connection's
-    /// notification handler). SingleReader: task 3/4's forwarder is the only intended consumer.
+    /// The ordered, aggregated <see cref="AcpEventEnvelope"/> transcript — every write goes through
+    /// <see cref="EmitEnvelope"/>, which always holds <see cref="_aggregationLock"/>, so this
+    /// channel's FIFO write order matches lock-acquisition order across the two call sites that can
+    /// write to it (the turn worker, and the connection's notification handler). SingleReader: the
+    /// forwarder is the only intended consumer.
     ///
-    /// <b>AI-688 PR #301 reliability fix (Qodo #6):</b> bounded (see <see cref="DefaultTranscriptCapacity"/>)
-    /// with <see cref="BoundedChannelFullMode.DropOldest"/> — NEVER <see cref="BoundedChannelFullMode.Wait"/>.
+    /// Bounded (see <see cref="DefaultTranscriptCapacity"/>) with
+    /// <see cref="BoundedChannelFullMode.DropOldest"/> — NEVER <see cref="BoundedChannelFullMode.Wait"/>.
     /// The sole writer (<see cref="EmitEnvelope"/>) always uses the non-blocking <c>TryWrite</c>, which
     /// never blocks regardless of <see cref="BoundedChannelFullMode"/> — but <c>EmitEnvelope</c> runs
     /// SYNCHRONOUSLY on the ACP connection's own read loop (via <see cref="HandleNotification"/>), so
@@ -86,41 +86,41 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     readonly Channel<AcpEventEnvelope> _transcript;
 
     /// <summary>
-    /// AI-688 Option B task 2 (§2.1): FIFO queue of pending prompt-turn texts. Public entry points
-    /// (<see cref="StartAsync"/>'s initial prompt, <see cref="SendUserInputAsync"/>) call
-    /// <see cref="EnqueueTurn"/> and return immediately; the single <see cref="RunTurnWorkerAsync"/>
-    /// worker task drains this strictly in order, one turn fully at a time (see
-    /// <see cref="ProcessTurnAsync"/>). SingleReader: only the worker reads; SingleWriter=false since
-    /// both StartAsync and (potentially concurrent) SendUserInputAsync calls enqueue.
+    /// FIFO queue of pending prompt-turn texts. Public entry points (<see cref="StartAsync"/>'s
+    /// initial prompt, <see cref="SendUserInputAsync"/>) call <see cref="EnqueueTurn"/> and return
+    /// immediately; the single <see cref="RunTurnWorkerAsync"/> worker task drains this strictly in
+    /// order, one turn fully at a time (see <see cref="ProcessTurnAsync"/>). SingleReader: only the
+    /// worker reads; SingleWriter=false since both StartAsync and (potentially concurrent)
+    /// SendUserInputAsync calls enqueue.
     ///
-    /// <b>AI-688 PR #301 reliability fix (Qodo #6):</b> bounded (see <see cref="DefaultPendingTurnsCapacity"/>)
-    /// with <see cref="BoundedChannelFullMode.DropWrite"/> — a burst of input while the worker is
+    /// Bounded (see <see cref="DefaultPendingTurnsCapacity"/>) with
+    /// <see cref="BoundedChannelFullMode.DropWrite"/> — a burst of input while the worker is
     /// stuck on a stalled turn drops the NEW input rather than evicting an earlier, still-pending one
     /// (either is a pathological case; this queue realistically never gets anywhere near the cap).
     /// </summary>
     readonly Channel<string> _pendingTurns;
 
     /// <summary>
-    /// AI-688 Option B task 2 (§2.1 thread-safety invariant): guards the open aggregation run
-    /// (<see cref="_openRunKind"/>/<see cref="_openRunText"/>) AND every write to
-    /// <see cref="_transcript"/> (via <see cref="EmitEnvelope"/>). Two call sites can mutate/flush the
-    /// run: the connection's read loop (synchronously, via <see cref="HandleNotification"/> →
-    /// <see cref="AggregateUpdate"/>, on a kind transition) and the turn worker (via
-    /// <see cref="ProcessTurnAsync"/>'s turn-end flush, which runs as the continuation of an awaited
-    /// <c>session/prompt</c> response and so is NOT guaranteed to run on the read-loop's own thread —
-    /// <see cref="AcpConnection.RequestAsync"/>'s <c>TaskCompletionSource</c> is created with
-    /// <c>RunContinuationsAsynchronously</c> specifically so completing it never runs the awaiter's
-    /// continuation inline). Because turns are serialized (§2.1), these two call sites are never
-    /// ACTUALLY contending in practice — the worker only sends turn N+1's <c>session/prompt</c> (and
-    /// so only that turn's updates can start arriving) after turn N's flush has already completed —
-    /// but a plain <c>lock</c> (reentrant on the same thread, so <see cref="FlushOpenRunLocked"/>
-    /// calling back into <see cref="EmitEnvelope"/> cannot self-deadlock) is a cheap, simple guarantee
-    /// against that invariant ever silently breaking (a future change to the worker, an agent that
-    /// violates the one-turn-at-a-time assumption, etc.) rather than relying solely on the timing
-    /// argument. A single loop reading both the update stream and the turn-boundary signal was the
-    /// other option considered — rejected because it would require plumbing the connection's
-    /// notification callback through a channel too, adding a second unbounded channel + consumer loop
-    /// for no additional safety over a lock given the happens-before analysis above.
+    /// Guards the open aggregation run (<see cref="_openRunKind"/>/<see cref="_openRunText"/>) AND
+    /// every write to <see cref="_transcript"/> (via <see cref="EmitEnvelope"/>). Two call sites can
+    /// mutate/flush the run: the connection's read loop (synchronously, via
+    /// <see cref="HandleNotification"/> → <see cref="AggregateUpdate"/>, on a kind transition) and the
+    /// turn worker (via <see cref="ProcessTurnAsync"/>'s turn-end flush, which runs as the
+    /// continuation of an awaited <c>session/prompt</c> response and so is NOT guaranteed to run on
+    /// the read-loop's own thread — <see cref="AcpConnection.RequestAsync"/>'s
+    /// <c>TaskCompletionSource</c> is created with <c>RunContinuationsAsynchronously</c> specifically
+    /// so completing it never runs the awaiter's continuation inline). Because turns are serialized,
+    /// these two call sites are never ACTUALLY contending in practice — the worker only sends turn
+    /// N+1's <c>session/prompt</c> (and so only that turn's updates can start arriving) after turn
+    /// N's flush has already completed — but a plain <c>lock</c> (reentrant on the same thread, so
+    /// <see cref="FlushOpenRunLocked"/> calling back into <see cref="EmitEnvelope"/> cannot
+    /// self-deadlock) is a cheap, simple guarantee against that invariant ever silently breaking (a
+    /// future change to the worker, an agent that violates the one-turn-at-a-time assumption, etc.)
+    /// rather than relying solely on the timing argument. A single loop reading both the update
+    /// stream and the turn-boundary signal was the other option considered — rejected because it
+    /// would require plumbing the connection's notification callback through a channel too, adding a
+    /// second unbounded channel + consumer loop for no additional safety over a lock given the
+    /// happens-before analysis above.
     /// </summary>
     readonly object _aggregationLock = new();
 
@@ -169,10 +169,10 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
         _logger       = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
 
-        // AI-688 PR #301 reliability fix (Qodo #6): bounded, not unbounded — see the fields' own
-        // remarks for the FullMode rationale. transcriptCapacity/pendingTurnsCapacity are
-        // production-null (defaults apply); tests override them to exercise the drop path with a
-        // small cap instead of writing thousands of envelopes.
+        // Bounded, not unbounded — see the fields' own remarks for the FullMode rationale.
+        // transcriptCapacity/pendingTurnsCapacity are production-null (defaults apply); tests
+        // override them to exercise the drop path with a small cap instead of writing thousands of
+        // envelopes.
         _transcriptCapacity  = transcriptCapacity ?? DefaultTranscriptCapacity;
         _pendingTurnsCapacity = pendingTurnsCapacity ?? DefaultPendingTurnsCapacity;
 
@@ -203,15 +203,15 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     /// Reduced <c>session/update</c> notifications, in arrival order. Unbounded so a mapper that
     /// attaches slightly late (or is momentarily busy) never misses an update — the alternative
     /// (a plain event) would drop anything raised before a subscriber attaches. Every update written
-    /// here is ALSO fed into <see cref="AggregateUpdate"/> (AI-688 Option B task 2) to build the
-    /// aggregated <see cref="Envelopes"/> transcript — the two are independent sinks of the same
-    /// reduced update, not a producer/consumer pair.
+    /// here is ALSO fed into <see cref="AggregateUpdate"/> to build the aggregated
+    /// <see cref="Envelopes"/> transcript — the two are independent sinks of the same reduced update,
+    /// not a producer/consumer pair.
     /// </summary>
     public ChannelReader<AcpSessionUpdate> Updates => _updates.Reader;
 
-    // ── IAcpTranscriptSource (AI-688 Option B task 2, design spec §2.4) ─────────────────────────
-    // Exposed here for task 3/4 to pick up; NOT wired onto HostedRuntimeStart/the orchestrator by
-    // this task (see IAcpTranscriptSource's remarks).
+    // ── IAcpTranscriptSource ─────────────────────────────────────────────────────────────────────
+    // Exposed here for the orchestrator to pick up; not wired onto HostedRuntimeStart/the
+    // orchestrator here (see IAcpTranscriptSource's remarks).
 
     /// <inheritdoc cref="IAcpTranscriptSource.AcpSessionId"/>
     /// <remarks>Only meaningful once <see cref="StartAsync"/> has resolved <see cref="_sessionId"/> —
@@ -229,15 +229,15 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
 
     /// <summary>
     /// Performs the ACP handshake: starts the connection's read loop, then
-    /// <c>initialize</c> → <c>session/new</c> (with the absolute <paramref name="cwd"/>) →
-    /// (AI-688 gap 1) an optional model-selection step — resolves <paramref name="requestedModel"/>
-    /// against <c>session/new</c>'s <c>availableModels</c> and, if it matches, sends
+    /// <c>initialize</c> → <c>session/new</c> (with the absolute <paramref name="cwd"/>) → an optional
+    /// model-selection step — resolves <paramref name="requestedModel"/> against
+    /// <c>session/new</c>'s <c>availableModels</c> and, if it matches, sends
     /// <c>session/set_config_option</c> and awaits the response BEFORE the first turn fires (see
     /// <see cref="TrySelectModelAsync"/>). If <paramref name="initialPrompt"/> is non-empty,
-    /// <see cref="EnqueueTurn"/>s it onto the serialized prompt-turn worker (AI-688 Option B task 2 —
-    /// see <see cref="RunTurnWorkerAsync"/>) and returns as soon as the session is established — it
-    /// does NOT await that prompt turn to completion (AI-684 Fix E). Not part of
-    /// <see cref="IHostedAgentRuntime"/> — called directly by the Task 10 factory (and by tests)
+    /// <see cref="EnqueueTurn"/>s it onto the serialized prompt-turn worker (see
+    /// <see cref="RunTurnWorkerAsync"/>) and returns as soon as the session is established — it
+    /// does NOT await that prompt turn to completion. Not part of
+    /// <see cref="IHostedAgentRuntime"/> — called directly by the runtime factory (and by tests)
     /// once the connection/process are constructed. A failed handshake surfaces a clear exception
     /// (never hangs): the read loop is started before any request is sent, and every request goes
     /// through <see cref="AcpConnection.RequestAsync"/>, which itself never hangs past
@@ -278,21 +278,21 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
             throw new InvalidOperationException("ACP handshake (initialize/session-new) failed.", ex);
         }
 
-        // AI-688 gap 1: select the requested model (if any) BEFORE the first prompt fires. Awaited,
-        // but never fatal — see TrySelectModelAsync's remarks.
+        // Select the requested model (if any) BEFORE the first prompt fires. Awaited, but never
+        // fatal — see TrySelectModelAsync's remarks.
         await TrySelectModelAsync(sessionNewResult, requestedModel, ct).ConfigureAwait(false);
 
         // The session is established (initialize + session/new both completed) — the caller
         // (orchestrator) can now treat this agent as live. Enqueue the initial turn without
         // awaiting it: a real ACP turn can run arbitrarily long, and blocking StartAsync on it would
-        // delay agent registration/stoppability for the whole turn (AI-684 Fix E). Completion is
+        // delay agent registration/stoppability for the whole turn. Completion is
         // observed via the Updates/Envelopes channels, not this method's return.
         if (!string.IsNullOrEmpty(initialPrompt))
             EnqueueTurn(initialPrompt);
     }
 
     /// <summary>
-    /// AI-688 gap 1: resolves <paramref name="requestedModel"/> (already merged by the caller from
+    /// Resolves <paramref name="requestedModel"/> (already merged by the caller from
     /// <c>ctx.Model</c>/<c>DaemonConfig.CursorModel</c> — see
     /// <c>AcpHostedAgentRuntimeFactory.ResolveRequestedModel</c>) against
     /// <paramref name="sessionNewResult"/>'s <c>models.availableModels</c> via
@@ -300,9 +300,9 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     /// <c>session/set_config_option</c> and AWAITS the response before returning — the model must
     /// be set before <see cref="SendPromptAsync"/> fires the first turn. Never throws: no requested
     /// model, an unparsable/missing <c>models</c> object, no match, or a JSON-RPC error response are
-    /// all logged (where relevant) and treated as "use Cursor's default model" — per the AI-688
-    /// probe findings (<c>docs/ai-688-cursor-prototype-findings.md</c>), model selection is a
-    /// nice-to-have, never a launch precondition.
+    /// all logged (where relevant) and treated as "use Cursor's default model" — per the probe
+    /// findings (<c>docs/ai-688-cursor-prototype-findings.md</c>), model selection is a nice-to-have,
+    /// never a launch precondition.
     /// </summary>
     async Task TrySelectModelAsync(JsonElement sessionNewResult, string? requestedModel, CancellationToken ct) {
         if (string.IsNullOrWhiteSpace(requestedModel))
@@ -337,10 +337,10 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
         try {
             await _connection.RequestAsync("session/set_config_option", setConfigOptionParams, ct).ConfigureAwait(false);
 
-            // AI-688 Option B task 2 (§2.4): only record the model as "resolved" once the agent has
-            // actually confirmed it — a rejected/errored set_config_option (below) falls back to
-            // Cursor's own default, so IAcpTranscriptSource.ResolvedModel must stay null in that case
-            // too, not report a model that was never actually applied.
+            // Only record the model as "resolved" once the agent has actually confirmed it — a
+            // rejected/errored set_config_option (below) falls back to Cursor's own default, so
+            // IAcpTranscriptSource.ResolvedModel must stay null in that case too, not report a model
+            // that was never actually applied.
             _resolvedModel = resolvedModelId;
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             // Covers AcpRpcException (a well-formed JSON-RPC error response) and any other
@@ -353,17 +353,17 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     }
 
     /// <summary>
-    /// AI-688 Option B task 2 (§2.1): enqueues a prompt-turn's text onto <see cref="_pendingTurns"/>
-    /// and returns immediately — never blocks on, or observes, that turn's completion. Used by both
+    /// Enqueues a prompt-turn's text onto <see cref="_pendingTurns"/> and returns immediately — never
+    /// blocks on, or observes, that turn's completion. Used by both
     /// <see cref="StartAsync"/> (initial prompt) and <see cref="SendUserInputAsync"/> (follow-up
-    /// turns), preserving AI-684 Fix E's non-blocking contract for both callers. The single
+    /// turns), preserving a non-blocking contract for both callers. The single
     /// <see cref="RunTurnWorkerAsync"/> worker drains this queue strictly in order; turn completion is
     /// observed via <see cref="Updates"/>/<see cref="Envelopes"/>, not this method's return.
     ///
-    /// <b>AI-688 PR #301 reliability fix (Qodo #6):</b> <see cref="_pendingTurns"/> is bounded
-    /// (<see cref="BoundedChannelFullMode.DropWrite"/>) — checked explicitly BEFORE writing so a
-    /// full queue logs a clear warning (with a running dropped-count) rather than silently
-    /// discarding the input via the channel's own drop-write behavior.
+    /// <see cref="_pendingTurns"/> is bounded (<see cref="BoundedChannelFullMode.DropWrite"/>) —
+    /// checked explicitly BEFORE writing so a full queue logs a clear warning (with a running
+    /// dropped-count) rather than silently discarding the input via the channel's own drop-write
+    /// behavior.
     /// </summary>
     void EnqueueTurn(string text) {
         if (_pendingTurns.Reader.Count >= _pendingTurnsCapacity) {
@@ -380,11 +380,10 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     }
 
     /// <summary>
-    /// AI-688 Option B task 2 (§2.1): the single, long-running prompt-turn worker. Drains
-    /// <see cref="_pendingTurns"/> strictly FIFO, processing exactly one turn
-    /// (<see cref="ProcessTurnAsync"/>) fully to completion before starting the next — this single-
-    /// flight serialization is what makes "the aggregation buffer unambiguously belongs to the active
-    /// turn" true, per the design spec. Cancellable: <c>ChannelReader.ReadAllAsync(ct)</c> observes
+    /// The single, long-running prompt-turn worker. Drains <see cref="_pendingTurns"/> strictly FIFO,
+    /// processing exactly one turn (<see cref="ProcessTurnAsync"/>) fully to completion before
+    /// starting the next — this single-flight serialization is what makes "the aggregation buffer
+    /// unambiguously belongs to the active turn" true. Cancellable: <c>ChannelReader.ReadAllAsync(ct)</c> observes
     /// <paramref name="ct"/> both between turns and (via <see cref="ProcessTurnAsync"/>'s own use of
     /// <paramref name="ct"/> in <see cref="SendPromptAsync"/>) inside an in-flight turn, so a turn
     /// whose <c>stopReason</c> never arrives cannot pin <see cref="DisposeAsync"/>.
@@ -401,15 +400,14 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     }
 
     /// <summary>
-    /// AI-688 Option B task 2 (§2.1): processes exactly one serialized prompt turn: (a) emits this
-    /// turn's <c>UserMessage</c> envelope (written directly, not through the aggregation lock — it
-    /// happens-before any update for this turn can possibly arrive, since it is written before
-    /// <c>session/prompt</c> is even sent); (b) sends <c>session/prompt</c> and awaits its
-    /// <c>stopReason</c> response (reusing <see cref="SendPromptAsync"/>); (c) performs this turn's
-    /// end-of-turn flush of the aggregation buffer in a <c>finally</c> — this runs whether the turn
-    /// completed normally, faulted (logged, non-fatal — mirrors the old
-    /// <c>FireAndTrackPromptAsync</c>'s swallow-and-log behavior), or was cancelled (a courtesy flush
-    /// of whatever partial text had accumulated; see <see cref="_aggregationLock"/>'s remarks on why
+    /// Processes exactly one serialized prompt turn: (a) emits this turn's <c>UserMessage</c>
+    /// envelope (written directly, not through the aggregation lock — it happens-before any update
+    /// for this turn can possibly arrive, since it is written before <c>session/prompt</c> is even
+    /// sent); (b) sends <c>session/prompt</c> and awaits its <c>stopReason</c> response (reusing
+    /// <see cref="SendPromptAsync"/>); (c) performs this turn's end-of-turn flush of the aggregation
+    /// buffer in a <c>finally</c> — this runs whether the turn completed normally, faulted (logged,
+    /// non-fatal), or was cancelled (a courtesy flush of whatever partial text had accumulated; see
+    /// <see cref="_aggregationLock"/>'s remarks on why
     /// this can never hang <see cref="DisposeAsync"/> — flushing is a pure in-memory operation, never
     /// I/O). A cancellation still propagates out of this method (the <c>when</c> filter below only
     /// catches non-cancellation faults) so <see cref="RunTurnWorkerAsync"/>'s loop stops promptly.
@@ -465,11 +463,11 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     /// <summary>
     /// Sends a follow-up <c>session/prompt</c> for hosted-UI text input (server <c>SendInput</c>).
     /// Returns as soon as the text is enqueued (see <see cref="EnqueueTurn"/>) — it does NOT await the
-    /// turn's <c>stopReason</c> response (AI-684 Fix E): a real turn can run arbitrarily long, and the
+    /// turn's <c>stopReason</c> response: a real turn can run arbitrarily long, and the
     /// pre-fix behavior (awaiting the full round trip) blocked this call — and therefore the
-    /// orchestrator's <c>HandleSendInput</c> — for the whole turn. AI-688 Option B task 2: if a prior
-    /// turn is still in flight, this text is queued FIFO and the worker sends it only once that
-    /// turn's own <c>stopReason</c> has been received and its buffer flushed — turn completion is
+    /// orchestrator's <c>HandleSendInput</c> — for the whole turn. If a prior turn is still in
+    /// flight, this text is queued FIFO and the worker sends it only once that turn's own
+    /// <c>stopReason</c> has been received and its buffer flushed — turn completion is
     /// observed via <see cref="Updates"/>/<see cref="Envelopes"/>, not this method's return.
     /// </summary>
     public Task SendUserInputAsync(string text) {
@@ -531,10 +529,10 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
         if (!_updates.Writer.TryWrite(reduced))
             _logger.LogDebug("ACP: dropped a session/update — updates channel already completed.");
 
-        // AI-688 Option B task 2 (§2.1): fed synchronously, on THIS notification callback's own
-        // thread — AcpConnection.RunAsync's single read loop calls HandleNotification directly
-        // (never concurrently with itself), so every update this runtime ever sees is aggregated in
-        // strict arrival order without needing its own queue/consumer loop.
+        // Fed synchronously, on THIS notification callback's own thread — AcpConnection.RunAsync's
+        // single read loop calls HandleNotification directly (never concurrently with itself), so
+        // every update this runtime ever sees is aggregated in strict arrival order without needing
+        // its own queue/consumer loop.
         AggregateUpdate(reduced);
     }
 
@@ -586,40 +584,36 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
         element.TryGetProperty(propertyName, out var value) ? value.GetString() : null;
 
     /// <summary>
-    /// AI-688 Option B task 1 (§2.2 footnote 2): verbatim JSON text of <paramref name="propertyName"/>
-    /// (e.g. a <c>tool_call</c>'s <c>rawInput</c> object) if present and not JSON <c>null</c>, else
-    /// <see langword="null"/> — used to populate <see cref="AcpSessionUpdate.ToolInputJson"/> without
-    /// re-serializing/reshaping the tool's input args (the mapper on the server side parses this raw
-    /// text itself; see <c>AcpSessionMapper.BuildToolCall</c>).
+    /// Verbatim JSON text of <paramref name="propertyName"/> when it's a JSON object (e.g. a
+    /// <c>tool_call</c>'s <c>rawInput</c>), else <see langword="null"/> — used to populate
+    /// <see cref="AcpSessionUpdate.ToolInputJson"/> without re-serializing/reshaping the tool's input
+    /// args (the mapper on the server side parses this raw text itself; see
+    /// <c>AcpSessionMapper.BuildToolCall</c>).
     /// </summary>
     static string? GetRawTextOrNull(JsonElement element, string propertyName) =>
-        element.TryGetProperty(propertyName, out var value) && value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined
-            ? value.GetRawText()
-            : null;
+        element.Obj(propertyName)?.GetRawText();
 
     /// <summary>
-    /// AI-688 Option B task 1 (§2.2 footnote 2, defensive/spec-derived — the tool_call_update result
-    /// shape is NOT probe-confirmed, see docs/acp-probe-findings.md): extracts a tool_call_update's
-    /// RESULT text for <see cref="AcpSessionUpdate.ToolResultText"/>, mechanically and regardless of
-    /// <c>status</c> (the terminal-status gate lives in <c>AcpEventTranslator</c>, not here). Prefers
-    /// the ACP-spec <c>content</c> array's text-block shape (<c>ToolCallContent</c>:
-    /// <c>{type:"content", content:{type:"text", text:"..."}}</c>) — concatenating every such block
-    /// found (newline-joined); non-text content variants (<c>diff</c>/<c>terminal</c>) are not
-    /// extracted here, degrading to "no result text from this block" rather than throwing. Falls back
-    /// to the verbatim <c>rawOutput</c> JSON text when no text content block is present. Returns
-    /// <see langword="null"/> when neither is present/extractable, so
-    /// <c>AcpEventTranslator.Translate</c> never emits an empty <c>ToolResultReceived</c>.
+    /// Extracts a tool_call_update's RESULT text for <see cref="AcpSessionUpdate.ToolResultText"/>,
+    /// mechanically and regardless of <c>status</c> (the terminal-status gate lives in
+    /// <c>AcpEventTranslator</c>, not here). Prefers the ACP-spec <c>content</c> array's text-block
+    /// shape (<c>ToolCallContent</c>: <c>{type:"content", content:{type:"text", text:"..."}}</c>) —
+    /// concatenating every such block found (newline-joined); non-text content variants
+    /// (<c>diff</c>/<c>terminal</c>) are not extracted here, degrading to "no result text from this
+    /// block" rather than throwing. Falls back to the verbatim <c>rawOutput</c> JSON text when no
+    /// text content block is present. Returns <see langword="null"/> when neither is
+    /// present/extractable, so <c>AcpEventTranslator.Translate</c> never emits an empty
+    /// <c>ToolResultReceived</c>. This shape is defensive/spec-derived, not yet probe-confirmed
+    /// against real Cursor output (see docs/acp-probe-findings.md).
     /// </summary>
     static string? ExtractToolResultText(JsonElement update) {
-        if (update.TryGetProperty("content", out var contentEl) && contentEl.ValueKind == JsonValueKind.Array) {
+        if (update.Arr("content") is { } contentEl) {
             List<string>? texts = null;
 
             foreach (var block in contentEl.EnumerateArray()) {
-                if (block.ValueKind != JsonValueKind.Object) continue;
-                if (!block.TryGetProperty("type", out var blockType) || blockType.GetString() != "content") continue;
-                if (!block.TryGetProperty("content", out var inner) || inner.ValueKind != JsonValueKind.Object) continue;
-                if (!inner.TryGetProperty("type", out var innerType) || innerType.GetString() != "text") continue;
-                if (!inner.TryGetProperty("text", out var textEl) || textEl.GetString() is not { } text) continue;
+                if (block.Str("type") != "content") continue;
+                if (block.Obj("content") is not { } inner) continue;
+                if (inner.Str("text") is not { } text) continue;
 
                 (texts ??= []).Add(text);
             }
@@ -631,15 +625,15 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
         return GetRawTextOrNull(update, "rawOutput");
     }
 
-    // ── AI-688 Option B task 2 (§2.1): chunk aggregation ─────────────────────────────────────────
+    // ── Chunk aggregation ────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Aggregates ONE reduced update per the design spec's rules: a same-kind
+    /// Aggregates ONE reduced update: a same-kind
     /// <see cref="AcpUpdateKind.AgentMessageChunk"/>/<see cref="AcpUpdateKind.AgentThoughtChunk"/> run
     /// grows the open buffer; any other kind (or a kind transition between message/thought) flushes
     /// the open run first, then — for the non-aggregated kinds — translates <paramref name="update"/>
     /// 1:1 and emits it if non-null (tool_call/tool_call_update/plan/available_commands/unknown all
-    /// take this path; §2.2). Entirely under <see cref="_aggregationLock"/> so the
+    /// take this path). Entirely under <see cref="_aggregationLock"/> so the
     /// check-open-run-kind-then-append-or-flush decision is atomic against a concurrent turn-end
     /// flush from the worker (see the lock field's remarks for why that matters even though the two
     /// call sites are serialized in practice).
@@ -669,7 +663,7 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     }
 
     /// <summary>
-    /// Turn-end / session-end flush entry point (§2.1): flushes the open aggregation run, if any.
+    /// Turn-end / session-end flush entry point: flushes the open aggregation run, if any.
     /// Called by <see cref="ProcessTurnAsync"/> on its turn's <c>stopReason</c>/fault/cancellation,
     /// and defensively by <see cref="DisposeAsync"/> as a session-end safety net. Idempotent — a
     /// second call with no open run is a no-op.
@@ -707,8 +701,8 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     /// <see cref="AggregateUpdate"/>/<see cref="FlushOpenRunLocked"/> do not deadlock) so envelope
     /// order on the channel matches lock-acquisition order across every writer.
     ///
-    /// <b>AI-688 PR #301 reliability fix (Qodo #6):</b> <see cref="_transcript"/> is bounded
-    /// (<see cref="BoundedChannelFullMode.DropOldest"/>) — checked explicitly BEFORE writing (under
+    /// <see cref="_transcript"/> is bounded (<see cref="BoundedChannelFullMode.DropOldest"/>) —
+    /// checked explicitly BEFORE writing (under
     /// the same lock, so no other writer can race this check) so a full channel logs a clear warning
     /// (with a running dropped-count) at the exact write that triggers the eviction, rather than
     /// relying on <c>TryWrite</c>'s return value, which is <see langword="true"/> for BOTH a normal
@@ -729,10 +723,10 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     }
 
     /// <summary>
-    /// AI-688 Option B task 2: a REAL timestamp for every envelope this runtime emits (Seq itself
-    /// stays a <c>0</c> placeholder — task 3's forwarder assigns the real monotonic seq on dequeue).
-    /// Uses <see cref="_timeProvider"/> (defaults to <see cref="TimeProvider.System"/>, overridable in
-    /// tests for determinism) rather than <see cref="DateTimeOffset.UtcNow"/> directly.
+    /// A real timestamp for every envelope this runtime emits (Seq itself stays a <c>0</c> placeholder
+    /// — the forwarder assigns the real monotonic seq on dequeue). Uses <see cref="_timeProvider"/>
+    /// (defaults to <see cref="TimeProvider.System"/>, overridable in tests for determinism) rather
+    /// than <see cref="DateTimeOffset.UtcNow"/> directly.
     /// </summary>
     string NowIso() => _timeProvider.GetUtcNow().ToString("O");
 
@@ -762,10 +756,10 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
             // Best-effort — a stuck turn worker must never hang dispose.
         }
 
-        // Session-end flush (§2.1): a belt-and-suspenders flush of any still-open aggregation run.
-        // In the normal shutdown path ProcessTurnAsync's own finally already flushed the active
-        // turn's buffer above, making this a no-op — it only matters for the (currently unreachable
-        // in practice) case where the worker task itself never ran a turn to begin with.
+        // Session-end flush: a belt-and-suspenders flush of any still-open aggregation run. In the
+        // normal shutdown path ProcessTurnAsync's own finally already flushed the active turn's
+        // buffer above, making this a no-op — it only matters for the (currently unreachable in
+        // practice) case where the worker task itself never ran a turn to begin with.
         FlushOpenRun();
         _transcript.Writer.TryComplete();
 

@@ -6,12 +6,12 @@ using Microsoft.Extensions.Logging;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// AI-688 Option B task 3 (design spec §2.3): pumps an ACP runtime's aggregated
-/// <see cref="AcpEventEnvelope"/> transcript (task 2's <see cref="IAcpTranscriptSource.Envelopes"/>)
+/// Pumps an ACP runtime's aggregated
+/// <see cref="AcpEventEnvelope"/> transcript (<see cref="IAcpTranscriptSource.Envelopes"/>)
 /// to the server via a <c>SendAcpEventsAsync</c>-shaped delegate, assigning the real monotonic
 /// <see cref="AcpEventEnvelope.Seq"/> and driving the seq/ack state machine against the server's
 /// EXACT <c>CapacitorHub.AcpSessionEvents</c>/<c>AcpSessionRegistry</c> contract (read read-only from
-/// <c>Capacitor.Server.Sessions.CapacitorHub</c> in the ai-686 server worktree):
+/// <c>Capacitor.Server.Sessions.CapacitorHub</c> in the server repo):
 ///
 /// <list type="bullet">
 /// <item>
@@ -36,7 +36,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// </item>
 /// </list>
 ///
-/// <b>Known edge case (documented, not fully closed — task 3 report):</b> the "terminal-drop"
+/// <b>Known edge case (documented, not fully closed):</b> the "terminal-drop"
 /// signature above is unambiguous only when the FIRST envelope of a batch is the one silently
 /// dropped by an ALREADY-terminal binding and the batch has exactly one envelope, OR the binding
 /// turns terminal partway through the batch (e.g. this very batch's own <c>SessionEnded</c> mapping).
@@ -44,16 +44,16 @@ namespace Capacitor.Cli.Daemon.Services;
 /// loop drops the first (matching) envelope silently, then reports the SECOND envelope as a "gap"
 /// (<see cref="AcpBatchAck.ExpectedNextSeq"/> set to the very seq it just dropped) — indistinguishable
 /// on the wire from a genuine gap. Resending in that state would loop forever against a terminal
-/// binding — so a <b>hot-loop guard</b> (AI-688 review) caps consecutive same-<c>ExpectedNextSeq</c>
+/// binding — so a <b>hot-loop guard</b> caps consecutive same-<c>ExpectedNextSeq</c>
 /// resends that make no progress (with a small backoff) and, once the cap is hit, treats the binding
 /// as terminal (stop + clear + <see cref="IsTerminal"/>) rather than spinning. A legitimate gap
 /// advances its <c>ExpectedNextSeq</c> each round and so never trips the guard. Deeper reconnect
-/// resilience beyond this remains AI-689 per the design spec's deferral.
+/// resilience beyond this remains AI-689.
 ///
-/// NOT this task's job (task 4's): building/emitting the <c>SessionStarted</c> envelope (it is passed
+/// Out of scope here: building/emitting the <c>SessionStarted</c> envelope (it is passed
 /// in pre-built as <paramref name="initialEnvelope"/>) or calling <c>AcpSessionStarted</c> — the bind
 /// always precedes starting this forwarder. This forwarder also never emits a <c>session_ended</c>
-/// envelope; per §2.2/§2.3 the server's <c>EndAgentSession</c> is the sole <c>SessionEnded</c> owner.
+/// envelope; the server's <c>EndAgentSession</c> is the sole <c>SessionEnded</c> owner.
 /// </summary>
 internal sealed class AcpTranscriptForwarder {
     static readonly TimeSpan DefaultInitialSendRetryDelay = TimeSpan.FromSeconds(1);
@@ -81,20 +81,20 @@ internal sealed class AcpTranscriptForwarder {
     long _nextSeq     = 1; // seq 0 is reserved for the initial envelope
     long _highestSent = -1;
 
-    // Hot-loop guard (AI-688 review): the "already-terminal binding reporting an indistinguishable
+    // Hot-loop guard: the "already-terminal binding reporting an indistinguishable
     // gap" edge (see this class's remarks) would otherwise make the gap path resend forever from the
     // same ExpectedNextSeq. Track consecutive same-point resends that made no progress; cap them.
     long? _lastResendFrom;
     int   _stalledGapResends;
 
     /// <summary>
-    /// Set once a terminal-drop ack stops the loop (design spec §2.3's "Forwarder terminal-drop
-    /// handling"). Lets a caller (task 4) distinguish "the transcript channel completed normally"
-    /// from "the server-side binding went terminal out from under this forwarder".
+    /// Set once a terminal-drop ack stops the loop. Lets a caller distinguish "the transcript
+    /// channel completed normally" from "the server-side binding went terminal out from under this
+    /// forwarder".
     /// </summary>
     public bool IsTerminal { get; private set; }
 
-    /// <summary>Test-only visibility into the unacked buffer's current size (internal — AI-688 task 3 tests).</summary>
+    /// <summary>Test-only visibility into the unacked buffer's current size.</summary>
     internal int UnackedCount => _unacked.Count;
 
     /// <summary>

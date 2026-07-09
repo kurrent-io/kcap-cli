@@ -58,7 +58,7 @@ public sealed record SessionCancelParams(
 );
 
 /// <summary>
-/// <c>session/set_config_option</c> params (AI-688 gap 1 — model selection). Sent AFTER
+/// <c>session/set_config_option</c> params (model selection). Sent AFTER
 /// <c>session/new</c> resolves and BEFORE the first <c>session/prompt</c>, with the response
 /// awaited so the model is set before the turn starts. Wire shape probe-confirmed against real
 /// <c>cursor-agent</c> (<c>docs/ai-688-cursor-prototype-findings.md</c>): <see cref="ConfigId"/> is
@@ -77,7 +77,7 @@ public sealed record SetConfigOptionParams(
 );
 
 /// <summary>
-/// Typed shape for <c>session/new</c>'s <c>result.models</c> object (AI-688 gap 1) — the daemon
+/// Typed shape for <c>session/new</c>'s <c>result.models</c> object — the daemon
 /// otherwise treats the <c>session/new</c> result as an opaque <see cref="JsonElement"/> (only
 /// <c>sessionId</c> is read out of it today); this record exists purely so
 /// <c>Capacitor.Cli.Core.Acp.AcpModelResolver</c> can resolve a requested model against

@@ -51,7 +51,7 @@ public class DaemonConfig {
     public string CursorPath { get; set; } = "cursor-agent";
 
     /// <summary>
-    /// Family-prefix default model for Cursor ACP sessions (AI-688 gap 1), e.g.
+    /// Family-prefix default model for Cursor ACP sessions, e.g.
     /// <c>"claude-sonnet-4-5"</c>. Cursor's wire protocol requires the exact, parameterized
     /// <c>modelId</c> from <c>session/new</c>'s <c>availableModels</c> (e.g.
     /// <c>claude-sonnet-4-5[thinking=true,context=200k]</c>), so this bare family name is resolved

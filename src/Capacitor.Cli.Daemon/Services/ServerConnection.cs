@@ -23,10 +23,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     readonly PendingAcpInteractionRegistry _pendingAcpInteractions = new();
 
     /// <summary>
-    /// AI-688 Option B task 3 (design spec §2.3 "reconnect re-bind"): every currently-active
-    /// ACP session↔agent binding this daemon owns, keyed by agentId. Populated by
-    /// <see cref="RegisterAcpBinding"/> (task 4, right after the initial <see cref="AcpSessionStartedAsync"/>
-    /// bind succeeds) and drained by <see cref="UnregisterAcpBinding"/> (task 4, on agent end).
+    /// Every currently-active ACP session↔agent binding this daemon owns, keyed by agentId.
+    /// Populated by <see cref="RegisterAcpBinding"/> (right after the initial
+    /// <see cref="AcpSessionStartedAsync"/> bind succeeds) and drained by
+    /// <see cref="UnregisterAcpBinding"/> (on agent end).
     /// <see cref="ReBindAcpSessionsAsync"/> replays every entry here idempotently on each reconnect —
     /// see that method's remarks for why it does NOT go through the gated <see cref="AcpSessionStartedAsync"/>.
     /// </summary>
@@ -356,8 +356,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// restores readiness. Folding agent re-registration into the readiness bracket closes the
     /// window where a permission invoke could fire after <c>DaemonConnect</c> but before the server
     /// re-established per-session ownership (AI-864); folding the ACP re-bind in right after it
-    /// closes the equivalent window for <see cref="SendAcpEventsAsync"/> (AI-688 Option B task 3,
-    /// design spec §2.3 "Enforcement") — that call is <see cref="IsReady"/>-gated, so it can never
+    /// closes the equivalent window for <see cref="SendAcpEventsAsync"/> — that call is
+    /// <see cref="IsReady"/>-gated, so it can never
     /// reach the server before <see cref="ReBindAcpSessionsAsync"/> has re-established every active
     /// binding. The gate clears readiness at the start of the bracket, which is also what drops
     /// readiness on the heartbeat slot-displacement path (DaemonHeartbeatLoop.cs → ReRegisterAsync),
@@ -370,9 +370,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         );
 
     /// <summary>
-    /// Composes the existing per-agent re-registration hook with the ACP reconnect re-bind
-    /// (AI-688 Option B task 3, design spec §2.3) — AFTER agent re-registration, so per-session
-    /// agent ownership is restored before an ACP binding tries to reference its agent. Both steps
+    /// Composes the existing per-agent re-registration hook with the ACP reconnect re-bind — AFTER
+    /// agent re-registration, so per-session agent ownership is restored before an ACP binding tries
+    /// to reference its agent. Both steps
     /// run inside <see cref="RegisterDaemon"/>'s <see cref="RegistrationGate.RunRegistrationAsync"/>
     /// bracket, i.e. strictly BEFORE <see cref="IsReady"/> can report true — <c>internal</c> (not
     /// <c>private</c>) so it can be driven directly in tests without a live hub connection.
@@ -454,7 +454,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <see cref="RegisterDaemon"/>). The permission-request retry loop waits on this rather than
     /// raw <see cref="HubConnectionState.Connected"/> so a retry can't race re-registration.
     /// <c>virtual</c> so unit tests can control readiness directly without a live SignalR transport
-    /// (AI-688 Option B task 3 — see the ACP hub-method tests).
+    /// (see the ACP hub-method tests).
     /// </summary>
     internal virtual bool IsReady => _gate.IsReady(_hub.State);
 
@@ -666,16 +666,16 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         ex is Microsoft.AspNetCore.SignalR.HubException he
         && he.Message.Contains("owning session", StringComparison.Ordinal);
 
-    // ── ACP wire contract forwarding (AI-688 Option B task 3) ───────────────────────────────────
-    // The forwarding half of design spec §2.3: two gated hub-invoke methods mirroring the server's
-    // CapacitorHub.AcpSessionStarted/AcpSessionEvents (Capacitor.Server.Sessions.CapacitorHub in the
-    // ai-686 server worktree) exactly — same method names, same argument order/names — plus the
+    // ── ACP wire contract forwarding ────────────────────────────────────────────────────────────
+    // Two gated hub-invoke methods mirroring the server's
+    // CapacitorHub.AcpSessionStarted/AcpSessionEvents (Capacitor.Server.Sessions.CapacitorHub)
+    // exactly — same method names, same argument order/names — plus the
     // reconnect re-bind registry or above (RegisterAcpBinding/UnregisterAcpBinding/ReBindAcpSessionsAsync).
     // AcpTranscriptForwarder (Acp/AcpTranscriptForwarder.cs) is the stateful caller of SendAcpEventsAsync;
     // this class never itself decides seq/gap/retry — it only forwards + gates + re-binds.
 
     /// <summary>
-    /// Registers an ACTIVE ACP session↔agent binding (AI-688 Option B task 4 calls this right after
+    /// Registers an ACTIVE ACP session↔agent binding (called right after
     /// its initial <see cref="AcpSessionStartedAsync"/> call succeeds) so a future reconnect's
     /// <see cref="ReBindAcpSessionsAsync"/> can idempotently re-establish it. Overwriting an existing
     /// entry for the same <paramref name="agentId"/> is harmless — the server-side bind is itself
@@ -684,14 +684,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public void RegisterAcpBinding(string agentId, AcpBindInfo bindInfo) => _acpBindings[agentId] = bindInfo;
 
     /// <summary>
-    /// Removes an ACP binding (task 4, when the agent ends) so a later reconnect no longer tries to
+    /// Removes an ACP binding (when the agent ends) so a later reconnect no longer tries to
     /// re-invoke <c>AcpSessionStarted</c> for an agent that no longer exists.
     /// </summary>
     public void UnregisterAcpBinding(string agentId) => _acpBindings.TryRemove(agentId, out _);
 
     /// <summary>
-    /// Bounded backoff between re-bind attempts inside <see cref="ReBindAcpSessionsAsync"/> (Codex
-    /// P1 #1) — short by design since this runs INSIDE the registration bracket, before
+    /// Bounded backoff between re-bind attempts inside <see cref="ReBindAcpSessionsAsync"/> — short
+    /// by design since this runs INSIDE the registration bracket, before
     /// <see cref="IsReady"/> flips true, so a slow bound here delays every other inbound/outbound
     /// call on this connection. Settable so tests don't wait for the real value.
     /// </summary>
@@ -699,7 +699,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     /// <summary>
     /// How many times <see cref="ReBindAcpSessionsAsync"/> retries a single binding's re-bind before
-    /// giving up on it (Codex P1 #1). Bounded so a binding that can never be re-established (the
+    /// giving up on it. Bounded so a binding that can never be re-established (the
     /// server has forgotten it, or the agent it belongs to has ended) isn't replayed forever on every
     /// future reconnect.
     /// </summary>
@@ -708,7 +708,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <summary>
     /// Re-invokes <c>AcpSessionStarted</c> directly on the hub — bypassing the gated
     /// <see cref="AcpSessionStartedAsync"/>/<see cref="IsReady"/> path on purpose — for every
-    /// currently-registered ACP binding (design spec §2.3 "reconnect re-bind"). Called from
+    /// currently-registered ACP binding. Called from
     /// <see cref="ReRegisterAgentsAndAcpBindingsAsync"/>, itself run inside
     /// <see cref="RegistrationGate.RunRegistrationAsync"/>'s bracket BEFORE
     /// <see cref="RegistrationGate.MarkRegistered"/> — i.e. while <see cref="IsReady"/> is still
@@ -722,7 +722,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// failure does not stop the others or withhold daemon readiness for the rest of this connection,
     /// mirroring <c>ReRegisterAgentsAsync</c>'s per-agent isolation.
     ///
-    /// <b>Codex P1 #1 (bounded re-bind-miss):</b> a binding that fails to re-establish would
+    /// <b>Bounded re-bind-miss:</b> a binding that fails to re-establish would
     /// otherwise be silently skipped and left registered — <see cref="IsReady"/> flips true
     /// regardless once this whole pass returns, so the forwarder's <see cref="SendAcpEventsAsync"/>
     /// calls would start retrying the SAME batch against a binding the server never got, forever
@@ -762,11 +762,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     /// <summary>
-    /// Binds an ACP canonical session to an agent (AI-688 Option B task 3; design spec §2.3). Gated
+    /// Binds an ACP canonical session to an agent. Gated
     /// exactly like <see cref="EndAgentSessionAsync"/>/<see cref="RequestPermissionAsync"/> —
     /// <see cref="ConnectionRetry"/> waits for <see cref="IsReady"/> before every attempt, so this
     /// can never fire against a connection the server hasn't (re-)registered. Idempotent server-side
-    /// (<c>AcpSessionRegistry</c>'s same-agent re-bind), so callers (task 4's initial bind, and this
+    /// (<c>AcpSessionRegistry</c>'s same-agent re-bind), so callers (the initial bind, and this
     /// class's own <see cref="ReBindAcpSessionsAsync"/> reconnect path) may invoke the underlying hub
     /// method again freely — a redundant re-bind is harmless even if the two race.
     /// </summary>
@@ -788,11 +788,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     /// <summary>
     /// Forwards a batch of ACP transcript envelopes to the server's <c>AcpSessionEvents</c> hub
-    /// method (AI-688 Option B task 3; design spec §2.3) and returns the ack
+    /// method and returns the ack
     /// <c>AcpTranscriptForwarder</c> uses to drive its seq/gap/terminal state machine. Gated exactly
     /// like <see cref="AcpSessionStartedAsync"/> — a post-reconnect batch blocks on
     /// <see cref="IsReady"/> until <see cref="ReBindAcpSessionsAsync"/> has re-established the
-    /// binding (design spec §2.3 "Enforcement"), so it can never reach the server ahead of the
+    /// binding, so it can never reach the server ahead of the
     /// re-bind.
     /// </summary>
     public virtual Task<AcpBatchAck> SendAcpEventsAsync(
@@ -1076,9 +1076,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 }
 
 /// <summary>
-/// The args needed to re-invoke <c>AcpSessionStarted</c> after a reconnect (AI-688 Option B task 3,
-/// design spec §2.3 "reconnect re-bind"). Purely in-memory — never (de)serialized — captured once by
-/// task 4 at initial-bind time via <see cref="ServerConnection.RegisterAcpBinding"/> and replayed
+/// The args needed to re-invoke <c>AcpSessionStarted</c> after a reconnect. Purely in-memory —
+/// never (de)serialized — captured once
+/// at initial-bind time via <see cref="ServerConnection.RegisterAcpBinding"/> and replayed
 /// idempotently by <see cref="ServerConnection.ReBindAcpSessionsAsync"/> on every reconnect until
 /// <see cref="ServerConnection.UnregisterAcpBinding"/> removes it. Top-level (not nested in
 /// <see cref="ServerConnection"/>) purely so tests can reference it without qualification.

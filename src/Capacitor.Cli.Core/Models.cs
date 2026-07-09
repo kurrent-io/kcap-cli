@@ -920,9 +920,9 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(AcpEventEnvelope))]
 [JsonSerializable(typeof(AcpEventEnvelope[]))]
 [JsonSerializable(typeof(AcpBatchAck))]
-// AI-688 Option B task 3: the AcpSessionStarted hub method's optional metadata argument. Registered
-// as its own root type (not just nested inside another JsonSerializable graph) because SignalR's
-// JsonHubProtocol serializes each hub-invocation argument independently by its declared type.
+// The AcpSessionStarted hub method's optional metadata argument. Registered as its own root type
+// (not just nested inside another JsonSerializable graph) because SignalR's JsonHubProtocol
+// serializes each hub-invocation argument independently by its declared type.
 [JsonSerializable(typeof(IReadOnlyDictionary<string, string>))]
 // UseStringEnumConverter=true matches the server's SignalR JSON protocol, which
 // serialises enums (e.g. LaunchKind) as camelCase strings. Without it the
@@ -1027,7 +1027,7 @@ public readonly record struct AcpInteractionResolution(
     );
 
 /// <summary>
-/// Envelope-kind discriminator constants (AI-688 Option B task 1). Field-for-field mirror of the
+/// Envelope-kind discriminator constants. Field-for-field mirror of the
 /// server-side <c>Capacitor.Server.Core.Acp.AcpEventKind</c> static class (same constant names, same
 /// wire string values) — kept as plain string constants (not a C# enum) because
 /// <see cref="AcpEventEnvelope.Kind"/> itself is a plain <see langword="string"/> on both sides, not
@@ -1045,10 +1045,10 @@ public static class AcpEventKind {
 
 /// <summary>
 /// One canonical-equivalent event the daemon sends over the server's <c>AcpSessionEvents</c> hub
-/// method (AI-688 Option B task 1). Daemon-local, field-for-field mirror of the server-side
+/// method. Daemon-local, field-for-field mirror of the server-side
 /// <c>Capacitor.Server.Core.Acp.AcpEventEnvelope</c> record (same property names/types/defaults,
 /// same "flat and Kind-discriminated, no polymorphism" shape) — read (never edited) from
-/// <c>src/Capacitor.Server.Core/Acp/AcpEventEnvelope.cs</c> in the server's ai-686 worktree. Neither
+/// <c>src/Capacitor.Server.Core/Acp/AcpEventEnvelope.cs</c> in the server repo. Neither
 /// side declares an explicit <c>[JsonPropertyName]</c>: both ride the wire under a
 /// <c>JsonNamingPolicy.SnakeCaseLower</c>-equivalent naming policy (the server's SignalR
 /// <c>AddJsonProtocol</c> configuration; this context's <see cref="CapacitorJsonContext"/>'s
@@ -1090,10 +1090,10 @@ public readonly record struct AcpEventEnvelope(
     );
 
 /// <summary>
-/// Ack returned from the server's <c>AcpSessionEvents</c> hub method (AI-688 Option B task 1).
+/// Ack returned from the server's <c>AcpSessionEvents</c> hub method.
 /// Field-for-field mirror of the server-side <c>Capacitor.Server.Core.Acp.AcpBatchAck</c> record —
 /// <see cref="ExpectedNextSeq"/> is set only on a gap-reject, telling the daemon where to rewind
-/// (§2.3 of the design spec: resend from <see cref="ExpectedNextSeq"/> on a gap; a terminal-drop ack
+/// (resend from <see cref="ExpectedNextSeq"/> on a gap; a terminal-drop ack
 /// has <see cref="AcceptedSeq"/> below the daemon's max-sent seq AND a null
 /// <see cref="ExpectedNextSeq"/>).
 /// </summary>

@@ -42,7 +42,7 @@ internal interface IHostedAgentRuntimeFactory {
 /// any temp mcp-config path the orchestrator must record on <see cref="AgentInstance.McpConfigPath"/>
 /// so it's cleaned up alongside the agent (PTY launchers only — the ACP factory returns null).
 ///
-/// <b>AI-688 Option B task 4 (design spec §2.4, concrete bind-handoff):</b> <paramref name="Transcript"/>
+/// <b>Concrete bind-handoff:</b> <paramref name="Transcript"/>
 /// (renamed record — see below) exposes the ACP session metadata + aggregated transcript
 /// (<see cref="IAcpTranscriptSource"/>) the orchestrator needs to bind (<c>AcpSessionStarted</c>) and
 /// forward (<c>AcpSessionEvents</c>), without downcasting <see cref="Runtime"/> or re-deriving state

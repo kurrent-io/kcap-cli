@@ -2,7 +2,7 @@
 namespace Capacitor.Cli.Core.Acp;
 
 /// <summary>
-/// Pure model-resolution helper for AI-688 gap 1 (<c>session/set_config_option</c>). The wire
+/// Pure model-resolution helper for <c>session/set_config_option</c>. The wire
 /// requires the EXACT, parameterized <c>modelId</c> from <c>session/new</c>'s
 /// <c>result.models.availableModels</c> (e.g. <c>claude-sonnet-4-5[thinking=true,context=200k]</c>)
 /// — a bare family name like <c>claude-sonnet-4-5</c> (the shape both <c>RuntimeStartContext.Model</c>

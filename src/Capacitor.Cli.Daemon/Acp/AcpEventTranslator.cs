@@ -5,20 +5,20 @@ using Microsoft.Extensions.Logging;
 namespace Capacitor.Cli.Daemon.Acp;
 
 /// <summary>
-/// AI-688 Option B task 1: pure, static, per-update translator from a reduced
-/// <see cref="AcpSessionUpdate"/> (Daemon-local, AI-684) to the daemon-local wire
+/// Pure, static, per-update translator from a reduced
+/// <see cref="AcpSessionUpdate"/> (daemon-local) to the daemon-local wire
 /// <see cref="AcpEventEnvelope"/> (Core — field-for-field mirror of the server's
 /// <c>Capacitor.Server.Core.Acp.AcpEventEnvelope</c>). Maps exactly ONE update to AT MOST one
-/// envelope per §2.2 of <c>docs/ai688-option-b-canonical-surfacing-design.md</c>. Deliberately does
+/// envelope (see <c>docs/ai688-option-b-canonical-surfacing-design.md</c>). Deliberately does
 /// NOT aggregate chunk streams, correlate multi-update tool-call state, assign real sequence
-/// numbers, or forward anything — those are tasks 2-4 (aggregation/seq assignment is runtime-owned;
-/// <paramref name="seq"/>/<paramref name="timestampIso"/> below are caller-supplied inputs, not
-/// derived here). <see cref="Translate"/> never throws: an unmappable/dropped kind returns
-/// <see langword="null"/> rather than fabricating an empty envelope.
+/// numbers, or forward anything — those are handled elsewhere (aggregation/seq assignment is
+/// runtime-owned; <paramref name="seq"/>/<paramref name="timestampIso"/> below are caller-supplied
+/// inputs, not derived here). <see cref="Translate"/> never throws: an unmappable/dropped kind
+/// returns <see langword="null"/> rather than fabricating an empty envelope.
 /// </summary>
 internal static class AcpEventTranslator {
     /// <summary>
-    /// ACP <c>ToolCallStatus</c> values that represent a FINISHED tool call (§2.2 footnote 2) —
+    /// ACP <c>ToolCallStatus</c> values that represent a FINISHED tool call —
     /// <c>pending</c>/<c>in_progress</c>/a missing status are non-terminal, status-only updates that
     /// never emit a <c>ToolResult</c> envelope, regardless of whether <see cref="AcpSessionUpdate.ToolResultText"/>
     /// happens to be set.
@@ -27,12 +27,12 @@ internal static class AcpEventTranslator {
 
     /// <summary>
     /// Translates ONE <paramref name="update"/> into an <see cref="AcpEventEnvelope"/>, or
-    /// <see langword="null"/> when the kind is dropped per §2.2:
+    /// <see langword="null"/> when the kind is dropped:
     /// <list type="bullet">
     /// <item><description><see cref="AcpUpdateKind.AgentMessageChunk"/> → <see cref="AcpEventKind.AssistantText"/>,
     /// <see cref="AcpUpdateKind.AgentThoughtChunk"/> → <see cref="AcpEventKind.AssistantThinking"/> —
     /// both use <paramref name="aggregatedText"/> when supplied (the caller's chunk-aggregation
-    /// result, task 2 — this translator holds no aggregation state of its own), else the update's own
+    /// result — this translator holds no aggregation state of its own), else the update's own
     /// <see cref="AcpSessionUpdate.Text"/>.</description></item>
     /// <item><description><see cref="AcpUpdateKind.ToolCall"/> → <see cref="AcpEventKind.ToolCall"/>,
     /// carrying <see cref="AcpSessionUpdate.ToolCallId"/>/<see cref="AcpSessionUpdate.ToolTitle"/>
@@ -87,7 +87,7 @@ internal static class AcpEventTranslator {
 
             case AcpUpdateKind.ToolCallUpdate:
                 if (!IsTerminalToolStatus(update.ToolStatus) || update.ToolResultText is null)
-                    return null; // status-only update — never an empty ToolResultReceived (§2.2 footnote 2)
+                    return null; // status-only update — never an empty ToolResultReceived
 
                 return new AcpEventEnvelope(
                     Seq: seq,
@@ -111,9 +111,9 @@ internal static class AcpEventTranslator {
     }
 
     /// <summary>
-    /// Builds the daemon-synthesized <c>SessionStarted</c> envelope (§2.2/§2.3/§2.4) — NOT derived
+    /// Builds the daemon-synthesized <c>SessionStarted</c> envelope — NOT derived
     /// from an <see cref="AcpSessionUpdate"/> (ACP's <c>session/update</c> stream never carries a
-    /// session-started variant). The orchestrator (tasks 3-4) calls this exactly once per session, at
+    /// session-started variant). The orchestrator calls this exactly once per session, at
     /// <c>Seq 0</c>, AFTER agent registration and paired with the <c>AcpSessionStarted</c> hub bind —
     /// this builder itself has no ordering opinion; it is a pure envelope constructor.
     /// </summary>
@@ -134,8 +134,8 @@ internal static class AcpEventTranslator {
             TimestampIso: timestampIso);
 
     /// <summary>
-    /// Builds the daemon-synthesized <c>UserMessage</c> envelope (§2.1/§2.2/§2.3) — one per
-    /// serialized prompt turn (task 2), since ACP's <c>session/prompt</c> request itself never
+    /// Builds the daemon-synthesized <c>UserMessage</c> envelope — one per
+    /// serialized prompt turn, since ACP's <c>session/prompt</c> request itself never
     /// round-trips through <c>session/update</c> and so has no natural "update" to translate.
     /// </summary>
     public static AcpEventEnvelope BuildUserMessage(long seq, string timestampIso, string text) =>
