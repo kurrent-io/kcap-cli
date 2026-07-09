@@ -1599,7 +1599,7 @@ public static class PluginCommand {
         var hooksFailed = false;
         var mcpFailed = false;
 
-        // Hooks AND MCP servers both live in the shared settings.json — only touch it if it exists.
+        // Hooks live in the shared settings.json — only removable if the file exists.
         if (File.Exists(settingsPath)) {
             try {
                 var removed = RemoveGeminiHooks(settingsPath);
@@ -1613,19 +1613,23 @@ public static class PluginCommand {
                 await env.Stderr.WriteLineAsync($"Could not update Gemini hooks at {settingsPath}: {ex.Message}");
                 hooksFailed = true;
             }
-
-            // Unregister owns the ownership-marker cleanup: it clears the marker on any non-Failed
-            // outcome and retains it on Failed so a retry can still identify the kcap-owned entries.
-            var mcpChange = JsonMcpConfigWriter.Unregister(settingsPath, McpConfigShape.Standard, new McpMarker("gemini"));
-            mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
-
-            if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
-                await env.Stdout.WriteLineAsync($"Gemini MCP servers removed ({settingsPath}).");
-            } else if (mcpFailed) {
-                await env.Stderr.WriteLineAsync($"Could not update {settingsPath} to remove Gemini MCP servers.");
-            }
         } else {
             await env.Stdout.WriteLineAsync("Nothing to remove — Gemini settings file not found.");
+        }
+
+        // Unregister the MCP servers REGARDLESS of whether settings.json exists. Unregister owns the
+        // ownership-marker cleanup — it clears the sidecar marker on any non-Failed outcome (and
+        // retains it on Failed for a retry). Skipping it when the user deleted settings.json would
+        // leave a STALE marker that could later misclassify a user-authored mcpServers.kcap-* entry as
+        // kcap-owned. On an absent file it's a no-op (Unchanged) that still clears the marker and
+        // never creates a config file.
+        var mcpChange = JsonMcpConfigWriter.Unregister(settingsPath, McpConfigShape.Standard, new McpMarker("gemini"));
+        mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
+
+        if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
+            await env.Stdout.WriteLineAsync($"Gemini MCP servers removed ({settingsPath}).");
+        } else if (mcpFailed) {
+            await env.Stderr.WriteLineAsync($"Could not update {settingsPath} to remove Gemini MCP servers.");
         }
 
         // Instructions live in a SEPARATE ~/.gemini/GEMINI.md — strip our block independently of

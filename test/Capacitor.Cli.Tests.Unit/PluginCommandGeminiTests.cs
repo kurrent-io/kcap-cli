@@ -237,6 +237,27 @@ public class PluginCommandGeminiTests {
         await Assert.That(content).DoesNotContain("Prefer kcap tools");
     }
 
+    [Test]
+    public async Task remove_gemini_clears_mcp_marker_even_when_settings_file_absent() {
+        using var _    = new EnvScope("GEMINI_CLI_HOME", null);
+        using var home = new FakeUserHome();
+        var env = TestEnv(home.Path);
+
+        // A prior install registered the servers (ownership marker recorded); then the user deleted
+        // settings.json by hand before running remove.
+        JsonMcpConfigWriter.Register(env.GeminiSettingsJson, KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("gemini"));
+        await Assert.That(new McpMarker("gemini").Owned(env.GeminiSettingsJson).ToArray()).IsNotEmpty();
+        File.Delete(env.GeminiSettingsJson);
+
+        var exit = await PluginCommand.HandleAsync(["plugin", "remove", "--gemini"], env);
+        await Assert.That(exit).IsEqualTo(0);
+
+        // The marker is cleared despite the absent file → a future user-authored mcpServers.kcap-*
+        // entry won't be misclassified as kcap-owned. And no config file is created.
+        await Assert.That(new McpMarker("gemini").Owned(env.GeminiSettingsJson).ToArray()).IsEmpty();
+        await Assert.That(File.Exists(env.GeminiSettingsJson)).IsFalse();
+    }
+
     static PluginEnvironment TestEnv(string fakeHome) => new(
         HomeDirectory:     fakeHome,
         ResolvePluginPath: () => null,
