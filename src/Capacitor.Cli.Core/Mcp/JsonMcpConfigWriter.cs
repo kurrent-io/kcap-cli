@@ -82,6 +82,11 @@ public static class JsonMcpConfigWriter {
 
         if (cwd is not null && s.NeedsProjectCwd) o["cwd"] = cwd;
         if (shape.Enable == EnableStyle.EnabledTrue) o["enabled"] = true;
+
+        // Auto-approve only read-only servers, and only where the harness has a per-server trust knob.
+        // Write-capable / work-launching servers (kcap-memory, kcap-flows) keep prompting.
+        if (s.ReadOnly && shape.Trust == TrustStyle.TrustBool) o["trust"] = true;   // Gemini
+
         return o;
     }
 

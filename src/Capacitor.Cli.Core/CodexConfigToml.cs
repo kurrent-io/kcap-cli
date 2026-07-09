@@ -245,15 +245,30 @@ public static class CodexConfigToml {
         var changed = false;
 
         foreach (var server in KcapMcpServers.ForCodex) {
-            // Never clobber an existing entry: a prior kcap registration is already
-            // correct, and a user may have customized it (e.g. an absolute-path command
-            // for a GUI host). Only create the server when it's missing entirely.
-            if (servers.ContainsKey(server.Name)) continue;
+            // Never clobber an existing entry's command/args: a prior kcap registration is already
+            // correct, and a user may have customized it (e.g. an absolute-path command for a GUI
+            // host). For an existing entry we only ADDITIVELY set the read-only auto-approve key,
+            // and only when absent — so we never override a user who deliberately chose to be
+            // prompted. This lets pre-existing installs pick up the trust on the next register.
+            if (servers.TryGetValue(server.Name, out var existingVal)) {
+                if (server.ReadOnly
+                 && existingVal is TomlTable existingTable
+                 && !existingTable.ContainsKey("default_tools_approval_mode")) {
+                    existingTable["default_tools_approval_mode"] = "approve";
+                    changed = true;
+                }
+                continue;
+            }
 
-            servers[server.Name] = new TomlTable {
+            var table = new TomlTable {
                 ["command"] = KcapMcpServers.Command,
                 ["args"]    = ToTomlArray(server.Args)
             };
+            // Auto-approve read-only servers (pure reads: kcap-review, kcap-sessions) so Codex runs
+            // them without a prompt. kcap-memory (writes via save) is omitted → keeps prompting.
+            // (kcap-flows isn't in ForCodex at all.) Valid Codex values: auto | prompt | approve.
+            if (server.ReadOnly) table["default_tools_approval_mode"] = "approve";
+            servers[server.Name] = table;
             changed = true;
         }
 

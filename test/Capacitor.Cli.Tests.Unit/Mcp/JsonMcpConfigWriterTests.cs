@@ -32,6 +32,41 @@ public class JsonMcpConfigWriterTests {
     }
 
     [Test]
+    public async Task Register_gemini_shape_marks_only_read_only_servers_trusted() {
+        var path = TempConfig();
+        JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Gemini, cwd: null, new FakeMarker());
+
+        var servers = (JsonObject)Read(path)["mcpServers"]!;
+        // Read-only servers (pure reads) get trust:true; write/flow-launching servers keep prompting.
+        await Assert.That((bool)servers["kcap-review"]!["trust"]!).IsTrue();
+        await Assert.That((bool)servers["kcap-sessions"]!["trust"]!).IsTrue();
+        await Assert.That(servers["kcap-memory"]!["trust"]).IsNull();   // writes (save) → still prompts
+        await Assert.That(servers["kcap-flows"]!["trust"]).IsNull();    // spawns reviewer → still prompts
+    }
+
+    [Test]
+    public async Task Register_standard_shape_emits_no_trust_field() {
+        var path = TempConfig();
+        JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new FakeMarker());
+
+        // Cursor uses the plain Standard shape — no per-server trust knob, so we emit none anywhere.
+        var servers = (JsonObject)Read(path)["mcpServers"]!;
+        foreach (var kv in servers) await Assert.That(kv.Value!["trust"]).IsNull();
+    }
+
+    [Test]
+    public async Task Register_gemini_heals_existing_untrusted_read_only_entry() {
+        var path = TempConfig();
+        // A pre-trust kcap-review entry (no trust field) as an older install would have written.
+        File.WriteAllText(path, """{ "mcpServers": { "kcap-review": { "command": "kcap", "args": ["mcp","review"] } } }""");
+
+        var change = JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Gemini, cwd: null, new FakeMarker());
+
+        await Assert.That(change).IsEqualTo(JsonMcpConfigWriter.Change.Updated);
+        await Assert.That((bool)((JsonObject)Read(path)["mcpServers"]!)["kcap-review"]!["trust"]!).IsTrue();
+    }
+
+    [Test]
     public async Task Register_preserves_user_servers() {
         var path = TempConfig();
         File.WriteAllText(path, """{ "mcpServers": { "playwright": { "command": "npx", "args": ["-y","playwright"] } } }""");

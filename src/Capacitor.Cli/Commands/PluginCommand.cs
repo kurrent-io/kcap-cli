@@ -1569,7 +1569,7 @@ public static class PluginCommand {
     /// </summary>
     static async Task RegisterGeminiMcpServersAsync(PluginEnvironment env, string settingsPath) {
         var change = JsonMcpConfigWriter.Register(
-            settingsPath, KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("gemini"));
+            settingsPath, KcapMcpServers.All, McpConfigShape.Gemini, cwd: null, new McpMarker("gemini"));
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
@@ -1633,7 +1633,7 @@ public static class PluginCommand {
         // leave a STALE marker that could later misclassify a user-authored mcpServers.kcap-* entry as
         // kcap-owned. On an absent file it's a no-op (Unchanged) that still clears the marker and
         // never creates a config file.
-        var mcpChange = JsonMcpConfigWriter.Unregister(settingsPath, McpConfigShape.Standard, new McpMarker("gemini"));
+        var mcpChange = JsonMcpConfigWriter.Unregister(settingsPath, McpConfigShape.Gemini, new McpMarker("gemini"));
         mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
 
         if (mcpChange == JsonMcpConfigWriter.Change.Updated) {

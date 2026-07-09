@@ -230,6 +230,47 @@ public class CodexConfigTomlTests {
     }
 
     [Test]
+    public async Task RegisterKcapMcpServers_auto_approves_only_read_only_servers() {
+        var path = TempConfig();
+
+        CodexConfigToml.RegisterKcapMcpServers(path);
+
+        var servers  = (TomlTable)ReadToml(path)["mcp_servers"];
+        var review   = (TomlTable)servers["kcap-review"];
+        var sessions = (TomlTable)servers["kcap-sessions"];
+        var memory   = (TomlTable)servers["kcap-memory"];
+
+        // Read-only servers auto-approve (never prompt); kcap-memory (writes via save) keeps the default.
+        await Assert.That((string)review["default_tools_approval_mode"]).IsEqualTo("approve");
+        await Assert.That((string)sessions["default_tools_approval_mode"]).IsEqualTo("approve");
+        await Assert.That(memory.ContainsKey("default_tools_approval_mode")).IsFalse();
+    }
+
+    [Test]
+    public async Task RegisterKcapMcpServers_heals_existing_entry_without_overriding_user_mode() {
+        var path = TempConfig();
+        // Pre-existing kcap entries: kcap-review with no approval mode (older install); kcap-sessions
+        // where the user deliberately chose "prompt".
+        File.WriteAllText(path, """
+            [mcp_servers.kcap-review]
+            command = "kcap"
+            args = ["mcp", "review"]
+
+            [mcp_servers.kcap-sessions]
+            command = "kcap"
+            args = ["mcp", "sessions"]
+            default_tools_approval_mode = "prompt"
+            """);
+
+        var change = CodexConfigToml.RegisterKcapMcpServers(path);
+
+        await Assert.That(change).IsEqualTo(CodexConfigToml.Change.Updated);
+        var servers = (TomlTable)ReadToml(path)["mcp_servers"];
+        await Assert.That((string)((TomlTable)servers["kcap-review"])["default_tools_approval_mode"]).IsEqualTo("approve");    // healed (was absent)
+        await Assert.That((string)((TomlTable)servers["kcap-sessions"])["default_tools_approval_mode"]).IsEqualTo("prompt");  // user choice preserved
+    }
+
+    [Test]
     public async Task RegisterKcapMcpServers_emits_snake_case_mcp_servers_table() {
         // Codex config.toml uses the snake_case `mcp_servers` table — NOT the
         // camelCase `mcpServers` key the plugin *descriptor* JSON requires.
