@@ -35,6 +35,11 @@ internal record AgentInstance(
     /// <summary>Temp MCP config path written for hosted PR reviews; deleted on cleanup.</summary>
     public string? McpConfigPath { get; set; }
 
+    /// <summary>AI-1292: the per-reviewer LocalPermissionBridge token URL minted for an unattended
+    /// review-flow launch (null otherwise). Revoked on cleanup so the auto-approve path dies with
+    /// the reviewer.</summary>
+    public string? ReviewerBridgeToken { get; init; }
+
     /// <summary>
     /// Reason string sent to the server when ending the AgentSession. Defaults to
     /// "agent_exited" (claude exited on its own); HandleStopAgent flips it to
@@ -284,6 +289,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // is the user's real checkout — never removed on any path (spec's top safety invariant).
         var work = cmd.Borrowed ? WorkLocation.BorrowedCwd : WorkLocation.OwnedWorktree;
 
+        // AI-1292: the per-reviewer bridge token URL (if this is an unattended review-flow launch),
+        // hoisted to method scope so the failure catch below can revoke it when no AgentInstance
+        // was created to carry it into CleanupAgentAsync.
+        string? reviewerToken = null;
+
         try {
             if (ActiveCount >= _config.MaxConcurrentAgents) {
                 await _server.LaunchFailedAsync(agentId, $"At max capacity ({_config.MaxConcurrentAgents} agents)");
@@ -383,6 +393,34 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
 
+            // AI-1292: an unattended review-flow reviewer must auto-approve its kcap tool calls (no
+            // human is present). Mint a dedicated bridge token bound to the launch's read-only kcap
+            // allowlist and give the reviewer that token's URL as KCAP_DAEMON_URL. An invalid
+            // allowlist fails the launch FAST — never a shared-token launch that would hang on a
+            // prompt no one can answer. Non-review-flow launches keep the shared (interactive) token.
+            var daemonBridgeUrl    = _permissionBridge.BaseUrl;
+            var effectiveAllowlist = cmd.McpAllowlist;
+
+            // Guarded on the bridge actually listening (BaseUrl != null) — always true in prod; the
+            // guard keeps an unattended launch a graceful no-op (today's behaviour) if the bridge
+            // failed to start rather than crashing the launch.
+            if (isReviewFlow && daemonBridgeUrl is not null) {
+                if (!KcapMcpRegistry.TryResolveReviewFlowAllowlist(cmd.McpAllowlist, out var reviewerServers, out var rejected)) {
+                    await _server.LaunchFailedAsync(agentId,
+                        $"Review-flow reviewer MCP allowlist contains a server that is not auto-approvable: '{rejected}'.");
+
+                    if (work == WorkLocation.OwnedWorktree) {
+                        try { await WorktreeManager.RemoveAsync(worktree); } catch { /* best-effort */ }
+                    }
+
+                    return;
+                }
+
+                daemonBridgeUrl    = _permissionBridge.RegisterReviewerToken(reviewerServers);
+                reviewerToken      = daemonBridgeUrl;   // the URL doubles as the revoke handle
+                effectiveAllowlist = reviewerServers;   // single source: the set the launcher materializes
+            }
+
             var runtimeCtx = new RuntimeStartContext(
                 AgentId: agentId,
                 Vendor: cmd.Vendor,
@@ -398,9 +436,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 Cols: HostedPtyCols,
                 Rows: HostedPtyRows,
                 ServerUrl: _config.ServerUrl,
-                DaemonBridgeUrl: _permissionBridge.BaseUrl,
+                DaemonBridgeUrl: daemonBridgeUrl,
                 CapacitorPath: _config.CapacitorPath,
-                McpAllowlist: cmd.McpAllowlist,
+                McpAllowlist: effectiveAllowlist,
                 Work: work
             );
 
@@ -410,6 +448,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 start = await runtimeFactory.StartAsync(runtimeCtx, _shutdownCts.Token);
             } catch (CodexHooksNotInstalledException ex) {
                 await _server.LaunchFailedAsync(agentId, ex.Message);
+
+                // No AgentInstance was created, so CleanupAgentAsync won't run — revoke the reviewer
+                // token here (if we minted one) so it doesn't leak into the live-token set.
+                if (reviewerToken != null) _permissionBridge.RevokeReviewerToken(reviewerToken);
 
                 // Still need to clean up the worktree before returning — but ONLY if we own it.
                 // A borrowed cwd is the user's real checkout; removing it here would `git worktree
@@ -431,10 +473,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var cts = new CancellationTokenSource();
 
             var agent = new AgentInstance(agentId, prompt, model, effort, repoPath, cmd.Vendor, runtime, worktree, cts) {
-                McpConfigPath = mcpConfigPath,
-                CurrentCols   = HostedPtyCols,
-                CurrentRows   = HostedPtyRows,
-                Work          = work
+                McpConfigPath       = mcpConfigPath,
+                CurrentCols         = HostedPtyCols,
+                CurrentRows         = HostedPtyRows,
+                Work                = work,
+                ReviewerBridgeToken = reviewerToken
             };
             _agents[agentId] = agent;
 
@@ -468,6 +511,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
         } catch (Exception ex) {
             LogLaunchFailed(ex, agentId);
+
+            // If a reviewer token was minted before the failure and no AgentInstance was created to
+            // own it, revoke it here so it can't linger in the bridge's live-token set.
+            if (reviewerToken != null) _permissionBridge.RevokeReviewerToken(reviewerToken);
 
             // Only tear down a worktree we OWN. A borrowed cwd is the user's real checkout — never
             // remove it, its branch, or its Claude project symlink on a failed launch (spec's top
@@ -1240,6 +1287,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task CleanupAgentAsync(string agentId) {
         if (!_agents.TryRemove(agentId, out var agent)) {
             return;
+        }
+
+        // AI-1292: the reviewer process has exited by the time we get here (this runs off the
+        // read-loop's exit path), so revoke its bridge token now — after any final
+        // submit_review_result has been served, closing the auto-approve window.
+        if (agent.ReviewerBridgeToken is { } reviewerToken) {
+            try { _permissionBridge.RevokeReviewerToken(reviewerToken); } catch (Exception ex) { LogCleanupStepFailed(ex, "revoking reviewer bridge token", agentId); }
         }
 
         // Wake any attached local clients blocked on the user's stdin so they can flush the
