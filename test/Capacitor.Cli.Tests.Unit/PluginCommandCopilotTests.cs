@@ -93,6 +93,27 @@ public class PluginCommandCopilotTests {
     }
 
     [Test]
+    public async Task install_copilot_if_installed_heals_mcp_and_instructions_when_hook_rewrite_fails() {
+        using var _    = new EnvScope("COPILOT_HOME", null);
+        using var home = new FakeUserHome();
+        var env = TestEnv(home.Path);
+
+        // Installed (stale marker → IsInstalled true, hooksCurrent false) but the hooks rewrite will
+        // FAIL: make the kcap.json path a directory so InstallCopilotHooks's write throws → returns
+        // false. The refresh must warn on the hook failure but still heal the independent MCP +
+        // instructions files rather than bailing.
+        var hooksDir = System.IO.Path.GetDirectoryName(env.CopilotKcapHooksJson)!;
+        Directory.CreateDirectory(env.CopilotKcapHooksJson);   // kcap.json is a directory → write fails
+        await File.WriteAllTextAsync(System.IO.Path.Combine(hooksDir, CopilotHooksInstaller.MarkerFileName), "0.0.0-stale");
+
+        var exit = await PluginCommand.HandleAsync(["plugin", "install", "--copilot", "--if-installed"], env);
+        await Assert.That(exit).IsEqualTo(0);                  // refresh swallows the hook-write failure
+
+        await Assert.That(File.Exists(env.CopilotMcpConfigJson)).IsTrue();   // MCP healed despite the hook failure
+        await Assert.That(File.Exists(env.CopilotInstructionsMd)).IsTrue();  // instructions healed too
+    }
+
+    [Test]
     public async Task remove_copilot_unregisters_mcp_servers_preserving_user_entries() {
         using var _    = new EnvScope("COPILOT_HOME", null);
         using var home = new FakeUserHome();

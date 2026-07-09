@@ -134,6 +134,22 @@ public class AgentInstructionsWriterTests {
         await Assert.That(await File.ReadAllTextAsync(path)).IsEqualTo(orphan);      // file left untouched
     }
 
+    [Test]
+    public async Task Write_fails_on_multiple_begin_markers_instead_of_corrupting() {
+        using var tmp = new TempDir();
+        var path = Path.Combine(tmp.Path, "copilot-instructions.md");
+        // A prose mention of the begin marker ABOVE a real block → two BEGIN markers in the file.
+        // "first BEGIN … first END" would span (and delete) the user prose in between — refuse instead.
+        var content = "# notes\n\nkcap delimits its block with " + AgentInstructionsWriter.BeginMarker + "\n\n"
+                    + AgentInstructionsWriter.BeginMarker + "\nold body\n" + AgentInstructionsWriter.EndMarker + "\n";
+        await File.WriteAllTextAsync(path, content);
+
+        var change = AgentInstructionsWriter.Write(path, KcapAgentInstructions.Body);
+
+        await Assert.That(change).IsEqualTo(AgentInstructionsWriter.Change.Failed);  // ambiguous → refuse
+        await Assert.That(await File.ReadAllTextAsync(path)).IsEqualTo(content);     // left untouched, no corruption
+    }
+
     static int CountOccurrences(string haystack, string needle) {
         int count = 0, i = 0;
         while ((i = haystack.IndexOf(needle, i, StringComparison.Ordinal)) >= 0) { count++; i += needle.Length; }

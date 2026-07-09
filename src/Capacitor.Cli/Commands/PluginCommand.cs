@@ -1039,19 +1039,23 @@ public static class PluginCommand {
         // separate files and must be healed if a prior write failed (warning-only) or was deleted.
         var hooksCurrent = refreshOnly && CopilotHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current();
         if (!hooksCurrent) {
-            if (!InstallCopilotHooks(hooksPath)) {
-                if (refreshOnly) return 0;
-
+            if (InstallCopilotHooks(hooksPath)) {
+                await env.Stdout.WriteLineAsync(
+                    refreshOnly
+                        ? $"Copilot hooks refreshed ({hooksPath})"
+                        : $"Copilot hooks installed ({hooksPath})"
+                );
+            } else if (!refreshOnly) {
+                // Fresh install: hooks are the whole point — fail.
                 await env.Stderr.WriteLineAsync("Could not write Copilot hooks file.");
 
                 return 1;
+            } else {
+                // Refresh: the hook write failed, but MCP + instructions live in separate files and
+                // are independent + idempotent — warn and still heal them below rather than bail.
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not refresh Copilot hooks ({hooksPath}); continuing with MCP + instructions.");
             }
-
-            await env.Stdout.WriteLineAsync(
-                refreshOnly
-                    ? $"Copilot hooks refreshed ({hooksPath})"
-                    : $"Copilot hooks installed ({hooksPath})"
-            );
         }
 
         // Register the kcap MCP servers in ~/.copilot/mcp-config.json so Copilot picks them

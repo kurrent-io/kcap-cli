@@ -76,11 +76,15 @@ public static class AgentInstructionsWriter {
         return before + "\n\n" + after;
     }
 
-    // Locates kcap's block. Malformed = a BEGIN marker with no following END (truncated write, merge
-    // conflict, or hand-edit); callers refuse rather than duplicate or strand it.
+    // Malformed = ambiguous ownership we refuse to touch rather than risk corrupting user content:
+    //  - a BEGIN marker with no following END (truncated write / merge conflict / hand-edit); or
+    //  - more than one BEGIN marker (a second block, or the marker quoted in user prose above/below
+    //    ours) — replacing/stripping "first BEGIN … first END" would span unrelated content.
     static (BlockState State, int Start, int End) FindBlock(string content) {
         var start = content.IndexOf(BeginMarker, StringComparison.Ordinal);
         if (start < 0) return (BlockState.Absent, -1, -1);
+        if (content.IndexOf(BeginMarker, start + BeginMarker.Length, StringComparison.Ordinal) >= 0)
+            return (BlockState.Malformed, -1, -1);
         var end = content.IndexOf(EndMarker, start, StringComparison.Ordinal);
         if (end < 0) return (BlockState.Malformed, -1, -1);
         return (BlockState.Present, start, end + EndMarker.Length);
