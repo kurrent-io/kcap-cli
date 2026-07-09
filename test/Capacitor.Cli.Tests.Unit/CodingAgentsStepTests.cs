@@ -199,33 +199,15 @@ public class CodingAgentsStepTests {
             writeLine: sink.Write
         );
 
-        await Assert.That(result.CodexSkillsInstalled).IsTrue();
+        await Assert.That(result.AgentSkillsInstalled).IsTrue();
         await Assert.That(calls.AgentSkillsArgs).IsEqualTo((Path.Combine("/fake/plugin", "skills"), "/fake/.agents/skills"));
         await Assert.That(sink.Lines).Contains(l => l.Contains("Agent skills installed"));
     }
 
     [Test]
-    public async Task Codex_skills_not_attempted_when_hooks_fail() {
-        var sink     = new Sink();
-        var calls    = new InstallerCalls { CodexHooksReturns = false };
-        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
-        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
-
-        var result = await RunAsync(
-            options,
-            detected,
-            TestPaths(),
-            calls.AsInstallers(),
-            prompt: _ => true,
-            writeLine: sink.Write
-        );
-
-        await Assert.That(result.CodexSkillsInstalled).IsFalse();
-        await Assert.That(calls.AgentSkillsCalled).IsFalse();
-    }
-
-    [Test]
-    public async Task Codex_skills_failure_still_keeps_trust_hint() {
+    public async Task Agent_skills_failure_still_keeps_codex_trust_hint() {
+        // Skills install and Codex hooks are independent steps — a skills-copy
+        // failure must not suppress the Codex trust hint.
         var sink     = new Sink();
         var calls    = new InstallerCalls { AgentSkillsReturns = false };
         var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
@@ -241,9 +223,260 @@ public class CodingAgentsStepTests {
         );
 
         await Assert.That(result.CodexHooksInstalled).IsTrue();
-        await Assert.That(result.CodexSkillsInstalled).IsFalse();
-        await Assert.That(sink.Lines).Contains(l => l.Contains("Codex hooks installed but agent skills"));
+        await Assert.That(result.AgentSkillsInstalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Agent skills could not be copied"));
         await Assert.That(sink.Lines).Contains(l => l.Contains("/hooks") && l.Contains("trust"));
+    }
+
+    // ── Agent skills decoupled from Codex (AI-1285) ──────────────────────────
+
+    [Test]
+    public async Task Agent_skills_installed_when_only_cursor_detected() {
+        // The bug: a Cursor-only machine (no Codex) got hooks but never the
+        // shared ~/.agents/skills/ skills, because the install was gated on Codex.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.AgentSkillsInstalled).IsTrue();
+        await Assert.That(calls.AgentSkillsCalled).IsTrue();
+        await Assert.That(calls.AgentSkillsArgs).IsEqualTo((Path.Combine("/fake/plugin", "skills"), "/fake/.agents/skills"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Agent skills installed"));
+    }
+
+    [Test]
+    public async Task Agent_skills_installed_when_only_copilot_detected() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.AgentSkillsInstalled).IsTrue();
+        await Assert.That(calls.AgentSkillsCalled).IsTrue();
+    }
+
+    [Test]
+    public async Task Agent_skills_installed_when_only_gemini_detected() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipGemini: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.AgentSkillsInstalled).IsTrue();
+        await Assert.That(calls.AgentSkillsCalled).IsTrue();
+    }
+
+    [Test]
+    public async Task Agent_skills_still_installed_when_codex_hooks_fail() {
+        // Decoupling means a Codex hooks-write failure no longer suppresses the
+        // skills copy — Codex is still detected and reads ~/.agents/skills/.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CodexHooksReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CodexHooksInstalled).IsFalse();
+        await Assert.That(result.AgentSkillsInstalled).IsTrue();
+        await Assert.That(calls.AgentSkillsCalled).IsTrue();
+    }
+
+    [Test]
+    public async Task Agent_skills_declined_emits_hint_and_skips_install() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
+
+        // Accept Cursor hooks, decline only the skills prompt.
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: t => !t.Contains("agent skills", StringComparison.OrdinalIgnoreCase),
+            writeLine: sink.Write);
+
+        await Assert.That(result.AgentSkillsInstalled).IsFalse();
+        await Assert.That(calls.AgentSkillsCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Agent skills not installed"));
+    }
+
+    [Test]
+    public async Task Agent_skills_skipped_when_already_current() {
+        // Idempotent: a marker matching this build means no prompt and no re-copy.
+        var sink     = new Sink();
+        var promptCount = 0;
+        var calls    = new InstallerCalls { AgentSkillsCurrentReturns = true };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: t => {
+                if (t.Contains("agent skills", StringComparison.OrdinalIgnoreCase)) promptCount++;
+
+                return true;
+            },
+            writeLine: sink.Write);
+
+        await Assert.That(result.AgentSkillsInstalled).IsFalse();
+        await Assert.That(calls.AgentSkillsCalled).IsFalse();
+        await Assert.That(promptCount).IsEqualTo(0);
+        await Assert.That(sink.Lines).Contains(l => l.Contains("already up to date"));
+    }
+
+    [Test]
+    public async Task Agent_skills_not_installed_when_only_claude_detected() {
+        // Claude gets skills via the bundled plugin, not ~/.agents/skills/ — a
+        // Claude-only machine must not trigger the shared skills install.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: true, Codex: false, Cursor: false, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.AgentSkillsInstalled).IsFalse();
+        await Assert.That(calls.AgentSkillsCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Agent_skills_prompted_once_across_multiple_detected_agents() {
+        // A single "Install kcap agent skills?" prompt covers every skills-capable
+        // agent — not one per agent.
+        var sink        = new Sink();
+        var promptCount = 0;
+        var calls       = new InstallerCalls();
+        var options     = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: false, NoPrompt: false, SkipGemini: false);
+        var detected    = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: true, Gemini: true);
+
+        await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: t => {
+                if (t.Contains("agent skills", StringComparison.OrdinalIgnoreCase)) promptCount++;
+
+                return true;
+            },
+            writeLine: sink.Write);
+
+        await Assert.That(promptCount).IsEqualTo(1);
+        await Assert.That(calls.AgentSkillsCalled).IsTrue();
+    }
+
+    [Test]
+    public async Task Agent_skills_installed_without_prompt_in_no_prompt_mode() {
+        var sink     = new Sink();
+        var promptCount = 0;
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => {
+                promptCount++;
+
+                return true;
+            },
+            writeLine: sink.Write);
+
+        await Assert.That(result.AgentSkillsInstalled).IsTrue();
+        await Assert.That(calls.AgentSkillsCalled).IsTrue();
+        await Assert.That(promptCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Legacy_codex_cleanup_not_invoked_when_codex_not_detected() {
+        // The ~/.codex/skills legacy sweep stays Codex-specific even though the
+        // skills copy is now shared.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: false, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: true, Copilot: false);
+
+        await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.AgentSkillsCalled).IsTrue();
+        await Assert.That(calls.LegacyCleanupCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Legacy_codex_cleanup_runs_when_skills_current_and_codex_detected() {
+        // Codex detected + shared skills already current → the new skills ARE in place,
+        // so the stale ~/.codex/skills legacy folders should still be swept even though
+        // we short-circuit the (re)install.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { AgentSkillsCurrentReturns = true };
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.AgentSkillsInstalled).IsFalse();
+        await Assert.That(calls.AgentSkillsCalled).IsFalse();
+        await Assert.That(calls.LegacyCleanupCalled).IsTrue();
+        await Assert.That(calls.LegacyCleanupArg).IsEqualTo("/fake/.codex/skills");
+    }
+
+    [Test]
+    public async Task Legacy_codex_cleanup_not_invoked_when_skills_declined() {
+        // Declining the skills prompt means the new skills are NOT in place — don't
+        // strand a Codex user by sweeping their legacy folders with no replacement.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: t => !t.Contains("agent skills", StringComparison.OrdinalIgnoreCase),
+            writeLine: sink.Write);
+
+        await Assert.That(calls.AgentSkillsCalled).IsFalse();
+        await Assert.That(calls.LegacyCleanupCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Codex_hooks_prompt_no_longer_mentions_skills() {
+        // Skills got their own standalone prompt, so the Codex hooks prompt must
+        // not double-ask about skills.
+        var sink     = new Sink();
+        var prompts  = new List<string>();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: false, SkipCursor: true, SkipCopilot: true, NoPrompt: false);
+        var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
+
+        await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: t => {
+                prompts.Add(t);
+
+                return true;
+            },
+            writeLine: sink.Write);
+
+        await Assert.That(prompts).Contains(p => p.Contains("Install Codex CLI hooks?"));
+        await Assert.That(prompts).DoesNotContain(p => p.Contains("agent skills", StringComparison.OrdinalIgnoreCase) && p.Contains("Codex"));
     }
 
     // ── Codex sandbox network access (AI-794) ────────────────────────────────
@@ -641,10 +874,10 @@ public class CodingAgentsStepTests {
         await Assert.That(calls.ClaudeCalled).IsFalse();
         await Assert.That(result.CodexHooksInstalled).IsTrue();
         await Assert.That(calls.CodexHooksCalled).IsTrue();
-        await Assert.That(result.CodexSkillsInstalled).IsFalse();
+        await Assert.That(result.AgentSkillsInstalled).IsFalse();
         await Assert.That(calls.AgentSkillsCalled).IsFalse();
         await Assert.That(sink.Lines).Contains(l => l.Contains("Plugin directory not found"));
-        await Assert.That(sink.Lines).Contains(l => l.Contains("Codex hooks installed but agent skills could not be copied"));
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Agent skills could not be installed (plugin directory not found)"));
     }
 
     [Test]
@@ -665,7 +898,7 @@ public class CodingAgentsStepTests {
 
         await Assert.That(result.ClaudeInstalled).IsFalse();
         await Assert.That(result.CodexHooksInstalled).IsFalse();
-        await Assert.That(result.CodexSkillsInstalled).IsFalse();
+        await Assert.That(result.AgentSkillsInstalled).IsFalse();
         await Assert.That(calls.ClaudeCalled).IsFalse();
         await Assert.That(calls.CodexHooksCalled).IsFalse();
         await Assert.That(calls.AgentSkillsCalled).IsFalse();
@@ -1300,6 +1533,10 @@ public class CodingAgentsStepTests {
         public (string Src, string Dst)? AgentSkillsArgs    { get; private set; }
         public bool                      AgentSkillsReturns { get; set; } = true;
 
+        public bool    AgentSkillsCurrentCalled  { get; private set; }
+        public string? AgentSkillsCurrentArg     { get; private set; }
+        public bool    AgentSkillsCurrentReturns { get; set; } // default false → not current → install
+
         public bool    LegacyCleanupCalled  { get; private set; }
         public string? LegacyCleanupArg     { get; private set; }
         public bool    LegacyCleanupReturns { get; set; } = true;
@@ -1408,6 +1645,12 @@ public class CodingAgentsStepTests {
                 InstallCopilotInstructionsCalled = true;
 
                 return InstallCopilotInstructionsReturns;
+            },
+            AgentSkillsCurrent: dir => {
+                AgentSkillsCurrentCalled = true;
+                AgentSkillsCurrentArg    = dir;
+
+                return AgentSkillsCurrentReturns;
             }
         );
     }

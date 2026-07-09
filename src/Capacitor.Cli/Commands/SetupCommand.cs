@@ -290,7 +290,11 @@ public static class SetupCommand {
             RegisterCopilotMcp:       () => JsonMcpConfigWriter.Register(
                 CopilotPaths.McpConfigJson(), KcapMcpServers.All, McpConfigShape.Copilot, cwd: null, new McpMarker("copilot")),
             InstallCopilotInstructions: () => AgentInstructionsWriter.Write(
-                CopilotPaths.InstructionsMd(), KcapAgentInstructions.Body));
+                CopilotPaths.InstructionsMd(), KcapAgentInstructions.Body),
+            // AI-1285 — skills are already current when the on-disk marker matches this
+            // build; used to skip the prompt + re-copy (mirrors PluginCommand's postinstall
+            // fast path). A missing/stale marker reads as "not current" → prompt + install.
+            AgentSkillsCurrent:       dir => AgentsSkillsInstaller.ReadMarker(dir) == AgentsSkillsInstaller.CurrentVersion());
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
