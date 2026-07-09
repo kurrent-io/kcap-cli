@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -31,12 +33,22 @@ internal sealed partial class LocalPermissionBridge(
     HttpListener?            _listener;
     Task?                    _acceptLoop;
     CancellationTokenSource? _cts;
-    string?                  _token;
+    string?                  _sharedToken;
+    int                      _port;
+
+    // AI-1292: live per-reviewer tokens → each token's bound (read-only) kcap allowlist servers.
+    // A request arriving on a reviewer token auto-approves that reviewer's kcap tools (no human is
+    // present); the shared token keeps the interactive prompt path. The reviewer token is a secret
+    // only the reviewer process receives (in its own KCAP_DAEMON_URL), so an interactive agent —
+    // which holds only the shared token — cannot address the unattended path.
+    readonly ConcurrentDictionary<string, string[]> _reviewerTokens = new(StringComparer.Ordinal);
+    readonly object                                 _prefixLock     = new();
 
     /// <summary>
     /// Full URL the spawned CLI hook command should POST to. Includes the random per-run
     /// token as a path segment so unrelated local processes can't pose as a Claude hook
-    /// even if they discover the ephemeral port.
+    /// even if they discover the ephemeral port. This is the SHARED (interactive) token; a
+    /// review-flow reviewer instead gets a dedicated token from <see cref="RegisterReviewerToken"/>.
     /// </summary>
     public string? BaseUrl { get; private set; }
 
@@ -47,16 +59,17 @@ internal sealed partial class LocalPermissionBridge(
         // Windows, permission issues) bubble up immediately so they aren't masked.
         for (var attempt = 1; attempt <= MaxBindAttempts; attempt++) {
             var port  = ReserveFreeLoopbackPort();
-            var token = Guid.NewGuid().ToString("N");
+            var token = NewToken();
 
             var listener = new HttpListener();
             listener.Prefixes.Add($"http://127.0.0.1:{port}/{token}/");
 
             try {
                 listener.Start();
-                _listener = listener;
-                _token    = token;
-                BaseUrl   = $"http://127.0.0.1:{port}/{token}";
+                _listener    = listener;
+                _sharedToken = token;
+                _port        = port;
+                BaseUrl      = $"http://127.0.0.1:{port}/{token}";
 
                 break;
             } catch (HttpListenerException ex) when (attempt < MaxBindAttempts && IsAddressInUse(ex)) {
@@ -103,6 +116,54 @@ internal sealed partial class LocalPermissionBridge(
         _cts?.Dispose();
     }
 
+    /// <summary>
+    /// AI-1292: mint a dedicated bridge token for an unattended review-flow reviewer, bound to the
+    /// read-only kcap servers it may auto-approve (<paramref name="allowlistServers"/>, canonical
+    /// ids). Returns the full URL the reviewer must use as its <c>KCAP_DAEMON_URL</c>. The token is
+    /// a CSPRNG secret and gets its own listener prefix so only that reviewer's hook can reach the
+    /// unattended path. Revoke with <see cref="RevokeReviewerToken"/> once the reviewer exits.
+    /// </summary>
+    public string RegisterReviewerToken(IReadOnlyList<string> allowlistServers) {
+        if (_listener is null || _sharedToken is null)
+            throw new InvalidOperationException("LocalPermissionBridge not started");
+
+        lock (_prefixLock) {
+            var token = NewToken();
+            while (string.Equals(token, _sharedToken, StringComparison.Ordinal) || _reviewerTokens.ContainsKey(token))
+                token = NewToken();   // CSPRNG collisions are negligible; never silently reuse one
+
+            _listener.Prefixes.Add($"http://127.0.0.1:{_port}/{token}/");
+            _reviewerTokens[token] = [.. allowlistServers];
+
+            return $"http://127.0.0.1:{_port}/{token}";
+        }
+    }
+
+    /// <summary>Revoke a reviewer token (accepts the URL from <see cref="RegisterReviewerToken"/> or
+    /// the bare token). Idempotent. After revocation, requests on that token 404 (fail-safe).</summary>
+    public void RevokeReviewerToken(string reviewerBridgeUrlOrToken) {
+        var token = ExtractToken(reviewerBridgeUrlOrToken);
+        if (token is null) return;
+
+        lock (_prefixLock) {
+            if (_reviewerTokens.TryRemove(token, out _))
+                _listener?.Prefixes.Remove($"http://127.0.0.1:{_port}/{token}/");
+        }
+    }
+
+    // 128 bits of CSPRNG entropy as 32 lowercase hex chars — same shape as the original shared
+    // token, unguessable, and safe to place in a bearer URL.
+    static string NewToken() => RandomNumberGenerator.GetHexString(32, lowercase: true);
+
+    // Accept either the full reviewer URL (http://127.0.0.1:{port}/{token}) or a bare token.
+    static string? ExtractToken(string urlOrToken) {
+        if (string.IsNullOrWhiteSpace(urlOrToken)) return null;
+
+        return Uri.TryCreate(urlOrToken, UriKind.Absolute, out var uri)
+            ? uri.AbsolutePath.Trim('/')
+            : urlOrToken.Trim('/');
+    }
+
     static int ReserveFreeLoopbackPort() {
         // HttpListener doesn't accept port 0 in its prefix; reserve a free ephemeral
         // port via TcpListener and immediately release. There's a TOCTOU window before
@@ -133,13 +194,12 @@ internal sealed partial class LocalPermissionBridge(
 
     async Task HandleAsync(HttpListenerContext context, CancellationToken ct) {
         try {
-            // Require token + vendor + endpoint match. The HttpListener prefix already filters
-            // to /{token}/, but we check explicitly so a misconfigured prefix can't quietly
-            // admit anything. Token is checked first; vendor determines the response shape.
+            // Require token + vendor + endpoint match. The HttpListener prefix already routed us
+            // here, but we re-validate explicitly so a stray prefix can't quietly admit anything.
+            // Path shape: /{token}/{vendor}/permission-request.
             var path = context.Request.Url?.AbsolutePath;
 
             if (path is null
-             || !path.StartsWith($"/{_token}/", StringComparison.Ordinal)
              || !path.EndsWith(PathSuffix, StringComparison.Ordinal)
              || context.Request.HttpMethod != "POST") {
                 context.Response.StatusCode = 404;
@@ -148,9 +208,33 @@ internal sealed partial class LocalPermissionBridge(
                 return;
             }
 
-            var vendorStart = _token!.Length + 2; // skip "/{token}/"
-            var vendorEnd   = path.Length    - PathSuffix.Length;
-            var vendor      = vendorEnd > vendorStart ? path[vendorStart..vendorEnd] : "";
+            // Extract the token (first path segment) and classify it against the LIVE token set:
+            // the shared token → interactive; a live reviewer token → unattended auto-approve. An
+            // unknown or revoked token fails safe with a 404.
+            var trimmed    = path.TrimStart('/');
+            var firstSlash = trimmed.IndexOf('/');
+
+            if (firstSlash <= 0) {
+                context.Response.StatusCode = 404;
+                context.Response.Close();
+
+                return;
+            }
+
+            var token      = trimmed[..firstSlash];
+            var isShared   = string.Equals(token, _sharedToken, StringComparison.Ordinal);
+            var isReviewer = _reviewerTokens.TryGetValue(token, out var reviewerAllowlist);
+
+            if (!isShared && !isReviewer) {
+                context.Response.StatusCode = 404;
+                context.Response.Close();
+
+                return;
+            }
+
+            // Vendor is the segment between "/{token}/" and the "/permission-request" suffix.
+            var afterToken = path[(token.Length + 2)..];
+            var vendor     = afterToken.Length > PathSuffix.Length ? afterToken[..^PathSuffix.Length] : "";
 
             if (vendor is not ("claude" or "codex")) {
                 context.Response.StatusCode = 404;
@@ -209,17 +293,33 @@ internal sealed partial class LocalPermissionBridge(
             PermissionDecision decision;
 
             if (IsFlowResultSubmission(toolName)) {
-                // AI-1139 follow-up: a review-flow reviewer's own result-submission tool
-                // (kcap-flow-result → submit_review_result) is safe and expected — it only posts the
-                // reviewer's verdict back to the server. Auto-approve it here instead of surfacing a
-                // prompt: the reviewer is unattended (Codex fires a PermissionRequest for the MCP
-                // tool call even under `--ask-for-approval never`, and its hook bridges here), so a
-                // user decision it can't get would just block the flow. The tool name is unique to
-                // the kcap-flow-result server, which is only injected for review-flow reviewers, so
-                // matching it is sufficient and always safe — no server round-trip needed.
+                // AI-1139: the reviewer's own result-submission tool (kcap-flow-result →
+                // submit_review_result) is unique to a server only injected for review-flow
+                // reviewers, so it's always safe. Auto-approve on ANY live token without a server
+                // round-trip — the unattended reviewer can never get a user decision otherwise.
                 LogFlowResultAutoApproved(logger, sessionId, vendor);
                 decision = new PermissionDecision("allow", null, null);
+            } else if (isReviewer) {
+                // AI-1292: an unattended review-flow reviewer. Its Codex MCP config confines it to
+                // the bound (read-only) kcap servers, so a tool call arriving on its token is an
+                // auto-approvable kcap tool. A reviewer request MUST carry a tool to classify; an
+                // out-of-allowlist server-qualified call is an authorization failure we DENY
+                // outright — never deferred to a prompt no human can answer (that would hang).
+                if (string.IsNullOrEmpty(toolName)) {
+                    context.Response.StatusCode = 400;
+                    context.Response.Close();
+
+                    return;
+                }
+
+                if (IsReviewerToolAllowed(toolName, reviewerAllowlist!)) {
+                    decision = new PermissionDecision("allow", null, null);
+                } else {
+                    LogReviewerToolDenied(logger, sessionId, toolName);
+                    decision = new PermissionDecision("deny", null, null);
+                }
             } else {
+                // Shared (interactive) token → the server permission path, unchanged.
                 try {
                     decision = await server.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, ct);
                 } catch (Exception ex) {
@@ -286,6 +386,35 @@ internal sealed partial class LocalPermissionBridge(
         return namesFlowResultServer && toolName.EndsWith("submit_review_result", StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// AI-1292: whether a tool call arriving on a reviewer token is within the reviewer's bound
+    /// (read-only) kcap allowlist. A BARE tool name (Codex passes the raw MCP tool name, no server
+    /// qualifier) is allowed: the reviewer's Codex MCP config already confines callable tools to the
+    /// bound servers, so the token — not the name — is the authorization. A SERVER-QUALIFIED name
+    /// (Claude's <c>mcp__&lt;server&gt;__&lt;tool&gt;</c>, hyphens sanitised to underscores) is
+    /// allowed only when <c>&lt;server&gt;</c> is in the bound allowlist; otherwise it's an
+    /// out-of-allowlist call the caller DENIES (never defers). Matching is hyphen/underscore- and
+    /// case-insensitive so <c>kcap-review</c> and <c>kcap_review</c> compare equal.
+    /// </summary>
+    static bool IsReviewerToolAllowed(string toolName, string[] boundAllowlist) {
+        const string prefix = "mcp__";
+
+        if (!toolName.StartsWith(prefix, StringComparison.Ordinal)) return true;   // bare name → config-lock bounded
+
+        var afterPrefix = toolName[prefix.Length..];
+        var sep         = afterPrefix.IndexOf("__", StringComparison.Ordinal);
+
+        if (sep <= 0) return false;   // malformed qualified name → deny (fail-safe)
+
+        var server = afterPrefix[..sep].Replace('-', '_');
+
+        foreach (var allowed in boundAllowlist)
+            if (string.Equals(server, allowed.Replace('-', '_'), StringComparison.OrdinalIgnoreCase))
+                return true;
+
+        return false;
+    }
+
     static string BuildHookResponseJson(PermissionDecision decision, string vendor) =>
         vendor switch {
             "claude" => BuildClaudeResponse(decision),
@@ -336,6 +465,9 @@ internal sealed partial class LocalPermissionBridge(
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Auto-approved review-flow result submission for session {SessionId} (vendor={Vendor}) without surfacing a prompt")]
     static partial void LogFlowResultAutoApproved(ILogger logger, string sessionId, string vendor);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Denied out-of-allowlist tool {ToolName} for unattended reviewer session {SessionId}")]
+    static partial void LogReviewerToolDenied(ILogger logger, string sessionId, string toolName);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Permission bridge handler error")]
     static partial void LogBridgeHandlerError(ILogger logger, Exception exception);

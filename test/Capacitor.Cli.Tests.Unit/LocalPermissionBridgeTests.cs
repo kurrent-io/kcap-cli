@@ -5,16 +5,18 @@ using System.Text;
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit;
 
 public class LocalPermissionBridgeTests {
     static (LocalPermissionBridge bridge, FakeServerConnection server) CreateBridge(
-            Func<string, string?, JsonElement?, JsonElement?, CancellationToken, Task<PermissionDecision>>? respond = null
+            Func<string, string?, JsonElement?, JsonElement?, CancellationToken, Task<PermissionDecision>>? respond = null,
+            ILogger<LocalPermissionBridge>? logger = null
         ) {
         var server = new FakeServerConnection(respond);
-        var bridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance);
+        var bridge = new LocalPermissionBridge(server, logger ?? NullLogger<LocalPermissionBridge>.Instance);
 
         return (bridge, server);
     }
@@ -565,6 +567,191 @@ public class LocalPermissionBridgeTests {
             await bridge.DisposeAsync();
         }
     }
+
+    // ── AI-1292: unattended reviewer-token auto-approval ──────────────────────────────
+
+    static async Task<string?> Behavior(HttpResponseMessage r) {
+        using var doc = JsonDocument.Parse(await r.Content.ReadAsStringAsync());
+        return doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision").GetProperty("behavior").GetString();
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_auto_approves_bound_read_tool_without_server_round_trip() {
+        // deny if the server is ever consulted, so an accidental round-trip can't masquerade as allow.
+        var (bridge, server) = CreateBridge((_, _, _, _, _) => Task.FromResult(new PermissionDecision("deny", null, null)));
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            var payload = new { session_id = "abc", tool_name = "get_pr_summary" };   // bare Codex name
+            using var r = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(payload));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+            await Assert.That(await Behavior(r)).IsEqualTo("allow");
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_auto_approves_server_qualified_tool_in_bound_allowlist() {
+        var (bridge, server) = CreateBridge((_, _, _, _, _) => Task.FromResult(new PermissionDecision("deny", null, null)));
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            var payload = new { session_id = "abc", tool_name = "mcp__kcap_review__get_pr_summary" };  // Claude form
+            using var r = await client.PostAsync($"{reviewerUrl}/claude/permission-request", JsonContent.Create(payload));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+            await Assert.That(await Behavior(r)).IsEqualTo("allow");
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_auto_approves_submit_review_result() {
+        var (bridge, server) = CreateBridge((_, _, _, _, _) => Task.FromResult(new PermissionDecision("deny", null, null)));
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            var payload = new { session_id = "abc", tool_name = "submit_review_result" };
+            using var r = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(payload));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+            await Assert.That(await Behavior(r)).IsEqualTo("allow");
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_denies_server_qualified_tool_outside_bound_allowlist() {
+        // Bound to kcap-review only; a kcap-memory (write) call is out of allowlist → DENY, never a prompt.
+        var (bridge, server) = CreateBridge((_, _, _, _, _) => Task.FromResult(new PermissionDecision("allow", null, null)));
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            var payload = new { session_id = "abc", tool_name = "mcp__kcap_memory__save_memory" };
+            using var r = await client.PostAsync($"{reviewerUrl}/claude/permission-request", JsonContent.Create(payload));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);      // NOT deferred to the interactive path
+            await Assert.That(await Behavior(r)).IsEqualTo("deny");
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_missing_tool_name_returns_400() {
+        var (bridge, server) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            using var r = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(new { session_id = "abc" }));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(400);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_missing_session_id_returns_400() {
+        var (bridge, server) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            using var r = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(new { tool_name = "get_pr_summary" }));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(400);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Shared_token_read_tool_still_prompts_no_escalation() {
+        var (bridge, server) = CreateBridge((_, _, _, _, _) => Task.FromResult(new PermissionDecision("allow", null, null)));
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+
+            using var client = CreateClient();
+            // Same tool, but on the SHARED (interactive) token → must go to the server, not auto-approve.
+            var payload = new { session_id = "abc", tool_name = "get_pr_summary" };
+            using var r = await client.PostAsync($"{bridge.BaseUrl}/codex/permission-request", JsonContent.Create(payload));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(1);
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Revoked_reviewer_token_returns_404() {
+        var (bridge, _) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+            bridge.RevokeReviewerToken(reviewerUrl);
+
+            using var client = CreateClient();
+            using var r1 = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "get_pr_summary" }));
+            using var r2 = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "submit_review_result" }));
+
+            await Assert.That((int)r1.StatusCode).IsEqualTo(404);
+            await Assert.That((int)r2.StatusCode).IsEqualTo(404);
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Concurrent_reviewer_tokens_are_independent() {
+        var (bridge, server) = CreateBridge((_, _, _, _, _) => Task.FromResult(new PermissionDecision("deny", null, null)));
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var urlA = bridge.RegisterReviewerToken(["kcap-review"]);
+            var urlB = bridge.RegisterReviewerToken(["kcap-review"]);
+            bridge.RevokeReviewerToken(urlA);
+
+            using var client = CreateClient();
+            using var rB = await client.PostAsync($"{urlB}/codex/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "get_pr_summary" }));
+            using var rA = await client.PostAsync($"{urlA}/codex/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "get_pr_summary" }));
+
+            await Assert.That((int)rB.StatusCode).IsEqualTo(200);   // B unaffected by revoking A
+            await Assert.That(await Behavior(rB)).IsEqualTo("allow");
+            await Assert.That((int)rA.StatusCode).IsEqualTo(404);   // A revoked
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_is_never_logged() {
+        var log = new CapturingLogger();
+        var (bridge, _) = CreateBridge(logger: log);
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+            var token       = new Uri(reviewerUrl).AbsolutePath.Trim('/');
+
+            using var client = CreateClient();
+            using var r = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "get_pr_summary" }));
+            await Assert.That((int)r.StatusCode).IsEqualTo(200);
+
+            foreach (var msg in log.Messages)
+                await Assert.That(msg.Contains(token, StringComparison.Ordinal)).IsFalse();
+        } finally { await bridge.DisposeAsync(); }
+    }
+}
+
+sealed class CapturingLogger : ILogger<LocalPermissionBridge> {
+    public List<string> Messages { get; } = [];
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    public bool IsEnabled(LogLevel logLevel) => true;
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        => Messages.Add(formatter(state, exception));
 }
 
 /// <summary>
