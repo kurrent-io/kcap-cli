@@ -151,6 +151,10 @@ internal sealed partial class LocalPermissionBridge(
         }
     }
 
+    /// <summary>Test seam: number of live reviewer tokens (verifies mint/revoke without a real
+    /// HTTP round-trip, so orchestrator tests needn't contend on a loopback port).</summary>
+    internal int ReviewerTokenCountForTest => _reviewerTokens.Count;
+
     // 128 bits of CSPRNG entropy as 32 lowercase hex chars — same shape as the original shared
     // token, unguessable, and safe to place in a bearer URL.
     static string NewToken() => RandomNumberGenerator.GetHexString(32, lowercase: true);
