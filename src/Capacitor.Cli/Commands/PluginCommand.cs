@@ -8,6 +8,7 @@ using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
+using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
@@ -1019,41 +1020,103 @@ public static class PluginCommand {
 
         var refreshOnly = args.Contains("--if-installed");
 
-        switch (refreshOnly) {
-            case true when !CopilotHooksInstaller.IsInstalled(hooksPath):
-            case true when CopilotHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current():
-                return 0;
-            // Same PATH precheck rationale as Cursor: kcap.json writes the bare
-            // `kcap hook --copilot` command, so Copilot must find kcap on PATH.
-            // Skipped on the postinstall (--if-installed) path — see InstallCursor.
-            case false when !AgentDetector.IsInstalled("kcap"):
-                await env.Stderr.WriteLineAsync(
-                    "Cannot install Copilot hooks: 'kcap' is not on PATH. "
-                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
-                );
+        // Refresh-only mode never touches a machine that never opted in.
+        if (refreshOnly && !CopilotHooksInstaller.IsInstalled(hooksPath)) return 0;
 
-                return 1;
-        }
-
-        if (!InstallCopilotHooks(hooksPath)) {
-            if (refreshOnly) return 0;
-
-            await env.Stderr.WriteLineAsync("Could not write Copilot hooks file.");
+        // Fresh install needs kcap on PATH: kcap.json writes the bare `kcap hook --copilot` command,
+        // so Copilot must find kcap on PATH. Skipped on the --if-installed (postinstall) path.
+        if (!refreshOnly && !AgentDetector.IsInstalled("kcap")) {
+            await env.Stderr.WriteLineAsync(
+                "Cannot install Copilot hooks: 'kcap' is not on PATH. "
+              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+            );
 
             return 1;
         }
 
-        await env.Stdout.WriteLineAsync(
-            refreshOnly
-                ? $"Copilot hooks refreshed ({hooksPath})"
-                : $"Copilot hooks installed ({hooksPath})"
-        );
+        // Write hooks unless a refresh finds them already at the current version. Even when the
+        // hooks write is skipped, still (re)register MCP + install instructions below: they live in
+        // separate files and must be healed if a prior write failed (warning-only) or was deleted.
+        var hooksCurrent = refreshOnly && CopilotHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current();
+        if (!hooksCurrent) {
+            if (InstallCopilotHooks(hooksPath)) {
+                await env.Stdout.WriteLineAsync(
+                    refreshOnly
+                        ? $"Copilot hooks refreshed ({hooksPath})"
+                        : $"Copilot hooks installed ({hooksPath})"
+                );
+            } else if (!refreshOnly) {
+                // Fresh install: hooks are the whole point — fail.
+                await env.Stderr.WriteLineAsync("Could not write Copilot hooks file.");
+
+                return 1;
+            } else {
+                // Refresh: the hook write failed, but MCP + instructions live in separate files and
+                // are independent + idempotent — warn and still heal them below rather than bail.
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not refresh Copilot hooks ({hooksPath}); continuing with MCP + instructions.");
+            }
+        }
+
+        // Register the kcap MCP servers in ~/.copilot/mcp-config.json so Copilot picks them
+        // up with no manual JSON edit. Non-destructive + idempotent. Never fails the install:
+        // a write error is a warning, not an error code (mirrors Cursor/Codex).
+        if (!args.Contains("--skip-copilot-mcp"))
+            await RegisterCopilotMcpServersAsync(env);
+
+        // Install kcap's agent-instructions block so Copilot's model is steered toward the kcap MCP
+        // tools. Non-destructive (only our marker block) + idempotent. Never fails the install.
+        if (!args.Contains("--skip-copilot-instructions"))
+            await InstallCopilotInstructionsAsync(env);
 
         return 0;
     }
 
+    /// <summary>
+    /// Registers the kcap MCP servers in <c>~/.copilot/mcp-config.json</c> so Copilot loads
+    /// them without a manual JSON edit. Never fails the install: a write error is a warning,
+    /// not an error code.
+    /// </summary>
+    static async Task RegisterCopilotMcpServersAsync(PluginEnvironment env) {
+        var change = JsonMcpConfigWriter.Register(
+            env.CopilotMcpConfigJson, KcapMcpServers.All, McpConfigShape.Copilot, cwd: null, new McpMarker("copilot"));
+
+        switch (change) {
+            case JsonMcpConfigWriter.Change.Updated:
+                await env.Stdout.WriteLineAsync($"Copilot MCP servers registered ({env.CopilotMcpConfigJson}).");
+                break;
+            case JsonMcpConfigWriter.Change.Failed:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {env.CopilotMcpConfigJson} to register Copilot MCP servers.");
+                break;
+            // Unchanged: silent — same as Cursor's already-registered case.
+        }
+    }
+
+    /// <summary>
+    /// Installs kcap's marker-delimited instructions block into
+    /// <c>~/.copilot/copilot-instructions.md</c> so Copilot's model is steered toward the kcap
+    /// tools. Non-destructive (only our block). Never fails the install: a write error is a warning.
+    /// </summary>
+    static async Task InstallCopilotInstructionsAsync(PluginEnvironment env) {
+        var change = AgentInstructionsWriter.Write(env.CopilotInstructionsMd, KcapAgentInstructions.Body);
+
+        switch (change) {
+            case AgentInstructionsWriter.Change.Updated:
+                await env.Stdout.WriteLineAsync($"Copilot instructions installed ({env.CopilotInstructionsMd}).");
+                break;
+            case AgentInstructionsWriter.Change.Failed:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {env.CopilotInstructionsMd} to install Copilot instructions.");
+                break;
+            // Unchanged: silent.
+        }
+    }
+
     static async Task<int> RemoveCopilot(string[] args, PluginEnvironment env) {
         var hooksPath = GetArg(args, "--copilot-hooks-path") ?? env.CopilotKcapHooksJson;
+
+        var hooksFailed = false;
 
         try {
             var removed = RemoveCopilotHooks(hooksPath);
@@ -1063,13 +1126,35 @@ public static class PluginCommand {
                     ? $"Copilot hooks removed ({hooksPath})"
                     : "Nothing to remove — Copilot hooks file not found."
             );
-
-            return 0;
         } catch (Exception ex) {
             await env.Stderr.WriteLineAsync($"Could not remove Copilot hooks at {hooksPath}: {ex.Message}");
-
-            return 1;
+            hooksFailed = true;
         }
+
+        // Copilot MCP servers live in a separate file (~/.copilot/mcp-config.json), so
+        // unregister them independently of whether the hooks file existed. Unregister owns
+        // the ownership-marker cleanup: it clears the marker on any non-Failed outcome and
+        // retains it on Failed so a retry can still identify the kcap-owned entries.
+        var mcpChange = JsonMcpConfigWriter.Unregister(env.CopilotMcpConfigJson, McpConfigShape.Copilot, new McpMarker("copilot"));
+        var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
+
+        if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
+            await env.Stdout.WriteLineAsync($"Copilot MCP servers removed ({env.CopilotMcpConfigJson}).");
+        } else if (mcpFailed) {
+            await env.Stderr.WriteLineAsync($"Could not update {env.CopilotMcpConfigJson} to remove Copilot MCP servers.");
+        }
+
+        // Strip kcap's instructions block, preserving any user-authored content in the file.
+        var instrChange = AgentInstructionsWriter.Remove(env.CopilotInstructionsMd);
+        var instrFailed = instrChange == AgentInstructionsWriter.Change.Failed;
+
+        if (instrChange == AgentInstructionsWriter.Change.Updated) {
+            await env.Stdout.WriteLineAsync($"Copilot instructions removed ({env.CopilotInstructionsMd}).");
+        } else if (instrFailed) {
+            await env.Stderr.WriteLineAsync($"Could not update {env.CopilotInstructionsMd} to remove Copilot instructions.");
+        }
+
+        return hooksFailed || mcpFailed || instrFailed ? 1 : 0;
     }
 
     /// <summary>

@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Mcp;
+using Capacitor.Cli.Core.Instructions;
 using Spectre.Console;
 
 namespace Capacitor.Cli.Commands;
@@ -14,7 +15,7 @@ internal static class CodingAgentsStep {
     // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini
     // (AI-887), Kiro (AI-888), and Pi (AI-886) were all added after the original
     // four vendors.
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false);
 
     internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false);
 
@@ -33,7 +34,9 @@ internal static class CodingAgentsStep {
             string  OpenCodeExtensionPath = "",
             string  CodexConfigTomlPath = "",
             string  AntigravityHooksPath = "",
-            string  CursorMcpPath = ""
+            string  CursorMcpPath = "",
+            string  CopilotMcpPath = "",
+            string  CopilotInstructionsPath = ""
         );
 
     internal record Installers(
@@ -51,7 +54,9 @@ internal static class CodingAgentsStep {
             Func<CodexConfigToml.Change>?                            EnableCodexNetworkAccess = null,
             Func<CodexConfigToml.Change>?                            RegisterCodexMcp = null,
             Func<string /*hooksPath*/, bool>?                        InstallAntigravityHooks = null,
-            Func<JsonMcpConfigWriter.Change>?                        RegisterCursorMcp = null
+            Func<JsonMcpConfigWriter.Change>?                        RegisterCursorMcp = null,
+            Func<JsonMcpConfigWriter.Change>?                        RegisterCopilotMcp = null,
+            Func<AgentInstructionsWriter.Change>?                    InstallCopilotInstructions = null
         );
 
     internal record Result(
@@ -67,7 +72,9 @@ internal static class CodingAgentsStep {
             bool CodexNetworkAccessApplied = false,
             bool CodexMcpRegistered = false,
             bool AntigravityHooksInstalled = false,
-            bool CursorMcpRegistered = false
+            bool CursorMcpRegistered = false,
+            bool CopilotMcpRegistered = false,
+            bool CopilotInstructionsInstalled = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -101,6 +108,8 @@ internal static class CodingAgentsStep {
         var cursorHooksInstalled  = HandleCursorHooks(options, detected, paths, installers, prompt, writeLine);
         var cursorMcpRegistered   = HandleCursorMcp(options, paths, installers, writeLine, cursorHooksInstalled);
         var copilotHooksInstalled = HandleCopilotHooks(options, detected, paths, installers, prompt, writeLine);
+        var copilotMcpRegistered  = HandleCopilotMcp(options, paths, installers, writeLine, copilotHooksInstalled);
+        var copilotInstructionsInstalled = HandleCopilotInstructions(options, paths, installers, writeLine, copilotHooksInstalled);
         var geminiHooksInstalled  = HandleGeminiHooks(options, detected, paths, installers, prompt, writeLine);
         var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, prompt, writeLine);
         var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, prompt, writeLine);
@@ -125,7 +134,9 @@ internal static class CodingAgentsStep {
                 codexNetworkApplied,
                 codexMcpRegistered,
                 antigravityHooksInstalled,
-                CursorMcpRegistered: cursorMcpRegistered
+                CursorMcpRegistered: cursorMcpRegistered,
+                CopilotMcpRegistered: copilotMcpRegistered,
+                CopilotInstructionsInstalled: copilotInstructionsInstalled
             )
         );
     }
@@ -698,6 +709,74 @@ internal static class CodingAgentsStep {
                 return false;
             default:
                 writeLine($"  [yellow]⚠[/] Could not register Cursor MCP servers in {configPath} — see README to add them manually.");
+
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Registers the kcap MCP servers in <c>~/.copilot/mcp-config.json</c> via
+    /// <see cref="Installers.RegisterCopilotMcp"/> so Copilot picks them up with no manual
+    /// JSON edit. Gated on Copilot hooks installing — the same "full Copilot integration"
+    /// trigger used by <see cref="HandleCursorMcp"/> — and on <see cref="Options.SkipCopilotMcp"/>.
+    /// No prompt: registration is non-destructive (only adds missing kcap servers).
+    /// </summary>
+    static bool HandleCopilotMcp(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           copilotHooksInstalled
+        ) {
+        if (installers.RegisterCopilotMcp is null || !copilotHooksInstalled || options.SkipCopilotMcp) return false;
+
+        var configPath = Markup.Escape(paths.CopilotMcpPath);
+
+        switch (installers.RegisterCopilotMcp()) {
+            case JsonMcpConfigWriter.Change.Updated:
+                writeLine($"  [green]✓[/] Copilot MCP servers registered ([dim]{configPath}[/])");
+
+                return true;
+            case JsonMcpConfigWriter.Change.Unchanged:
+                writeLine("  [dim]· Copilot MCP servers already registered — no change needed[/]");
+
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not register Copilot MCP servers in {configPath} — see README to add them manually.");
+
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Installs kcap's agent-instructions block into <c>~/.copilot/copilot-instructions.md</c> via
+    /// <see cref="Installers.InstallCopilotInstructions"/> so Copilot's model is steered toward the
+    /// kcap MCP tools. Gated on Copilot hooks installing — same "full Copilot integration" trigger
+    /// as <see cref="HandleCopilotMcp"/> — and on <see cref="Options.SkipCopilotInstructions"/>.
+    /// Non-destructive: only kcap's marker-delimited block is written.
+    /// </summary>
+    static bool HandleCopilotInstructions(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           copilotHooksInstalled
+        ) {
+        if (installers.InstallCopilotInstructions is null || !copilotHooksInstalled || options.SkipCopilotInstructions) return false;
+
+        var path = Markup.Escape(paths.CopilotInstructionsPath);
+
+        switch (installers.InstallCopilotInstructions()) {
+            case AgentInstructionsWriter.Change.Updated:
+                writeLine($"  [green]✓[/] Copilot instructions installed ([dim]{path}[/])");
+
+                return true;
+            case AgentInstructionsWriter.Change.Unchanged:
+                writeLine("  [dim]· Copilot instructions already up to date — no change needed[/]");
+
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not write Copilot instructions to {path}.");
 
                 return false;
         }
