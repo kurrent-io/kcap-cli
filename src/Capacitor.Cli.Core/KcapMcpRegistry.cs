@@ -25,15 +25,14 @@ public static class KcapMcpRegistry {
         return Entries.TryGetValue(name.Trim(), out var d) ? d : null;
     }
 
-    // ── AI-1292: unattended review-flow reviewer auto-approval ──────────────────────────
+    // ── Unattended review-flow reviewer auto-approval ──────────────────────────────────
     //
-    // A hosted review-flow reviewer runs unattended, so any MCP tool it calls must be
-    // auto-approved (there's no human to answer a prompt). Authorization is a per-reviewer
-    // bridge token (see LocalPermissionBridge); this registry defines WHICH servers/tools that
-    // auto-approval may cover. The unit is the SERVER (bare Codex tool names carry no server,
-    // and an exact tool-name gate would HANG the reviewer on an un-curated tool). The set is
-    // therefore restricted to READ-ONLY kcap servers whose every tool is safe to run unattended
-    // — deliberately excluding the write server `kcap-memory` and the flow-starting `kcap-flows`.
+    // A hosted review-flow reviewer runs unattended, so any MCP tool it calls must be auto-approved
+    // (no human to prompt). Authorization is a per-reviewer bridge token (see LocalPermissionBridge);
+    // this registry defines which servers may be covered. The unit is the SERVER (bare Codex tool
+    // names carry no server, and an exact tool-name gate would hang the reviewer on an un-curated
+    // tool), restricted to READ-ONLY kcap servers — excluding the write server kcap-memory and the
+    // flow-starting kcap-flows.
 
     /// <summary>The read-only kcap servers a review-flow reviewer may auto-approve. A flow
     /// allowlist containing anything else fails the launch fast (never a silent auto-approve or a

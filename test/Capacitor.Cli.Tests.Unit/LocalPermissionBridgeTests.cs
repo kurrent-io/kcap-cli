@@ -568,7 +568,7 @@ public class LocalPermissionBridgeTests {
         }
     }
 
-    // ── AI-1292: unattended reviewer-token auto-approval ──────────────────────────────
+    // ── Unattended reviewer-token auto-approval ──────────────────────────────────────
 
     static async Task<string?> Behavior(HttpResponseMessage r) {
         using var doc = JsonDocument.Parse(await r.Content.ReadAsStringAsync());
@@ -742,6 +742,55 @@ public class LocalPermissionBridgeTests {
 
             foreach (var msg in log.Messages)
                 await Assert.That(msg.Contains(token, StringComparison.Ordinal)).IsFalse();
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_denies_bare_tool_name_from_non_codex_vendor() {
+        // A bare tool name is only provably a kcap tool for a config-locked vendor (codex). On a
+        // claude-path reviewer token, a bare built-in like "Bash" must be DENIED, not auto-approved.
+        var (bridge, server) = CreateBridge((_, _, _, _, _) => Task.FromResult(new PermissionDecision("allow", null, null)));
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            using var r = await client.PostAsync($"{reviewerUrl}/claude/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "Bash" }));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(200);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);        // not deferred to a prompt
+            await Assert.That(await Behavior(r)).IsEqualTo("deny");
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_whitespace_session_id_returns_400() {
+        var (bridge, server) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            // "----" → "" after dash-strip → not a usable session id → 400 before any auto-approval.
+            using var r = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(new { session_id = "----", tool_name = "get_pr_summary" }));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(400);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
+        } finally { await bridge.DisposeAsync(); }
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
+    public async Task Reviewer_token_whitespace_tool_name_returns_400() {
+        var (bridge, server) = CreateBridge();
+        try {
+            await bridge.StartAsync(CancellationToken.None);
+            var reviewerUrl = bridge.RegisterReviewerToken(["kcap-review"]);
+
+            using var client = CreateClient();
+            using var r = await client.PostAsync($"{reviewerUrl}/codex/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "   " }));
+
+            await Assert.That((int)r.StatusCode).IsEqualTo(400);
+            await Assert.That(server.Calls.Count).IsEqualTo(0);
         } finally { await bridge.DisposeAsync(); }
     }
 }

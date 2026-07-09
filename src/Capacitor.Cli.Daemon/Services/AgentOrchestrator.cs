@@ -35,9 +35,8 @@ internal record AgentInstance(
     /// <summary>Temp MCP config path written for hosted PR reviews; deleted on cleanup.</summary>
     public string? McpConfigPath { get; set; }
 
-    /// <summary>AI-1292: the per-reviewer LocalPermissionBridge token URL minted for an unattended
-    /// review-flow launch (null otherwise). Revoked on cleanup so the auto-approve path dies with
-    /// the reviewer.</summary>
+    /// <summary>The per-reviewer LocalPermissionBridge token URL minted for an unattended review-flow
+    /// launch (null otherwise). Revoked on cleanup so the auto-approve path dies with the reviewer.</summary>
     public string? ReviewerBridgeToken { get; init; }
 
     /// <summary>
@@ -289,9 +288,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // is the user's real checkout — never removed on any path (spec's top safety invariant).
         var work = cmd.Borrowed ? WorkLocation.BorrowedCwd : WorkLocation.OwnedWorktree;
 
-        // AI-1292: the per-reviewer bridge token URL (if this is an unattended review-flow launch),
-        // hoisted to method scope so the failure catch below can revoke it when no AgentInstance
-        // was created to carry it into CleanupAgentAsync.
+        // The per-reviewer bridge token URL (if this is an unattended review-flow launch), hoisted to
+        // method scope so the failure catch can revoke it when no AgentInstance was created to carry it.
         string? reviewerToken = null;
 
         try {
@@ -393,18 +391,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
 
-            // AI-1292: an unattended review-flow reviewer must auto-approve its kcap tool calls (no
-            // human is present). Mint a dedicated bridge token bound to the launch's read-only kcap
-            // allowlist and give the reviewer that token's URL as KCAP_DAEMON_URL. An invalid
-            // allowlist fails the launch FAST — never a shared-token launch that would hang on a
-            // prompt no one can answer. Non-review-flow launches keep the shared (interactive) token.
+            // An unattended review-flow reviewer must auto-approve its kcap tool calls (no human is
+            // present): mint a dedicated bridge token bound to the launch's read-only kcap allowlist
+            // and hand the reviewer that token's URL as KCAP_DAEMON_URL. An invalid allowlist fails
+            // the launch FAST rather than falling back to a prompt that would hang.
             var daemonBridgeUrl    = _permissionBridge.BaseUrl;
             var effectiveAllowlist = cmd.McpAllowlist;
 
-            // Guarded on the bridge actually listening (BaseUrl != null) — always true in prod; the
-            // guard keeps an unattended launch a graceful no-op (today's behaviour) if the bridge
-            // failed to start rather than crashing the launch.
-            if (isReviewFlow && daemonBridgeUrl is not null) {
+            // Only Codex reviewers get a token: their MCP config-lock is what makes a bare tool name
+            // provably a bound kcap tool (see LocalPermissionBridge.IsReviewerToolAllowed). Claude
+            // reviewers run via bypassPermissions with only the flow-result channel, so they need
+            // none. Also guarded on the bridge listening (BaseUrl != null) — a graceful no-op otherwise.
+            if (isReviewFlow && daemonBridgeUrl is not null
+                && string.Equals(cmd.Vendor, "codex", StringComparison.OrdinalIgnoreCase)) {
                 if (!KcapMcpRegistry.TryResolveReviewFlowAllowlist(cmd.McpAllowlist, out var reviewerServers, out var rejected)) {
                     await _server.LaunchFailedAsync(agentId,
                         $"Review-flow reviewer MCP allowlist contains a server that is not auto-approvable: '{rejected}'.");
@@ -1289,9 +1288,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
-        // AI-1292: the reviewer process has exited by the time we get here (this runs off the
-        // read-loop's exit path), so revoke its bridge token now — after any final
-        // submit_review_result has been served, closing the auto-approve window.
+        // The reviewer process has exited by the time we get here (this runs off the read-loop's exit
+        // path), so revoke its bridge token now — after any final submit_review_result was served.
         if (agent.ReviewerBridgeToken is { } reviewerToken) {
             try { _permissionBridge.RevokeReviewerToken(reviewerToken); } catch (Exception ex) { LogCleanupStepFailed(ex, "revoking reviewer bridge token", agentId); }
         }

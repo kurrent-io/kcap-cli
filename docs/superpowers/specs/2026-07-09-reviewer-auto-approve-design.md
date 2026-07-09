@@ -129,9 +129,10 @@ hasn't fully validated:
      diagnostic log), **never** fall through to `server.RequestPermissionAsync`. An unattended
      reviewer has no human, so an out-of-allowlist call is an authorization failure to reject,
      not a decision to defer — and deferring would hang.
-   - `tool_name` **bare** (Codex): auto-approve — bounded by the Codex MCP-config lock
-     (constraint 3) + the orchestrator's register-time allowlist validation, which together
-     guarantee the reviewer can only call servers in the bound allowlist.
+   - `tool_name` **bare** (no server qualifier): auto-approve **only when the request's vendor is
+     `codex`** — its MCP-config lock is what makes a bare name provably a bound kcap tool (constraint
+     3 + register-time validation). Any other vendor's bare name (e.g. Claude's built-in `Bash`) is
+     **denied** — not proven to be a kcap tool.
 5. **Else** (shared token, any non-`submit_review_result` tool) → `server.RequestPermissionAsync`
    (interactive prompt, unchanged). A reviewer token never reaches this step.
 
@@ -146,11 +147,13 @@ enforcement of *which* tools. No tool-name heuristic, no spoof surface. (Forward
 future vendor sends server-qualified names, the bridge MAY additionally verify the `<server>`
 ∈ the token's bound allowlist; not needed for Codex today.)
 
-### Vendor-agnostic
+### Vendor gating
 
-Keyed by the reviewer token, not the vendor. Codex is the only current beneficiary (Claude
-uses `bypassPermissions`); a future unattended vendor that routes MCP prompts through the
-bridge benefits for free.
+Only **Codex** reviewers are minted a token (the orchestrator gates the mint on `cmd.Vendor ==
+codex`): Codex's MCP-config lock is what bounds a bare tool name to the allowlist. Claude reviewers
+run via `bypassPermissions` and only get the flow-result submit channel, so they need none. As
+defense in depth the bridge also denies a non-`codex` bare name on a reviewer token (step 4), so
+even a mis-minted token can't auto-approve an unconstrained built-in.
 
 ## Lifecycle & concurrency
 

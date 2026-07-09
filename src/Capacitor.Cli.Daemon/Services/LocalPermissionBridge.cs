@@ -36,11 +36,10 @@ internal sealed partial class LocalPermissionBridge(
     string?                  _sharedToken;
     int                      _port;
 
-    // AI-1292: live per-reviewer tokens → each token's bound (read-only) kcap allowlist servers.
-    // A request arriving on a reviewer token auto-approves that reviewer's kcap tools (no human is
-    // present); the shared token keeps the interactive prompt path. The reviewer token is a secret
-    // only the reviewer process receives (in its own KCAP_DAEMON_URL), so an interactive agent —
-    // which holds only the shared token — cannot address the unattended path.
+    // Live per-reviewer tokens → each token's bound (read-only) kcap allowlist servers. A request on
+    // a reviewer token auto-approves that reviewer's kcap tools; the shared token keeps the
+    // interactive prompt path. The token is a secret only the reviewer process holds, so an
+    // interactive agent (which has only the shared token) can't reach the unattended path.
     readonly ConcurrentDictionary<string, string[]> _reviewerTokens = new(StringComparer.Ordinal);
     readonly object                                 _prefixLock     = new();
 
@@ -117,11 +116,11 @@ internal sealed partial class LocalPermissionBridge(
     }
 
     /// <summary>
-    /// AI-1292: mint a dedicated bridge token for an unattended review-flow reviewer, bound to the
-    /// read-only kcap servers it may auto-approve (<paramref name="allowlistServers"/>, canonical
-    /// ids). Returns the full URL the reviewer must use as its <c>KCAP_DAEMON_URL</c>. The token is
-    /// a CSPRNG secret and gets its own listener prefix so only that reviewer's hook can reach the
-    /// unattended path. Revoke with <see cref="RevokeReviewerToken"/> once the reviewer exits.
+    /// Mint a dedicated bridge token for an unattended review-flow reviewer, bound to the read-only
+    /// kcap servers it may auto-approve (<paramref name="allowlistServers"/>, canonical ids). Returns
+    /// the full URL the reviewer must use as its <c>KCAP_DAEMON_URL</c>. The token is a CSPRNG secret
+    /// and gets its own listener prefix so only that reviewer's hook can reach the unattended path.
+    /// Revoke with <see cref="RevokeReviewerToken"/> once the reviewer exits.
     /// </summary>
     public string RegisterReviewerToken(IReadOnlyList<string> allowlistServers) {
         if (_listener is null || _sharedToken is null)
@@ -276,7 +275,7 @@ internal sealed partial class LocalPermissionBridge(
             // pass-through.
             var sessionId = node["session_id"]?.GetValue<string>()?.Replace("-", "");
 
-            if (sessionId is null) {
+            if (string.IsNullOrWhiteSpace(sessionId)) {
                 context.Response.StatusCode = 400;
                 context.Response.Close();
 
@@ -297,26 +296,24 @@ internal sealed partial class LocalPermissionBridge(
             PermissionDecision decision;
 
             if (IsFlowResultSubmission(toolName)) {
-                // AI-1139: the reviewer's own result-submission tool (kcap-flow-result →
-                // submit_review_result) is unique to a server only injected for review-flow
-                // reviewers, so it's always safe. Auto-approve on ANY live token without a server
-                // round-trip — the unattended reviewer can never get a user decision otherwise.
+                // The reviewer's own result-submission tool (kcap-flow-result → submit_review_result)
+                // is unique to a server only injected for review-flow reviewers, so it's always safe.
+                // Auto-approve on ANY live token without a server round-trip — an unattended reviewer
+                // can't get a user decision otherwise.
                 LogFlowResultAutoApproved(logger, sessionId, vendor);
                 decision = new PermissionDecision("allow", null, null);
             } else if (isReviewer) {
-                // AI-1292: an unattended review-flow reviewer. Its Codex MCP config confines it to
-                // the bound (read-only) kcap servers, so a tool call arriving on its token is an
-                // auto-approvable kcap tool. A reviewer request MUST carry a tool to classify; an
-                // out-of-allowlist server-qualified call is an authorization failure we DENY
-                // outright — never deferred to a prompt no human can answer (that would hang).
-                if (string.IsNullOrEmpty(toolName)) {
+                // Unattended reviewer: auto-approve its bound kcap tools; DENY an out-of-allowlist
+                // (or non-config-locked-vendor bare) call outright rather than defer to a prompt no
+                // human can answer. A well-formed tool name is required to classify.
+                if (string.IsNullOrWhiteSpace(toolName)) {
                     context.Response.StatusCode = 400;
                     context.Response.Close();
 
                     return;
                 }
 
-                if (IsReviewerToolAllowed(toolName, reviewerAllowlist!)) {
+                if (IsReviewerToolAllowed(vendor, toolName, reviewerAllowlist!)) {
                     decision = new PermissionDecision("allow", null, null);
                 } else {
                     LogReviewerToolDenied(logger, sessionId, toolName);
@@ -391,19 +388,21 @@ internal sealed partial class LocalPermissionBridge(
     }
 
     /// <summary>
-    /// AI-1292: whether a tool call arriving on a reviewer token is within the reviewer's bound
-    /// (read-only) kcap allowlist. A BARE tool name (Codex passes the raw MCP tool name, no server
-    /// qualifier) is allowed: the reviewer's Codex MCP config already confines callable tools to the
-    /// bound servers, so the token — not the name — is the authorization. A SERVER-QUALIFIED name
-    /// (Claude's <c>mcp__&lt;server&gt;__&lt;tool&gt;</c>, hyphens sanitised to underscores) is
-    /// allowed only when <c>&lt;server&gt;</c> is in the bound allowlist; otherwise it's an
-    /// out-of-allowlist call the caller DENIES (never defers). Matching is hyphen/underscore- and
-    /// case-insensitive so <c>kcap-review</c> and <c>kcap_review</c> compare equal.
+    /// Whether a tool call arriving on a reviewer token is within the reviewer's bound (read-only)
+    /// kcap allowlist. A BARE tool name (no server qualifier) is allowed ONLY for a config-locked
+    /// vendor (<c>codex</c>): its MCP config confines callable tools to the bound servers, so the
+    /// token — not the name — is the authorization. Any other vendor's bare name (e.g. Claude's
+    /// built-in <c>Bash</c>) is NOT proven to be a kcap tool → denied. A SERVER-QUALIFIED name
+    /// (Claude's <c>mcp__&lt;server&gt;__&lt;tool&gt;</c>) is allowed only when <c>&lt;server&gt;</c>
+    /// is in the bound allowlist. Matching is hyphen/underscore- and case-insensitive.
     /// </summary>
-    static bool IsReviewerToolAllowed(string toolName, string[] boundAllowlist) {
+    static bool IsReviewerToolAllowed(string vendor, string toolName, string[] boundAllowlist) {
         const string prefix = "mcp__";
 
-        if (!toolName.StartsWith(prefix, StringComparison.Ordinal)) return true;   // bare name → config-lock bounded
+        // Bare name: only a config-locked vendor's bare names are provably kcap tools. Codex
+        // clears+whitelists mcp_servers; any other vendor's bare name is denied.
+        if (!toolName.StartsWith(prefix, StringComparison.Ordinal))
+            return string.Equals(vendor, "codex", StringComparison.Ordinal);
 
         var afterPrefix = toolName[prefix.Length..];
         var sep         = afterPrefix.IndexOf("__", StringComparison.Ordinal);
