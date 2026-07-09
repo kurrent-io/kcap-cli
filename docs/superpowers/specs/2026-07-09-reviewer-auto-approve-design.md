@@ -49,9 +49,12 @@ so the fix should be vendor-agnostic at the bridge).
    exact tool-name set would silently **hang** the unattended reviewer the day it calls a tool
    we forgot to curate — the exact failure this change fixes. This is therefore a **deliberate
    security contract**: *any server whitelistable for review flows MUST expose only
-   unattended-safe (read / result-submit) tools.* Adding a mutating tool to such a server, or a
-   new server to a flow allowlist, is a security-relevant change — guarded by a test (see Test
-   plan) and code review. (kcap-owned servers are first-party, so this is enforceable by us.)
+   unattended-safe (read / result-submit) tools.* This contract is backed by an **explicit,
+   machine-checkable unattended-safe tool classification** (first-party metadata / a reviewed
+   allowlist — not naming heuristics or human interpretation), enforced by a guard test (see
+   Test plan). Adding a mutating tool to such a server, or a new server to a flow allowlist, is
+   a security-relevant change that fails the guard until the tool is explicitly classified in a
+   reviewed change. (kcap-owned servers are first-party, so this is enforceable by us.)
 4. **Fail-safe.** Any uncertainty — unknown/revoked token, malformed body — falls through to
    the existing 404 / prompt / deny path. Never auto-allow on doubt.
 5. Native (shell/exec/patch) tools are already covered by `--ask-for-approval never` + the
@@ -120,14 +123,17 @@ hasn't fully validated:
    reach the bridge — constraint 5 — so a reviewer-token request is always an MCP tool call.)
 3. **`submit_review_result` → auto-approve**, on any live token (unchanged; preserves #255 —
    the tool is unique to `kcap-flow-result`, only injected for reviewers).
-4. **Live reviewer token → auto-approve**, bounded by the token's **registered allowlist**:
-   - if `tool_name` is **server-qualified** (Claude `mcp__<server>__<tool>`), require
-     `<server>` ∈ the token's bound allowlist, else fall through to step 5;
-   - if `tool_name` is **bare** (Codex), auto-approve — bounded by the Codex MCP-config lock
-     (constraint 3) + the orchestrator's register-time allowlist validation (below), which
-     together guarantee the reviewer can only call servers in the bound allowlist.
-5. **Else** (shared token / server not in the bound allowlist / any other tool) →
-   `server.RequestPermissionAsync` (interactive prompt, unchanged).
+4. **Live reviewer token** — bounded by the token's **registered allowlist**:
+   - `tool_name` **server-qualified** (Claude `mcp__<server>__<tool>`): if `<server>` ∈ the
+     bound allowlist → **auto-approve**; if **not** → **deny directly** (a deny decision + a
+     diagnostic log), **never** fall through to `server.RequestPermissionAsync`. An unattended
+     reviewer has no human, so an out-of-allowlist call is an authorization failure to reject,
+     not a decision to defer — and deferring would hang.
+   - `tool_name` **bare** (Codex): auto-approve — bounded by the Codex MCP-config lock
+     (constraint 3) + the orchestrator's register-time allowlist validation, which together
+     guarantee the reviewer can only call servers in the bound allowlist.
+5. **Else** (shared token, any non-`submit_review_result` tool) → `server.RequestPermissionAsync`
+   (interactive prompt, unchanged). A reviewer token never reaches this step.
 
 ### Why token-based, not tool-name parsing
 
@@ -202,7 +208,8 @@ bridge benefits for free.
 - live reviewer token **and** shared token + **missing/empty `session_id`** → 400, no approval
   and **not** forwarded to `server.RequestPermissionAsync`;
 - live reviewer token + server-qualified name whose `<server>` is **not** in the bound
-  allowlist → prompts (bound-allowlist enforcement);
+  allowlist → **deny** (deny decision), with **no** `server.RequestPermissionAsync` call (no
+  hang, no interactive deferral);
 - **shared** token + `get_pr_summary` → prompts (interactive unchanged — proves an agent
   holding only the shared token can't get kcap tools auto-approved, i.e. no escalation);
 - **shared** token + `submit_review_result` → auto-approved (#255 regression);
@@ -221,11 +228,15 @@ bridge benefits for free.
   permission request — it does NOT fall back to the shared token;
 - the reviewer token is revoked on normal teardown (after exit) **and** on failed-launch cleanup.
 
-Contract guard test:
-- every tool exposed by the kcap servers eligible for review-flow allowlists (`kcap-review`,
-  `kcap-flow-result`, and any others the flow catalog can whitelist) is **unattended-safe**
-  (read / result-submit only) — enumerate them and assert none is mutating or flow-starting, so
-  adding such a tool to a review-flow-eligible server trips this test (constraint 3's contract).
+Contract guard test (machine-checkable, not naming-based):
+- derive the review-flow-eligible server set from the **same source used at launch** — the flow
+  catalog's allowlists ∩ `KcapMcpRegistry` — never a hand-maintained list;
+- enumerate each such server's **actually-exposed** tools (via its `tools/list`) and assert
+  every one appears in an **explicit unattended-safe classification** (a first-party, reviewed
+  `ReviewFlowUnattendedSafeTools` allowlist / per-tool metadata on `KcapMcpRegistry`);
+- an unclassified or unsafe tool **fails** the guard — tripping CI and, by contract, making the
+  server ineligible for review-flow whitelisting until the tool is explicitly classified in a
+  reviewed change.
 
 **Secrecy assertions** (a minted reviewer token must not appear in): the bridge's emitted logs;
 the daemon/launch logs; the recorded session env (`PtyEnvScrub` coverage); the session
