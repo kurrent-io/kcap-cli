@@ -39,13 +39,19 @@ so the fix should be vendor-agnostic at the bridge).
    signal must be a **secret only the reviewer process holds**.
 2. **Scope:** unattended launches only — `LaunchKind.ReviewFlow`. Never `Default`
    (interactive) or `Review` (PR-review, on-request by design).
-3. **Bounded by the launch's MCP allowlist.** The reviewer's *callable* MCP tools are
-   physically confined by its Codex MCP config, which `CodexLauncher` clears
-   (`mcp_servers={}`) then whitelists to exactly the launch's kcap-owned allowlist
-   (`kcap-flow-result` + the flow's allowlist via `KcapMcpRegistry`, flow-starting servers
-   stripped). Auto-approval is *authorized by the reviewer token* and *bounded by that config
-   lock* — it can never exceed what the launch granted. Adding a mutating server to a flow's
-   allowlist is therefore an intentional grant of unattended use.
+3. **Bounded by the launch's MCP allowlist — at SERVER granularity (deliberate contract).**
+   The reviewer's *callable* MCP tools are physically confined by its Codex MCP config, which
+   `CodexLauncher` clears (`mcp_servers={}`) then whitelists to exactly the launch's kcap-owned
+   allowlist (`kcap-flow-result` + the flow's allowlist via `KcapMcpRegistry`, flow-starting
+   servers stripped). Auto-approval is *authorized by the reviewer token* and *bounded by that
+   config lock* — it can never exceed the servers the launch granted. The permission unit is
+   the **server**, not the individual tool: a bare Codex `tool_name` carries no server, and an
+   exact tool-name set would silently **hang** the unattended reviewer the day it calls a tool
+   we forgot to curate — the exact failure this change fixes. This is therefore a **deliberate
+   security contract**: *any server whitelistable for review flows MUST expose only
+   unattended-safe (read / result-submit) tools.* Adding a mutating tool to such a server, or a
+   new server to a flow allowlist, is a security-relevant change — guarded by a test (see Test
+   plan) and code review. (kcap-owned servers are first-party, so this is enforceable by us.)
 4. **Fail-safe.** Any uncertainty — unknown/revoked token, malformed body — falls through to
    the existing 404 / prompt / deny path. Never auto-allow on doubt.
 5. Native (shell/exec/patch) tools are already covered by `--ask-for-approval never` + the
@@ -85,10 +91,11 @@ Instead, at launch of an unattended reviewer:
   config — computed once, used for both, so the config lock and the bridge's bound allowlist
   cannot drift. Before minting, the orchestrator asserts that allowlist ⊆ kcap-owned,
   non-flow-starting servers (reusing `KcapMcpRegistry` + the same `FlowMcpServers.Sanitize`
-  check the config uses). If it contains anything else, the orchestrator does **not** mint an
-  unattended token (logs + falls back to the shared token) — so a future config regression
-  that leaks a non-kcap or flow-starting server can never be silently auto-approved; those
-  tools simply prompt.
+  check the config uses). If it contains anything else, the launch is treated as a **hard
+  failure**: for `LaunchKind.ReviewFlow` the orchestrator calls `LaunchFailedAsync` with a
+  clear error and does **not** spawn the reviewer. It must NOT fall back to the shared token —
+  that would drop the reviewer into the interactive-prompt path with no human present, i.e.
+  reintroduce the very unattended hang this change fixes. **Fail fast, not hang.**
 - The bridge keeps a map of **live** tokens: the **shared** token → interactive (prompt as
   today); each **per-reviewer** token → unattended (auto-approve, bound to its allowlist).
 - On agent exit/cleanup the orchestrator **revokes** the token (see Lifecycle).
@@ -176,6 +183,11 @@ bridge benefits for free.
   segment** — rejected: violates constraint 1 (any hosted agent knows the shared token).
 - **Tool-name "kcap-owned" filter at the bridge** — rejected: Codex sends bare names
   (unverifiable + spoofable); token + config-lock is safer and simpler (see above).
+- **Exact per-tool allowlist bound to the token** — rejected: it makes the permission unit the
+  tool, so the day the reviewer calls a tool we forgot to curate it would **hang** (no human to
+  approve) — the exact failure this change fixes. Server-level grant + the read-only-tools
+  contract guard (constraint 3) is chosen instead: it can't hang and still bounds auto-approval
+  to first-party, unattended-safe servers.
 - **Auto-approve kcap-owned tools for all sessions** — rejected: would suppress prompts in
   interactive hosted agents and the user's own sessions.
 
@@ -187,6 +199,8 @@ bridge benefits for free.
 - live reviewer token + `submit_review_result` → auto-approved (regression);
 - live reviewer token + **malformed JSON** → 400, no approval;
 - live reviewer token + **missing/empty `tool_name`** → 400, no approval (never blanket-approve);
+- live reviewer token **and** shared token + **missing/empty `session_id`** → 400, no approval
+  and **not** forwarded to `server.RequestPermissionAsync`;
 - live reviewer token + server-qualified name whose `<server>` is **not** in the bound
   allowlist → prompts (bound-allowlist enforcement);
 - **shared** token + `get_pr_summary` → prompts (interactive unchanged — proves an agent
@@ -202,9 +216,16 @@ bridge benefits for free.
   `KCAP_DAEMON_URL`; a `Default` launch uses the shared token;
 - the token's registered allowlist **equals** the allowlist used to build the reviewer MCP
   config (single source, no drift);
-- a launch whose computed allowlist contains a non-kcap or flow-starting server mints **no**
-  reviewer token — it falls back to the shared token so those tools prompt;
+- a `ReviewFlow` launch whose computed allowlist contains a non-kcap or flow-starting server
+  **fails fast** (`LaunchFailedAsync`, no reviewer spawned) and produces **no** interactive
+  permission request — it does NOT fall back to the shared token;
 - the reviewer token is revoked on normal teardown (after exit) **and** on failed-launch cleanup.
+
+Contract guard test:
+- every tool exposed by the kcap servers eligible for review-flow allowlists (`kcap-review`,
+  `kcap-flow-result`, and any others the flow catalog can whitelist) is **unattended-safe**
+  (read / result-submit only) — enumerate them and assert none is mutating or flow-starting, so
+  adding such a tool to a review-flow-eligible server trips this test (constraint 3's contract).
 
 **Secrecy assertions** (a minted reviewer token must not appear in): the bridge's emitted logs;
 the daemon/launch logs; the recorded session env (`PtyEnvScrub` coverage); the session
