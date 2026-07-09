@@ -286,7 +286,7 @@ static class McpWorkItemsServer {
             "Attach the CURRENT session (and its continuation chain) to a work item on the Capacitor server. Provide exactly one of issue_key, pr_number, work_item_id, or new_title.",
             new("object", new() {
                 ["issue_key"]    = new("string", "Attach to the work item for this issue key (e.g. 'AI-1234'), creating it if none exists yet."),
-                ["pr_number"]    = new("number", "Attach to the existing work item linked to this PR number."),
+                ["pr_number"]    = new("number", "Attach to the work item for this PR number, creating it if none exists yet."),
                 ["work_item_id"] = new("string", "Attach directly to this work item id."),
                 ["new_title"]    = new("string", "Create a brand-new work item with this title and attach to it."),
                 ["session_id"]   = new("string", "Session id to attach. Defaults to the current kcap-hooked session (KCAP_SESSION_ID) when omitted.")
