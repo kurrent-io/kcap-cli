@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Copilot;
+using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Mcp;
 
 namespace Capacitor.Cli.Tests.Unit;
@@ -125,6 +126,63 @@ public class PluginCommandCopilotTests {
         var keys    = servers?.Select(kv => kv.Key).ToArray() ?? [];
         await Assert.That(keys).DoesNotContain("kcap-review");
         await Assert.That(new McpMarker("copilot").Owned(env.CopilotMcpConfigJson).ToArray()).IsEmpty();  // marker cleared after clean removal
+    }
+
+    [Test]
+    public async Task install_copilot_installs_instructions_preserving_user_content() {
+        using var _    = new EnvScope("COPILOT_HOME", null);
+        using var home = new FakeUserHome();
+        var env = TestEnv(home.Path);
+
+        PluginCommand.InstallCopilotHooks(env.CopilotKcapHooksJson);
+        CopilotHooksInstaller.DeleteMarker(env.CopilotKcapHooksJson);
+
+        // A pre-existing user instructions file that must survive.
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(env.CopilotInstructionsMd)!);
+        await File.WriteAllTextAsync(env.CopilotInstructionsMd, "# My rules\n\nAlways use tabs.\n");
+
+        var exit = await PluginCommand.HandleAsync(["plugin", "install", "--copilot", "--if-installed"], env);
+        await Assert.That(exit).IsEqualTo(0);
+
+        var content = await File.ReadAllTextAsync(env.CopilotInstructionsMd);
+        await Assert.That(content).Contains("Always use tabs.");                       // user content preserved
+        await Assert.That(content).Contains(AgentInstructionsWriter.BeginMarker);
+        await Assert.That(content).Contains("Prefer kcap tools");
+    }
+
+    [Test]
+    public async Task install_copilot_skip_instructions_flag_leaves_file_untouched() {
+        using var _    = new EnvScope("COPILOT_HOME", null);
+        using var home = new FakeUserHome();
+        var env = TestEnv(home.Path);
+
+        PluginCommand.InstallCopilotHooks(env.CopilotKcapHooksJson);
+        CopilotHooksInstaller.DeleteMarker(env.CopilotKcapHooksJson);
+
+        var exit = await PluginCommand.HandleAsync(
+            ["plugin", "install", "--copilot", "--if-installed", "--skip-copilot-instructions"], env);
+        await Assert.That(exit).IsEqualTo(0);
+
+        await Assert.That(File.Exists(env.CopilotInstructionsMd)).IsFalse();
+    }
+
+    [Test]
+    public async Task remove_copilot_strips_instructions_block_keeping_user_content() {
+        using var _    = new EnvScope("COPILOT_HOME", null);
+        using var home = new FakeUserHome();
+        var env = TestEnv(home.Path);
+
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(env.CopilotInstructionsMd)!);
+        await File.WriteAllTextAsync(env.CopilotInstructionsMd, "# My rules\n\nAlways use tabs.\n");
+        AgentInstructionsWriter.Write(env.CopilotInstructionsMd, KcapAgentInstructions.Body);
+
+        var exit = await PluginCommand.HandleAsync(["plugin", "remove", "--copilot"], env);
+        await Assert.That(exit).IsEqualTo(0);
+
+        var content = await File.ReadAllTextAsync(env.CopilotInstructionsMd);
+        await Assert.That(content).Contains("Always use tabs.");
+        await Assert.That(content).DoesNotContain(AgentInstructionsWriter.BeginMarker);
+        await Assert.That(content).DoesNotContain("Prefer kcap tools");
     }
 
     static PluginEnvironment TestEnv(string fakeHome) => new(

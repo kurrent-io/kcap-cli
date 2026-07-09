@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Antigravity;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Copilot;
+using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
@@ -33,6 +34,7 @@ public static class SetupCommand {
         var skipCursorMcpFlag = args.Contains("--skip-cursor-mcp");
         var skipCopilotFlag  = args.Contains("--skip-copilot-hooks");
         var skipCopilotMcpFlag = args.Contains("--skip-copilot-mcp");
+        var skipCopilotInstructionsFlag = args.Contains("--skip-copilot-instructions");
         var skipGeminiFlag   = args.Contains("--skip-gemini-hooks");
         var skipKiroFlag     = args.Contains("--skip-kiro-hooks");
         var skipPiFlag       = args.Contains("--skip-pi-hooks");
@@ -238,7 +240,8 @@ public static class SetupCommand {
             NoPrompt:    noPrompt,
             SkipCodexNetworkAccess: skipCodexNetworkFlag,
             SkipCursorMcp: skipCursorMcpFlag,
-            SkipCopilotMcp: skipCopilotMcpFlag);
+            SkipCopilotMcp: skipCopilotMcpFlag,
+            SkipCopilotInstructions: skipCopilotInstructionsFlag);
 
         // AI-794 — allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
@@ -264,7 +267,8 @@ public static class SetupCommand {
             AntigravityHooksPath: AntigravityPaths.GlobalHooksJson(),
             CodexConfigTomlPath:  Path.Combine(CodexPaths.Home(), "config.toml"),
             CursorMcpPath:        CursorPaths.UserMcpJson(),
-            CopilotMcpPath:       CopilotPaths.McpConfigJson());
+            CopilotMcpPath:       CopilotPaths.McpConfigJson(),
+            CopilotInstructionsPath: CopilotPaths.InstructionsMd());
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -284,7 +288,9 @@ public static class SetupCommand {
             RegisterCursorMcp:        () => JsonMcpConfigWriter.Register(
                 CursorPaths.UserMcpJson(), KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("cursor")),
             RegisterCopilotMcp:       () => JsonMcpConfigWriter.Register(
-                CopilotPaths.McpConfigJson(), KcapMcpServers.All, McpConfigShape.Copilot, cwd: null, new McpMarker("copilot")));
+                CopilotPaths.McpConfigJson(), KcapMcpServers.All, McpConfigShape.Copilot, cwd: null, new McpMarker("copilot")),
+            InstallCopilotInstructions: () => AgentInstructionsWriter.Write(
+                CopilotPaths.InstructionsMd(), KcapAgentInstructions.Body));
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });

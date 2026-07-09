@@ -44,6 +44,13 @@ public static class CopilotPaths {
         => Path.Combine(Root(home, copilotHome), "mcp-config.json");
 
     /// <summary>
+    /// User-level custom-instructions file Copilot loads into context at startup. Honors
+    /// <c>$COPILOT_HOME</c> like the rest of the layout.
+    /// </summary>
+    public static string InstructionsMd(string? home = null, string? copilotHome = null)
+        => Path.Combine(Root(home, copilotHome), "copilot-instructions.md");
+
+    /// <summary>
     /// Per-session state root: one subdirectory per session (named with the
     /// dashed session uuid) containing <c>events.jsonl</c> (append-only
     /// transcript), <c>workspace.yaml</c> (cwd/repo/title metadata), and

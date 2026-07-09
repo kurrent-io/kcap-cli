@@ -8,6 +8,7 @@ using Capacitor.Cli.Core.Copilot;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
+using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
@@ -1055,6 +1056,11 @@ public static class PluginCommand {
         if (!args.Contains("--skip-copilot-mcp"))
             await RegisterCopilotMcpServersAsync(env);
 
+        // Install kcap's agent-instructions block so Copilot's model is steered toward the kcap MCP
+        // tools. Non-destructive (only our marker block) + idempotent. Never fails the install.
+        if (!args.Contains("--skip-copilot-instructions"))
+            await InstallCopilotInstructionsAsync(env);
+
         return 0;
     }
 
@@ -1076,6 +1082,26 @@ public static class PluginCommand {
                     $"Warning: could not update {env.CopilotMcpConfigJson} to register Copilot MCP servers.");
                 break;
             // Unchanged: silent — same as Cursor's already-registered case.
+        }
+    }
+
+    /// <summary>
+    /// Installs kcap's marker-delimited instructions block into
+    /// <c>~/.copilot/copilot-instructions.md</c> so Copilot's model is steered toward the kcap
+    /// tools. Non-destructive (only our block). Never fails the install: a write error is a warning.
+    /// </summary>
+    static async Task InstallCopilotInstructionsAsync(PluginEnvironment env) {
+        var change = AgentInstructionsWriter.Write(env.CopilotInstructionsMd, KcapAgentInstructions.Body);
+
+        switch (change) {
+            case AgentInstructionsWriter.Change.Updated:
+                await env.Stdout.WriteLineAsync($"Copilot instructions installed ({env.CopilotInstructionsMd}).");
+                break;
+            case AgentInstructionsWriter.Change.Failed:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {env.CopilotInstructionsMd} to install Copilot instructions.");
+                break;
+            // Unchanged: silent.
         }
     }
 
@@ -1110,7 +1136,17 @@ public static class PluginCommand {
             await env.Stderr.WriteLineAsync($"Could not update {env.CopilotMcpConfigJson} to remove Copilot MCP servers.");
         }
 
-        return hooksFailed || mcpFailed ? 1 : 0;
+        // Strip kcap's instructions block, preserving any user-authored content in the file.
+        var instrChange = AgentInstructionsWriter.Remove(env.CopilotInstructionsMd);
+        var instrFailed = instrChange == AgentInstructionsWriter.Change.Failed;
+
+        if (instrChange == AgentInstructionsWriter.Change.Updated) {
+            await env.Stdout.WriteLineAsync($"Copilot instructions removed ({env.CopilotInstructionsMd}).");
+        } else if (instrFailed) {
+            await env.Stderr.WriteLineAsync($"Could not update {env.CopilotInstructionsMd} to remove Copilot instructions.");
+        }
+
+        return hooksFailed || mcpFailed || instrFailed ? 1 : 0;
     }
 
     /// <summary>

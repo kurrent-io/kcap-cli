@@ -16,4 +16,10 @@ public class CopilotPathsTests {
         await Assert.That(CopilotPaths.McpConfigJson("/h", "/custom/loc"))
             .IsEqualTo(Path.Combine("/custom/loc", "mcp-config.json"));
     }
+
+    [Test]
+    public async Task InstructionsMd_is_copilot_instructions_under_root() {
+        await Assert.That(CopilotPaths.InstructionsMd("/h"))
+            .IsEqualTo(Path.Combine("/h", ".copilot", "copilot-instructions.md"));
+    }
 }

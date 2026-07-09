@@ -35,6 +35,7 @@ public sealed record PluginEnvironment(
     public string CursorMcpJson       => CursorPaths.UserMcpJson(HomeDirectory);
     public string CopilotKcapHooksJson => CopilotPaths.KcapHooksJson(HomeDirectory);
     public string CopilotMcpConfigJson => CopilotPaths.McpConfigJson(HomeDirectory);
+    public string CopilotInstructionsMd => CopilotPaths.InstructionsMd(HomeDirectory);
     public string GeminiSettingsJson   => GeminiPaths.SettingsJson(HomeDirectory);
     public string KiroKcapAgentJson    => KiroPaths.KcapAgentJson(HomeDirectory);
     public string KiroSettingsJson     => KiroPaths.SettingsFile(HomeDirectory);

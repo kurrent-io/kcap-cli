@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Mcp;
+using Capacitor.Cli.Core.Instructions;
 using static Capacitor.Cli.Commands.CodingAgentsStep;
 
 namespace Capacitor.Cli.Tests.Unit;
@@ -521,6 +522,70 @@ public class CodingAgentsStepTests {
         await Assert.That(calls.RegisterCopilotMcpCalled).IsTrue();
         await Assert.That(result.CopilotMcpRegistered).IsFalse();
         await Assert.That(sink.Lines).Contains(l => l.Contains("Could not register Copilot MCP"));
+    }
+
+    [Test]
+    public async Task Copilot_instructions_installed_when_hooks_installed() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CopilotInstructionsInstalled).IsTrue();
+        await Assert.That(calls.InstallCopilotInstructionsCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Copilot instructions installed"));
+    }
+
+    [Test]
+    public async Task Copilot_instructions_not_installed_when_hooks_fail() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CopilotHooksReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CopilotHooksInstalled).IsFalse();
+        await Assert.That(calls.InstallCopilotInstructionsCalled).IsFalse();
+        await Assert.That(result.CopilotInstructionsInstalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Copilot_instructions_skipped_by_flag() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: true, SkipCopilotInstructions: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.CopilotHooksInstalled).IsTrue();
+        await Assert.That(result.CopilotInstructionsInstalled).IsFalse();
+        await Assert.That(calls.InstallCopilotInstructionsCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Copilot_instructions_failure_emits_warning() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { InstallCopilotInstructionsReturns = AgentInstructionsWriter.Change.Failed };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: false, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.InstallCopilotInstructionsCalled).IsTrue();
+        await Assert.That(result.CopilotInstructionsInstalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write Copilot instructions"));
     }
 
     [Test]
@@ -1186,7 +1251,8 @@ public class CodingAgentsStepTests {
         OpenCodeExtensionPath: "/fake/.config/opencode/plugins/kcap.ts",
         CodexConfigTomlPath:  "/fake/.codex/config.toml",
         CursorMcpPath:        "/fake/.cursor/mcp.json",
-        CopilotMcpPath:       "/fake/.copilot/mcp-config.json"
+        CopilotMcpPath:       "/fake/.copilot/mcp-config.json",
+        CopilotInstructionsPath: "/fake/.copilot/copilot-instructions.md"
     );
 
     sealed class Sink {
@@ -1249,6 +1315,9 @@ public class CodingAgentsStepTests {
 
         public bool                     RegisterCopilotMcpCalled  { get; private set; }
         public JsonMcpConfigWriter.Change RegisterCopilotMcpReturns { get; set; } = JsonMcpConfigWriter.Change.Updated;
+
+        public bool                          InstallCopilotInstructionsCalled  { get; private set; }
+        public AgentInstructionsWriter.Change InstallCopilotInstructionsReturns { get; set; } = AgentInstructionsWriter.Change.Updated;
 
         public Installers AsInstallers() => new(
             InstallClaudePlugin: (s, p) => {
@@ -1334,6 +1403,11 @@ public class CodingAgentsStepTests {
                 RegisterCopilotMcpCalled = true;
 
                 return RegisterCopilotMcpReturns;
+            },
+            InstallCopilotInstructions: () => {
+                InstallCopilotInstructionsCalled = true;
+
+                return InstallCopilotInstructionsReturns;
             }
         );
     }
