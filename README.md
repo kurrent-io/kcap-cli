@@ -132,6 +132,8 @@ The `kcap mcp flow-result` stdio server is the reviewer-side counterpart: the da
 
 The `kcap mcp memory` stdio server lets agents search, save, and update durable team memories — preferences, feedback, project facts, and references scoped to you, your team, or the org. `kcap setup` **auto-registers it for Claude Code** (via the plugin's `.mcp.json`), **Codex CLI** (in `~/.codex/config.toml`, alongside `kcap-sessions` / `kcap-review`), and **Cursor** (in `~/.cursor/mcp.json`, alongside the other three servers); Codex's native plugin loader also picks it up via `.codex-mcp.json`. See the [Memory MCP server](#memory-mcp-server-for-agents) section for details.
 
+The `kcap mcp workitems` stdio server lets agents attach the current session (and its continuation chain) to a work item — by issue key, PR number, work item id, or a brand-new title — or list what a session is already attached to. The plugin **auto-registers it for Claude Code only**; it isn't offered for Cursor or Codex. See the [Work items MCP server](#work-items-mcp-server-for-agents) section for details.
+
 ## What it records
 
 Once set up, Capacitor runs silently in the background. Every Claude Code (and Codex CLI, if you installed those hooks) session is captured automatically:
@@ -359,6 +361,21 @@ It provides six tools:
 The server is repo- and machine-aware: it resolves the current working directory to a repo hash and the local persisted machine id at startup, and uses both to scope `save_memory` and to bias `search_memories` / `get_memory` results.
 
 At SessionStart (Claude Code), `kcap` also injects a compact **index** of the memories visible for the current repo/machine into the session context, so the agent starts each session aware of what's saved without a search — see [SessionStart team-memory index](#what-it-records) above. Opt out with `kcap config set disable_memory_index true`.
+
+### Work items MCP server (for agents)
+
+```bash
+kcap mcp workitems
+```
+
+Stdio MCP server that lets coding agents correlate the current session to the SDLC work item (issue/PR) it belongs to, or list what it's already correlated to. **Claude Code:** auto-registered via the plugin's `.mcp.json`; it isn't offered for Cursor or Codex.
+
+It provides two tools:
+
+- **`declare_work_item`** — attach the current session (and its continuation chain) to a work item. Pass exactly one of `issue_key` (e.g. `"AI-1234"`), `pr_number`, `work_item_id`, or `new_title` (creates a brand-new work item).
+- **`get_session_work_items`** — list the work items the current session is attached to.
+
+Both tools default `session_id` to the current kcap-hooked session (`KCAP_SESSION_ID`) when omitted. This is the manual-declare path alongside the server's own mechanical and LLM-assisted correlation — use it when an agent already knows which issue or PR a session belongs to.
 
 ### Curate guidelines
 
