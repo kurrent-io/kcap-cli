@@ -271,6 +271,43 @@ public class CodexConfigTomlTests {
     }
 
     [Test]
+    public async Task RegisterKcapMcpServers_does_not_auto_approve_a_foreign_same_named_entry() {
+        var path = TempConfig();
+        // A user-authored server that shares the name "kcap-review" but is NOT kcap (different command).
+        // The heal must NOT auto-approve it — ownership is keyed off command == "kcap".
+        File.WriteAllText(path, """
+            [mcp_servers.kcap-review]
+            command = "my-wrapper"
+            args = ["review"]
+            """);
+
+        CodexConfigToml.RegisterKcapMcpServers(path);
+
+        var review = (TomlTable)((TomlTable)ReadToml(path)["mcp_servers"])["kcap-review"];
+        await Assert.That((string)review["command"]).IsEqualTo("my-wrapper");                 // untouched
+        await Assert.That(review.ContainsKey("default_tools_approval_mode")).IsFalse();        // NOT auto-approved
+    }
+
+    [Test]
+    public async Task RegisterKcapMcpServers_does_not_auto_approve_kcap_named_entry_with_wrong_args() {
+        var path = TempConfig();
+        // command == "kcap" but args point at the WRITE-capable memory server under the read-only
+        // "kcap-review" name. The heal must NOT auto-approve it — args don't match the expected
+        // read-only server's args, and the heal never rewrites args.
+        File.WriteAllText(path, """
+            [mcp_servers.kcap-review]
+            command = "kcap"
+            args = ["mcp", "memory"]
+            """);
+
+        CodexConfigToml.RegisterKcapMcpServers(path);
+
+        var review = (TomlTable)((TomlTable)ReadToml(path)["mcp_servers"])["kcap-review"];
+        await Assert.That(review.ContainsKey("default_tools_approval_mode")).IsFalse();  // NOT auto-approved
+        await Assert.That(ArgsOf(review)).IsEquivalentTo(new[] { "mcp", "memory" });      // args untouched
+    }
+
+    [Test]
     public async Task RegisterKcapMcpServers_emits_snake_case_mcp_servers_table() {
         // Codex config.toml uses the snake_case `mcp_servers` table — NOT the
         // camelCase `mcpServers` key the plugin *descriptor* JSON requires.
