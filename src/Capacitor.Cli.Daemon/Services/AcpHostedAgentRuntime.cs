@@ -114,6 +114,11 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime {
         _connectionRunTask = RunConnectionLoopAsync(_cts.Token);
 
         try {
+            // Advertise NO client fs/terminal. A live probe found cursor-agent performs file/shell
+            // operations itself (as a local child process, against `cwd`) and never asks the client
+            // to serve fs/*/terminal/*, so the smallest set is also sufficient — and we never
+            // advertise a capability we can't safely enforce. Any unadvertised request a future agent
+            // sends anyway is declined -32601 by AcpConnection (never falsely acknowledged).
             var initializeParams = JsonSerializer.SerializeToElement(
                 new InitializeParams(
                     ProtocolVersion: 1,
