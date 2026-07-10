@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Pty;
@@ -964,10 +965,109 @@ public partial class AgentOrchestratorVendorTests {
 
         public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath) {
             AgentRegisteredCallCount++;
+            lock (AcpCallOrder) AcpCallOrder.Add($"register:{agentId}");
 
             return AgentRegisteredCallCount <= AgentRegisteredFailTimes
                 ? Task.FromException(new InvalidOperationException("transient re-register failure"))
                 : Task.CompletedTask;
+        }
+
+        // ── AI-688 Option B task 4: ACP bind/forward capture ────────────────────────────────────
+        // Overrides the RAW hub-invoke seams (mirroring AcpServerConnectionTests' TestServerConnection)
+        // rather than the higher-level gated AcpSessionStartedAsync/SendAcpEventsAsync, so every call
+        // still goes through the REAL ConnectionRetry/IsReady gating the production wiring relies on.
+        // IsReady is overridden to true (no real hub connection exists in these tests) so that gating
+        // resolves immediately instead of hanging forever waiting for a connection that never connects.
+
+        internal override bool IsReady => true;
+
+        /// <summary>Every register/bind/events call, in the exact order the orchestrator issued them —
+        /// the single source of truth for the bind-ordering and teardown-ordering assertions.</summary>
+        public List<string> AcpCallOrder { get; } = [];
+
+        public List<(string AgentId, string Vendor, string AcpSessionId, string? Cwd, string? Model)> AcpSessionStartedCalls { get; } = [];
+        public List<(string AgentId, string AcpSessionId, AcpEventEnvelope[] Envelopes)>              AcpEventsCalls         { get; } = [];
+
+        /// <summary>Fires (unbounded, never blocks the caller) once per AcpSessionEvents call, carrying
+        /// the 1-based call count — lets a test await "the Nth events call happened" deterministically
+        /// instead of guessing with Task.Delay.</summary>
+        public Channel<int> AcpEventsCallSignal { get; } = Channel.CreateUnbounded<int>();
+
+        /// <summary>Overrides the ack a given batch receives; defaults to "fully accepted".</summary>
+        public Func<AcpEventEnvelope[], AcpBatchAck>? AcpEventsAckOverride { get; init; }
+
+        /// <summary>Set to make the raw AcpSessionEvents invoke hang until this token is cancelled —
+        /// simulates a server call that never returns, for the bounded-final-drain test (mirrors
+        /// EndSessionBlockUntil's pattern).</summary>
+        public CancellationTokenSource? AcpEventsBlockUntil { get; init; }
+
+        /// <summary>One-shot gate: when set, the NEXT raw AcpSessionEvents invoke awaits this task
+        /// before returning (then the field is cleared) — lets a test deterministically control
+        /// exactly when one specific events call completes, without racing unrelated background
+        /// work (e.g. CleanupAgentAsync's own worktree removal) that would otherwise let a call
+        /// "eventually" go through regardless of the ordering under test.</summary>
+        public TaskCompletionSource? PendingAcpEventsGate { get; set; }
+
+        /// <summary>One-shot gate: when set, the NEXT raw AcpSessionStarted invoke awaits this task
+        /// before returning (then the field is cleared) — models a bind call still in flight across
+        /// a reconnect outage (AI-688 reliability fix's stale-binding-race test), independent of
+        /// <paramref name="ct"/> so the test controls exactly when the "late bind" resolves.</summary>
+        public TaskCompletionSource? PendingAcpBindGate { get; set; }
+
+        internal override async Task InvokeAcpSessionStartedRawAsync(
+                string agentId, string vendor, string acpSessionId, string? cwd, string? model,
+                IReadOnlyDictionary<string, string>? metadata, CancellationToken ct
+            ) {
+            lock (AcpCallOrder) {
+                AcpCallOrder.Add($"bind:{agentId}");
+                AcpSessionStartedCalls.Add((agentId, vendor, acpSessionId, cwd, model));
+            }
+
+            if (PendingAcpBindGate is { } gate) {
+                PendingAcpBindGate = null;
+                await gate.Task;
+            }
+        }
+
+        internal override async Task<AcpBatchAck> InvokeAcpSessionEventsRawAsync(
+                string agentId, string acpSessionId, AcpEventEnvelope[] envelopes, CancellationToken ct
+            ) {
+            int callCount;
+
+            lock (AcpCallOrder) {
+                AcpCallOrder.Add($"events:{agentId}:{string.Join(',', envelopes.Select(e => e.Seq))}");
+                AcpEventsCalls.Add((agentId, acpSessionId, envelopes));
+                callCount = AcpEventsCalls.Count;
+            }
+
+            if (AcpEventsBlockUntil is { } blockCts) {
+                // Linked with ct (unlike a bare blockCts.Token wait) so a per-agent CTS cancellation
+                // propagates through exactly like a real _hub.InvokeAsync(..., cancellationToken: ct)
+                // call would (AI-688 reliability fix: forwarder-cancel-on-drain-timeout relies on
+                // this). A ct-driven cancellation PROPAGATES (mirrors the real hub); blockCts alone
+                // is purely test cleanup (releases an otherwise-abandoned background call) and falls
+                // through to a normal successful return.
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(blockCts.Token, ct);
+
+                try {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, linked.Token);
+                } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                    throw;
+                } catch (OperationCanceledException) {
+                    /* released by the test (blockCts) */
+                }
+            }
+
+            // Not interlocked: the forwarder always has exactly one send in flight at a time (its
+            // single-in-flight-batch design), so this test double never sees concurrent callers.
+            if (PendingAcpEventsGate is { } gate) {
+                PendingAcpEventsGate = null;
+                await gate.Task;
+            }
+
+            AcpEventsCallSignal.Writer.TryWrite(callCount);
+
+            return AcpEventsAckOverride?.Invoke(envelopes) ?? new AcpBatchAck(envelopes[^1].Seq, envelopes[^1].Seq);
         }
 
         /// <summary>(AgentId, Status) pairs passed to every AgentStatusChangedAsync call, in
@@ -1019,6 +1119,7 @@ public partial class AgentOrchestratorVendorTests {
 
         public override async Task<EndAgentSessionResult> EndAgentSessionAsync(string agentId, string reason) {
             EndSessionReasons.Add(reason);
+            lock (AcpCallOrder) AcpCallOrder.Add($"endSession:{agentId}");
 
             if (EndSessionBlockUntil is { } cts) {
                 try { await Task.Delay(Timeout.InfiniteTimeSpan, cts.Token); } catch (OperationCanceledException) {

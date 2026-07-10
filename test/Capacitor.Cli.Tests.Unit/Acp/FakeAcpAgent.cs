@@ -51,6 +51,9 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     string? _pendingServerRequestOptionsJson;
     long    _nextServerRequestId = 1000; // disjoint range from the connection's own outbound ids
 
+    JsonElement _sessionNewResult = ProbeConfirmedSessionNewResult;
+    bool        _failNextSetConfigOption;
+
     readonly List<(string Method, JsonElement? Params)>          _sentServerRequests = new();
     readonly object                                              _sentServerRequestsLock = new();
     JsonElement?                                                 _lastServerRequestResponse;
@@ -152,6 +155,55 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// </summary>
     public void EnqueuePromptScript(IReadOnlyList<JsonElement> updateNotifications, JsonElement result) =>
         _promptScripts.Enqueue((updateNotifications, result));
+
+    /// <summary>
+    /// Overrides the <c>session/new</c> response this fake returns for every subsequent
+    /// <c>session/new</c> request (default: <see cref="ProbeConfirmedSessionNewResult"/>, a single
+    /// <c>composer-2.5[fast=true]</c> model) — AI-688 gap 1 model-selection tests use this to script
+    /// a richer <c>models.availableModels</c> list + <c>currentModelId</c>.
+    /// <see cref="BuildSessionNewResult"/> is the easiest way to build a well-formed override.
+    /// </summary>
+    public void SetSessionNewResult(JsonElement result) => _sessionNewResult = result;
+
+    /// <summary>
+    /// Arranges the NEXT <c>session/set_config_option</c> request to be answered with a JSON-RPC
+    /// error instead of a success result (AI-688 gap 1) — models a real agent rejecting the
+    /// resolved model id, exercising <c>AcpHostedAgentRuntime</c>'s non-fatal "log a warning and
+    /// continue with Cursor's default model" handling.
+    /// </summary>
+    public void FailNextSetConfigOption() => _failNextSetConfigOption = true;
+
+    /// <summary>
+    /// Convenience builder for a probe-shaped <c>session/new</c> result (AI-688 gap 1) with a
+    /// caller-controlled <c>models.availableModels</c> list + <c>currentModelId</c>.
+    /// <paramref name="availableModels"/> entries are <c>(modelId, name)</c> pairs.
+    /// </summary>
+    public static JsonElement BuildSessionNewResult(
+            string sessionId,
+            string currentModelId,
+            IEnumerable<(string ModelId, string Name)> availableModels) {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteString("sessionId", sessionId);
+            writer.WriteStartObject("models");
+            writer.WriteString("currentModelId", currentModelId);
+            writer.WriteStartArray("availableModels");
+            foreach (var (modelId, name) in availableModels) {
+                writer.WriteStartObject();
+                writer.WriteString("modelId", modelId);
+                writer.WriteString("name", name);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+            writer.WriteStartArray("configOptions");
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
+        return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
+    }
 
     /// <summary>
     /// When set, every <c>session/prompt</c> request's RESPONSE (not the queued updates, if any) is
@@ -263,7 +315,11 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
                 break;
 
             case "session/new":
-                await WriteResponseAsync(id, ProbeConfirmedSessionNewResult, ct).ConfigureAwait(false);
+                await WriteResponseAsync(id, _sessionNewResult, ct).ConfigureAwait(false);
+                break;
+
+            case "session/set_config_option":
+                await HandleSetConfigOptionAsync(id, paramsElement, ct).ConfigureAwait(false);
                 break;
 
             case "session/prompt":
@@ -298,6 +354,39 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
         if (HoldPromptResponses is { } gate)
             await gate.Task.ConfigureAwait(false);
 
+        await WriteResponseAsync(id, result, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// AI-688 gap 1: answers a <c>session/set_config_option</c> request — either the scripted
+    /// JSON-RPC error (see <see cref="FailNextSetConfigOption"/>) or a probe-shaped success result
+    /// echoing back the requested <c>value</c> as the <c>model</c> config option's
+    /// <c>currentValue</c>, mirroring the real agent's confirmed response shape
+    /// (<c>docs/ai-688-cursor-prototype-findings.md</c>). The request itself is already captured in
+    /// <see cref="ReceivedCalls"/> by <see cref="DispatchLineAsync"/> before this runs.
+    /// </summary>
+    async Task HandleSetConfigOptionAsync(JsonElement id, JsonElement? @params, CancellationToken ct) {
+        if (_failNextSetConfigOption) {
+            _failNextSetConfigOption = false;
+            await WriteErrorResponseAsync(id, -32602, "Invalid params: unknown model", ct).ConfigureAwait(false);
+            return;
+        }
+
+        var value = @params is { } p && p.TryGetProperty("value", out var valueEl) ? valueEl.GetString() ?? "" : "";
+
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteStartArray("configOptions");
+            writer.WriteStartObject();
+            writer.WriteString("id", "model");
+            writer.WriteString("currentValue", value);
+            writer.WriteEndObject();
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
+        var result = JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
         await WriteResponseAsync(id, result, ct).ConfigureAwait(false);
     }
 
@@ -463,24 +552,67 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// <summary>
     /// Spec-derived, NOT yet verified against cursor-agent (the probe account was plan-gated before
     /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
-    /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call","toolCallId":"...","title":"...","kind":"...","status":"..."}</c>.
+    /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call","toolCallId":"...","title":"...","kind":"...","status":"...","rawInput":{...}}</c>
+    /// (<c>rawInput</c> only when <paramref name="rawInputJson"/> is non-null — AI-688 task 1's
+    /// <c>AcpSessionUpdate.Reduce()</c> extraction target for <c>ToolInputJson</c>).
     /// <paramref name="status"/> is one of <c>pending</c> / <c>in_progress</c> / <c>completed</c> / <c>failed</c>.
     /// </summary>
-    public static JsonElement BuildToolCallUpdate(string toolCallId, string title, string kind, string status) {
-        var json = $$"""
-            {"sessionUpdate":"tool_call","toolCallId":"{{toolCallId}}","title":"{{title}}","kind":"{{kind}}","status":"{{status}}"}
-            """;
-        return JsonDocument.Parse(json).RootElement.Clone();
+    public static JsonElement BuildToolCallUpdate(string toolCallId, string title, string kind, string status, string? rawInputJson = null) {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteString("sessionUpdate", "tool_call");
+            writer.WriteString("toolCallId", toolCallId);
+            writer.WriteString("title", title);
+            writer.WriteString("kind", kind);
+            writer.WriteString("status", status);
+            if (rawInputJson is not null) {
+                writer.WritePropertyName("rawInput");
+                using var doc = JsonDocument.Parse(rawInputJson);
+                doc.RootElement.WriteTo(writer);
+            }
+            writer.WriteEndObject();
+        }
+
+        return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
     }
 
     /// <summary>
     /// Spec-derived, NOT yet verified against cursor-agent (the probe account was plan-gated before
     /// any tool-call turn completed) — re-verify against docs/acp-probe-findings.md "Recommended
-    /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call_update","toolCallId":"...","status":"..."}</c>.
+    /// follow-up" once available. Shape: <c>{"sessionUpdate":"tool_call_update","toolCallId":"...","status":"...","content":[{"type":"content","content":{"type":"text","text":"..."}}],"rawOutput":{...}}</c>
+    /// — <c>content</c>/<c>rawOutput</c> are included only when <paramref name="resultText"/>/
+    /// <paramref name="rawOutputJson"/> are non-null (AI-688 task 1's
+    /// <c>AcpSessionUpdate.Reduce()</c> extraction targets for <c>ToolResultText</c>: the ACP-spec
+    /// <c>ToolCallContent</c> text-block shape, falling back to <c>rawOutput</c> verbatim).
     /// </summary>
-    public static JsonElement BuildToolCallStatusUpdate(string toolCallId, string status) {
-        var json = $$"""{"sessionUpdate":"tool_call_update","toolCallId":"{{toolCallId}}","status":"{{status}}"}""";
-        return JsonDocument.Parse(json).RootElement.Clone();
+    public static JsonElement BuildToolCallStatusUpdate(string toolCallId, string status, string? resultText = null, string? rawOutputJson = null) {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteString("sessionUpdate", "tool_call_update");
+            writer.WriteString("toolCallId", toolCallId);
+            writer.WriteString("status", status);
+            if (resultText is not null) {
+                writer.WriteStartArray("content");
+                writer.WriteStartObject();
+                writer.WriteString("type", "content");
+                writer.WriteStartObject("content");
+                writer.WriteString("type", "text");
+                writer.WriteString("text", resultText);
+                writer.WriteEndObject();
+                writer.WriteEndObject();
+                writer.WriteEndArray();
+            }
+            if (rawOutputJson is not null) {
+                writer.WritePropertyName("rawOutput");
+                using var doc = JsonDocument.Parse(rawOutputJson);
+                doc.RootElement.WriteTo(writer);
+            }
+            writer.WriteEndObject();
+        }
+
+        return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
     }
 
     /// <summary>

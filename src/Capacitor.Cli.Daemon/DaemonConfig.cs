@@ -51,6 +51,18 @@ public class DaemonConfig {
     public string CursorPath { get; set; } = "cursor-agent";
 
     /// <summary>
+    /// Family-prefix default model for Cursor ACP sessions, e.g.
+    /// <c>"claude-sonnet-4-5"</c>. Cursor's wire protocol requires the exact, parameterized
+    /// <c>modelId</c> from <c>session/new</c>'s <c>availableModels</c> (e.g.
+    /// <c>claude-sonnet-4-5[thinking=true,context=200k]</c>), so this bare family name is resolved
+    /// against that list at launch time by <c>AcpModelResolver.Resolve</c> — not sent verbatim.
+    /// Overridable via <c>KCAP_CURSOR_MODEL</c>, mirroring <see cref="CursorPath"/>. A per-launch
+    /// model override (<c>RuntimeStartContext.Model</c>, when the launch specifies one) takes
+    /// precedence over this daemon-wide default — see <c>AcpHostedAgentRuntimeFactory</c>.
+    /// </summary>
+    public string CursorModel { get; set; } = "claude-sonnet-4-5";
+
+    /// <summary>
     /// Path to the kcap CLI binary. Used by the daemon to spawn auxiliary
     /// processes (e.g. <c>generate-whats-done</c>) when claude didn't fire its
     /// own session-end hook. Defaults to "kcap" — resolved via PATH, which

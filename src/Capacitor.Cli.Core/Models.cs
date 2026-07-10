@@ -902,6 +902,9 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Acp.SessionPromptParams))]
 [JsonSerializable(typeof(Acp.PromptContentBlock))]
 [JsonSerializable(typeof(Acp.SessionCancelParams))]
+[JsonSerializable(typeof(Acp.SetConfigOptionParams))]
+[JsonSerializable(typeof(Acp.SessionModelsInfo))]
+[JsonSerializable(typeof(Acp.AvailableModelDto))]
 [JsonSerializable(typeof(Acp.SessionRequestPermissionParams))]
 [JsonSerializable(typeof(Acp.PermissionOptionDto))]
 [JsonSerializable(typeof(Acp.PermissionOutcomeResult))]
@@ -912,6 +915,13 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(AcpInteractionOption))]
 [JsonSerializable(typeof(AcpInteractionDecision))]
 [JsonSerializable(typeof(AcpInteractionResolution))]
+[JsonSerializable(typeof(AcpEventEnvelope))]
+[JsonSerializable(typeof(AcpEventEnvelope[]))]
+[JsonSerializable(typeof(AcpBatchAck))]
+// The AcpSessionStarted hub method's optional metadata argument. Registered as its own root type
+// (not just nested inside another JsonSerializable graph) because SignalR's JsonHubProtocol
+// serializes each hub-invocation argument independently by its declared type.
+[JsonSerializable(typeof(IReadOnlyDictionary<string, string>))]
 // UseStringEnumConverter=true matches the server's SignalR JSON protocol, which
 // serialises enums (e.g. LaunchKind) as camelCase strings. Without it the
 // source-gen LaunchKind JsonTypeInfo defaults to numeric and silently drops the
@@ -1013,6 +1023,79 @@ public readonly record struct AcpInteractionResolution(
         string             RequestId,
         AcpInteractionDecision Decision
     );
+
+/// <summary>
+/// Envelope-kind discriminator constants. Field-for-field mirror of the
+/// server-side <c>Capacitor.Server.Core.Acp.AcpEventKind</c> static class (same constant names, same
+/// wire string values) — kept as plain string constants (not a C# enum) because
+/// <see cref="AcpEventEnvelope.Kind"/> itself is a plain <see langword="string"/> on both sides, not
+/// an enum-backed field.
+/// </summary>
+public static class AcpEventKind {
+    public const string SessionStarted     = "session_started";
+    public const string UserMessage        = "user_message";
+    public const string AssistantText      = "assistant_text";
+    public const string AssistantThinking  = "assistant_thinking";
+    public const string ToolCall           = "tool_call";
+    public const string ToolResult         = "tool_result";
+    public const string SessionEnded       = "session_ended";
+}
+
+/// <summary>
+/// One canonical-equivalent event the daemon sends over the server's <c>AcpSessionEvents</c> hub
+/// method. Daemon-local, field-for-field mirror of the server-side
+/// <c>Capacitor.Server.Core.Acp.AcpEventEnvelope</c> record (same property names/types/defaults,
+/// same "flat and Kind-discriminated, no polymorphism" shape) — read (never edited) from
+/// <c>src/Capacitor.Server.Core/Acp/AcpEventEnvelope.cs</c> in the server repo. Neither
+/// side declares an explicit <c>[JsonPropertyName]</c>: both ride the wire under a
+/// <c>JsonNamingPolicy.SnakeCaseLower</c>-equivalent naming policy (the server's SignalR
+/// <c>AddJsonProtocol</c> configuration; this context's <see cref="CapacitorJsonContext"/>'s
+/// <see cref="JsonSourceGenerationOptionsAttribute.PropertyNamingPolicy"/>), so keeping the C#
+/// property NAMES identical here is what keeps the wire shape identical — see
+/// <c>AcpEventEnvelopeWireCompatTests</c> for the locked-in per-field wire-compat guard. Exactly one
+/// per-kind field group is populated for a given <see cref="Kind"/> (see
+/// <c>AcpEventTranslator.Translate</c>, which never sets a field outside its kind's group).
+/// </summary>
+public readonly record struct AcpEventEnvelope(
+        int     ContractVersion   = 1,
+        long    Seq               = 0,
+        string  Kind              = "",
+
+        // text / thinking chunks
+        string? Text              = null,
+        bool    ThinkingEncrypted = false,
+
+        // tool_call
+        string? ToolCallId        = null,
+        string? ToolName          = null,
+        string? ToolInputJson     = null, // JSON object string
+
+        // tool_result
+        string? ToolResult        = null,
+        bool    ToolIsError       = false,
+
+        // session_started
+        string? Model             = null,
+        string? Cwd               = null,
+        string? RawSessionId      = null,
+        string? SessionMode       = null, // ACP session/new mode (agent|plan|ask)
+
+        // session_ended
+        string? EndReason         = null,
+
+        // transcript-authoritative time (ISO-8601); server falls back to now if absent
+        string? TimestampIso      = null
+    );
+
+/// <summary>
+/// Ack returned from the server's <c>AcpSessionEvents</c> hub method.
+/// Field-for-field mirror of the server-side <c>Capacitor.Server.Core.Acp.AcpBatchAck</c> record —
+/// <see cref="ExpectedNextSeq"/> is set only on a gap-reject, telling the daemon where to rewind
+/// (resend from <see cref="ExpectedNextSeq"/> on a gap; a terminal-drop ack
+/// has <see cref="AcceptedSeq"/> below the daemon's max-sent seq AND a null
+/// <see cref="ExpectedNextSeq"/>).
+/// </summary>
+public readonly record struct AcpBatchAck(long AcceptedSeq, long PersistedSeq, long? ExpectedNextSeq = null);
 
 /// <summary>Commands sent from the server to daemon clients via SignalR.</summary>
 public readonly record struct LaunchAgentCommand(
