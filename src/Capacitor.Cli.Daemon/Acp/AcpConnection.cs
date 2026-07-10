@@ -50,20 +50,28 @@ internal sealed class AcpRpcException : Exception {
 /// call on the client side (removes the correlation entry and faults the awaiter); it does not by
 /// itself tell the agent to stop working.
 /// </summary>
-internal sealed class AcpConnection : IAsyncDisposable {
+internal sealed partial class AcpConnection : IAsyncDisposable {
     readonly Stream                                                  _writeStream;
     readonly Stream                                                  _readStream;
     readonly ILogger                                                 _logger;
+    readonly bool                                                    _debugFrames;
     readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> _pending = new();
     readonly SemaphoreSlim                                           _writeGate = new(1, 1);
 
     long     _nextId;
     int      _disposed;
 
-    public AcpConnection(Stream writeStream, Stream readStream, ILogger logger) {
+    /// <param name="debugFrames">
+    /// <c>KCAP_ACP_DEBUG_FRAMES</c> (<see cref="DaemonConfig.DebugFrames"/>) — off by default. When
+    /// on, every inbound/outbound JSON-RPC frame is ALSO logged in full (length-capped) at Debug
+    /// (<see cref="LogInboundFrame"/>/<see cref="LogOutboundFrame"/>); the existing shape-only Debug
+    /// logging in <see cref="DispatchLineAsync"/> is unchanged either way.
+    /// </param>
+    public AcpConnection(Stream writeStream, Stream readStream, ILogger logger, bool debugFrames = false) {
         _writeStream = writeStream;
         _readStream  = readStream;
         _logger      = logger;
+        _debugFrames = debugFrames;
     }
 
     /// <summary>Raised for inbound agent→client notifications (e.g. <c>session/update</c>).</summary>
@@ -166,6 +174,13 @@ internal sealed class AcpConnection : IAsyncDisposable {
     }
 
     async Task DispatchLineAsync(string line, CancellationToken ct) {
+        // KCAP_ACP_DEBUG_FRAMES gate (Off by default) — an ACP frame can carry prompt/tool/file
+        // content, so the FULL frame is only ever logged when the operator has explicitly opted in.
+        // This is additive: the shape-only Debug logging further down (unparseable/unrecognized/
+        // wrong-typed frames) is unchanged regardless of this flag.
+        if (_debugFrames)
+            LogInboundFrame(AcpDebugFrameLog.Cap(line));
+
         JsonDocument doc;
 
         try {
@@ -410,6 +425,9 @@ internal sealed class AcpConnection : IAsyncDisposable {
     }
 
     async Task WriteLineAsync(string json, CancellationToken ct) {
+        if (_debugFrames)
+            LogOutboundFrame(AcpDebugFrameLog.Cap(json));
+
         var bytes = Encoding.UTF8.GetBytes(json + "\n");
 
         await _writeGate.WaitAsync(ct).ConfigureAwait(false);
@@ -439,4 +457,10 @@ internal sealed class AcpConnection : IAsyncDisposable {
         await _writeStream.DisposeAsync().ConfigureAwait(false);
         await _readStream.DisposeAsync().ConfigureAwait(false);
     }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "ACP <<< {Frame}")]
+    partial void LogInboundFrame(string frame);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "ACP >>> {Frame}")]
+    partial void LogOutboundFrame(string frame);
 }

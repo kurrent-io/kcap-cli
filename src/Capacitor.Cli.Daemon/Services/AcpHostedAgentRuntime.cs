@@ -33,13 +33,15 @@ namespace Capacitor.Cli.Daemon.Services;
 /// mechanism between the worker's turn-end flush and the connection read-loop's kind-transition
 /// flush.
 /// </summary>
-internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscriptSource {
+internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscriptSource {
     static readonly object[] NoMcpServers = [];
 
     readonly AcpConnection _connection;
     readonly IAcpProcess   _process;
     readonly ILogger       _logger;
     readonly TimeProvider  _timeProvider;
+    readonly string        _agentId;
+    readonly bool          _debugFrames;
     readonly AcpInteractionBridge? _interactionBridge;
     readonly CancellationTokenSource _cts = new();
     // Raw reduced-update surface, used only for test/live-inspection — the production transcript
@@ -140,6 +142,9 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     /// <summary>Agent capabilities negotiated by <see cref="StartAsync"/>'s <c>initialize</c> call; null before that.</summary>
     AgentCapabilities? _negotiatedCapabilities;
 
+    /// <summary>The <c>protocolVersion</c> negotiated by <see cref="StartAsync"/>'s <c>initialize</c> call — captured purely for the <see cref="LogHandshakeOk"/> lifecycle log; 0 before that.</summary>
+    int _negotiatedProtocolVersion;
+
     /// <summary>
     /// A deliberate, already-actionable handshake error (unsupported ACP protocol version) — NOT an
     /// auth/connection failure. The handshake catch rethrows it unwrapped so the auth/subscription
@@ -188,12 +193,15 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
             Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>?   requestInteraction = null,
             TimeProvider?                                                                  timeProvider = null,
             int?                                                                           transcriptCapacity = null,
-            int?                                                                           pendingTurnsCapacity = null
+            int?                                                                           pendingTurnsCapacity = null,
+            bool                                                                           debugFrames = false
         ) {
         _connection   = connection;
         _process      = process;
         _logger       = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _agentId      = agentId;
+        _debugFrames  = debugFrames;
 
         // Bounded, not unbounded — see the fields' own remarks for the FullMode rationale.
         // transcriptCapacity/pendingTurnsCapacity are production-null (defaults apply); tests
@@ -313,22 +321,25 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
                 initializeResult = null;
             }
 
-            // This build only ever speaks version 1 — fail loud and clearly BEFORE session/new.
-            if (initializeResult is null)
+            // This build only ever speaks version 1 — fail loud and clearly BEFORE session/new,
+            // distinguishing a malformed/parse-failed response from a real version mismatch.
+            if (initializeResult is null) {
+                AcpMetrics.RecordFailure("handshake");
                 throw new AcpProtocolVersionException(
                     "cursor-agent's initialize response was malformed or omitted protocolVersion; this build supports ACP protocol version 1 — update kcap or cursor-agent.");
-            if (initializeResult.ProtocolVersion != 1)
+            }
+            if (initializeResult.ProtocolVersion != 1) {
+                AcpMetrics.RecordFailure("handshake");
                 throw new AcpProtocolVersionException(
                     $"cursor-agent negotiated ACP protocol version {initializeResult.ProtocolVersion}; this build supports version 1 — update kcap or cursor-agent.");
+            }
+
+            _negotiatedProtocolVersion = initializeResult.ProtocolVersion;
 
             // Missing agentCapabilities defensively means "advertises nothing" (loadSession=false),
             // not a throw — captured for a later reconnect path (only exposed here; nothing acts on
             // it yet).
             _negotiatedCapabilities = initializeResult.AgentCapabilities ?? new AgentCapabilities(LoadSession: false);
-
-            _logger.LogDebug(
-                "ACP: negotiated protocol version {ProtocolVersion}, loadSession={LoadSession}.",
-                initializeResult.ProtocolVersion, _negotiatedCapabilities.LoadSession);
 
             var sessionNewParams = JsonSerializer.SerializeToElement(
                 new SessionNewParams(Cwd: cwd, McpServers: NoMcpServers),
@@ -340,10 +351,16 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
                 throw new InvalidOperationException("ACP session/new response did not contain a sessionId.");
 
             _sessionId = sessionId;
+
+            LogSessionStarted(_agentId, sessionId);
+            AcpMetrics.SessionsStarted.Add(1);
         } catch (AcpProtocolVersionException) {
             // Already actionable and NOT an auth issue — rethrow verbatim, without the auth hint.
+            // Failure already recorded above, at the point the version mismatch was detected.
             throw;
         } catch (Exception ex) when (ex is not OperationCanceledException) {
+            AcpMetrics.RecordFailure("handshake");
+
             // Fold the original error's message into this one (single-lined + length-capped, since an
             // AcpRpcException carries the agent's arbitrary JSON-RPC error.message and this text is
             // forwarded to the server/UI via LaunchFailedAsync) and append a generic, actionable hint.
@@ -359,6 +376,11 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
         // Select the requested model (if any) BEFORE the first prompt fires. Awaited, but never
         // fatal — see TrySelectModelAsync's remarks.
         await TrySelectModelAsync(sessionNewResult, requestedModel, ct).ConfigureAwait(false);
+
+        // Handshake is now fully complete (initialize + session/new + best-effort model selection) —
+        // one consolidated Info log carrying the negotiated protocol version, loadSession, and the
+        // resolved model (null if none was requested/matched).
+        LogHandshakeOk(_agentId, _negotiatedProtocolVersion, _negotiatedCapabilities.LoadSession, _resolvedModel);
 
         // The session is established (initialize + session/new both completed) — the caller
         // (orchestrator) can now treat this agent as live. Enqueue the initial turn without
@@ -732,7 +754,7 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
 
                 default:
                     FlushOpenRunLocked(); // kind-transition — the open run (if any) ends here
-                    var envelope = AcpEventTranslator.Translate(update, seq: 0, NowIso(), logger: _logger);
+                    var envelope = AcpEventTranslator.Translate(update, seq: 0, NowIso(), logger: _logger, debugFrames: _debugFrames);
                     if (envelope is { } e)
                         EmitEnvelope(e);
                     break;
@@ -768,7 +790,7 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
         _openRunText = null;
 
         var representative = new AcpSessionUpdate(kind);
-        var envelope        = AcpEventTranslator.Translate(representative, seq: 0, NowIso(), aggregatedText: text, logger: _logger);
+        var envelope        = AcpEventTranslator.Translate(representative, seq: 0, NowIso(), aggregatedText: text, logger: _logger, debugFrames: _debugFrames);
         if (envelope is { } e)
             EmitEnvelope(e);
     }
@@ -817,6 +839,8 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
 
+        LogSessionEnded(_agentId, _sessionId ?? "");
+
         _connection.OnNotification -= HandleNotification;
 
         await _cts.CancelAsync().ConfigureAwait(false);
@@ -852,4 +876,17 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
         await _connection.DisposeAsync().ConfigureAwait(false);
         await _process.DisposeAsync().ConfigureAwait(false);
     }
+
+    // ── LoggerMessage source-generated methods ──────────────────────────────────────────────────
+    // Payload-free by construction: ids, protocol/capability metadata, and the resolved model NAME
+    // only — never prompt/assistant/tool content.
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP session started: agentId={AgentId} acpSessionId={AcpSessionId}")]
+    partial void LogSessionStarted(string agentId, string acpSessionId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP handshake OK: agentId={AgentId} protocolVersion={ProtocolVersion} loadSession={LoadSession} resolvedModel={ResolvedModel}")]
+    partial void LogHandshakeOk(string agentId, int protocolVersion, bool loadSession, string? resolvedModel);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP hosted agent session ended: agentId={AgentId} acpSessionId={AcpSessionId}")]
+    partial void LogSessionEnded(string agentId, string acpSessionId);
 }

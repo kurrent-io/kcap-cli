@@ -2,6 +2,7 @@
 using System.Text.Json;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit.Acp;
@@ -43,11 +44,11 @@ public class AcpHostedAgentRuntimeProtocolNegotiationTests {
 
         Task _fakeRunTask = Task.CompletedTask;
 
-        public Harness() {
+        public Harness(ILogger? logger = null, string agentId = "") {
             Fake    = new FakeAcpAgent();
-            Conn    = new AcpConnection(Fake.ClientWriteStream, Fake.ClientReadStream, NullLogger.Instance);
+            Conn    = new AcpConnection(Fake.ClientWriteStream, Fake.ClientReadStream, logger ?? NullLogger.Instance);
             Process = new FakeAcpProcess();
-            Runtime = new AcpHostedAgentRuntime(Conn, Process, NullLogger.Instance);
+            Runtime = new AcpHostedAgentRuntime(Conn, Process, logger ?? NullLogger.Instance, agentId: agentId);
         }
 
         public void StartFakeAgentLoop() => _fakeRunTask = Fake.RunAsync(Cts.Token);
@@ -145,5 +146,74 @@ public class AcpHostedAgentRuntimeProtocolNegotiationTests {
         await Assert.That(ex.Message).Contains("version 1");
         await Assert.That(ex.Message).DoesNotContain("version 0");
         await Assert.That(ex.Message).DoesNotContain("cursor-agent login");
+    }
+
+    // ── Payload-free handshake/session-lifecycle Info logging ──────────────────────────────────
+
+    /// <summary>Records every log call — mirrors <c>AcpTranscriptAggregationTests.CaptureLogger</c>'s
+    /// established pattern.</summary>
+    sealed class CaptureLogger : ILogger {
+        public readonly List<(LogLevel Level, string Message)> Entries = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool         IsEnabled(LogLevel logLevel)                            => true;
+
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? ex, Func<TState, Exception?, string> formatter)
+            => Entries.Add((level, formatter(state, ex)));
+    }
+
+    [Test]
+    public async Task StartAsync_Success_LogsSessionStartedAndHandshakeOk_NeverThePromptText() {
+        var logger = new CaptureLogger();
+        await using var h = new Harness(logger, agentId: "agent-42");
+        h.Fake.SetInitializeResult(FakeAcpAgent.BuildInitializeResult(protocolVersion: 1, loadSession: true));
+        h.StartFakeAgentLoop();
+
+        const string secretPrompt = "do the super-secret prompt thing";
+        await h.Runtime.StartAsync("/abs/worktree", secretPrompt, h.Cts.Token).WaitAsync(HangGuard);
+
+        var infoEntries = logger.Entries.Where(e => e.Level == LogLevel.Information).ToList();
+
+        await Assert.That(infoEntries).Contains(e =>
+            e.Message.Contains("session started") && e.Message.Contains("agent-42"));
+
+        await Assert.That(infoEntries).Contains(e =>
+            e.Message.Contains("handshake OK")
+            && e.Message.Contains("protocolVersion")
+            && e.Message.Contains("loadSession=True")
+            && e.Message.Contains("agent-42"));
+
+        // Payload-free: the prompt text must never appear in any Info-level log line.
+        await Assert.That(infoEntries).DoesNotContain(e => e.Message.Contains(secretPrompt));
+    }
+
+    [Test]
+    public async Task StartAsync_ProtocolVersionMismatch_NeverLogsSessionStartedOrHandshakeOk() {
+        var logger = new CaptureLogger();
+        await using var h = new Harness(logger);
+        h.Fake.SetInitializeResult(FakeAcpAgent.BuildInitializeResult(protocolVersion: 2, loadSession: true));
+        h.StartFakeAgentLoop();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => h.Runtime.StartAsync("/abs/worktree", "do the thing", h.Cts.Token).WaitAsync(HangGuard));
+
+        var infoEntries = logger.Entries.Where(e => e.Level == LogLevel.Information).ToList();
+        await Assert.That(infoEntries).DoesNotContain(e => e.Message.Contains("session started"));
+        await Assert.That(infoEntries).DoesNotContain(e => e.Message.Contains("handshake OK"));
+    }
+
+    [Test]
+    public async Task DisposeAsync_AfterSuccessfulStart_LogsSessionEnded() {
+        var logger = new CaptureLogger();
+        var h = new Harness(logger, agentId: "agent-7");
+        h.Fake.SetInitializeResult(FakeAcpAgent.BuildInitializeResult(protocolVersion: 1, loadSession: false));
+        h.StartFakeAgentLoop();
+
+        await h.Runtime.StartAsync("/abs/worktree", "do the thing", h.Cts.Token).WaitAsync(HangGuard);
+        await h.DisposeAsync();
+
+        var infoEntries = logger.Entries.Where(e => e.Level == LogLevel.Information).ToList();
+        await Assert.That(infoEntries).Contains(e =>
+            e.Message.Contains("session ended") && e.Message.Contains("agent-7"));
     }
 }

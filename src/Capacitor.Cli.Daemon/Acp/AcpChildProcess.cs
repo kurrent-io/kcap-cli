@@ -14,20 +14,29 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// with <c>RedirectStandardError = true</c> (see <see cref="Services.AcpHostedAgentRuntimeFactory"/>),
 /// and nothing else ever reads that stream — if we didn't drain it here, the OS pipe buffer (~64KB)
 /// would eventually fill and cursor-agent would block on its next stderr write, deadlocking a long
-/// session. The drain loop reads lines until EOF (process exit) or cancellation and logs them at
-/// Debug so cursor-agent diagnostics are still captured, just not on the critical path.
+/// session. The drain loop reads lines until EOF (process exit) or cancellation and logs each line's
+/// LENGTH at Debug by default (stderr can carry paths/prompt fragments/error detail); the full line
+/// text is only logged when the operator opts in via <c>KCAP_ACP_DEBUG_FRAMES</c> (see
+/// <see cref="DaemonConfig.DebugFrames"/>).
 /// </summary>
-internal sealed class AcpChildProcess : IAcpProcess {
+internal sealed partial class AcpChildProcess : IAcpProcess {
     readonly Process                 _process;
     readonly ILogger                 _logger;
+    readonly bool                    _debugFrames;
     readonly CancellationTokenSource _stderrDrainCts = new();
     readonly Task                    _stderrDrainTask;
 
     int _disposed;
 
-    public AcpChildProcess(Process process, ILogger logger) {
-        _process = process;
-        _logger  = logger;
+    /// <param name="debugFrames">
+    /// <c>KCAP_ACP_DEBUG_FRAMES</c> (<see cref="DaemonConfig.DebugFrames"/>) — off by default. When
+    /// on, <see cref="DrainStderrAsync"/> logs full (length-capped) stderr line text at Debug instead
+    /// of just its length; cursor-agent stderr can carry paths/prompt fragments/error detail.
+    /// </param>
+    public AcpChildProcess(Process process, ILogger logger, bool debugFrames = false) {
+        _process     = process;
+        _logger      = logger;
+        _debugFrames = debugFrames;
 
         // Fire-and-forget from the ctor's perspective — DisposeAsync cancels and (best-effort)
         // awaits it. Never let this task fault unobserved; DrainStderrAsync swallows everything
@@ -50,8 +59,15 @@ internal sealed class AcpChildProcess : IAcpProcess {
 
                 if (line is null) break; // EOF — process exited and closed the stream.
 
-                if (line.Length > 0)
-                    _logger.LogDebug("cursor-agent stderr: {Line}", line);
+                if (line.Length == 0) continue;
+
+                // KCAP_ACP_DEBUG_FRAMES gate (Off by default) — stderr can carry paths, prompt
+                // fragments, or error detail, so it is only logged verbatim when explicitly opted in;
+                // otherwise only its length is logged.
+                if (_debugFrames)
+                    LogStderrLineFull(AcpDebugFrameLog.Cap(line));
+                else
+                    LogStderrLineShape(line.Length);
             }
         } catch (OperationCanceledException) {
             // Disposal requested the drain stop — expected, not an error.
@@ -159,4 +175,10 @@ internal sealed class AcpChildProcess : IAcpProcess {
             // Best-effort.
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "cursor-agent stderr: {Line}")]
+    partial void LogStderrLineFull(string line);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "cursor-agent stderr: {Length} chars")]
+    partial void LogStderrLineShape(int length);
 }

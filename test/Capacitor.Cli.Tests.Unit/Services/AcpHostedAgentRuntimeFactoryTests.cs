@@ -3,6 +3,7 @@ using Capacitor.Cli.Daemon;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Tests.Unit.Acp;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
@@ -200,6 +201,62 @@ public class AcpHostedAgentRuntimeFactoryTests {
         cts.Cancel();
         try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
         await runtime.DisposeAsync();
+        await fake.DisposeAsync();
+    }
+
+    // ── Payload-free "ACP hosted agent launch" Info logging ────────────────────────────────────
+
+    /// <summary>Records every log call across every category (one instance shared by every
+    /// <c>CreateLogger&lt;T&gt;()</c> call) — mirrors <c>AcpTranscriptAggregationTests.CaptureLogger</c>'s
+    /// established pattern, wrapped in a minimal <see cref="ILoggerFactory"/> so it can be handed to
+    /// the factory's real constructor.</summary>
+    sealed class CaptureLogger : ILogger {
+        public readonly List<(LogLevel Level, string Message)> Entries = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool         IsEnabled(LogLevel logLevel)                            => true;
+
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? ex, Func<TState, Exception?, string> formatter)
+            => Entries.Add((level, formatter(state, ex)));
+    }
+
+    sealed class CaptureLoggerFactory : ILoggerFactory {
+        public readonly CaptureLogger Logger = new();
+
+        public ILogger CreateLogger(string categoryName) => Logger;
+        public void    AddProvider(ILoggerProvider provider) { }
+        public void    Dispose() { }
+    }
+
+    [Test]
+    public async Task StartAsync_LogsAcpHostedAgentLaunch_WithAgentIdVendorAndCwd() {
+        var fake           = new FakeAcpAgent();
+        var connection     = new CaptureServerConnection();
+        var loggerFactory  = new CaptureLoggerFactory();
+
+        var factory = new AcpHostedAgentRuntimeFactory(
+            config: new DaemonConfig { CursorPath = "cursor-agent" },
+            loggerFactory: loggerFactory,
+            connection: connection,
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess())
+        );
+
+        using var cts = new CancellationTokenSource();
+        var fakeRunTask = fake.RunAsync(cts.Token);
+
+        var ctx     = MakeContext("agent-launch-log") with { Worktree = new WorktreeInfo(Path: "/abs/some-worktree", Branch: "b", SourceRepo: "/repo") };
+        var started = await factory.StartAsync(ctx, cts.Token).WaitAsync(HangGuard);
+
+        var infoEntries = loggerFactory.Logger.Entries.Where(e => e.Level == LogLevel.Information).ToList();
+        await Assert.That(infoEntries).Contains(e =>
+            e.Message.Contains("ACP hosted agent launch")
+            && e.Message.Contains("agent-launch-log")
+            && e.Message.Contains("cursor")
+            && e.Message.Contains("/abs/some-worktree"));
+
+        cts.Cancel();
+        try { await fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await started.Runtime.DisposeAsync();
         await fake.DisposeAsync();
     }
 }

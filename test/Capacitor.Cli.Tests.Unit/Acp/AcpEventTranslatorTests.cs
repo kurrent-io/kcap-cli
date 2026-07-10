@@ -1,6 +1,7 @@
 // test/Capacitor.Cli.Tests.Unit/Acp/AcpEventTranslatorTests.cs
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Acp;
+using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Tests.Unit.Acp;
 
@@ -13,6 +14,18 @@ namespace Capacitor.Cli.Tests.Unit.Acp;
 /// </summary>
 public class AcpEventTranslatorTests {
     const string TimestampIso = "2026-07-08T12:00:00Z";
+
+    /// <summary>Records every log call — mirrors the pattern established in
+    /// <c>AcpTranscriptAggregationTests.CaptureLogger</c>.</summary>
+    sealed class CaptureLogger : ILogger {
+        public readonly List<(LogLevel Level, string Message)> Entries = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool         IsEnabled(LogLevel logLevel)                            => true;
+
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? ex, Func<TState, Exception?, string> formatter)
+            => Entries.Add((level, formatter(state, ex)));
+    }
 
     [Test]
     public async Task AgentMessageChunk_translates_to_AssistantText_using_the_updates_own_text() {
@@ -127,6 +140,62 @@ public class AcpEventTranslatorTests {
         await Assert.That(AcpEventTranslator.Translate(new AcpSessionUpdate(AcpUpdateKind.Plan), 1, TimestampIso)).IsNull();
         await Assert.That(AcpEventTranslator.Translate(new AcpSessionUpdate(AcpUpdateKind.AvailableCommands), 1, TimestampIso)).IsNull();
         await Assert.That(AcpEventTranslator.Translate(new AcpSessionUpdate(AcpUpdateKind.Unknown), 1, TimestampIso)).IsNull();
+    }
+
+    // ── KCAP_ACP_DEBUG_FRAMES gate: Unknown-kind raw-JSON dump ──────────────────────────────────
+
+    static AcpSessionUpdate UnknownUpdateWithSecretMarker() {
+        const string secretMarker = "sk-super-secret-prompt-content-marker";
+        using var doc = System.Text.Json.JsonDocument.Parse($$"""{"sessionUpdate":"something_new","detail":"{{secretMarker}}"}""");
+
+        return new AcpSessionUpdate(AcpUpdateKind.Unknown, Raw: doc.RootElement.Clone());
+    }
+
+    [Test]
+    public async Task Unknown_kind_with_DebugFrames_off_by_default_logs_shape_only_never_the_raw_content() {
+        var logger = new CaptureLogger();
+        var update = UnknownUpdateWithSecretMarker();
+
+        // debugFrames omitted entirely — proves the parameter defaults to Off, matching every
+        // pre-existing call site that doesn't pass it.
+        var env = AcpEventTranslator.Translate(update, seq: 1, timestampIso: TimestampIso, logger: logger);
+
+        await Assert.That(env).IsNull();
+        await Assert.That(logger.Entries).HasCount(1);
+        await Assert.That(logger.Entries[0].Level).IsEqualTo(LogLevel.Debug);
+        await Assert.That(logger.Entries[0].Message).DoesNotContain("sk-super-secret-prompt-content-marker");
+        await Assert.That(logger.Entries[0].Message).Contains("RawLength");
+    }
+
+    [Test]
+    public async Task Unknown_kind_with_DebugFrames_explicitly_off_logs_shape_only_never_the_raw_content() {
+        var logger = new CaptureLogger();
+        var update = UnknownUpdateWithSecretMarker();
+
+        AcpEventTranslator.Translate(update, seq: 1, timestampIso: TimestampIso, logger: logger, debugFrames: false);
+
+        await Assert.That(logger.Entries).HasCount(1);
+        await Assert.That(logger.Entries[0].Message).DoesNotContain("sk-super-secret-prompt-content-marker");
+    }
+
+    [Test]
+    public async Task Unknown_kind_with_DebugFrames_on_logs_the_full_raw_content() {
+        var logger = new CaptureLogger();
+        var update = UnknownUpdateWithSecretMarker();
+
+        AcpEventTranslator.Translate(update, seq: 1, timestampIso: TimestampIso, logger: logger, debugFrames: true);
+
+        await Assert.That(logger.Entries).HasCount(1);
+        await Assert.That(logger.Entries[0].Level).IsEqualTo(LogLevel.Debug);
+        await Assert.That(logger.Entries[0].Message).Contains("sk-super-secret-prompt-content-marker");
+    }
+
+    [Test]
+    public async Task Unknown_kind_with_no_logger_supplied_never_throws_regardless_of_DebugFrames() {
+        var update = UnknownUpdateWithSecretMarker();
+
+        await Assert.That(AcpEventTranslator.Translate(update, seq: 1, timestampIso: TimestampIso, debugFrames: true)).IsNull();
+        await Assert.That(AcpEventTranslator.Translate(update, seq: 1, timestampIso: TimestampIso, debugFrames: false)).IsNull();
     }
 
     [Test]
