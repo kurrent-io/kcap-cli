@@ -47,6 +47,11 @@ Options:
                               Pi is detected (~/.pi/ or pi on PATH).
   --skip-opencode-hooks       Don't install the OpenCode plugin even if OpenCode
                               is detected (~/.config/opencode/ or opencode on PATH).
+  --skip-opencode-mcp         Skip registering the kcap MCP servers for OpenCode
+                              (~/.config/opencode/opencode.json).
+  --skip-opencode-instructions
+                              Skip installing kcap's steering instructions for
+                              OpenCode (~/.config/opencode/AGENTS.md).
   --skip-antigravity-hooks    Don't install the Antigravity hooks block even if
                               Antigravity is detected (~/.gemini/antigravity/ or
                               antigravity on PATH).

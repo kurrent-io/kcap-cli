@@ -1710,6 +1710,65 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write the OpenCode plugin"));
     }
 
+    // ── OpenCode MCP + instructions ──────────────────────────────────────────
+
+    [Test]
+    public async Task OpenCode_mcp_and_instructions_registered_when_plugin_installed() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipOpenCode: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, OpenCode: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.OpenCodeMcpRegistered).IsTrue();
+        await Assert.That(calls.RegisterOpenCodeMcpCalled).IsTrue();
+        await Assert.That(result.OpenCodeInstructionsInstalled).IsTrue();
+        await Assert.That(calls.InstallOpenCodeInstructionsCalled).IsTrue();
+    }
+
+    [Test]
+    public async Task OpenCode_mcp_and_instructions_not_registered_when_plugin_fails() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { OpenCodeExtensionReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipOpenCode: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, OpenCode: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.OpenCodeExtensionInstalled).IsFalse();
+        await Assert.That(calls.RegisterOpenCodeMcpCalled).IsFalse();
+        await Assert.That(calls.InstallOpenCodeInstructionsCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task OpenCode_mcp_and_instructions_skipped_by_flags() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipOpenCode: false, SkipOpenCodeMcp: true, SkipOpenCodeInstructions: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, OpenCode: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.OpenCodeExtensionInstalled).IsTrue();  // plugin still installs
+        await Assert.That(calls.RegisterOpenCodeMcpCalled).IsFalse();
+        await Assert.That(calls.InstallOpenCodeInstructionsCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task OpenCode_mcp_registration_failure_emits_warning() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { RegisterOpenCodeMcpReturns = JsonMcpConfigWriter.Change.Failed };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipOpenCode: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, OpenCode: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.RegisterOpenCodeMcpCalled).IsTrue();
+        await Assert.That(result.OpenCodeMcpRegistered).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not register OpenCode MCP"));
+    }
+
     static Paths TestPaths() => new(
         ClaudeSettingsPath:   "/fake/.claude/settings.json",
         ClaudeScopeLabel:     "user",
@@ -1730,7 +1789,9 @@ public class CodingAgentsStepTests {
         GeminiInstructionsPath: "/fake/.gemini/GEMINI.md",
         AntigravityMcpPath:       "/fake/.gemini/config/mcp_config.json",
         AntigravityInstructionsPath: "/fake/.gemini/GEMINI.md",
-        AntigravitySkillsDir:     "/fake/.gemini/skills"
+        AntigravitySkillsDir:     "/fake/.gemini/skills",
+        OpenCodeMcpPath:      "/fake/.config/opencode/opencode.json",
+        OpenCodeInstructionsPath: "/fake/.config/opencode/AGENTS.md"
     );
 
     sealed class Sink {
@@ -1820,6 +1881,12 @@ public class CodingAgentsStepTests {
         // Every InstallAgentSkills(src,dst) call (the single AgentSkillsArgs only keeps the last) — so
         // tests can assert WHICH skills dirs got written (e.g. ~/.gemini/skills vs ~/.agents/skills).
         public List<(string Src, string Dst)> AgentSkillsInstalls { get; } = [];
+
+        public bool                     RegisterOpenCodeMcpCalled  { get; private set; }
+        public JsonMcpConfigWriter.Change RegisterOpenCodeMcpReturns { get; set; } = JsonMcpConfigWriter.Change.Updated;
+
+        public bool                          InstallOpenCodeInstructionsCalled  { get; private set; }
+        public AgentInstructionsWriter.Change InstallOpenCodeInstructionsReturns { get; set; } = AgentInstructionsWriter.Change.Updated;
 
         public Installers AsInstallers() => new(
             InstallClaudePlugin: (s, p) => {
@@ -1917,6 +1984,16 @@ public class CodingAgentsStepTests {
                 InstallCopilotInstructionsCalled = true;
 
                 return InstallCopilotInstructionsReturns;
+            },
+            RegisterOpenCodeMcp: () => {
+                RegisterOpenCodeMcpCalled = true;
+
+                return RegisterOpenCodeMcpReturns;
+            },
+            InstallOpenCodeInstructions: () => {
+                InstallOpenCodeInstructionsCalled = true;
+
+                return InstallOpenCodeInstructionsReturns;
             },
             AgentSkillsCurrent: dir => {
                 AgentSkillsCurrentCalled = true;

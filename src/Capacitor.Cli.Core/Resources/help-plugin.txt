@@ -37,6 +37,11 @@ Options:
                       hooks; the plugin auto-loads on `opencode` startup and
                       streams each session. User-wide only — --project has no
                       effect with --opencode.
+  --skip-opencode-mcp With --opencode: skip registering the kcap MCP servers in
+                      ~/.config/opencode/opencode.json (the `mcp` block).
+  --skip-opencode-instructions
+                      With --opencode: skip installing kcap's steering block into
+                      ~/.config/opencode/AGENTS.md.
   --antigravity       Target Google Antigravity: install the kcap capture plugin
                       to ~/.gemini/config/plugins/kcap/ (a plugin.json manifest +
                       hooks.json). Antigravity has no shell hooks; the GUI loads
@@ -166,9 +171,13 @@ Notes:
   instead of a hooks file — OpenCode exposes no shell hooks, only an in-process
   plugin API. The plugin shells out to `kcap hook --opencode` on session start
   and writes the {info,parts} transcript the watcher tails, so kcap must be on
-  PATH. OpenCode loads plugins at startup, so restart any running `opencode`
-  session after install. OpenCode has no project-scope plugins dir, so --project
-  has no effect with --opencode.
+  PATH. It also registers the 4 kcap MCP servers in ~/.config/opencode/opencode.json
+  (the `mcp` block, `type:"local"`, non-destructive/idempotent — see
+  --skip-opencode-mcp) and installs a kcap-owned steering block into
+  ~/.config/opencode/AGENTS.md (see --skip-opencode-instructions). OpenCode loads
+  plugins + config at startup, so restart any running `opencode` session after
+  install. OpenCode has no project-scope plugins dir, so --project has no effect
+  with --opencode.
 
   --if-installed is scoped to user-wide installs only — the npm postinstall hook
   does not refresh --project installs.

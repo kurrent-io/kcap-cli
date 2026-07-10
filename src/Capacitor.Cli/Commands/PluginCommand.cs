@@ -887,41 +887,106 @@ public static class PluginCommand {
 
         var refreshOnly = args.Contains("--if-installed");
 
-        switch (refreshOnly) {
-            case true when !OpenCodeExtensionInstaller.IsInstalled(pluginPath):
-            case true when OpenCodeExtensionInstaller.ReadMarker(pluginPath) == CapacitorVersion.Current():
-                return 0;
-            // The plugin shells out to the bare `kcap hook --opencode` command, so
-            // OpenCode (and therefore kcap) must find kcap on PATH. Skipped on the
-            // postinstall (--if-installed) refresh path, like the other vendors.
-            case false when !AgentDetector.IsInstalled("kcap"):
-                await env.Stderr.WriteLineAsync(
-                    "Cannot install the OpenCode plugin: 'kcap' is not on PATH. "
-                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
-                );
+        // Refresh-only mode never touches a machine that never opted in.
+        if (refreshOnly && !OpenCodeExtensionInstaller.IsInstalled(pluginPath)) return 0;
 
-                return 1;
-        }
-
-        if (!OpenCodeExtensionInstaller.Install(pluginPath)) {
-            if (refreshOnly) return 0;
-
-            await env.Stderr.WriteLineAsync("Could not write the OpenCode plugin file.");
+        // Fresh install needs kcap on PATH: the plugin shells out to the bare `kcap hook --opencode`
+        // command, so OpenCode must find kcap on PATH. Skipped on the --if-installed (postinstall) path.
+        if (!refreshOnly && !AgentDetector.IsInstalled("kcap")) {
+            await env.Stderr.WriteLineAsync(
+                "Cannot install the OpenCode plugin: 'kcap' is not on PATH. "
+              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+            );
 
             return 1;
         }
 
-        await env.Stdout.WriteLineAsync(
-            refreshOnly
-                ? $"OpenCode plugin refreshed ({pluginPath})"
-                : $"OpenCode plugin installed ({pluginPath})"
-        );
+        // Write the plugin unless a refresh finds it already on disk AND at the current version.
+        // The File.Exists guard matters because OpenCodeExtensionInstaller.IsInstalled treats a lone
+        // marker as "installed" — so a deleted kcap.ts with a current marker must still be rewritten,
+        // not skipped. Even when the plugin write IS skipped, still (re)register MCP + install
+        // instructions below: they live in separate files and must be healed if deleted or failed.
+        var pluginCurrent = refreshOnly
+            && File.Exists(pluginPath)
+            && OpenCodeExtensionInstaller.ReadMarker(pluginPath) == CapacitorVersion.Current();
+        if (!pluginCurrent) {
+            if (OpenCodeExtensionInstaller.Install(pluginPath)) {
+                await env.Stdout.WriteLineAsync(
+                    refreshOnly
+                        ? $"OpenCode plugin refreshed ({pluginPath})"
+                        : $"OpenCode plugin installed ({pluginPath})"
+                );
+            } else if (!refreshOnly) {
+                // Fresh install: the plugin is the whole point — fail.
+                await env.Stderr.WriteLineAsync("Could not write the OpenCode plugin file.");
+
+                return 1;
+            } else {
+                // Refresh: the plugin write failed, but MCP + instructions live in separate files and
+                // are independent + idempotent — warn and still heal them below rather than bail.
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not refresh the OpenCode plugin ({pluginPath}); continuing with MCP + instructions.");
+            }
+        }
+
+        // Register the kcap MCP servers in ~/.config/opencode/opencode.json so OpenCode picks them
+        // up with no manual JSON edit. Non-destructive + idempotent. Never fails the install:
+        // a write error is a warning, not an error code (mirrors Cursor/Copilot).
+        if (!args.Contains("--skip-opencode-mcp"))
+            await RegisterOpenCodeMcpServersAsync(env);
+
+        // Install kcap's agent-instructions block so OpenCode's model is steered toward the kcap MCP
+        // tools. Non-destructive (only our marker block) + idempotent. Never fails the install.
+        if (!args.Contains("--skip-opencode-instructions"))
+            await InstallOpenCodeInstructionsAsync(env);
 
         return 0;
     }
 
+    /// <summary>
+    /// Registers the kcap MCP servers in OpenCode's <c>~/.config/opencode/opencode.json</c>
+    /// (<c>mcp</c> block, <c>type:"local"</c>, command-as-array, <c>enabled:true</c>) so OpenCode
+    /// loads them without a manual JSON edit. Never fails the install: a write error is a warning.
+    /// </summary>
+    static async Task RegisterOpenCodeMcpServersAsync(PluginEnvironment env) {
+        var change = JsonMcpConfigWriter.Register(
+            env.OpenCodeMcpConfigJson, KcapMcpServers.All, McpConfigShape.OpenCode, cwd: null, new McpMarker("opencode"));
+
+        switch (change) {
+            case JsonMcpConfigWriter.Change.Updated:
+                await env.Stdout.WriteLineAsync($"OpenCode MCP servers registered ({env.OpenCodeMcpConfigJson}).");
+                break;
+            case JsonMcpConfigWriter.Change.Failed:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {env.OpenCodeMcpConfigJson} to register OpenCode MCP servers.");
+                break;
+            // Unchanged: silent.
+        }
+    }
+
+    /// <summary>
+    /// Installs kcap's marker-delimited instructions block into OpenCode's user-global
+    /// <c>~/.config/opencode/AGENTS.md</c>. Non-destructive (only our block). Never fails the install.
+    /// </summary>
+    static async Task InstallOpenCodeInstructionsAsync(PluginEnvironment env) {
+        var change = AgentInstructionsWriter.Write(env.OpenCodeAgentsMd, KcapAgentInstructions.Body);
+
+        switch (change) {
+            case AgentInstructionsWriter.Change.Updated:
+                await env.Stdout.WriteLineAsync($"OpenCode instructions installed ({env.OpenCodeAgentsMd}).");
+                break;
+            case AgentInstructionsWriter.Change.Failed:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {env.OpenCodeAgentsMd} to install OpenCode instructions.");
+                break;
+            // Unchanged: silent.
+        }
+    }
+
     static async Task<int> RemoveOpenCode(string[] args, PluginEnvironment env) {
         var pluginPath = GetArg(args, "--opencode-plugin-path") ?? env.OpenCodeKcapPlugin;
+
+        var pluginFailed = false;
 
         try {
             var removed = OpenCodeExtensionInstaller.Remove(pluginPath);
@@ -931,13 +996,33 @@ public static class PluginCommand {
                     ? $"OpenCode plugin removed ({pluginPath})"
                     : "Nothing to remove — OpenCode plugin file not found."
             );
-
-            return 0;
         } catch (Exception ex) {
             await env.Stderr.WriteLineAsync($"Could not remove the OpenCode plugin at {pluginPath}: {ex.Message}");
-
-            return 1;
+            pluginFailed = true;
         }
+
+        // MCP servers live in a separate file (~/.config/opencode/opencode.json) — unregister
+        // regardless (Unregister owns the ownership-marker cleanup and no-ops when the file is absent).
+        var mcpChange = JsonMcpConfigWriter.Unregister(env.OpenCodeMcpConfigJson, McpConfigShape.OpenCode, new McpMarker("opencode"));
+        var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
+
+        if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
+            await env.Stdout.WriteLineAsync($"OpenCode MCP servers removed ({env.OpenCodeMcpConfigJson}).");
+        } else if (mcpFailed) {
+            await env.Stderr.WriteLineAsync($"Could not update {env.OpenCodeMcpConfigJson} to remove OpenCode MCP servers.");
+        }
+
+        // Strip kcap's instructions block from ~/.config/opencode/AGENTS.md, preserving user content.
+        var instrChange = AgentInstructionsWriter.Remove(env.OpenCodeAgentsMd);
+        var instrFailed = instrChange == AgentInstructionsWriter.Change.Failed;
+
+        if (instrChange == AgentInstructionsWriter.Change.Updated) {
+            await env.Stdout.WriteLineAsync($"OpenCode instructions removed ({env.OpenCodeAgentsMd}).");
+        } else if (instrFailed) {
+            await env.Stderr.WriteLineAsync($"Could not update {env.OpenCodeAgentsMd} to remove OpenCode instructions.");
+        }
+
+        return pluginFailed || mcpFailed || instrFailed ? 1 : 0;
     }
 
     // ── Antigravity (AI-1158) — a named block in Antigravity's hooks.json ────────
