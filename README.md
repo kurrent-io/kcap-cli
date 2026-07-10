@@ -722,8 +722,11 @@ client filesystem or terminal capabilities to the agent (it performs those opera
 
 - *`cursor` missing from the launch dialog* — the daemon didn't find `cursor-agent`; install it or set
   `KCAP_CURSOR_PATH`, then restart the daemon.
-- *Agent launches but errors immediately / produces nothing* — confirm `cursor-agent login` and that
-  the account has a Team-tier subscription; the daemon logs the handshake failure.
+- *Agent connects but every turn fails with "Upgrade your plan to continue"* — the Cursor account is on
+  the Free tier; hosted turns require a **Team-tier** subscription. (The handshake succeeds; the refusal
+  is returned per-turn.)
+- *Agent fails at startup / never establishes a session* — the CLI is likely logged out (`cursor-agent
+  login`) or the binary is broken; the daemon logs the handshake failure.
 - *Model not applied* — `KCAP_CURSOR_MODEL` (or the per-launch model) is matched against the models the
   account actually offers; an unrecognized value falls back to Cursor's default.
 
