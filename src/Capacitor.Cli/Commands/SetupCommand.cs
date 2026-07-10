@@ -301,7 +301,7 @@ public static class SetupCommand {
             // fast path). A missing/stale marker reads as "not current" → prompt + install.
             AgentSkillsCurrent:       dir => AgentsSkillsInstaller.ReadMarker(dir) == AgentsSkillsInstaller.CurrentVersion(),
             RegisterGeminiMcp:        () => JsonMcpConfigWriter.Register(
-                GeminiPaths.SettingsJson(), KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("gemini")),
+                GeminiPaths.SettingsJson(), KcapMcpServers.All, McpConfigShape.Gemini, cwd: null, new McpMarker("gemini")),
             InstallGeminiInstructions: () => AgentInstructionsWriter.Write(
                 GeminiPaths.GeminiMd(), KcapAgentInstructions.Body));
 

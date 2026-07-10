@@ -37,10 +37,15 @@ public class PluginCommandGeminiTests {
         var root    = JsonNode.Parse(await File.ReadAllTextAsync(env.GeminiSettingsJson))!.AsObject();
         var servers = root["mcpServers"]!.AsObject();
         await Assert.That(servers["kcap-review"]!["command"]!.GetValue<string>()).IsEqualTo("kcap");
-        await Assert.That(servers["kcap-review"]!["type"]).IsNull();  // Standard shape: no `type`
+        await Assert.That(servers["kcap-review"]!["type"]).IsNull();  // Gemini shape: no `type`
         await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-sessions");
         await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-flows");
         await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-memory");
+        // Read-only servers auto-approved via Gemini's per-server trust; write/flow servers still prompt.
+        await Assert.That(servers["kcap-review"]!["trust"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(servers["kcap-sessions"]!["trust"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(servers["kcap-flows"]!["trust"]).IsNull();
+        await Assert.That(servers["kcap-memory"]!["trust"]).IsNull();
         await Assert.That(servers["my-tool"]).IsNotNull();  // user server preserved
         await Assert.That(root["hooks"]).IsNotNull();       // hooks block preserved
         await Assert.That(root["theme"]!.GetValue<string>()).IsEqualTo("dark");  // unrelated setting preserved
