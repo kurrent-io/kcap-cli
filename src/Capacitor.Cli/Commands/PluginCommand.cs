@@ -823,46 +823,120 @@ public static class PluginCommand {
     // ── Pi (badlogic/pi-mono): a TypeScript extension, not a hooks.json ──────
 
     static async Task<int> InstallPi(string[] args, PluginEnvironment env) {
-        var extensionPath = GetArg(args, "--pi-extension-path") ?? env.PiKcapExtension;
+        var extensionPath    = GetArg(args, "--pi-extension-path") ?? env.PiKcapExtension;
+        var mcpExtensionPath = env.PiKcapMcpExtension;
 
-        var refreshOnly = args.Contains("--if-installed");
+        var refreshOnly      = args.Contains("--if-installed");
+        var skipMcp          = args.Contains("--skip-pi-mcp");
+        var skipInstructions = args.Contains("--skip-pi-instructions");
 
-        switch (refreshOnly) {
-            case true when !PiExtensionInstaller.IsInstalled(extensionPath):
-            case true when PiExtensionInstaller.ReadMarker(extensionPath) == CapacitorVersion.Current():
-                return 0;
-            // The extension shells out to the bare `kcap hook --pi` command, so
-            // pi (and therefore kcap) must find kcap on PATH. Skipped on the
-            // postinstall (--if-installed) refresh path, like the other vendors.
-            case false when !AgentDetector.IsInstalled("kcap"):
-                await env.Stderr.WriteLineAsync(
-                    "Cannot install the Pi extension: 'kcap' is not on PATH. "
-                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
-                );
+        // Refresh-only mode never touches a machine that never opted into Pi. The
+        // live-ingest extension is the opt-in signal; if it's present, a refresh also
+        // heals the (newer) MCP bridge + AGENTS.md steering below — mirroring how the
+        // Gemini refresh heals MCP + instructions even when a prior version had hooks only.
+        if (refreshOnly && !PiExtensionInstaller.IsInstalled(extensionPath)) return 0;
 
-                return 1;
-        }
-
-        if (!PiExtensionInstaller.Install(extensionPath)) {
-            if (refreshOnly) return 0;
-
-            await env.Stderr.WriteLineAsync("Could not write the Pi extension file.");
+        // Fresh install needs kcap on PATH: both extensions shell out to the bare
+        // `kcap` command (ingest → `kcap hook --pi`; bridge → `kcap mcp <name>`), so
+        // pi must find kcap on PATH. Skipped on the postinstall (--if-installed) path.
+        if (!refreshOnly && !AgentDetector.IsInstalled("kcap")) {
+            await env.Stderr.WriteLineAsync(
+                "Cannot install the Pi extension: 'kcap' is not on PATH. "
+              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+            );
 
             return 1;
         }
 
-        await env.Stdout.WriteLineAsync(
-            refreshOnly
-                ? $"Pi extension refreshed ({extensionPath})"
-                : $"Pi extension installed ({extensionPath})"
-        );
+        var extensionFailed = false;
 
-        return 0;
+        // 1. Live-ingest extension (kcap.ts). On refresh, skip only when already current.
+        var ingestCurrent = refreshOnly
+                         && PiExtensionInstaller.IsInstalled(extensionPath)
+                         && PiExtensionInstaller.ReadMarker(extensionPath) == CapacitorVersion.Current();
+        if (!ingestCurrent) {
+            if (PiExtensionInstaller.Install(extensionPath)) {
+                await env.Stdout.WriteLineAsync(
+                    refreshOnly
+                        ? $"Pi extension refreshed ({extensionPath})"
+                        : $"Pi extension installed ({extensionPath})"
+                );
+            } else if (!refreshOnly) {
+                // Fresh install: the ingest write failed. Report + return non-zero, but
+                // DON'T bail — the independent MCP bridge + AGENTS.md still install below.
+                await env.Stderr.WriteLineAsync("Could not write the Pi extension file.");
+                extensionFailed = true;
+            } else {
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not refresh the Pi extension ({extensionPath}); continuing with MCP + instructions.");
+            }
+        }
+
+        // 2. MCP-bridge extension (kcap-mcp.ts) — a separate file + marker, healed
+        //    independently. Non-fatal: a write error is a warning, not an error code.
+        if (!skipMcp)
+            await InstallPiMcpExtensionAsync(env, mcpExtensionPath, refreshOnly);
+
+        // 3. Agent-instructions block in ~/.pi/agent/AGENTS.md so Pi's model is steered
+        //    toward the kcap tools. Non-destructive (only our block) + idempotent. Never fails.
+        if (!skipInstructions)
+            await InstallPiInstructionsAsync(env);
+
+        // Non-zero only when a FRESH ingest install failed (the integration is incomplete) —
+        // the independent MCP bridge + AGENTS.md steering above were still installed.
+        return extensionFailed ? 1 : 0;
+    }
+
+    /// <summary>
+    /// Installs the kcap MCP-bridge extension (<c>~/.pi/agent/extensions/kcap-mcp.ts</c>).
+    /// Its own file + version marker, so on refresh it is skipped only when already at the
+    /// current version. Never fails the install: a write error is a warning.
+    /// </summary>
+    static async Task InstallPiMcpExtensionAsync(PluginEnvironment env, string mcpExtensionPath, bool refreshOnly) {
+        if (refreshOnly
+            && PiMcpExtensionInstaller.IsInstalled(mcpExtensionPath)
+            && PiMcpExtensionInstaller.ReadMarker(mcpExtensionPath) == CapacitorVersion.Current())
+            return;
+
+        if (PiMcpExtensionInstaller.Install(mcpExtensionPath)) {
+            await env.Stdout.WriteLineAsync(
+                refreshOnly
+                    ? $"Pi MCP extension refreshed ({mcpExtensionPath})"
+                    : $"Pi MCP extension installed ({mcpExtensionPath})"
+            );
+        } else {
+            await env.Stderr.WriteLineAsync(
+                $"Warning: could not write the Pi MCP extension ({mcpExtensionPath}).");
+        }
+    }
+
+    /// <summary>
+    /// Installs kcap's marker-delimited instructions block into <c>~/.pi/agent/AGENTS.md</c>
+    /// (Pi's native user-global instructions file) so Pi's model is steered toward the kcap
+    /// tools. Non-destructive (only our block). Never fails the install: a write error is a warning.
+    /// </summary>
+    static async Task InstallPiInstructionsAsync(PluginEnvironment env) {
+        var change = AgentInstructionsWriter.Write(env.PiAgentsMd, KcapAgentInstructions.Body);
+
+        switch (change) {
+            case AgentInstructionsWriter.Change.Updated:
+                await env.Stdout.WriteLineAsync($"Pi instructions installed ({env.PiAgentsMd}).");
+                break;
+            case AgentInstructionsWriter.Change.Failed:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {env.PiAgentsMd} to install Pi instructions.");
+                break;
+            // Unchanged: silent.
+        }
     }
 
     static async Task<int> RemovePi(string[] args, PluginEnvironment env) {
-        var extensionPath = GetArg(args, "--pi-extension-path") ?? env.PiKcapExtension;
+        var extensionPath    = GetArg(args, "--pi-extension-path") ?? env.PiKcapExtension;
+        var mcpExtensionPath = env.PiKcapMcpExtension;
 
+        var failed = false;
+
+        // 1. Live-ingest extension.
         try {
             var removed = PiExtensionInstaller.Remove(extensionPath);
 
@@ -871,13 +945,30 @@ public static class PluginCommand {
                     ? $"Pi extension removed ({extensionPath})"
                     : "Nothing to remove — Pi extension file not found."
             );
-
-            return 0;
         } catch (Exception ex) {
             await env.Stderr.WriteLineAsync($"Could not remove the Pi extension at {extensionPath}: {ex.Message}");
-
-            return 1;
+            failed = true;
         }
+
+        // 2. MCP-bridge extension.
+        try {
+            if (PiMcpExtensionInstaller.Remove(mcpExtensionPath))
+                await env.Stdout.WriteLineAsync($"Pi MCP extension removed ({mcpExtensionPath})");
+        } catch (Exception ex) {
+            await env.Stderr.WriteLineAsync($"Could not remove the Pi MCP extension at {mcpExtensionPath}: {ex.Message}");
+            failed = true;
+        }
+
+        // 3. Instructions block in ~/.pi/agent/AGENTS.md — strip our block, preserving user content.
+        var instrChange = AgentInstructionsWriter.Remove(env.PiAgentsMd);
+        if (instrChange == AgentInstructionsWriter.Change.Updated) {
+            await env.Stdout.WriteLineAsync($"Pi instructions removed ({env.PiAgentsMd}).");
+        } else if (instrChange == AgentInstructionsWriter.Change.Failed) {
+            await env.Stderr.WriteLineAsync($"Could not update {env.PiAgentsMd} to remove Pi instructions.");
+            failed = true;
+        }
+
+        return failed ? 1 : 0;
     }
 
     // ── OpenCode (SST): a TypeScript plugin, not a hooks.json (AI-919) ───────

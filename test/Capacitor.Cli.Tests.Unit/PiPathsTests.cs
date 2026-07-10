@@ -26,6 +26,19 @@ public class PiPathsTests {
             .IsEqualTo(Path.Combine("/fake/home", ".pi", "agent"));
     }
 
+    // Parallel-safe: home is non-null, so no env var is read.
+    [Test]
+    public async Task McpExtension_and_AgentsMd_sit_under_the_agent_dir() {
+        var agentDir = Path.Combine("/fake/home", ".pi", "agent");
+        // kcap-mcp.ts lives in extensions/ (beside kcap.ts); AGENTS.md is directly under agent/.
+        await Assert.That(PiPaths.KcapMcpExtension(home: "/fake/home"))
+            .IsEqualTo(Path.Combine(agentDir, "extensions", "kcap-mcp.ts"));
+        await Assert.That(PiPaths.KcapMcpExtensionMarker(home: "/fake/home"))
+            .IsEqualTo(Path.Combine(agentDir, "extensions", ".kcap-mcp-extension-version"));
+        await Assert.That(PiPaths.AgentsMd(home: "/fake/home"))
+            .IsEqualTo(Path.Combine(agentDir, "AGENTS.md"));
+    }
+
     [Test]
     [NotInParallel("HomeEnvVarMutation")]
     public async Task AgentDir_reads_PI_CODING_AGENT_DIR_and_derived_members_follow() {
@@ -41,6 +54,10 @@ public class PiPathsTests {
             await Assert.That(PiPaths.AgentDir()).IsEqualTo(relocated);
             await Assert.That(PiPaths.KcapExtension())
                 .IsEqualTo(Path.Combine(relocated, "extensions", "kcap.ts"));
+            await Assert.That(PiPaths.KcapMcpExtension())
+                .IsEqualTo(Path.Combine(relocated, "extensions", "kcap-mcp.ts"));
+            await Assert.That(PiPaths.AgentsMd())
+                .IsEqualTo(Path.Combine(relocated, "AGENTS.md"));
             await Assert.That(PiPaths.SessionsDir())
                 .IsEqualTo(Path.Combine(relocated, "sessions"));
         } finally {

@@ -55,6 +55,23 @@ public static class PiPaths {
     public static string KcapExtensionMarker(string? home = null) => Path.Combine(ExtensionsDir(home), ".kcap-extension-version");
 
     /// <summary>
+    /// The kcap MCP-bridge extension (Pi has no built-in MCP, so kcap ships a second
+    /// extension that spawns the <c>kcap mcp &lt;name&gt;</c> servers and registers
+    /// their tools). Installed by <see cref="PiMcpExtensionInstaller"/>.
+    /// </summary>
+    public static string KcapMcpExtension(string? home = null) => Path.Combine(ExtensionsDir(home), "kcap-mcp.ts");
+
+    /// <summary>Marker recording the installed MCP-bridge extension version (sibling of kcap-mcp.ts).</summary>
+    public static string KcapMcpExtensionMarker(string? home = null) => Path.Combine(ExtensionsDir(home), ".kcap-mcp-extension-version");
+
+    /// <summary>
+    /// Pi's native user-global agent-instructions file (<c>~/.pi/agent/AGENTS.md</c>),
+    /// a sibling of <c>extensions/</c>. kcap writes its marker-delimited steering block
+    /// here (see <c>AgentInstructionsWriter</c>).
+    /// </summary>
+    public static string AgentsMd(string? home = null) => Path.Combine(AgentDir(home), "AGENTS.md");
+
+    /// <summary>
     /// Detection by <c>~/.pi/agent</c> presence — Pi creates it on first run.
     /// The binary name <c>pi</c> is too generic for a PATH probe to be the only
     /// signal, so callers that also want the PATH probe OR this with

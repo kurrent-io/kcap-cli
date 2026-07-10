@@ -39,8 +39,12 @@ Options:
   --pi                Target Pi (badlogic/pi-mono): install the live-ingest
                       extension to ~/.pi/agent/extensions/kcap.ts. Pi has no
                       shell hooks; the extension auto-loads on `pi` startup and
-                      streams each session. User-wide only — --project has no
-                      effect with --pi.
+                      streams each session. Also installs the kcap MCP-bridge
+                      extension (~/.pi/agent/extensions/kcap-mcp.ts — Pi has no
+                      native MCP, so this spawns the kcap mcp servers and
+                      registers their tools; see --skip-pi-mcp) and a steering
+                      block in ~/.pi/agent/AGENTS.md (see --skip-pi-instructions).
+                      User-wide only — --project has no effect with --pi.
   --opencode          Target SST OpenCode: install the live-ingest plugin to
                       ~/.config/opencode/plugins/kcap.ts. OpenCode has no shell
                       hooks; the plugin auto-loads on `opencode` startup and
@@ -104,6 +108,17 @@ Options:
   --skip-antigravity-skills
                       With --antigravity: skip copying the kcap skills into
                       ~/.gemini/skills (where Antigravity reads them, not ~/.agents/skills).
+  --skip-pi-mcp       With --pi: skip installing the kcap MCP-bridge extension
+                      (~/.pi/agent/extensions/kcap-mcp.ts). By default `install
+                      --pi` writes it so Pi exposes the 4 kcap MCP servers as
+                      native tools (Pi has no JSON mcpServers config, so the
+                      bridge extension is the only way to surface them).
+  --skip-pi-instructions
+                      With --pi: skip installing kcap's steering-instructions
+                      block into Pi's global ~/.pi/agent/AGENTS.md. By default
+                      `install --pi` writes a small kcap-owned, marker-delimited
+                      block (non-destructive — preserves your own instructions)
+                      that nudges Pi to use the kcap tools for why/history questions.
   --if-installed      Refresh-only mode: no-op unless the user has previously
                       installed the target (marker file or pre-marker entry
                       detected). Used by the npm postinstall hook to refresh
@@ -161,12 +176,17 @@ Notes:
   default, deletes kcap.json, and unregisters the MCP servers. Kiro has no
   project-scope hooks, so --project has no effect with --kiro.
 
-  --pi writes a single extension file (~/.pi/agent/extensions/kcap.ts) instead
-  of a hooks file — Pi exposes no shell hooks, only an in-process extension API.
-  The extension shells out to `kcap hook --pi` on session start/end, so kcap
-  must be on PATH. Pi loads extensions at startup, so restart any running `pi`
-  session after install. Pi has no project-scope extensions dir, so --project
-  has no effect with --pi.
+  --pi writes extension files instead of a hooks file — Pi exposes no shell
+  hooks, only an in-process extension API. The live-ingest extension
+  (~/.pi/agent/extensions/kcap.ts) shells out to `kcap hook --pi` on session
+  start/end. Because Pi also ships no built-in MCP, a second MCP-bridge extension
+  (~/.pi/agent/extensions/kcap-mcp.ts, see --skip-pi-mcp) spawns the `kcap mcp
+  <name>` servers as subprocesses and registers their tools as native Pi tools
+  (kcap_<server>_<tool>), and a kcap-owned steering block is written to
+  ~/.pi/agent/AGENTS.md (see --skip-pi-instructions). All are non-destructive and
+  idempotent; kcap must be on PATH. Pi loads extensions at startup, so restart
+  any running `pi` session after install. Pi has no project-scope extensions dir,
+  so --project has no effect with --pi.
 
   --antigravity installs the kcap plugin to ~/.gemini/config/plugins/kcap/ — a
   plugin.json manifest (which the GUI requires to load the dir) plus a hooks.json
