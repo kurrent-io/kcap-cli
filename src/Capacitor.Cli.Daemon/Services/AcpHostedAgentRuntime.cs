@@ -137,6 +137,9 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     string? _resolvedModel;
     int     _disposed;
 
+    /// <summary>Agent capabilities negotiated by <see cref="StartAsync"/>'s <c>initialize</c> call; null before that.</summary>
+    AgentCapabilities? _negotiatedCapabilities;
+
     /// <summary>
     /// <paramref name="requestInteraction"/> is optional (AI-686) — when null, matches AI-684's
     /// original behavior exactly: <see cref="AcpConnection.OnServerRequest"/> stays unset, and any
@@ -227,6 +230,16 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     /// <inheritdoc cref="IAcpTranscriptSource.ResolvedModel"/>
     public string? ResolvedModel => _resolvedModel;
 
+    /// <summary>
+    /// Agent capabilities negotiated by <see cref="StartAsync"/>'s <c>initialize</c> call; null
+    /// before <see cref="StartAsync"/> resolves. Captured for a later reconnect path (gated on
+    /// <see cref="AgentCapabilities.LoadSession"/>) — this workstream only captures and exposes it.
+    /// </summary>
+    public AgentCapabilities? NegotiatedCapabilities => _negotiatedCapabilities;
+
+    /// <summary>Convenience projection of <see cref="NegotiatedCapabilities"/>'s <c>loadSession</c> flag — false before <see cref="StartAsync"/> resolves, or if the agent didn't advertise it.</summary>
+    public bool SupportsLoadSession => _negotiatedCapabilities?.LoadSession ?? false;
+
     /// <inheritdoc cref="IAcpTranscriptSource.Envelopes"/>
     public ChannelReader<AcpEventEnvelope> Envelopes => _transcript.Reader;
 
@@ -268,7 +281,35 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
                         Terminal: false)),
                 CapacitorJsonContext.Default.InitializeParams);
 
-            await _connection.RequestAsync("initialize", initializeParams, ct).ConfigureAwait(false);
+            var initializeResultElement = await _connection.RequestAsync("initialize", initializeParams, ct).ConfigureAwait(false);
+
+            // Defensive: a malformed initialize response (wrong-typed protocolVersion, etc.) must
+            // not surface as a raw JsonException — it falls back to negotiatedVersion 0 below,
+            // which the version check rejects with the same clear, actionable message a real
+            // mismatch would get.
+            InitializeResult? initializeResult;
+            try {
+                initializeResult = JsonSerializer.Deserialize(initializeResultElement.GetRawText(), CapacitorJsonContext.Default.InitializeResult);
+            } catch (JsonException) {
+                initializeResult = null;
+            }
+
+            var negotiatedVersion = initializeResult?.ProtocolVersion ?? 0;
+
+            // This build only ever speaks version 1 — fail loud and clearly BEFORE session/new
+            // rather than proceeding against an agent that negotiated something else.
+            if (negotiatedVersion != 1)
+                throw new InvalidOperationException(
+                    $"cursor-agent negotiated ACP protocol version {negotiatedVersion}; this build supports version 1 — update kcap or cursor-agent.");
+
+            // Missing agentCapabilities defensively means "advertises nothing" (loadSession=false),
+            // not a throw — captured for a later reconnect path (AI-689 Workstream A only exposes
+            // it; nothing here acts on it yet).
+            _negotiatedCapabilities = initializeResult?.AgentCapabilities ?? new AgentCapabilities(LoadSession: false);
+
+            _logger.LogDebug(
+                "ACP: negotiated protocol version {ProtocolVersion}, loadSession={LoadSession}.",
+                negotiatedVersion, _negotiatedCapabilities.LoadSession);
 
             var sessionNewParams = JsonSerializer.SerializeToElement(
                 new SessionNewParams(Cwd: cwd, McpServers: NoMcpServers),
@@ -281,7 +322,16 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
 
             _sessionId = sessionId;
         } catch (Exception ex) when (ex is not OperationCanceledException) {
-            throw new InvalidOperationException("ACP handshake (initialize/session-new) failed.", ex);
+            // Preserve the original RPC/parse/version error verbatim — folded into this message via
+            // ex.Message, with ex itself kept as InnerException — and append a generic, actionable
+            // hint. Deliberately conservative (AI-689 A4): the exact wire shape of a logged-out or
+            // unsubscribed cursor-agent failure is unverified, so this does NOT pattern-match
+            // specific error text; a live logged-out probe to pin down the precise shape is a
+            // follow-up. The hint is appended to EVERY handshake failure (including e.g. a protocol
+            // version mismatch), never masking the original error, only annotating it.
+            throw new InvalidOperationException(
+                $"ACP handshake (initialize/session-new) failed: {ex.Message} — if this is an auth/subscription issue, run `cursor-agent login` and verify a Team-tier subscription.",
+                ex);
         }
 
         // Select the requested model (if any) BEFORE the first prompt fires. Awaited, but never

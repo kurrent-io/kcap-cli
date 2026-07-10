@@ -54,6 +54,9 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     JsonElement _sessionNewResult = ProbeConfirmedSessionNewResult;
     bool        _failNextSetConfigOption;
 
+    JsonElement                  _initializeResult = ProbeConfirmedInitializeResult;
+    (int Code, string Message)? _failNextInitialize;
+
     readonly List<(string Method, JsonElement? Params)>          _sentServerRequests = new();
     readonly object                                              _sentServerRequestsLock = new();
     JsonElement?                                                 _lastServerRequestResponse;
@@ -172,6 +175,46 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// continue with Cursor's default model" handling.
     /// </summary>
     public void FailNextSetConfigOption() => _failNextSetConfigOption = true;
+
+    /// <summary>
+    /// Overrides the <c>initialize</c> response this fake returns for every subsequent
+    /// <c>initialize</c> request (default: <see cref="ProbeConfirmedInitializeResult"/>, protocol
+    /// version 1 with <c>loadSession: true</c>) — AI-689 protocol-negotiation tests use this to
+    /// script a mismatched <c>protocolVersion</c> or a missing/false <c>agentCapabilities</c>.
+    /// <see cref="BuildInitializeResult"/> is the easiest way to build a well-formed override.
+    /// </summary>
+    public void SetInitializeResult(JsonElement result) => _initializeResult = result;
+
+    /// <summary>
+    /// Arranges the NEXT <c>initialize</c> request to be answered with a JSON-RPC error instead of
+    /// a success result (AI-689) — models a logged-out/unsubscribed <c>cursor-agent</c> rejecting
+    /// the handshake, exercising <c>AcpHostedAgentRuntime.StartAsync</c>'s auth/subscription hint.
+    /// </summary>
+    public void FailNextInitialize(int code, string message) => _failNextInitialize = (code, message);
+
+    /// <summary>
+    /// Convenience builder for a caller-controlled <c>initialize</c> result (AI-689) — narrower than
+    /// the full <see cref="ProbeConfirmedInitializeResult"/> fixture, carrying only the two fields
+    /// <c>AcpHostedAgentRuntime.StartAsync</c> actually reads: <paramref name="protocolVersion"/>
+    /// and, when non-null, an <c>agentCapabilities.loadSession</c> flag. Passing
+    /// <paramref name="loadSession"/> as <see langword="null"/> omits <c>agentCapabilities</c>
+    /// entirely, exercising the "missing agentCapabilities" defensive-default path.
+    /// </summary>
+    public static JsonElement BuildInitializeResult(int protocolVersion, bool? loadSession = null) {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream)) {
+            writer.WriteStartObject();
+            writer.WriteNumber("protocolVersion", protocolVersion);
+            if (loadSession is { } ls) {
+                writer.WriteStartObject("agentCapabilities");
+                writer.WriteBoolean("loadSession", ls);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndObject();
+        }
+
+        return JsonDocument.Parse(stream.ToArray()).RootElement.Clone();
+    }
 
     /// <summary>
     /// Convenience builder for a probe-shaped <c>session/new</c> result (AI-688 gap 1) with a
@@ -311,7 +354,12 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
 
         switch (method) {
             case "initialize":
-                await WriteResponseAsync(id, ProbeConfirmedInitializeResult, ct).ConfigureAwait(false);
+                if (_failNextInitialize is { } failInit) {
+                    _failNextInitialize = null;
+                    await WriteErrorResponseAsync(id, failInit.Code, failInit.Message, ct).ConfigureAwait(false);
+                } else {
+                    await WriteResponseAsync(id, _initializeResult, ct).ConfigureAwait(false);
+                }
                 break;
 
             case "session/new":

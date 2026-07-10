@@ -898,6 +898,8 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Acp.InitializeParams))]
 [JsonSerializable(typeof(Acp.ClientCapabilities))]
 [JsonSerializable(typeof(Acp.FsCapabilities))]
+[JsonSerializable(typeof(Acp.InitializeResult))]
+[JsonSerializable(typeof(Acp.AgentCapabilities))]
 [JsonSerializable(typeof(Acp.SessionNewParams))]
 [JsonSerializable(typeof(Acp.SessionPromptParams))]
 [JsonSerializable(typeof(Acp.PromptContentBlock))]
