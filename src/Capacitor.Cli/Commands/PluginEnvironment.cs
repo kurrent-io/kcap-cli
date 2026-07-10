@@ -41,6 +41,7 @@ public sealed record PluginEnvironment(
     public string KiroKcapAgentJson    => KiroPaths.KcapAgentJson(HomeDirectory);
     public string KiroSettingsJson     => KiroPaths.SettingsFile(HomeDirectory);
     public string KiroMcpJson          => KiroPaths.SettingsMcpJson(HomeDirectory);
+    public string KiroSkillsDir        => KiroPaths.SkillsDir(HomeDirectory);
     public string PiKcapExtension      => PiPaths.KcapExtension(HomeDirectory);
     public string OpenCodeKcapPlugin    => OpenCodePaths.KcapPlugin(HomeDirectory);
     public string OpenCodeMcpConfigJson => OpenCodePaths.McpConfigJson(HomeDirectory);

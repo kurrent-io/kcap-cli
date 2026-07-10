@@ -1542,6 +1542,81 @@ public class CodingAgentsStepTests {
         await Assert.That(calls.RegisterKiroMcpCalled).IsFalse();
     }
 
+    // ── Kiro skills (steer Kiro toward the kcap MCP tools) ─────────────────────
+
+    [Test]
+    public async Task Kiro_skills_go_to_kiro_dir_not_agents_skills() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        var dsts = calls.AgentSkillsInstalls.Select(x => x.Dst).ToArray();
+        await Assert.That(dsts).Contains("/fake/.kiro/skills");          // Kiro skills → ~/.kiro/skills
+        await Assert.That(dsts).DoesNotContain("/fake/.agents/skills");  // NOT the agent-agnostic dir Kiro can't read
+        await Assert.That(result.KiroSkillsInstalled).IsTrue();
+    }
+
+    [Test]
+    public async Task Kiro_skills_skipped_by_flag() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: false, SkipKiroSkills: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.KiroSkillsInstalled).IsFalse();
+        await Assert.That(calls.AgentSkillsInstalls.Select(x => x.Dst)).DoesNotContain("/fake/.kiro/skills");
+    }
+
+    [Test]
+    public async Task Kiro_skills_installed_even_when_agent_clone_fails() {
+        // The agent clone can fail (needs kiro-cli), but ~/.kiro/skills is independent — it must
+        // still install when Kiro is opted-in with kcap on PATH.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { KiroHooksReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.KiroHooksInstalled).IsFalse();          // clone failed
+        await Assert.That(result.KiroSkillsInstalled).IsTrue();          // skills still installed
+        await Assert.That(calls.AgentSkillsInstalls.Select(x => x.Dst)).Contains("/fake/.kiro/skills");
+    }
+
+    [Test]
+    public async Task Kiro_skills_not_installed_when_not_selected() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CapacitorOnPathReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.KiroSkillsInstalled).IsFalse();
+        await Assert.That(calls.AgentSkillsInstalls.Select(x => x.Dst)).DoesNotContain("/fake/.kiro/skills");
+    }
+
+    [Test]
+    public async Task Kiro_only_machine_does_not_install_agents_skills() {
+        // A Kiro-only machine must NOT get ~/.agents/skills (Kiro can't read it) — only ~/.kiro/skills.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        var dsts = calls.AgentSkillsInstalls.Select(x => x.Dst).ToArray();
+        await Assert.That(dsts).Contains("/fake/.kiro/skills");
+        await Assert.That(dsts).DoesNotContain("/fake/.agents/skills");
+        await Assert.That(result.AgentSkillsInstalled).IsFalse();   // ~/.agents/skills not touched for a Kiro-only box
+    }
+
     [Test]
     public async Task Kiro_mcp_not_registered_when_kcap_not_on_path() {
         var sink     = new Sink();
@@ -1932,7 +2007,8 @@ public class CodingAgentsStepTests {
         AntigravitySkillsDir:     "/fake/.gemini/skills",
         OpenCodeMcpPath:      "/fake/.config/opencode/opencode.json",
         OpenCodeInstructionsPath: "/fake/.config/opencode/AGENTS.md",
-        KiroMcpPath:          "/fake/.kiro/settings/mcp.json"
+        KiroMcpPath:          "/fake/.kiro/settings/mcp.json",
+        KiroSkillsDir:        "/fake/.kiro/skills"
     );
 
     sealed class Sink {

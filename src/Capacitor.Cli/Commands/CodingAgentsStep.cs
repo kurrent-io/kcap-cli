@@ -15,7 +15,7 @@ internal static class CodingAgentsStep {
     // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini
     // (AI-887), Kiro (AI-888), and Pi (AI-886) were all added after the original
     // four vendors.
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false, bool SkipAntigravityMcp = false, bool SkipAntigravityInstructions = false, bool SkipAntigravitySkills = false, bool SkipOpenCodeMcp = false, bool SkipOpenCodeInstructions = false, bool SkipKiroMcp = false);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false, bool SkipAntigravityMcp = false, bool SkipAntigravityInstructions = false, bool SkipAntigravitySkills = false, bool SkipOpenCodeMcp = false, bool SkipOpenCodeInstructions = false, bool SkipKiroMcp = false, bool SkipKiroSkills = false);
 
     internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false);
 
@@ -43,7 +43,8 @@ internal static class CodingAgentsStep {
             string  AntigravitySkillsDir = "",
             string  OpenCodeMcpPath = "",
             string  OpenCodeInstructionsPath = "",
-            string  KiroMcpPath = ""
+            string  KiroMcpPath = "",
+            string  KiroSkillsDir = ""
         );
 
     internal record Installers(
@@ -97,7 +98,8 @@ internal static class CodingAgentsStep {
             bool AntigravitySkillsInstalled = false,
             bool OpenCodeMcpRegistered = false,
             bool OpenCodeInstructionsInstalled = false,
-            bool KiroMcpRegistered = false
+            bool KiroMcpRegistered = false,
+            bool KiroSkillsInstalled = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -140,6 +142,9 @@ internal static class CodingAgentsStep {
         var geminiInstructionsInstalled = HandleGeminiInstructions(options, paths, installers, writeLine, geminiSelected);
         var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, prompt, writeLine, out var kiroSelected);
         var kiroMcpRegistered     = HandleKiroMcp(options, paths, installers, writeLine, kiroSelected);
+        // Kiro's skills live in ~/.kiro/skills (Kiro doesn't read ~/.agents/skills) and steer it toward
+        // the kcap MCP tools — gate on the user having SELECTED Kiro, like the MCP registration.
+        var kiroSkillsInstalled   = HandleKiroSkills(options, paths, installers, writeLine, kiroSelected);
         var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, prompt, writeLine);
         var openCodeExtensionInstalled = HandleOpenCodeExtension(options, detected, paths, installers, prompt, writeLine);
         var openCodeMcpRegistered      = HandleOpenCodeMcp(options, paths, installers, writeLine, openCodeExtensionInstalled);
@@ -185,7 +190,8 @@ internal static class CodingAgentsStep {
                 AntigravitySkillsInstalled: antigravitySkillsInstalled,
                 OpenCodeMcpRegistered: openCodeMcpRegistered,
                 OpenCodeInstructionsInstalled: openCodeInstructionsInstalled,
-                KiroMcpRegistered: kiroMcpRegistered
+                KiroMcpRegistered: kiroMcpRegistered,
+                KiroSkillsInstalled: kiroSkillsInstalled
             )
         );
     }
@@ -290,6 +296,49 @@ internal static class CodingAgentsStep {
 
                 return false;
         }
+    }
+
+    /// <summary>
+    /// Installs kcap's skills into <c>~/.kiro/skills</c> (Kiro reads these via the agent's
+    /// <c>skill:///~/.kiro/skills/*/SKILL.md</c> resources — NOT the agent-agnostic
+    /// <c>~/.agents/skills</c>), steering Kiro toward the kcap MCP tools. Gated on the user having
+    /// SELECTED Kiro (same trigger as <see cref="HandleKiroMcp"/>) and on <see cref="Options.SkipKiroSkills"/>.
+    /// Mirrors <see cref="HandleAntigravitySkills"/>.
+    /// </summary>
+    static bool HandleKiroSkills(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           kiroSelected
+        ) {
+        if (!kiroSelected || options.SkipKiroSkills) return false;
+
+        var dst = paths.KiroSkillsDir;
+
+        if (installers.AgentSkillsCurrent?.Invoke(dst) == true) {
+            writeLine("  [dim]· Kiro skills already up to date — no change needed[/]");
+
+            return false;
+        }
+
+        if (paths.PluginDir is null) {
+            writeLine("  [yellow]⚠[/] Kiro skills could not be installed (plugin directory not found).");
+
+            return false;
+        }
+
+        var src = Path.Combine(paths.PluginDir, "skills");
+
+        if (!installers.InstallAgentSkills(src, dst)) {
+            writeLine($"  [yellow]⚠[/] Kiro skills could not be copied to {Markup.Escape(dst)}");
+
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] Kiro skills installed ([dim]{Markup.Escape(dst)}[/])");
+
+        return true;
     }
 
     static bool HandleCopilotHooks(
@@ -703,13 +752,13 @@ internal static class CodingAgentsStep {
             Func<string, bool> prompt,
             Action<string>     writeLine
         ) {
-        // Antigravity is intentionally EXCLUDED here: it reads ~/.gemini/skills (installed by
-        // HandleAntigravitySkills), NOT the agent-agnostic ~/.agents/skills — so its presence alone
-        // must not trigger a ~/.agents/skills install it can't see. (Kiro likewise uses ~/.kiro/skills;
-        // left in for now as a harmless no-op until Kiro's own skills install lands.)
+        // Antigravity AND Kiro are intentionally EXCLUDED here: they read their own skills dirs
+        // (~/.gemini/skills via HandleAntigravitySkills, ~/.kiro/skills via HandleKiroSkills), NOT the
+        // agent-agnostic ~/.agents/skills — so their presence alone must not trigger a ~/.agents/skills
+        // install they can't see.
         var anyNonClaudeDetected =
             detected.Codex || detected.Cursor || detected.Copilot || detected.Gemini
-         || detected.Kiro  || detected.Pi     || detected.OpenCode;
+         || detected.Pi    || detected.OpenCode;
 
         // Nothing that reads ~/.agents/skills/ is present (Claude-only or nothing) — the
         // Claude plugin install handles Claude's skills, so there's nothing to do here.

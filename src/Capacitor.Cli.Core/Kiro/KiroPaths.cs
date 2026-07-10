@@ -55,6 +55,14 @@ public static class KiroPaths {
         Path.Combine(ConfigRoot(home), "settings", "mcp.json");
 
     /// <summary>
+    /// Global skills dir Kiro agents read (<c>~/.kiro/skills</c>). The default agent's
+    /// <c>resources</c> include <c>skill:///&lt;home&gt;/.kiro/skills/*/SKILL.md</c>, so kcap installs
+    /// its skills here to steer Kiro toward the kcap MCP tools (Kiro does not read the
+    /// agent-agnostic <c>~/.agents/skills</c>). Mirrors <c>AntigravityPaths.SkillsDir</c>.
+    /// </summary>
+    public static string SkillsDir(string? home = null) => Path.Combine(ConfigRoot(home), "skills");
+
+    /// <summary>
     /// kcap's owned agent-hooks file. Mirrors the Copilot model: kcap owns its own
     /// file rather than merging into a user agent, so removal is a clean delete.
     /// Kiro reads every <c>agents/*.json</c>, so the lifecycle hooks here apply to

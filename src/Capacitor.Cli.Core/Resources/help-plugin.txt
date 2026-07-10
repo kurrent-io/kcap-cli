@@ -26,9 +26,16 @@ Options:
                       (preserving its tools) to ~/.kiro/agents/kcap.json, add
                       kcap's agentSpawn hook, and make it your default so every
                       session is captured (honours $KIRO_HOME). Needs kiro-cli on
-                      PATH. Session-end is synthesized on exit.
+                      PATH. Session-end is synthesized on exit. Also registers the
+                      kcap MCP servers (see --skip-kiro-mcp) and installs the kcap
+                      skills to ~/.kiro/skills to steer Kiro toward those tools
+                      (see --skip-kiro-skills).
   --skip-kiro-mcp     With --kiro: skip registering the kcap MCP servers in
                       ~/.kiro/settings/mcp.json (independent of the agent clone).
+  --skip-kiro-skills  With --kiro: skip installing the kcap skills into
+                      ~/.kiro/skills. By default `install --kiro` copies them there
+                      (Kiro reads ~/.kiro/skills, not the agent-agnostic
+                      ~/.agents/skills) so Kiro is steered to prefer the kcap tools.
   --pi                Target Pi (badlogic/pi-mono): install the live-ingest
                       extension to ~/.pi/agent/extensions/kcap.ts. Pi has no
                       shell hooks; the extension auto-loads on `pi` startup and

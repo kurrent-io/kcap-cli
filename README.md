@@ -628,6 +628,8 @@ AWS Kiro CLI (the rebranded Amazon Q Developer CLI) is detected via `~/.kiro/` o
 
 `install --kiro` (and `kcap setup`) also **registers the four kcap MCP servers** in Kiro's user-level `~/.kiro/settings/mcp.json` (a plain `mcpServers` merge, non-destructive — preserves your servers and their `disabled`/`autoApprove` fields; kcap leaves `autoApprove` unset). This is **independent of the agent clone**, so it still applies even if `kiro-cli` isn't present to clone the agent. Opt out with `--skip-kiro-mcp`; `remove --kiro` unregisters them.
 
+It further installs the **kcap skills** into `~/.kiro/skills` (as `kcap-<name>/SKILL.md`). Kiro reads its skills from there — not the agent-agnostic `~/.agents/skills` — and the cloned agent's `resources` include `skill:///~/.kiro/skills/*/SKILL.md`, so the skills steer Kiro to prefer the kcap MCP tools for why/history/prior-work/review questions (registration alone doesn't make the model route to them). Opt out with `--skip-kiro-skills`; `remove --kiro` deletes the `kcap-*` skill folders.
+
 ```bash
 kcap plugin install --kiro                  # clone default agent + add hook, set as default
 kcap plugin remove --kiro                   # restore previous default, delete kcap.json

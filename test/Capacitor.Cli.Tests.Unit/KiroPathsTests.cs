@@ -13,4 +13,14 @@ public class KiroPathsTests {
         await Assert.That(Path.GetFileName(mcp)).IsEqualTo("mcp.json");
         await Assert.That(Path.GetDirectoryName(mcp)).IsEqualTo(Path.GetDirectoryName(cli));
     }
+
+    // Parallel-safe: home is non-null, so no env var is read. Skills live at <config-root>/skills
+    // (a sibling of settings/agents), NOT the agent-agnostic ~/.agents/skills, which Kiro can't read.
+    [Test]
+    public async Task SkillsDir_is_kiro_skills_not_agents_skills() {
+        var skills = KiroPaths.SkillsDir(home: "/fake/home");
+
+        await Assert.That(skills).IsEqualTo(Path.Combine("/fake/home", ".kiro", "skills"));
+        await Assert.That(skills).DoesNotContain(Path.Combine(".agents", "skills"));
+    }
 }
