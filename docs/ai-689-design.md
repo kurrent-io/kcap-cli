@@ -138,6 +138,15 @@ answers each.
     present)**. This mapping is exactly what C8 routes on (ABSENT→requeue, PRESENT-COMPLETE→no requeue,
     PRESENT-INCOMPLETE→surface-as-interrupted), so it must be observed, not assumed. Also confirm a
     *fully* completed turn reappears complete (not truncated), else C3/C4 dedup is unsound.
+  - **Acceptance-boundary invariant for ABSENT (r8-review 1):** C8's `ABSENT ⇒ safe to requeue` rests on
+    a claim that must be PROVEN, not inferred from absence: *once ACP has accepted/started a prompt, its
+    occurrence becomes replay-visible.* So C0 must also kill **after crossing the acceptance/execution
+    boundary** — after the first assistant/tool `session/update` evidence for that occurrence — and
+    verify the occurrence then appears in the replay as PRESENT-INCOMPLETE/COMPLETE, **never ABSENT**.
+    If a "started-but-not-yet-replay-visible" window exists (an accepted prompt can still be ABSENT),
+    then ABSENT is ambiguous and C8's auto-requeue would duplicate already-started, possibly
+    side-effecting work → in that case reconnect re-scopes, or ABSENT-after-possible-acceptance routes
+    to the interrupted/at-most-once path rather than auto-requeue.
   - **A protocol-backed closed-world end-of-replay barrier** (r3-review B4, r5-review 3, r6-review 1):
     C0 must establish a signal ACP itself **guarantees** is terminal for replay — the `session/load`
     response contract, an explicit EOF, or a terminal notification — after which **no further replay
@@ -275,7 +284,12 @@ answers each.
   "present" ≠ "complete", because ACP `session/load` does NOT auto-resume an interrupted turn; a new
   `session/prompt` starts a *new* turn):
   - **ABSENT** (occurrence id not in the replay): the agent never got it → **requeue exactly once**,
-    carrying the *same* occurrence id (so a crash during the requeue is itself decidable).
+    carrying the *same* occurrence id (so a crash during the requeue is itself decidable). **This is
+    safe ONLY under the C0-proven invariant that an accepted/started prompt always becomes
+    replay-visible** (r8-review 1) — i.e. ABSENT genuinely means "never accepted." If C0 cannot prove
+    that (a started-but-not-replay-visible window exists), an ABSENT that could follow acceptance is
+    routed to the PRESENT-INCOMPLETE surface-as-interrupted path instead, never auto-requeued (blind
+    requeue would duplicate already-started, possibly side-effecting work).
   - **PRESENT-COMPLETE** (occurrence id present AND its turn reached a terminal assistant state /
     `StopReason` in the replay): fully handled → **do NOT requeue** (replay carries it; C3 forwards any
     new part).
