@@ -839,7 +839,12 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
 
-        LogSessionEnded(_agentId, _sessionId ?? "");
+        // Only emit the session-ended lifecycle event when a session actually started — a startup
+        // failure (bad protocol version / handshake / session/new) disposes the runtime before
+        // _sessionId is assigned, and pairing "ended" with a session that never started would make
+        // the lifecycle telemetry incoherent.
+        if (_sessionId is { Length: > 0 } endedSessionId)
+            LogSessionEnded(_agentId, endedSessionId);
 
         _connection.OnNotification -= HandleNotification;
 

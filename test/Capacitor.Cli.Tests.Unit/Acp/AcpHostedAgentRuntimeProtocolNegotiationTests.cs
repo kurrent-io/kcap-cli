@@ -216,4 +216,21 @@ public class AcpHostedAgentRuntimeProtocolNegotiationTests {
         await Assert.That(infoEntries).Contains(e =>
             e.Message.Contains("session ended") && e.Message.Contains("agent-7"));
     }
+
+    [Test]
+    public async Task DisposeAsync_AfterFailedStart_DoesNotLogSessionEnded() {
+        var logger = new CaptureLogger();
+        var h = new Harness(logger, agentId: "agent-8");
+        // Fail the handshake before a session is ever established.
+        h.Fake.SetInitializeResult(FakeAcpAgent.BuildInitializeResult(protocolVersion: 2, loadSession: true));
+        h.StartFakeAgentLoop();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => h.Runtime.StartAsync("/abs/worktree", "do the thing", h.Cts.Token).WaitAsync(HangGuard));
+        await h.DisposeAsync();
+
+        // No session started → no "session ended" event (lifecycle telemetry stays coherent).
+        var infoEntries = logger.Entries.Where(e => e.Level == LogLevel.Information).ToList();
+        await Assert.That(infoEntries).DoesNotContain(e => e.Message.Contains("session ended"));
+    }
 }
