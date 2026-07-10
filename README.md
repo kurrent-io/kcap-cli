@@ -700,6 +700,38 @@ KCAP_CURSOR_PATH=/opt/cursor/bin/cursor-agent kcap daemon
 KCAP_CURSOR_MODEL=claude-opus-4-8 kcap daemon
 ```
 
+**Hosted Cursor agents run over ACP.** The `cursor` vendor is launched by the daemon as
+`cursor-agent acp` (Cursor's Agent Client Protocol server) in an isolated worktree, driven from the
+dashboard. This is **distinct from the Cursor recording hooks** (`~/.cursor/hooks.json`, which capture
+sessions you run yourself in Cursor) — a hosted ACP agent is one the daemon *starts and supervises*.
+It requires:
+
+- The Cursor CLI (`cursor-agent`) installed and on `PATH`, or pointed at via `KCAP_CURSOR_PATH`. If the
+  daemon can't find it, the `cursor` vendor is simply hidden from the launch dialog.
+- A **logged-in Cursor account on a Team-tier (paid) subscription** — run `cursor-agent login` first.
+  On the Free tier the agent refuses to run turns (it returns "Upgrade your plan to continue"); a
+  logged-out CLI fails the handshake.
+
+**Current limitations.** A hosted Cursor agent renders its transcript (messages, thinking, tool
+calls/results) but does **not** support interactive local-attach input, special keys, or terminal
+resize, and it emits no separate terminal-output stream — Cursor runs shell commands itself in the
+worktree and they surface as `execute` tool results in the transcript. Kapacitor advertises **no**
+client filesystem or terminal capabilities to the agent (it performs those operations itself).
+
+**Troubleshooting.**
+
+- *`cursor` missing from the launch dialog* — the daemon didn't find `cursor-agent`; install it or set
+  `KCAP_CURSOR_PATH`, then restart the daemon.
+- *Agent launches but errors immediately / produces nothing* — confirm `cursor-agent login` and that
+  the account has a Team-tier subscription; the daemon logs the handshake failure.
+- *Model not applied* — `KCAP_CURSOR_MODEL` (or the per-launch model) is matched against the models the
+  account actually offers; an unrecognized value falls back to Cursor's default.
+
+**Data handling.** A hosted Cursor agent runs as a local child process of the daemon with the daemon's
+own filesystem/process access — the same unsandboxed-in-a-worktree posture as every hosted agent — and
+its transcript (prompt text, tool arguments, tool results) is forwarded to the Capacitor server
+verbatim, exactly like every other agent, with no Cursor/ACP-specific redaction.
+
 **Codex session-end tuning.** Because Codex has no session-end hook, the watcher owns session-end via two triggers: parent `codex` process exit, and rollout-file idle timeout. The idle trigger is particularly important for the Codex desktop app, whose shared `codex app-server` process never exits per-conversation.
 
 | Environment variable | Default | Description |
