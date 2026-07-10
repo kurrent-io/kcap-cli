@@ -1432,10 +1432,8 @@ public static class PluginCommand {
             return 1;
         }
 
-        // Clone/refresh the kcap agent unless a refresh finds it on disk AND already current. The
-        // File.Exists guard matters because a deleted kcap.json with a current marker must still be
-        // recreated. MCP is registered below REGARDLESS — it's an independent settings/mcp.json merge,
-        // not tied to the agent clone or the default-agent flip.
+        // Clone/refresh the agent unless a refresh finds it on disk AND current (File.Exists so a
+        // deleted kcap.json is recreated). MCP is registered below regardless of the clone outcome.
         var hooksFailed = false;
         var hooksCurrent = refreshOnly && File.Exists(agentPath) && KiroHooksInstaller.ReadMarker(agentPath) == CapacitorVersion.Current();
         if (!hooksCurrent) {

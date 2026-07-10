@@ -232,14 +232,13 @@ internal static class CodingAgentsStep {
             return false;
         }
 
-        // Kiro is opted-in and kcap is on PATH: the MCP file (a separate settings/mcp.json) should be
-        // registered even if the agent clone below fails (it needs kiro-cli). Signal that to the MCP step.
+        // Opted-in + kcap on PATH: register MCP even if the clone below fails.
         selected = true;
 
         var ok = installers.InstallKiroHooks?.Invoke(paths.KiroHooksPath) ?? false;
 
         if (!ok) {
-            writeLine("  [yellow]⚠[/] Could not write Kiro agent hooks file (kiro-cli needed to clone your default agent).");
+            writeLine("  [yellow]⚠[/] Could not set up the Kiro agent hooks (needs kiro-cli on PATH to clone your default agent; the clone or default-agent update may have failed).");
 
             return false;
         }
@@ -250,12 +249,8 @@ internal static class CodingAgentsStep {
         return true;
     }
 
-    /// <summary>
-    /// Registers the kcap MCP servers in Kiro's <c>~/.kiro/settings/mcp.json</c> via
-    /// <see cref="Installers.RegisterKiroMcp"/>. Gated on Kiro being opted-in with kcap on PATH
-    /// (<paramref name="kiroSelected"/>) — independent of the agent-clone outcome, since the MCP
-    /// file is a plain JSON merge — and on <see cref="Options.SkipKiroMcp"/>. Non-destructive.
-    /// </summary>
+    /// <summary>Registers the kcap MCP servers in <c>~/.kiro/settings/mcp.json</c>, gated on
+    /// <paramref name="kiroSelected"/> (independent of the agent-clone outcome) + <see cref="Options.SkipKiroMcp"/>.</summary>
     static bool HandleKiroMcp(
             Options        options,
             Paths          paths,

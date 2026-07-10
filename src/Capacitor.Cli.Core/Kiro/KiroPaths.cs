@@ -49,11 +49,8 @@ public static class KiroPaths {
     public static string SettingsFile(string? home = null) =>
         Path.Combine(ConfigRoot(home), "settings", "cli.json");
 
-    /// <summary>
-    /// Kiro's user-level MCP config file (<c>~/.kiro/settings/mcp.json</c>), where kcap registers
-    /// its MCP servers (<c>mcpServers</c> map). Independent of the agent-hooks file and the
-    /// <c>chat.defaultAgent</c> flip — a plain JSON merge.
-    /// </summary>
+    /// <summary>Kiro's user-level MCP config (<c>~/.kiro/settings/mcp.json</c>) — a plain
+    /// <c>mcpServers</c> merge, independent of the agent-hooks file.</summary>
     public static string SettingsMcpJson(string? home = null) =>
         Path.Combine(ConfigRoot(home), "settings", "mcp.json");
 

@@ -7,11 +7,8 @@ using Capacitor.Cli.Core.Mcp;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// `plugin install/remove --kiro` also (un)registers the kcap MCP servers in Kiro's
-/// user-level <c>~/.kiro/settings/mcp.json</c> (Standard <c>mcpServers</c> shape) — independent
-/// of the agent clone + default-agent flip. Uses a FakeUserHome and clears KIRO_HOME so
-/// KiroPaths resolves under the fake home; the <c>--if-installed</c> refresh branch (agent
-/// pre-seeded at the current version) skips the kiro-cli clone so no binary is needed.
+/// `plugin install/remove --kiro` MCP registration in <c>~/.kiro/settings/mcp.json</c>. Uses a
+/// FakeUserHome + cleared KIRO_HOME; <c>--if-installed</c> (agent pre-seeded) skips the kiro-cli clone.
 /// </summary>
 [NotInParallel("HomeEnvVarMutation")]
 public class PluginCommandKiroTests {
