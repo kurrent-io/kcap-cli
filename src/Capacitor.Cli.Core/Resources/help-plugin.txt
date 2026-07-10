@@ -81,6 +81,15 @@ Options:
                       marker-delimited block (non-destructive — preserves your own
                       instructions) that nudges Gemini to use the kcap tools for
                       why/history questions.
+  --skip-antigravity-mcp
+                      With --antigravity: skip registering the kcap MCP servers in
+                      ~/.gemini/config/mcp_config.json (Antigravity's own MCP file).
+  --skip-antigravity-instructions
+                      With --antigravity: skip installing kcap's steering block into
+                      the shared ~/.gemini/GEMINI.md.
+  --skip-antigravity-skills
+                      With --antigravity: skip copying the kcap skills into
+                      ~/.gemini/skills (where Antigravity reads them, not ~/.agents/skills).
   --if-installed      Refresh-only mode: no-op unless the user has previously
                       installed the target (marker file or pre-marker entry
                       detected). Used by the npm postinstall hook to refresh
@@ -143,10 +152,15 @@ Notes:
 
   --antigravity installs the kcap plugin to ~/.gemini/config/plugins/kcap/ — a
   plugin.json manifest (which the GUI requires to load the dir) plus a hooks.json
-  kcap block (preserving any hook blocks you authored). Antigravity exposes no
-  shell hooks, only control hooks. Each event runs `kcap hook --antigravity
-  <Event>`, so kcap must be on PATH. The GUI loads plugins at startup, so restart
-  it after install. User-wide only — --project has no effect with --antigravity.
+  kcap block (preserving any hook blocks you authored). It also registers the 4 kcap
+  MCP servers in ~/.gemini/config/mcp_config.json (Antigravity's OWN MCP file, not the
+  Gemini CLI's settings.json — see --skip-antigravity-mcp), installs a steering block
+  into the shared ~/.gemini/GEMINI.md (see --skip-antigravity-instructions), and copies
+  the kcap skills into ~/.gemini/skills (Antigravity does NOT read ~/.agents/skills — see
+  --skip-antigravity-skills). Antigravity exposes no shell hooks, only control hooks. Each
+  event runs `kcap hook --antigravity <Event>`, so kcap must be on PATH. The GUI loads
+  plugins at startup, so restart it after install. User-wide only — --project has no effect
+  with --antigravity.
 
   --opencode writes a single plugin file (~/.config/opencode/plugins/kcap.ts)
   instead of a hooks file — OpenCode exposes no shell hooks, only an in-process

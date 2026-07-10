@@ -15,7 +15,7 @@ internal static class CodingAgentsStep {
     // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini
     // (AI-887), Kiro (AI-888), and Pi (AI-886) were all added after the original
     // four vendors.
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false, bool SkipAntigravityMcp = false, bool SkipAntigravityInstructions = false, bool SkipAntigravitySkills = false);
 
     internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false);
 
@@ -37,7 +37,10 @@ internal static class CodingAgentsStep {
             string  CursorMcpPath = "",
             string  CopilotMcpPath = "",
             string  CopilotInstructionsPath = "",
-            string  GeminiInstructionsPath = ""
+            string  GeminiInstructionsPath = "",
+            string  AntigravityMcpPath = "",
+            string  AntigravityInstructionsPath = "",
+            string  AntigravitySkillsDir = ""
         );
 
     internal record Installers(
@@ -60,7 +63,9 @@ internal static class CodingAgentsStep {
             Func<AgentInstructionsWriter.Change>?                    InstallCopilotInstructions = null,
             Func<string /*skillsDir*/, bool>?                        AgentSkillsCurrent = null,
             Func<JsonMcpConfigWriter.Change>?                        RegisterGeminiMcp = null,
-            Func<AgentInstructionsWriter.Change>?                    InstallGeminiInstructions = null
+            Func<AgentInstructionsWriter.Change>?                    InstallGeminiInstructions = null,
+            Func<JsonMcpConfigWriter.Change>?                        RegisterAntigravityMcp = null,
+            Func<AgentInstructionsWriter.Change>?                    InstallAntigravityInstructions = null
         );
 
     internal record Result(
@@ -80,7 +85,10 @@ internal static class CodingAgentsStep {
             bool CopilotMcpRegistered = false,
             bool CopilotInstructionsInstalled = false,
             bool GeminiMcpRegistered = false,
-            bool GeminiInstructionsInstalled = false
+            bool GeminiInstructionsInstalled = false,
+            bool AntigravityMcpRegistered = false,
+            bool AntigravityInstructionsInstalled = false,
+            bool AntigravitySkillsInstalled = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -124,7 +132,13 @@ internal static class CodingAgentsStep {
         var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, prompt, writeLine);
         var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, prompt, writeLine);
         var openCodeExtensionInstalled = HandleOpenCodeExtension(options, detected, paths, installers, prompt, writeLine);
-        var antigravityHooksInstalled  = HandleAntigravityHooks(options, detected, paths, installers, prompt, writeLine);
+        var antigravityHooksInstalled  = HandleAntigravityHooks(options, detected, paths, installers, prompt, writeLine, out var antigravitySelected);
+        // Antigravity's MCP (own mcp_config.json), instructions (shared GEMINI.md) and skills
+        // (~/.gemini/skills) live in files SEPARATE from its hooks.json, so gate them on the user
+        // having SELECTED Antigravity (opted-in + kcap on PATH), not on the hook-write succeeding.
+        var antigravityMcpRegistered   = HandleAntigravityMcp(options, paths, installers, writeLine, antigravitySelected);
+        var antigravityInstructionsInstalled = HandleAntigravityInstructions(options, paths, installers, writeLine, antigravitySelected);
+        var antigravitySkillsInstalled = HandleAntigravitySkills(options, paths, installers, writeLine, antigravitySelected);
 
         // AI-1285 — the shared ~/.agents/skills/ install is decoupled from Codex: run it
         // once when any non-Claude agent is detected, independent of that agent's hook
@@ -153,7 +167,10 @@ internal static class CodingAgentsStep {
                 CopilotMcpRegistered: copilotMcpRegistered,
                 CopilotInstructionsInstalled: copilotInstructionsInstalled,
                 GeminiMcpRegistered: geminiMcpRegistered,
-                GeminiInstructionsInstalled: geminiInstructionsInstalled
+                GeminiInstructionsInstalled: geminiInstructionsInstalled,
+                AntigravityMcpRegistered: antigravityMcpRegistered,
+                AntigravityInstructionsInstalled: antigravityInstructionsInstalled,
+                AntigravitySkillsInstalled: antigravitySkillsInstalled
             )
         );
     }
@@ -444,8 +461,14 @@ internal static class CodingAgentsStep {
             Paths              paths,
             Installers         installers,
             Func<string, bool> prompt,
-            Action<string>     writeLine
+            Action<string>     writeLine,
+            out bool           selected
         ) {
+        // `selected` = Antigravity opted-in (detected + not skipped + prompt-yes/NoPrompt) AND kcap on
+        // PATH; stays true even if the hooks.json write fails, so the SEPARATE mcp_config.json / shared
+        // GEMINI.md / ~/.gemini/skills still install. The bool return reflects only hook-write success.
+        selected = false;
+
         if (!detected.Antigravity) {
             writeLine("  [dim]· Antigravity not detected — skipping[/]");
 
@@ -479,6 +502,8 @@ internal static class CodingAgentsStep {
             return false;
         }
 
+        selected = true;  // opted in + kcap on PATH → MCP/instructions/skills install even if the hook write fails
+
         var ok = installers.InstallAntigravityHooks(paths.AntigravityHooksPath);
 
         if (!ok) {
@@ -489,6 +514,110 @@ internal static class CodingAgentsStep {
 
         writeLine($"  [green]✓[/] Antigravity hooks installed ({Markup.Escape(paths.AntigravityHooksPath)})");
         writeLine("  [dim]  Note: Antigravity loads hooks at startup — restart it to pick them up.[/]");
+
+        return true;
+    }
+
+    /// <summary>
+    /// Registers the kcap MCP servers in Antigravity's own <c>~/.gemini/config/mcp_config.json</c>
+    /// (Standard shape). Gated on the user having SELECTED Antigravity + on
+    /// <see cref="Options.SkipAntigravityMcp"/>. No prompt: registration is non-destructive.
+    /// </summary>
+    static bool HandleAntigravityMcp(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           antigravitySelected
+        ) {
+        if (installers.RegisterAntigravityMcp is null || !antigravitySelected || options.SkipAntigravityMcp) return false;
+
+        var configPath = Markup.Escape(paths.AntigravityMcpPath);
+
+        switch (installers.RegisterAntigravityMcp()) {
+            case JsonMcpConfigWriter.Change.Updated:
+                writeLine($"  [green]✓[/] Antigravity MCP servers registered ([dim]{configPath}[/])");
+
+                return true;
+            case JsonMcpConfigWriter.Change.Unchanged:
+                writeLine("  [dim]· Antigravity MCP servers already registered — no change needed[/]");
+
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not register Antigravity MCP servers in {configPath} — see README to add them manually.");
+
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Installs kcap's steering block into the shared <c>~/.gemini/GEMINI.md</c> (read by both
+    /// Antigravity and the Gemini CLI). Gated on SELECTED + <see cref="Options.SkipAntigravityInstructions"/>.
+    /// </summary>
+    static bool HandleAntigravityInstructions(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           antigravitySelected
+        ) {
+        if (installers.InstallAntigravityInstructions is null || !antigravitySelected || options.SkipAntigravityInstructions) return false;
+
+        var path = Markup.Escape(paths.AntigravityInstructionsPath);
+
+        switch (installers.InstallAntigravityInstructions()) {
+            case AgentInstructionsWriter.Change.Updated:
+                writeLine($"  [green]✓[/] Antigravity instructions installed ([dim]{path}[/])");
+
+                return true;
+            case AgentInstructionsWriter.Change.Unchanged:
+                writeLine("  [dim]· Antigravity instructions already up to date — no change needed[/]");
+
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not write Antigravity instructions to {path}.");
+
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Installs the kcap skills into <c>~/.gemini/skills</c> — where Antigravity reads them (it does
+    /// NOT read the agent-agnostic <c>~/.agents/skills</c>). Reuses the shared skills installer +
+    /// marker (targeting the Antigravity skills dir). Gated on SELECTED + <see cref="Options.SkipAntigravitySkills"/>.
+    /// </summary>
+    static bool HandleAntigravitySkills(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           antigravitySelected
+        ) {
+        if (!antigravitySelected || options.SkipAntigravitySkills) return false;
+
+        var dst = paths.AntigravitySkillsDir;
+
+        if (installers.AgentSkillsCurrent?.Invoke(dst) == true) {
+            writeLine("  [dim]· Antigravity skills already up to date — no change needed[/]");
+
+            return false;
+        }
+
+        if (paths.PluginDir is null) {
+            writeLine("  [yellow]⚠[/] Antigravity skills could not be installed (plugin directory not found).");
+
+            return false;
+        }
+
+        var src = Path.Combine(paths.PluginDir, "skills");
+
+        if (!installers.InstallAgentSkills(src, dst)) {
+            writeLine($"  [yellow]⚠[/] Antigravity skills could not be copied to {Markup.Escape(dst)}");
+
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] Antigravity skills installed ([dim]{Markup.Escape(dst)}[/])");
 
         return true;
     }
@@ -510,9 +639,13 @@ internal static class CodingAgentsStep {
             Func<string, bool> prompt,
             Action<string>     writeLine
         ) {
+        // Antigravity is intentionally EXCLUDED here: it reads ~/.gemini/skills (installed by
+        // HandleAntigravitySkills), NOT the agent-agnostic ~/.agents/skills — so its presence alone
+        // must not trigger a ~/.agents/skills install it can't see. (Kiro likewise uses ~/.kiro/skills;
+        // left in for now as a harmless no-op until Kiro's own skills install lands.)
         var anyNonClaudeDetected =
             detected.Codex || detected.Cursor || detected.Copilot || detected.Gemini
-         || detected.Kiro  || detected.Pi     || detected.OpenCode || detected.Antigravity;
+         || detected.Kiro  || detected.Pi     || detected.OpenCode;
 
         // Nothing that reads ~/.agents/skills/ is present (Claude-only or nothing) — the
         // Claude plugin install handles Claude's skills, so there's nothing to do here.

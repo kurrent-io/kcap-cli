@@ -821,6 +821,100 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write Copilot instructions"));
     }
 
+    static (Options, DetectedAgents) AntigravityOnly(bool skipMcp = false, bool skipInstr = false, bool skipSkills = false) => (
+        new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true,
+            SkipAntigravityMcp: skipMcp, SkipAntigravityInstructions: skipInstr, SkipAntigravitySkills: skipSkills),
+        new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Antigravity: true));
+
+    [Test]
+    public async Task Antigravity_mcp_and_instructions_registered_when_selected() {
+        var sink = new Sink();
+        var calls = new InstallerCalls();
+        var (options, detected) = AntigravityOnly();
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.RegisterAntigravityMcpCalled).IsTrue();
+        await Assert.That(result.AntigravityMcpRegistered).IsTrue();
+        await Assert.That(calls.InstallAntigravityInstructionsCalled).IsTrue();
+        await Assert.That(result.AntigravityInstructionsInstalled).IsTrue();
+    }
+
+    [Test]
+    public async Task Antigravity_skills_go_to_gemini_dir_not_agents_skills() {
+        var sink = new Sink();
+        var calls = new InstallerCalls();
+        var (options, detected) = AntigravityOnly();
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        var dsts = calls.AgentSkillsInstalls.Select(x => x.Dst).ToArray();
+        await Assert.That(dsts).Contains("/fake/.gemini/skills");        // Antigravity skills → ~/.gemini/skills
+        await Assert.That(dsts).DoesNotContain("/fake/.agents/skills");  // NOT the agent-agnostic dir it can't read
+        await Assert.That(result.AntigravitySkillsInstalled).IsTrue();
+    }
+
+    [Test]
+    public async Task Antigravity_mcp_instructions_skills_skipped_by_flags() {
+        var sink = new Sink();
+        var calls = new InstallerCalls();
+        var (options, detected) = AntigravityOnly(skipMcp: true, skipInstr: true, skipSkills: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.RegisterAntigravityMcpCalled).IsFalse();
+        await Assert.That(calls.InstallAntigravityInstructionsCalled).IsFalse();
+        await Assert.That(calls.AgentSkillsInstalls.Select(x => x.Dst)).DoesNotContain("/fake/.gemini/skills");
+    }
+
+    [Test]
+    public async Task Antigravity_installs_independent_files_even_when_hook_write_fails() {
+        // Antigravity opted-in + kcap on PATH but the hooks.json write fails → MCP (own file),
+        // instructions (GEMINI.md), and skills (~/.gemini/skills) are all separate, so they still install.
+        var sink = new Sink();
+        var calls = new InstallerCalls { AntigravityHooksReturns = false };
+        var (options, detected) = AntigravityOnly();
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.AntigravityHooksInstalled).IsFalse();
+        await Assert.That(calls.RegisterAntigravityMcpCalled).IsTrue();
+        await Assert.That(calls.InstallAntigravityInstructionsCalled).IsTrue();
+        await Assert.That(calls.AgentSkillsInstalls.Select(x => x.Dst)).Contains("/fake/.gemini/skills");
+    }
+
+    [Test]
+    public async Task Antigravity_nothing_installed_when_not_selected() {
+        // kcap not on PATH → not selected → no MCP/instructions/skills.
+        var sink = new Sink();
+        var calls = new InstallerCalls { CapacitorOnPathReturns = false };
+        var (options, detected) = AntigravityOnly();
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.RegisterAntigravityMcpCalled).IsFalse();
+        await Assert.That(calls.InstallAntigravityInstructionsCalled).IsFalse();
+        await Assert.That(calls.AgentSkillsInstalls).IsEmpty();
+    }
+
+    [Test]
+    public async Task Antigravity_mcp_not_fired_for_gemini_only_machine() {
+        // Non-conflation: Antigravity + Gemini CLI share ~/.gemini but use different files.
+        // A Gemini-only machine (Antigravity NOT detected) must NOT register Antigravity's MCP into
+        // ~/.gemini/config/mcp_config.json, nor write ~/.gemini/skills.
+        var sink = new Sink();
+        var calls = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: true, Antigravity: false);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.RegisterAntigravityMcpCalled).IsFalse();
+        await Assert.That(calls.InstallAntigravityInstructionsCalled).IsFalse();
+        await Assert.That(result.AntigravityMcpRegistered).IsFalse();
+        await Assert.That(calls.AgentSkillsInstalls.Select(x => x.Dst)).DoesNotContain("/fake/.gemini/skills");
+    }
+
     [Test]
     public async Task Gemini_mcp_registered_when_hooks_installed() {
         var sink     = new Sink();
@@ -1633,7 +1727,10 @@ public class CodingAgentsStepTests {
         CursorMcpPath:        "/fake/.cursor/mcp.json",
         CopilotMcpPath:       "/fake/.copilot/mcp-config.json",
         CopilotInstructionsPath: "/fake/.copilot/copilot-instructions.md",
-        GeminiInstructionsPath: "/fake/.gemini/GEMINI.md"
+        GeminiInstructionsPath: "/fake/.gemini/GEMINI.md",
+        AntigravityMcpPath:       "/fake/.gemini/config/mcp_config.json",
+        AntigravityInstructionsPath: "/fake/.gemini/GEMINI.md",
+        AntigravitySkillsDir:     "/fake/.gemini/skills"
     );
 
     sealed class Sink {
@@ -1657,6 +1754,10 @@ public class CodingAgentsStepTests {
         public bool    CopilotHooksCalled  { get; private set; }
         public string? CopilotHooksArg     { get; private set; }
         public bool    CopilotHooksReturns { get; set; } = true;
+
+        public bool    AntigravityHooksCalled  { get; private set; }
+        public string? AntigravityHooksArg     { get; private set; }
+        public bool    AntigravityHooksReturns { get; set; } = true;
 
         public bool    GeminiHooksCalled  { get; private set; }
         public string? GeminiHooksArg     { get; private set; }
@@ -1709,6 +1810,16 @@ public class CodingAgentsStepTests {
 
         public bool                          InstallGeminiInstructionsCalled  { get; private set; }
         public AgentInstructionsWriter.Change InstallGeminiInstructionsReturns { get; set; } = AgentInstructionsWriter.Change.Updated;
+
+        public bool                     RegisterAntigravityMcpCalled  { get; private set; }
+        public JsonMcpConfigWriter.Change RegisterAntigravityMcpReturns { get; set; } = JsonMcpConfigWriter.Change.Updated;
+
+        public bool                          InstallAntigravityInstructionsCalled  { get; private set; }
+        public AgentInstructionsWriter.Change InstallAntigravityInstructionsReturns { get; set; } = AgentInstructionsWriter.Change.Updated;
+
+        // Every InstallAgentSkills(src,dst) call (the single AgentSkillsArgs only keeps the last) — so
+        // tests can assert WHICH skills dirs got written (e.g. ~/.gemini/skills vs ~/.agents/skills).
+        public List<(string Src, string Dst)> AgentSkillsInstalls { get; } = [];
 
         public Installers AsInstallers() => new(
             InstallClaudePlugin: (s, p) => {
@@ -1763,9 +1874,16 @@ public class CodingAgentsStepTests {
 
                 return OpenCodeExtensionReturns;
             },
+            InstallAntigravityHooks: h => {
+                AntigravityHooksCalled = true;
+                AntigravityHooksArg    = h;
+
+                return AntigravityHooksReturns;
+            },
             InstallAgentSkills: (s, d) => {
                 AgentSkillsCalled = true;
                 AgentSkillsArgs   = (s, d);
+                AgentSkillsInstalls.Add((s, d));
 
                 return AgentSkillsReturns;
             },
@@ -1815,6 +1933,16 @@ public class CodingAgentsStepTests {
                 InstallGeminiInstructionsCalled = true;
 
                 return InstallGeminiInstructionsReturns;
+            },
+            RegisterAntigravityMcp: () => {
+                RegisterAntigravityMcpCalled = true;
+
+                return RegisterAntigravityMcpReturns;
+            },
+            InstallAntigravityInstructions: () => {
+                InstallAntigravityInstructionsCalled = true;
+
+                return InstallAntigravityInstructionsReturns;
             }
         );
     }
