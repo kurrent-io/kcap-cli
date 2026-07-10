@@ -1588,7 +1588,7 @@ public static class PluginCommand {
                     : "Nothing to remove — Kiro agent hooks file not found."
             );
 
-            return mcpFailed ? 1 : 0;
+            return mcpFailed || skills.HadErrors ? 1 : 0;
         } catch (Exception ex) {
             await env.Stderr.WriteLineAsync($"Could not remove Kiro hooks at {agentPath}: {ex.Message}");
 

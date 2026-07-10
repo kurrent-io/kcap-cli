@@ -14,13 +14,15 @@ public class KiroPathsTests {
         await Assert.That(Path.GetDirectoryName(mcp)).IsEqualTo(Path.GetDirectoryName(cli));
     }
 
-    // Parallel-safe: home is non-null, so no env var is read. Skills live at <config-root>/skills
-    // (a sibling of settings/agents), NOT the agent-agnostic ~/.agents/skills, which Kiro can't read.
+    // Parallel-safe: asserts an invariant relationship (skills is <config-root>/skills), so it holds
+    // regardless of how ConfigRoot resolves (KIRO_HOME / home). This is the kcap-owned Kiro skills dir
+    // — a sibling of settings/agents under the Kiro config root — NOT the agent-agnostic ~/.agents/skills.
     [Test]
-    public async Task SkillsDir_is_kiro_skills_not_agents_skills() {
+    public async Task SkillsDir_is_skills_under_the_kiro_config_root() {
         var skills = KiroPaths.SkillsDir(home: "/fake/home");
+        var root   = KiroPaths.ConfigRoot(home: "/fake/home");
 
-        await Assert.That(skills).IsEqualTo(Path.Combine("/fake/home", ".kiro", "skills"));
-        await Assert.That(skills).DoesNotContain(Path.Combine(".agents", "skills"));
+        await Assert.That(Path.GetFileName(skills)).IsEqualTo("skills");
+        await Assert.That(Path.GetDirectoryName(skills)).IsEqualTo(root);   // under the Kiro root, not ~/.agents
     }
 }
