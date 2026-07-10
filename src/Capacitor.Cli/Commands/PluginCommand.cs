@@ -1415,50 +1415,97 @@ public static class PluginCommand {
 
     static async Task<int> InstallKiro(string[] args, PluginEnvironment env) {
         var agentPath = GetArg(args, "--kiro-agent-path") ?? env.KiroKcapAgentJson;
+        var mcpPath   = GetArg(args, "--kiro-mcp-path")   ?? env.KiroMcpJson;
 
         var refreshOnly = args.Contains("--if-installed");
 
-        switch (refreshOnly) {
-            case true when !KiroHooksInstaller.IsInstalled(agentPath):
-            case true when KiroHooksInstaller.ReadMarker(agentPath) == CapacitorVersion.Current():
-                return 0;
-            // The agent runs the bare `kcap hook --kiro` command, so kcap must be on PATH.
-            case false when !AgentDetector.IsInstalled("kcap"):
-                await env.Stderr.WriteLineAsync(
-                    "Cannot install Kiro hooks: 'kcap' is not on PATH. "
-                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
-                );
+        // Refresh-only mode never touches a machine that never opted in.
+        if (refreshOnly && !KiroHooksInstaller.IsInstalled(agentPath)) return 0;
 
-                return 1;
-        }
-
-        if (!InstallKiroHooks(agentPath)) {
-            if (refreshOnly) return 0;
-
+        // Fresh install needs kcap on PATH: the agent + the MCP servers run the bare `kcap` command.
+        if (!refreshOnly && !AgentDetector.IsInstalled("kcap")) {
             await env.Stderr.WriteLineAsync(
-                $"Could not set up the Kiro '{KiroAgentName}' agent. Is '{KiroBinary}' on PATH? "
-              + "(it's needed to clone your current default agent so tool access is preserved.)"
+                "Cannot install Kiro hooks: 'kcap' is not on PATH. "
+              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
             );
 
             return 1;
         }
 
-        var clonedFrom = KiroHooksInstaller.ReadPreviousDefault(agentPath) ?? "your default agent";
+        // Clone/refresh the kcap agent unless a refresh finds it on disk AND already current. The
+        // File.Exists guard matters because a deleted kcap.json with a current marker must still be
+        // recreated. MCP is registered below REGARDLESS — it's an independent settings/mcp.json merge,
+        // not tied to the agent clone or the default-agent flip.
+        var hooksFailed = false;
+        var hooksCurrent = refreshOnly && File.Exists(agentPath) && KiroHooksInstaller.ReadMarker(agentPath) == CapacitorVersion.Current();
+        if (!hooksCurrent) {
+            if (InstallKiroHooks(agentPath)) {
+                var clonedFrom = KiroHooksInstaller.ReadPreviousDefault(agentPath) ?? "your default agent";
+                await env.Stdout.WriteLineAsync(
+                    refreshOnly
+                        ? $"Kiro hooks refreshed ({agentPath})"
+                        : $"Kiro hooks installed — '{KiroAgentName}' (cloned from '{clonedFrom}') is now your default "
+                        + "Kiro agent, so every session is captured. Restart kiro-cli to pick it up; "
+                        + "undo with: kcap plugin remove --kiro"
+                );
+            } else {
+                // The agent clone needs kiro-cli on PATH; if it's missing the clone fails. Warn, but
+                // still register the independent MCP file below rather than bailing.
+                hooksFailed = true;
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not set up the Kiro '{KiroAgentName}' agent (is '{KiroBinary}' on PATH? "
+                  + "it's needed to clone your current default agent so tool access is preserved). "
+                  + "Continuing with MCP registration.");
+            }
+        }
 
-        await env.Stdout.WriteLineAsync(
-            refreshOnly
-                ? $"Kiro hooks refreshed ({agentPath})"
-                : $"Kiro hooks installed — '{KiroAgentName}' (cloned from '{clonedFrom}') is now your default "
-                + "Kiro agent, so every session is captured. Restart kiro-cli to pick it up; "
-                + "undo with: kcap plugin remove --kiro"
-        );
+        // Register the kcap MCP servers in ~/.kiro/settings/mcp.json (Standard shape) so Kiro picks
+        // them up with no manual JSON edit. Non-destructive + idempotent (preserves user servers and
+        // their disabled/autoApprove fields). Never fails the install: a write error is a warning.
+        if (!args.Contains("--skip-kiro-mcp"))
+            await RegisterKiroMcpServersAsync(env, mcpPath);
 
-        return 0;
+        // A fresh agent-clone failure is still an error exit (capture won't work without it), but the
+        // independent MCP file was still written above.
+        return hooksFailed && !refreshOnly ? 1 : 0;
+    }
+
+    /// <summary>
+    /// Registers the kcap MCP servers in Kiro's <c>~/.kiro/settings/mcp.json</c> (<c>mcpServers</c>
+    /// map). Non-destructive + idempotent — preserves user servers and their disabled/autoApprove
+    /// fields (kcap leaves autoApprove unset). Never fails the install: a write error is a warning.
+    /// </summary>
+    static async Task RegisterKiroMcpServersAsync(PluginEnvironment env, string mcpPath) {
+        var change = JsonMcpConfigWriter.Register(
+            mcpPath, KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("kiro"));
+
+        switch (change) {
+            case JsonMcpConfigWriter.Change.Updated:
+                await env.Stdout.WriteLineAsync($"Kiro MCP servers registered ({mcpPath}).");
+                break;
+            case JsonMcpConfigWriter.Change.Failed:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {mcpPath} to register Kiro MCP servers.");
+                break;
+            // Unchanged: silent.
+        }
     }
 
     static async Task<int> RemoveKiro(string[] args, PluginEnvironment env) {
         var agentPath    = GetArg(args, "--kiro-agent-path")    ?? env.KiroKcapAgentJson;
         var settingsPath = GetArg(args, "--kiro-settings-path") ?? KiroSettingsPathFor(agentPath);
+        var mcpPath      = GetArg(args, "--kiro-mcp-path")      ?? env.KiroMcpJson;
+
+        // MCP servers live in a separate settings/mcp.json — unregister independently of the agent
+        // restore/removal (Unregister owns the ownership-marker cleanup and no-ops when absent).
+        var mcpChange = JsonMcpConfigWriter.Unregister(mcpPath, McpConfigShape.Standard, new McpMarker("kiro"));
+        var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
+
+        if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
+            await env.Stdout.WriteLineAsync($"Kiro MCP servers removed ({mcpPath}).");
+        } else if (mcpFailed) {
+            await env.Stderr.WriteLineAsync($"Could not update {mcpPath} to remove Kiro MCP servers.");
+        }
 
         try {
             // Restore the default agent kcap replaced (recorded at install time).
@@ -1487,7 +1534,7 @@ public static class PluginCommand {
                     : "Nothing to remove — Kiro agent hooks file not found."
             );
 
-            return 0;
+            return mcpFailed ? 1 : 0;
         } catch (Exception ex) {
             await env.Stderr.WriteLineAsync($"Could not remove Kiro hooks at {agentPath}: {ex.Message}");
 

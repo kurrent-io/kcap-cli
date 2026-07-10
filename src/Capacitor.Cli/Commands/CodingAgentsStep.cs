@@ -15,7 +15,7 @@ internal static class CodingAgentsStep {
     // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini
     // (AI-887), Kiro (AI-888), and Pi (AI-886) were all added after the original
     // four vendors.
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false, bool SkipAntigravityMcp = false, bool SkipAntigravityInstructions = false, bool SkipAntigravitySkills = false, bool SkipOpenCodeMcp = false, bool SkipOpenCodeInstructions = false);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false, bool SkipAntigravityMcp = false, bool SkipAntigravityInstructions = false, bool SkipAntigravitySkills = false, bool SkipOpenCodeMcp = false, bool SkipOpenCodeInstructions = false, bool SkipKiroMcp = false);
 
     internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false);
 
@@ -42,7 +42,8 @@ internal static class CodingAgentsStep {
             string  AntigravityInstructionsPath = "",
             string  AntigravitySkillsDir = "",
             string  OpenCodeMcpPath = "",
-            string  OpenCodeInstructionsPath = ""
+            string  OpenCodeInstructionsPath = "",
+            string  KiroMcpPath = ""
         );
 
     internal record Installers(
@@ -69,7 +70,8 @@ internal static class CodingAgentsStep {
             Func<JsonMcpConfigWriter.Change>?                        RegisterAntigravityMcp = null,
             Func<AgentInstructionsWriter.Change>?                    InstallAntigravityInstructions = null,
             Func<JsonMcpConfigWriter.Change>?                        RegisterOpenCodeMcp = null,
-            Func<AgentInstructionsWriter.Change>?                    InstallOpenCodeInstructions = null
+            Func<AgentInstructionsWriter.Change>?                    InstallOpenCodeInstructions = null,
+            Func<JsonMcpConfigWriter.Change>?                        RegisterKiroMcp = null
         );
 
     internal record Result(
@@ -94,7 +96,8 @@ internal static class CodingAgentsStep {
             bool AntigravityInstructionsInstalled = false,
             bool AntigravitySkillsInstalled = false,
             bool OpenCodeMcpRegistered = false,
-            bool OpenCodeInstructionsInstalled = false
+            bool OpenCodeInstructionsInstalled = false,
+            bool KiroMcpRegistered = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -135,7 +138,8 @@ internal static class CodingAgentsStep {
         // SELECTED Gemini (not on hook-write success), so a malformed settings.json that fails the
         // shared hooks/MCP write doesn't also block healing GEMINI.md.
         var geminiInstructionsInstalled = HandleGeminiInstructions(options, paths, installers, writeLine, geminiSelected);
-        var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, prompt, writeLine);
+        var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, prompt, writeLine, out var kiroSelected);
+        var kiroMcpRegistered     = HandleKiroMcp(options, paths, installers, writeLine, kiroSelected);
         var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, prompt, writeLine);
         var openCodeExtensionInstalled = HandleOpenCodeExtension(options, detected, paths, installers, prompt, writeLine);
         var openCodeMcpRegistered      = HandleOpenCodeMcp(options, paths, installers, writeLine, openCodeExtensionInstalled);
@@ -180,7 +184,8 @@ internal static class CodingAgentsStep {
                 AntigravityInstructionsInstalled: antigravityInstructionsInstalled,
                 AntigravitySkillsInstalled: antigravitySkillsInstalled,
                 OpenCodeMcpRegistered: openCodeMcpRegistered,
-                OpenCodeInstructionsInstalled: openCodeInstructionsInstalled
+                OpenCodeInstructionsInstalled: openCodeInstructionsInstalled,
+                KiroMcpRegistered: kiroMcpRegistered
             )
         );
     }
@@ -191,8 +196,11 @@ internal static class CodingAgentsStep {
             Paths              paths,
             Installers         installers,
             Func<string, bool> prompt,
-            Action<string>     writeLine
+            Action<string>     writeLine,
+            out bool           selected
         ) {
+        selected = false;
+
         if (!detected.Kiro) {
             writeLine("  [dim]· Kiro CLI not detected — skipping[/]");
 
@@ -224,10 +232,14 @@ internal static class CodingAgentsStep {
             return false;
         }
 
+        // Kiro is opted-in and kcap is on PATH: the MCP file (a separate settings/mcp.json) should be
+        // registered even if the agent clone below fails (it needs kiro-cli). Signal that to the MCP step.
+        selected = true;
+
         var ok = installers.InstallKiroHooks?.Invoke(paths.KiroHooksPath) ?? false;
 
         if (!ok) {
-            writeLine("  [yellow]⚠[/] Could not write Kiro agent hooks file.");
+            writeLine("  [yellow]⚠[/] Could not write Kiro agent hooks file (kiro-cli needed to clone your default agent).");
 
             return false;
         }
@@ -236,6 +248,39 @@ internal static class CodingAgentsStep {
         writeLine("  [dim]  Note: Kiro loads agent hooks at startup — restart any running kiro session to pick them up.[/]");
 
         return true;
+    }
+
+    /// <summary>
+    /// Registers the kcap MCP servers in Kiro's <c>~/.kiro/settings/mcp.json</c> via
+    /// <see cref="Installers.RegisterKiroMcp"/>. Gated on Kiro being opted-in with kcap on PATH
+    /// (<paramref name="kiroSelected"/>) — independent of the agent-clone outcome, since the MCP
+    /// file is a plain JSON merge — and on <see cref="Options.SkipKiroMcp"/>. Non-destructive.
+    /// </summary>
+    static bool HandleKiroMcp(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           kiroSelected
+        ) {
+        if (installers.RegisterKiroMcp is null || !kiroSelected || options.SkipKiroMcp) return false;
+
+        var configPath = Markup.Escape(paths.KiroMcpPath);
+
+        switch (installers.RegisterKiroMcp()) {
+            case JsonMcpConfigWriter.Change.Updated:
+                writeLine($"  [green]✓[/] Kiro MCP servers registered ([dim]{configPath}[/])");
+
+                return true;
+            case JsonMcpConfigWriter.Change.Unchanged:
+                writeLine("  [dim]· Kiro MCP servers already registered — no change needed[/]");
+
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not register Kiro MCP servers in {configPath} — see README to add them manually.");
+
+                return false;
+        }
     }
 
     static bool HandleCopilotHooks(

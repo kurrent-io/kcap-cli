@@ -1497,6 +1497,78 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("'kcap' is not on PATH"));
     }
 
+    // ── Kiro MCP ──────────────────────────────────────────────────────────────
+
+    [Test]
+    public async Task Kiro_mcp_registered_when_selected() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.KiroMcpRegistered).IsTrue();
+        await Assert.That(calls.RegisterKiroMcpCalled).IsTrue();
+    }
+
+    [Test]
+    public async Task Kiro_mcp_registered_even_when_agent_clone_fails() {
+        // Independence: the agent clone needs kiro-cli and can fail, but the MCP file is a separate
+        // settings/mcp.json merge — it must still register when Kiro is opted-in with kcap on PATH.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { KiroHooksReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.KiroHooksInstalled).IsFalse();       // clone failed
+        await Assert.That(calls.RegisterKiroMcpCalled).IsTrue();      // MCP still registered
+        await Assert.That(result.KiroMcpRegistered).IsTrue();
+    }
+
+    [Test]
+    public async Task Kiro_mcp_skipped_by_flag() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: false, SkipKiroMcp: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.KiroHooksInstalled).IsTrue();
+        await Assert.That(result.KiroMcpRegistered).IsFalse();
+        await Assert.That(calls.RegisterKiroMcpCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Kiro_mcp_not_registered_when_kcap_not_on_path() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CapacitorOnPathReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.RegisterKiroMcpCalled).IsFalse();     // not selected → no MCP
+        await Assert.That(result.KiroMcpRegistered).IsFalse();
+    }
+
+    [Test]
+    public async Task Kiro_mcp_registration_failure_emits_warning() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { RegisterKiroMcpReturns = JsonMcpConfigWriter.Change.Failed };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.RegisterKiroMcpCalled).IsTrue();
+        await Assert.That(result.KiroMcpRegistered).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not register Kiro MCP"));
+    }
+
     [Test]
     public async Task Pi_detected_and_accepted_installs_extension() {
         var sink     = new Sink();
@@ -1791,7 +1863,8 @@ public class CodingAgentsStepTests {
         AntigravityInstructionsPath: "/fake/.gemini/GEMINI.md",
         AntigravitySkillsDir:     "/fake/.gemini/skills",
         OpenCodeMcpPath:      "/fake/.config/opencode/opencode.json",
-        OpenCodeInstructionsPath: "/fake/.config/opencode/AGENTS.md"
+        OpenCodeInstructionsPath: "/fake/.config/opencode/AGENTS.md",
+        KiroMcpPath:          "/fake/.kiro/settings/mcp.json"
     );
 
     sealed class Sink {
@@ -1887,6 +1960,9 @@ public class CodingAgentsStepTests {
 
         public bool                          InstallOpenCodeInstructionsCalled  { get; private set; }
         public AgentInstructionsWriter.Change InstallOpenCodeInstructionsReturns { get; set; } = AgentInstructionsWriter.Change.Updated;
+
+        public bool                     RegisterKiroMcpCalled  { get; private set; }
+        public JsonMcpConfigWriter.Change RegisterKiroMcpReturns { get; set; } = JsonMcpConfigWriter.Change.Updated;
 
         public Installers AsInstallers() => new(
             InstallClaudePlugin: (s, p) => {
@@ -1994,6 +2070,11 @@ public class CodingAgentsStepTests {
                 InstallOpenCodeInstructionsCalled = true;
 
                 return InstallOpenCodeInstructionsReturns;
+            },
+            RegisterKiroMcp: () => {
+                RegisterKiroMcpCalled = true;
+
+                return RegisterKiroMcpReturns;
             },
             AgentSkillsCurrent: dir => {
                 AgentSkillsCurrentCalled = true;

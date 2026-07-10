@@ -43,6 +43,8 @@ Options:
                               Gemini (~/.gemini/GEMINI.md).
   --skip-kiro-hooks           Don't install Kiro CLI hooks even if Kiro is
                               detected (~/.kiro/ or kiro/kiro-cli on PATH).
+  --skip-kiro-mcp             Skip registering the kcap MCP servers for Kiro
+                              (~/.kiro/settings/mcp.json).
   --skip-pi-hooks             Don't install the Pi live-ingest extension even if
                               Pi is detected (~/.pi/ or pi on PATH).
   --skip-opencode-hooks       Don't install the OpenCode plugin even if OpenCode

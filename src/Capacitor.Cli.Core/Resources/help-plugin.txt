@@ -27,6 +27,8 @@ Options:
                       kcap's agentSpawn hook, and make it your default so every
                       session is captured (honours $KIRO_HOME). Needs kiro-cli on
                       PATH. Session-end is synthesized on exit.
+  --skip-kiro-mcp     With --kiro: skip registering the kcap MCP servers in
+                      ~/.kiro/settings/mcp.json (independent of the agent clone).
   --pi                Target Pi (badlogic/pi-mono): install the live-ingest
                       extension to ~/.pi/agent/extensions/kcap.ts. Pi has no
                       shell hooks; the extension auto-loads on `pi` startup and
@@ -144,9 +146,13 @@ Notes:
   (preserving its tools — a minimal agent would lose tool access), injects the
   agentSpawn hook, and sets it as your default agent (chat.defaultAgent in
   ~/.kiro/settings/cli.json) because Kiro hooks fire only for the ACTIVE agent —
-  there is no global hook. Needs kiro-cli on PATH to clone. Restart kiro-cli to
-  pick it up. remove restores your previous default and deletes kcap.json. Kiro
-  has no project-scope hooks, so --project has no effect with --kiro.
+  there is no global hook. Needs kiro-cli on PATH to clone. It also registers the
+  4 kcap MCP servers in ~/.kiro/settings/mcp.json (a plain mcpServers merge,
+  independent of the agent clone — so it still applies if kiro-cli is missing;
+  non-destructive, preserves user servers + their disabled/autoApprove fields; see
+  --skip-kiro-mcp). Restart kiro-cli to pick it up. remove restores your previous
+  default, deletes kcap.json, and unregisters the MCP servers. Kiro has no
+  project-scope hooks, so --project has no effect with --kiro.
 
   --pi writes a single extension file (~/.pi/agent/extensions/kcap.ts) instead
   of a hooks file — Pi exposes no shell hooks, only an in-process extension API.

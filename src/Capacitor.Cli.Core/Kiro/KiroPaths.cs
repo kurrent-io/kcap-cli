@@ -50,6 +50,14 @@ public static class KiroPaths {
         Path.Combine(ConfigRoot(home), "settings", "cli.json");
 
     /// <summary>
+    /// Kiro's user-level MCP config file (<c>~/.kiro/settings/mcp.json</c>), where kcap registers
+    /// its MCP servers (<c>mcpServers</c> map). Independent of the agent-hooks file and the
+    /// <c>chat.defaultAgent</c> flip — a plain JSON merge.
+    /// </summary>
+    public static string SettingsMcpJson(string? home = null) =>
+        Path.Combine(ConfigRoot(home), "settings", "mcp.json");
+
+    /// <summary>
     /// kcap's owned agent-hooks file. Mirrors the Copilot model: kcap owns its own
     /// file rather than merging into a user agent, so removal is a clean delete.
     /// Kiro reads every <c>agents/*.json</c>, so the lifecycle hooks here apply to
