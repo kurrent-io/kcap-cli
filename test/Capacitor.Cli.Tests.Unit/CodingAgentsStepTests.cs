@@ -1062,7 +1062,7 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write Gemini instructions"));
     }
 
-    // ── Pi MCP-bridge extension + AGENTS.md steering (AI-1239) ──────────────
+    // ── Pi MCP-bridge extension + AGENTS.md steering ──────────────
     // Pi has no JSON mcpServers config: the "MCP" is a second extension file
     // (kcap-mcp.ts) and the instructions live in ~/.pi/agent/AGENTS.md — both
     // gated on the user having SELECTED Pi, independent of the ingest write.

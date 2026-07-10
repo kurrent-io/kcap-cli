@@ -4,7 +4,7 @@ using Capacitor.Cli.Core.Pi;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// Covers the Pi MCP-bridge extension installer (AI-1239): kcap-mcp.ts write/remove
+/// Covers the Pi MCP-bridge extension installer: kcap-mcp.ts write/remove
 /// + the version-marker helpers, and content assertions on the embedded bridge. Pi
 /// has no built-in MCP, so kcap ships a second TypeScript extension that spawns the
 /// <c>kcap mcp &lt;name&gt;</c> servers and registers their tools. It's a sibling of

@@ -893,8 +893,11 @@ public static class PluginCommand {
     /// current version. Never fails the install: a write error is a warning.
     /// </summary>
     static async Task InstallPiMcpExtensionAsync(PluginEnvironment env, string mcpExtensionPath, bool refreshOnly) {
+        // Require the extension FILE itself (not just a current marker) for the "already current"
+        // fast path — otherwise a deleted kcap-mcp.ts with a stale-but-current marker would skip the
+        // heal and never recreate the file. (Marker-only state is only the opt-in signal in InstallPi.)
         if (refreshOnly
-            && PiMcpExtensionInstaller.IsInstalled(mcpExtensionPath)
+            && File.Exists(mcpExtensionPath)
             && PiMcpExtensionInstaller.ReadMarker(mcpExtensionPath) == CapacitorVersion.Current())
             return;
 

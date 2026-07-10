@@ -1,5 +1,6 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Instructions;
+using Capacitor.Cli.Core.Pi;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -70,7 +71,7 @@ public class PluginCommandPiTests {
         await Assert.That(File.Exists(marker)).IsFalse();
     }
 
-    // ── MCP-bridge extension + AGENTS.md steering (AI-1239) ─────────────────
+    // ── MCP-bridge extension + AGENTS.md steering ─────────────────
     // Exercised via the --if-installed refresh path (PATH-independent) with a
     // seeded ingest extension as the opt-in signal, mirroring the Gemini tests.
 
@@ -89,6 +90,26 @@ public class PluginCommandPiTests {
         var agents = Path.Combine(fakeHome.Path, ".pi", "agent", "AGENTS.md");
         await Assert.That(File.Exists(agents)).IsTrue();
         await Assert.That(await File.ReadAllTextAsync(agents)).Contains(AgentInstructionsWriter.BeginMarker);
+    }
+
+    [Test]
+    public async Task Install_pi_if_installed_heals_deleted_mcp_bridge_with_current_marker() {
+        using var fakeHome = new TempDir();
+        var extDir = Path.Combine(fakeHome.Path, ".pi", "agent", "extensions");
+        Directory.CreateDirectory(extDir);
+        // Opt-in signal: the ingest extension is present.
+        await File.WriteAllTextAsync(Path.Combine(extDir, "kcap.ts"), "// stale ingest");
+        // A CURRENT MCP marker but NO kcap-mcp.ts (user deleted the file). A marker-only "current"
+        // state must NOT let the refresh skip recreating the bridge file.
+        var mcpPath = Path.Combine(extDir, "kcap-mcp.ts");
+        PiMcpExtensionInstaller.WriteMarker(mcpPath);
+        await Assert.That(File.Exists(mcpPath)).IsFalse();
+
+        var exit = await PluginCommand.HandleAsync(
+            ["plugin", "install", "--pi", "--if-installed"], TestEnv(fakeHome.Path));
+        await Assert.That(exit).IsEqualTo(0);
+
+        await Assert.That(File.Exists(mcpPath)).IsTrue();  // healed despite the current marker
     }
 
     [Test]
