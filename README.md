@@ -1,8 +1,50 @@
 # Kurrent Capacitor
 
-Full observability for your Claude Code sessions. Record every session, visualize agent activity in real time, and review code changes grounded in the actual development transcripts.
+> Full observability for your AI coding-agent sessions — record every session, watch agent activity in real time, and review code changes grounded in the transcripts that produced them.
 
-Capacitor captures the complete picture — session lifecycle, transcript data, subagent trees, tool usage, and token consumption — then surfaces it through a real-time dashboard and PR review tools that give you context no diff can provide.
+[![npm](https://img.shields.io/npm/v/@kurrent/kcap?color=cb3837&logo=npm&label=%40kurrent%2Fkcap)](https://www.npmjs.com/package/@kurrent/kcap)
+[![license](https://img.shields.io/badge/license-Kurrent%20v1-blue)](LICENSE.md)
+[![platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#1-install-the-cli)
+[![built with](https://img.shields.io/badge/.NET%2010-NativeAOT-512bd4?logo=dotnet&logoColor=white)](#)
+
+**Kurrent Capacitor** (`kcap`) records your coding-agent sessions and forwards them to a Capacitor server, where a real-time dashboard and PR-review tools surface the context no diff can give you: *why* code changed, what alternatives were weighed, and how it was actually built. It works across nine agents — Claude Code, Codex, Cursor, GitHub Copilot, Gemini, Kiro, Pi, OpenCode, and Antigravity — capturing the full picture: session lifecycle, transcripts, subagent trees, tool calls, and token usage.
+
+## Contents
+
+- [Why Capacitor](#why-capacitor)
+- [Requirements](#requirements)
+- [Getting started](#getting-started) — [Install](#1-install-the-cli) · [Setup](#2-run-setup) · [Import](#3-import-existing-sessions-optional) · [Dashboard](#4-open-the-dashboard) · [MCP servers](#sessions-and-flows-mcp-servers-for-agents)
+- [What it records](#what-it-records)
+- [CLI commands](#cli-commands)
+  - Sessions: [recap](#session-recap) · [validate-plan](#plan-validation) · [hide](#hide-session) · [disable](#disable-recording) · [errors](#error-extraction) · [eval](#session-evaluation-llm-as-judge)
+  - Reviewing: [review](#pr-review-with-full-context) · [curate](#curate-guidelines)
+  - MCP servers: [sessions](#sessions-mcp-server-for-agents) · [flows](#flows-mcp-server-for-agents) · [flow-result](#flow-result-mcp-server-hosted-reviewers) · [memory](#memory-mcp-server-for-agents)
+  - Importing: [import](#loading-historical-sessions) · [remap](#renamed-repo-directories-kcap-remap)
+  - Agents & daemon: [daemon](#daemon) · [run-agent / attach / ls](#local-agents-run-agent--attach--ls) · [repos](#repository-paths)
+  - Account: [projects](#projects) · [profiles](#profiles) · [config](#configuration) · [uninstall](#uninstalling) · [other](#other-commands)
+- [License](#license)
+
+## Why Capacitor
+
+- **Records everything, automatically.** Once set up, `kcap` runs silently in the background and captures every session — lifecycle, transcripts, subagent trees, tool calls, and token usage — with no change to how you work.
+- **Real-time visibility.** Transcript data streams live over SignalR to a dashboard that shows repositories, sessions, and agents as they happen.
+- **PR review with real context.** `kcap review` launches a reviewer equipped with MCP tools that query the actual implementation transcripts — ask *why* something changed, not just *what*.
+- **Recall past work from your agent.** MCP servers let agents search and reuse prior sessions, durable team memories, and structured review flows without leaving the chat.
+- **Works with your agents.** One install covers Claude Code, Codex, Cursor, GitHub Copilot, Gemini, Kiro, Pi, OpenCode, and Antigravity.
+
+## Requirements
+
+- **A Capacitor server URL** from your admin (e.g. `https://my-tenant.kcap.ai`), or sign in and let `kcap setup` discover/create your tenant.
+- **Node.js + npm** to install the CLI globally (`npm install -g @kurrent/kcap`). The binary itself is a self-contained NativeAOT executable with no runtime dependency.
+- **At least one supported coding agent** so there's something to record — Claude Code or Codex CLI on `PATH` at minimum (Cursor, Copilot, Gemini, Kiro, Pi, OpenCode, and Antigravity are detected too).
+- **A supported platform:**
+
+  | Platform | Architecture |
+  |----------|-------------|
+  | macOS | ARM64 (Apple Silicon) |
+  | Linux | x64, ARM64 |
+  | Linux (Alpine/musl) | x64, ARM64 |
+  | Windows | x64 |
 
 ## Getting started
 
@@ -14,16 +56,7 @@ You need the server URL from your admin (e.g. `https://my-tenant.kcap.ai`).
 npm install -g @kurrent/kcap
 ```
 
-npm automatically selects the right native binary for your platform:
-
-| Platform | Architecture |
-|----------|-------------|
-| macOS | ARM64 (Apple Silicon) |
-| Linux | x64, ARM64 |
-| Linux (Alpine/musl) | x64, ARM64 |
-| Windows | x64 |
-
-The CLI is compiled with NativeAOT — fast startup, no runtime dependency.
+npm automatically selects the right native binary for your [platform](#requirements). The CLI is compiled with NativeAOT — fast startup, no runtime dependency.
 
 > **npm 11+ blocks install scripts by default.** You'll see a warning like
 > `1 package has install scripts not yet covered by allowScripts`. The `kcap`
@@ -153,6 +186,33 @@ Once set up, Capacitor runs silently in the background. Every Claude Code (and C
 - **Crash resilience** — if a `kcap` command hits an unexpected error it records the exception (with stack trace) to `~/.config/kcap/crash.log` (honours `KCAP_CONFIG_DIR`; size-capped) and exits cleanly instead of aborting. Hook and detached-generator commands the coding agent spawns **fail open** (exit 0, nothing surfaced to the agent); other commands exit non-zero with a one-line stderr message pointing at the log.
 
 ## CLI commands
+
+At a glance — each links to its section below:
+
+| Command | What it does |
+|---------|--------------|
+| [`kcap setup`](#initial-setup) | Interactive wizard — server, auth, agent hooks, daemon |
+| [`kcap import`](#loading-historical-sessions) | Backfill past sessions from every detected agent |
+| [`kcap recap`](#session-recap) | AI summary + per-turn outline of a session |
+| [`kcap validate-plan`](#plan-validation) | Check that every planned item was completed |
+| [`kcap hide`](#hide-session) | Mark a session owner-only |
+| [`kcap disable`](#disable-recording) | Stop recording and delete server-side data |
+| [`kcap errors`](#error-extraction) | Extract tool-call errors from a session |
+| [`kcap eval`](#session-evaluation-llm-as-judge) | Score a session with LLM-as-judge |
+| [`kcap review`](#pr-review-with-full-context) | Launch a PR review with full transcript context |
+| [`kcap mcp <server>`](#sessions-mcp-server-for-agents) | Run an MCP server (sessions / flows / memory / …) for agents |
+| [`kcap curate apply`](#curate-guidelines) | Sync promoted guidelines into `CLAUDE.md` / `AGENTS.md` |
+| [`kcap daemon …`](#daemon) | Run and manage the agent daemon |
+| [`kcap run-agent` / `attach` / `ls`](#local-agents-run-agent--attach--ls) | Start and re-attach daemon-hosted local agents |
+| [`kcap repos`](#repository-paths) | Manage known repo paths for the launch dialog |
+| [`kcap projects` / `project`](#projects) | List and inspect projects |
+| [`kcap profile` / `use`](#profiles) | Manage and switch between servers/profiles |
+| [`kcap config`](#configuration) | Show and set configuration |
+| [`kcap remap`](#renamed-repo-directories-kcap-remap) | Map renamed repo directories for import |
+| [`kcap ignore`](#configuration) | Exclude paths from recording |
+| [`kcap update`](#other-commands) | Upgrade the CLI and refresh agent plugins |
+| [`kcap uninstall`](#uninstalling) | Remove kcap from this machine |
+| [`kcap status` / `whoami` / `login` / `logout`](#other-commands) | Health, identity, and auth |
 
 ### Initial setup
 
