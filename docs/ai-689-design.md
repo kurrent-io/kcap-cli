@@ -93,6 +93,16 @@ Stop discarding the `initialize` result; parse it into a typed `InitializeResult
 
 ## 4. Workstream C — ACP process reconnect/resume (PR 3)
 
+> **DESCOPED from AI-689 → follow-up issue AI-1325 (owner decision, at the C0 gate).** The C0 live
+> probe found cursor-agent's `session/load` replay carries **no per-message id**, so the
+> streaming-preserving dedup (C3(a)) is impossible; the only viable path is C3(b) whole-turn atomic
+> staging, which regresses within-turn live streaming for **all** hosted-Cursor sessions. Rather than
+> ship that regression, reconnect is deferred (revisit if ACP adds a per-message / round-tripped
+> prompt id, or if the tradeoff is explicitly accepted). This section is **retained as the
+> design-of-record for AI-1325** — the full C0–C9 contract below is Codex-reviewed-to-clean (10 rounds)
+> and remains correct; AI-1325 narrows C3 to the C3(b) path. AI-689 itself ships as PR4 (docs, this
+> branch) + PR1 diagnostics (#316) + PR2 observability (#317).
+
 The heart of Full scope, and — per spec-review r1 (3 BLOCKING) — the part that needs a real design,
 not a bullet list. Today a mid-session `cursor-agent` death ends the read loop, faults pending
 requests, and drives finalization. The three findings below are load-bearing; the revised design
