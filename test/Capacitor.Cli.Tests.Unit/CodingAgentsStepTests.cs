@@ -1570,6 +1570,38 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
+    public async Task Kiro_mcp_registered_when_hooks_skipped_by_flag() {
+        // --skip-kiro-hooks opts out of only the invasive agent clone; the independent MCP
+        // registration must STILL happen (gated only by --skip-kiro-mcp).
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.KiroHooksInstalled).IsFalse();     // hooks skipped by flag
+        await Assert.That(calls.KiroHooksCalled).IsFalse();
+        await Assert.That(calls.RegisterKiroMcpCalled).IsTrue();     // MCP still registered
+        await Assert.That(result.KiroMcpRegistered).IsTrue();
+    }
+
+    [Test]
+    public async Task Kiro_mcp_not_registered_when_hooks_declined_interactively() {
+        // An interactive "no" to the (only) Kiro prompt skips both hooks and MCP.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: false, SkipKiro: false);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => false, writeLine: sink.Write);
+
+        await Assert.That(result.KiroHooksInstalled).IsFalse();
+        await Assert.That(calls.RegisterKiroMcpCalled).IsFalse();    // decline → no MCP
+        await Assert.That(result.KiroMcpRegistered).IsFalse();
+    }
+
+    [Test]
     public async Task Pi_detected_and_accepted_installs_extension() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();

@@ -209,30 +209,35 @@ internal static class CodingAgentsStep {
 
         writeLine("  [green]✓[/] Kiro CLI detected");
 
-        if (options.SkipKiro) {
-            writeLine("  [dim]· Kiro CLI hooks skipped by flag[/]");
-
-            return false;
-        }
-
-        var shouldInstall = options.NoPrompt || prompt("Install Kiro CLI hooks?");
-
-        if (!shouldInstall) {
-            writeLine("  [dim]· Kiro hooks not installed (you can run kcap plugin install --kiro later)[/]");
-
-            return false;
-        }
-
-        // The agent JSON writes the bare "kcap hook --kiro" command and relies on
-        // Kiro finding kcap on PATH — same precheck as the Cursor/Copilot branches.
+        // kcap must be on PATH for BOTH the agent hooks (`kcap hook`) and the MCP servers (`kcap mcp`) —
+        // same precheck as the Cursor/Copilot branches. No kcap → neither hooks nor MCP.
         if (!installers.CapacitorOnPath()) {
-            writeLine("  [yellow]⚠[/] Kiro hooks not installed — 'kcap' is not on PATH.");
+            writeLine("  [yellow]⚠[/] Kiro integration skipped — 'kcap' is not on PATH.");
             writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
 
             return false;
         }
 
-        // Opted-in + kcap on PATH: register MCP even if the clone below fails.
+        // --skip-kiro-hooks opts out of ONLY the invasive agent clone + default-agent flip. The
+        // independent, non-invasive MCP registration (~/.kiro/settings/mcp.json) still applies —
+        // gated separately by --skip-kiro-mcp — so MCP stays eligible under --skip-kiro-hooks.
+        if (options.SkipKiro) {
+            writeLine("  [dim]· Kiro CLI hooks skipped by flag — MCP still registered (use --skip-kiro-mcp to skip that too)[/]");
+            selected = true;
+
+            return false;
+        }
+
+        var shouldInstall = options.NoPrompt || prompt("Install Kiro CLI hooks? (clones your default agent and sets it as default)");
+
+        if (!shouldInstall) {
+            // Interactive decline of the (only) Kiro prompt → skip hooks AND MCP.
+            writeLine("  [dim]· Kiro hooks not installed (you can run kcap plugin install --kiro later)[/]");
+
+            return false;
+        }
+
+        // Opted into Kiro + kcap on PATH → hooks + MCP. MCP still registers even if the clone below fails.
         selected = true;
 
         var ok = installers.InstallKiroHooks?.Invoke(paths.KiroHooksPath) ?? false;
