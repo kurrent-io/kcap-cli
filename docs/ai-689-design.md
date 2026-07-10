@@ -56,12 +56,15 @@ Stop discarding the `initialize` result; parse it into a typed `InitializeResult
   the vendor and pointing at `KCAP_CURSOR_PATH` + `agent` install. (Keep the omission behavior — just
   make it visible.)
 - **A4 auth/subscription diagnostic.** When `session/new` (or a prompt) fails in the way an
-  unauthenticated / non-Team account fails, surface an actionable message ("cursor-agent is not
-  logged in or lacks a Team subscription — run `cursor-agent login`"). Detection uses the failing
-  RPC's error text plus the presence of `authMethods`. **Caveat:** the exact unauthenticated failure
-  shape is unverified (the AI-684 probe never hit it); A4 is best-effort — it must never *mask* the
-  underlying error, only annotate it. A short live probe against a logged-out `cursor-agent` should
-  confirm the shape during implementation.
+  unauthenticated / non-Team account fails, surface an actionable *annotation* ("possible
+  auth/subscription issue — try `cursor-agent login` / verify Team tier") that **preserves the
+  original RPC error code + data verbatim** and never replaces it. Per r1: `authMethods` presence is
+  **weak evidence** (it's advertised during normal init too), so it is a hint, not a trigger — do not
+  drive the diagnosis off `authMethods` alone or off broad substring matching until the shape is
+  confirmed. Also per r1: prompt failures are currently swallowed in the background turn worker
+  (`AcpHostedAgentRuntime.cs` turn worker), so A4 must hook the actual failure site (handshake /
+  `session/new` / the surfaced turn error), not assume the error reaches the launch path. A short
+  logged-out live probe confirms the real failure shape before any string matching is added.
 
 ## 3. Workstream B — observability (PR 2)
 
@@ -70,12 +73,14 @@ Stop discarding the `initialize` result; parse it into a typed `InitializeResult
   Events, all payload-free (ids/metadata only): launch requested, handshake ok (protocolVersion +
   loadSession + model), session started, session loaded/resumed, blocking request issued+resolved
   (kind + decision, never content), reconnect attempt/success/give-up, session ended.
-- **B2 metrics stack.** Introduce a single `Meter` (`"Capacitor.Cli.Daemon.Acp"`) with counters:
-  `acp.launches`, `acp.sessions_started`, `acp.sessions_loaded`, `acp.blocking_requests` (tag: kind),
-  `acp.reconnects` (tag: outcome), `acp.failures` (tag: stage). `System.Diagnostics.Metrics` is
-  NativeAOT-safe (no reflection); **no exporter is wired** — counters are observable via
-  `dotnet-counters`/any future OTel exporter. Documented as such (acceptance is "metrics enough to
-  diagnose", not "shipped dashboards").
+- **B2 metrics stack (OPTIONAL — per r1).** A single `Meter` (`"Capacitor.Cli.Daemon.Acp"`) with
+  counters: `acp.launches`, `acp.sessions_started`, `acp.sessions_loaded`, `acp.blocking_requests`
+  (tag: kind), `acp.reconnects` (tag: outcome), `acp.failures` (tag: stage). r1 confirmed
+  `System.Diagnostics.Metrics` is not an AOT hazard, but flagged that the acceptance criterion
+  ("logs/metrics *enough to diagnose*") is **already met by B1's Info logging** — there is no existing
+  `Meter`/exporter in the repo. So B2 is **optional/nice-to-have, not required**: implement it LAST
+  within PR2, and it is the first thing to drop if PR2 gets large. No exporter is wired (observable via
+  `dotnet-counters`).
 - **B3 close the two Debug payload-leak vectors.** The Unknown-kind full-raw-update dump
   (`AcpEventTranslator.cs:106-108`) and cursor-agent stderr (`AcpChildProcess.cs:54`) currently log
   content unconditionally at Debug. Gate both behind the B4 opt-in flag; when the flag is off, log
@@ -88,32 +93,75 @@ Stop discarding the `initialize` result; parse it into a typed `InitializeResult
 
 ## 4. Workstream C — ACP process reconnect/resume (PR 3)
 
-The heart of Full scope. Today a mid-session `cursor-agent` death ends the read loop, faults pending
-requests, and finalizes the session. Replace that with a bounded resume attempt.
+The heart of Full scope, and — per spec-review r1 (3 BLOCKING) — the part that needs a real design,
+not a bullet list. Today a mid-session `cursor-agent` death ends the read loop, faults pending
+requests, and drives finalization. The three findings below are load-bearing; the revised design
+answers each.
 
-- **C1 death detection.** In `AcpHostedAgentRuntime`, distinguish an *unexpected* child exit /
-  read-loop end (process died while the session was active and no intentional stop/dispose was
-  requested) from normal teardown. Only the unexpected case triggers reconnect.
-- **C2 resume.** If `loadSession` was advertised (A2): relaunch `cursor-agent acp` (same cwd/env via
+> **r1 findings addressed here:** (B1) seq is a *forwarder* concept (runtime envelopes carry
+> placeholder `Seq=0`; the forwarder assigns real seqs on dequeue, `IAcpTranscriptSource.cs:34`,
+> `AcpTranscriptForwarder.cs:232`) — so a seq/index watermark cannot be the dedup key. (B2) a
+> `session/load` replay is NOT proven to preserve envelope boundaries/order, and a partial death-
+> boundary flush can dup-prefix or drop-suffix the boundary turn. (B3) `_connection`/`_process` are
+> `readonly`, `_updates` completes on read-loop end, and `ReadOutputAsync` returning drives orchestrator
+> finalization (`AgentOrchestrator.cs:743`), disposal/final-drain (`:1336`), `AcpCts` cancel, and
+> binding unregister (`:827,:887`) — the runtime is built for a single process lifetime and cannot
+> swap its process as originally described.
+
+- **C0 — replay-identity probe (FIRST step of PR3, before any code).** The reconnect design hinges on
+  one unknown the AI-689 probe did not resolve: *what exactly does `session/load` replay, and can a
+  replayed turn be matched to an already-forwarded one?* Probe: establish a multi-turn session, kill
+  the process, `session/load`, and capture the replayed `session/update` stream — specifically
+  whether assistant/user messages carry a **stable message id** across the original vs the replay,
+  whether **turn order** is preserved, and whether chunk coalescing differs. The result picks the C3
+  dedup key (stable id preferred; content fingerprint fallback). No reconnect code lands until C0 is
+  answered.
+
+- **C1 — reconnect owner + crash-vs-stop.** Introduce an explicit reconnect owner inside the runtime
+  (not the orchestrator). Add an `_intentionalStop` flag set by the dispose/stop paths; the read-loop
+  ending or `ReadOutputAsync` returning while `!_intentionalStop` (and `loadSession` capable) means
+  *crash → reconnect*, NOT finalize. This requires restructuring the runtime so it does not signal
+  terminal to the orchestrator on an unexpected exit: `_updates` must **not** complete, `AcpCts` must
+  **not** cancel, and the orchestrator's finalize trigger (`ReadOutputAsync` return) must be gated on
+  the runtime's reconnect *outcome* — the runtime reports "done" only after reconnect attempts are
+  exhausted or an intentional stop. `_connection`/`_process` become swappable (guarded), no longer
+  `readonly`.
+
+- **C2 — resume.** If `loadSession` was advertised (A2): relaunch `cursor-agent acp` (same cwd/env via
   the factory), `initialize` (re-run A1 protocol check + A2 capture), then
-  `session/load {sessionId, cwd, mcpServers}` with the SAME sessionId. On success the session is live
-  again and accepts prompts. Bounded attempts (default 3) with backoff; on give-up, finalize cleanly
-  (today's behavior) with a Warning + `acp.reconnects{outcome=failed}`.
-- **C3 replay dedup (subtle — from the probe).** `session/load` **replays prior history** as
-  `session/update` notifications. Those map to envelopes the forwarder has ALREADY sent. We must not
-  double-forward. Approach: the runtime tracks the highest transcript sequence already emitted before
-  the death; during a load-triggered replay it **suppresses re-emission up to that watermark** (drop
-  replayed updates whose reconstructed envelope index ≤ watermark), resuming live emission only for
-  post-watermark content. The forwarder's existing seq/ack machinery is the backstop (monotonic seq;
-  the server already ignores/acks by seq), but suppression at the source avoids relying on it for
-  correctness. Overlapping-turn single-flight (AI-688) still holds.
-- **C4 in-flight turn.** A turn interrupted by the death cannot be assumed complete. After resume,
-  the open aggregation run is flushed/closed at the death boundary (no fabricated completion); a
-  partial `AssistantText`/`Thinking` is emitted as-is. New prompts continue normally.
-- **C5 interaction vs SignalR re-bind.** C-reconnect (agent process) is orthogonal to the existing
-  `ReBindAcpSessionsAsync` (SignalR server binding). Both can fire; ordering: a process resume keeps
-  the same agentId/sessionId, so the existing binding stays valid — no re-bind needed for a pure
-  process resume. Document the interaction so the two mechanisms aren't conflated.
+  `session/load {sessionId, cwd, mcpServers}` with the SAME sessionId; swap the new process/connection
+  into the runtime and re-arm the read loop, keeping the outer channels + forwarder binding alive.
+  Bounded attempts (default 3) with backoff; on give-up, finalize cleanly (today's behavior) with a
+  Warning + `acp.reconnects{outcome=failed}`.
+
+- **C3 — content-identity dedup (replaces the seq/index watermark).** Dedup lives in the **runtime's
+  emission layer**, keyed on **content identity**, never on our assigned seq (B1) or a positional
+  index (B2). The runtime maintains a set of identities of the COMPLETE turn envelopes it has already
+  emitted (stable ACP message id if C0 finds one; else a content fingerprint over role + text/tool
+  payload). During the `session/load` replay, updates are aggregated into complete turns exactly as in
+  live operation; each reconstructed complete turn is emitted **only if its identity is not already in
+  the set**. This is order- and boundary-independent: already-forwarded turns are dropped regardless of
+  how the replay re-chunks them; genuinely new content (incl. the completed boundary turn, see C4)
+  passes through. The forwarder seq/ack remains the transport backstop but is explicitly NOT relied on
+  for replay correctness. AI-688 single-flight still holds.
+
+- **C4 — boundary turn: do NOT flush a partial.** Revised from r1: at the death boundary the in-flight
+  aggregation run is **discarded, not flushed** (no partial `AssistantText`/`Thinking` emitted, no
+  fabricated completion). Because the partial was never emitted, its identity is not in the C3 set, so
+  when `session/load` replays that turn *complete*, C3 emits it exactly once. This removes the
+  dup-prefix / drop-suffix hazard entirely. (If reconnect ultimately fails, the interrupted turn is
+  simply absent — acceptable, and better than a forwarded partial that never gets corrected.)
+
+- **C5 — interaction vs SignalR re-bind.** C-reconnect (agent process) is orthogonal to the existing
+  `ReBindAcpSessionsAsync` (SignalR server binding). A pure process resume keeps the same
+  agentId/sessionId, so the existing SignalR binding stays valid — no re-bind needed. Documented so the
+  two mechanisms aren't conflated.
+
+**Scope note:** C1's runtime restructure (swappable process/connection, deferred finalize, crash-vs-stop
+gating) is the largest single change in AI-689 and touches AI-688's teardown ordering directly. It gets
+its own PR (PR3), its own C0 probe, and a deterministic "died mid-transcript → replay → dedup" test
+suite. If C0 reveals `session/load` replay is not reliably matchable, reconnect is re-scoped to a
+follow-up issue rather than shipped unsound (flagged for owner decision at that point).
 
 ## 5. Workstream D — docs + security posture (PR 4, mergeable first)
 
@@ -131,13 +179,23 @@ requests, and finalizes the session. Replace that with a bounded resume attempt.
 
 ## 6. PR sequencing
 
-1. **PR 4 (docs + security)** first — pure prose, zero code risk, unblocks dogfooding immediately.
-2. **PR 1 (diagnostics + negotiation)** — small, self-contained; also lands the typed `InitializeResult`
-   that PR 3 depends on.
-3. **PR 2 (observability)** — logging + metrics + leak fixes + raw-frame flag.
-4. **PR 3 (reconnect)** — largest; depends on PR 1's `InitializeResult`/capability capture. Includes a
-   short live probe to confirm the death→relaunch→`session/load` path end-to-end (gated
-   `KCAP_ACP_LIVE`), mirroring AI-688's live test.
+Per r1: docs describe only what's shipped — future knobs (`KCAP_ACP_DEBUG_FRAMES`, reconnect
+limitations) are documented **with their implementing PR**, not up front.
+
+1. **PR 4 (docs + security)** first — pure prose, zero code risk, unblocks dogfooding. Documents only
+   *current* reality: hosted-Cursor/ACP setup vs recording-hooks, `cursor-agent acp` + version + Team
+   tier + `login`, the env vars that exist today (`KCAP_CURSOR_PATH`, `KCAP_CURSOR_MODEL`, `KCAP_URL`),
+   current limitations (no local-attach input/keys/resize, no terminal-output), and the verbatim-
+   transcript security posture. **Does NOT** pre-document `KCAP_ACP_DEBUG_FRAMES` or reconnect.
+2. **PR 1 (diagnostics + negotiation)** — small, self-contained; lands the typed `InitializeResult`
+   that PR 3 depends on. Includes the A4 logged-out live probe.
+3. **PR 2 (observability)** — Info logging + leak-vector fixes + opt-in raw-frame flag; **B2 metrics
+   optional/last**. Ships the `KCAP_ACP_DEBUG_FRAMES` doc **with** this PR.
+4. **PR 3 (reconnect)** — largest; depends on PR 1's `InitializeResult`/capability capture. Starts with
+   the **C0 replay-identity probe**, then the C1 runtime restructure + C3 content-dedup, then a gated
+   `KCAP_ACP_LIVE` end-to-end resume test and a deterministic died-mid-transcript→replay→dedup unit
+   suite. Ships the reconnect-limitations doc **with** this PR. Re-scopes to a follow-up if C0 shows
+   replay is not reliably matchable.
 
 Each PR: unit tests (fake-agent harness already supports scripted server-requests, initialize
 capture, prompt scripts); NativeAOT publish gate warning-free; kcap-cli conventions (no Linear ids in
@@ -161,9 +219,15 @@ comments; concise; `JsonElementExtensions`; README sync for new env vars).
 
 - **R1 (A4):** unauthenticated `cursor-agent` failure shape unverified — confirm via a logged-out
   live probe during PR 1; A4 annotates, never masks.
-- **R2 (C3):** replay-dedup watermark correctness is the riskiest piece — the forwarder seq/ack is the
-  backstop, but source suppression must be covered by a deterministic "died mid-transcript then
-  replays" test.
+- **R2 (C3/C4 — reworked after r1):** replay-dedup no longer uses a seq/index watermark (unsafe — seq
+  is a forwarder concept, replay boundaries unproven). It now uses **content identity** at the runtime
+  emission layer + **not flushing the death-boundary partial**. Residual risk: the dedup key itself —
+  whether `session/load` replay carries a stable message id (preferred) or only content (fingerprint
+  fallback, with collision risk for identical turns). **C0 probe resolves this before code**; a
+  deterministic died-mid-transcript→replay→dedup test locks it.
+- **R2b (C1 restructure):** making the runtime swap its process + defer finalize touches AI-688's
+  teardown ordering (`ReadOutputAsync`→finalize, `AcpCts`, `_updates` completion, binding unregister).
+  Highest-blast-radius change; isolated to PR3 with focused tests, and re-scopable if C0 fails.
 - **R3 (B2):** metrics have no exporter yet — acceptable per acceptance ("enough to diagnose",
   observable via `dotnet-counters`); a real exporter is out of scope.
 - **R4:** reconnect could mask a genuinely-crashing agent by relaunching repeatedly — the bounded
