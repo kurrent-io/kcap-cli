@@ -238,10 +238,10 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      # npm trusted publishing (OIDC) requires npm >= 11.5.1. Node 24 ships
-      # with npm 11.x but the exact patch can lag, so pin to latest explicitly.
+      # npm trusted publishing (OIDC) requires npm >= 11.5.1. Pin a known-good
+      # npm 11 release; npm 12.0.0 has a broken bundled sigstore dependency.
       - name: Upgrade npm for trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@11.18.0
 
       - name: Extract version from tag
         id: version
