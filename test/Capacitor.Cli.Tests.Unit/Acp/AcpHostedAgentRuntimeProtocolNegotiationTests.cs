@@ -141,7 +141,9 @@ public class AcpHostedAgentRuntimeProtocolNegotiationTests {
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => h.Runtime.StartAsync("/abs/worktree", "do the thing", h.Cts.Token).WaitAsync(HangGuard));
 
-        await Assert.That(ex!.Message).Contains("version 1");
+        await Assert.That(ex!.Message).Contains("malformed");   // reported as a parse failure, not "negotiated version 0"
+        await Assert.That(ex.Message).Contains("version 1");
+        await Assert.That(ex.Message).DoesNotContain("version 0");
         await Assert.That(ex.Message).DoesNotContain("cursor-agent login");
     }
 }

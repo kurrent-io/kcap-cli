@@ -149,6 +149,18 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     sealed class AcpProtocolVersionException(string message) : InvalidOperationException(message);
 
     /// <summary>
+    /// Makes an error message safe to fold into a forwarded launch-failure string: collapses line
+    /// breaks to spaces and caps the length. The source can be an agent-controlled JSON-RPC
+    /// <c>error.message</c> (via <see cref="AcpRpcException"/>), which could otherwise be arbitrarily
+    /// long or multi-line and degrade logs/UI downstream. The full original exception is retained as
+    /// the thrown exception's <c>InnerException</c>, so nothing is lost for daemon-side diagnostics.
+    /// </summary>
+    static string SanitizeForForward(string message, int maxLength = 500) {
+        var oneLine = message.ReplaceLineEndings(" ").Trim();
+        return oneLine.Length <= maxLength ? oneLine : oneLine[..maxLength] + "…";
+    }
+
+    /// <summary>
     /// <paramref name="requestInteraction"/> is optional (AI-686) — when null, matches AI-684's
     /// original behavior exactly: <see cref="AcpConnection.OnServerRequest"/> stays unset, and any
     /// <c>session/request_permission</c>/<c>elicitation/create</c> the agent sends gets the
@@ -291,10 +303,9 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
 
             var initializeResultElement = await _connection.RequestAsync("initialize", initializeParams, ct).ConfigureAwait(false);
 
-            // Defensive: a malformed initialize response (wrong-typed protocolVersion, etc.) must
-            // not surface as a raw JsonException — it falls back to negotiatedVersion 0 below,
-            // which the version check rejects with the same clear, actionable message a real
-            // mismatch would get.
+            // Defensive: a malformed initialize response (wrong-typed protocolVersion, etc.) must not
+            // surface as a raw JsonException. We distinguish a parse failure from a real version
+            // mismatch so the error doesn't misreport a malformed response as "negotiated version 0".
             InitializeResult? initializeResult;
             try {
                 initializeResult = JsonSerializer.Deserialize(initializeResultElement.GetRawText(), CapacitorJsonContext.Default.InitializeResult);
@@ -302,22 +313,22 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
                 initializeResult = null;
             }
 
-            var negotiatedVersion = initializeResult?.ProtocolVersion ?? 0;
-
-            // This build only ever speaks version 1 — fail loud and clearly BEFORE session/new
-            // rather than proceeding against an agent that negotiated something else.
-            if (negotiatedVersion != 1)
+            // This build only ever speaks version 1 — fail loud and clearly BEFORE session/new.
+            if (initializeResult is null)
                 throw new AcpProtocolVersionException(
-                    $"cursor-agent negotiated ACP protocol version {negotiatedVersion}; this build supports version 1 — update kcap or cursor-agent.");
+                    "cursor-agent's initialize response was malformed or omitted protocolVersion; this build supports ACP protocol version 1 — update kcap or cursor-agent.");
+            if (initializeResult.ProtocolVersion != 1)
+                throw new AcpProtocolVersionException(
+                    $"cursor-agent negotiated ACP protocol version {initializeResult.ProtocolVersion}; this build supports version 1 — update kcap or cursor-agent.");
 
             // Missing agentCapabilities defensively means "advertises nothing" (loadSession=false),
             // not a throw — captured for a later reconnect path (only exposed here; nothing acts on
             // it yet).
-            _negotiatedCapabilities = initializeResult?.AgentCapabilities ?? new AgentCapabilities(LoadSession: false);
+            _negotiatedCapabilities = initializeResult.AgentCapabilities ?? new AgentCapabilities(LoadSession: false);
 
             _logger.LogDebug(
                 "ACP: negotiated protocol version {ProtocolVersion}, loadSession={LoadSession}.",
-                negotiatedVersion, _negotiatedCapabilities.LoadSession);
+                initializeResult.ProtocolVersion, _negotiatedCapabilities.LoadSession);
 
             var sessionNewParams = JsonSerializer.SerializeToElement(
                 new SessionNewParams(Cwd: cwd, McpServers: NoMcpServers),
@@ -333,14 +344,15 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
             // Already actionable and NOT an auth issue — rethrow verbatim, without the auth hint.
             throw;
         } catch (Exception ex) when (ex is not OperationCanceledException) {
-            // Preserve the original RPC/parse error verbatim — folded into this message via
-            // ex.Message, with ex kept as InnerException — and append a generic, actionable hint.
-            // Deliberately conservative: the exact wire shape of a logged-out or unsubscribed
-            // cursor-agent failure is unverified, so this does NOT pattern-match specific error text;
-            // a live logged-out probe to pin down the precise shape is a follow-up. Never masks the
-            // original error, only annotates it.
+            // Fold the original error's message into this one (single-lined + length-capped, since an
+            // AcpRpcException carries the agent's arbitrary JSON-RPC error.message and this text is
+            // forwarded to the server/UI via LaunchFailedAsync) and append a generic, actionable hint.
+            // The full original exception is kept as InnerException, so daemon logs retain everything.
+            // Deliberately conservative: the exact wire shape of a logged-out/unsubscribed cursor-agent
+            // failure is unverified, so this does NOT pattern-match specific error text (a live
+            // logged-out probe is a follow-up). Never masks the original error, only annotates it.
             throw new InvalidOperationException(
-                $"ACP handshake (initialize/session-new) failed: {ex.Message} — if this is an auth/subscription issue, run `cursor-agent login` and verify a Team-tier subscription.",
+                $"ACP handshake (initialize/session-new) failed: {SanitizeForForward(ex.Message)} — if this is an auth/subscription issue, run `cursor-agent login` and verify a Team-tier subscription.",
                 ex);
         }
 
