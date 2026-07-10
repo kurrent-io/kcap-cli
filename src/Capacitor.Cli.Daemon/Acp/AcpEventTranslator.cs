@@ -107,10 +107,12 @@ internal static partial class AcpEventTranslator {
 
             case AcpUpdateKind.Unknown:
             default:
-                if (logger is not null) {
+                // Gate on IsEnabled(Debug) first so the default path never materializes the raw JSON
+                // (GetRawText allocates the full payload) when Debug logging is disabled.
+                if (logger is not null && logger.IsEnabled(LogLevel.Debug)) {
                     // KCAP_ACP_DEBUG_FRAMES gate (Off by default): the raw update JSON can carry
                     // prompt/tool/file content, so it is only ever logged verbatim when the operator
-                    // has explicitly opted in — otherwise this logs shape (kind + length) only.
+                    // has explicitly opted in — otherwise this logs shape (length) only.
                     if (debugFrames)
                         LogUnknownUpdateFull(logger, AcpDebugFrameLog.Cap(update.Raw?.GetRawText() ?? ""));
                     else

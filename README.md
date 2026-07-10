@@ -756,6 +756,12 @@ KCAP_DAEMON_LOG_LEVEL=debug kcap daemon    # env var; read directly, works in an
 
 Accepted values: `trace`, `debug`, `information` (default), `warning`, `error`, `critical`, `none`. The `--log-level` flag wins over the env var when both are set. `Debug` is verbose — it also enables the SignalR client's framework logs — so use it for a diagnostic window rather than steady state.
 
+**Full ACP frame logging (`KCAP_ACP_DEBUG_FRAMES`).** Off by default. When set to `1`/`true`, a hosted Cursor (ACP) session logs full inbound/outbound JSON-RPC frames, raw unrecognized `session/update` payloads, and `cursor-agent` stderr at `Debug` (length-capped); with it off, only their shape (kind + length) is logged. **These frames can contain prompts, tool arguments, and file contents** — enable it only for a diagnostic window, never in a shared or persistently-logged environment. It needs `Debug` logging on to be visible:
+
+```bash
+KCAP_ACP_DEBUG_FRAMES=1 KCAP_DAEMON_LOG_LEVEL=debug kcap daemon
+```
+
 #### Diagnosing a hard death
 
 A daemon killed by an uncatchable `SIGKILL` (macOS **jetsam** / Linux **OOM**, `kill -9`, power loss) or a hard native crash can't log its own exit — the process is gone before any handler runs. Two things help tell those apart from a normal stop:

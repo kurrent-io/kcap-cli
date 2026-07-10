@@ -16,6 +16,8 @@ public class DaemonDebugFramesFlagTests {
     [Arguments("true")]
     [Arguments("TRUE")]
     [Arguments("True")]
+    [Arguments(" 1 ")]
+    [Arguments("  true  ")]
     public async Task ParseDebugFramesFlag_OnValues_ReturnsTrue(string input) {
         await Assert.That(DaemonRunner.ParseDebugFramesFlag(input)).IsTrue();
     }

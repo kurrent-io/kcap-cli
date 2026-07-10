@@ -425,15 +425,18 @@ internal sealed partial class AcpConnection : IAsyncDisposable {
     }
 
     async Task WriteLineAsync(string json, CancellationToken ct) {
-        if (_debugFrames)
-            LogOutboundFrame(AcpDebugFrameLog.Cap(json));
-
         var bytes = Encoding.UTF8.GetBytes(json + "\n");
 
         await _writeGate.WaitAsync(ct).ConfigureAwait(false);
         try {
             await _writeStream.WriteAsync(bytes, ct).ConfigureAwait(false);
             await _writeStream.FlushAsync(ct).ConfigureAwait(false);
+
+            // Log the outbound frame only after it is actually on the wire — and still under the gate,
+            // so the debug log order matches wire order. A cancelled/failed write skips this, never
+            // leaving a line that implies a frame was sent when it wasn't.
+            if (_debugFrames)
+                LogOutboundFrame(AcpDebugFrameLog.Cap(json));
         } finally {
             _writeGate.Release();
         }

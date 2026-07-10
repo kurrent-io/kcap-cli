@@ -436,7 +436,7 @@ public static partial class DaemonRunner {
     /// pure predicate (mirroring <see cref="ParseLogLevel"/>) so it's testable without an env var.
     /// </summary>
     internal static bool ParseDebugFramesFlag(string? value) =>
-        value == "1" || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+        value?.Trim() is { } v && (v == "1" || string.Equals(v, "true", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// True when a "cursor" <see cref="IHostedAgentRuntimeFactory"/> is registered but
