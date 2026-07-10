@@ -141,7 +141,7 @@ kcap import --opencode          # only OpenCode
 kcap import --antigravity       # only Antigravity
 ```
 
-> **Pi** has no shell hooks, so live capture uses a shipped Pi extension rather than a hooks file: run `kcap plugin install --pi` (or accept the `kcap setup` prompt) to write `~/.pi/agent/extensions/kcap.ts`, which `pi` auto-loads and streams each session live. Historical `kcap import --pi` works with or without it.
+> **Pi** has no shell hooks, so live capture uses a shipped Pi extension rather than a hooks file: run `kcap plugin install --pi` (or accept the `kcap setup` prompt) to write `~/.pi/agent/extensions/kcap.ts`, which `pi` auto-loads and streams each session live. Because Pi also ships no built-in MCP, the same command installs an MCP-bridge extension (`~/.pi/agent/extensions/kcap-mcp.ts`, opt out `--skip-pi-mcp`) that exposes the kcap MCP servers as native Pi tools, plus a steering block in `~/.pi/agent/AGENTS.md` (opt out `--skip-pi-instructions`). Historical `kcap import --pi` works with or without any of it.
 
 > **OpenCode** likewise has no shell hooks: live capture uses a shipped OpenCode plugin. Run `kcap plugin install --opencode` (or accept the `kcap setup` prompt) to write `~/.config/opencode/plugins/kcap.ts`, which `opencode` auto-loads and streams each session live (`vendor=opencode`). Subagents (the `task` tool / `@agent`) are captured too — the plugin fetches each child session via the SDK and streams it, so it nests under the parent in the trace. Historical `kcap import --opencode` reads OpenCode's SQLite database (`~/.local/share/opencode/opencode.db`) and imports child sessions as subagents, so it backfills sessions from before the plugin was installed.
 
@@ -637,6 +637,24 @@ kcap plugin remove --kiro                   # restore previous default, delete k
 
 Kiro writes an append-only JSONL log per session at `~/.kiro/sessions/cli/{id}.jsonl` (plus a sibling `{id}.json` for cwd / model / title; honours `KIRO_HOME`), so the kcap watcher tails it like every other vendor. Lifecycle comes from Kiro's `agentSpawn` hook (fires every prompt → deduped server-side); since Kiro has **no session-end trigger**, the watcher synthesizes session-end on `kiro-cli` exit. Historical sessions import via `kcap import --kiro`. Kiro persists no token counts, so Kiro sessions show no token usage by design.
 
+#### Pi extension
+
+Pi (`badlogic/pi-mono`) is detected via `~/.pi/agent/` or the `pi` binary on `PATH`. Pi has **no shell hooks** and **no built-in MCP** — it exposes an in-process extension API — so `install --pi` writes dependency-free TypeScript extensions that `pi` auto-loads at startup:
+
+- **`~/.pi/agent/extensions/kcap.ts`** — the live-ingest extension (shells out to `kcap hook --pi` on session start/end).
+- **`~/.pi/agent/extensions/kcap-mcp.ts`** — the MCP bridge (opt out `--skip-pi-mcp`). At load it spawns each `kcap mcp <name>` server as a stdio subprocess, performs the MCP handshake, and registers every advertised tool as a native Pi tool `kcap_<server>_<tool>`, torn down on session exit.
+- **`~/.pi/agent/AGENTS.md`** — a kcap-owned, marker-delimited steering block (opt out `--skip-pi-instructions`, non-destructive — your own instructions are preserved) nudging Pi to prefer the kcap tools.
+
+`kcap` must be on `PATH` (both extensions shell out to it). Restart any running `pi` session after installing.
+
+```bash
+kcap plugin install --pi                    # write kcap.ts + kcap-mcp.ts + AGENTS.md block
+kcap plugin install --pi --skip-pi-mcp      # ingest + steering only, no MCP bridge
+kcap plugin remove --pi                     # delete both extensions + strip the AGENTS.md block
+```
+
+Live sessions stream from `~/.pi/agent/sessions/` (honours `PI_CODING_AGENT_DIR`); historical sessions import via `kcap import --pi`.
+
 #### SST OpenCode plugin
 
 SST OpenCode is detected via `~/.config/opencode/` (or `~/.local/share/opencode/`) or the `opencode` binary on `PATH`. OpenCode has **no shell hooks** — it exposes an in-process plugin API — so `install --opencode` writes a dependency-free plugin to `~/.config/opencode/plugins/kcap.ts`, which `opencode` auto-loads at startup. Restart any running `opencode` session after installing.
@@ -924,7 +942,7 @@ kcap uninstall --project --yes  # also strip project-scope hooks in cwd's repo
 kcap uninstall --keep-config    # remove integrations, keep ~/.config/kcap
 ```
 
-`uninstall` covers every supported agent: it stops running daemons and watcher processes, strips kcap entries from user-level Claude Code, Codex CLI, Cursor, and Copilot CLI hook files (preserving any non-kcap entries), deletes the Pi live-ingest extension (`~/.pi/agent/extensions/kcap.ts`) and the OpenCode plugin (`~/.config/opencode/plugins/kcap.ts`), removes the kcap capture plugin from Antigravity's `~/.gemini/config/plugins/kcap/`, removes agent skills under `~/.agents/skills/` (plus the legacy `~/.codex/skills/kcap-*` folders), and deletes `~/.config/kcap/`.
+`uninstall` covers every supported agent: it stops running daemons and watcher processes, strips kcap entries from user-level Claude Code, Codex CLI, Cursor, and Copilot CLI hook files (preserving any non-kcap entries), deletes the Pi extensions (`~/.pi/agent/extensions/kcap.ts` + the `kcap-mcp.ts` bridge) and strips kcap's block from `~/.pi/agent/AGENTS.md`, deletes the OpenCode plugin (`~/.config/opencode/plugins/kcap.ts`), removes the kcap capture plugin from Antigravity's `~/.gemini/config/plugins/kcap/`, removes agent skills under `~/.agents/skills/` (plus the legacy `~/.codex/skills/kcap-*` folders), and deletes `~/.config/kcap/`.
 
 `--project` additionally cleans up `<repo>/.claude/settings.local.json` and `<repo>/.codex/hooks.json` in the current git working tree (errors if you're not inside one). Cursor only has a user-scope `hooks.json`, so `--project` does not affect it. Project-scope hooks in other repos are not touched — re-run from each repo that has them.
 

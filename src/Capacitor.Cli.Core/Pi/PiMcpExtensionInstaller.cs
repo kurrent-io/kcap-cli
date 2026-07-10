@@ -1,21 +1,12 @@
 namespace Capacitor.Cli.Core.Pi;
 
 /// <summary>
-/// Installs / removes kcap's <b>MCP-bridge</b> extension for Pi. Pi ships no
-/// built-in MCP (<c>badlogic/pi-mono</c> deliberately omits it), so there is no
-/// JSON <c>mcpServers</c> config to write the way the other harnesses have.
-/// Instead kcap ships a second TypeScript extension
-/// (<c>~/.pi/agent/extensions/kcap-mcp.ts</c>) that Pi auto-discovers: at load it
-/// spawns each <c>kcap mcp &lt;name&gt;</c> stdio server as a persistent
-/// subprocess, performs the MCP handshake, and re-registers every advertised tool
-/// as a native Pi tool (<c>kcap_&lt;server&gt;_&lt;tool&gt;</c>) whose
-/// <c>execute()</c> proxies <c>tools/call</c> back to that subprocess.
-///
-/// <para>This is a sibling of <see cref="PiExtensionInstaller"/> (the live-ingest
-/// extension) — same embedded-const + version-marker shape, but a distinct file
-/// and marker so the two install/refresh/remove independently. <see cref="ExtensionContent"/>
-/// is the single source of truth (embedding it as a const keeps NativeAOT happy —
-/// no manifest resource reflection).</para>
+/// Installs / removes kcap's MCP-bridge extension for Pi. Pi has no built-in MCP, so
+/// instead of a JSON <c>mcpServers</c> config kcap ships a TypeScript extension
+/// (<c>~/.pi/agent/extensions/kcap-mcp.ts</c>) that spawns the <c>kcap mcp &lt;name&gt;</c>
+/// servers and registers their tools as native Pi tools. Sibling of
+/// <see cref="PiExtensionInstaller"/> with a distinct file + marker; <see cref="ExtensionContent"/>
+/// is the embedded source of truth (const, not a resource — NativeAOT-safe).
 /// </summary>
 public static class PiMcpExtensionInstaller {
     public const string MarkerFileName = ".kcap-mcp-extension-version";
@@ -28,18 +19,10 @@ public static class PiMcpExtensionInstaller {
     /// </summary>
     public const string ExtensionContent =
         """
-        // kcap-mcp.ts — Kurrent Capacitor MCP-bridge extension for Pi (badlogic/pi-mono).
-        //
-        // Installed by `kcap plugin install --pi` into ~/.pi/agent/extensions/kcap-mcp.ts.
-        // Pi has no built-in MCP, so this extension bridges the kcap stdio MCP servers
-        // (`kcap mcp <name>`) into Pi as native tools: at load it spawns each server as a
-        // persistent subprocess, performs the MCP handshake, and re-registers every tool
-        // the server advertises as a Pi tool named `kcap_<server>_<tool>` whose execute()
-        // proxies `tools/call` back to that subprocess.
-        //
-        // Dependency-free (only the node:child_process builtin; no pi SDK import) and
-        // fail-safe: each server is spawned/handshaken/registered independently so one
-        // bad server never blocks the others or the pi session.
+        // kcap-mcp.ts — Kurrent Capacitor MCP-bridge extension for Pi.
+        // Pi has no built-in MCP, so this bridges the kcap stdio servers (`kcap mcp <name>`)
+        // into Pi as native tools: spawn each, handshake, register its tools. Dependency-free
+        // (node:child_process only) and fail-safe — one bad server never blocks the rest.
 
         import { spawn } from "node:child_process";
 
@@ -51,6 +34,11 @@ public static class PiMcpExtensionInstaller {
         // Bound the initialize + tools/list handshake per server so a hung server can
         // never stall pi's startup indefinitely.
         const HANDSHAKE_TIMEOUT_MS = 10000;
+
+        // Bound each tools/call so a stalled (but not exited) server can't hang a pi tool
+        // forever. Generous — well above the flows server's own long-poll/round timeouts,
+        // since it's only a backstop; on timeout the error surfaces as tool-result content.
+        const TOOL_CALL_TIMEOUT_MS = 1200000; // 20 min
 
         // A minimal line-delimited JSON-RPC 2.0 client over one `kcap mcp <name>`
         // subprocess. No external MCP SDK.
@@ -68,12 +56,22 @@ public static class PiMcpExtensionInstaller {
 
           // spawn + MCP handshake (initialize -> notifications/initialized).
           async start(): Promise<void> {
-            const child = spawn("kcap", ["mcp", this.server], { stdio: ["pipe", "pipe", "ignore"] });
+            const child = spawn("kcap", ["mcp", this.server], { stdio: ["pipe", "pipe", "pipe"] });
             this.child = child;
             child.on("exit", () => this.fail(new Error("kcap mcp " + this.server + " exited")));
             child.on("error", (e: any) => this.fail(e instanceof Error ? e : new Error(String(e))));
             child.stdout.setEncoding("utf8");
             child.stdout.on("data", (chunk: string) => this.onData(chunk));
+            // Forward the server's stderr (its primary diagnostics channel) with a prefix so
+            // failures are debuggable; kept off stdout so it never corrupts the JSON-RPC stream.
+            if (child.stderr) {
+              child.stderr.setEncoding("utf8");
+              child.stderr.on("data", (chunk: string) => {
+                for (const line of String(chunk).split("\n")) {
+                  if (line.trim()) console.error("[kcap-mcp " + this.server + "] " + line);
+                }
+              });
+            }
 
             await this.request("initialize", {
               protocolVersion: "2024-11-05",
@@ -165,7 +163,7 @@ public static class PiMcpExtensionInstaller {
           }
 
           callTool(name: string, args: any): Promise<any> {
-            return this.request("tools/call", { name, arguments: args || {} });
+            return this.request("tools/call", { name, arguments: args || {} }, TOOL_CALL_TIMEOUT_MS);
           }
 
           stop() {
@@ -224,7 +222,9 @@ public static class PiMcpExtensionInstaller {
                   HANDSHAKE_TIMEOUT_MS,
                   "kcap mcp " + server + " handshake",
                 );
-              } catch {
+              } catch (e: any) {
+                // Log why this server was skipped so its tools' absence is explainable.
+                console.error("[kcap-mcp] " + server + " unavailable, skipping: " + ((e && e.message) || String(e)));
                 client.stop(); // skip this server; leave the others registered
                 return;
               }
