@@ -40,6 +40,18 @@ public class GeminiPathsTests {
         }
     }
 
+    [Test]
+    public async Task GeminiMd_defaults_to_dot_gemini_under_home() {
+        await Assert.That(GeminiPaths.GeminiMd(home: "/fake/home", geminiCliHome: null))
+            .IsEqualTo(Path.Combine("/fake/home", ".gemini", "GEMINI.md"));
+    }
+
+    [Test]
+    public async Task GeminiMd_follows_GEMINI_CLI_HOME_relocation() {
+        await Assert.That(GeminiPaths.GeminiMd(home: "/fake/home", geminiCliHome: "/foo"))
+            .IsEqualTo(Path.Combine("/foo", ".gemini", "GEMINI.md"));
+    }
+
     // AI-1158: ~/.gemini is shared with Google Antigravity — an Antigravity-only
     // home must NOT read as a Gemini install, but a real Gemini marker still must.
     [Test]

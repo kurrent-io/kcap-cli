@@ -1494,67 +1494,166 @@ public static class PluginCommand {
 
         var refreshOnly = args.Contains("--if-installed");
 
-        switch (refreshOnly) {
-            case true when !GeminiHooksInstaller.IsInstalled(settingsPath):
-            case true when GeminiHooksInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current():
-                return 0;
-            // Gemini's settings.json writes the bare `kcap hook --gemini` command;
-            // verify Gemini will actually find kcap on PATH. Skip on the
-            // postinstall (--if-installed) refresh, same as the Cursor branch.
-            case false when !AgentDetector.IsInstalled("kcap"):
-                await env.Stderr.WriteLineAsync(
-                    "Cannot install Gemini hooks: 'kcap' is not on PATH. "
-                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
-                );
+        // Refresh-only mode never touches a machine that never opted in.
+        if (refreshOnly && !GeminiHooksInstaller.IsInstalled(settingsPath)) return 0;
 
-                return 1;
-        }
-
-        if (!InstallGeminiHooks(settingsPath)) {
-            if (refreshOnly) return 0;
-
+        // Fresh install needs kcap on PATH: settings.json writes the bare `kcap hook --gemini`
+        // command, so Gemini must find kcap on PATH. Skipped on the --if-installed (postinstall) path.
+        if (!refreshOnly && !AgentDetector.IsInstalled("kcap")) {
             await env.Stderr.WriteLineAsync(
-                $"Could not install Gemini hooks. If {settingsPath} exists, make sure it is valid JSON — "
-              + "kcap leaves an unparseable settings.json untouched rather than overwrite your settings. "
-              + "Fix or remove it, then re-run."
+                "Cannot install Gemini hooks: 'kcap' is not on PATH. "
+              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
             );
 
             return 1;
         }
 
-        await env.Stdout.WriteLineAsync(
-            refreshOnly
-                ? $"Gemini hooks refreshed ({settingsPath})"
-                : $"Gemini hooks installed ({settingsPath})"
-        );
+        // Write hooks unless a refresh finds them already at the current version. Even when the hooks
+        // write is skipped, still (re)register MCP + install instructions below: MCP shares settings.json
+        // but instructions live in a separate GEMINI.md, and both must be healed if a prior write failed
+        // (warning-only) or was deleted.
+        // Treat hooks as "current" only when the host file ALSO exists. A lone marker (settings.json
+        // deleted by hand) must NOT let a refresh skip the hook write — otherwise the MCP registration
+        // below would recreate settings.json with only `mcpServers`, leaving hooks missing while the
+        // marker stays current, so later refreshes never restore them.
+        var hooksCurrent = refreshOnly && File.Exists(settingsPath)
+                        && GeminiHooksInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current();
+        var freshHookFailure = false;
+        if (!hooksCurrent) {
+            if (InstallGeminiHooks(settingsPath)) {
+                await env.Stdout.WriteLineAsync(
+                    refreshOnly
+                        ? $"Gemini hooks refreshed ({settingsPath})"
+                        : $"Gemini hooks installed ({settingsPath})"
+                );
+            } else if (!refreshOnly) {
+                // Fresh install: the shared settings.json hook write failed (e.g. invalid JSON). Report
+                // it and return non-zero, but DON'T bail early — the independent ~/.gemini/GEMINI.md
+                // block still installs below (MCP shares settings.json, so it just fails-closed too).
+                await env.Stderr.WriteLineAsync(
+                    $"Could not install Gemini hooks. If {settingsPath} exists, make sure it is valid JSON — "
+                  + "kcap leaves an unparseable settings.json untouched rather than overwrite your settings. "
+                  + "Fix or remove it, then re-run."
+                );
 
-        return 0;
+                freshHookFailure = true;
+            } else {
+                // Refresh: the hook write failed, but instructions live in a separate file and MCP is
+                // independent + idempotent — warn and still heal them below rather than bail.
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not refresh Gemini hooks ({settingsPath}); continuing with MCP + instructions.");
+            }
+        }
+
+        // Register the kcap MCP servers into the shared ~/.gemini/settings.json (mcpServers block) so
+        // Gemini picks them up with no manual JSON edit. Non-destructive + idempotent. Never fails the
+        // install: a write error is a warning, not an error code (mirrors Cursor/Copilot).
+        if (!args.Contains("--skip-gemini-mcp"))
+            await RegisterGeminiMcpServersAsync(env, settingsPath);
+
+        // Install kcap's agent-instructions block into ~/.gemini/GEMINI.md so Gemini's model is steered
+        // toward the kcap MCP tools. Non-destructive (only our marker block) + idempotent. Never fails.
+        if (!args.Contains("--skip-gemini-instructions"))
+            await InstallGeminiInstructionsAsync(env);
+
+        // Non-zero only when a FRESH hook install failed (the integration is incomplete) — the
+        // independent GEMINI.md steering above was still installed.
+        return freshHookFailure ? 1 : 0;
+    }
+
+    /// <summary>
+    /// Registers the kcap MCP servers in the shared <c>~/.gemini/settings.json</c> (<c>mcpServers</c>
+    /// block, Standard shape) so Gemini loads them without a manual JSON edit. Writes to the SAME
+    /// <paramref name="settingsPath"/> the hooks use (honoring <c>--gemini-settings-path</c>).
+    /// Never fails the install: a write error is a warning, not an error code.
+    /// </summary>
+    static async Task RegisterGeminiMcpServersAsync(PluginEnvironment env, string settingsPath) {
+        var change = JsonMcpConfigWriter.Register(
+            settingsPath, KcapMcpServers.All, McpConfigShape.Gemini, cwd: null, new McpMarker("gemini"));
+
+        switch (change) {
+            case JsonMcpConfigWriter.Change.Updated:
+                await env.Stdout.WriteLineAsync($"Gemini MCP servers registered ({settingsPath}).");
+                break;
+            case JsonMcpConfigWriter.Change.Failed:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {settingsPath} to register Gemini MCP servers.");
+                break;
+            // Unchanged: silent — same as Cursor/Copilot's already-registered case.
+        }
+    }
+
+    /// <summary>
+    /// Installs kcap's marker-delimited instructions block into <c>~/.gemini/GEMINI.md</c> (Gemini's
+    /// global context file) so Gemini's model is steered toward the kcap tools. Non-destructive (only
+    /// our block). Never fails the install: a write error is a warning.
+    /// </summary>
+    static async Task InstallGeminiInstructionsAsync(PluginEnvironment env) {
+        var change = AgentInstructionsWriter.Write(env.GeminiInstructionsMd, KcapAgentInstructions.Body);
+
+        switch (change) {
+            case AgentInstructionsWriter.Change.Updated:
+                await env.Stdout.WriteLineAsync($"Gemini instructions installed ({env.GeminiInstructionsMd}).");
+                break;
+            case AgentInstructionsWriter.Change.Failed:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {env.GeminiInstructionsMd} to install Gemini instructions.");
+                break;
+            // Unchanged: silent.
+        }
     }
 
     static async Task<int> RemoveGemini(string[] args, PluginEnvironment env) {
         var settingsPath = GetArg(args, "--gemini-settings-path") ?? env.GeminiSettingsJson;
 
-        if (!File.Exists(settingsPath)) {
+        var hooksFailed = false;
+        var mcpFailed = false;
+
+        // Hooks live in the shared settings.json — only removable if the file exists.
+        if (File.Exists(settingsPath)) {
+            try {
+                var removed = RemoveGeminiHooks(settingsPath);
+
+                await env.Stdout.WriteLineAsync(
+                    removed
+                        ? $"Gemini hooks removed ({settingsPath})"
+                        : "Gemini hooks were not installed."
+                );
+            } catch (Exception ex) {
+                await env.Stderr.WriteLineAsync($"Could not update Gemini hooks at {settingsPath}: {ex.Message}");
+                hooksFailed = true;
+            }
+        } else {
             await env.Stdout.WriteLineAsync("Nothing to remove — Gemini settings file not found.");
-
-            return 0;
         }
 
-        try {
-            var removed = RemoveGeminiHooks(settingsPath);
+        // Unregister the MCP servers REGARDLESS of whether settings.json exists. Unregister owns the
+        // ownership-marker cleanup — it clears the sidecar marker on any non-Failed outcome (and
+        // retains it on Failed for a retry). Skipping it when the user deleted settings.json would
+        // leave a STALE marker that could later misclassify a user-authored mcpServers.kcap-* entry as
+        // kcap-owned. On an absent file it's a no-op (Unchanged) that still clears the marker and
+        // never creates a config file.
+        var mcpChange = JsonMcpConfigWriter.Unregister(settingsPath, McpConfigShape.Gemini, new McpMarker("gemini"));
+        mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
 
-            await env.Stdout.WriteLineAsync(
-                removed
-                    ? $"Gemini hooks removed ({settingsPath})"
-                    : "Gemini hooks were not installed."
-            );
-
-            return 0;
-        } catch (Exception ex) {
-            await env.Stderr.WriteLineAsync($"Could not update Gemini hooks at {settingsPath}: {ex.Message}");
-
-            return 1;
+        if (mcpChange == JsonMcpConfigWriter.Change.Updated) {
+            await env.Stdout.WriteLineAsync($"Gemini MCP servers removed ({settingsPath}).");
+        } else if (mcpFailed) {
+            await env.Stderr.WriteLineAsync($"Could not update {settingsPath} to remove Gemini MCP servers.");
         }
+
+        // Instructions live in a SEPARATE ~/.gemini/GEMINI.md — strip our block independently of
+        // whether settings.json exists, preserving any user-authored content in the file.
+        var instrChange = AgentInstructionsWriter.Remove(env.GeminiInstructionsMd);
+        var instrFailed = instrChange == AgentInstructionsWriter.Change.Failed;
+
+        if (instrChange == AgentInstructionsWriter.Change.Updated) {
+            await env.Stdout.WriteLineAsync($"Gemini instructions removed ({env.GeminiInstructionsMd}).");
+        } else if (instrFailed) {
+            await env.Stderr.WriteLineAsync($"Could not update {env.GeminiInstructionsMd} to remove Gemini instructions.");
+        }
+
+        return hooksFailed || mcpFailed || instrFailed ? 1 : 0;
     }
 
     /// <summary>
