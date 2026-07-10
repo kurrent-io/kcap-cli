@@ -118,20 +118,28 @@ answers each.
     its result, coalesced text runs — so a per-message set would drop valid later envelopes). The key
     must be a composite that is stable across replay and distinct per emitted envelope, e.g. `agent
     message id + envelope kind + (tool-call id | run index)`. C0 must confirm such a composite is
-    reconstructable identically on replay, AND — separately — that the **locally-synthesized
-    `UserMessage`** (which we create, not the agent) has its OWN occurrence-safe replayable key:
-    content-matching "by the prompt text" is duplicate-prompt-unsafe and is rejected, so C0 must find a
-    stable correlator on the replayed user turn (e.g. an id on the replayed `user_message_chunk` we can
-    also capture at synthesis time). **If C0 cannot establish the synthesized-user key, C3(a) is
-    DISALLOWED** → fall to C3(b) or re-scope. Or **(b)** stable **complete-turn count + order** enabling
+    reconstructable identically on replay, AND — separately — a **concrete occurrence-safe key for the
+    interrupted USER turn** (r5-review 1), named with its lifecycle, not hand-waved. The required
+    primary is a **client-generated prompt-occurrence-id**: the runtime mints a per-session monotonic
+    (or GUID) id, **persists it before the first byte of `session/prompt` is written**, and attaches it
+    to the outgoing prompt — and **C0 must confirm ACP `session/load` echoes that client id identically
+    on the replayed user turn**. (Content-matching by prompt text is rejected — duplicate-prompt-unsafe.
+    A stable ACP-provided user-turn id also qualifies ONLY if it is durably associated *before* any
+    crash window; an id first learned from the live echo is useless for a prompt whose echo never
+    arrived.) **If C0 confirms neither an echoed client id nor a pre-association ACP turn id, the
+    interrupted-turn PRESENT/ABSENT decision is undecidable by key → C8 falls back to documented
+    at-most-once semantics (see C8), and C3(a) is DISALLOWED** → C3(b) or re-scope. Or **(b)** stable
+    **complete-turn count + order** enabling
     occurrence-safe **turn-ordinal** dedup, which REQUIRES the whole-turn staging model in C3 (and its
     streaming tradeoff). A pure content fingerprint is rejected (r2-review B1 — no occurrence identity).
   - **Boundary-turn completeness** (r3-review B4): the turn interrupted mid-prompt must reappear
     **complete** in the replay (not truncated), else C4's discard-and-replay is unsound.
-  - **An end-of-replay barrier** (r3-review B4): whether the `session/load` *response* reliably means
-    all replay notifications have already arrived. C6 may only open the gate once replay is known
-    complete; if the response is not a barrier, C0 must find the actual signal (e.g. a terminal
-    notification) or the gate cannot safely reopen.
+  - **A closed-world end-of-replay barrier** (r3-review B4, r5-review 3): C0 must establish a signal
+    after which **no further replay `session/update` can arrive** — a true drain/EOF barrier, not a mere
+    ordering hint. C8's PRESENT/ABSENT check and the C6 gate reopen run ONLY after this barrier, so if
+    `session/load`'s response is not closed-world, C0 must find the real drain signal (a terminal
+    notification, or draining until quiescence with a bound); if none exists, the interrupted-turn
+    decision has a mid-replay window and reconnect re-scopes.
   **If C0 fails any of these, reconnect is re-scoped to a follow-up issue and NOT shipped** — A/B/D
   stand alone. No reconnect code lands until C0 answers all three.
 
@@ -243,17 +251,40 @@ answers each.
   blocking teardown runs outside the lock, the pre-fault hook and an in-progress stop cannot block each
   other.
 
-- **C8 — prompt commit: requeue-vs-replay for the interrupted turn (addresses r4-review 1).** ACP has
-  no per-prompt ack, so when a crash interrupts an active `session/prompt` we cannot know from the wire
-  alone whether the agent received/started it. Resolve it *after* resume using replay presence, not a
-  guess: once `session/load` + the C0 end-of-replay barrier complete, check whether the interrupted
-  prompt's **user turn is present in the replay** under the C3 occurrence-safe key. **Present → the
-  agent has it (do NOT requeue; the replay carries the turn, C3 forwards any new part). Absent → the
-  agent never got it (requeue the prompt once).** This single rule covers all three failure windows
-  r4-review 1 names — write failed before acceptance, partial write, or accepted-but-response-faulted —
-  without losing or duplicating the user turn, and it depends on exactly the C0 guarantees (occurrence-
-  safe key + reliable end-of-replay barrier) already required. The requeue is gated by C6 (runs only
-  after the gate reopens on the barrier).
+- **C8 — prompt commit: requeue-vs-replay for the interrupted turn (addresses r4-review 1, r5-review 1).**
+  ACP has no per-prompt ack, so a crash during an active `session/prompt` leaves the prompt's fate
+  unknown from the wire. **Primary rule (requires the C0 client-generated prompt-occurrence-id):** after
+  `session/load` + the C0 **closed-world** end-of-replay barrier, look for the interrupted prompt's
+  **occurrence id** (minted+persisted before the first write, C0) on the replayed user turn. **Found →
+  the agent has it: do NOT requeue** (replay carries the turn; C3 forwards any new part). **Not found →
+  the agent never got it: requeue exactly once**, carrying the *same* occurrence id (so a second crash
+  during the requeue is itself decidable — the retry-after-failed-requeue case). This is decidable only
+  because the check runs strictly after the closed-world barrier (no mid-replay window) and keys on the
+  pre-write occurrence id (not prompt text) — so it is correct even for **repeated identical prompts**.
+- **C8 fallback (when C0 yields no usable key — r5-review 1).** If C0 confirms neither an echoed client
+  id nor a pre-association ACP turn id, the interrupted turn is **undecidable**, so C8 adopts documented
+  **at-most-once** semantics: **do NOT requeue** an interrupted prompt of unknown fate (never silently
+  re-run it — a duplicate could re-execute tools with side effects), log it, and surface to the user
+  that the last prompt may not have been delivered. Under the C3(b) staging path the same rule applies,
+  keyed on whether the staged user turn appears in the replayed complete-turn sequence. This fallback is
+  a correctness floor, not the goal; if at-most-once is unacceptable for the product, reconnect
+  re-scopes until ACP gives a round-tripped prompt id.
+
+- **C9 — reconnect-owner unwind contract vs stop/finalize (addresses r5-review 2).** C6.3's "no-op
+  after stop" only guards *new* `BeginReconnect` calls; it does NOT cover an owner already scheduled and
+  mid-flight. The owner runs all its blocking work under the reconnect `CancellationToken` (C7) and
+  **re-checks stop/finalized state at every checkpoint**: before relaunch, after each await, before
+  `session/load`, before the connection/process swap, before reopening the gate, and before a C8
+  requeue. **Stop/finalize always wins:** on observing it (token cancelled or `_updates` completed), the
+  owner unwinds in a `finally` — dispose any candidate process/connection it created, resolve
+  `Reconnecting` and drive the gate to the terminal path (never leave it stuck closed), and perform **no
+  swap, no requeue, and no envelope emission** after intentional stop or `_updates` completion. This is
+  the explicit contract binding the reconnect owner to AI-688's `AcpCts`/`_updates`/orchestrator-finalize
+  teardown so a late owner cannot install a process after stop, emit into a completed `_updates`, requeue
+  after a user stop, or leak a child. Acceptance cases: stop while the owner is queued; stop during
+  relaunch / `initialize` / `session/load`; a graceful-exit/`TerminateAsync` overlapping a pre-fault
+  reconnect; and reconnect attempts exhausting *during* teardown — each must finalize once, leak nothing,
+  and emit/requeue nothing post-stop.
 
 **Scope note:** C1's runtime restructure (swappable process/connection, deferred finalize, crash-vs-stop
 gating) is the largest single change in AI-689 and touches AI-688's teardown ordering directly. It gets
@@ -317,9 +348,10 @@ comments; concise; `JsonElementExtensions`; README sync for new env vars).
   the boundary partial is **discarded, not flushed** on the crash fault (C4/C6); a prompt queued during
   reconnect runs **only after** the replay barrier (C6 gate); the interrupted prompt is **requeued iff
   its user turn is absent from the replay** (C8 — assert both branches: present→not requeued,
-  absent→requeued once); an **intentional stop during an in-progress reconnect** finalizes without
-  deadlock and without leaking a candidate child (C7 lock-scope); give-up after N attempts finalizes
-  cleanly. Live `KCAP_ACP_LIVE` end-to-end resume.
+  absent→requeued once, carrying the same occurrence id so a requeue-retry is itself decidable);
+  **stop/finalize during an in-progress reconnect** (owner queued, or mid relaunch/initialize/load)
+  finalizes exactly once, leaks no candidate child, and emits/requeues nothing post-stop (C7 lock-scope
+  + C9 unwind); give-up after N attempts finalizes cleanly. Live `KCAP_ACP_LIVE` end-to-end resume.
 
 ## 8. Risks / open questions
 
