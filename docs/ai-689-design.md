@@ -138,15 +138,15 @@ answers each.
     present)**. This mapping is exactly what C8 routes on (ABSENT→requeue, PRESENT-COMPLETE→no requeue,
     PRESENT-INCOMPLETE→surface-as-interrupted), so it must be observed, not assumed. Also confirm a
     *fully* completed turn reappears complete (not truncated), else C3/C4 dedup is unsound.
-  - **Acceptance-boundary invariant for ABSENT (r8-review 1):** C8's `ABSENT ⇒ safe to requeue` rests on
-    a claim that must be PROVEN, not inferred from absence: *once ACP has accepted/started a prompt, its
-    occurrence becomes replay-visible.* So C0 must also kill **after crossing the acceptance/execution
-    boundary** — after the first assistant/tool `session/update` evidence for that occurrence — and
-    verify the occurrence then appears in the replay as PRESENT-INCOMPLETE/COMPLETE, **never ABSENT**.
-    If a "started-but-not-yet-replay-visible" window exists (an accepted prompt can still be ABSENT),
-    then ABSENT is ambiguous and C8's auto-requeue would duplicate already-started, possibly
-    side-effecting work → in that case reconnect re-scopes, or ABSENT-after-possible-acceptance routes
-    to the interrupted/at-most-once path rather than auto-requeue.
+  - **Old-connection quiescence for the ABSENT decision (r8/r9-review 1):** C8 anchors auto-requeue on
+    a *local* "provably-not-sent" fact, not on proving "accepted ⇒ replay-visible" from the wire — so
+    C0's required job here is narrower: confirm reconnect can **quiesce/cancel the old process+connection
+    before the replay snapshot** (C1/C7), so the dead connection cannot still accept the interrupted
+    prompt after we decide. *(Optional/bonus: C0 may also kill just after the first assistant/tool
+    `session/update` for an occurrence and check it is then never ABSENT; if that "accepted ⇒
+    replay-visible" invariant holds it lets more ABSENT cases take the fast auto-requeue path, but the
+    design does NOT depend on it — any may-have-been-sent ABSENT is surfaced-as-interrupted regardless,
+    per C8.)*
   - **A protocol-backed closed-world end-of-replay barrier** (r3-review B4, r5-review 3, r6-review 1):
     C0 must establish a signal ACP itself **guarantees** is terminal for replay — the `session/load`
     response contract, an explicit EOF, or a terminal notification — after which **no further replay
@@ -283,13 +283,22 @@ answers each.
   `session/load` + the C0 **closed-world** end-of-replay barrier, decide **three ways** (r7-review 1 —
   "present" ≠ "complete", because ACP `session/load` does NOT auto-resume an interrupted turn; a new
   `session/prompt` starts a *new* turn):
-  - **ABSENT** (occurrence id not in the replay): the agent never got it → **requeue exactly once**,
-    carrying the *same* occurrence id (so a crash during the requeue is itself decidable). **This is
-    safe ONLY under the C0-proven invariant that an accepted/started prompt always becomes
-    replay-visible** (r8-review 1) — i.e. ABSENT genuinely means "never accepted." If C0 cannot prove
-    that (a started-but-not-replay-visible window exists), an ABSENT that could follow acceptance is
-    routed to the PRESENT-INCOMPLETE surface-as-interrupted path instead, never auto-requeued (blind
-    requeue would duplicate already-started, possibly side-effecting work).
+  - **ABSENT** (occurrence id not in the replay): split on a **local, observable client-side fact — did
+    the prompt's bytes provably never leave the client?** (r8/r9-review — replay-absence alone is NOT
+    proof of "never accepted", because bytes may have been written and accepted, or accepted by the
+    dying old connection, before any replay-visible evidence). ACP has no prompt-ack, so we do NOT try
+    to prove "never accepted" from the wire; we key on what we can observe locally:
+    - **Provably-not-sent** — the `session/prompt` write threw *before any byte was written* to the
+      connection (a purely local fact): the agent cannot have it → **auto-requeue exactly once** (same
+      occurrence id; a crash during the requeue is itself decidable).
+    - **May-have-been-sent** — any byte was (partially) written, or the send outcome is unknown, AND
+      the occurrence is ABSENT from replay: the prompt may have reached the agent with no replay
+      evidence yet → **surface-as-interrupted, NEVER auto-requeue** (the at-most-once floor; re-running
+      could duplicate side-effecting work already in flight).
+    This keys auto-requeue on "provably never left the client", not on "absent from replay", which
+    closes the accept-race window regardless of ACP's internal acceptance timing. It also requires C1/C7
+    reconnect to **quiesce/cancel the old connection before the replay snapshot** so it cannot still
+    accept the prompt after we decide.
   - **PRESENT-COMPLETE** (occurrence id present AND its turn reached a terminal assistant state /
     `StopReason` in the replay): fully handled → **do NOT requeue** (replay carries it; C3 forwards any
     new part).
@@ -393,10 +402,11 @@ comments; concise; `JsonElementExtensions`; README sync for new env vars).
   the boundary partial is **discarded, not flushed** on the crash fault (C4/C6); a prompt queued during
   reconnect runs **only after** the replay barrier (C6 gate); the interrupted prompt is **requeued iff
   its user turn is absent from the replay** (C8 — assert both branches: present→not requeued,
-  the C8 three-way keyed on the occurrence id at the three crash points: **absent** (before write) →
-  head-requeue once with the same id; **present-complete** (terminal assistant state in replay) → no
+  the C8 decision at the crash points: **absent + write provably-not-sent** (send threw before any
+  byte) → head-requeue once with the same id; **absent but bytes may-have-been-sent** → surfaced as
+  interrupted, NOT auto-requeued; **present-complete** (terminal assistant state in replay) → no
   requeue; **present-incomplete** (user turn but no terminal state) → surfaced as interrupted, NOT
-  auto-requeued and NOT dropped);
+  auto-requeued and NOT dropped; and the old connection is quiesced before the replay snapshot);
   **stop/finalize during an in-progress reconnect** (owner queued, or mid relaunch/initialize/load)
   finalizes exactly once, leaks no candidate child, and emits/requeues nothing post-stop (C7 lock-scope
   + C9 unwind); give-up after N attempts finalizes cleanly. Live `KCAP_ACP_LIVE` end-to-end resume.
