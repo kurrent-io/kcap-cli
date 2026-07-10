@@ -44,9 +44,21 @@ public class PiMcpExtensionInstallerTests {
         // Registers each tool as a Pi tool with the all-underscore name.
         await Assert.That(content).Contains("pi.registerTool");
         await Assert.That(content).Contains("\"kcap_\" + server + \"_\"");
-        // Teardown: session_shutdown (switch + exit) plus a sync process-exit backstop.
+        // Session-scoped lifecycle: register-once guard + holder + respawn on session_start.
+        await Assert.That(content).Contains("function startBridge");
+        await Assert.That(content).Contains("function stopBridge");
+        await Assert.That(content).Contains("session_start");
         await Assert.That(content).Contains("session_shutdown");
-        await Assert.That(content).Contains("process.once(\"exit\"");
+        // Parallel, bounded startup (four hung servers ⇒ ~one timeout, not 4×).
+        await Assert.That(content).Contains("Promise.all");
+        // Teardown ladder EOF → SIGTERM → SIGKILL, plus a globalThis-guarded sync exit backstop.
+        await Assert.That(content).Contains("SIGTERM");
+        await Assert.That(content).Contains("SIGKILL");
+        await Assert.That(content).Contains("process.on(\"exit\"");
+        await Assert.That(content).Contains("__kcapPiMcpBridge");
+        // MCP isError → Pi tool failure (execute throws).
+        await Assert.That(content).Contains("result.isError");
+        await Assert.That(content).Contains("throw new Error");
         // Dependency-free spawn of the stdio servers.
         await Assert.That(content).Contains("node:child_process");
         await Assert.That(content).Contains("\"mcp\", this.server");

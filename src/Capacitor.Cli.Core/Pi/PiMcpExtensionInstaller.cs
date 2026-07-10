@@ -26,22 +26,58 @@ public static class PiMcpExtensionInstaller {
 
         import { spawn } from "node:child_process";
 
-        // The kcap MCP servers to bridge, in `kcap mcp <name>` form. `flows` starts a
-        // *paid* hosted reviewer only on explicit invocation; its tool descriptions
-        // (surfaced verbatim from the server) name that cost so the model/user see it.
         const KCAP_MCP_SERVERS = ["review", "sessions", "flows", "memory"];
-
-        // Bound the initialize + tools/list handshake per server so a hung server can
-        // never stall pi's startup indefinitely.
         const HANDSHAKE_TIMEOUT_MS = 10000;
-
-        // Bound each tools/call so a stalled (but not exited) server can't hang a pi tool
-        // forever. Generous — well above the flows server's own long-poll/round timeouts,
-        // since it's only a backstop; on timeout the error surfaces as tool-result content.
+        // Generous — above the flows server's own round timeouts; only a backstop against a
+        // stalled-but-not-exited server. A timeout surfaces as a tool failure (execute throws).
         const TOOL_CALL_TIMEOUT_MS = 1200000; // 20 min
+        const KILL_GRACE_MS = 2000;
 
-        // A minimal line-delimited JSON-RPC 2.0 client over one `kcap mcp <name>`
-        // subprocess. No external MCP SDK.
+        // Process-wide child registry + a single exit hook, guarded on globalThis so repeated
+        // per-session extension loads never accumulate process listeners (Node's MaxListeners).
+        const KCAP_BRIDGE = ((globalThis as any).__kcapPiMcpBridge ||= { children: new Set(), exitHooked: false });
+
+        function trackChild(child: any) {
+          KCAP_BRIDGE.children.add(child);
+          child.once("exit", () => KCAP_BRIDGE.children.delete(child));
+        }
+
+        function ensureExitHook() {
+          if (KCAP_BRIDGE.exitHooked) return;
+          KCAP_BRIDGE.exitHooked = true;
+          // Synchronous-only backstop: an `exit` handler can't await the graceful ladder, so it
+          // hard-SIGKILLs any child still tracked at process teardown (no orphans).
+          try {
+            process.on("exit", () => {
+              for (const c of KCAP_BRIDGE.children) { try { c.kill("SIGKILL"); } catch { /* ignore */ } }
+            });
+          } catch {
+            // ignore
+          }
+        }
+
+        function waitExit(child: any, ms: number): Promise<boolean> {
+          return new Promise((resolve) => {
+            if (child.exitCode !== null || child.signalCode !== null) { resolve(true); return; }
+            let settled = false;
+            const onExit = () => { if (!settled) { settled = true; resolve(true); } };
+            child.once("exit", onExit);
+            setTimeout(() => {
+              if (!settled) { settled = true; try { child.removeListener("exit", onExit); } catch { /* ignore */ } resolve(false); }
+            }, ms);
+          });
+        }
+
+        // EOF -> SIGTERM -> SIGKILL ladder: a child may ignore EOF and SIGTERM, so escalate.
+        async function killLadder(child: any) {
+          try { if (child.stdin) child.stdin.end(); } catch { /* ignore */ }
+          if (await waitExit(child, KILL_GRACE_MS)) return;
+          try { child.kill("SIGTERM"); } catch { /* ignore */ }
+          if (await waitExit(child, KILL_GRACE_MS)) return;
+          try { child.kill("SIGKILL"); } catch { /* ignore */ }
+        }
+
+        // A minimal line-delimited JSON-RPC 2.0 client over one `kcap mcp <name>` subprocess.
         class McpStdioClient {
           server: string;
           child: any = null;
@@ -49,15 +85,18 @@ public static class PiMcpExtensionInstaller {
           pending = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>();
           buffer = "";
           closed = false;
+          protocolVersion: string | null = null;
 
           constructor(server: string) {
             this.server = server;
           }
 
-          // spawn + MCP handshake (initialize -> notifications/initialized).
+          // spawn + MCP handshake (initialize -> validate -> notifications/initialized).
           async start(): Promise<void> {
             const child = spawn("kcap", ["mcp", this.server], { stdio: ["pipe", "pipe", "pipe"] });
             this.child = child;
+            trackChild(child);
+            ensureExitHook();
             child.on("exit", () => this.fail(new Error("kcap mcp " + this.server + " exited")));
             child.on("error", (e: any) => this.fail(e instanceof Error ? e : new Error(String(e))));
             child.stdout.setEncoding("utf8");
@@ -73,13 +112,15 @@ public static class PiMcpExtensionInstaller {
               });
             }
 
-            await this.request("initialize", {
+            // Full MCP initialize; validate + capture the negotiated protocol version, THEN send
+            // notifications/initialized before any tools/list or tools/call (a spec-strict server
+            // rejects requests that arrive before it).
+            const result = await this.request("initialize", {
               protocolVersion: "2024-11-05",
               capabilities: {},
               clientInfo: { name: "kcap-pi-bridge", version: "1" },
-            });
-            // Per the MCP spec the client must send `notifications/initialized`
-            // after the initialize response and before any further requests.
+            }, HANDSHAKE_TIMEOUT_MS);
+            this.protocolVersion = (result && result.protocolVersion) || "2024-11-05";
             this.notify("notifications/initialized", {});
           }
 
@@ -106,8 +147,8 @@ public static class PiMcpExtensionInstaller {
             }
           }
 
-          // Reject every in-flight call when the subprocess dies so execute() never
-          // hangs; mark closed so later calls fail fast too.
+          // Reject every in-flight call when the subprocess dies so execute() never hangs;
+          // mark closed so later calls fail fast too.
           fail(err: Error) {
             if (this.closed) return;
             this.closed = true;
@@ -166,22 +207,13 @@ public static class PiMcpExtensionInstaller {
             return this.request("tools/call", { name, arguments: args || {} }, TOOL_CALL_TIMEOUT_MS);
           }
 
-          stop() {
+          // Graceful teardown via the EOF -> SIGTERM -> SIGKILL ladder.
+          async stop(): Promise<void> {
             this.fail(new Error("kcap mcp " + this.server + " stopped"));
             const child = this.child;
             this.child = null;
             if (!child) return;
-            // Close stdin (EOF) to let a well-behaved server exit, then kill it.
-            try {
-              if (child.stdin) child.stdin.end();
-            } catch {
-              // ignore
-            }
-            try {
-              child.kill();
-            } catch {
-              // ignore
-            }
+            await killLadder(child);
           }
         }
 
@@ -202,98 +234,108 @@ public static class PiMcpExtensionInstaller {
           });
         }
 
-        // Async factory: pi awaits it before session_start, so the bridged tools are
-        // registered before the first turn. Pi reloads/rebinds extensions per session,
-        // so each session gets its own subprocesses, torn down on session_shutdown.
+        function mcpText(result: any): string {
+          if (!result || !Array.isArray(result.content)) return "";
+          return result.content
+            .filter((b: any) => b && b.type === "text" && typeof b.text === "string")
+            .map((b: any) => b.text)
+            .join("\n");
+        }
+
+        // Session-scoped bridge. Registered tools route through a per-server holder that
+        // startBridge() refreshes on every session_start, so a session switch never leaves a tool
+        // bound to a dead subprocess. Registration is guarded per tool name (Pi has no unregister),
+        // so a reused instance never double-registers.
         export default async function (pi: any) {
-          const clients: McpStdioClient[] = [];
+          const holders = new Map<string, { client: McpStdioClient | null }>();
+          const registered = new Set<string>();
+          let startInFlight: Promise<void> | null = null;
 
-          await Promise.all(
-            KCAP_MCP_SERVERS.map(async (server) => {
-              const client = new McpStdioClient(server);
-              let tools: any[];
-              try {
-                // One 10s budget for the whole handshake (spawn + initialize + tools/list).
-                tools = await withTimeout(
-                  (async () => {
-                    await client.start();
-                    return client.listTools();
-                  })(),
-                  HANDSHAKE_TIMEOUT_MS,
-                  "kcap mcp " + server + " handshake",
-                );
-              } catch (e: any) {
-                // Log why this server was skipped so its tools' absence is explainable.
-                console.error("[kcap-mcp] " + server + " unavailable, skipping: " + ((e && e.message) || String(e)));
-                client.stop(); // skip this server; leave the others registered
-                return;
-              }
-
-              clients.push(client);
-
-              for (const tool of tools) {
-                const mcpName = tool && tool.name;
-                if (!mcpName) continue;
-                const toolName = sanitizeToolName("kcap_" + server + "_" + mcpName);
-                if (!toolName) continue;
-                const description = String((tool && tool.description) || ("kcap " + server + " " + mcpName));
-                pi.registerTool({
-                  name: toolName,
-                  label: "kcap " + server + ": " + mcpName,
-                  description,
-                  // Surface it in the system prompt's Available tools section too.
-                  promptSnippet: "kcap " + server + " — " + description.split("\n")[0],
-                  // MCP inputSchema is already JSON Schema; pi forwards `parameters`
-                  // to the provider as-is.
-                  parameters: (tool && tool.inputSchema) || { type: "object", properties: {} },
-                  async execute(_toolCallId: string, params: any) {
-                    try {
-                      const result = await client.callTool(mcpName, params);
-                      const content =
-                        result && Array.isArray(result.content) && result.content.length
-                          ? result.content
-                          : [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result || {}) }];
-                      // AgentToolResult has no isError field — an MCP error surfaces as
-                      // content text so the model can see it.
-                      return { content, details: { server, tool: mcpName, isError: !!(result && result.isError) } };
-                    } catch (e: any) {
-                      return {
-                        content: [{ type: "text", text: "kcap " + server + " " + mcpName + " failed: " + ((e && e.message) || String(e)) }],
-                        details: { server, tool: mcpName, isError: true },
-                      };
-                    }
-                  },
-                });
-              }
-            }),
-          );
-
-          let done = false;
-          const onExit = () => {
-            for (const c of clients) c.stop();
-          };
-          const shutdown = () => {
-            if (done) return;
-            done = true;
-            onExit();
-            // Pi reloads/rebinds this extension per session switch and re-runs the
-            // factory, so drop our process-exit listener to avoid accumulating one
-            // per session (Node's MaxListeners warning).
-            try {
-              process.removeListener("exit", onExit);
-            } catch {
-              // ignore
-            }
-          };
-          // session_shutdown fires on session switch AND on process exit
-          // (Ctrl+C/Ctrl+D/SIGHUP/SIGTERM) — the primary teardown hook.
-          pi.on("session_shutdown", async () => shutdown());
-          // Sync backstop for an abrupt exit where the async handler may not finish.
-          try {
-            process.once("exit", onExit);
-          } catch {
-            // ignore
+          function registerTool(server: string, tool: any) {
+            const mcpName = tool && tool.name;
+            if (!mcpName) return;
+            const toolName = sanitizeToolName("kcap_" + server + "_" + mcpName);
+            if (!toolName || registered.has(toolName)) return;
+            registered.add(toolName);
+            const description = String((tool && tool.description) || ("kcap " + server + " " + mcpName));
+            pi.registerTool({
+              name: toolName,
+              label: "kcap " + server + ": " + mcpName,
+              description,
+              // Surface it in the system prompt's Available tools section too.
+              promptSnippet: "kcap " + server + " — " + description.split("\n")[0],
+              // MCP inputSchema is already JSON Schema; pi forwards `parameters` to the provider as-is.
+              parameters: (tool && tool.inputSchema) || { type: "object", properties: {} },
+              async execute(_toolCallId: string, params: any) {
+                const holder = holders.get(server);
+                const client = holder && holder.client;
+                if (!client || client.closed) {
+                  throw new Error("kcap " + server + " " + mcpName + " unavailable — no live server");
+                }
+                // callTool rejects on timeout or subprocess death — let it propagate as a failure.
+                const result = await client.callTool(mcpName, params);
+                // AgentToolResult has no isError field, so signal an MCP error by THROWING (pi-agent-core
+                // records a thrown execute as an isError tool result the model sees).
+                if (result && result.isError) {
+                  throw new Error(mcpText(result) || ("kcap " + server + " " + mcpName + " returned an error"));
+                }
+                const content =
+                  result && Array.isArray(result.content) && result.content.length
+                    ? result.content
+                    : [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result || {}) }];
+                return { content, details: { server, tool: mcpName } };
+              },
+            });
           }
+
+          // Start (or re-establish) every server CONCURRENTLY — one 10s handshake budget each, so
+          // four hung servers add ~10s wall-clock, not 4x. Healthy servers register + route; a bad
+          // one is logged and skipped. Idempotent: a server already live is left as-is.
+          async function startBridge(): Promise<void> {
+            if (startInFlight) return startInFlight;
+            startInFlight = (async () => {
+              await Promise.all(
+                KCAP_MCP_SERVERS.map(async (server) => {
+                  const existing = holders.get(server);
+                  if (existing && existing.client && !existing.client.closed) return; // already live
+                  const client = new McpStdioClient(server);
+                  let tools: any[];
+                  try {
+                    tools = await withTimeout(
+                      (async () => { await client.start(); return client.listTools(); })(),
+                      HANDSHAKE_TIMEOUT_MS,
+                      "kcap mcp " + server + " handshake",
+                    );
+                  } catch (e: any) {
+                    console.error("[kcap-mcp] " + server + " unavailable, skipping: " + ((e && e.message) || String(e)));
+                    await client.stop();
+                    return;
+                  }
+                  holders.set(server, { client });
+                  for (const tool of tools) registerTool(server, tool);
+                }),
+              );
+            })();
+            try {
+              await startInFlight;
+            } finally {
+              startInFlight = null;
+            }
+          }
+
+          async function stopBridge(): Promise<void> {
+            const live = [...holders.values()].map((h) => h.client).filter(Boolean) as McpStdioClient[];
+            holders.clear();
+            await Promise.all(live.map((c) => c.stop()));
+          }
+
+          // Turn-1 readiness: pi awaits the async factory before session_start.
+          await startBridge();
+
+          // Respawn on a session switch/restart within the same process (idempotent).
+          pi.on("session_start", async () => { await startBridge(); });
+          // Primary teardown — fires on switch AND on process exit (Ctrl+C/Ctrl+D/SIGHUP/SIGTERM).
+          pi.on("session_shutdown", async () => { await stopBridge(); });
         }
         """;
 
