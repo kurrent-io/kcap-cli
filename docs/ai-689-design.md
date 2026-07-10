@@ -132,8 +132,12 @@ answers each.
     **complete-turn count + order** enabling
     occurrence-safe **turn-ordinal** dedup, which REQUIRES the whole-turn staging model in C3 (and its
     streaming tradeoff). A pure content fingerprint is rejected (r2-review B1 — no occurrence identity).
-  - **Boundary-turn completeness** (r3-review B4): the turn interrupted mid-prompt must reappear
-    **complete** in the replay (not truncated), else C4's discard-and-replay is unsound.
+  - **Boundary-turn shape (drives C8's three-way routing — r3-review B4, r7-review 1):** kill mid-prompt
+    and record which of three shapes the interrupted turn takes in the replay — **absent**, **user-only
+    / no terminal assistant state (incomplete)**, or **complete (terminal assistant state / `StopReason`
+    present)**. This mapping is exactly what C8 routes on (ABSENT→requeue, PRESENT-COMPLETE→no requeue,
+    PRESENT-INCOMPLETE→surface-as-interrupted), so it must be observed, not assumed. Also confirm a
+    *fully* completed turn reappears complete (not truncated), else C3/C4 dedup is unsound.
   - **A protocol-backed closed-world end-of-replay barrier** (r3-review B4, r5-review 3, r6-review 1):
     C0 must establish a signal ACP itself **guarantees** is terminal for replay — the `session/load`
     response contract, an explicit EOF, or a terminal notification — after which **no further replay
@@ -142,7 +146,10 @@ answers each.
     period would fire *after* the same occurrence id was already requeued, recreating the duplicate.
     C8's check and the C6 gate reopen run ONLY after this protocol-backed barrier. **If ACP provides no
     protocol-backed barrier, PRESENT/ABSENT is undecidable → C8 uses the at-most-once fallback and/or
-    reconnect re-scopes** — never a heuristic barrier.
+    reconnect re-scopes** — never a heuristic barrier. *(Encouraging: ACP v1 documents `session/load` as
+    responding only after all conversation entries have streamed — i.e. its response is a protocol-
+    backed closed-world barrier — so this is likely satisfiable; C0 confirms it against the real
+    `cursor-agent`.)*
   **If C0 fails any of these, reconnect is re-scoped to a follow-up issue and NOT shipped** — A/B/D
   stand alone. No reconnect code lands until C0 answers all three.
 
@@ -264,13 +271,27 @@ answers each.
 - **C8 — prompt commit: requeue-vs-replay for the interrupted turn (addresses r4-review 1, r5-review 1).**
   ACP has no per-prompt ack, so a crash during an active `session/prompt` leaves the prompt's fate
   unknown from the wire. **Primary rule (requires the C0 client-generated prompt-occurrence-id):** after
-  `session/load` + the C0 **closed-world** end-of-replay barrier, look for the interrupted prompt's
-  **occurrence id** (minted+persisted before the first write, C0) on the replayed user turn. **Found →
-  the agent has it: do NOT requeue** (replay carries the turn; C3 forwards any new part). **Not found →
-  the agent never got it: requeue exactly once**, carrying the *same* occurrence id (so a second crash
-  during the requeue is itself decidable — the retry-after-failed-requeue case). This is decidable only
-  because the check runs strictly after the closed-world barrier (no mid-replay window) and keys on the
-  pre-write occurrence id (not prompt text) — so it is correct even for **repeated identical prompts**.
+  `session/load` + the C0 **closed-world** end-of-replay barrier, decide **three ways** (r7-review 1 —
+  "present" ≠ "complete", because ACP `session/load` does NOT auto-resume an interrupted turn; a new
+  `session/prompt` starts a *new* turn):
+  - **ABSENT** (occurrence id not in the replay): the agent never got it → **requeue exactly once**,
+    carrying the *same* occurrence id (so a crash during the requeue is itself decidable).
+  - **PRESENT-COMPLETE** (occurrence id present AND its turn reached a terminal assistant state /
+    `StopReason` in the replay): fully handled → **do NOT requeue** (replay carries it; C3 forwards any
+    new part).
+  - **PRESENT-INCOMPLETE** (occurrence id present but the turn has **no terminal assistant state** in
+    the replay): the prompt is *stranded* — `session/load` will not finish it, and blind-requeuing the
+    same content would duplicate the user message in the agent's context. So: **do NOT auto-requeue and
+    do NOT silently drop** — surface it to the user as an interrupted turn to re-send (the at-most-once
+    floor for the incomplete case), logged with the occurrence id. (If the product needs automatic
+    continuation of an interrupted turn, that requires an ACP resume primitive ACP v1 does not provide →
+    re-scope; it must not be faked by re-prompting.)
+  Keys on the pre-write occurrence id (not prompt text), and runs strictly after the closed-world
+  barrier — so it is correct even for **repeated identical prompts** and has no mid-replay window.
+  "Terminal assistant state" detection uses the same replayed signal ACP represents turn completion with
+  (the `session/prompt` `StopReason` / a terminal assistant turn); **C0 must characterize which of the
+  three shapes a mid-prompt kill actually produces in the replay** so the routing is grounded, not
+  assumed.
 - **C8 fallback (when C0 yields no usable key — r5-review 1).** If C0 confirms neither an echoed client
   id nor a pre-association ACP turn id, the interrupted turn is **undecidable**, so C8 adopts documented
   **at-most-once** semantics: **do NOT requeue** an interrupted prompt of unknown fate (never silently
@@ -358,7 +379,10 @@ comments; concise; `JsonElementExtensions`; README sync for new env vars).
   the boundary partial is **discarded, not flushed** on the crash fault (C4/C6); a prompt queued during
   reconnect runs **only after** the replay barrier (C6 gate); the interrupted prompt is **requeued iff
   its user turn is absent from the replay** (C8 — assert both branches: present→not requeued,
-  absent→requeued once, carrying the same occurrence id so a requeue-retry is itself decidable);
+  the C8 three-way keyed on the occurrence id at the three crash points: **absent** (before write) →
+  head-requeue once with the same id; **present-complete** (terminal assistant state in replay) → no
+  requeue; **present-incomplete** (user turn but no terminal state) → surfaced as interrupted, NOT
+  auto-requeued and NOT dropped);
   **stop/finalize during an in-progress reconnect** (owner queued, or mid relaunch/initialize/load)
   finalizes exactly once, leaks no candidate child, and emits/requeues nothing post-stop (C7 lock-scope
   + C9 unwind); give-up after N attempts finalizes cleanly. Live `KCAP_ACP_LIVE` end-to-end resume.
