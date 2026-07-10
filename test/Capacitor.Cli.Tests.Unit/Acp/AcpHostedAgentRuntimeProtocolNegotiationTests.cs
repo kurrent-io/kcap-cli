@@ -75,6 +75,8 @@ public class AcpHostedAgentRuntimeProtocolNegotiationTests {
 
         await Assert.That(ex!.Message).Contains("version 2");
         await Assert.That(ex.Message).Contains("version 1");
+        // A protocol-version mismatch is NOT an auth issue — it must not carry the auth/subscription hint.
+        await Assert.That(ex.Message).DoesNotContain("cursor-agent login");
     }
 
     [Test]

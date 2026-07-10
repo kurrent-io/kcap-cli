@@ -141,6 +141,14 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
     AgentCapabilities? _negotiatedCapabilities;
 
     /// <summary>
+    /// A deliberate, already-actionable handshake error (unsupported ACP protocol version) — NOT an
+    /// auth/connection failure. The handshake catch rethrows it unwrapped so the auth/subscription
+    /// hint isn't misapplied to it. Derives from <see cref="InvalidOperationException"/> so callers
+    /// that catch that still see it as one.
+    /// </summary>
+    sealed class AcpProtocolVersionException(string message) : InvalidOperationException(message);
+
+    /// <summary>
     /// <paramref name="requestInteraction"/> is optional (AI-686) — when null, matches AI-684's
     /// original behavior exactly: <see cref="AcpConnection.OnServerRequest"/> stays unset, and any
     /// <c>session/request_permission</c>/<c>elicitation/create</c> the agent sends gets the
@@ -299,7 +307,7 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
             // This build only ever speaks version 1 — fail loud and clearly BEFORE session/new
             // rather than proceeding against an agent that negotiated something else.
             if (negotiatedVersion != 1)
-                throw new InvalidOperationException(
+                throw new AcpProtocolVersionException(
                     $"cursor-agent negotiated ACP protocol version {negotiatedVersion}; this build supports version 1 — update kcap or cursor-agent.");
 
             // Missing agentCapabilities defensively means "advertises nothing" (loadSession=false),
@@ -321,14 +329,16 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
                 throw new InvalidOperationException("ACP session/new response did not contain a sessionId.");
 
             _sessionId = sessionId;
+        } catch (AcpProtocolVersionException) {
+            // Already actionable and NOT an auth issue — rethrow verbatim, without the auth hint.
+            throw;
         } catch (Exception ex) when (ex is not OperationCanceledException) {
-            // Preserve the original RPC/parse/version error verbatim — folded into this message via
-            // ex.Message, with ex itself kept as InnerException — and append a generic, actionable
-            // hint. Deliberately conservative (AI-689 A4): the exact wire shape of a logged-out or
-            // unsubscribed cursor-agent failure is unverified, so this does NOT pattern-match
-            // specific error text; a live logged-out probe to pin down the precise shape is a
-            // follow-up. The hint is appended to EVERY handshake failure (including e.g. a protocol
-            // version mismatch), never masking the original error, only annotating it.
+            // Preserve the original RPC/parse error verbatim — folded into this message via
+            // ex.Message, with ex kept as InnerException — and append a generic, actionable hint.
+            // Deliberately conservative: the exact wire shape of a logged-out or unsubscribed
+            // cursor-agent failure is unverified, so this does NOT pattern-match specific error text;
+            // a live logged-out probe to pin down the precise shape is a follow-up. Never masks the
+            // original error, only annotates it.
             throw new InvalidOperationException(
                 $"ACP handshake (initialize/session-new) failed: {ex.Message} — if this is an auth/subscription issue, run `cursor-agent login` and verify a Team-tier subscription.",
                 ex);
