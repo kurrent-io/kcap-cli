@@ -31,13 +31,12 @@ public sealed record ClientCapabilities(
 );
 
 /// <summary>
-/// <c>initialize</c> result (AI-689 Workstream A) — <c>AcpHostedAgentRuntime.StartAsync</c>
-/// deserializes the agent's <c>initialize</c> response into this to validate
-/// <see cref="ProtocolVersion"/> (must be <c>1</c>; the daemon speaks no other version yet) and to
-/// capture <see cref="AgentCapabilities"/> for later features (e.g. a reconnect path gated on
-/// <see cref="Acp.AgentCapabilities.LoadSession"/>). Deliberately minimal — the real wire response
-/// also carries <c>promptCapabilities</c>/<c>authMethods</c> (see <c>FakeAcpAgent</c>'s
-/// probe-confirmed fixture), neither of which this workstream needs yet.
+/// <c>initialize</c> result — <c>AcpHostedAgentRuntime.StartAsync</c> deserializes the agent's
+/// <c>initialize</c> response into this to validate <see cref="ProtocolVersion"/> (must be <c>1</c>;
+/// the daemon speaks no other version yet) and to capture <see cref="AgentCapabilities"/> for later
+/// features (e.g. a reconnect path gated on <see cref="Acp.AgentCapabilities.LoadSession"/>).
+/// Deliberately minimal — the real wire response also carries <c>promptCapabilities</c>/
+/// <c>authMethods</c>, neither of which the daemon needs yet.
 /// </summary>
 public sealed record InitializeResult(
     [property: JsonPropertyName("protocolVersion")]  int                 ProtocolVersion,
@@ -46,8 +45,8 @@ public sealed record InitializeResult(
 
 /// <summary>
 /// Agent-advertised capabilities from <c>initialize</c>'s result — only <see cref="LoadSession"/> is
-/// modeled for now (AI-689 Workstream A captures it for a future reconnect path; it does not act on
-/// it yet). <see cref="LoadSession"/> defaults to <see langword="false"/> when the wire omits it,
+/// modeled for now (captured for a future reconnect path; nothing acts on it yet).
+/// <see cref="LoadSession"/> defaults to <see langword="false"/> when the wire omits it,
 /// matching the ACP spec's "absent means unsupported" convention.
 /// </summary>
 public sealed record AgentCapabilities(

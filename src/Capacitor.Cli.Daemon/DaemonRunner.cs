@@ -291,7 +291,7 @@ public static partial class DaemonRunner {
             .OrderBy(v => v, StringComparer.Ordinal)
             .ToArray();
 
-        // AI-689: IsAvailable()==false silently omits cursor from SupportedVendors above — correct
+        // IsAvailable()==false silently omits cursor from SupportedVendors above — correct
         // behavior (the launch dialog just won't offer Cursor), but gave operators no clue WHY. One
         // Warning at startup (not per-launch) so a missing/misconfigured cursor-agent install is
         // visible in the daemon's own logs instead of only showing up as an absent vendor downstream.
@@ -423,7 +423,7 @@ public static partial class DaemonRunner {
     };
 
     /// <summary>
-    /// AI-689: true when a "cursor" <see cref="IHostedAgentRuntimeFactory"/> is registered but
+    /// True when a "cursor" <see cref="IHostedAgentRuntimeFactory"/> is registered but
     /// reports itself unavailable — the signal for <see cref="RunAsync"/>'s one-time startup
     /// Warning. Pulled out as a pure predicate over the factory list (rather than inlined in
     /// <see cref="RunAsync"/>) so it's testable without spinning up the whole DI host that method

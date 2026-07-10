@@ -311,8 +311,8 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
                     $"cursor-agent negotiated ACP protocol version {negotiatedVersion}; this build supports version 1 — update kcap or cursor-agent.");
 
             // Missing agentCapabilities defensively means "advertises nothing" (loadSession=false),
-            // not a throw — captured for a later reconnect path (AI-689 Workstream A only exposes
-            // it; nothing here acts on it yet).
+            // not a throw — captured for a later reconnect path (only exposed here; nothing acts on
+            // it yet).
             _negotiatedCapabilities = initializeResult?.AgentCapabilities ?? new AgentCapabilities(LoadSession: false);
 
             _logger.LogDebug(

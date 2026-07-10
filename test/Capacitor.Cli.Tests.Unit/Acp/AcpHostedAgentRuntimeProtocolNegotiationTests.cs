@@ -1,4 +1,5 @@
 // test/Capacitor.Cli.Tests.Unit/Acp/AcpHostedAgentRuntimeProtocolNegotiationTests.cs
+using System.Text.Json;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -125,5 +126,22 @@ public class AcpHostedAgentRuntimeProtocolNegotiationTests {
 
         await Assert.That(ex!.Message).Contains("Unauthorized: no active session");
         await Assert.That(ex.Message).Contains("cursor-agent login");
+    }
+
+    [Test]
+    public async Task StartAsync_MalformedInitializeResult_ThrowsClearVersionError_WithoutAuthHint() {
+        await using var h = new Harness();
+        // A wrong-typed protocolVersion makes the defensive parse throw JsonException internally; it
+        // must fall back to negotiated version 0 (rejected with the clear version error) rather than
+        // surfacing a raw JsonException — and, being a version problem, carry no auth hint.
+        using var doc = JsonDocument.Parse("""{"protocolVersion":"not-a-number","agentCapabilities":{"loadSession":true}}""");
+        h.Fake.SetInitializeResult(doc.RootElement.Clone());
+        h.StartFakeAgentLoop();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => h.Runtime.StartAsync("/abs/worktree", "do the thing", h.Cts.Token).WaitAsync(HangGuard));
+
+        await Assert.That(ex!.Message).Contains("version 1");
+        await Assert.That(ex.Message).DoesNotContain("cursor-agent login");
     }
 }
