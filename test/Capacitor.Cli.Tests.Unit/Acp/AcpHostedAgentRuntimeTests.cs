@@ -116,6 +116,31 @@ public class AcpHostedAgentRuntimeTests {
         await Assert.That(promptBlocks[0].GetProperty("text").GetString()).IsEqualTo("do the thing");
     }
 
+    // A live capability probe against the real cursor-agent found it performs file/shell operations
+    // itself and never requests client fs/terminal, so the daemon must keep advertising NONE of
+    // them — advertising a capability we can't safely enforce is exactly the failure mode this
+    // locks against. Fails loudly if a future change flips one on without revisiting that decision.
+    [Test]
+    public async Task StartAsync_advertises_no_fs_or_terminal_client_capabilities() {
+        await using var h = new Harness();
+        h.StartFakeAgentLoop();
+
+        await h.Runtime.StartAsync("/abs/worktree", "do the thing", h.Cts.Token).WaitAsync(HangGuard);
+
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (h.Fake.ReceivedCalls.Count < 1 && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        var calls = h.Fake.ReceivedCalls;
+        await Assert.That(calls.Count).IsGreaterThanOrEqualTo(1);
+        await Assert.That(calls[0].Method).IsEqualTo("initialize");
+
+        var clientCapabilities = calls[0].Params!.Value.GetProperty("clientCapabilities");
+        await Assert.That(clientCapabilities.GetProperty("fs").GetProperty("readTextFile").GetBoolean()).IsFalse();
+        await Assert.That(clientCapabilities.GetProperty("fs").GetProperty("writeTextFile").GetBoolean()).IsFalse();
+        await Assert.That(clientCapabilities.GetProperty("terminal").GetBoolean()).IsFalse();
+    }
+
     [Test]
     public async Task Scripted_agent_message_chunk_update_is_surfaced_as_reduced_DTO() {
         await using var h = new Harness();

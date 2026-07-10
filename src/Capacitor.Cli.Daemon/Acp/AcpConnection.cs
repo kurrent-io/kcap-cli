@@ -76,6 +76,13 @@ internal sealed class AcpConnection : IAsyncDisposable {
     /// If unset, every inbound server request is answered with a method-not-found error — a safe
     /// default-decline posture. AI-684 leaves this unset; AI-686 wires it to the permission bridge.
     ///
+    /// A handler returning <see langword="null"/> signals the method is unhandled: the connection
+    /// answers <c>-32601 Method not found</c>, the SAME response a fully unset handler produces —
+    /// never a null-result success, which would falsely claim we performed an operation (e.g. an
+    /// <c>fs/*</c>/<c>terminal/*</c> request) we never actually served. A handler that intends a
+    /// successful EMPTY result must return an explicit <see cref="JsonElement"/> (e.g. an empty
+    /// object via <see cref="JsonSerializer.SerializeToElement"/>), never <see langword="null"/>.
+    ///
     /// Typed <see cref="JsonElement"/>? rather than <c>object?</c> (PR #244 review, Fix #3): the
     /// old <c>object?</c> contract let a handler return an un-serialized CLR object that
     /// <see cref="WriteServerResponseAsync"/> could only reject with a thrown
@@ -305,6 +312,15 @@ internal sealed class AcpConnection : IAsyncDisposable {
                 _logger.LogDebug(ex, "ACP: OnServerRequest handler threw for method={Method}", method);
                 error  = new AcpError(-32603, "Internal error", null);
                 result = null;
+            }
+
+            // A handler that ran without throwing but returned null means "I don't handle this
+            // method" (e.g. AcpInteractionBridge's `_ => null` default for fs/*, terminal/*) — treat
+            // it exactly like the no-handler branch above, never a null-result success that would
+            // falsely acknowledge an operation we never performed.
+            if (result is null && error is null) {
+                _logger.LogDebug("ACP: OnServerRequest handler declined method={Method}; responding -32601 Method not found", method);
+                error = new AcpError(-32601, $"Method not found: {method}", null);
             }
         }
 

@@ -257,6 +257,9 @@ internal sealed class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscrip
         JsonElement sessionNewResult;
 
         try {
+            // Advertise NO client fs/terminal: cursor-agent does file/shell ops itself and never asks
+            // the client to serve them (rationale: docs/ai-687-fs-terminal-capability-decision-design.md).
+            // Any unadvertised request is declined -32601 by AcpConnection, never falsely acknowledged.
             var initializeParams = JsonSerializer.SerializeToElement(
                 new InitializeParams(
                     ProtocolVersion: 1,
