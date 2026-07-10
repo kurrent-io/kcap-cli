@@ -1602,6 +1602,22 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
+    public async Task Kiro_both_skip_flags_skip_hooks_and_mcp_with_accurate_message() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: true, SkipKiroMcp: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.KiroHooksCalled).IsFalse();
+        await Assert.That(calls.RegisterKiroMcpCalled).IsFalse();    // both flags → nothing registered
+        await Assert.That(result.KiroMcpRegistered).IsFalse();
+        // The skip message must NOT claim MCP was still registered when it was also skipped.
+        await Assert.That(sink.Lines).DoesNotContain(l => l.Contains("MCP still registered"));
+    }
+
+    [Test]
     public async Task Pi_detected_and_accepted_installs_extension() {
         var sink     = new Sink();
         var calls    = new InstallerCalls();

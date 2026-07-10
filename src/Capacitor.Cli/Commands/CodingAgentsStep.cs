@@ -222,8 +222,10 @@ internal static class CodingAgentsStep {
         // independent, non-invasive MCP registration (~/.kiro/settings/mcp.json) still applies —
         // gated separately by --skip-kiro-mcp — so MCP stays eligible under --skip-kiro-hooks.
         if (options.SkipKiro) {
-            writeLine("  [dim]· Kiro CLI hooks skipped by flag — MCP still registered (use --skip-kiro-mcp to skip that too)[/]");
-            selected = true;
+            writeLine(options.SkipKiroMcp
+                ? "  [dim]· Kiro CLI skipped by flags (hooks + MCP)[/]"
+                : "  [dim]· Kiro CLI hooks skipped by flag — MCP still registered (use --skip-kiro-mcp to skip that too)[/]");
+            selected = true;   // MCP eligibility; HandleKiroMcp still honours --skip-kiro-mcp
 
             return false;
         }
