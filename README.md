@@ -715,7 +715,7 @@ It requires:
 **Current limitations.** A hosted Cursor agent renders its transcript (messages, thinking, tool
 calls/results) but does **not** support interactive local-attach input, special keys, or terminal
 resize, and it emits no separate terminal-output stream — Cursor runs shell commands itself in the
-worktree and they surface as `execute` tool results in the transcript. Kapacitor advertises **no**
+worktree and they surface as `execute` tool results in the transcript. Capacitor advertises **no**
 client filesystem or terminal capabilities to the agent (it performs those operations itself).
 
 **Troubleshooting.**
