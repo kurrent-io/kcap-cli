@@ -108,14 +108,19 @@ answers each.
 > binding unregister (`:827,:887`) — the runtime is built for a single process lifetime and cannot
 > swap its process as originally described.
 
-- **C0 — replay-identity probe (FIRST step of PR3, before any code).** The reconnect design hinges on
+- **C0 — replay-identity probe (FIRST step of PR3, and a HARD GATE).** The reconnect design hinges on
   one unknown the AI-689 probe did not resolve: *what exactly does `session/load` replay, and can a
-  replayed turn be matched to an already-forwarded one?* Probe: establish a multi-turn session, kill
-  the process, `session/load`, and capture the replayed `session/update` stream — specifically
-  whether assistant/user messages carry a **stable message id** across the original vs the replay,
-  whether **turn order** is preserved, and whether chunk coalescing differs. The result picks the C3
-  dedup key (stable id preferred; content fingerprint fallback). No reconnect code lands until C0 is
-  answered.
+  replayed turn be matched to an already-forwarded one?* Probe: establish a multi-turn session
+  (including a deliberately **repeated** identical prompt/answer, to test occurrence identity), kill
+  the process, `session/load`, and capture the replayed `session/update` stream. C0 must establish
+  **one of two viable dedup keys** (r2-review B1): **(a)** a **stable per-message id** carried on each
+  message identically across the original and the replay (preferred); or **(b)** a stable **complete-
+  turn count + order** — i.e. the replay yields the same number of complete turns in the same order
+  (chunk re-coalescing within a turn is fine, since we re-aggregate) — which enables occurrence-safe
+  **ordinal** dedup. **A pure content fingerprint is explicitly rejected** (r2-review B1): it has no
+  occurrence identity and would drop legitimately-repeated content. **If C0 establishes neither (a)
+  nor (b), reconnect is re-scoped to a follow-up issue and NOT shipped** — the other three workstreams
+  (A/B/D) stand on their own. No reconnect code lands until C0 answers this.
 
 - **C1 — reconnect owner + crash-vs-stop.** Introduce an explicit reconnect owner inside the runtime
   (not the orchestrator). Add an `_intentionalStop` flag set by the dispose/stop paths; the read-loop
@@ -134,28 +139,51 @@ answers each.
   Bounded attempts (default 3) with backoff; on give-up, finalize cleanly (today's behavior) with a
   Warning + `acp.reconnects{outcome=failed}`.
 
-- **C3 — content-identity dedup (replaces the seq/index watermark).** Dedup lives in the **runtime's
-  emission layer**, keyed on **content identity**, never on our assigned seq (B1) or a positional
-  index (B2). The runtime maintains a set of identities of the COMPLETE turn envelopes it has already
-  emitted (stable ACP message id if C0 finds one; else a content fingerprint over role + text/tool
-  payload). During the `session/load` replay, updates are aggregated into complete turns exactly as in
-  live operation; each reconstructed complete turn is emitted **only if its identity is not already in
-  the set**. This is order- and boundary-independent: already-forwarded turns are dropped regardless of
-  how the replay re-chunks them; genuinely new content (incl. the completed boundary turn, see C4)
-  passes through. The forwarder seq/ack remains the transport backstop but is explicitly NOT relied on
-  for replay correctness. AI-688 single-flight still holds.
+- **C3 — occurrence-safe dedup (replaces the seq/index watermark AND the content-fingerprint idea).**
+  Dedup lives in the **runtime's emission layer**, never on our assigned seq (B1) or a positional
+  wire index (r1-B2). The key is whichever C0 validated: **(a)** the **stable per-message id**, or
+  **(b)** the **complete-turn ordinal** — the runtime remembers *how many complete turns it emitted*
+  before the death (N), and on replay re-aggregates into complete turns and emits only those at
+  ordinal > N. Both are **occurrence-safe**: two identical-content turns at different ordinals (or with
+  different ids) are distinct, so legitimately-repeated prompts/answers are NOT dropped (r2-review B1).
+  Re-aggregation makes it robust to within-turn chunk re-coalescing. Genuinely new content (incl. the
+  completed boundary turn, see C4) passes through; already-forwarded turns are dropped. The forwarder
+  seq/ack remains the transport backstop but is explicitly NOT relied on for replay correctness.
+  AI-688 single-flight still holds. (If C0 found neither key, this whole workstream re-scopes — see C0.)
 
-- **C4 — boundary turn: do NOT flush a partial.** Revised from r1: at the death boundary the in-flight
-  aggregation run is **discarded, not flushed** (no partial `AssistantText`/`Thinking` emitted, no
-  fabricated completion). Because the partial was never emitted, its identity is not in the C3 set, so
-  when `session/load` replays that turn *complete*, C3 emits it exactly once. This removes the
-  dup-prefix / drop-suffix hazard entirely. (If reconnect ultimately fails, the interrupted turn is
-  simply absent — acceptable, and better than a forwarded partial that never gets corrected.)
+- **C4 — boundary turn: do NOT flush a partial (must override the existing `finally` flush).** At the
+  death boundary the in-flight aggregation run is **discarded, not flushed** (no partial emitted, no
+  fabricated completion), so when `session/load` replays that turn *complete*, C3 emits it exactly
+  once. **Critical (r2-review B2):** this is NOT automatic — today when the read loop ends it faults
+  pending requests (`AcpConnection.cs:163`) and `ProcessTurnAsync`'s `finally { FlushOpenRun(); }`
+  (`AcpHostedAgentRuntime.cs:397`) would flush exactly the partial we intend to discard. The reconnect
+  gate (C6) must set the reconnecting state **before** that `finally` runs, and `FlushOpenRun` (or the
+  turn worker's fault path) must check it and **discard instead of flush** while reconnecting. Not
+  wiring this makes C4 a no-op. (If reconnect ultimately fails, the interrupted turn is simply absent —
+  acceptable, better than a forwarded partial that never gets corrected.)
 
 - **C5 — interaction vs SignalR re-bind.** C-reconnect (agent process) is orthogonal to the existing
   `ReBindAcpSessionsAsync` (SignalR server binding). A pure process resume keeps the same
   agentId/sessionId, so the existing SignalR binding stays valid — no re-bind needed. Documented so the
   two mechanisms aren't conflated.
+
+- **C6 — reconnect gate around the turn worker (addresses r2-review B2).** A single-process assumption
+  is baked into the turn worker: `ProcessTurnAsync` catches a prompt fault, runs its `finally`, and
+  keeps draining `_pendingTurns` (`AcpHostedAgentRuntime.cs:397,:421`), and `SendPromptAsync` uses the
+  swappable `_connection` directly (`:493`). Reconnect therefore needs an explicit **gate**, not just a
+  parked `ReadOutputAsync`:
+  1. A `Reconnecting` state (set by C1 on a crash-triggering read-loop end, cleared after
+     `session/load` succeeds or reconnect is abandoned).
+  2. The turn worker **awaits the gate before dequeuing/sending each turn**, and `SendUserInputAsync`
+     (and key/resize) awaits it too — so no queued prompt runs against a dead or half-swapped
+     connection. The connection/process swap happens only while the gate is closed.
+  3. The crash fault path enters `Reconnecting` **before** `ProcessTurnAsync`'s `finally` runs, so the
+     `finally`/`FlushOpenRun` discards the boundary partial (C4) instead of flushing it.
+  4. On give-up, the gate opens into the terminal path (worker completes, `_updates` completes,
+     orchestrator finalizes) — the same disposition as an intentional stop.
+  This gate is the concrete coupling point between C1 (crash-vs-stop), C2 (swap), and C4 (discard); the
+  test suite must cover "prompt queued during reconnect runs only after resume" and "boundary partial
+  discarded, not flushed, on the crash fault".
 
 **Scope note:** C1's runtime restructure (swappable process/connection, deferred finalize, crash-vs-stop
 gating) is the largest single change in AI-689 and touches AI-688's teardown ordering directly. It gets
@@ -165,13 +193,15 @@ follow-up issue rather than shipped unsound (flagged for owner decision at that 
 
 ## 5. Workstream D — docs + security posture (PR 4, mergeable first)
 
-- **D1 operator docs** (`README.md` + a focused `docs/` page): the hosted-Cursor/ACP path (explicitly
+- **D1 operator docs** (`README.md` + a focused `docs/` page) — **current reality only** (per §6 /
+  r2-review NB6; future knobs ship with their PR, NOT here): the hosted-Cursor/ACP path (explicitly
   distinct from the Cursor *recording-hooks* path, a known confusion point); `cursor-agent acp` +
-  minimum version + **Team-tier subscription** + `cursor-agent login`; env vars (`KCAP_CURSOR_PATH`,
-  `KCAP_CURSOR_MODEL`, `KCAP_ACP_DEBUG_FRAMES`, `KCAP_URL`); **limitations** (no local-attach raw
-  input/special-keys/resize, no terminal-output surfacing, reconnect is best-effort resume);
-  **troubleshooting** (missing binary → `KCAP_CURSOR_PATH`; auth → `cursor-agent login`/Team;
-  model-resolution fallback; protocol-version mismatch).
+  minimum version + **Team-tier subscription** + `cursor-agent login`; the env vars that exist today
+  (`KCAP_CURSOR_PATH`, `KCAP_CURSOR_MODEL`, `KCAP_URL`); current **limitations** (no local-attach raw
+  input/special-keys/resize, no terminal-output surfacing); **troubleshooting** (missing binary →
+  `KCAP_CURSOR_PATH`; auth → `cursor-agent login`/Team; model-resolution fallback). **Deferred to their
+  implementing PRs:** `KCAP_ACP_DEBUG_FRAMES` (with PR2) and reconnect/best-effort-resume limitations
+  (with PR3).
 - **D2 security posture** (docs): the ACP transcript forwards prompt text, tool args, and tool
   results **verbatim** — the same canonical-transcript posture as every other agent, with no
   ACP-specific redaction; default logging is shape-only; the opt-in raw-frame stream may contain
@@ -210,9 +240,12 @@ comments; concise; `JsonElementExtensions`; README sync for new env vars).
 - **B1:** lifecycle events logged at Info with ids only (assert no payload). **B2:** counters
   increment on launch/session/blocking/reconnect/failure. **B3/B4:** flag off → content-free logs;
   flag on → full frames under the dedicated category.
-- **C:** fake agent that "dies" mid-session → runtime relaunches + `session/load`s the same
-  sessionId; **replayed updates ≤ watermark are suppressed** (assert no duplicate envelopes reach the
-  forwarder); post-watermark content forwards; give-up after N attempts finalizes cleanly. Live
+- **C:** fake agent that "dies" mid-session → runtime relaunches + `session/load`s the same sessionId;
+  replayed complete turns at **ordinal ≤ N (or matching an already-emitted stable id)** are dropped
+  while ordinal > N forwards (assert no duplicate envelopes reach the forwarder, AND that a
+  legitimately-repeated identical turn is NOT dropped — the occurrence-safety case from r2-review B1);
+  the boundary partial is **discarded, not flushed** on the crash fault (C4/C6); a prompt queued during
+  reconnect runs **only after** resume (C6 gate); give-up after N attempts finalizes cleanly. Live
   `KCAP_ACP_LIVE` end-to-end resume.
 
 ## 8. Risks / open questions
