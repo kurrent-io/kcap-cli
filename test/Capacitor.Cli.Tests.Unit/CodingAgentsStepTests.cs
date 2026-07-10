@@ -1587,6 +1587,26 @@ public class CodingAgentsStepTests {
     }
 
     [Test]
+    public async Task Kiro_both_skip_flags_short_circuit_before_path_check() {
+        // With BOTH --skip-kiro-hooks and --skip-kiro-mcp nothing is written, so the PATH precheck
+        // must NOT gate the message: even when kcap isn't on PATH the user sees the accurate
+        // "skipped by flags (hooks + MCP)" line, not a misleading "not on PATH" warning.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CapacitorOnPathReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipKiro: true, SkipKiroMcp: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Kiro: true);
+
+        var result = await RunAsync(options, detected, TestPaths(), calls.AsInstallers(), prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.CapacitorOnPathCalled).IsFalse();    // short-circuited before the PATH check
+        await Assert.That(result.KiroHooksInstalled).IsFalse();
+        await Assert.That(result.KiroMcpRegistered).IsFalse();
+        await Assert.That(calls.RegisterKiroMcpCalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("skipped by flags (hooks + MCP)"));
+        await Assert.That(sink.Lines).DoesNotContain(l => l.Contains("not on PATH"));
+    }
+
+    [Test]
     public async Task Kiro_mcp_not_registered_when_hooks_declined_interactively() {
         // An interactive "no" to the (only) Kiro prompt skips both hooks and MCP.
         var sink     = new Sink();

@@ -209,6 +209,15 @@ internal static class CodingAgentsStep {
 
         writeLine("  [green]✓[/] Kiro CLI detected");
 
+        // Both flags → nothing will be written (no agent clone, no MCP), so short-circuit with the
+        // accurate message BEFORE the PATH precheck — that check only matters when we'd write a
+        // config that invokes `kcap`.
+        if (options.SkipKiro && options.SkipKiroMcp) {
+            writeLine("  [dim]· Kiro CLI skipped by flags (hooks + MCP)[/]");
+
+            return false;
+        }
+
         // kcap must be on PATH for BOTH the agent hooks (`kcap hook`) and the MCP servers (`kcap mcp`) —
         // same precheck as the Cursor/Copilot branches. No kcap → neither hooks nor MCP.
         if (!installers.CapacitorOnPath()) {
@@ -218,13 +227,11 @@ internal static class CodingAgentsStep {
             return false;
         }
 
-        // --skip-kiro-hooks opts out of ONLY the invasive agent clone + default-agent flip. The
+        // --skip-kiro-hooks (alone) opts out of ONLY the invasive agent clone + default-agent flip. The
         // independent, non-invasive MCP registration (~/.kiro/settings/mcp.json) still applies —
         // gated separately by --skip-kiro-mcp — so MCP stays eligible under --skip-kiro-hooks.
         if (options.SkipKiro) {
-            writeLine(options.SkipKiroMcp
-                ? "  [dim]· Kiro CLI skipped by flags (hooks + MCP)[/]"
-                : "  [dim]· Kiro CLI hooks skipped by flag — MCP still registered (use --skip-kiro-mcp to skip that too)[/]");
+            writeLine("  [dim]· Kiro CLI hooks skipped by flag — MCP still registered (use --skip-kiro-mcp to skip that too)[/]");
             selected = true;   // MCP eligibility; HandleKiroMcp still honours --skip-kiro-mcp
 
             return false;

@@ -1419,8 +1419,25 @@ public static class PluginCommand {
 
         var refreshOnly = args.Contains("--if-installed");
 
-        // Refresh-only mode never touches a machine that never opted in.
-        if (refreshOnly && !KiroHooksInstaller.IsInstalled(agentPath)) return 0;
+        // Kiro's MCP lives in a SEPARATE file (~/.kiro/settings/mcp.json), independent of the agent
+        // clone — so a prior `--skip-kiro-hooks` (or a clone that failed because kiro-cli was missing)
+        // can leave an MCP-only install with no agent marker.
+        var mcpInstalled = new McpMarker("kiro").Owned(mcpPath).Any();
+
+        if (refreshOnly) {
+            // Never touch a machine that never opted in (neither hooks nor MCP).
+            if (!KiroHooksInstaller.IsInstalled(agentPath) && !mcpInstalled) return 0;
+
+            // MCP-only install: heal JUST the MCP file — do NOT fall through to the agent clone
+            // below, which would install the hooks the user opted out of. (Writing mcp.json needs
+            // no kcap on PATH, and the refresh path skips the PATH precheck anyway.)
+            if (!KiroHooksInstaller.IsInstalled(agentPath)) {
+                if (!args.Contains("--skip-kiro-mcp"))
+                    await RegisterKiroMcpServersAsync(env, mcpPath);
+
+                return 0;
+            }
+        }
 
         // Fresh install needs kcap on PATH: the agent + the MCP servers run the bare `kcap` command.
         if (!refreshOnly && !AgentDetector.IsInstalled("kcap")) {

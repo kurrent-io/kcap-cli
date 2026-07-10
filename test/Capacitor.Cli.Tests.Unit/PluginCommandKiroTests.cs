@@ -100,6 +100,46 @@ public class PluginCommandKiroTests {
         await Assert.That(servers["my-tool"]).IsNotNull();  // user server preserved
     }
 
+    [Test]
+    public async Task install_kiro_if_installed_heals_mcp_only_install_without_cloning_agent() {
+        using var _    = new EnvScope("KIRO_HOME", null);
+        using var home = new FakeUserHome();
+        var env = TestEnv(home.Path);
+
+        // MCP-only prior install, PARTIAL (only kcap-review registered, e.g. from an older kcap),
+        // and NO agent clone — as `--skip-kiro-hooks`, or a kiro-cli-less clone failure, leaves it.
+        var partial = KcapMcpServers.All.Where(s => s.Name == "kcap-review").ToList();
+        JsonMcpConfigWriter.Register(env.KiroMcpJson, partial, McpConfigShape.Standard, cwd: null, new McpMarker("kiro"));
+        await Assert.That(File.Exists(env.KiroKcapAgentJson)).IsFalse();  // no agent installed
+
+        var exit = await PluginCommand.HandleAsync(["plugin", "install", "--kiro", "--if-installed"], env);
+        await Assert.That(exit).IsEqualTo(0);
+
+        // The refresh reached RegisterKiroMcpServersAsync (instead of bailing on the missing agent
+        // marker) and added the three servers the partial install lacked...
+        var servers = JsonNode.Parse(await File.ReadAllTextAsync(env.KiroMcpJson))!.AsObject()["mcpServers"]!.AsObject();
+        var keys    = servers.Select(kv => kv.Key).ToArray();
+        await Assert.That(keys).Contains("kcap-sessions");
+        await Assert.That(keys).Contains("kcap-flows");
+        await Assert.That(keys).Contains("kcap-memory");
+        // ...and the agent was NOT cloned — a refresh must never install hooks the user opted out of.
+        await Assert.That(File.Exists(env.KiroKcapAgentJson)).IsFalse();
+    }
+
+    [Test]
+    public async Task install_kiro_if_installed_noop_when_nothing_installed() {
+        using var _    = new EnvScope("KIRO_HOME", null);
+        using var home = new FakeUserHome();
+        var env = TestEnv(home.Path);
+
+        // Neither agent nor MCP present → refresh must be a pure no-op (never force-installs).
+        var exit = await PluginCommand.HandleAsync(["plugin", "install", "--kiro", "--if-installed"], env);
+        await Assert.That(exit).IsEqualTo(0);
+
+        await Assert.That(File.Exists(env.KiroMcpJson)).IsFalse();
+        await Assert.That(File.Exists(env.KiroKcapAgentJson)).IsFalse();
+    }
+
     static PluginEnvironment TestEnv(string fakeHome) => new(
         HomeDirectory:     fakeHome,
         ResolvePluginPath: () => null,
