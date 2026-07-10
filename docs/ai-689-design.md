@@ -134,12 +134,15 @@ answers each.
     streaming tradeoff). A pure content fingerprint is rejected (r2-review B1 — no occurrence identity).
   - **Boundary-turn completeness** (r3-review B4): the turn interrupted mid-prompt must reappear
     **complete** in the replay (not truncated), else C4's discard-and-replay is unsound.
-  - **A closed-world end-of-replay barrier** (r3-review B4, r5-review 3): C0 must establish a signal
-    after which **no further replay `session/update` can arrive** — a true drain/EOF barrier, not a mere
-    ordering hint. C8's PRESENT/ABSENT check and the C6 gate reopen run ONLY after this barrier, so if
-    `session/load`'s response is not closed-world, C0 must find the real drain signal (a terminal
-    notification, or draining until quiescence with a bound); if none exists, the interrupted-turn
-    decision has a mid-replay window and reconnect re-scopes.
+  - **A protocol-backed closed-world end-of-replay barrier** (r3-review B4, r5-review 3, r6-review 1):
+    C0 must establish a signal ACP itself **guarantees** is terminal for replay — the `session/load`
+    response contract, an explicit EOF, or a terminal notification — after which **no further replay
+    `session/update` can arrive**. A **bounded quiescence / quiet-period heuristic is NOT acceptable**
+    to drive C8's PRESENT/ABSENT (r6-review 1): a late replayed user turn arriving after the quiet
+    period would fire *after* the same occurrence id was already requeued, recreating the duplicate.
+    C8's check and the C6 gate reopen run ONLY after this protocol-backed barrier. **If ACP provides no
+    protocol-backed barrier, PRESENT/ABSENT is undecidable → C8 uses the at-most-once fallback and/or
+    reconnect re-scopes** — never a heuristic barrier.
   **If C0 fails any of these, reconnect is re-scoped to a follow-up issue and NOT shipped** — A/B/D
   stand alone. No reconnect code lands until C0 answers all three.
 
@@ -224,9 +227,16 @@ answers each.
      `AcpConnection` call it inline on the pre-fault path without risking a block.
   4. On give-up, the gate opens into the terminal path (worker completes, `_updates` completes,
      orchestrator finalizes) — same disposition as an intentional stop.
-  This gate is the coupling point between C1/C2/C4; tests must cover "prompt queued during reconnect runs
-  only after the replay barrier", "boundary partial discarded not flushed on the crash fault", and
-  "write-side send failure triggers reconnect".
+  5. **Reopen ordering on successful resume (r6-review 2) — strict sequence, gate stays CLOSED
+     throughout:** (a) drain replay to C0's protocol-backed barrier; (b) C9 stop/finalized re-check;
+     (c) C8 PRESENT/ABSENT decision; (d) if ABSENT, durably enqueue the requeue (same occurrence id) at
+     the **head** of the post-replay queue, **before any live update** can be delivered; (e) C9 re-check
+     again; (f) **only then reopen the gate** for live delivery. This guarantees a requeued user turn is
+     never trailed by its own assistant/tool updates and no live update overtakes the barrier.
+  This gate is the coupling point between C1/C2/C4/C8/C9; tests must cover "prompt queued during
+  reconnect runs only after the replay barrier", "boundary partial discarded not flushed on the crash
+  fault", "write-side send failure triggers reconnect", and "on ABSENT, the requeued user turn is
+  delivered before any post-resume live update".
 
 - **C7 — intentional stop serialized against an in-progress relaunch (addresses r3-review B3).** Stop
   today calls `RequestGracefulStopAsync`/`WaitForExitAsync`/`TerminateAsync` against the *current*
