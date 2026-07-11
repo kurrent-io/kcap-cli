@@ -30,6 +30,29 @@ public sealed record ClientCapabilities(
     [property: JsonPropertyName("terminal")] bool           Terminal
 );
 
+/// <summary>
+/// <c>initialize</c> result — <c>AcpHostedAgentRuntime.StartAsync</c> deserializes the agent's
+/// <c>initialize</c> response into this to validate <see cref="ProtocolVersion"/> (must be <c>1</c>;
+/// the daemon speaks no other version yet) and to capture <see cref="AgentCapabilities"/> for later
+/// features (e.g. a reconnect path gated on <see cref="Acp.AgentCapabilities.LoadSession"/>).
+/// Deliberately minimal — the real wire response also carries <c>promptCapabilities</c>/
+/// <c>authMethods</c>, neither of which the daemon needs yet.
+/// </summary>
+public sealed record InitializeResult(
+    [property: JsonPropertyName("protocolVersion")]  int                 ProtocolVersion,
+    [property: JsonPropertyName("agentCapabilities")] AgentCapabilities?  AgentCapabilities
+);
+
+/// <summary>
+/// Agent-advertised capabilities from <c>initialize</c>'s result — only <see cref="LoadSession"/> is
+/// modeled for now (captured for a future reconnect path; nothing acts on it yet).
+/// <see cref="LoadSession"/> defaults to <see langword="false"/> when the wire omits it,
+/// matching the ACP spec's "absent means unsupported" convention.
+/// </summary>
+public sealed record AgentCapabilities(
+    [property: JsonPropertyName("loadSession")] bool LoadSession = false
+);
+
 public sealed record FsCapabilities(
     [property: JsonPropertyName("readTextFile")]  bool ReadTextFile,
     [property: JsonPropertyName("writeTextFile")] bool WriteTextFile
