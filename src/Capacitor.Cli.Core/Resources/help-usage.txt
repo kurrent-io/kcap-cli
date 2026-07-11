@@ -46,7 +46,7 @@ Session:
   validate-plan [id]               Validate plan completion for a session
   eval [--model N] [--chain] [id]  Run LLM-as-judge evaluation over a session
   generate-whats-done [--codex] <id>  Generate what's-done summary (--codex uses `codex exec`)
-  import [vendor-filters] [options]   Import local sessions (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode)
+  import [vendor-filters] [options]   Import local sessions (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode, Antigravity)
   set-title <title>                Set session title
   disable                          Stop recording and delete session data
   hide                             Hide session (owner-only visibility)
@@ -63,8 +63,8 @@ MCP servers (stdio):
   mcp memory                         Team memory tools (search, get, save, update, rescope, archive)
 
 Plugin:
-  plugin install [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--skills]   Register hooks/skills (Claude default; flag picks the vendor)
-  plugin remove  [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--skills]   Remove hooks/skills (Claude default; flag picks the vendor)
+  plugin install [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--skills]   Register hooks/skills (Claude default; flag picks the vendor)
+  plugin remove  [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--skills]   Remove hooks/skills (Claude default; flag picks the vendor)
 
 Maintenance:
   update                           Check for and install updates
@@ -73,7 +73,7 @@ Maintenance:
   --version                        Show version
   --help                           Show this help
 
-Hooks (internal — invoked by Claude Code / Codex / Cursor / Copilot / Gemini / Kiro / Pi / OpenCode):
+Hooks (internal — invoked by Claude Code / Codex / Cursor / Copilot / Gemini / Kiro / Pi / OpenCode / Antigravity):
   hook --claude                    Dispatch a Claude Code hook event (reads payload from stdin)
   hook --codex                     Dispatch a Codex CLI hook event
   hook --cursor                    Dispatch a Cursor IDE hook event
@@ -82,6 +82,7 @@ Hooks (internal — invoked by Claude Code / Codex / Cursor / Copilot / Gemini /
   hook --kiro --event <name>       Dispatch an AWS Kiro CLI hook event
   hook --pi --event <name> --file <f>  Dispatch a Pi lifecycle event (arg-driven; no stdin)
   hook --opencode --event <name> --session <id> --file <f>  Dispatch an SST OpenCode lifecycle event (arg-driven; no stdin)
+  hook --antigravity <event>       Dispatch a Google Antigravity control-hook event (event as positional arg; payload on stdin)
 
 Environment:
   KCAP_URL              Server URL (overrides config file)
