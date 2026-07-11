@@ -15,7 +15,7 @@ internal static class CodingAgentsStep {
     // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini
     // (AI-887), Kiro (AI-888), and Pi (AI-886) were all added after the original
     // four vendors.
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false, bool SkipAntigravityMcp = false, bool SkipAntigravityInstructions = false, bool SkipAntigravitySkills = false, bool SkipOpenCodeMcp = false, bool SkipOpenCodeInstructions = false);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false, bool SkipAntigravityMcp = false, bool SkipAntigravityInstructions = false, bool SkipAntigravitySkills = false, bool SkipOpenCodeMcp = false, bool SkipOpenCodeInstructions = false, bool SkipKiroMcp = false, bool SkipKiroSkills = false);
 
     internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false);
 
@@ -42,7 +42,9 @@ internal static class CodingAgentsStep {
             string  AntigravityInstructionsPath = "",
             string  AntigravitySkillsDir = "",
             string  OpenCodeMcpPath = "",
-            string  OpenCodeInstructionsPath = ""
+            string  OpenCodeInstructionsPath = "",
+            string  KiroMcpPath = "",
+            string  KiroSkillsDir = ""
         );
 
     internal record Installers(
@@ -69,7 +71,8 @@ internal static class CodingAgentsStep {
             Func<JsonMcpConfigWriter.Change>?                        RegisterAntigravityMcp = null,
             Func<AgentInstructionsWriter.Change>?                    InstallAntigravityInstructions = null,
             Func<JsonMcpConfigWriter.Change>?                        RegisterOpenCodeMcp = null,
-            Func<AgentInstructionsWriter.Change>?                    InstallOpenCodeInstructions = null
+            Func<AgentInstructionsWriter.Change>?                    InstallOpenCodeInstructions = null,
+            Func<JsonMcpConfigWriter.Change>?                        RegisterKiroMcp = null
         );
 
     internal record Result(
@@ -94,7 +97,9 @@ internal static class CodingAgentsStep {
             bool AntigravityInstructionsInstalled = false,
             bool AntigravitySkillsInstalled = false,
             bool OpenCodeMcpRegistered = false,
-            bool OpenCodeInstructionsInstalled = false
+            bool OpenCodeInstructionsInstalled = false,
+            bool KiroMcpRegistered = false,
+            bool KiroSkillsInstalled = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -135,7 +140,11 @@ internal static class CodingAgentsStep {
         // SELECTED Gemini (not on hook-write success), so a malformed settings.json that fails the
         // shared hooks/MCP write doesn't also block healing GEMINI.md.
         var geminiInstructionsInstalled = HandleGeminiInstructions(options, paths, installers, writeLine, geminiSelected);
-        var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, prompt, writeLine);
+        var kiroHooksInstalled    = HandleKiroHooks(options, detected, paths, installers, prompt, writeLine, out var kiroSelected);
+        var kiroMcpRegistered     = HandleKiroMcp(options, paths, installers, writeLine, kiroSelected);
+        // Kiro's skills live in ~/.kiro/skills (Kiro doesn't read ~/.agents/skills) and steer it toward
+        // the kcap MCP tools — gate on the user having SELECTED Kiro, like the MCP registration.
+        var kiroSkillsInstalled   = HandleKiroSkills(options, paths, installers, writeLine, kiroSelected);
         var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, prompt, writeLine);
         var openCodeExtensionInstalled = HandleOpenCodeExtension(options, detected, paths, installers, prompt, writeLine);
         var openCodeMcpRegistered      = HandleOpenCodeMcp(options, paths, installers, writeLine, openCodeExtensionInstalled);
@@ -180,7 +189,9 @@ internal static class CodingAgentsStep {
                 AntigravityInstructionsInstalled: antigravityInstructionsInstalled,
                 AntigravitySkillsInstalled: antigravitySkillsInstalled,
                 OpenCodeMcpRegistered: openCodeMcpRegistered,
-                OpenCodeInstructionsInstalled: openCodeInstructionsInstalled
+                OpenCodeInstructionsInstalled: openCodeInstructionsInstalled,
+                KiroMcpRegistered: kiroMcpRegistered,
+                KiroSkillsInstalled: kiroSkillsInstalled
             )
         );
     }
@@ -191,8 +202,11 @@ internal static class CodingAgentsStep {
             Paths              paths,
             Installers         installers,
             Func<string, bool> prompt,
-            Action<string>     writeLine
+            Action<string>     writeLine,
+            out bool           selected
         ) {
+        selected = false;
+
         if (!detected.Kiro) {
             writeLine("  [dim]· Kiro CLI not detected — skipping[/]");
 
@@ -201,39 +215,128 @@ internal static class CodingAgentsStep {
 
         writeLine("  [green]✓[/] Kiro CLI detected");
 
-        if (options.SkipKiro) {
-            writeLine("  [dim]· Kiro CLI hooks skipped by flag[/]");
+        // Both flags → nothing will be written (no agent clone, no MCP), so short-circuit with the
+        // accurate message BEFORE the PATH precheck — that check only matters when we'd write a
+        // config that invokes `kcap`.
+        if (options.SkipKiro && options.SkipKiroMcp) {
+            writeLine("  [dim]· Kiro CLI skipped by flags (hooks + MCP)[/]");
 
             return false;
         }
 
-        var shouldInstall = options.NoPrompt || prompt("Install Kiro CLI hooks?");
-
-        if (!shouldInstall) {
-            writeLine("  [dim]· Kiro hooks not installed (you can run kcap plugin install --kiro later)[/]");
-
-            return false;
-        }
-
-        // The agent JSON writes the bare "kcap hook --kiro" command and relies on
-        // Kiro finding kcap on PATH — same precheck as the Cursor/Copilot branches.
+        // kcap must be on PATH for BOTH the agent hooks (`kcap hook`) and the MCP servers (`kcap mcp`) —
+        // same precheck as the Cursor/Copilot branches. No kcap → neither hooks nor MCP.
         if (!installers.CapacitorOnPath()) {
-            writeLine("  [yellow]⚠[/] Kiro hooks not installed — 'kcap' is not on PATH.");
+            writeLine("  [yellow]⚠[/] Kiro integration skipped — 'kcap' is not on PATH.");
             writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
 
             return false;
         }
 
+        // --skip-kiro-hooks (alone) opts out of ONLY the invasive agent clone + default-agent flip. The
+        // independent, non-invasive MCP registration (~/.kiro/settings/mcp.json) still applies —
+        // gated separately by --skip-kiro-mcp — so MCP stays eligible under --skip-kiro-hooks.
+        if (options.SkipKiro) {
+            writeLine("  [dim]· Kiro CLI hooks skipped by flag — MCP still registered (use --skip-kiro-mcp to skip that too)[/]");
+            selected = true;   // MCP eligibility; HandleKiroMcp still honours --skip-kiro-mcp
+
+            return false;
+        }
+
+        var shouldInstall = options.NoPrompt || prompt("Install Kiro CLI hooks? (clones your default agent and sets it as default)");
+
+        if (!shouldInstall) {
+            // Interactive decline of the (only) Kiro prompt → skip hooks AND MCP.
+            writeLine("  [dim]· Kiro hooks not installed (you can run kcap plugin install --kiro later)[/]");
+
+            return false;
+        }
+
+        // Opted into Kiro + kcap on PATH → hooks + MCP. MCP still registers even if the clone below fails.
+        selected = true;
+
         var ok = installers.InstallKiroHooks?.Invoke(paths.KiroHooksPath) ?? false;
 
         if (!ok) {
-            writeLine("  [yellow]⚠[/] Could not write Kiro agent hooks file.");
+            writeLine("  [yellow]⚠[/] Could not set up the Kiro agent hooks (needs kiro-cli on PATH to clone your default agent; the clone or default-agent update may have failed).");
 
             return false;
         }
 
         writeLine($"  [green]✓[/] Kiro hooks installed ({Markup.Escape(paths.KiroHooksPath)})");
         writeLine("  [dim]  Note: Kiro loads agent hooks at startup — restart any running kiro session to pick them up.[/]");
+
+        return true;
+    }
+
+    /// <summary>Registers the kcap MCP servers in <c>~/.kiro/settings/mcp.json</c>, gated on
+    /// <paramref name="kiroSelected"/> (independent of the agent-clone outcome) + <see cref="Options.SkipKiroMcp"/>.</summary>
+    static bool HandleKiroMcp(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           kiroSelected
+        ) {
+        if (installers.RegisterKiroMcp is null || !kiroSelected || options.SkipKiroMcp) return false;
+
+        var configPath = Markup.Escape(paths.KiroMcpPath);
+
+        switch (installers.RegisterKiroMcp()) {
+            case JsonMcpConfigWriter.Change.Updated:
+                writeLine($"  [green]✓[/] Kiro MCP servers registered ([dim]{configPath}[/])");
+
+                return true;
+            case JsonMcpConfigWriter.Change.Unchanged:
+                writeLine("  [dim]· Kiro MCP servers already registered — no change needed[/]");
+
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not register Kiro MCP servers in {configPath} — see README to add them manually.");
+
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Installs kcap's skills into <c>~/.kiro/skills</c> (Kiro reads these via the agent's
+    /// <c>skill:///~/.kiro/skills/*/SKILL.md</c> resources — NOT the agent-agnostic
+    /// <c>~/.agents/skills</c>), steering Kiro toward the kcap MCP tools. Gated on the user having
+    /// SELECTED Kiro (same trigger as <see cref="HandleKiroMcp"/>) and on <see cref="Options.SkipKiroSkills"/>.
+    /// Mirrors <see cref="HandleAntigravitySkills"/>.
+    /// </summary>
+    static bool HandleKiroSkills(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           kiroSelected
+        ) {
+        if (!kiroSelected || options.SkipKiroSkills) return false;
+
+        var dst = paths.KiroSkillsDir;
+
+        if (installers.AgentSkillsCurrent?.Invoke(dst) == true) {
+            writeLine("  [dim]· Kiro skills already up to date — no change needed[/]");
+
+            return false;
+        }
+
+        if (paths.PluginDir is null) {
+            writeLine("  [yellow]⚠[/] Kiro skills could not be installed (plugin directory not found).");
+
+            return false;
+        }
+
+        var src = Path.Combine(paths.PluginDir, "skills");
+
+        if (!installers.InstallAgentSkills(src, dst)) {
+            writeLine($"  [yellow]⚠[/] Kiro skills could not be copied to {Markup.Escape(dst)}");
+
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] Kiro skills installed ([dim]{Markup.Escape(dst)}[/])");
 
         return true;
     }
@@ -649,13 +752,13 @@ internal static class CodingAgentsStep {
             Func<string, bool> prompt,
             Action<string>     writeLine
         ) {
-        // Antigravity is intentionally EXCLUDED here: it reads ~/.gemini/skills (installed by
-        // HandleAntigravitySkills), NOT the agent-agnostic ~/.agents/skills — so its presence alone
-        // must not trigger a ~/.agents/skills install it can't see. (Kiro likewise uses ~/.kiro/skills;
-        // left in for now as a harmless no-op until Kiro's own skills install lands.)
+        // Antigravity AND Kiro are intentionally EXCLUDED here: they read their own skills dirs
+        // (~/.gemini/skills via HandleAntigravitySkills, ~/.kiro/skills via HandleKiroSkills), NOT the
+        // agent-agnostic ~/.agents/skills — so their presence alone must not trigger a ~/.agents/skills
+        // install they can't see.
         var anyNonClaudeDetected =
             detected.Codex || detected.Cursor || detected.Copilot || detected.Gemini
-         || detected.Kiro  || detected.Pi     || detected.OpenCode;
+         || detected.Pi    || detected.OpenCode;
 
         // Nothing that reads ~/.agents/skills/ is present (Claude-only or nothing) — the
         // Claude plugin install handles Claude's skills, so there's nothing to do here.

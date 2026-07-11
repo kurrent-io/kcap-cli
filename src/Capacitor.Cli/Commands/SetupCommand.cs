@@ -39,6 +39,8 @@ public static class SetupCommand {
         var skipGeminiMcpFlag = args.Contains("--skip-gemini-mcp");
         var skipGeminiInstructionsFlag = args.Contains("--skip-gemini-instructions");
         var skipKiroFlag     = args.Contains("--skip-kiro-hooks");
+        var skipKiroMcpFlag  = args.Contains("--skip-kiro-mcp");
+        var skipKiroSkillsFlag = args.Contains("--skip-kiro-skills");
         var skipPiFlag       = args.Contains("--skip-pi-hooks");
         var skipOpenCodeFlag = args.Contains("--skip-opencode-hooks");
         var skipOpenCodeMcpFlag = args.Contains("--skip-opencode-mcp");
@@ -255,7 +257,9 @@ public static class SetupCommand {
             SkipAntigravityInstructions: skipAntigravityInstructionsFlag,
             SkipAntigravitySkills: skipAntigravitySkillsFlag,
             SkipOpenCodeMcp: skipOpenCodeMcpFlag,
-            SkipOpenCodeInstructions: skipOpenCodeInstructionsFlag);
+            SkipOpenCodeInstructions: skipOpenCodeInstructionsFlag,
+            SkipKiroMcp: skipKiroMcpFlag,
+            SkipKiroSkills: skipKiroSkillsFlag);
 
         // AI-794 — allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
@@ -288,7 +292,9 @@ public static class SetupCommand {
             AntigravityInstructionsPath: AntigravityPaths.InstructionsMd(),
             AntigravitySkillsDir:     AntigravityPaths.SkillsDir(),
             OpenCodeMcpPath:      OpenCodePaths.McpConfigJson(),
-            OpenCodeInstructionsPath: OpenCodePaths.AgentsMd());
+            OpenCodeInstructionsPath: OpenCodePaths.AgentsMd(),
+            KiroMcpPath:          KiroPaths.SettingsMcpJson(),
+            KiroSkillsDir:        KiroPaths.SkillsDir());
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -320,6 +326,8 @@ public static class SetupCommand {
                 OpenCodePaths.McpConfigJson(), KcapMcpServers.All, McpConfigShape.OpenCode, cwd: null, new McpMarker("opencode")),
             InstallOpenCodeInstructions: () => AgentInstructionsWriter.Write(
                 OpenCodePaths.AgentsMd(), KcapAgentInstructions.Body),
+            RegisterKiroMcp:          () => JsonMcpConfigWriter.Register(
+                KiroPaths.SettingsMcpJson(), KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("kiro")),
             RegisterGeminiMcp:        () => JsonMcpConfigWriter.Register(
                 GeminiPaths.SettingsJson(), KcapMcpServers.All, McpConfigShape.Gemini, cwd: null, new McpMarker("gemini")),
             InstallGeminiInstructions: () => AgentInstructionsWriter.Write(
