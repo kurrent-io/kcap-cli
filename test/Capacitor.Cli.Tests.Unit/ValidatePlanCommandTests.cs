@@ -223,4 +223,207 @@ public class ValidatePlanCommandTests : IDisposable {
         await Assert.That(stdout).Contains("[plan content unavailable due to size bounds]");
         await Assert.That(stdout).Contains("Validation is not possible");
     }
+
+    [Test, NotInParallel]
+    public async Task Degraded_primary_prefixes_the_plan_section_with_the_degraded_marker() {
+        // CRITICAL (AI-701 review): is_complete == false on the primary — a newer
+        // revision exists but hasn't resolved yet — must render the
+        // "unresolved newer revision" marker before the content. This mirrors the
+        // server's PlanRowRendering.DegradedText byte-for-byte (em-dash, spacing).
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/plan-artifacts").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody($$"""
+                {
+                  "primary": {
+                    "artifact_id": "art-degraded",
+                    "kind": "plan",
+                    "title": "Plan D",
+                    "source": "native_plan",
+                    "session_id": "{{SessionId}}",
+                    "content": "Step 1\nStep 2",
+                    "content_state": "ok",
+                    "is_complete": false,
+                    "is_confirmed": true,
+                    "is_truncated": false,
+                    "content_hash": "deg111",
+                    "version": 1,
+                    "discovered_at": "2026-07-01T00:00:00Z",
+                    "confidence": "high",
+                    "reason": "native plan tool",
+                    "is_primary": true
+                  },
+                  "artifacts": [],
+                  "diagnostics": []
+                }
+                """));
+
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/recap").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(RecapJson()));
+
+        using var client = new HttpClient();
+        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(client, _server.Url!, SessionId));
+
+        await Assert.That(stdout).Contains("[plan state: unresolved newer revision — last known complete text]");
+        await Assert.That(stdout).Contains("Step 1\nStep 2");
+
+        // Marker precedes the content.
+        var markerIndex  = stdout.IndexOf("[plan state: unresolved newer revision", StringComparison.Ordinal);
+        var contentIndex = stdout.IndexOf("Step 1\nStep 2", StringComparison.Ordinal);
+        await Assert.That(markerIndex).IsLessThan(contentIndex);
+    }
+
+    [Test, NotInParallel]
+    public async Task Degraded_and_truncated_primary_renders_both_markers_degraded_first() {
+        // Degraded composes WITH truncated: degraded line first, then the truncation
+        // line, mirroring the server's PlanRowRendering ordering.
+        const string content = "Truncated prefix of a degraded plan...";
+        var byteCount        = Encoding.UTF8.GetByteCount(content);
+
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/plan-artifacts").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody($$"""
+                {
+                  "primary": {
+                    "artifact_id": "art-degraded-truncated",
+                    "kind": "plan",
+                    "title": "Plan E",
+                    "source": "repo_file",
+                    "session_id": "{{SessionId}}",
+                    "content": "{{content}}",
+                    "content_state": "truncated",
+                    "is_complete": false,
+                    "is_confirmed": true,
+                    "is_truncated": true,
+                    "original_bytes": 5000,
+                    "content_hash": "deg222",
+                    "version": 1,
+                    "discovered_at": "2026-07-01T00:00:00Z",
+                    "confidence": "medium",
+                    "reason": "repo file over size bound",
+                    "is_primary": true
+                  },
+                  "artifacts": [],
+                  "diagnostics": []
+                }
+                """));
+
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/recap").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(RecapJson()));
+
+        using var client = new HttpClient();
+        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(client, _server.Url!, SessionId));
+
+        var degradedIndex  = stdout.IndexOf("[plan state: unresolved newer revision", StringComparison.Ordinal);
+        var truncatedIndex = stdout.IndexOf($"[plan truncated: first {byteCount} of 5000 bytes]", StringComparison.Ordinal);
+        var contentIndex   = stdout.IndexOf(content, StringComparison.Ordinal);
+
+        await Assert.That(degradedIndex).IsGreaterThanOrEqualTo(0);
+        await Assert.That(truncatedIndex).IsGreaterThan(degradedIndex);
+        await Assert.That(contentIndex).IsGreaterThan(truncatedIndex);
+    }
+
+    [Test, NotInParallel]
+    public async Task Primary_not_first_in_artifacts_array_still_renders_first_then_others_in_server_order() {
+        // MINOR (AI-701 review): the primary artifact can appear anywhere in the
+        // "artifacts" array (the server's discovery order is newest-first, not
+        // primary-first). Rendering must still put the primary's section first,
+        // followed by the OTHER artifacts in the order the server returned them.
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/plan-artifacts").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody($$"""
+                {
+                  "primary": {
+                    "artifact_id": "art-primary",
+                    "kind": "plan",
+                    "title": "Primary Plan",
+                    "source": "native_plan",
+                    "session_id": "{{SessionId}}",
+                    "content": "PRIMARY-CONTENT",
+                    "content_state": "ok",
+                    "is_complete": true,
+                    "is_confirmed": true,
+                    "is_truncated": false,
+                    "content_hash": "p1",
+                    "version": 1,
+                    "discovered_at": "2026-07-01T00:00:00Z",
+                    "confidence": "high",
+                    "reason": "native plan tool",
+                    "is_primary": true
+                  },
+                  "artifacts": [
+                    {
+                      "artifact_id": "art-other-1",
+                      "kind": "plan",
+                      "title": "Other Plan 1",
+                      "source": "repo_file",
+                      "session_id": "{{SessionId}}",
+                      "content": "OTHER-ONE-CONTENT",
+                      "content_state": "ok",
+                      "is_complete": true,
+                      "is_confirmed": true,
+                      "is_truncated": false,
+                      "content_hash": "o1",
+                      "version": 1,
+                      "discovered_at": "2026-07-01T00:00:00Z",
+                      "confidence": "low",
+                      "reason": "candidate",
+                      "is_primary": false
+                    },
+                    {
+                      "artifact_id": "art-primary",
+                      "kind": "plan",
+                      "title": "Primary Plan",
+                      "source": "native_plan",
+                      "session_id": "{{SessionId}}",
+                      "content": "PRIMARY-CONTENT",
+                      "content_state": "ok",
+                      "is_complete": true,
+                      "is_confirmed": true,
+                      "is_truncated": false,
+                      "content_hash": "p1",
+                      "version": 1,
+                      "discovered_at": "2026-07-01T00:00:00Z",
+                      "confidence": "high",
+                      "reason": "native plan tool",
+                      "is_primary": true
+                    },
+                    {
+                      "artifact_id": "art-other-2",
+                      "kind": "plan",
+                      "title": "Other Plan 2",
+                      "source": "repo_file",
+                      "session_id": "{{SessionId}}",
+                      "content": "OTHER-TWO-CONTENT",
+                      "content_state": "ok",
+                      "is_complete": true,
+                      "is_confirmed": true,
+                      "is_truncated": false,
+                      "content_hash": "o2",
+                      "version": 1,
+                      "discovered_at": "2026-07-01T00:00:00Z",
+                      "confidence": "low",
+                      "reason": "candidate",
+                      "is_primary": false
+                    }
+                  ],
+                  "diagnostics": []
+                }
+                """));
+
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/recap").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(RecapJson()));
+
+        using var client = new HttpClient();
+        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(client, _server.Url!, SessionId));
+
+        var primaryIndex = stdout.IndexOf("PRIMARY-CONTENT", StringComparison.Ordinal);
+        var other1Index  = stdout.IndexOf("OTHER-ONE-CONTENT", StringComparison.Ordinal);
+        var other2Index  = stdout.IndexOf("OTHER-TWO-CONTENT", StringComparison.Ordinal);
+
+        await Assert.That(primaryIndex).IsGreaterThanOrEqualTo(0);
+        await Assert.That(primaryIndex).IsLessThan(other1Index);
+        await Assert.That(other1Index).IsLessThan(other2Index);
+
+        // The primary's content is rendered exactly once (not duplicated because it
+        // also appears in the "artifacts" array).
+        var occurrences = System.Text.RegularExpressions.Regex.Matches(stdout, "PRIMARY-CONTENT").Count;
+        await Assert.That(occurrences).IsEqualTo(1);
+    }
 }

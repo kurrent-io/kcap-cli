@@ -102,12 +102,24 @@ static class ValidatePlanCommand {
     }
 
     /// <summary>
+    /// Bracketed marker for a degraded artifact (<c>IsComplete == false</c>) — a newer revision
+    /// exists but hasn't resolved yet, so this is the last known complete text. Single-sourced
+    /// here (rather than referenced from the server) because the CLI has no dependency on
+    /// <c>Capacitor.Server</c>; text and spacing must stay byte-for-byte identical to the
+    /// server's <c>PlanRowRendering.DegradedText</c> (AI-701 review finding).
+    /// </summary>
+    const string DegradedMarker = "[plan state: unresolved newer revision — last known complete text]";
+
+    /// <summary>
     /// Renders the "## Plan" section from the discovery response: the primary artifact
     /// first (the server's designated best candidate for validation — see
     /// <c>PlanArtifactComposer</c>), followed by any other discovered artifacts in the
-    /// order returned (newest-first). A truncated artifact is prefixed with a byte-count
-    /// marker; an unavailable one renders a placeholder — and, when the PRIMARY itself is
-    /// unavailable, an explicit note that full validation isn't possible without its content.
+    /// order returned (newest-first). A degraded artifact (<c>is_complete == false</c>) is
+    /// prefixed with <see cref="DegradedMarker"/>; a truncated one additionally gets a
+    /// byte-count marker (degraded composes WITH truncated: degraded line first, then the
+    /// truncation line, mirroring the server's <c>PlanRowRendering</c> ordering); an
+    /// unavailable one renders a placeholder — and, when the PRIMARY itself is unavailable,
+    /// an explicit note that full validation isn't possible without its content.
     /// </summary>
     static async Task RenderPlanArtifacts(PlanArtifactDto? primary, IReadOnlyList<PlanArtifactDto> artifacts) {
         var ordered = primary is null
@@ -121,6 +133,10 @@ static class ValidatePlanCommand {
 
         foreach (var artifact in ordered) {
             var isPrimary = primary is not null && artifact.ArtifactId == primary.ArtifactId;
+
+            if (!artifact.IsComplete) {
+                await Console.Out.WriteLineAsync(DegradedMarker);
+            }
 
             switch (artifact.ContentState) {
                 case "truncated": {
