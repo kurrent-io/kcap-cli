@@ -34,12 +34,22 @@ public sealed record PluginEnvironment(
     public string CursorUserHooksJson => CursorPaths.UserHooksJson(HomeDirectory);
     public string CursorMcpJson       => CursorPaths.UserMcpJson(HomeDirectory);
     public string CopilotKcapHooksJson => CopilotPaths.KcapHooksJson(HomeDirectory);
+    public string CopilotMcpConfigJson => CopilotPaths.McpConfigJson(HomeDirectory);
+    public string CopilotInstructionsMd => CopilotPaths.InstructionsMd(HomeDirectory);
     public string GeminiSettingsJson   => GeminiPaths.SettingsJson(HomeDirectory);
+    public string GeminiInstructionsMd => GeminiPaths.GeminiMd(HomeDirectory);
     public string KiroKcapAgentJson    => KiroPaths.KcapAgentJson(HomeDirectory);
     public string KiroSettingsJson     => KiroPaths.SettingsFile(HomeDirectory);
+    public string KiroMcpJson          => KiroPaths.SettingsMcpJson(HomeDirectory);
+    public string KiroSkillsDir        => KiroPaths.SkillsDir(HomeDirectory);
     public string PiKcapExtension      => PiPaths.KcapExtension(HomeDirectory);
     public string OpenCodeKcapPlugin    => OpenCodePaths.KcapPlugin(HomeDirectory);
+    public string OpenCodeMcpConfigJson => OpenCodePaths.McpConfigJson(HomeDirectory);
+    public string OpenCodeAgentsMd      => OpenCodePaths.AgentsMd(HomeDirectory);
     public string AntigravityHooksJson  => AntigravityPaths.GlobalHooksJson(HomeDirectory);
+    public string AntigravityMcpConfigJson  => AntigravityPaths.McpConfigJson(HomeDirectory);
+    public string AntigravityInstructionsMd => AntigravityPaths.InstructionsMd(HomeDirectory);
+    public string AntigravitySkillsDir      => AntigravityPaths.SkillsDir(HomeDirectory);
     public string AgentsSkillsDir     => Path.Combine(HomeDirectory, ".agents", "skills");
     public string LegacyCodexSkills   => Path.Combine(CodexHome, "skills");
 

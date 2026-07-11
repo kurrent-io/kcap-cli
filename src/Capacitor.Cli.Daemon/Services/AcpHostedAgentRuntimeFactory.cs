@@ -57,7 +57,7 @@ internal sealed class AcpHostedAgentRuntimeFactory(
         );
 
         try {
-            await runtime.StartAsync(ctx.Worktree.Path, ctx.Prompt, ct).ConfigureAwait(false);
+            await runtime.StartAsync(ctx.Worktree.Path, ctx.Prompt, ct, ResolveRequestedModel(config, ctx)).ConfigureAwait(false);
         } catch {
             // The runtime owns both the connection and the process; dispose on a failed handshake
             // so a half-started cursor-agent child is never leaked.
@@ -66,8 +66,27 @@ internal sealed class AcpHostedAgentRuntimeFactory(
             throw;
         }
 
-        return new HostedRuntimeStart(runtime, McpConfigPath: null);
+        // The runtime IS the transcript source (it implements
+        // IAcpTranscriptSource directly) — hand it back on HostedRuntimeStart so the orchestrator can
+        // bind + forward without downcasting Runtime.
+        return new HostedRuntimeStart(runtime, McpConfigPath: null, Transcript: runtime);
     }
+
+    /// <summary>
+    /// Merges the per-launch model override with the daemon-wide default —
+    /// <paramref name="ctx"/>'s own <c>Model</c> takes precedence when the launch specifies one,
+    /// else falls back to <paramref name="config"/>'s <c>CursorModel</c>. Mirrors the existing
+    /// <c>"default"</c>-sentinel convention <c>CodexLauncher.AddModelArg</c> already uses for "no
+    /// override requested" (the UI dispatches the literal string <c>"default"</c>, not an empty
+    /// string, when the user hasn't picked a model). The merged value is still a bare family prefix
+    /// or an exact <c>modelId</c> — final resolution against the session's <c>availableModels</c>
+    /// happens in <see cref="AcpHostedAgentRuntime"/> via
+    /// <see cref="Capacitor.Cli.Core.Acp.AcpModelResolver"/>.
+    /// </summary>
+    static string? ResolveRequestedModel(DaemonConfig config, RuntimeStartContext ctx) =>
+        !string.IsNullOrEmpty(ctx.Model) && !string.Equals(ctx.Model, "default", StringComparison.OrdinalIgnoreCase)
+            ? ctx.Model
+            : config.CursorModel;
 
     /// <summary>
     /// The REAL, production process-spawning path — unchanged in behavior from the pre-round-4

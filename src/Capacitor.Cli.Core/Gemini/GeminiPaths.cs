@@ -50,6 +50,15 @@ public static class GeminiPaths {
         => Path.Combine(Root(home, geminiCliHome), "settings.json");
 
     /// <summary>
+    /// Global context/memory file (<c>~/.gemini/GEMINI.md</c>) — Gemini CLI loads it for
+    /// every project (top of the hierarchical GEMINI.md chain), so it is where kcap installs
+    /// its steering-instructions block. A separate file from <see cref="SettingsJson"/>; honors
+    /// <c>GEMINI_CLI_HOME</c> like the rest of the layout.
+    /// </summary>
+    public static string GeminiMd(string? home = null, string? geminiCliHome = null)
+        => Path.Combine(Root(home, geminiCliHome), "GEMINI.md");
+
+    /// <summary>
     /// Per-project temporary state root: <c>~/.gemini/tmp/&lt;project&gt;/</c>.
     /// Chat recordings live under <c>chats/</c> within each project dir.
     /// </summary>

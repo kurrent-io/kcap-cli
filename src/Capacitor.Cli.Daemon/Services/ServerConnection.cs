@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -21,8 +22,19 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     readonly PendingPermissionRegistry _pendingPermissions  = new();
     readonly PendingAcpInteractionRegistry _pendingAcpInteractions = new();
 
+    /// <summary>
+    /// Every currently-active ACP session↔agent binding this daemon owns, keyed by agentId.
+    /// Populated by <see cref="RegisterAcpBinding"/> (right after the initial
+    /// <see cref="AcpSessionStartedAsync"/> bind succeeds) and drained by
+    /// <see cref="UnregisterAcpBinding"/> (on agent end).
+    /// <see cref="ReBindAcpSessionsAsync"/> replays every entry here idempotently on each reconnect —
+    /// see that method's remarks for why it does NOT go through the gated <see cref="AcpSessionStartedAsync"/>.
+    /// </summary>
+    readonly ConcurrentDictionary<string, AcpBindInfo> _acpBindings = new();
+
     static readonly TimeSpan PermissionRetryPollInterval = TimeSpan.FromMilliseconds(500);
     static readonly TimeSpan EndSessionRetryPollInterval  = TimeSpan.FromMilliseconds(500);
+    static readonly TimeSpan AcpRetryPollInterval         = TimeSpan.FromMilliseconds(500);
 
     // Events for incoming commands from server
     public event Func<LaunchAgentCommand, Task>?    OnLaunchAgent;
@@ -322,19 +334,36 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     /// <summary>
     /// Runs a full (re-)registration through <see cref="RegistrationGate.RunRegistrationAsync"/>:
-    /// <c>DaemonConnect</c>, then per-agent re-registration (<see cref="ReRegisterAgentsHook"/>),
-    /// and only THEN restores readiness. Folding agent re-registration into the readiness bracket
-    /// closes the window where a permission invoke could fire after <c>DaemonConnect</c> but
-    /// before the server re-established per-session ownership (AI-864). The gate clears readiness
-    /// at the start of the bracket, which is also what drops readiness on the heartbeat
-    /// slot-displacement path (DaemonHeartbeatLoop.cs → ReRegisterAsync), where the transport
-    /// stays up and no Reconnecting/Closed event fires.
+    /// <c>DaemonConnect</c>, then per-agent re-registration (<see cref="ReRegisterAgentsHook"/>)
+    /// followed by the ACP re-bind (<see cref="ReRegisterAgentsAndAcpBindingsAsync"/>), and only THEN
+    /// restores readiness. Folding agent re-registration into the readiness bracket closes the
+    /// window where a permission invoke could fire after <c>DaemonConnect</c> but before the server
+    /// re-established per-session ownership (AI-864); folding the ACP re-bind in right after it
+    /// closes the equivalent window for <see cref="SendAcpEventsAsync"/> — that call is
+    /// <see cref="IsReady"/>-gated, so it can never
+    /// reach the server before <see cref="ReBindAcpSessionsAsync"/> has re-established every active
+    /// binding. The gate clears readiness at the start of the bracket, which is also what drops
+    /// readiness on the heartbeat slot-displacement path (DaemonHeartbeatLoop.cs → ReRegisterAsync),
+    /// where the transport stays up and no Reconnecting/Closed event fires.
     /// </summary>
     Task RegisterDaemon() =>
         _gate.RunRegistrationAsync(
             daemonConnect: DaemonConnectAsync,
-            reRegisterAgents: () => ReRegisterAgentsHook?.Invoke() ?? Task.CompletedTask
+            reRegisterAgents: ReRegisterAgentsAndAcpBindingsAsync
         );
+
+    /// <summary>
+    /// Composes the existing per-agent re-registration hook with the ACP reconnect re-bind — AFTER
+    /// agent re-registration, so per-session agent ownership is restored before an ACP binding tries
+    /// to reference its agent. Both steps
+    /// run inside <see cref="RegisterDaemon"/>'s <see cref="RegistrationGate.RunRegistrationAsync"/>
+    /// bracket, i.e. strictly BEFORE <see cref="IsReady"/> can report true — <c>internal</c> (not
+    /// <c>private</c>) so it can be driven directly in tests without a live hub connection.
+    /// </summary>
+    internal async Task ReRegisterAgentsAndAcpBindingsAsync() {
+        await (ReRegisterAgentsHook?.Invoke() ?? Task.CompletedTask);
+        await ReBindAcpSessionsAsync();
+    }
 
     async Task DaemonConnectAsync() {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
@@ -407,8 +436,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// (re-)registration — <c>DaemonConnect</c> AND per-agent re-registration (see
     /// <see cref="RegisterDaemon"/>). The permission-request retry loop waits on this rather than
     /// raw <see cref="HubConnectionState.Connected"/> so a retry can't race re-registration.
+    /// <c>virtual</c> so unit tests can control readiness directly without a live SignalR transport
+    /// (see the ACP hub-method tests).
     /// </summary>
-    internal bool IsReady => _gate.IsReady(_hub.State);
+    internal virtual bool IsReady => _gate.IsReady(_hub.State);
 
     async Task OnReconnected(string? connectionId) {
         LogReconnected();
@@ -618,6 +649,176 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         ex is Microsoft.AspNetCore.SignalR.HubException he
         && he.Message.Contains("owning session", StringComparison.Ordinal);
 
+    // ── ACP wire contract forwarding ────────────────────────────────────────────────────────────
+    // Two gated hub-invoke methods mirroring the server's
+    // CapacitorHub.AcpSessionStarted/AcpSessionEvents (Capacitor.Server.Sessions.CapacitorHub)
+    // exactly — same method names, same argument order/names — plus the
+    // reconnect re-bind registry or above (RegisterAcpBinding/UnregisterAcpBinding/ReBindAcpSessionsAsync).
+    // AcpTranscriptForwarder (Acp/AcpTranscriptForwarder.cs) is the stateful caller of SendAcpEventsAsync;
+    // this class never itself decides seq/gap/retry — it only forwards + gates + re-binds.
+
+    /// <summary>
+    /// Registers an ACTIVE ACP session↔agent binding (called right after
+    /// its initial <see cref="AcpSessionStartedAsync"/> call succeeds) so a future reconnect's
+    /// <see cref="ReBindAcpSessionsAsync"/> can idempotently re-establish it. Overwriting an existing
+    /// entry for the same <paramref name="agentId"/> is harmless — the server-side bind is itself
+    /// idempotent on a same-agent re-bind (<c>AcpSessionRegistry.TryBindAsync</c>).
+    /// </summary>
+    public void RegisterAcpBinding(string agentId, AcpBindInfo bindInfo) => _acpBindings[agentId] = bindInfo;
+
+    /// <summary>
+    /// Removes an ACP binding (when the agent ends) so a later reconnect no longer tries to
+    /// re-invoke <c>AcpSessionStarted</c> for an agent that no longer exists.
+    /// </summary>
+    public void UnregisterAcpBinding(string agentId) => _acpBindings.TryRemove(agentId, out _);
+
+    /// <summary>
+    /// Bounded backoff between re-bind attempts inside <see cref="ReBindAcpSessionsAsync"/> — short
+    /// by design since this runs INSIDE the registration bracket, before
+    /// <see cref="IsReady"/> flips true, so a slow bound here delays every other inbound/outbound
+    /// call on this connection. Settable so tests don't wait for the real value.
+    /// </summary>
+    internal TimeSpan AcpRebindRetryDelay { get; set; } = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// How many times <see cref="ReBindAcpSessionsAsync"/> retries a single binding's re-bind before
+    /// giving up on it. Bounded so a binding that can never be re-established (the
+    /// server has forgotten it, or the agent it belongs to has ended) isn't replayed forever on every
+    /// future reconnect.
+    /// </summary>
+    internal const int AcpRebindMaxAttempts = 3;
+
+    /// <summary>
+    /// Re-invokes <c>AcpSessionStarted</c> directly on the hub — bypassing the gated
+    /// <see cref="AcpSessionStartedAsync"/>/<see cref="IsReady"/> path on purpose — for every
+    /// currently-registered ACP binding. Called from
+    /// <see cref="ReRegisterAgentsAndAcpBindingsAsync"/>, itself run inside
+    /// <see cref="RegistrationGate.RunRegistrationAsync"/>'s bracket BEFORE
+    /// <see cref="RegistrationGate.MarkRegistered"/> — i.e. while <see cref="IsReady"/> is still
+    /// FALSE. Gating this call on <see cref="IsReady"/> (the way the public wrapper does) would
+    /// therefore deadlock: <see cref="IsReady"/> can only become true once this very method returns.
+    /// The transport itself is already <see cref="HubConnectionState.Connected"/> by the time
+    /// <see cref="RegisterDaemon"/> runs (that is what triggered it), so invoking the raw hub method
+    /// here is safe — exactly the same reasoning that lets <see cref="AgentRegisteredAsync"/>/
+    /// <see cref="AgentStatusChangedAsync"/> be called ungated from
+    /// <c>AgentOrchestrator.ReRegisterAgentsAsync</c>. Best-effort per binding: one binding's re-bind
+    /// failure does not stop the others or withhold daemon readiness for the rest of this connection,
+    /// mirroring <c>ReRegisterAgentsAsync</c>'s per-agent isolation.
+    ///
+    /// <b>Bounded re-bind-miss:</b> a binding that fails to re-establish would
+    /// otherwise be silently skipped and left registered — <see cref="IsReady"/> flips true
+    /// regardless once this whole pass returns, so the forwarder's <see cref="SendAcpEventsAsync"/>
+    /// calls would start retrying the SAME batch against a binding the server never got, forever
+    /// (nothing replays the bind itself until another reconnect). Retry each binding up to
+    /// <see cref="AcpRebindMaxAttempts"/> times (short <see cref="AcpRebindRetryDelay"/> backoff
+    /// between attempts) before giving up on it; on a bound-exhausting permanent failure,
+    /// <see cref="UnregisterAcpBinding"/> removes it so a LATER reconnect doesn't replay it either.
+    /// </summary>
+    internal async Task ReBindAcpSessionsAsync() {
+        foreach (var (agentId, bind) in _acpBindings) {
+            var rebound = false;
+
+            for (var attempt = 1; attempt <= AcpRebindMaxAttempts; attempt++) {
+                try {
+                    await InvokeAcpSessionStartedRawAsync(agentId, bind.Vendor, bind.AcpSessionId, bind.Cwd, bind.Model, bind.Metadata, _ct);
+                    rebound = true;
+
+                    break;
+                } catch (Exception ex) {
+                    LogAcpRebindFailed(ex, agentId, bind.AcpSessionId, attempt, AcpRebindMaxAttempts);
+
+                    if (attempt == AcpRebindMaxAttempts) break;
+
+                    try {
+                        await Task.Delay(AcpRebindRetryDelay, _ct);
+                    } catch (OperationCanceledException) {
+                        return; // shutting down mid-retry — nothing more to do here
+                    }
+                }
+            }
+
+            if (!rebound) {
+                LogAcpRebindGivingUp(agentId, bind.AcpSessionId, AcpRebindMaxAttempts);
+                UnregisterAcpBinding(agentId);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Binds an ACP canonical session to an agent. Gated
+    /// exactly like <see cref="EndAgentSessionAsync"/>/<see cref="RequestPermissionAsync"/> —
+    /// <see cref="ConnectionRetry"/> waits for <see cref="IsReady"/> before every attempt, so this
+    /// can never fire against a connection the server hasn't (re-)registered. Idempotent server-side
+    /// (<c>AcpSessionRegistry</c>'s same-agent re-bind), so callers (the initial bind, and this
+    /// class's own <see cref="ReBindAcpSessionsAsync"/> reconnect path) may invoke the underlying hub
+    /// method again freely — a redundant re-bind is harmless even if the two race.
+    /// </summary>
+    public virtual Task AcpSessionStartedAsync(
+            string                               agentId,
+            string                               vendor,
+            string                               acpSessionId,
+            string?                              cwd,
+            string?                              model,
+            IReadOnlyDictionary<string, string>? metadata,
+            CancellationToken                    ct = default
+        ) => ConnectionRetry.InvokeWithConnectionRetryAsync(
+            () => InvokeAcpSessionStartedRawAsync(agentId, vendor, acpSessionId, cwd, model, metadata, ct),
+            () => IsReady,
+            AcpRetryPollInterval,
+            attempt => LogAcpSessionStartedRetry(agentId, attempt),
+            ct
+        );
+
+    /// <summary>
+    /// Forwards a batch of ACP transcript envelopes to the server's <c>AcpSessionEvents</c> hub
+    /// method and returns the ack
+    /// <c>AcpTranscriptForwarder</c> uses to drive its seq/gap/terminal state machine. Gated exactly
+    /// like <see cref="AcpSessionStartedAsync"/> — a post-reconnect batch blocks on
+    /// <see cref="IsReady"/> until <see cref="ReBindAcpSessionsAsync"/> has re-established the
+    /// binding, so it can never reach the server ahead of the
+    /// re-bind.
+    /// </summary>
+    public virtual Task<AcpBatchAck> SendAcpEventsAsync(
+            string             agentId,
+            string             acpSessionId,
+            AcpEventEnvelope[] envelopes,
+            CancellationToken  ct = default
+        ) => ConnectionRetry.InvokeWithConnectionRetryAsync(
+            () => InvokeAcpSessionEventsRawAsync(agentId, acpSessionId, envelopes, ct),
+            () => IsReady,
+            AcpRetryPollInterval,
+            attempt => LogAcpEventsRetry(agentId, attempt),
+            ct
+        );
+
+    /// <summary>
+    /// The actual <c>AcpSessionStarted</c> hub invocation, isolated into its own <c>virtual</c>
+    /// method so both <see cref="AcpSessionStartedAsync"/> (gated) and
+    /// <see cref="ReBindAcpSessionsAsync"/> (ungated, see its remarks) share one call site, and so
+    /// unit tests can capture/verify the exact payload without a live hub connection.
+    /// </summary>
+    internal virtual Task InvokeAcpSessionStartedRawAsync(
+            string                               agentId,
+            string                               vendor,
+            string                               acpSessionId,
+            string?                              cwd,
+            string?                              model,
+            IReadOnlyDictionary<string, string>? metadata,
+            CancellationToken                    ct
+        ) => _hub.InvokeAsync("AcpSessionStarted", agentId, vendor, acpSessionId, cwd, model, metadata, cancellationToken: ct);
+
+    /// <summary>
+    /// The actual <c>AcpSessionEvents</c> hub invocation, isolated into its own <c>virtual</c> method
+    /// so <see cref="SendAcpEventsAsync"/>'s gating can be tested against a fake payload capture
+    /// without a live hub connection.
+    /// </summary>
+    internal virtual Task<AcpBatchAck> InvokeAcpSessionEventsRawAsync(
+            string             agentId,
+            string             acpSessionId,
+            AcpEventEnvelope[] envelopes,
+            CancellationToken  ct
+        ) => _hub.InvokeAsync<AcpBatchAck>("AcpSessionEvents", agentId, acpSessionId, envelopes, cancellationToken: ct);
+
     /// <summary>
     /// Queues a base64 PTY chunk for the hosted-agent terminal mirror. AI-842/AI-844:
     /// chunks are drained by <see cref="TerminalOutputSender"/>'s single ordered loop
@@ -795,6 +996,18 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     [LoggerMessage(Level = LogLevel.Information, Message = "EndAgentSession for agent {AgentId} interrupted by a connection drop (retry {Attempt}); waiting for the daemon connection to recover before retrying")]
     partial void LogEndSessionRetry(string agentId, int attempt);
 
+    [LoggerMessage(Level = LogLevel.Information, Message = "AcpSessionStarted for agent {AgentId} interrupted by a connection drop (retry {Attempt}); waiting for the daemon connection to recover before retrying")]
+    partial void LogAcpSessionStartedRetry(string agentId, int attempt);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "AcpSessionEvents for agent {AgentId} interrupted by a connection drop (retry {Attempt}); waiting for the daemon connection to recover before retrying")]
+    partial void LogAcpEventsRetry(string agentId, int attempt);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Reconnect re-bind of ACP session {AcpSessionId} for agent {AgentId} failed (attempt {Attempt}/{MaxAttempts})")]
+    partial void LogAcpRebindFailed(Exception ex, string agentId, string acpSessionId, int attempt, int maxAttempts);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Reconnect re-bind of ACP session {AcpSessionId} for agent {AgentId} failed after {MaxAttempts} attempts — unregistering the binding so it isn't replayed forever")]
+    partial void LogAcpRebindGivingUp(string agentId, string acpSessionId, int maxAttempts);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to post agent run event, retrying in {Delay}s")]
     partial void LogEventPostFailed(Exception ex, double delay);
 
@@ -844,3 +1057,19 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         }
     }
 }
+
+/// <summary>
+/// The args needed to re-invoke <c>AcpSessionStarted</c> after a reconnect. Purely in-memory —
+/// never (de)serialized — captured once
+/// at initial-bind time via <see cref="ServerConnection.RegisterAcpBinding"/> and replayed
+/// idempotently by <see cref="ServerConnection.ReBindAcpSessionsAsync"/> on every reconnect until
+/// <see cref="ServerConnection.UnregisterAcpBinding"/> removes it. Top-level (not nested in
+/// <see cref="ServerConnection"/>) purely so tests can reference it without qualification.
+/// </summary>
+internal sealed record AcpBindInfo(
+    string                               Vendor,
+    string                               AcpSessionId,
+    string?                              Cwd,
+    string?                              Model,
+    IReadOnlyDictionary<string, string>? Metadata = null
+);

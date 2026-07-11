@@ -125,6 +125,9 @@ public static partial class DaemonRunner {
         if (Environment.GetEnvironmentVariable("KCAP_CURSOR_PATH") is { Length: > 0 } envCursorPath)
             config.CursorPath = envCursorPath;
 
+        if (Environment.GetEnvironmentVariable("KCAP_CURSOR_MODEL") is { Length: > 0 } envCursorModel)
+            config.CursorModel = envCursorModel;
+
         // Shared name resolution with the CLI supervisor — the CLI's
         // DaemonCommands and the daemon binary must agree on the name so
         // the per-name PID file the CLI inspects is the one the daemon
@@ -280,11 +283,20 @@ public static partial class DaemonRunner {
         // Cursor (which has no IHostedAgentLauncher) is advertised once cursor-agent is installed.
         // The launch dialog filters its vendor selector by this list. Ordered alphabetically so the
         // wire format is stable across restarts.
-        config.SupportedVendors = host.Services.GetServices<IHostedAgentRuntimeFactory>()
+        var runtimeFactories = host.Services.GetServices<IHostedAgentRuntimeFactory>().ToArray();
+
+        config.SupportedVendors = runtimeFactories
             .Where(f => f.IsAvailable())
             .Select(f => f.Vendor)
             .OrderBy(v => v, StringComparer.Ordinal)
             .ToArray();
+
+        // IsAvailable()==false silently omits cursor from SupportedVendors above — correct
+        // behavior (the launch dialog just won't offer Cursor), but gave operators no clue WHY. One
+        // Warning at startup (not per-launch) so a missing/misconfigured cursor-agent install is
+        // visible in the daemon's own logs instead of only showing up as an absent vendor downstream.
+        if (ShouldWarnCursorUnavailable(runtimeFactories))
+            LogCursorUnavailable(logger, config.CursorPath);
 
         LogDaemonStarting(logger, config.Name, config.ServerUrl);
 
@@ -410,8 +422,21 @@ public static partial class DaemonRunner {
         _                              => null
     };
 
+    /// <summary>
+    /// True when a "cursor" <see cref="IHostedAgentRuntimeFactory"/> is registered but
+    /// reports itself unavailable — the signal for <see cref="RunAsync"/>'s one-time startup
+    /// Warning. Pulled out as a pure predicate over the factory list (rather than inlined in
+    /// <see cref="RunAsync"/>) so it's testable without spinning up the whole DI host that method
+    /// builds.
+    /// </summary>
+    internal static bool ShouldWarnCursorUnavailable(IEnumerable<IHostedAgentRuntimeFactory> factories) =>
+        factories.FirstOrDefault(f => f.Vendor == "cursor") is { } cursorFactory && !cursorFactory.IsAvailable();
+
     [LoggerMessage(Level = LogLevel.Information, Message = "kcap daemon '{Name}' starting, connecting to {ServerUrl}")]
     static partial void LogDaemonStarting(ILogger logger, string name, string serverUrl);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Cursor ACP runtime unavailable: cursor-agent CLI not found (looked for '{CursorPath}'). Cursor will not be offered as a hosted-agent vendor until this is fixed. Set KCAP_CURSOR_PATH to the cursor-agent executable, or install the Cursor CLI, then restart the daemon.")]
+    static partial void LogCursorUnavailable(ILogger logger, string cursorPath);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Previous '{Name}' daemon (PID {Pid}) exited WITHOUT a graceful shutdown — its lock was left for the kernel to release. That is the signature of an uncatchable kill (macOS jetsam/OOM, `kill -9`), a power loss, or a hard native crash; an in-process signal handler cannot record it. If this recurs, run the daemon as a supervised service (`kcap daemon service install`) so it auto-restarts.")]
     static partial void LogPriorUncleanExit(ILogger logger, string name, string pid);

@@ -116,6 +116,31 @@ public class AcpHostedAgentRuntimeTests {
         await Assert.That(promptBlocks[0].GetProperty("text").GetString()).IsEqualTo("do the thing");
     }
 
+    // A live capability probe against the real cursor-agent found it performs file/shell operations
+    // itself and never requests client fs/terminal, so the daemon must keep advertising NONE of
+    // them — advertising a capability we can't safely enforce is exactly the failure mode this
+    // locks against. Fails loudly if a future change flips one on without revisiting that decision.
+    [Test]
+    public async Task StartAsync_advertises_no_fs_or_terminal_client_capabilities() {
+        await using var h = new Harness();
+        h.StartFakeAgentLoop();
+
+        await h.Runtime.StartAsync("/abs/worktree", "do the thing", h.Cts.Token).WaitAsync(HangGuard);
+
+        var deadline = DateTime.UtcNow + HangGuard;
+        while (h.Fake.ReceivedCalls.Count < 1 && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        var calls = h.Fake.ReceivedCalls;
+        await Assert.That(calls.Count).IsGreaterThanOrEqualTo(1);
+        await Assert.That(calls[0].Method).IsEqualTo("initialize");
+
+        var clientCapabilities = calls[0].Params!.Value.GetProperty("clientCapabilities");
+        await Assert.That(clientCapabilities.GetProperty("fs").GetProperty("readTextFile").GetBoolean()).IsFalse();
+        await Assert.That(clientCapabilities.GetProperty("fs").GetProperty("writeTextFile").GetBoolean()).IsFalse();
+        await Assert.That(clientCapabilities.GetProperty("terminal").GetBoolean()).IsFalse();
+    }
+
     [Test]
     public async Task Scripted_agent_message_chunk_update_is_surfaced_as_reduced_DTO() {
         await using var h = new Harness();
@@ -154,6 +179,123 @@ public class AcpHostedAgentRuntimeTests {
         await Assert.That(received.Kind).IsEqualTo(AcpUpdateKind.Unknown);
         await Assert.That(received.Raw).IsNotNull();
         await Assert.That(received.Raw!.Value.GetProperty("foo").GetString()).IsEqualTo("bar");
+    }
+
+    // ── AI-688 Option B task 1: Reduce() tool-call/tool-result field capture ──────────────
+
+    [Test]
+    public async Task ToolCall_update_captures_ToolInputJson_from_rawInput() {
+        await using var h = new Harness();
+
+        var toolCall = FakeAcpAgent.BuildToolCallUpdate(
+            "call-1", "Run shell command", "execute", "pending",
+            rawInputJson: """{"command":"echo hi"}""");
+        var notification = FakeAcpAgent.BuildSessionUpdateNotification(FakeAcpAgent.FixedSessionId, toolCall);
+        var result = System.Text.Json.JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone();
+        h.Fake.EnqueuePromptScript(new[] { notification }, result);
+
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "prompt", h.Cts.Token).WaitAsync(HangGuard);
+
+        var received = await h.Runtime.Updates.ReadAsync().AsTask().WaitAsync(HangGuard);
+
+        await Assert.That(received.Kind).IsEqualTo(AcpUpdateKind.ToolCall);
+        await Assert.That(received.ToolCallId).IsEqualTo("call-1");
+        await Assert.That(received.ToolTitle).IsEqualTo("Run shell command");
+        await Assert.That(received.ToolInputJson).IsEqualTo("""{"command":"echo hi"}""");
+    }
+
+    [Test]
+    public async Task ToolCall_update_without_rawInput_leaves_ToolInputJson_null() {
+        await using var h = new Harness();
+
+        var toolCall = FakeAcpAgent.BuildToolCallUpdate("call-1", "Run shell command", "execute", "pending");
+        var notification = FakeAcpAgent.BuildSessionUpdateNotification(FakeAcpAgent.FixedSessionId, toolCall);
+        var result = System.Text.Json.JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone();
+        h.Fake.EnqueuePromptScript(new[] { notification }, result);
+
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "prompt", h.Cts.Token).WaitAsync(HangGuard);
+
+        var received = await h.Runtime.Updates.ReadAsync().AsTask().WaitAsync(HangGuard);
+
+        await Assert.That(received.ToolInputJson).IsNull();
+    }
+
+    [Test]
+    public async Task Status_only_ToolCallUpdate_captures_status_but_no_ToolResultText() {
+        await using var h = new Harness();
+
+        var statusUpdate = FakeAcpAgent.BuildToolCallStatusUpdate("call-1", "in_progress");
+        var notification = FakeAcpAgent.BuildSessionUpdateNotification(FakeAcpAgent.FixedSessionId, statusUpdate);
+        var result = System.Text.Json.JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone();
+        h.Fake.EnqueuePromptScript(new[] { notification }, result);
+
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "prompt", h.Cts.Token).WaitAsync(HangGuard);
+
+        var received = await h.Runtime.Updates.ReadAsync().AsTask().WaitAsync(HangGuard);
+
+        await Assert.That(received.Kind).IsEqualTo(AcpUpdateKind.ToolCallUpdate);
+        await Assert.That(received.ToolStatus).IsEqualTo("in_progress");
+        await Assert.That(received.ToolResultText).IsNull();
+        await Assert.That(received.ToolIsError).IsFalse();
+    }
+
+    [Test]
+    public async Task Terminal_ToolCallUpdate_captures_ToolResultText_from_content_text_block() {
+        await using var h = new Harness();
+
+        var statusUpdate = FakeAcpAgent.BuildToolCallStatusUpdate("call-1", "completed", resultText: "hi\n");
+        var notification = FakeAcpAgent.BuildSessionUpdateNotification(FakeAcpAgent.FixedSessionId, statusUpdate);
+        var result = System.Text.Json.JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone();
+        h.Fake.EnqueuePromptScript(new[] { notification }, result);
+
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "prompt", h.Cts.Token).WaitAsync(HangGuard);
+
+        var received = await h.Runtime.Updates.ReadAsync().AsTask().WaitAsync(HangGuard);
+
+        await Assert.That(received.ToolStatus).IsEqualTo("completed");
+        await Assert.That(received.ToolResultText).IsEqualTo("hi\n");
+        await Assert.That(received.ToolIsError).IsFalse();
+    }
+
+    [Test]
+    public async Task Terminal_failed_ToolCallUpdate_sets_ToolIsError_true() {
+        await using var h = new Harness();
+
+        var statusUpdate = FakeAcpAgent.BuildToolCallStatusUpdate("call-1", "failed", resultText: "boom");
+        var notification = FakeAcpAgent.BuildSessionUpdateNotification(FakeAcpAgent.FixedSessionId, statusUpdate);
+        var result = System.Text.Json.JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone();
+        h.Fake.EnqueuePromptScript(new[] { notification }, result);
+
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "prompt", h.Cts.Token).WaitAsync(HangGuard);
+
+        var received = await h.Runtime.Updates.ReadAsync().AsTask().WaitAsync(HangGuard);
+
+        await Assert.That(received.ToolStatus).IsEqualTo("failed");
+        await Assert.That(received.ToolResultText).IsEqualTo("boom");
+        await Assert.That(received.ToolIsError).IsTrue();
+    }
+
+    [Test]
+    public async Task Terminal_ToolCallUpdate_falls_back_to_rawOutput_when_no_content_text_block() {
+        await using var h = new Harness();
+
+        var statusUpdate = FakeAcpAgent.BuildToolCallStatusUpdate(
+            "call-1", "completed", rawOutputJson: """{"exitCode":0}""");
+        var notification = FakeAcpAgent.BuildSessionUpdateNotification(FakeAcpAgent.FixedSessionId, statusUpdate);
+        var result = System.Text.Json.JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone();
+        h.Fake.EnqueuePromptScript(new[] { notification }, result);
+
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "prompt", h.Cts.Token).WaitAsync(HangGuard);
+
+        var received = await h.Runtime.Updates.ReadAsync().AsTask().WaitAsync(HangGuard);
+
+        await Assert.That(received.ToolResultText).IsEqualTo("""{"exitCode":0}""");
     }
 
     [Test]

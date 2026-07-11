@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Antigravity;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Copilot;
+using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Cursor;
 using Capacitor.Cli.Core.Gemini;
 using Capacitor.Cli.Core.Kiro;
@@ -32,11 +33,22 @@ public static class SetupCommand {
         var skipCursorFlag   = args.Contains("--skip-cursor-hooks");
         var skipCursorMcpFlag = args.Contains("--skip-cursor-mcp");
         var skipCopilotFlag  = args.Contains("--skip-copilot-hooks");
+        var skipCopilotMcpFlag = args.Contains("--skip-copilot-mcp");
+        var skipCopilotInstructionsFlag = args.Contains("--skip-copilot-instructions");
         var skipGeminiFlag   = args.Contains("--skip-gemini-hooks");
+        var skipGeminiMcpFlag = args.Contains("--skip-gemini-mcp");
+        var skipGeminiInstructionsFlag = args.Contains("--skip-gemini-instructions");
         var skipKiroFlag     = args.Contains("--skip-kiro-hooks");
+        var skipKiroMcpFlag  = args.Contains("--skip-kiro-mcp");
+        var skipKiroSkillsFlag = args.Contains("--skip-kiro-skills");
         var skipPiFlag       = args.Contains("--skip-pi-hooks");
         var skipOpenCodeFlag = args.Contains("--skip-opencode-hooks");
+        var skipOpenCodeMcpFlag = args.Contains("--skip-opencode-mcp");
+        var skipOpenCodeInstructionsFlag = args.Contains("--skip-opencode-instructions");
         var skipAntigravityFlag = args.Contains("--skip-antigravity-hooks");
+        var skipAntigravityMcpFlag = args.Contains("--skip-antigravity-mcp");
+        var skipAntigravityInstructionsFlag = args.Contains("--skip-antigravity-instructions");
+        var skipAntigravitySkillsFlag = args.Contains("--skip-antigravity-skills");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
@@ -236,7 +248,18 @@ public static class SetupCommand {
             SkipAntigravity: skipAntigravityFlag,
             NoPrompt:    noPrompt,
             SkipCodexNetworkAccess: skipCodexNetworkFlag,
-            SkipCursorMcp: skipCursorMcpFlag);
+            SkipCursorMcp: skipCursorMcpFlag,
+            SkipCopilotMcp: skipCopilotMcpFlag,
+            SkipCopilotInstructions: skipCopilotInstructionsFlag,
+            SkipGeminiMcp: skipGeminiMcpFlag,
+            SkipGeminiInstructions: skipGeminiInstructionsFlag,
+            SkipAntigravityMcp: skipAntigravityMcpFlag,
+            SkipAntigravityInstructions: skipAntigravityInstructionsFlag,
+            SkipAntigravitySkills: skipAntigravitySkillsFlag,
+            SkipOpenCodeMcp: skipOpenCodeMcpFlag,
+            SkipOpenCodeInstructions: skipOpenCodeInstructionsFlag,
+            SkipKiroMcp: skipKiroMcpFlag,
+            SkipKiroSkills: skipKiroSkillsFlag);
 
         // AI-794 — allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
@@ -261,7 +284,17 @@ public static class SetupCommand {
             OpenCodeExtensionPath: OpenCodePaths.KcapPlugin(),
             AntigravityHooksPath: AntigravityPaths.GlobalHooksJson(),
             CodexConfigTomlPath:  Path.Combine(CodexPaths.Home(), "config.toml"),
-            CursorMcpPath:        CursorPaths.UserMcpJson());
+            CursorMcpPath:        CursorPaths.UserMcpJson(),
+            CopilotMcpPath:       CopilotPaths.McpConfigJson(),
+            CopilotInstructionsPath: CopilotPaths.InstructionsMd(),
+            GeminiInstructionsPath: GeminiPaths.GeminiMd(),
+            AntigravityMcpPath:       AntigravityPaths.McpConfigJson(),
+            AntigravityInstructionsPath: AntigravityPaths.InstructionsMd(),
+            AntigravitySkillsDir:     AntigravityPaths.SkillsDir(),
+            OpenCodeMcpPath:      OpenCodePaths.McpConfigJson(),
+            OpenCodeInstructionsPath: OpenCodePaths.AgentsMd(),
+            KiroMcpPath:          KiroPaths.SettingsMcpJson(),
+            KiroSkillsDir:        KiroPaths.SkillsDir());
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -278,8 +311,33 @@ public static class SetupCommand {
             InstallAntigravityHooks:  PluginCommand.InstallAntigravityHooks,
             EnableCodexNetworkAccess: () => CodexConfigToml.EnableNetworkAccess(codexAllowDomains),
             RegisterCodexMcp:         () => CodexConfigToml.RegisterKcapMcpServers(),
+            // AI-1264: every non-Claude JSON harness registers the ForCursor subset — kcap-workitems
+            // is a Claude Code plugin-only tool (its session-id default rides the Claude hook env).
             RegisterCursorMcp:        () => JsonMcpConfigWriter.Register(
-                CursorPaths.UserMcpJson(), KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("cursor")));
+                CursorPaths.UserMcpJson(), KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("cursor")),
+            RegisterCopilotMcp:       () => JsonMcpConfigWriter.Register(
+                CopilotPaths.McpConfigJson(), KcapMcpServers.ForCursor, McpConfigShape.Copilot, cwd: null, new McpMarker("copilot")),
+            InstallCopilotInstructions: () => AgentInstructionsWriter.Write(
+                CopilotPaths.InstructionsMd(), KcapAgentInstructions.Body),
+            // Skills are already current when the on-disk marker matches this build AND
+            // every owned kcap-* folder is present; used to skip the prompt + re-copy
+            // (mirrors PluginCommand's postinstall fast path). A missing/stale marker — or a
+            // deleted skill folder — reads as "not current" → prompt + install (self-heals).
+            AgentSkillsCurrent:       AgentsSkillsInstaller.IsCurrent,
+            RegisterOpenCodeMcp:      () => JsonMcpConfigWriter.Register(
+                OpenCodePaths.McpConfigJson(), KcapMcpServers.ForCursor, McpConfigShape.OpenCode, cwd: null, new McpMarker("opencode")),
+            InstallOpenCodeInstructions: () => AgentInstructionsWriter.Write(
+                OpenCodePaths.AgentsMd(), KcapAgentInstructions.Body),
+            RegisterKiroMcp:          () => JsonMcpConfigWriter.Register(
+                KiroPaths.SettingsMcpJson(), KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("kiro")),
+            RegisterGeminiMcp:        () => JsonMcpConfigWriter.Register(
+                GeminiPaths.SettingsJson(), KcapMcpServers.ForCursor, McpConfigShape.Gemini, cwd: null, new McpMarker("gemini")),
+            InstallGeminiInstructions: () => AgentInstructionsWriter.Write(
+                GeminiPaths.GeminiMd(), KcapAgentInstructions.Body),
+            RegisterAntigravityMcp:   () => JsonMcpConfigWriter.Register(
+                AntigravityPaths.McpConfigJson(), KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("antigravity")),
+            InstallAntigravityInstructions: () => AgentInstructionsWriter.Write(
+                AntigravityPaths.InstructionsMd(), KcapAgentInstructions.Body));
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });

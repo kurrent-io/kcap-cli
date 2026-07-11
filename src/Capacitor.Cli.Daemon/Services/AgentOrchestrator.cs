@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Daemon.Pty;
+using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Auth;
@@ -34,6 +35,10 @@ internal record AgentInstance(
 
     /// <summary>Temp MCP config path written for hosted PR reviews; deleted on cleanup.</summary>
     public string? McpConfigPath { get; set; }
+
+    /// <summary>The per-reviewer LocalPermissionBridge token URL minted for an unattended review-flow
+    /// launch (null otherwise). Revoked on cleanup so the auto-approve path dies with the reviewer.</summary>
+    public string? ReviewerBridgeToken { get; init; }
 
     /// <summary>
     /// Reason string sent to the server when ending the AgentSession. Defaults to
@@ -91,7 +96,40 @@ internal record AgentInstance(
     /// atomic, and stale-by-one-resize is harmless for best-effort dims.</summary>
     public ushort CurrentCols { get; set; }
     public ushort CurrentRows { get; set; }
+
+    /// <summary>
+    /// The live ACP transcript forwarder for this agent, set once
+    /// <see cref="AgentOrchestrator.HandleLaunchAgent"/>'s post-registration bind
+    /// (<c>AcpSessionStarted</c>) succeeds and the forwarder is constructed. <see langword="null"/>
+    /// for every PTY agent (claude/codex — <see cref="HostedRuntimeStart.Transcript"/> is null for
+    /// them) and for an ACP agent whose initial bind failed (nothing to drain in that case — see
+    /// <see cref="AgentOrchestrator.StartAcpForwardingAsync"/>). Read by
+    /// <see cref="AgentOrchestrator.FinalizeAgentRunAsync"/> to run the bounded final-drain before
+    /// ending the session.
+    /// </summary>
+    public AcpForwarderHandle? AcpForwarder { get; set; }
+
+    /// <summary>
+    /// Per-agent/per-setup <see cref="CancellationTokenSource"/>, linked to the daemon's shutdown
+    /// token, created in <see cref="AgentOrchestrator.HandleLaunchAgent"/> BEFORE the fire-and-forget
+    /// <see cref="AgentOrchestrator.StartAcpForwardingAsync"/> call — so it exists immediately,
+    /// independent of whether the bind ever resolves. Both the bind/setup task and (once started) the
+    /// forwarder's run task use ITS token rather than the raw daemon-wide shutdown token, so
+    /// <see cref="AgentOrchestrator.FinalizeAgentRunAsync"/> can cancel just this agent's ACP work
+    /// (on drain-timeout, and unconditionally at finalize) without touching any other agent or the
+    /// daemon's own shutdown gate. <see langword="null"/> for every PTY agent (claude/codex) and set
+    /// exactly once, at launch, for every ACP-capable runtime — never re-created for the same agent.
+    /// </summary>
+    public CancellationTokenSource? AcpCts { get; set; }
 }
+
+/// <summary>
+/// Pairs a started <see cref="AcpTranscriptForwarder"/> with its fire-and-forget run task
+/// (<see cref="AgentOrchestrator.ForwardAcpTranscriptAsync"/>'s return
+/// value) so <see cref="AgentOrchestrator.FinalizeAgentRunAsync"/> can await the SAME task (bounded)
+/// at teardown without re-deriving or re-wrapping it.
+/// </summary>
+internal sealed record AcpForwarderHandle(AcpTranscriptForwarder Forwarder, Task RunTask);
 
 /// <summary>Ring buffer that keeps the last 2 MB of terminal output.</summary>
 public class TerminalOutputBuffer {
@@ -284,6 +322,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // is the user's real checkout — never removed on any path (spec's top safety invariant).
         var work = cmd.Borrowed ? WorkLocation.BorrowedCwd : WorkLocation.OwnedWorktree;
 
+        // The per-reviewer bridge token URL (if this is an unattended review-flow launch), hoisted to
+        // method scope so the failure catch can revoke it when no AgentInstance was created to carry it.
+        string? reviewerToken = null;
+
         try {
             if (ActiveCount >= _config.MaxConcurrentAgents) {
                 await _server.LaunchFailedAsync(agentId, $"At max capacity ({_config.MaxConcurrentAgents} agents)");
@@ -383,6 +425,35 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
 
+            // An unattended review-flow reviewer must auto-approve its kcap tool calls (no human is
+            // present): mint a dedicated bridge token bound to the launch's read-only kcap allowlist
+            // and hand the reviewer that token's URL as KCAP_DAEMON_URL. An invalid allowlist fails
+            // the launch FAST rather than falling back to a prompt that would hang.
+            var daemonBridgeUrl    = _permissionBridge.BaseUrl;
+            var effectiveAllowlist = cmd.McpAllowlist;
+
+            // Only Codex reviewers get a token: their MCP config-lock is what makes a bare tool name
+            // provably a bound kcap tool (see LocalPermissionBridge.IsReviewerToolAllowed). Claude
+            // reviewers run via bypassPermissions with only the flow-result channel, so they need
+            // none. Also guarded on the bridge listening (BaseUrl != null) — a graceful no-op otherwise.
+            if (isReviewFlow && daemonBridgeUrl is not null
+                && string.Equals(cmd.Vendor, "codex", StringComparison.OrdinalIgnoreCase)) {
+                if (!KcapMcpRegistry.TryResolveReviewFlowAllowlist(cmd.McpAllowlist, out var reviewerServers, out var rejected)) {
+                    await _server.LaunchFailedAsync(agentId,
+                        $"Review-flow reviewer MCP allowlist contains a server that is not auto-approvable: '{rejected}'.");
+
+                    if (work == WorkLocation.OwnedWorktree) {
+                        try { await WorktreeManager.RemoveAsync(worktree); } catch { /* best-effort */ }
+                    }
+
+                    return;
+                }
+
+                daemonBridgeUrl    = _permissionBridge.RegisterReviewerToken(reviewerServers);
+                reviewerToken      = daemonBridgeUrl;   // the URL doubles as the revoke handle
+                effectiveAllowlist = reviewerServers;   // single source: the set the launcher materializes
+            }
+
             var runtimeCtx = new RuntimeStartContext(
                 AgentId: agentId,
                 Vendor: cmd.Vendor,
@@ -398,9 +469,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 Cols: HostedPtyCols,
                 Rows: HostedPtyRows,
                 ServerUrl: _config.ServerUrl,
-                DaemonBridgeUrl: _permissionBridge.BaseUrl,
+                DaemonBridgeUrl: daemonBridgeUrl,
                 CapacitorPath: _config.CapacitorPath,
-                McpAllowlist: cmd.McpAllowlist,
+                McpAllowlist: effectiveAllowlist,
                 Work: work
             );
 
@@ -410,6 +481,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 start = await runtimeFactory.StartAsync(runtimeCtx, _shutdownCts.Token);
             } catch (CodexHooksNotInstalledException ex) {
                 await _server.LaunchFailedAsync(agentId, ex.Message);
+
+                // No AgentInstance was created, so CleanupAgentAsync won't run — revoke the reviewer
+                // token here (if we minted one) so it doesn't leak into the live-token set.
+                if (reviewerToken != null) _permissionBridge.RevokeReviewerToken(reviewerToken);
 
                 // Still need to clean up the worktree before returning — but ONLY if we own it.
                 // A borrowed cwd is the user's real checkout; removing it here would `git worktree
@@ -431,10 +506,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var cts = new CancellationTokenSource();
 
             var agent = new AgentInstance(agentId, prompt, model, effort, repoPath, cmd.Vendor, runtime, worktree, cts) {
-                McpConfigPath = mcpConfigPath,
-                CurrentCols   = HostedPtyCols,
-                CurrentRows   = HostedPtyRows,
-                Work          = work
+                McpConfigPath       = mcpConfigPath,
+                CurrentCols         = HostedPtyCols,
+                CurrentRows         = HostedPtyRows,
+                Work                = work,
+                ReviewerBridgeToken = reviewerToken
             };
             _agents[agentId] = agent;
 
@@ -454,6 +530,24 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (!agent.IsPrivate) _ = _server.AgentStatusChangedAsync(agent.Id, "Running", agent.SessionId);
             }
 
+            // Bind + start live transcript forwarding for any runtime that exposes an ACP
+            // transcript source (Cursor today; null for every PTY runtime — no branch taken for
+            // claude/codex). Fire-and-forget from here, exactly like ReadAgentOutputAsync below: the
+            // bind call is IsReady-gated and can block across a reconnect outage (ConnectionRetry),
+            // and HandleLaunchAgent must never stall on it — a stalled launch would queue every OTHER
+            // inbound hub command behind it on this daemon's single SignalR connection.
+            // StartAcpForwardingAsync itself still enforces the load-bearing ordering (bind strictly
+            // after RegisterAgentAsync above, strictly before any AcpSessionEvents) by awaiting the
+            // bind before constructing the forwarder.
+            if (start.Transcript is { } transcript) {
+                // Create + store the per-agent CTS BEFORE firing the setup task, so it exists for
+                // FinalizeAgentRunAsync to cancel even if the agent finalizes before the bind below
+                // ever resolves (see AgentInstance.AcpCts).
+                var acpCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token);
+                agent.AcpCts = acpCts;
+                _ = StartAcpForwardingAsync(agent, transcript, cmd.Vendor, acpCts);
+            }
+
             // Start reading output
             _ = ReadAgentOutputAsync(agent);
 
@@ -468,6 +562,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
         } catch (Exception ex) {
             LogLaunchFailed(ex, agentId);
+
+            // If a reviewer token was minted before the failure and no AgentInstance was created to
+            // own it, revoke it here so it can't linger in the bridge's live-token set.
+            if (reviewerToken != null) _permissionBridge.RevokeReviewerToken(reviewerToken);
 
             // Only tear down a worktree we OWN. A borrowed cwd is the user's real checkout — never
             // remove it, its branch, or its Claude project symlink on a failed launch (spec's top
@@ -717,6 +815,28 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             LogAgentExited(agent.Id, exitCode);
 
+            // For an ACP agent with a live forwarder, give the transcript a bounded chance to drain
+            // BEFORE ending the session — this must NEVER pin shutdown (see
+            // FinalDrainAcpTranscriptAsync's remarks); it always returns within AcpFinalDrainBudget
+            // regardless of outcome. PTY agents have no AcpForwarder and take none of this path — the
+            // runtime is disposed exactly where it always was, inside CleanupAgentAsync below.
+            if (agent.AcpForwarder is { } acpForwarder) {
+                await FinalDrainAcpTranscriptAsync(agent, acpForwarder);
+            }
+
+            // Cancel the per-agent ACP CTS unconditionally here — not only inside
+            // FinalDrainAcpTranscriptAsync's own timeout branch above — so a bind/setup task that's
+            // STILL in flight (the agent exited before its bind ever completed, so AcpForwarder is
+            // still null and the drain step above never ran at all) observes cancellation now and can
+            // abort at its liveness check (StartAcpForwardingAsync) before it ever registers a
+            // binding for an agent that is finalizing right now. Runs BEFORE EndAgentSessionAsync so
+            // any forwarder is fully stopped before the binding goes terminal server-side (the same
+            // ordering the drain above already protects). Idempotent/harmless if already cancelled by
+            // the drain step.
+            if (agent.AcpCts is { } acpCts) {
+                try { await acpCts.CancelAsync(); } catch { /* best-effort */ }
+            }
+
             // Tell the server to end the AgentSession. Claude doesn't reliably fire
             // its own session-end hook on SIGTERM/exit, so without this call the
             // session would stay "active" forever in the read model. Server-side is
@@ -756,6 +876,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     LogEndSessionFailed(ex, agent.Id);
                 }
             }
+
+            // Drop the reconnect re-bind registration now that EndAgentSessionAsync above has
+            // (best-effort) made this binding terminal server-side — a later reconnect must not try
+            // to re-bind a session that's already ended. Unconditional — NOT gated on AcpForwarder
+            // having ever been set — so a binding a late/racing setup managed to register despite the
+            // cancellation above (StartAcpForwardingAsync's liveness check narrows but can't fully
+            // eliminate that window) still gets cleaned up here; UnregisterAcpBinding is a no-op when
+            // nothing was ever registered, so this call is always safe to make unconditionally.
+            _server.UnregisterAcpBinding(agent.Id);
 
             // Clean up worktree and unregister from server. Runs unconditionally — even
             // when end-session timed out and is still retrying in the background — so a
@@ -1065,6 +1194,163 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         );
     }
 
+    /// <summary>
+    /// Binds the ACP canonical session to <paramref name="agent"/> (<c>AcpSessionStarted</c>) —
+    /// this call MUST run after <see cref="RegisterAgentAsync"/> has already registered the agent (the server rejects a
+    /// bind for an unregistered agent) and strictly before any transcript event reaches the server;
+    /// callers (<see cref="HandleLaunchAgent"/>) enforce the first half by only calling this after
+    /// <c>await RegisterAgentAsync(agent)</c>, and this method enforces the second half itself by
+    /// awaiting the bind before ever constructing the forwarder. Once bound, registers the binding
+    /// for reconnect re-bind (<see cref="ServerConnection.RegisterAcpBinding"/>), builds the
+    /// synthesized <c>SessionStarted@Seq0</c> envelope (<see cref="AcpEventTranslator.BuildSessionStarted"/>),
+    /// and starts <see cref="ForwardAcpTranscriptAsync"/> as background work — the resulting task is
+    /// kept on <see cref="AgentInstance.AcpForwarder"/> so <see cref="FinalizeAgentRunAsync"/> can
+    /// coordinate the bounded final-drain at teardown.
+    ///
+    /// Best-effort: any failure in the bind/setup step is logged and swallowed, never propagated to
+    /// the caller. By the time this runs, <paramref name="agent"/> is already registered with the
+    /// server and its ACP process is already live — letting a transcript-plumbing failure escape
+    /// into <see cref="HandleLaunchAgent"/>'s outer catch would incorrectly route it through the
+    /// failed-launch cleanup path (worktree removal) against an agent that is actually running.
+    /// Degrades to "no live transcript for this session" rather than failing the launch.
+    ///
+    /// <b>Bind-vs-finalize stale-binding race:</b>
+    /// <paramref name="acpCts"/> is <paramref name="agent"/>'s <see cref="AgentInstance.AcpCts"/>,
+    /// created by the caller BEFORE this task was fired. Its token — not the raw daemon shutdown
+    /// token — gates the bind call below AND (once built) the forwarder's run task, so
+    /// <see cref="FinalizeAgentRunAsync"/> can cancel just this setup/forwarder. The bind call can
+    /// block for the length of a reconnect outage (<c>ConnectionRetry</c>); if the agent's whole
+    /// lifecycle finalizes while it's still in flight, a LATE successful bind must not register a
+    /// binding for what is by then a dead agent (it would leak into <c>_acpBindings</c> and be
+    /// replayed on every future reconnect with nothing left to ever drain it) — the liveness check
+    /// immediately below the bind await closes that race.
+    /// </summary>
+    async Task StartAcpForwardingAsync(AgentInstance agent, IAcpTranscriptSource transcript, string vendor, CancellationTokenSource acpCts) {
+        try {
+            await _server.AcpSessionStartedAsync(
+                agent.Id,
+                vendor,
+                transcript.AcpSessionId,
+                transcript.Cwd,
+                transcript.ResolvedModel,
+                null, // metadata: no wire-contract fields required for the prototype
+                acpCts.Token
+            );
+
+            // Liveness check: the await above can span a reconnect outage.
+            // If finalize already ran (cancelling acpCts and/or removing the agent from _agents)
+            // while we were waiting, abort here — do not register a binding, build a forwarder, or
+            // start it for an agent that's finalizing or already gone.
+            if (acpCts.IsCancellationRequested || !_agents.ContainsKey(agent.Id)) {
+                LogAcpBindAbortedAgentGone(agent.Id);
+
+                return;
+            }
+
+            _server.RegisterAcpBinding(
+                agent.Id,
+                new AcpBindInfo(vendor, transcript.AcpSessionId, transcript.Cwd, transcript.ResolvedModel)
+            );
+
+            // Post-register re-check (TOCTOU): finalize can run between the liveness check above and
+            // this register, having already cancelled/unregistered+cleaned up the agent — leaving the
+            // binding we just registered stale (replayed on reconnect for a dead agent). Undo it. The
+            // finalizer's own unconditional UnregisterAcpBinding covers the mirror case (finalize after
+            // this point); UnregisterAcpBinding is idempotent so a double-remove is harmless.
+            if (acpCts.IsCancellationRequested || !_agents.ContainsKey(agent.Id)) {
+                _server.UnregisterAcpBinding(agent.Id);
+                LogAcpBindAbortedAgentGone(agent.Id);
+
+                return;
+            }
+
+            var sessionStarted = AcpEventTranslator.BuildSessionStarted(
+                seq: 0,
+                DateTimeOffset.UtcNow.ToString("O"),
+                cwd: transcript.Cwd,
+                model: transcript.ResolvedModel,
+                rawSessionId: transcript.AcpSessionId
+            );
+
+            var forwarder = new AcpTranscriptForwarder(
+                send: (batch, ct) => _server.SendAcpEventsAsync(agent.Id, transcript.AcpSessionId, batch, ct),
+                initialEnvelope: sessionStarted,
+                envelopes: transcript.Envelopes,
+                logger: _logger
+            );
+
+            var runTask = ForwardAcpTranscriptAsync(agent, forwarder, acpCts.Token);
+            agent.AcpForwarder = new AcpForwarderHandle(forwarder, runTask);
+        } catch (Exception ex) {
+            LogAcpBindFailed(ex, agent.Id);
+        }
+    }
+
+    /// <summary>
+    /// Fire-and-forget wrapper around <see cref="AcpTranscriptForwarder.RunAsync"/> — a forwarder fault must NEVER
+    /// crash the agent or the daemon. <see cref="AcpTranscriptForwarder.RunAsync"/> already swallows
+    /// its own cancellation and retries indefinitely on a send failure, but this wrapper is the outer
+    /// safety net for anything else that could still escape it (e.g. the transcript channel itself
+    /// faulting from a translator bug upstream) — logged, never rethrown, so the returned task always
+    /// completes successfully and <see cref="FinalizeAgentRunAsync"/> can safely await it.
+    /// </summary>
+    async Task ForwardAcpTranscriptAsync(AgentInstance agent, AcpTranscriptForwarder forwarder, CancellationToken ct) {
+        try {
+            await forwarder.RunAsync(ct);
+        } catch (Exception ex) {
+            LogAcpForwarderFaulted(ex, agent.Id);
+        }
+    }
+
+    /// <summary>
+    /// Time budget for the ACP bounded final-drain — how long
+    /// <see cref="FinalDrainAcpTranscriptAsync"/> waits for the forwarder's run task to finish
+    /// draining (after the runtime is disposed) before giving up and letting
+    /// <see cref="FinalizeAgentRunAsync"/> proceed to <see cref="ServerConnection.EndAgentSessionAsync"/>
+    /// regardless. Deliberately small and independent of <see cref="EndAgentSessionBudget"/> — a
+    /// slow/stuck drain degrades to "no trailing transcript", never a stacked delay on top of the
+    /// session-end budget, and never pins shutdown (the primary invariant this exists to protect).
+    /// Settable so tests don't wait for the real value.
+    /// </summary>
+    internal TimeSpan AcpFinalDrainBudget { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Disposes the ACP runtime FIRST so its <c>DisposeAsync</c> completes the
+    /// transcript channel (courtesy-flushing any still-open aggregation run) — <paramref name="acpForwarder"/>'s
+    /// run task can only ever return once that channel completes — then gives the forwarder a FINITE
+    /// budget (<see cref="AcpFinalDrainBudget"/>) to drain whatever's left to the server before
+    /// returning UNCONDITIONALLY. Never throws and never blocks past the budget: a disposal fault or
+    /// a drain that exceeds it is logged, not propagated, so <see cref="FinalizeAgentRunAsync"/>'s
+    /// own outage-cleanup guarantee (<see cref="EndAgentSessionBudget"/>) is never compounded by this
+    /// call. This is also what keeps the forwarder stopped BEFORE the binding goes terminal (the
+    /// caller ends the session immediately after this returns) — the ordering the hot-loop
+    /// guard's edge case relies on in the normal (non-outage) flow.
+    ///
+    /// When the drain misses its budget, the forwarder is
+    /// presumably still blocked/retrying a send against an unresponsive connection —
+    /// <see cref="AcpTranscriptForwarder.RunAsync"/> otherwise retries indefinitely. Cancel
+    /// <paramref name="agent"/>'s per-agent <see cref="AgentInstance.AcpCts"/> so it unwinds
+    /// promptly (it is <c>ct</c>-aware at every await point) instead of leaking an orphaned task
+    /// that keeps sending against an agent that's finalizing right now.
+    /// </summary>
+    async Task FinalDrainAcpTranscriptAsync(AgentInstance agent, AcpForwarderHandle acpForwarder) {
+        try {
+            await agent.Runtime.DisposeAsync();
+        } catch (Exception ex) {
+            LogCleanupStepFailed(ex, "disposing ACP runtime for final transcript drain", agent.Id);
+        }
+
+        var completed = await Task.WhenAny(acpForwarder.RunTask, Task.Delay(AcpFinalDrainBudget));
+
+        if (completed != acpForwarder.RunTask) {
+            LogAcpFinalDrainTimedOut(agent.Id, AcpFinalDrainBudget.TotalSeconds);
+
+            if (agent.AcpCts is { } acpCts) {
+                try { await acpCts.CancelAsync(); } catch { /* best-effort — never let this pin teardown */ }
+            }
+        }
+    }
+
     Task HandleResizeTerminal(ResizeTerminalCommand cmd) {
         // Ignore server-origin resize for private agents (defence-in-depth; see HandleStopAgent).
         if (_agents.TryGetValue(cmd.AgentId, out var agent) && !agent.IsPrivate) {
@@ -1242,6 +1528,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
+        // The reviewer process has exited by the time we get here (this runs off the read-loop's exit
+        // path), so revoke its bridge token now — after any final submit_review_result was served.
+        if (agent.ReviewerBridgeToken is { } reviewerToken) {
+            try { _permissionBridge.RevokeReviewerToken(reviewerToken); } catch (Exception ex) { LogCleanupStepFailed(ex, "revoking reviewer bridge token", agentId); }
+        }
+
         // Wake any attached local clients blocked on the user's stdin so they can flush the
         // last output and send Exited (the agent is going away). The exit code is already
         // captured on agent.Runtime, so disposing it below doesn't lose it.
@@ -1400,6 +1692,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to persist repo path for agent {AgentId}")]
     partial void LogRepoPathPersistFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "ACP bind/forwarder setup failed for agent {AgentId} — proceeding with no live transcript for this session")]
+    partial void LogAcpBindFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP bind for agent {AgentId} resolved after the agent had already finalized — aborting setup without registering a binding")]
+    partial void LogAcpBindAbortedAgentGone(string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "ACP transcript forwarder faulted for agent {AgentId}")]
+    partial void LogAcpForwarderFaulted(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "ACP final transcript drain for agent {AgentId} exceeded its {Seconds}s budget — proceeding to end the session; any undrained transcript is lost")]
+    partial void LogAcpFinalDrainTimedOut(string agentId, double seconds);
 
     [GeneratedRegex(@"\x1B\[[0-9;]*[A-Za-z]|\x1B\].*?\x07|\x1B[()][AB012]|\x1B\[[\?]?[0-9;]*[hlm]")]
     private static partial Regex StripAnsiRegex();

@@ -297,6 +297,41 @@ public class AgentsSkillsInstallerTests {
     }
 
     [Test]
+    public async Task IsCurrent_is_true_after_a_fresh_install() {
+        using var src = new InstallerTempDir();
+        using var dst = new InstallerTempDir();
+        await SeedSourceSkills(src.Path);
+
+        AgentsSkillsInstaller.Install(src.Path, dst.Path);
+
+        await Assert.That(AgentsSkillsInstaller.IsCurrent(dst.Path)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsCurrent_is_false_when_marker_missing() {
+        using var dst = new InstallerTempDir();
+        // No install, no marker.
+        await Assert.That(AgentsSkillsInstaller.IsCurrent(dst.Path)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsCurrent_is_false_when_a_skill_folder_deleted_despite_marker() {
+        // Self-heal guard: a matching marker whose skill folders were deleted must NOT
+        // read as current, or the install/refresh would skip and leave the agent without skills.
+        using var src = new InstallerTempDir();
+        using var dst = new InstallerTempDir();
+        await SeedSourceSkills(src.Path);
+
+        AgentsSkillsInstaller.Install(src.Path, dst.Path);
+        await Assert.That(AgentsSkillsInstaller.IsCurrent(dst.Path)).IsTrue();  // marker + folders present
+
+        // Delete one owned folder but leave the marker in place.
+        Directory.Delete(Path.Combine(dst.Path, "kcap-recap"), recursive: true);
+
+        await Assert.That(AgentsSkillsInstaller.IsCurrent(dst.Path)).IsFalse();
+    }
+
+    [Test]
     public async Task Remove_deletes_version_marker() {
         using var src = new InstallerTempDir();
         using var dst = new InstallerTempDir();

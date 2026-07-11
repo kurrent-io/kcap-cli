@@ -41,6 +41,20 @@ public static class OpenCodePaths {
         Path.Combine(PluginsDir(home), ".kcap-extension-version");
 
     /// <summary>
+    /// OpenCode's config file (<c>~/.config/opencode/opencode.json</c>), where kcap registers its
+    /// MCP servers under the <c>mcp</c> block (see <see cref="Mcp.McpConfigShape.OpenCode"/>).
+    /// </summary>
+    public static string McpConfigJson(string? home = null, string? configDir = null) =>
+        Path.Combine(ConfigDir(home, configDir), "opencode.json");
+
+    /// <summary>
+    /// OpenCode's user-global agent-instructions file (<c>~/.config/opencode/AGENTS.md</c>), where
+    /// kcap installs its marker-delimited steering block.
+    /// </summary>
+    public static string AgentsMd(string? home = null, string? configDir = null) =>
+        Path.Combine(ConfigDir(home, configDir), "AGENTS.md");
+
+    /// <summary>
     /// Detection by OpenCode's config or data dir presence — OpenCode creates one
     /// on first run. The binary name <c>opencode</c> can also be probed by callers
     /// via <c>AgentDetector.IsInstalled("opencode")</c>.

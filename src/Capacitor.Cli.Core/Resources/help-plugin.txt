@@ -26,7 +26,16 @@ Options:
                       (preserving its tools) to ~/.kiro/agents/kcap.json, add
                       kcap's agentSpawn hook, and make it your default so every
                       session is captured (honours $KIRO_HOME). Needs kiro-cli on
-                      PATH. Session-end is synthesized on exit.
+                      PATH. Session-end is synthesized on exit. Also registers the
+                      kcap MCP servers (see --skip-kiro-mcp) and installs the kcap
+                      skills to ~/.kiro/skills to steer Kiro toward those tools
+                      (see --skip-kiro-skills).
+  --skip-kiro-mcp     With --kiro: skip registering the kcap MCP servers in
+                      ~/.kiro/settings/mcp.json (independent of the agent clone).
+  --skip-kiro-skills  With --kiro: skip installing the kcap skills into
+                      ~/.kiro/skills. By default `install --kiro` copies them there
+                      (Kiro reads ~/.kiro/skills, not the agent-agnostic
+                      ~/.agents/skills) so Kiro is steered to prefer the kcap tools.
   --pi                Target Pi (badlogic/pi-mono): install the live-ingest
                       extension to ~/.pi/agent/extensions/kcap.ts. Pi has no
                       shell hooks; the extension auto-loads on `pi` startup and
@@ -37,6 +46,11 @@ Options:
                       hooks; the plugin auto-loads on `opencode` startup and
                       streams each session. User-wide only — --project has no
                       effect with --opencode.
+  --skip-opencode-mcp With --opencode: skip registering the kcap MCP servers in
+                      ~/.config/opencode/opencode.json (the `mcp` block).
+  --skip-opencode-instructions
+                      With --opencode: skip installing kcap's steering block into
+                      ~/.config/opencode/AGENTS.md.
   --antigravity       Target Google Antigravity: install the kcap capture plugin
                       to ~/.gemini/config/plugins/kcap/ (a plugin.json manifest +
                       hooks.json). Antigravity has no shell hooks; the GUI loads
@@ -58,6 +72,38 @@ Options:
                       registers all 4 kcap MCP servers there (non-destructive,
                       idempotent — preserves any user-authored servers) so
                       Cursor picks them up with no manual JSON edit.
+  --skip-copilot-mcp  With --copilot: skip registering the kcap MCP servers in
+                      ~/.copilot/mcp-config.json. By default `install --copilot`
+                      also registers all 4 kcap MCP servers there (non-destructive,
+                      idempotent — preserves any user-authored servers) so Copilot
+                      picks them up with no manual JSON edit.
+  --skip-copilot-instructions
+                      With --copilot: skip installing kcap's steering-instructions
+                      block into ~/.copilot/copilot-instructions.md. By default
+                      `install --copilot` writes a small kcap-owned, marker-delimited
+                      block (non-destructive — preserves your own instructions) that
+                      nudges Copilot to use the kcap tools for why/history questions.
+  --skip-gemini-mcp   With --gemini: skip registering the kcap MCP servers in the
+                      shared ~/.gemini/settings.json. By default `install --gemini`
+                      also registers all 4 kcap MCP servers there (non-destructive,
+                      idempotent — preserves your other Gemini settings + servers)
+                      so Gemini picks them up with no manual JSON edit.
+  --skip-gemini-instructions
+                      With --gemini: skip installing kcap's steering-instructions
+                      block into Gemini's global ~/.gemini/GEMINI.md context file.
+                      By default `install --gemini` writes a small kcap-owned,
+                      marker-delimited block (non-destructive — preserves your own
+                      instructions) that nudges Gemini to use the kcap tools for
+                      why/history questions.
+  --skip-antigravity-mcp
+                      With --antigravity: skip registering the kcap MCP servers in
+                      ~/.gemini/config/mcp_config.json (Antigravity's own MCP file).
+  --skip-antigravity-instructions
+                      With --antigravity: skip installing kcap's steering block into
+                      the shared ~/.gemini/GEMINI.md.
+  --skip-antigravity-skills
+                      With --antigravity: skip copying the kcap skills into
+                      ~/.gemini/skills (where Antigravity reads them, not ~/.agents/skills).
   --if-installed      Refresh-only mode: no-op unless the user has previously
                       installed the target (marker file or pre-marker entry
                       detected). Used by the npm postinstall hook to refresh
@@ -85,23 +131,35 @@ Notes:
 
   --copilot writes the four events kcap subscribes to (sessionStart, sessionEnd,
   agentStop, notification) with the event name embedded in each command —
-  Copilot hook payloads don't carry one. Copilot loads hook config at startup,
-  so restart any running copilot session after install. Copilot has no
-  project-scope hooks dir, so --project has no effect with --copilot.
+  Copilot hook payloads don't carry one — registers all 4 kcap MCP servers in
+  ~/.copilot/mcp-config.json (see --skip-copilot-mcp to opt out), and installs a
+  kcap-owned steering block into ~/.copilot/copilot-instructions.md (see
+  --skip-copilot-instructions to opt out). All three are non-destructive and
+  idempotent. Copilot loads hook + MCP + instructions config at startup, so
+  restart any running copilot session after install. Copilot has no project-scope
+  hooks dir, so --project has no effect with --copilot.
 
   --gemini merges SessionStart/SessionEnd/Notification entries into the shared
   ~/.gemini/settings.json (like --cursor's shared hooks.json — your other Gemini
-  settings and hooks are kept). Gemini loads hook config at startup, so restart
-  any running gemini session after install. Gemini has no project-scope settings
-  dir, so --project has no effect with --gemini.
+  settings and hooks are kept), registers all 4 kcap MCP servers in that same
+  settings.json (see --skip-gemini-mcp to opt out), and installs a kcap-owned
+  steering block into Gemini's global ~/.gemini/GEMINI.md context file (see
+  --skip-gemini-instructions to opt out). All three are non-destructive and
+  idempotent. Gemini loads hook + MCP config and the GEMINI.md context at
+  startup, so restart any running gemini session after install. Gemini has no
+  project-scope settings dir, so --project has no effect with --gemini.
 
   --kiro clones your current default Kiro agent into ~/.kiro/agents/kcap.json
   (preserving its tools — a minimal agent would lose tool access), injects the
   agentSpawn hook, and sets it as your default agent (chat.defaultAgent in
   ~/.kiro/settings/cli.json) because Kiro hooks fire only for the ACTIVE agent —
-  there is no global hook. Needs kiro-cli on PATH to clone. Restart kiro-cli to
-  pick it up. remove restores your previous default and deletes kcap.json. Kiro
-  has no project-scope hooks, so --project has no effect with --kiro.
+  there is no global hook. Needs kiro-cli on PATH to clone. It also registers the
+  4 kcap MCP servers in ~/.kiro/settings/mcp.json (a plain mcpServers merge,
+  independent of the agent clone — so it still applies if kiro-cli is missing;
+  non-destructive, preserves user servers + their disabled/autoApprove fields; see
+  --skip-kiro-mcp). Restart kiro-cli to pick it up. remove restores your previous
+  default, deletes kcap.json, and unregisters the MCP servers. Kiro has no
+  project-scope hooks, so --project has no effect with --kiro.
 
   --pi writes a single extension file (~/.pi/agent/extensions/kcap.ts) instead
   of a hooks file — Pi exposes no shell hooks, only an in-process extension API.
@@ -112,18 +170,27 @@ Notes:
 
   --antigravity installs the kcap plugin to ~/.gemini/config/plugins/kcap/ — a
   plugin.json manifest (which the GUI requires to load the dir) plus a hooks.json
-  kcap block (preserving any hook blocks you authored). Antigravity exposes no
-  shell hooks, only control hooks. Each event runs `kcap hook --antigravity
-  <Event>`, so kcap must be on PATH. The GUI loads plugins at startup, so restart
-  it after install. User-wide only — --project has no effect with --antigravity.
+  kcap block (preserving any hook blocks you authored). It also registers the 4 kcap
+  MCP servers in ~/.gemini/config/mcp_config.json (Antigravity's OWN MCP file, not the
+  Gemini CLI's settings.json — see --skip-antigravity-mcp), installs a steering block
+  into the shared ~/.gemini/GEMINI.md (see --skip-antigravity-instructions), and copies
+  the kcap skills into ~/.gemini/skills (Antigravity does NOT read ~/.agents/skills — see
+  --skip-antigravity-skills). Antigravity exposes no shell hooks, only control hooks. Each
+  event runs `kcap hook --antigravity <Event>`, so kcap must be on PATH. The GUI loads
+  plugins at startup, so restart it after install. User-wide only — --project has no effect
+  with --antigravity.
 
   --opencode writes a single plugin file (~/.config/opencode/plugins/kcap.ts)
   instead of a hooks file — OpenCode exposes no shell hooks, only an in-process
   plugin API. The plugin shells out to `kcap hook --opencode` on session start
   and writes the {info,parts} transcript the watcher tails, so kcap must be on
-  PATH. OpenCode loads plugins at startup, so restart any running `opencode`
-  session after install. OpenCode has no project-scope plugins dir, so --project
-  has no effect with --opencode.
+  PATH. It also registers the 4 kcap MCP servers in ~/.config/opencode/opencode.json
+  (the `mcp` block, `type:"local"`, non-destructive/idempotent — see
+  --skip-opencode-mcp) and installs a kcap-owned steering block into
+  ~/.config/opencode/AGENTS.md (see --skip-opencode-instructions). OpenCode loads
+  plugins + config at startup, so restart any running `opencode` session after
+  install. OpenCode has no project-scope plugins dir, so --project has no effect
+  with --opencode.
 
   --if-installed is scoped to user-wide installs only — the npm postinstall hook
   does not refresh --project installs.

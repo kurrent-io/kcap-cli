@@ -40,8 +40,17 @@ internal interface IHostedAgentRuntimeFactory {
 
 /// <summary>Result of <see cref="IHostedAgentRuntimeFactory.StartAsync"/>: the started runtime and
 /// any temp mcp-config path the orchestrator must record on <see cref="AgentInstance.McpConfigPath"/>
-/// so it's cleaned up alongside the agent (PTY launchers only — the ACP factory returns null).</summary>
-internal readonly record struct HostedRuntimeStart(IHostedAgentRuntime Runtime, string? McpConfigPath);
+/// so it's cleaned up alongside the agent (PTY launchers only — the ACP factory returns null).
+///
+/// <b>Concrete bind-handoff:</b> <paramref name="Transcript"/>
+/// (renamed record — see below) exposes the ACP session metadata + aggregated transcript
+/// (<see cref="IAcpTranscriptSource"/>) the orchestrator needs to bind (<c>AcpSessionStarted</c>) and
+/// forward (<c>AcpSessionEvents</c>), without downcasting <see cref="Runtime"/> or re-deriving state
+/// the runtime already resolved. <see cref="AcpHostedAgentRuntimeFactory"/> sets it to the runtime it
+/// builds (which implements <see cref="IAcpTranscriptSource"/> directly); every PTY factory
+/// (<see cref="PtyHostedAgentRuntimeFactory"/>) leaves it at its default <see langword="null"/> — no
+/// PTY-side code needs to change for this field to exist.</summary>
+internal readonly record struct HostedRuntimeStart(IHostedAgentRuntime Runtime, string? McpConfigPath, IAcpTranscriptSource? Transcript = null);
 
 /// <summary>
 /// Everything a runtime factory needs to prepare and start a hosted agent for one launch. Built by

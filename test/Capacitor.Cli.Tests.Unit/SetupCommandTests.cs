@@ -148,7 +148,7 @@ public class SetupCommandTests {
         var result = new CodingAgentsStep.Result(
             ClaudeInstalled:       true,
             CodexHooksInstalled:   false,
-            CodexSkillsInstalled:  false,
+            AgentSkillsInstalled:  false,
             CursorHooksInstalled:  false,
             CopilotHooksInstalled: false);
 
@@ -164,7 +164,7 @@ public class SetupCommandTests {
         var result = new CodingAgentsStep.Result(
             ClaudeInstalled:       false,
             CodexHooksInstalled:   false,
-            CodexSkillsInstalled:  false,
+            AgentSkillsInstalled:  false,
             CursorHooksInstalled:  false,
             CopilotHooksInstalled: true);
 
@@ -178,7 +178,7 @@ public class SetupCommandTests {
         var result = new CodingAgentsStep.Result(
             ClaudeInstalled:       false,
             CodexHooksInstalled:   false,
-            CodexSkillsInstalled:  false,
+            AgentSkillsInstalled:  false,
             CursorHooksInstalled:  false,
             CopilotHooksInstalled: false,
             PiExtensionInstalled:  true);
@@ -197,7 +197,7 @@ public class SetupCommandTests {
         var result = new CodingAgentsStep.Result(
             ClaudeInstalled:       false,
             CodexHooksInstalled:   false,
-            CodexSkillsInstalled:  false,
+            AgentSkillsInstalled:  false,
             CursorHooksInstalled:  false,
             CopilotHooksInstalled: false);
 

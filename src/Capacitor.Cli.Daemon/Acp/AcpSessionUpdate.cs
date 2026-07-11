@@ -30,13 +30,24 @@ internal enum AcpUpdateKind {
 /// notification envelope) so the mapper can reach into fields this DTO doesn't surface yet —
 /// notably the untyped <c>plan</c> entries and any fields on spec-derived variants that drift once
 /// AI-684's probe follow-up re-verifies them against a non-plan-gated account.
+///
+/// <see cref="ToolInputJson"/> carries the tool_call's
+/// <c>rawInput</c>, feeding <c>AcpEventEnvelope.ToolInputJson</c>, and
+/// <see cref="ToolResultText"/>/<see cref="ToolIsError"/> carry a tool_call_update's extracted result
+/// content + failed-status flag, feeding <c>AcpEventEnvelope.ToolResult</c>/<c>ToolIsError</c> —
+/// both extracted mechanically by <c>AcpHostedAgentRuntime.Reduce()</c> from <see cref="Raw"/>,
+/// regardless of terminal status; deciding WHETHER a given update should emit a <c>ToolResult</c>
+/// envelope (terminal + extractable content) is <c>AcpEventTranslator</c>'s job, not Reduce()'s.
 /// </summary>
 internal sealed record AcpSessionUpdate(
     AcpUpdateKind Kind,
-    string?       Text       = null,
-    string?       ToolCallId = null,
-    string?       ToolTitle  = null,
-    string?       ToolKind   = null,
-    string?       ToolStatus = null,
-    JsonElement?  Raw        = null
+    string?       Text           = null,
+    string?       ToolCallId     = null,
+    string?       ToolTitle      = null,
+    string?       ToolKind       = null,
+    string?       ToolStatus     = null,
+    string?       ToolInputJson  = null,
+    string?       ToolResultText = null,
+    bool          ToolIsError    = false,
+    JsonElement?  Raw            = null
 );

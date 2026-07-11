@@ -31,17 +31,41 @@ Options:
                               (~/.cursor/mcp.json).
   --skip-copilot-hooks        Don't install Copilot CLI hooks even if Copilot
                               is detected (~/.copilot/ or copilot on PATH).
+  --skip-copilot-mcp          Skip registering the kcap MCP servers for Copilot
+                              (~/.copilot/mcp-config.json).
+  --skip-copilot-instructions Skip installing kcap's steering instructions for
+                              Copilot (~/.copilot/copilot-instructions.md).
   --skip-gemini-hooks         Don't install Gemini CLI hooks even if Gemini
                               is detected (~/.gemini/ or gemini on PATH).
+  --skip-gemini-mcp           Skip registering the kcap MCP servers for Gemini
+                              (in the shared ~/.gemini/settings.json).
+  --skip-gemini-instructions  Skip installing kcap's steering instructions for
+                              Gemini (~/.gemini/GEMINI.md).
   --skip-kiro-hooks           Don't install Kiro CLI hooks even if Kiro is
                               detected (~/.kiro/ or kiro/kiro-cli on PATH).
+  --skip-kiro-mcp             Skip registering the kcap MCP servers for Kiro
+                              (~/.kiro/settings/mcp.json).
+  --skip-kiro-skills          Skip installing the kcap skills for Kiro
+                              (~/.kiro/skills).
   --skip-pi-hooks             Don't install the Pi live-ingest extension even if
                               Pi is detected (~/.pi/ or pi on PATH).
   --skip-opencode-hooks       Don't install the OpenCode plugin even if OpenCode
                               is detected (~/.config/opencode/ or opencode on PATH).
+  --skip-opencode-mcp         Skip registering the kcap MCP servers for OpenCode
+                              (~/.config/opencode/opencode.json).
+  --skip-opencode-instructions
+                              Skip installing kcap's steering instructions for
+                              OpenCode (~/.config/opencode/AGENTS.md).
   --skip-antigravity-hooks    Don't install the Antigravity hooks block even if
                               Antigravity is detected (~/.gemini/antigravity/ or
                               antigravity on PATH).
+  --skip-antigravity-mcp      Skip registering the kcap MCP servers for Antigravity
+                              (~/.gemini/config/mcp_config.json).
+  --skip-antigravity-instructions
+                              Skip installing kcap's steering instructions for
+                              Antigravity (the shared ~/.gemini/GEMINI.md).
+  --skip-antigravity-skills   Skip copying the kcap skills into ~/.gemini/skills
+                              (where Antigravity reads them, not ~/.agents/skills).
   --use-provider-api-key <v>  In --no-prompt mode, set whether kcap keeps
                               ANTHROPIC_API_KEY / OPENAI_API_KEY in headless
                               agent spawns. Accepts true/1/yes/on or

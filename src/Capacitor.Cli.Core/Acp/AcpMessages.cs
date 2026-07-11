@@ -30,6 +30,29 @@ public sealed record ClientCapabilities(
     [property: JsonPropertyName("terminal")] bool           Terminal
 );
 
+/// <summary>
+/// <c>initialize</c> result — <c>AcpHostedAgentRuntime.StartAsync</c> deserializes the agent's
+/// <c>initialize</c> response into this to validate <see cref="ProtocolVersion"/> (must be <c>1</c>;
+/// the daemon speaks no other version yet) and to capture <see cref="AgentCapabilities"/> for later
+/// features (e.g. a reconnect path gated on <see cref="Acp.AgentCapabilities.LoadSession"/>).
+/// Deliberately minimal — the real wire response also carries <c>promptCapabilities</c>/
+/// <c>authMethods</c>, neither of which the daemon needs yet.
+/// </summary>
+public sealed record InitializeResult(
+    [property: JsonPropertyName("protocolVersion")]  int                 ProtocolVersion,
+    [property: JsonPropertyName("agentCapabilities")] AgentCapabilities?  AgentCapabilities
+);
+
+/// <summary>
+/// Agent-advertised capabilities from <c>initialize</c>'s result — only <see cref="LoadSession"/> is
+/// modeled for now (captured for a future reconnect path; nothing acts on it yet).
+/// <see cref="LoadSession"/> defaults to <see langword="false"/> when the wire omits it,
+/// matching the ACP spec's "absent means unsupported" convention.
+/// </summary>
+public sealed record AgentCapabilities(
+    [property: JsonPropertyName("loadSession")] bool LoadSession = false
+);
+
 public sealed record FsCapabilities(
     [property: JsonPropertyName("readTextFile")]  bool ReadTextFile,
     [property: JsonPropertyName("writeTextFile")] bool WriteTextFile
@@ -55,6 +78,49 @@ public sealed record PromptContentBlock(
 /// <summary><c>session/cancel</c> params — sent as a notification (no response expected).</summary>
 public sealed record SessionCancelParams(
     [property: JsonPropertyName("sessionId")] string SessionId
+);
+
+/// <summary>
+/// <c>session/set_config_option</c> params (model selection). Sent AFTER
+/// <c>session/new</c> resolves and BEFORE the first <c>session/prompt</c>, with the response
+/// awaited so the model is set before the turn starts. Wire shape probe-confirmed against real
+/// <c>cursor-agent</c> (<c>docs/ai-688-cursor-prototype-findings.md</c>): <see cref="ConfigId"/> is
+/// the literal <c>"model"</c> (the field is named <c>configId</c> on the wire, NOT <c>id</c> — an
+/// earlier attempt using <c>id</c> got a Zod <c>invalid_type</c> error at path <c>configId</c>), and
+/// <see cref="Value"/> must be the EXACT, parameterized <c>modelId</c> from
+/// <see cref="SessionModelsInfo.AvailableModels"/> (e.g.
+/// <c>claude-sonnet-4-5[thinking=true,context=200k]</c>) — a bare family name is not a valid wire
+/// value. See <c>Capacitor.Cli.Core.Acp.AcpModelResolver</c> for how a requested family name/exact
+/// id is resolved to this exact value.
+/// </summary>
+public sealed record SetConfigOptionParams(
+    [property: JsonPropertyName("sessionId")] string SessionId,
+    [property: JsonPropertyName("configId")]  string ConfigId,
+    [property: JsonPropertyName("value")]     string Value
+);
+
+/// <summary>
+/// Typed shape for <c>session/new</c>'s <c>result.models</c> object — the daemon
+/// otherwise treats the <c>session/new</c> result as an opaque <see cref="JsonElement"/> (only
+/// <c>sessionId</c> is read out of it today); this record exists purely so
+/// <c>Capacitor.Cli.Core.Acp.AcpModelResolver</c> can resolve a requested model against
+/// <see cref="AvailableModels"/> without ad hoc <see cref="JsonElement"/> digging. Probe-confirmed
+/// shape: <c>{"currentModelId":"...","availableModels":[{"modelId":"...","name":"..."}]}</c>.
+/// </summary>
+public sealed record SessionModelsInfo(
+    [property: JsonPropertyName("currentModelId")]  string?              CurrentModelId,
+    [property: JsonPropertyName("availableModels")] AvailableModelDto[]? AvailableModels
+);
+
+/// <summary>
+/// One entry in <see cref="SessionModelsInfo.AvailableModels"/>. <see cref="ModelId"/> is the
+/// exact, parameterized wire value <c>session/set_config_option</c>'s <c>value</c> requires (e.g.
+/// <c>claude-sonnet-4-5[thinking=true,context=200k]</c>); <see cref="Name"/> is the shorter
+/// human-readable family name (e.g. <c>claude-sonnet-4-5</c>) a caller is more likely to request.
+/// </summary>
+public sealed record AvailableModelDto(
+    [property: JsonPropertyName("modelId")] string  ModelId,
+    [property: JsonPropertyName("name")]    string? Name
 );
 
 /// <summary>
