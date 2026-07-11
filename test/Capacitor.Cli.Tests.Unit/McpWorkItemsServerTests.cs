@@ -104,6 +104,53 @@ public class McpWorkItemsServerTests {
         await Assert.That(url).IsEqualTo("http://x/api/work-items/session/sess%20a%2Fb");
     }
 
+    // ── flow-review round 2 findings ─────────────────────────────────────────
+
+    [Test]
+    public async Task Decode_method_returns_null_for_wrong_shaped_method_instead_of_throwing() {
+        // {"id":1,"method":{}} must yield an invalid-request response, never kill the stdio loop.
+        var method = McpWorkItemsServer.DecodeMethod(Args("""{"id":1,"method":{}}"""));
+
+        await Assert.That(method).IsNull();
+    }
+
+    [Test]
+    public async Task Declare_body_rejects_string_pr_number_instead_of_dropping_it() {
+        // A malformed two-selector declare (issue_key + string pr_number) must FAIL — silently
+        // dropping the wrong-shaped selector would let the server's exactly-one rule pass and
+        // perform an attach the caller never validly requested.
+        var ex = Assert.Throws<ArgumentException>(
+            () => McpWorkItemsServer.BuildDeclareBody(Args("""{"session_id":"s1","issue_key":"AI-1","pr_number":"123"}""")));
+
+        await Assert.That(ex!.Message).Contains("pr_number");
+    }
+
+    [Test]
+    public async Task Declare_body_rejects_object_shaped_pr_number() {
+        var ex = Assert.Throws<ArgumentException>(
+            () => McpWorkItemsServer.BuildDeclareBody(Args("""{"session_id":"s1","pr_number":{}}""")));
+
+        await Assert.That(ex!.Message).Contains("pr_number");
+    }
+
+    [Test]
+    public async Task Declare_body_rejects_fractional_pr_number_via_raw_token() {
+        // Raw-token validation (JsonElement.TryGetInt32) — a fractional part below double
+        // precision must still reject; the lossy double round-trip would have accepted it.
+        var ex = Assert.Throws<ArgumentException>(
+            () => McpWorkItemsServer.BuildDeclareBody(Args("""{"session_id":"s1","pr_number":2147483646.0000000001}""")));
+
+        await Assert.That(ex!.Message).Contains("pr_number");
+    }
+
+    [Test]
+    public async Task Declare_body_rejects_out_of_range_pr_number() {
+        var ex = Assert.Throws<ArgumentException>(
+            () => McpWorkItemsServer.BuildDeclareBody(Args("""{"session_id":"s1","pr_number":2147483648}""")));
+
+        await Assert.That(ex!.Message).Contains("pr_number");
+    }
+
     [Test]
     public async Task Tools_list_has_two_tools() {
         var tools = McpWorkItemsServer.BuildToolsList();

@@ -74,12 +74,13 @@ static class McpWorkItemsServer {
                 if (request is null) continue;
 
                 var id     = request["id"];
-                var method = request["method"]?.GetValue<string>();
+                var method = DecodeMethod(request);
 
                 // Notifications have no id — don't send a response
                 if (id is null) continue;
 
                 var response = method switch {
+                    null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
                     "initialize" => BuildInitializeResponse(id, request),
                     "tools/list" => BuildToolsListResponse(id, tools),
                     "tools/call" => await DispatchToolCallAsync(id, request),
@@ -214,13 +215,26 @@ static class McpWorkItemsServer {
     internal static string BuildSessionUrl(string baseUrl, JsonObject? args) =>
         $"{baseUrl}/api/work-items/session/{Uri.EscapeDataString(ResolveSessionId(args))}";
 
+    /// <summary>Decodes the JSON-RPC <c>method</c> field, returning null for a present but
+    /// wrong-shaped value (e.g. an object) instead of throwing — a malformed request must yield
+    /// an invalid-request response, never terminate the stdio loop.</summary>
+    internal static string? DecodeMethod(JsonObject request) {
+        try {
+            return request["method"]?.GetValue<string>();
+        } catch {
+            return null;
+        }
+    }
+
     /// <summary>
-    /// Reads a numeric field as int, tolerant of JsonValue holding any underlying numeric type
-    /// (int/long/double) — TryGetValue&lt;int&gt; on a JsonValue constructed from a long returns false.
-    /// Returns false when the key is missing or the value is the wrong shape (e.g., a string).
-    /// Throws <see cref="ArgumentException"/> when the value is numeric but out of range for int,
-    /// so the caller (via <see cref="HandleToolCallAsync"/>) surfaces it as a JSON-RPC validation error
-    /// rather than silently falling back to the default.
+    /// Reads a numeric field as int. Returns false ONLY when the key is absent (or JSON null) —
+    /// any PRESENT non-integer shape (string, object, array, fractional or out-of-range number)
+    /// throws <see cref="ArgumentException"/> so the caller surfaces a validation error instead
+    /// of silently dropping the selector: a malformed two-selector declare (e.g. issue_key plus
+    /// a string pr_number) must fail, not degrade into a "valid" single-selector attach. Wire
+    /// JSON (JsonElement-backed) is validated against the RAW token via TryGetInt32 — exact, no
+    /// lossy double round-trip, so a fractional part below double precision still rejects;
+    /// int/long branches cover programmatically constructed nodes.
     /// </summary>
     internal static bool TryReadInt(JsonObject? args, string key, out int value) {
         value = 0;
@@ -228,37 +242,26 @@ static class McpWorkItemsServer {
 
         if (node is null) return false;
 
-        JsonValue v;
+        if (node is JsonValue v) {
+            if (v.TryGetValue<JsonElement>(out var el)) {
+                if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out value)) return true;
 
-        try {
-            v = node.AsValue();
-        } catch {
-            return false; // wrong shape (object/array)
+                throw new ArgumentException($"'{key}' must be an integer within int range.");
+            }
+
+            if (v.TryGetValue(out value)) return true;
+
+            if (v.TryGetValue<long>(out var lv)) {
+                if (lv is < int.MinValue or > int.MaxValue)
+                    throw new ArgumentException($"'{key}' value {lv} is out of range for int.");
+
+                value = (int)lv;
+
+                return true;
+            }
         }
 
-        if (v.TryGetValue(out value)) return true;
-
-        if (v.TryGetValue<long>(out var lv)) {
-            if (lv is < int.MinValue or > int.MaxValue)
-                throw new ArgumentException($"'{key}' value {lv} is out of range for int.");
-
-            value = (int)lv;
-
-            return true;
-        }
-
-        if (v.TryGetValue<double>(out var dv)) {
-            var rounded = (long)dv;
-
-            if (rounded < int.MinValue || rounded > int.MaxValue || rounded != dv)
-                throw new ArgumentException($"'{key}' value {dv} is out of range or non-integer for int.");
-
-            value = (int)rounded;
-
-            return true;
-        }
-
-        return false;
+        throw new ArgumentException($"'{key}' must be an integer.");
     }
 
     static string BuildToolResult(JsonNode id, string text, bool isError = false) =>
@@ -289,7 +292,7 @@ static class McpWorkItemsServer {
             "Attach the CURRENT session (and its continuation chain) to a work item on the Capacitor server. Provide exactly one of issue_key, pr_number, work_item_id, or new_title.",
             new("object", new() {
                 ["issue_key"]    = new("string", "Attach to the work item for this issue key (e.g. 'AI-1234'), creating it if none exists yet."),
-                ["pr_number"]    = new("number", "Attach to the work item for this PR number, creating it if none exists yet."),
+                ["pr_number"]    = new("integer", "Attach to the work item for this PR number, creating it if none exists yet."),
                 ["work_item_id"] = new("string", "Attach directly to this work item id."),
                 ["new_title"]    = new("string", "Create a brand-new work item with this title and attach to it."),
                 ["session_id"]   = new("string", "Session id to attach. Defaults to the current kcap-hooked session (KCAP_SESSION_ID) when omitted.")
