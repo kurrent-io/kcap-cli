@@ -76,7 +76,12 @@ static class OpenCodeHookCommand {
             ["started_at"]      = DateTimeOffset.UtcNow.ToString("O")
         };
 
-        if (cwd is not null) forwarded["cwd"] = cwd;
+        if (cwd is not null) {
+            forwarded["cwd"] = cwd;
+
+            // AI-701: best-effort git-root discovery, fail-open (omitted when no repo is found).
+            if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
+        }
         if (GetArg(args, "--model")    is { } model)    forwarded["model"]            = model;
         if (GetArg(args, "--provider") is { } provider) forwarded["provider_id"]      = provider;
         if (GetArg(args, "--version")  is { } version)  forwarded["opencode_version"] = version;

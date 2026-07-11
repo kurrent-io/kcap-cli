@@ -16,6 +16,38 @@ public class ClaudeHookCommandTests {
         await Assert.That(fx.RouteOrder).Contains("session-start");
     }
 
+    // AI-701: the session-start payload gains a best-effort workspace_root (the git repo root
+    // for cwd), used server-side by plan-artifact discovery. Fail-open: a cwd with no
+    // discoverable .git entry (e.g. "/tmp") must omit the field entirely rather than send null.
+    [Test]
+    public async Task session_start_includes_workspace_root_when_cwd_is_inside_a_git_repo() {
+        var tmp = Directory.CreateTempSubdirectory("kcap-claude-hook-git-");
+        try {
+            Directory.CreateDirectory(Path.Combine(tmp.FullName, ".git"));
+            var nested = Path.Combine(tmp.FullName, "nested", "dir");
+            Directory.CreateDirectory(nested);
+
+            using var fx = new Fixture();
+            await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{nested.Replace("\\", "\\\\")}}"}""");
+
+            var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|"));
+            var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..]);
+            await Assert.That(body!["workspace_root"]?.GetValue<string>()).IsEqualTo(tmp.FullName);
+        } finally {
+            tmp.Delete(recursive: true);
+        }
+    }
+
+    [Test]
+    public async Task session_start_omits_workspace_root_when_cwd_has_no_git_repo() {
+        using var fx = new Fixture();
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}""");
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|"));
+        var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..]);
+        await Assert.That(body!["workspace_root"]).IsNull();
+    }
+
     // Covers the auth-hang case from the spec: the hard cap must beat an
     // uncancellable hang (e.g. TokenStore.RefreshAsync's untimed HttpClient.PostAsync).
     [Test]

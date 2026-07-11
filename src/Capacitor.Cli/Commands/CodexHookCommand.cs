@@ -179,6 +179,12 @@ static class CodexHookCommand {
             node["default_visibility"] = visibility;
         }
 
+        // AI-701: best-effort git-root discovery, fail-open (omitted when cwd is absent or no
+        // repo is found) — see the mirrored ClaudeHookCommand comment for rationale.
+        if (TryGetString(node, "cwd") is { } startCwd && GitRepository.FindRoot(startCwd) is { } workspaceRoot) {
+            node["workspace_root"] = workspaceRoot;
+        }
+
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(node.ToJsonString());
 
         // Repo exclusion runs here (not above the event switch) so that the

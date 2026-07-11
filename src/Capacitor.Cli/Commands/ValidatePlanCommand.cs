@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text;
 using System.Text.Json;
 using Capacitor.Cli.Core;
 
@@ -7,7 +9,200 @@ static class ValidatePlanCommand {
     public static async Task<int> Handle(string baseUrl, string sessionId) {
         using var httpClient = await HttpClientExtensions.CreateAuthenticatedClientAsync();
 
-        // Fetch chain recap to find plans from previous sessions (e.g. ExitPlanMode in parent)
+        return await HandleCore(httpClient, baseUrl, sessionId);
+    }
+
+    /// <summary>
+    /// Test-friendly core: caller owns the <see cref="HttpClient"/> (mirrors
+    /// <see cref="ClaudeHookCommand.HandleCore"/>'s seam). Two-call flow (AI-701):
+    /// <c>GET /api/sessions/{id}/plan-artifacts?chain=true</c> for the discovered plan
+    /// artifact set, then the existing <c>GET /api/sessions/{id}/recap?chain=true</c> for
+    /// current-session work rows and AI-generated "what's done" summaries. A 404 on the
+    /// artifacts route (old server without the route, or a non-visible session) falls back
+    /// to <see cref="RenderLegacyAsync"/> — the original recap-only behavior, unchanged.
+    /// </summary>
+    internal static async Task<int> HandleCore(HttpClient httpClient, string baseUrl, string sessionId) {
+        HttpResponseMessage artifactsResp;
+
+        try {
+            artifactsResp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/plan-artifacts?chain=true");
+        } catch (HttpRequestException ex) {
+            HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
+
+            return 1;
+        }
+
+        if (await HttpClientExtensions.HandleUnauthorizedAsync(artifactsResp)) {
+            return 1;
+        }
+
+        if (artifactsResp.StatusCode == HttpStatusCode.NotFound) {
+            // Older server without the route, or the session/candidate isn't visible —
+            // preserve the original recap-only behavior byte-for-byte.
+            return await RenderLegacyAsync(httpClient, baseUrl, sessionId);
+        }
+
+        if (!artifactsResp.IsSuccessStatusCode) {
+            await Console.Error.WriteLineAsync($"HTTP {(int)artifactsResp.StatusCode}");
+
+            return 1;
+        }
+
+        var artifactsJson     = await artifactsResp.Content.ReadAsStringAsync();
+        var artifactsResponse = JsonSerializer.Deserialize(artifactsJson, CapacitorJsonContext.Default.PlanArtifactsResponseDto);
+
+        var primary   = artifactsResponse?.Primary;
+        var artifacts = artifactsResponse?.Artifacts ?? [];
+
+        if (primary is null && artifacts.Count == 0) {
+            await Console.Out.WriteLineAsync("No plan found for this session.");
+
+            return 0;
+        }
+
+        // Work done + AI summaries still come from the existing recap endpoint — the
+        // plan-artifacts route only carries the discovered plan/spec/design/checklist set.
+        HttpResponseMessage recapResp;
+
+        try {
+            recapResp = await httpClient.GetWithRetryAsync($"{baseUrl}/api/sessions/{sessionId}/recap?chain=true");
+        } catch (HttpRequestException ex) {
+            HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
+
+            return 1;
+        }
+
+        if (await HttpClientExtensions.HandleUnauthorizedAsync(recapResp)) {
+            return 1;
+        }
+
+        if (recapResp.StatusCode == HttpStatusCode.NotFound) {
+            await Console.Error.WriteLineAsync($"Session not found: {sessionId}");
+
+            return 1;
+        }
+
+        if (!recapResp.IsSuccessStatusCode) {
+            await Console.Error.WriteLineAsync($"HTTP {(int)recapResp.StatusCode}");
+
+            return 1;
+        }
+
+        var recapJson = await recapResp.Content.ReadAsStringAsync();
+        var entries   = JsonSerializer.Deserialize(recapJson, CapacitorJsonContext.Default.ListRecapEntry) ?? [];
+
+        // Work done: only from the current session being validated (matches the legacy filter).
+        var work      = entries.Where(e => e.Type is "write" or "edit" && e.SessionId == sessionId).ToList();
+        var summaries = entries.Where(e => e.Type == "whats_done").ToList();
+
+        await RenderPlanArtifacts(primary, artifacts);
+        await RenderWhatsDoneAndInstructions(summaries, work);
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Renders the "## Plan" section from the discovery response: the primary artifact
+    /// first (the server's designated best candidate for validation — see
+    /// <c>PlanArtifactComposer</c>), followed by any other discovered artifacts in the
+    /// order returned (newest-first). A truncated artifact is prefixed with a byte-count
+    /// marker; an unavailable one renders a placeholder — and, when the PRIMARY itself is
+    /// unavailable, an explicit note that full validation isn't possible without its content.
+    /// </summary>
+    static async Task RenderPlanArtifacts(PlanArtifactDto? primary, IReadOnlyList<PlanArtifactDto> artifacts) {
+        var ordered = primary is null
+            ? artifacts
+            : new List<PlanArtifactDto> { primary }
+                .Concat(artifacts.Where(a => a.ArtifactId != primary.ArtifactId))
+                .ToList();
+
+        await Console.Out.WriteLineAsync("## Plan");
+        await Console.Out.WriteLineAsync();
+
+        foreach (var artifact in ordered) {
+            var isPrimary = primary is not null && artifact.ArtifactId == primary.ArtifactId;
+
+            switch (artifact.ContentState) {
+                case "truncated": {
+                    var n = artifact.Content is null ? 0 : Encoding.UTF8.GetByteCount(artifact.Content);
+                    await Console.Out.WriteLineAsync($"[plan truncated: first {n} of {artifact.OriginalBytes} bytes]");
+
+                    if (artifact.Content is not null) {
+                        await Console.Out.WriteLineAsync(artifact.Content);
+                    }
+
+                    break;
+                }
+                case "unavailable": {
+                    await Console.Out.WriteLineAsync("[plan content unavailable due to size bounds]");
+
+                    if (isPrimary) {
+                        await Console.Out.WriteLineAsync(
+                            "Validation is not possible: the plan content could not be retrieved (exceeds size bounds).");
+                    }
+
+                    break;
+                }
+                default: {
+                    if (artifact.Content is not null) {
+                        await Console.Out.WriteLineAsync(artifact.Content);
+                    }
+
+                    break;
+                }
+            }
+        }
+
+        await Console.Out.WriteLineAsync();
+    }
+
+    /// <summary>Shared "## What's Done" + "## Instructions" rendering, used by both the
+    /// plan-artifacts path and the legacy recap-only path so the two stay in sync.</summary>
+    static async Task RenderWhatsDoneAndInstructions(List<RecapEntry> summaries, List<RecapEntry> work) {
+        await Console.Out.WriteLineAsync("## What's Done");
+        await Console.Out.WriteLineAsync();
+
+        if (summaries.Count > 0) {
+            await Console.Out.WriteLineAsync("### Summary");
+            await Console.Out.WriteLineAsync();
+
+            foreach (var summary in summaries) {
+                await Console.Out.WriteLineAsync(summary.Content);
+            }
+
+            await Console.Out.WriteLineAsync();
+        }
+
+        await Console.Out.WriteLineAsync("### Details");
+        await Console.Out.WriteLineAsync();
+
+        if (work.Count == 0) {
+            await Console.Out.WriteLineAsync("No file writes or edits recorded.");
+        } else {
+            foreach (var entry in work) {
+                var label = entry.Type == "write" ? "Write" : "Edit";
+                var path  = entry.FilePath ?? "unknown";
+                await Console.Out.WriteLineAsync($"- {label}: {path}");
+            }
+        }
+
+        await Console.Out.WriteLineAsync();
+
+        await Console.Out.WriteLineAsync("## Instructions");
+        await Console.Out.WriteLineAsync();
+
+        await Console.Out.WriteLineAsync(
+            "Compare the plan above against the summary and file list under \"What's Done\". Identify any planned items that were NOT completed. If everything is done, confirm that. If there are gaps, list them and complete the remaining work now."
+        );
+    }
+
+    /// <summary>
+    /// Original (pre-AI-701) recap-only behavior, preserved byte-for-byte for old servers that
+    /// don't yet expose <c>GET /api/sessions/{id}/plan-artifacts</c> (or a session/candidate the
+    /// route can't resolve). Plans come from <c>recap</c> entries of type "plan" across the
+    /// session chain; work/summaries are filtered exactly as before.
+    /// </summary>
+    static async Task<int> RenderLegacyAsync(HttpClient httpClient, string baseUrl, string sessionId) {
         HttpResponseMessage resp;
 
         try {
@@ -22,7 +217,7 @@ static class ValidatePlanCommand {
             return 1;
         }
 
-        if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) {
+        if (resp.StatusCode == HttpStatusCode.NotFound) {
             await Console.Error.WriteLineAsync($"Session not found: {sessionId}");
 
             return 1;
@@ -66,43 +261,7 @@ static class ValidatePlanCommand {
 
         await Console.Out.WriteLineAsync();
 
-        // Output what's done
-        await Console.Out.WriteLineAsync("## What's Done");
-        await Console.Out.WriteLineAsync();
-
-        if (summaries.Count > 0) {
-            await Console.Out.WriteLineAsync("### Summary");
-            await Console.Out.WriteLineAsync();
-
-            foreach (var summary in summaries) {
-                await Console.Out.WriteLineAsync(summary.Content);
-            }
-
-            await Console.Out.WriteLineAsync();
-        }
-
-        await Console.Out.WriteLineAsync("### Details");
-        await Console.Out.WriteLineAsync();
-
-        if (work.Count == 0) {
-            await Console.Out.WriteLineAsync("No file writes or edits recorded.");
-        } else {
-            foreach (var entry in work) {
-                var label = entry.Type == "write" ? "Write" : "Edit";
-                var path  = entry.FilePath ?? "unknown";
-                await Console.Out.WriteLineAsync($"- {label}: {path}");
-            }
-        }
-
-        await Console.Out.WriteLineAsync();
-
-        // Verification instruction
-        await Console.Out.WriteLineAsync("## Instructions");
-        await Console.Out.WriteLineAsync();
-
-        await Console.Out.WriteLineAsync(
-            "Compare the plan above against the summary and file list under \"What's Done\". Identify any planned items that were NOT completed. If everything is done, confirm that. If there are gaps, list them and complete the remaining work now."
-        );
+        await RenderWhatsDoneAndInstructions(summaries, work);
 
         return 0;
     }

@@ -2353,6 +2353,15 @@ static class ImportCommand {
         if (session.PreviousSessionId is not null) startHook["previous_session_id"] = session.PreviousSessionId;
         if (meta.Slug is not null) startHook["slug"]                                = meta.Slug;
 
+        // AI-701: best-effort git-root discovery from the (already remap-resolved) cwd, so
+        // historical imports carry the same workspace_root the live hooks do. Fail-open:
+        // GitRepository.FindRoot swallows I/O errors and returns null when no repo is found
+        // on this machine (e.g. the recorded path no longer exists), in which case the field
+        // is simply omitted.
+        if (!string.IsNullOrEmpty(cwd) && GitRepository.FindRoot(cwd) is { } workspaceRoot) {
+            startHook["workspace_root"] = workspaceRoot;
+        }
+
         // Codex sessions carry a `git` block on session_meta — prefer it over a fresh
         // RepositoryDetection probe (which reads the live git config and might disagree
         // with what was true when the rollout was recorded). Detection still runs as a
