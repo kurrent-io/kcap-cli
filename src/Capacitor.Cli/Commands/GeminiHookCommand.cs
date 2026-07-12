@@ -100,7 +100,12 @@ static class GeminiHookCommand {
             ["home_dir"]        = PathHelpers.HomeDirectory
         };
 
-        if (cwd is not null) forwarded["cwd"] = cwd;
+        if (cwd is not null) {
+            forwarded["cwd"] = cwd;
+
+            // AI-701: best-effort git-root discovery, fail-open (omitted when no repo is found).
+            if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
+        }
 
         // Gemini stamps hook payloads with an ISO-8601 `timestamp`; forward it
         // as started_at so canonical SessionStarted carries the real start time

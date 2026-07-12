@@ -426,6 +426,24 @@ public static class ClaudeHookCommand {
             // plan_content onto the enriched body before the POST.
             body = await deferredRepoTask!;
 
+            // AI-701: best-effort git-root discovery for the session's cwd, fed to the server's
+            // plan-artifact discovery so a repo-file plan/spec found at the workspace root can be
+            // attributed even when cwd is a subdirectory. Fail-open: GitRepository.FindRoot swallows
+            // I/O errors and returns null when no repo is found, in which case the field is simply
+            // omitted (older servers ignore unknown fields regardless).
+            if (sessionCwd is not null && GitRepository.FindRoot(sessionCwd) is { } workspaceRoot) {
+                try {
+                    var node = JsonNode.Parse(body);
+
+                    if (node is not null) {
+                        node["workspace_root"] = workspaceRoot;
+                        body                    = node.ToJsonString();
+                    }
+                } catch {
+                    // Best effort
+                }
+            }
+
             // Inject default_visibility from the active V2 profile. The legacy top-level
             // LegacyV1Config.DefaultVisibility shape is not populated by v2 configs (the field
             // lives under the profile), so reading it there silently fell back to "org_public"

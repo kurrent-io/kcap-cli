@@ -98,7 +98,12 @@ static class KiroHookCommand {
             ["home_dir"]        = PathHelpers.HomeDirectory
         };
 
-        if (cwd is not null) forwarded["cwd"] = cwd;
+        if (cwd is not null) {
+            forwarded["cwd"] = cwd;
+
+            // AI-701: best-effort git-root discovery, fail-open (omitted when no repo is found).
+            if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
+        }
 
         if (Environment.GetEnvironmentVariable("KCAP_AGENT_ID") is { } agentHostId) {
             forwarded["agent_host_id"] = agentHostId;

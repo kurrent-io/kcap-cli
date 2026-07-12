@@ -790,6 +790,52 @@ public sealed record CliProjectError {
     public required string Message { get; init; }
 }
 
+/// <summary>
+/// One discovered plan/spec/design/checklist artifact returned by
+/// <c>GET /api/sessions/{id}/plan-artifacts</c> (AI-701). Mirrors the server's
+/// <c>Capacitor.Plans.PlanArtifact</c> record field-for-field; string fields
+/// (<see cref="Kind"/>, <see cref="Source"/>, <see cref="ContentState"/>,
+/// <see cref="Confidence"/>) carry the server's snake_case enum values verbatim
+/// (e.g. "plan", "repo_file", "truncated") — no local enum type, since the CLI
+/// only needs to compare/display them, never branch on the full server vocabulary.
+/// </summary>
+public sealed record PlanArtifactDto {
+    [JsonPropertyName("artifact_id")]     public required string ArtifactId { get; init; }
+    [JsonPropertyName("kind")]            public required string Kind { get; init; }
+    [JsonPropertyName("title")]           public required string Title { get; init; }
+    [JsonPropertyName("source")]          public required string Source { get; init; }
+    [JsonPropertyName("session_id")]      public required string SessionId { get; init; }
+    [JsonPropertyName("agent_id")]        public string? AgentId { get; init; }
+    [JsonPropertyName("agent_type")]      public string? AgentType { get; init; }
+    [JsonPropertyName("head_session_id")] public string? HeadSessionId { get; init; }
+    [JsonPropertyName("head_agent_id")]   public string? HeadAgentId { get; init; }
+    [JsonPropertyName("head_agent_type")] public string? HeadAgentType { get; init; }
+    [JsonPropertyName("head_discovered_at")]      public DateTimeOffset? HeadDiscoveredAt { get; init; }
+    [JsonPropertyName("last_observed_session_id")] public string? LastObservedSessionId { get; init; }
+    [JsonPropertyName("last_observed_at")] public DateTimeOffset? LastObservedAt { get; init; }
+    [JsonPropertyName("path")]            public string? Path { get; init; }
+    [JsonPropertyName("content")]         public string? Content { get; init; }
+    [JsonPropertyName("content_state")]   public required string ContentState { get; init; } // "ok" | "truncated" | "unavailable"
+    [JsonPropertyName("is_complete")]     public required bool IsComplete { get; init; }
+    [JsonPropertyName("is_confirmed")]    public required bool IsConfirmed { get; init; }
+    [JsonPropertyName("is_truncated")]    public bool IsTruncated { get; init; }
+    [JsonPropertyName("original_bytes")]  public long? OriginalBytes { get; init; }
+    [JsonPropertyName("content_hash")]    public required string ContentHash { get; init; }
+    [JsonPropertyName("head_change_hash")] public string? HeadChangeHash { get; init; }
+    [JsonPropertyName("version")]         public required int Version { get; init; }
+    [JsonPropertyName("discovered_at")]   public required DateTimeOffset DiscoveredAt { get; init; }
+    [JsonPropertyName("confidence")]      public required string Confidence { get; init; } // "high" | "medium" | "low"
+    [JsonPropertyName("reason")]          public required string Reason { get; init; }
+    [JsonPropertyName("is_primary")]      public bool IsPrimary { get; init; }
+}
+
+/// <summary>Body of <c>GET /api/sessions/{id}/plan-artifacts</c> (AI-701).</summary>
+public sealed record PlanArtifactsResponseDto {
+    [JsonPropertyName("primary")]     public PlanArtifactDto? Primary { get; init; }
+    [JsonPropertyName("artifacts")]   public List<PlanArtifactDto> Artifacts { get; init; } = [];
+    [JsonPropertyName("diagnostics")] public List<string> Diagnostics { get; init; } = [];
+}
+
 public sealed record CurationApplyItem {
     [JsonPropertyName("category")]      public string?               Category     { get; init; }
     [JsonPropertyName("cluster_id")]    public string?               ClusterId    { get; init; }
@@ -805,6 +851,8 @@ public sealed record CurationApplyResponse {
 
 [JsonSerializable(typeof(List<RecapEntry>))]
 [JsonSerializable(typeof(List<RepoRecapEntry>))]
+[JsonSerializable(typeof(PlanArtifactDto))]
+[JsonSerializable(typeof(PlanArtifactsResponseDto))]
 [JsonSerializable(typeof(EvalContextResult))]
 [JsonSerializable(typeof(EvalQuestionDto))]
 [JsonSerializable(typeof(EvalQuestionDto[]))]

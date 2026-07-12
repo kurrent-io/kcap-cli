@@ -1119,7 +1119,7 @@ static class ImportCommand {
                                 },
                             };
 
-                            r = await ImportChainsAsync(httpClient, baseUrl, chains, wrappedEvents, CancellationToken.None);
+                            r = await ImportChainsAsync(httpClient, baseUrl, chains, wrappedEvents, CancellationToken.None, sessionCwds);
 
                             // After the await, all workers have drained; mark every slot idle.
                             for (var i = 0; i < ImportWorkerCount; i++) IdleSlot(i);
@@ -1142,7 +1142,7 @@ static class ImportCommand {
                     );
                 importResult = r!;
             } else {
-                importResult = await ImportChainsAsync(httpClient, baseUrl, chains, events, CancellationToken.None);
+                importResult = await ImportChainsAsync(httpClient, baseUrl, chains, events, CancellationToken.None, sessionCwds);
             }
         } else {
             importResult = new(0, 0, 0);
@@ -2213,7 +2213,8 @@ static class ImportCommand {
             string                            baseUrl,
             List<List<SessionClassification>> chains,
             ChainWorkerEvents                 events,
-            CancellationToken                 ct
+            CancellationToken                 ct,
+            IReadOnlyDictionary<string, string>? sessionCwds = null
         ) {
         var loaded  = 0;
         var resumed = 0;
@@ -2247,7 +2248,7 @@ static class ImportCommand {
                                 var linesSent = 0;
 
                                 try {
-                                    (r, linesSent) = await ImportSingleSessionAsync(httpClient, baseUrl, session, slot, events, ct);
+                                    (r, linesSent) = await ImportSingleSessionAsync(httpClient, baseUrl, session, slot, events, ct, sessionCwds);
                                 } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                                     throw;
                                 } catch (Exception ex) {
@@ -2285,7 +2286,8 @@ static class ImportCommand {
             SessionClassification session,
             int                   slot,
             ChainWorkerEvents     events,
-            CancellationToken     ct
+            CancellationToken     ct,
+            IReadOnlyDictionary<string, string>? sessionCwds = null
         ) {
         // Denominator for the per-slot progress bar: the number of parent-transcript
         // lines this import will POST. For a resume, only the lines past the server's
@@ -2339,7 +2341,14 @@ static class ImportCommand {
 
         // status == New: session-start → import → session-end → enqueue background tasks
         var meta = session.Meta;
-        var cwd  = meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(session.EncodedCwd);
+        // Prefer the already remap-/worktree-resolved cwd computed up front into sessionCwds
+        // (see ResolveTranscriptReposAsync / the Cursor branch above it) so workspace_root
+        // discovery below and repo detection agree with what the missing-cwd report showed
+        // the user — falling back to the raw transcript cwd when this session has no entry
+        // (e.g. a Cursor-less non-file source, or resolution failed to produce one).
+        var cwd = sessionCwds is not null && sessionCwds.TryGetValue(session.SessionId, out var resolvedCwd)
+            ? resolvedCwd
+            : meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(session.EncodedCwd);
 
         var startHook = new JsonObject {
             ["session_id"]      = session.SessionId,
@@ -2352,6 +2361,15 @@ static class ImportCommand {
         if (meta.FirstTimestamp is not null) startHook["started_at"]                = meta.FirstTimestamp.Value.ToString("O");
         if (session.PreviousSessionId is not null) startHook["previous_session_id"] = session.PreviousSessionId;
         if (meta.Slug is not null) startHook["slug"]                                = meta.Slug;
+
+        // AI-701: best-effort git-root discovery from the (already remap-resolved) cwd, so
+        // historical imports carry the same workspace_root the live hooks do. Fail-open:
+        // GitRepository.FindRoot swallows I/O errors and returns null when no repo is found
+        // on this machine (e.g. the recorded path no longer exists), in which case the field
+        // is simply omitted.
+        if (!string.IsNullOrEmpty(cwd) && GitRepository.FindRoot(cwd) is { } workspaceRoot) {
+            startHook["workspace_root"] = workspaceRoot;
+        }
 
         // Codex sessions carry a `git` block on session_meta — prefer it over a fresh
         // RepositoryDetection probe (which reads the live git config and might disagree

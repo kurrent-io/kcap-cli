@@ -345,6 +345,9 @@ internal sealed class AntigravityImportSource : IImportSource {
     static JsonObject BuildSessionStartPayload(string sid, string? cwd, DateTimeOffset? startedAt, bool forcePrivate) {
         var p = new JsonObject { ["hook_event_name"] = "sessionStart", ["session_id"] = sid };
         if (cwd is not null) p["cwd"] = cwd;
+        // AI-701 (finding 4): fail-open git-root discovery, mirroring ImportChainsAsync
+        // so routed imports carry the same workspace_root the file-based path does.
+        if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) p["workspace_root"] = workspaceRoot;
         if (startedAt is { } ts) p["started_at"] = ts.ToString("O");
         if (forcePrivate) p["default_visibility"] = "private";
         return p;
