@@ -311,10 +311,12 @@ public static class SetupCommand {
             InstallAntigravityHooks:  PluginCommand.InstallAntigravityHooks,
             EnableCodexNetworkAccess: () => CodexConfigToml.EnableNetworkAccess(codexAllowDomains),
             RegisterCodexMcp:         () => CodexConfigToml.RegisterKcapMcpServers(),
+            // AI-1264: every non-Claude JSON harness registers the ForCursor subset — kcap-workitems
+            // is a Claude Code plugin-only tool (its session-id default rides the Claude hook env).
             RegisterCursorMcp:        () => JsonMcpConfigWriter.Register(
-                CursorPaths.UserMcpJson(), KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("cursor")),
+                CursorPaths.UserMcpJson(), KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("cursor")),
             RegisterCopilotMcp:       () => JsonMcpConfigWriter.Register(
-                CopilotPaths.McpConfigJson(), KcapMcpServers.All, McpConfigShape.Copilot, cwd: null, new McpMarker("copilot")),
+                CopilotPaths.McpConfigJson(), KcapMcpServers.ForCursor, McpConfigShape.Copilot, cwd: null, new McpMarker("copilot")),
             InstallCopilotInstructions: () => AgentInstructionsWriter.Write(
                 CopilotPaths.InstructionsMd(), KcapAgentInstructions.Body),
             // Skills are already current when the on-disk marker matches this build AND
@@ -323,17 +325,17 @@ public static class SetupCommand {
             // deleted skill folder — reads as "not current" → prompt + install (self-heals).
             AgentSkillsCurrent:       AgentsSkillsInstaller.IsCurrent,
             RegisterOpenCodeMcp:      () => JsonMcpConfigWriter.Register(
-                OpenCodePaths.McpConfigJson(), KcapMcpServers.All, McpConfigShape.OpenCode, cwd: null, new McpMarker("opencode")),
+                OpenCodePaths.McpConfigJson(), KcapMcpServers.ForCursor, McpConfigShape.OpenCode, cwd: null, new McpMarker("opencode")),
             InstallOpenCodeInstructions: () => AgentInstructionsWriter.Write(
                 OpenCodePaths.AgentsMd(), KcapAgentInstructions.Body),
             RegisterKiroMcp:          () => JsonMcpConfigWriter.Register(
-                KiroPaths.SettingsMcpJson(), KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("kiro")),
+                KiroPaths.SettingsMcpJson(), KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("kiro")),
             RegisterGeminiMcp:        () => JsonMcpConfigWriter.Register(
-                GeminiPaths.SettingsJson(), KcapMcpServers.All, McpConfigShape.Gemini, cwd: null, new McpMarker("gemini")),
+                GeminiPaths.SettingsJson(), KcapMcpServers.ForCursor, McpConfigShape.Gemini, cwd: null, new McpMarker("gemini")),
             InstallGeminiInstructions: () => AgentInstructionsWriter.Write(
                 GeminiPaths.GeminiMd(), KcapAgentInstructions.Body),
             RegisterAntigravityMcp:   () => JsonMcpConfigWriter.Register(
-                AntigravityPaths.McpConfigJson(), KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("antigravity")),
+                AntigravityPaths.McpConfigJson(), KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("antigravity")),
             InstallAntigravityInstructions: () => AgentInstructionsWriter.Write(
                 AntigravityPaths.InstructionsMd(), KcapAgentInstructions.Body));
 

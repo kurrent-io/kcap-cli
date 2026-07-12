@@ -712,7 +712,7 @@ public static class PluginCommand {
     /// </summary>
     static async Task RegisterCursorMcpServersAsync(PluginEnvironment env) {
         var change = JsonMcpConfigWriter.Register(
-            env.CursorMcpJson, KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("cursor"));
+            env.CursorMcpJson, KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("cursor"));
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
@@ -950,7 +950,7 @@ public static class PluginCommand {
     /// </summary>
     static async Task RegisterOpenCodeMcpServersAsync(PluginEnvironment env) {
         var change = JsonMcpConfigWriter.Register(
-            env.OpenCodeMcpConfigJson, KcapMcpServers.All, McpConfigShape.OpenCode, cwd: null, new McpMarker("opencode"));
+            env.OpenCodeMcpConfigJson, KcapMcpServers.ForCursor, McpConfigShape.OpenCode, cwd: null, new McpMarker("opencode"));
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
@@ -1089,7 +1089,7 @@ public static class PluginCommand {
     /// (Standard shape). Never fails the install: a write error is a warning.</summary>
     static async Task RegisterAntigravityMcpServersAsync(PluginEnvironment env) {
         var change = JsonMcpConfigWriter.Register(
-            env.AntigravityMcpConfigJson, KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("antigravity"));
+            env.AntigravityMcpConfigJson, KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("antigravity"));
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
@@ -1279,7 +1279,7 @@ public static class PluginCommand {
     /// </summary>
     static async Task RegisterCopilotMcpServersAsync(PluginEnvironment env) {
         var change = JsonMcpConfigWriter.Register(
-            env.CopilotMcpConfigJson, KcapMcpServers.All, McpConfigShape.Copilot, cwd: null, new McpMarker("copilot"));
+            env.CopilotMcpConfigJson, KcapMcpServers.ForCursor, McpConfigShape.Copilot, cwd: null, new McpMarker("copilot"));
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
@@ -1523,7 +1523,7 @@ public static class PluginCommand {
     /// </summary>
     static async Task RegisterKiroMcpServersAsync(PluginEnvironment env, string mcpPath) {
         var change = JsonMcpConfigWriter.Register(
-            mcpPath, KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new McpMarker("kiro"));
+            mcpPath, KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("kiro"));
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
@@ -1870,7 +1870,7 @@ public static class PluginCommand {
     /// </summary>
     static async Task RegisterGeminiMcpServersAsync(PluginEnvironment env, string settingsPath) {
         var change = JsonMcpConfigWriter.Register(
-            settingsPath, KcapMcpServers.All, McpConfigShape.Gemini, cwd: null, new McpMarker("gemini"));
+            settingsPath, KcapMcpServers.ForCursor, McpConfigShape.Gemini, cwd: null, new McpMarker("gemini"));
 
         switch (change) {
             case JsonMcpConfigWriter.Change.Updated:
