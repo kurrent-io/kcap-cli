@@ -34,7 +34,22 @@ public class ClaudeHookCommandTests {
             var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..]);
             await Assert.That(body!["workspace_root"]?.GetValue<string>()).IsEqualTo(tmp.FullName);
         } finally {
-            tmp.Delete(recursive: true);
+            // Best-effort: on windows-latest runners the AV/indexer can transiently hold a
+            // handle on a just-created directory and fail the recursive delete with
+            // IOException ("being used by another process"). The temp dir is on an
+            // ephemeral runner — retry briefly, then let it go rather than fail the test.
+            for (var attempt = 1; ; attempt++) {
+                try {
+                    tmp.Delete(recursive: true);
+                    break;
+                } catch (IOException) when (attempt < 4) {
+                    await Task.Delay(100 * attempt);
+                } catch (IOException) {
+                    break;
+                } catch (UnauthorizedAccessException) {
+                    break;
+                }
+            }
         }
     }
 
