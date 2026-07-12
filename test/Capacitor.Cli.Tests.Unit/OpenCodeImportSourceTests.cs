@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -186,5 +187,70 @@ public class OpenCodeImportSourceTests {
             CancellationToken.None);
 
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.TooShort);
+    }
+
+    [Test]
+    public async Task import_session_derives_workspace_root_from_cwd_when_a_git_repo_is_present() {
+        // AI-701 review finding 4: routed imports (OpenCode/Pi/Copilot/Kiro/Antigravity) went
+        // straight to ImportSessionAsync and never derived workspace_root — only the file-based
+        // chain path (ImportChainsAsync) did. Mirrors ImportChainsTests'
+        // ImportChainsAsync_derives_workspace_root_from_the_remapped_cwd_not_the_raw_meta_cwd.
+        using var fix = new OpenCodeDbFixture();
+        var repoDir = Path.Combine(fix.Dir, "repo");
+        Directory.CreateDirectory(Path.Combine(repoDir, ".git"));
+
+        fix.AddSession("ses_wr", null, repoDir, "T", 100);
+        fix.AddMessageWithText("ses_wr", "m1", "hello", 100);
+
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+              .RespondWith(Response.Create().WithStatusCode(404));
+        foreach (var p in new[] { "/hooks/session-start/opencode", "/hooks/transcript",
+                                  "/hooks/set-title", "/hooks/session-end/opencode" })
+            server.Given(Request.Create().WithPath(p).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
+        using var client = new HttpClient();
+        var ctx = new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null);
+
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered, ctx, CancellationToken.None);
+
+        await source.ImportSessionAsync(classified[0], new ImportContext(client, server.Url!, false), CancellationToken.None);
+
+        var startEntry = server.LogEntries.Single(e => e.RequestMessage.Path == "/hooks/session-start/opencode");
+        var body        = JsonNode.Parse(startEntry.RequestMessage.Body!)!.AsObject();
+
+        await Assert.That(body["cwd"]?.GetValue<string>()).IsEqualTo(repoDir);
+        await Assert.That(body["workspace_root"]?.GetValue<string>()).IsEqualTo(repoDir);
+    }
+
+    [Test]
+    public async Task import_session_omits_workspace_root_when_cwd_has_no_git_repo() {
+        using var fix = new OpenCodeDbFixture();
+        var noGitDir = Path.Combine(fix.Dir, "no-git");
+        Directory.CreateDirectory(noGitDir);
+
+        fix.AddSession("ses_nowr", null, noGitDir, "T", 100);
+        fix.AddMessageWithText("ses_nowr", "m1", "hello", 100);
+
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+              .RespondWith(Response.Create().WithStatusCode(404));
+        foreach (var p in new[] { "/hooks/session-start/opencode", "/hooks/transcript",
+                                  "/hooks/set-title", "/hooks/session-end/opencode" })
+            server.Given(Request.Create().WithPath(p).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
+        using var client = new HttpClient();
+        var ctx = new ClassifyContext(client, server.Url!, MinLines: 1, ExcludedRepos: null, ExcludedPaths: null);
+
+        var source     = new OpenCodeImportSource(fix.DbPath, fix.LedgerPath);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered, ctx, CancellationToken.None);
+
+        await source.ImportSessionAsync(classified[0], new ImportContext(client, server.Url!, false), CancellationToken.None);
+
+        var startEntry = server.LogEntries.Single(e => e.RequestMessage.Path == "/hooks/session-start/opencode");
+        var body        = JsonNode.Parse(startEntry.RequestMessage.Body!)!.AsObject();
+
+        await Assert.That(body["workspace_root"]).IsNull();
     }
 }

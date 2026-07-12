@@ -20,6 +20,9 @@ static class ValidatePlanCommand {
     /// current-session work rows and AI-generated "what's done" summaries. A 404 on the
     /// artifacts route (old server without the route, or a non-visible session) falls back
     /// to <see cref="RenderLegacyAsync"/> — the original recap-only behavior, unchanged.
+    /// Exit codes: 0 for a normal render or "no plan found" (absence is a valid answer); 2
+    /// when the PRIMARY artifact's content is unavailable (validation genuinely isn't
+    /// possible); 1 for transport/HTTP errors (AI-701 review finding 3).
     /// </summary>
     internal static async Task<int> HandleCore(HttpClient httpClient, string baseUrl, string sessionId) {
         HttpResponseMessage artifactsResp;
@@ -95,10 +98,13 @@ static class ValidatePlanCommand {
         var work      = entries.Where(e => e.Type is "write" or "edit" && e.SessionId == sessionId).ToList();
         var summaries = entries.Where(e => e.Type == "whats_done").ToList();
 
-        await RenderPlanArtifacts(primary, artifacts);
+        var primaryUnavailable = await RenderPlanArtifacts(primary, artifacts);
         await RenderWhatsDoneAndInstructions(summaries, work);
 
-        return 0;
+        // AI-701 review finding 3: an unavailable PRIMARY means validation genuinely couldn't
+        // happen — distinct from both success (0, including the "no plan found" case above,
+        // where absence of a plan is itself a valid answer) and a generic error (1).
+        return primaryUnavailable ? 2 : 0;
     }
 
     /// <summary>
@@ -121,12 +127,19 @@ static class ValidatePlanCommand {
     /// unavailable one renders a placeholder — and, when the PRIMARY itself is unavailable,
     /// an explicit note that full validation isn't possible without its content.
     /// </summary>
-    static async Task RenderPlanArtifacts(PlanArtifactDto? primary, IReadOnlyList<PlanArtifactDto> artifacts) {
+    /// <returns>
+    /// <c>true</c> when the PRIMARY artifact's content could not be retrieved
+    /// (<c>content_state == "unavailable"</c>) — the caller uses this to exit 2 instead of 0
+    /// (AI-701 review finding 3): distinguishable from success (0) and from a generic error (1).
+    /// </returns>
+    static async Task<bool> RenderPlanArtifacts(PlanArtifactDto? primary, IReadOnlyList<PlanArtifactDto> artifacts) {
         var ordered = primary is null
             ? artifacts
             : new List<PlanArtifactDto> { primary }
                 .Concat(artifacts.Where(a => a.ArtifactId != primary.ArtifactId))
                 .ToList();
+
+        var primaryUnavailable = false;
 
         await Console.Out.WriteLineAsync("## Plan");
         await Console.Out.WriteLineAsync();
@@ -138,14 +151,23 @@ static class ValidatePlanCommand {
                 await Console.Out.WriteLineAsync(DegradedMarker);
             }
 
-            switch (artifact.ContentState) {
-                case "truncated": {
-                    var n = artifact.Content is null ? 0 : Encoding.UTF8.GetByteCount(artifact.Content);
-                    await Console.Out.WriteLineAsync($"[plan truncated: first {n} of {artifact.OriginalBytes} bytes]");
+            // "truncated" with null Content is treated like "unavailable" (AI-701 review
+            // finding 2): the server contract pairs content_state=="truncated" with non-null
+            // Content, but a malformed/edge response with Content == null must not render the
+            // nonsensical "first 0 of ... bytes" — fall through to the unavailable placeholder.
+            var effectiveState = artifact.ContentState == "truncated" && artifact.Content is null
+                ? "unavailable"
+                : artifact.ContentState;
 
-                    if (artifact.Content is not null) {
-                        await Console.Out.WriteLineAsync(artifact.Content);
-                    }
+            switch (effectiveState) {
+                case "truncated": {
+                    var n = Encoding.UTF8.GetByteCount(artifact.Content!);
+                    // OriginalBytes is nullable — a well-formed truncated artifact always
+                    // carries it, but fall back to "?" rather than emit "of  bytes" if it's
+                    // ever missing (AI-701 review finding 2).
+                    var total = artifact.OriginalBytes?.ToString() ?? "?";
+                    await Console.Out.WriteLineAsync($"[plan truncated: first {n} of {total} bytes]");
+                    await Console.Out.WriteLineAsync(artifact.Content!);
 
                     break;
                 }
@@ -153,6 +175,7 @@ static class ValidatePlanCommand {
                     await Console.Out.WriteLineAsync("[plan content unavailable due to size bounds]");
 
                     if (isPrimary) {
+                        primaryUnavailable = true;
                         await Console.Out.WriteLineAsync(
                             "Validation is not possible: the plan content could not be retrieved (exceeds size bounds).");
                     }
@@ -170,6 +193,8 @@ static class ValidatePlanCommand {
         }
 
         await Console.Out.WriteLineAsync();
+
+        return primaryUnavailable;
     }
 
     /// <summary>Shared "## What's Done" + "## Instructions" rendering, used by both the

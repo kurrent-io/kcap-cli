@@ -309,6 +309,9 @@ internal sealed class KiroImportSource : IImportSource {
             ["session_id"]      = sessionId,
         };
         if (cwd is not null) payload["cwd"] = cwd;
+        // AI-701 (finding 4): fail-open git-root discovery, mirroring ImportChainsAsync
+        // so routed imports carry the same workspace_root the file-based path does.
+        if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) payload["workspace_root"] = workspaceRoot;
         if (model is not null) payload["model"] = model;
         if (startedAt is { } ts) payload["started_at"] = ts.ToString("O");
         return payload;

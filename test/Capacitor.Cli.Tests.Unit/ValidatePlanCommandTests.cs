@@ -74,13 +74,15 @@ public class ValidatePlanCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(RecapJson()));
 
         using var client = new HttpClient();
-        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(client, _server.Url!, SessionId));
+        var exitCode = -1;
+        var stdout = await CaptureStdoutAsync(async () => exitCode = await ValidatePlanCommand.HandleCore(client, _server.Url!, SessionId));
 
         await Assert.That(stdout).Contains("## Plan");
         await Assert.That(stdout).Contains("Step 1\nStep 2");
         await Assert.That(stdout).Contains("## What's Done");
         await Assert.That(stdout).Contains("Implemented Foo.");
         await Assert.That(stdout).Contains("- Write: src/Foo.cs");
+        await Assert.That(exitCode).IsEqualTo(0);
 
         var hits = _server.FindLogEntries(Request.Create().WithPath($"/api/sessions/{SessionId}/recap").UsingGet());
         await Assert.That(hits.Count).IsEqualTo(1); // recap is still consulted for work/whats_done
@@ -94,9 +96,11 @@ public class ValidatePlanCommandTests : IDisposable {
                 """));
 
         using var client = new HttpClient();
-        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(client, _server.Url!, SessionId));
+        var exitCode = -1;
+        var stdout = await CaptureStdoutAsync(async () => exitCode = await ValidatePlanCommand.HandleCore(client, _server.Url!, SessionId));
 
         await Assert.That(stdout.Trim()).IsEqualTo("No plan found for this session.");
+        await Assert.That(exitCode).IsEqualTo(0); // absence of a plan is a valid answer
 
         var recapHits = _server.FindLogEntries(Request.Create().WithPath($"/api/sessions/{SessionId}/recap").UsingGet());
         await Assert.That(recapHits.Count).IsEqualTo(0);
@@ -218,10 +222,107 @@ public class ValidatePlanCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(RecapJson()));
 
         using var client = new HttpClient();
-        var stdout = await CaptureStdoutAsync(() => ValidatePlanCommand.HandleCore(client, _server.Url!, SessionId));
+        var exitCode = -1;
+        var stdout = await CaptureStdoutAsync(async () => exitCode = await ValidatePlanCommand.HandleCore(client, _server.Url!, SessionId));
 
         await Assert.That(stdout).Contains("[plan content unavailable due to size bounds]");
         await Assert.That(stdout).Contains("Validation is not possible");
+        // AI-701 review finding 3: distinguishable from success (0) and from a generic error (1).
+        await Assert.That(exitCode).IsEqualTo(2);
+    }
+
+    [Test, NotInParallel]
+    public async Task Truncated_primary_with_null_original_bytes_falls_back_to_unknown_total_marker() {
+        // AI-701 review finding 2: OriginalBytes is nullable — a malformed/edge response could
+        // omit it even on a "truncated" artifact. The marker must stay well-formed ("of ? bytes"),
+        // never "of  bytes".
+        const string content = "Truncated prefix with no known original size...";
+
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/plan-artifacts").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody($$"""
+                {
+                  "primary": {
+                    "artifact_id": "art-no-total",
+                    "kind": "plan",
+                    "title": "Plan F",
+                    "source": "repo_file",
+                    "session_id": "{{SessionId}}",
+                    "content": "{{content}}",
+                    "content_state": "truncated",
+                    "is_complete": true,
+                    "is_confirmed": true,
+                    "is_truncated": true,
+                    "original_bytes": null,
+                    "content_hash": "notot1",
+                    "version": 1,
+                    "discovered_at": "2026-07-01T00:00:00Z",
+                    "confidence": "medium",
+                    "reason": "repo file over size bound",
+                    "is_primary": true
+                  },
+                  "artifacts": [],
+                  "diagnostics": []
+                }
+                """));
+
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/recap").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(RecapJson()));
+
+        using var client = new HttpClient();
+        var exitCode = -1;
+        var stdout = await CaptureStdoutAsync(async () => exitCode = await ValidatePlanCommand.HandleCore(client, _server.Url!, SessionId));
+
+        var byteCount = Encoding.UTF8.GetByteCount(content);
+        await Assert.That(stdout).Contains($"[plan truncated: first {byteCount} of ? bytes]");
+        await Assert.That(stdout).DoesNotContain("of  bytes"); // malformed: double space, no total
+        await Assert.That(stdout).Contains(content);
+        await Assert.That(exitCode).IsEqualTo(0); // content did render — this isn't the unavailable case
+    }
+
+    [Test, NotInParallel]
+    public async Task Truncated_primary_with_null_content_renders_like_unavailable() {
+        // AI-701 review finding 2: content_state=="truncated" with Content == null is an edge
+        // shape the server contract doesn't normally produce, but the CLI must not print
+        // "first 0 of {n} bytes" — treat it like "unavailable" (placeholder + exit 2 since this
+        // is the primary).
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/plan-artifacts").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody($$"""
+                {
+                  "primary": {
+                    "artifact_id": "art-null-content",
+                    "kind": "plan",
+                    "title": "Plan G",
+                    "source": "repo_file",
+                    "session_id": "{{SessionId}}",
+                    "content": null,
+                    "content_state": "truncated",
+                    "is_complete": true,
+                    "is_confirmed": true,
+                    "is_truncated": true,
+                    "original_bytes": 5000,
+                    "content_hash": "nullc1",
+                    "version": 1,
+                    "discovered_at": "2026-07-01T00:00:00Z",
+                    "confidence": "medium",
+                    "reason": "repo file over size bound",
+                    "is_primary": true
+                  },
+                  "artifacts": [],
+                  "diagnostics": []
+                }
+                """));
+
+        _server.Given(Request.Create().WithPath($"/api/sessions/{SessionId}/recap").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(RecapJson()));
+
+        using var client = new HttpClient();
+        var exitCode = -1;
+        var stdout = await CaptureStdoutAsync(async () => exitCode = await ValidatePlanCommand.HandleCore(client, _server.Url!, SessionId));
+
+        await Assert.That(stdout).DoesNotContain("first 0");
+        await Assert.That(stdout).Contains("[plan content unavailable due to size bounds]");
+        await Assert.That(stdout).Contains("Validation is not possible");
+        await Assert.That(exitCode).IsEqualTo(2);
     }
 
     [Test, NotInParallel]

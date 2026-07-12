@@ -279,6 +279,8 @@ Verify that all items in a session's plan were completed.
 kcap validate-plan <sessionId>
 ```
 
+Fetches the session's discovered plan artifacts (`GET /api/sessions/{id}/plan-artifacts?chain=true`) — the primary artifact plus any other candidates the server found, in an ordered set — and pairs them with the existing `recap` call for the current session's file writes/edits and AI-generated "what's done" summaries. On an older server without the artifacts route (or a non-visible session), `validate-plan` falls back automatically to the previous recap-only behavior. A degraded, truncated, or unavailable plan renders an explicit marker line instead of failing silently; if the primary artifact's content can't be retrieved, the command reports that validation isn't possible and exits with status 2 (0 for a normal render or when no plan is found at all — absence is a valid answer).
+
 With the plugin installed, use the `/kcap:validate-plan` skill or ask naturally:
 
 ```
