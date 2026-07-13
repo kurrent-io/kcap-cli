@@ -15,7 +15,7 @@ internal static class CodingAgentsStep {
     // sites and the broad CodingAgentsStep test suite compile unchanged. Gemini
     // (AI-887), Kiro (AI-888), and Pi (AI-886) were all added after the original
     // four vendors.
-    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false, bool SkipAntigravityMcp = false, bool SkipAntigravityInstructions = false, bool SkipAntigravitySkills = false, bool SkipOpenCodeMcp = false, bool SkipOpenCodeInstructions = false, bool SkipKiroMcp = false, bool SkipKiroSkills = false);
+    internal record Options(bool SkipClaude, bool SkipCodex, bool SkipCursor, bool SkipCopilot, bool NoPrompt, bool SkipGemini = false, bool SkipKiro = false, bool SkipPi = false, bool SkipOpenCode = false, bool SkipCodexNetworkAccess = false, bool SkipAntigravity = false, bool SkipCursorMcp = false, bool SkipCopilotMcp = false, bool SkipCopilotInstructions = false, bool SkipGeminiMcp = false, bool SkipGeminiInstructions = false, bool SkipAntigravityMcp = false, bool SkipAntigravityInstructions = false, bool SkipAntigravitySkills = false, bool SkipOpenCodeMcp = false, bool SkipOpenCodeInstructions = false, bool SkipKiroMcp = false, bool SkipKiroSkills = false, bool SkipPiMcp = false, bool SkipPiInstructions = false);
 
     internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false);
 
@@ -44,7 +44,9 @@ internal static class CodingAgentsStep {
             string  OpenCodeMcpPath = "",
             string  OpenCodeInstructionsPath = "",
             string  KiroMcpPath = "",
-            string  KiroSkillsDir = ""
+            string  KiroSkillsDir = "",
+            string  PiMcpExtensionPath = "",
+            string  PiAgentsMdPath = ""
         );
 
     internal record Installers(
@@ -72,7 +74,9 @@ internal static class CodingAgentsStep {
             Func<AgentInstructionsWriter.Change>?                    InstallAntigravityInstructions = null,
             Func<JsonMcpConfigWriter.Change>?                        RegisterOpenCodeMcp = null,
             Func<AgentInstructionsWriter.Change>?                    InstallOpenCodeInstructions = null,
-            Func<JsonMcpConfigWriter.Change>?                        RegisterKiroMcp = null
+            Func<JsonMcpConfigWriter.Change>?                        RegisterKiroMcp = null,
+            Func<string /*mcpExtensionPath*/, bool>?                 InstallPiMcp = null,
+            Func<AgentInstructionsWriter.Change>?                    InstallPiInstructions = null
         );
 
     internal record Result(
@@ -99,7 +103,9 @@ internal static class CodingAgentsStep {
             bool OpenCodeMcpRegistered = false,
             bool OpenCodeInstructionsInstalled = false,
             bool KiroMcpRegistered = false,
-            bool KiroSkillsInstalled = false
+            bool KiroSkillsInstalled = false,
+            bool PiMcpInstalled = false,
+            bool PiInstructionsInstalled = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -145,7 +151,12 @@ internal static class CodingAgentsStep {
         // Kiro's skills live in ~/.kiro/skills (Kiro doesn't read ~/.agents/skills) and steer it toward
         // the kcap MCP tools — gate on the user having SELECTED Kiro, like the MCP registration.
         var kiroSkillsInstalled   = HandleKiroSkills(options, paths, installers, writeLine, kiroSelected);
-        var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, prompt, writeLine);
+        var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, prompt, writeLine, out var piSelected);
+        // Pi has no JSON MCP config: the "MCP" is a second extension file (kcap-mcp.ts) and the
+        // instructions live in the independent ~/.pi/agent/AGENTS.md — gate both on the user having
+        // SELECTED Pi (not on the ingest-write result) so a failed ingest write doesn't block them.
+        var piMcpInstalled        = HandlePiMcp(options, paths, installers, writeLine, piSelected);
+        var piInstructionsInstalled = HandlePiInstructions(options, paths, installers, writeLine, piSelected);
         var openCodeExtensionInstalled = HandleOpenCodeExtension(options, detected, paths, installers, prompt, writeLine);
         var openCodeMcpRegistered      = HandleOpenCodeMcp(options, paths, installers, writeLine, openCodeExtensionInstalled);
         var openCodeInstructionsInstalled = HandleOpenCodeInstructions(options, paths, installers, writeLine, openCodeExtensionInstalled);
@@ -191,7 +202,9 @@ internal static class CodingAgentsStep {
                 OpenCodeMcpRegistered: openCodeMcpRegistered,
                 OpenCodeInstructionsInstalled: openCodeInstructionsInstalled,
                 KiroMcpRegistered: kiroMcpRegistered,
-                KiroSkillsInstalled: kiroSkillsInstalled
+                KiroSkillsInstalled: kiroSkillsInstalled,
+                PiMcpInstalled: piMcpInstalled,
+                PiInstructionsInstalled: piInstructionsInstalled
             )
         );
     }
@@ -462,8 +475,15 @@ internal static class CodingAgentsStep {
             Paths              paths,
             Installers         installers,
             Func<string, bool> prompt,
-            Action<string>     writeLine
+            Action<string>     writeLine,
+            out bool           selected
         ) {
+        // `selected` = the user opted into Pi (detected + not skipped + prompt-yes/NoPrompt) AND
+        // kcap is on PATH — i.e. a full Pi integration was requested. It stays true even when the
+        // ingest-extension WRITE fails, so the independent MCP-bridge extension + ~/.pi/agent/AGENTS.md
+        // can still be installed; the bool return still reflects only actual ingest-write success.
+        selected = false;
+
         if (!detected.Pi) {
             writeLine("  [dim]· Pi not detected — skipping[/]");
 
@@ -488,15 +508,17 @@ internal static class CodingAgentsStep {
             return false;
         }
 
-        // Pi has no shell hooks — the extension (kcap.ts) shells out to the bare
-        // "kcap hook --pi" command, so pi must find kcap on PATH (same precheck
-        // as the Cursor/Copilot branches).
+        // Pi has no shell hooks — the extensions (kcap.ts / kcap-mcp.ts) shell out to
+        // the bare "kcap" command, so pi must find kcap on PATH (same precheck as the
+        // Cursor/Copilot branches).
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Pi extension not installed — 'kcap' is not on PATH.");
             writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
 
             return false;
         }
+
+        selected = true;  // opted in + kcap on PATH → MCP bridge + AGENTS.md may install even if the ingest write fails
 
         var ok = installers.InstallPiExtension(paths.PiExtensionPath);
 
@@ -510,6 +532,68 @@ internal static class CodingAgentsStep {
         writeLine("  [dim]  Note: Pi loads extensions at startup — restart any running pi session to pick it up.[/]");
 
         return true;
+    }
+
+    /// <summary>
+    /// Installs the kcap MCP-bridge extension (<c>~/.pi/agent/extensions/kcap-mcp.ts</c>). Pi has no
+    /// JSON <c>mcpServers</c> config, so the "MCP" for Pi is this extension file — spawning the
+    /// <c>kcap mcp &lt;name&gt;</c> servers and registering their tools. Gated on the user having
+    /// SELECTED Pi (<paramref name="piSelected"/>, not on the ingest-write result — it's a separate
+    /// file) and on <see cref="Options.SkipPiMcp"/>.
+    /// </summary>
+    static bool HandlePiMcp(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           piSelected
+        ) {
+        if (installers.InstallPiMcp is null || !piSelected || options.SkipPiMcp) return false;
+
+        var path = Markup.Escape(paths.PiMcpExtensionPath);
+
+        if (installers.InstallPiMcp(paths.PiMcpExtensionPath)) {
+            writeLine($"  [green]✓[/] Pi MCP extension installed ([dim]{path}[/])");
+
+            return true;
+        }
+
+        writeLine($"  [yellow]⚠[/] Could not write the Pi MCP extension ({path}).");
+
+        return false;
+    }
+
+    /// <summary>
+    /// Installs kcap's agent-instructions block into Pi's global <c>~/.pi/agent/AGENTS.md</c> so Pi's
+    /// model is steered toward the kcap MCP tools. Gated on the user having SELECTED Pi (same trigger
+    /// as <see cref="HandlePiMcp"/>) and on <see cref="Options.SkipPiInstructions"/>. Non-destructive:
+    /// only kcap's marker-delimited block is written.
+    /// </summary>
+    static bool HandlePiInstructions(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           piSelected
+        ) {
+        if (installers.InstallPiInstructions is null || !piSelected || options.SkipPiInstructions) return false;
+
+        var path = Markup.Escape(paths.PiAgentsMdPath);
+
+        switch (installers.InstallPiInstructions()) {
+            case AgentInstructionsWriter.Change.Updated:
+                writeLine($"  [green]✓[/] Pi instructions installed ([dim]{path}[/])");
+
+                return true;
+            case AgentInstructionsWriter.Change.Unchanged:
+                writeLine("  [dim]· Pi instructions already up to date — no change needed[/]");
+
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not write Pi instructions to {path}.");
+
+                return false;
+        }
     }
 
     static bool HandleOpenCodeExtension(

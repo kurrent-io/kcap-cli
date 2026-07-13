@@ -1062,6 +1062,173 @@ public class CodingAgentsStepTests {
         await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write Gemini instructions"));
     }
 
+    // ── Pi MCP-bridge extension + AGENTS.md steering ──────────────
+    // Pi has no JSON mcpServers config: the "MCP" is a second extension file
+    // (kcap-mcp.ts) and the instructions live in ~/.pi/agent/AGENTS.md — both
+    // gated on the user having SELECTED Pi, independent of the ingest write.
+
+    [Test]
+    public async Task Pi_mcp_installed_when_selected() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.PiMcpInstalled).IsTrue();
+        await Assert.That(calls.InstallPiMcpCalled).IsTrue();
+        await Assert.That(calls.InstallPiMcpArg).IsEqualTo("/fake/.pi/agent/extensions/kcap-mcp.ts");
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Pi MCP extension installed"));
+    }
+
+    [Test]
+    public async Task Pi_mcp_installed_even_when_ingest_write_fails() {
+        // The user SELECTED Pi (detected + opted-in + kcap on PATH) but the ingest
+        // extension write failed. kcap-mcp.ts is a separate file, so it still installs.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { PiExtensionReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.PiExtensionInstalled).IsFalse();  // ingest write failed
+        await Assert.That(calls.InstallPiMcpCalled).IsTrue();      // but kcap-mcp.ts still installs
+        await Assert.That(result.PiMcpInstalled).IsTrue();
+    }
+
+    [Test]
+    public async Task Pi_mcp_not_installed_when_not_selected() {
+        // kcap not on PATH → Pi integration NOT selected → kcap-mcp.ts must NOT install.
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CapacitorOnPathReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.InstallPiMcpCalled).IsFalse();
+        await Assert.That(result.PiMcpInstalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Pi_mcp_skipped_by_flag() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipPiMcp: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.PiExtensionInstalled).IsTrue();   // ingest still installs
+        await Assert.That(result.PiMcpInstalled).IsFalse();
+        await Assert.That(calls.InstallPiMcpCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Pi_mcp_failure_emits_warning() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { InstallPiMcpReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.InstallPiMcpCalled).IsTrue();
+        await Assert.That(result.PiMcpInstalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write the Pi MCP extension"));
+    }
+
+    [Test]
+    public async Task Pi_instructions_installed_when_selected() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.PiInstructionsInstalled).IsTrue();
+        await Assert.That(calls.InstallPiInstructionsCalled).IsTrue();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Pi instructions installed"));
+    }
+
+    [Test]
+    public async Task Pi_instructions_installed_even_when_ingest_write_fails() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { PiExtensionReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.PiExtensionInstalled).IsFalse();          // ingest write failed
+        await Assert.That(calls.InstallPiInstructionsCalled).IsTrue();     // but AGENTS.md still installs
+        await Assert.That(result.PiInstructionsInstalled).IsTrue();
+    }
+
+    [Test]
+    public async Task Pi_instructions_not_installed_when_not_selected() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { CapacitorOnPathReturns = false };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.InstallPiInstructionsCalled).IsFalse();
+        await Assert.That(result.PiInstructionsInstalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Pi_instructions_skipped_by_flag() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls();
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, SkipPiInstructions: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(result.PiExtensionInstalled).IsTrue();
+        await Assert.That(result.PiInstructionsInstalled).IsFalse();
+        await Assert.That(calls.InstallPiInstructionsCalled).IsFalse();
+    }
+
+    [Test]
+    public async Task Pi_instructions_failure_emits_warning() {
+        var sink     = new Sink();
+        var calls    = new InstallerCalls { InstallPiInstructionsReturns = AgentInstructionsWriter.Change.Failed };
+        var options  = new Options(SkipClaude: true, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true);
+        var detected = new DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Pi: true);
+
+        var result = await RunAsync(
+            options, detected, TestPaths(), calls.AsInstallers(),
+            prompt: _ => true, writeLine: sink.Write);
+
+        await Assert.That(calls.InstallPiInstructionsCalled).IsTrue();
+        await Assert.That(result.PiInstructionsInstalled).IsFalse();
+        await Assert.That(sink.Lines).Contains(l => l.Contains("Could not write Pi instructions"));
+    }
+
     [Test]
     public async Task Codex_network_access_not_attempted_when_hooks_fail() {
         var sink     = new Sink();
@@ -2008,7 +2175,9 @@ public class CodingAgentsStepTests {
         OpenCodeMcpPath:      "/fake/.config/opencode/opencode.json",
         OpenCodeInstructionsPath: "/fake/.config/opencode/AGENTS.md",
         KiroMcpPath:          "/fake/.kiro/settings/mcp.json",
-        KiroSkillsDir:        "/fake/.kiro/skills"
+        KiroSkillsDir:        "/fake/.kiro/skills",
+        PiMcpExtensionPath:   "/fake/.pi/agent/extensions/kcap-mcp.ts",
+        PiAgentsMdPath:       "/fake/.pi/agent/AGENTS.md"
     );
 
     sealed class Sink {
@@ -2107,6 +2276,13 @@ public class CodingAgentsStepTests {
 
         public bool                     RegisterKiroMcpCalled  { get; private set; }
         public JsonMcpConfigWriter.Change RegisterKiroMcpReturns { get; set; } = JsonMcpConfigWriter.Change.Updated;
+
+        public bool    InstallPiMcpCalled  { get; private set; }
+        public string? InstallPiMcpArg     { get; private set; }
+        public bool    InstallPiMcpReturns { get; set; } = true;
+
+        public bool                          InstallPiInstructionsCalled  { get; private set; }
+        public AgentInstructionsWriter.Change InstallPiInstructionsReturns { get; set; } = AgentInstructionsWriter.Change.Updated;
 
         public Installers AsInstallers() => new(
             InstallClaudePlugin: (s, p) => {
@@ -2245,6 +2421,17 @@ public class CodingAgentsStepTests {
                 InstallAntigravityInstructionsCalled = true;
 
                 return InstallAntigravityInstructionsReturns;
+            },
+            InstallPiMcp: p => {
+                InstallPiMcpCalled = true;
+                InstallPiMcpArg    = p;
+
+                return InstallPiMcpReturns;
+            },
+            InstallPiInstructions: () => {
+                InstallPiInstructionsCalled = true;
+
+                return InstallPiInstructionsReturns;
             }
         );
     }

@@ -829,10 +829,11 @@ static class McpFlowsServer {
         return envelope.ToJsonString();
     }
 
-    static McpTool[] BuildToolsList() => [
+    internal static McpTool[] BuildToolsList() => [
         new(
             "start_review_flow",
             "Start a new review flow. This hands the work to a SEPARATE hosted reviewer agent and iterates to sign-off — it is NOT how you review something yourself. " +
+            "COST: this spawns a PAID hosted reviewer (a real model running to completion), so only start one when a review flow is genuinely wanted. " +
             "Only call this when the user explicitly asked for a review *flow* / to submit for review; for an ordinary 'review my PR' or 'code review' request, review directly and do NOT call this tool. " +
             "Returns findings (same UX); the server runs the reviewer asynchronously and the CLI polls internally. " +
             "Returns a flow_run_id that identifies this review session — save it to call submit_review_round or get_review_flow_status later. " +

@@ -42,6 +42,8 @@ public static class SetupCommand {
         var skipKiroMcpFlag  = args.Contains("--skip-kiro-mcp");
         var skipKiroSkillsFlag = args.Contains("--skip-kiro-skills");
         var skipPiFlag       = args.Contains("--skip-pi-hooks");
+        var skipPiMcpFlag    = args.Contains("--skip-pi-mcp");
+        var skipPiInstructionsFlag = args.Contains("--skip-pi-instructions");
         var skipOpenCodeFlag = args.Contains("--skip-opencode-hooks");
         var skipOpenCodeMcpFlag = args.Contains("--skip-opencode-mcp");
         var skipOpenCodeInstructionsFlag = args.Contains("--skip-opencode-instructions");
@@ -259,7 +261,9 @@ public static class SetupCommand {
             SkipOpenCodeMcp: skipOpenCodeMcpFlag,
             SkipOpenCodeInstructions: skipOpenCodeInstructionsFlag,
             SkipKiroMcp: skipKiroMcpFlag,
-            SkipKiroSkills: skipKiroSkillsFlag);
+            SkipKiroSkills: skipKiroSkillsFlag,
+            SkipPiMcp: skipPiMcpFlag,
+            SkipPiInstructions: skipPiInstructionsFlag);
 
         // AI-794 — allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
@@ -294,7 +298,9 @@ public static class SetupCommand {
             OpenCodeMcpPath:      OpenCodePaths.McpConfigJson(),
             OpenCodeInstructionsPath: OpenCodePaths.AgentsMd(),
             KiroMcpPath:          KiroPaths.SettingsMcpJson(),
-            KiroSkillsDir:        KiroPaths.SkillsDir());
+            KiroSkillsDir:        KiroPaths.SkillsDir(),
+            PiMcpExtensionPath:   PiPaths.KcapMcpExtension(),
+            PiAgentsMdPath:       PiPaths.AgentsMd());
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -337,7 +343,11 @@ public static class SetupCommand {
             RegisterAntigravityMcp:   () => JsonMcpConfigWriter.Register(
                 AntigravityPaths.McpConfigJson(), KcapMcpServers.ForCursor, McpConfigShape.Standard, cwd: null, new McpMarker("antigravity")),
             InstallAntigravityInstructions: () => AgentInstructionsWriter.Write(
-                AntigravityPaths.InstructionsMd(), KcapAgentInstructions.Body));
+                AntigravityPaths.InstructionsMd(), KcapAgentInstructions.Body),
+            // Pi has no JSON MCP config — the "MCP" is a second extension file (kcap-mcp.ts).
+            InstallPiMcp:             PiMcpExtensionInstaller.Install,
+            InstallPiInstructions:    () => AgentInstructionsWriter.Write(
+                PiPaths.AgentsMd(), KcapAgentInstructions.Body));
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });

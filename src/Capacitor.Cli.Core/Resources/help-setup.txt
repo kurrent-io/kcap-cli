@@ -49,6 +49,10 @@ Options:
                               (~/.kiro/skills).
   --skip-pi-hooks             Don't install the Pi live-ingest extension even if
                               Pi is detected (~/.pi/ or pi on PATH).
+  --skip-pi-mcp               Skip installing the kcap MCP-bridge extension for
+                              Pi (~/.pi/agent/extensions/kcap-mcp.ts).
+  --skip-pi-instructions      Skip installing kcap's steering instructions for
+                              Pi (~/.pi/agent/AGENTS.md).
   --skip-opencode-hooks       Don't install the OpenCode plugin even if OpenCode
                               is detected (~/.config/opencode/ or opencode on PATH).
   --skip-opencode-mcp         Skip registering the kcap MCP servers for OpenCode
