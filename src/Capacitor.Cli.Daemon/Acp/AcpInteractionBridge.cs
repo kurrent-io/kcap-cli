@@ -26,7 +26,7 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// response is always a well-formed ACP outcome, never a generic JSON-RPC "Internal error" that
 /// would tell the agent nothing about WHY the permission was denied.
 /// </summary>
-internal sealed class AcpInteractionBridge(
+internal sealed partial class AcpInteractionBridge(
         Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>> requestInteraction,
         string                                                                       agentId,
         ILogger                                                                      logger
@@ -116,6 +116,11 @@ internal sealed class AcpInteractionBridge(
 
         AcpInteractionDecision decision;
 
+        // Payload-free lifecycle logging — kind + eventual decision ONLY, never the tool
+        // name/args/options content already captured above in interactionRequest.
+        LogInteractionIssued(agentId, "permission");
+        AcpMetrics.RecordBlockingRequest("permission");
+
         try {
             decision = await requestInteraction(interactionRequest, ct).ConfigureAwait(false);
         } catch (OperationCanceledException) {
@@ -132,15 +137,20 @@ internal sealed class AcpInteractionBridge(
             // down (AcpConnection's own catch around the write handles that silently) — this
             // bridge's only job is to make the ATTEMPTED response well-formed.
             logger.LogDebug("ACP: session/request_permission cancelled (connection closing) for agent {AgentId}; defaulting to cancelled", agentId);
+            LogInteractionResolved(agentId, "permission", "cancelled");
 
             return CancelledResult();
         } catch (Exception ex) {
             logger.LogDebug(ex, "ACP: RequestAcpInteractionAsync threw for agent {AgentId}; defaulting to cancelled", agentId);
+            LogInteractionResolved(agentId, "permission", "cancelled");
 
             return CancelledResult();
         }
 
-        return MapPermissionDecision(decision, options);
+        var mapped = MapPermissionDecision(decision, options);
+        LogInteractionResolved(agentId, "permission", OutcomeLabel(mapped));
+
+        return mapped;
     }
 
     async Task<JsonElement?> HandleElicitationAsync(AcpRequest request, CancellationToken ct) {
@@ -197,20 +207,28 @@ internal sealed class AcpInteractionBridge(
 
         AcpInteractionDecision decision;
 
+        LogInteractionIssued(agentId, "elicitation");
+        AcpMetrics.RecordBlockingRequest("elicitation");
+
         try {
             decision = await requestInteraction(interactionRequest, ct).ConfigureAwait(false);
         } catch (OperationCanceledException) {
             // Spec-review Finding 3(b) — same disconnect handling as HandlePermissionAsync above.
             logger.LogDebug("ACP: elicitation/create cancelled (connection closing) for agent {AgentId}; defaulting to cancelled", agentId);
+            LogInteractionResolved(agentId, "elicitation", "cancelled");
 
             return CancelledResult();
         } catch (Exception ex) {
             logger.LogDebug(ex, "ACP: RequestAcpInteractionAsync threw for elicitation on agent {AgentId}; defaulting to cancelled", agentId);
+            LogInteractionResolved(agentId, "elicitation", "cancelled");
 
             return CancelledResult();
         }
 
-        return MapPermissionDecision(decision, options);
+        var mapped = MapPermissionDecision(decision, options);
+        LogInteractionResolved(agentId, "elicitation", OutcomeLabel(mapped));
+
+        return mapped;
     }
 
     /// <summary>
@@ -301,6 +319,14 @@ internal sealed class AcpInteractionBridge(
             new PermissionOutcomeResult(new PermissionOutcomeDto("cancelled")),
             CapacitorJsonContext.Default.PermissionOutcomeResult);
 
+    /// <summary>
+    /// Pulls just the <c>"selected"</c>/<c>"cancelled"</c> discriminator back out of a mapped result
+    /// for the "resolved" lifecycle log — never the chosen <c>optionId</c> or anything else
+    /// payload-shaped.
+    /// </summary>
+    static string OutcomeLabel(JsonElement mapped) =>
+        mapped.GetProperty("outcome").GetProperty("outcome").GetString() ?? "cancelled";
+
     static string? TryGetToolTitle(JsonElement toolCall) =>
         toolCall.ValueKind == JsonValueKind.Object && toolCall.TryGetProperty("title", out var t) && t.ValueKind == JsonValueKind.String
             ? t.GetString()
@@ -310,4 +336,14 @@ internal sealed class AcpInteractionBridge(
         toolCall.ValueKind == JsonValueKind.Object && toolCall.TryGetProperty("toolCallId", out var id) && id.ValueKind == JsonValueKind.String
             ? id.GetString()
             : null;
+
+    // ── LoggerMessage source-generated methods ──────────────────────────────────────────────────
+    // Payload-free by construction: kind ("permission"/"elicitation") and decision
+    // ("selected"/"cancelled") ONLY — never tool name/args, prompt text, or option content.
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP blocking request issued: agentId={AgentId} kind={Kind}")]
+    partial void LogInteractionIssued(string agentId, string kind);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP blocking request resolved: agentId={AgentId} kind={Kind} decision={Decision}")]
+    partial void LogInteractionResolved(string agentId, string kind, string decision);
 }

@@ -25,7 +25,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <c>cursor-agent acp</c> child process (unavailable and non-portable in CI) — the seam changes
 /// nothing about production behavior, since the default IS the real `Process.Start`-backed path.
 /// </summary>
-internal sealed class AcpHostedAgentRuntimeFactory(
+internal sealed partial class AcpHostedAgentRuntimeFactory(
         DaemonConfig                                                                   config,
         ILoggerFactory                                                                 loggerFactory,
         ServerConnection                                                               connection,
@@ -34,17 +34,22 @@ internal sealed class AcpHostedAgentRuntimeFactory(
     readonly Func<RuntimeStartContext, (Stream Input, Stream Output, IAcpProcess Process)> _connectionSource =
         connectionSource ?? (ctx => StartRealProcess(config, ctx, loggerFactory));
 
+    readonly ILogger _logger = loggerFactory.CreateLogger<AcpHostedAgentRuntimeFactory>();
+
     public string Vendor             => "cursor";
     public bool   SupportsUnattended => false;
 
     public bool IsAvailable() => CliResolver.Exists(config.CursorPath);
 
     public async Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
+        LogLaunching(ctx.AgentId, Vendor, ctx.Worktree.Path);
+        AcpMetrics.Launches.Add(1);
+
         var runtimeLogger = loggerFactory.CreateLogger<AcpHostedAgentRuntime>();
         var connLogger    = loggerFactory.CreateLogger<AcpConnection>();
 
         var (input, output, acpProcess) = _connectionSource(ctx);
-        var acpConnection = new AcpConnection(input, output, connLogger);
+        var acpConnection = new AcpConnection(input, output, connLogger, config.DebugFrames);
 
         // Spec-review Finding 4: real production wiring — every Cursor launch now gets the
         // permission/elicitation bridge, not AI-684's default MethodNotFound/decline.
@@ -53,7 +58,8 @@ internal sealed class AcpHostedAgentRuntimeFactory(
             acpProcess,
             runtimeLogger,
             agentId: ctx.AgentId,
-            requestInteraction: connection.RequestAcpInteractionAsync
+            requestInteraction: connection.RequestAcpInteractionAsync,
+            debugFrames: config.DebugFrames
         );
 
         try {
@@ -112,8 +118,11 @@ internal sealed class AcpHostedAgentRuntimeFactory(
          ?? throw new InvalidOperationException($"Failed to start '{config.CursorPath} acp' (Process.Start returned null).");
 
         var processLogger = loggerFactory.CreateLogger<AcpChildProcess>();
-        var acpProcess    = new AcpChildProcess(process, processLogger);
+        var acpProcess    = new AcpChildProcess(process, processLogger, config.DebugFrames);
 
         return (process.StandardInput.BaseStream, process.StandardOutput.BaseStream, acpProcess);
     }
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP hosted agent launch: agentId={AgentId} vendor={Vendor} cwd={Cwd}")]
+    partial void LogLaunching(string agentId, string vendor, string cwd);
 }

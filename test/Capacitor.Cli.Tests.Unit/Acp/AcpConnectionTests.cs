@@ -5,6 +5,7 @@ using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Daemon.Acp;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit.Acp;
@@ -31,7 +32,7 @@ public class AcpConnectionTests {
 
         public AcpConnection Connection { get; }
 
-        public Harness() {
+        public Harness(ILogger? logger = null, bool debugFrames = false) {
             // Connection writes requests/notifications/responses into _toAgent; the "agent side"
             // (this harness) reads them from the same pipe.
             _agentReadsFromClient = _toAgent.Reader.AsStream();
@@ -43,7 +44,8 @@ public class AcpConnectionTests {
             Connection = new AcpConnection(
                 writeStream: _toAgent.Writer.AsStream(),
                 readStream: _toClient.Reader.AsStream(),
-                logger: NullLogger<AcpConnection>.Instance
+                logger: logger ?? NullLogger<AcpConnection>.Instance,
+                debugFrames: debugFrames
             );
         }
 
@@ -529,5 +531,114 @@ public class AcpConnectionTests {
         } catch (OperationCanceledException) {
             // expected shutdown path for this test's owned CTS
         }
+    }
+
+    // ── KCAP_ACP_DEBUG_FRAMES gate: full inbound/outbound frame logging ────────────────────────
+
+    /// <summary>Records every log call — mirrors <c>AcpTranscriptAggregationTests.CaptureLogger</c>'s
+    /// established pattern.</summary>
+    sealed class CaptureLogger : ILogger {
+        public readonly List<(LogLevel Level, string Message)> Entries = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool         IsEnabled(LogLevel logLevel)                            => true;
+
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? ex, Func<TState, Exception?, string> formatter)
+            => Entries.Add((level, formatter(state, ex)));
+    }
+
+    [Test]
+    public async Task DebugFrames_off_by_default_never_logs_the_full_outbound_or_inbound_frame() {
+        var logger = new CaptureLogger();
+        // debugFrames omitted — proves the default is Off, matching every pre-existing call site.
+        await using var harness = new Harness(logger);
+        using var        cts     = new CancellationTokenSource();
+        var               runTask = harness.Connection.RunAsync(cts.Token);
+
+        var requestTask = harness.Connection.RequestAsync("session/prompt", null, CancellationToken.None);
+        var frame        = await harness.ReadFrameFromConnectionAsync();
+        var id           = JsonDocument.Parse(frame).RootElement.GetProperty("id").GetInt64();
+
+        await harness.WriteFrameToConnectionAsync(
+            $$$"""{"jsonrpc":"2.0","id":{{{id}}},"result":{"stopReason":"end_turn"}}"""
+        );
+        await requestTask.WaitAsync(HangGuard);
+
+        await Assert.That(logger.Entries).DoesNotContain(e => e.Message.Contains("ACP >>>"));
+        await Assert.That(logger.Entries).DoesNotContain(e => e.Message.Contains("ACP <<<"));
+        await Assert.That(logger.Entries).DoesNotContain(e => e.Message.Contains("session/prompt"));
+        await Assert.That(logger.Entries).DoesNotContain(e => e.Message.Contains("stopReason"));
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
+    }
+
+    [Test]
+    public async Task DebugFrames_on_logs_the_full_outbound_request_frame() {
+        var logger = new CaptureLogger();
+        await using var harness = new Harness(logger, debugFrames: true);
+        using var        cts     = new CancellationTokenSource();
+        var               runTask = harness.Connection.RunAsync(cts.Token);
+
+        _ = harness.Connection.RequestAsync("session/prompt", null, CancellationToken.None);
+        var frame = await harness.ReadFrameFromConnectionAsync();
+        var id    = JsonDocument.Parse(frame).RootElement.GetProperty("id").GetInt64();
+
+        await Assert.That(logger.Entries).Contains(e =>
+            e.Level == LogLevel.Debug && e.Message.Contains("ACP >>>") && e.Message.Contains("session/prompt"));
+
+        // Clean shutdown: still owe the pending request a response before disposing.
+        await harness.WriteFrameToConnectionAsync($$$"""{"jsonrpc":"2.0","id":{{{id}}},"result":{}}""");
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
+    }
+
+    [Test]
+    public async Task DebugFrames_on_logs_the_full_inbound_notification_frame() {
+        var logger = new CaptureLogger();
+        await using var harness = new Harness(logger, debugFrames: true);
+        using var        cts     = new CancellationTokenSource();
+        var               runTask = harness.Connection.RunAsync(cts.Token);
+
+        var tcs = new TaskCompletionSource<AcpNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Connection.OnNotification += n => tcs.TrySetResult(n);
+
+        await harness.WriteFrameToConnectionAsync(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"abc-secret-marker"}}"""
+        );
+        await tcs.Task.WaitAsync(HangGuard);
+
+        await Assert.That(logger.Entries).Contains(e =>
+            e.Level == LogLevel.Debug && e.Message.Contains("ACP <<<") && e.Message.Contains("abc-secret-marker"));
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
+    }
+
+    [Test]
+    public async Task DebugFrames_on_does_not_regress_the_existing_shape_only_malformed_line_logging() {
+        // AcpConnection already logs frame SHAPE only for malformed/unrecognized lines — that must
+        // not regress when the opt-in full-frame logging is added. This proves the pre-existing
+        // malformed-line handling is unchanged with the flag on: still skipped, still keeps the loop
+        // alive, no throw.
+        var logger = new CaptureLogger();
+        await using var harness = new Harness(logger, debugFrames: true);
+        using var        cts     = new CancellationTokenSource();
+        var               runTask = harness.Connection.RunAsync(cts.Token);
+
+        var tcs = new TaskCompletionSource<AcpNotification>(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Connection.OnNotification += n => tcs.TrySetResult(n);
+
+        await harness.WriteFrameToConnectionAsync("{not valid json at all");
+        await harness.WriteFrameToConnectionAsync(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"still-alive"}}"""
+        );
+
+        var notification = await tcs.Task.WaitAsync(HangGuard);
+        await Assert.That(notification.Params!.Value.GetProperty("sessionId").GetString()).IsEqualTo("still-alive");
+
+        cts.Cancel();
+        await SwallowCancellation(runTask);
     }
 }

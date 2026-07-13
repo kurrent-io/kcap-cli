@@ -63,6 +63,19 @@ public class DaemonConfig {
     public string CursorModel { get; set; } = "claude-sonnet-4-5";
 
     /// <summary>
+    /// Opt-in, off-by-default ACP wire/content debug logging (<c>KCAP_ACP_DEBUG_FRAMES</c>). When
+    /// <see langword="false"/> (the default), the ACP layers (<c>AcpEventTranslator</c>,
+    /// <c>AcpChildProcess</c>, <c>AcpConnection</c>) log shape/length only for the traffic that would
+    /// otherwise carry prompt/tool/file content — an unrecognized <c>session/update</c> kind, raw
+    /// <c>cursor-agent</c> stderr lines, and full inbound/outbound JSON-RPC frames. When
+    /// <see langword="true"/>, those same call sites log full (length-capped) content at Debug for
+    /// local troubleshooting — never sent to the server, never written to the transcript. Read from
+    /// the env var in <c>DaemonRunner.RunAsync</c>, which also emits a one-time startup Warning when
+    /// this is on, since the logged content may include sensitive payloads.
+    /// </summary>
+    public bool DebugFrames { get; set; }
+
+    /// <summary>
     /// Path to the kcap CLI binary. Used by the daemon to spawn auxiliary
     /// processes (e.g. <c>generate-whats-done</c>) when claude didn't fire its
     /// own session-end hook. Defaults to "kcap" — resolved via PATH, which

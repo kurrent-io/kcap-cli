@@ -3,6 +3,7 @@ using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Daemon.Acp;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Tests.Unit.Acp;
@@ -533,5 +534,89 @@ public class AcpInteractionBridgeTests {
         await Assert.That(result).IsNotNull();
         var outcome = result!.Value.GetProperty("outcome");
         await Assert.That(outcome.GetProperty("outcome").GetString()).IsEqualTo("cancelled");
+    }
+
+    // ── Payload-free "blocking request issued/resolved" lifecycle logging ──────────────────────
+
+    /// <summary>Records every log call — mirrors <c>AcpTranscriptAggregationTests.CaptureLogger</c>'s
+    /// established pattern.</summary>
+    sealed class CaptureLogger : ILogger {
+        public readonly List<(LogLevel Level, string Message)> Entries = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool         IsEnabled(LogLevel logLevel)                            => true;
+
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? ex, Func<TState, Exception?, string> formatter)
+            => Entries.Add((level, formatter(state, ex)));
+    }
+
+    [Test]
+    public async Task RequestPermission_Selected_LogsIssuedAndResolvedWithKindAndDecision_NeverToolContent() {
+        var logger = new CaptureLogger();
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", "allow-once", "Allow", null, null, null)),
+            agentId: AgentId,
+            logger: logger);
+
+        var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
+        await bridge.HandleAsync(request, CancellationToken.None);
+
+        var infoEntries = logger.Entries.Where(e => e.Level == LogLevel.Information).ToList();
+        await Assert.That(infoEntries).Contains(e => e.Message.Contains("issued") && e.Message.Contains("permission"));
+        await Assert.That(infoEntries).Contains(e => e.Message.Contains("resolved") && e.Message.Contains("permission") && e.Message.Contains("selected"));
+
+        // Payload-free: the tool title ("Run ls") and the chosen optionId ("allow-once") must never
+        // leak into these Info logs, even though "allow-once" happens to also be a log-safe kind
+        // token elsewhere — check the actual tool content, not option ids.
+        await Assert.That(infoEntries).DoesNotContain(e => e.Message.Contains("Run ls"));
+    }
+
+    [Test]
+    public async Task RequestPermission_Cancelled_LogsResolvedWithCancelledDecision() {
+        var logger = new CaptureLogger();
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("deny", null, null, null, null, null)),
+            agentId: AgentId,
+            logger: logger);
+
+        var request = new AcpRequest(1, "session/request_permission", PermissionRequestParams(["allow-once", "deny"]));
+        await bridge.HandleAsync(request, CancellationToken.None);
+
+        var infoEntries = logger.Entries.Where(e => e.Level == LogLevel.Information).ToList();
+        await Assert.That(infoEntries).Contains(e => e.Message.Contains("resolved") && e.Message.Contains("cancelled"));
+    }
+
+    [Test]
+    public async Task RequestPermission_MissingParams_NeverLogsIssuedOrResolved_NoInteractionWasActuallyDispatched() {
+        // A malformed/unparsable request never reaches requestInteraction at all — there is no
+        // "blocking request" to report as issued or resolved.
+        var logger = new CaptureLogger();
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("allow", null, null, null, null, null)),
+            agentId: AgentId,
+            logger: logger);
+
+        var request = new AcpRequest(1, "session/request_permission", Params: null);
+        await bridge.HandleAsync(request, CancellationToken.None);
+
+        await Assert.That(logger.Entries.Where(e => e.Level == LogLevel.Information)).IsEmpty();
+    }
+
+    [Test]
+    public async Task ElicitationCreate_Selected_LogsIssuedAndResolvedWithElicitationKind() {
+        var logger = new CaptureLogger();
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (req, ct) => Task.FromResult(new AcpInteractionDecision("answered", "yes", "Yes", 0, null, null)),
+            agentId: AgentId,
+            logger: logger);
+
+        var json = $$"""{"sessionId":"{{AcpSessionId}}","message":"Proceed?","options":[{"optionId":"yes","name":"Yes","kind":"allow_once"},{"optionId":"no","name":"No","kind":"reject_once"}]}""";
+        var request = new AcpRequest(1, "elicitation/create", JsonDocument.Parse(json).RootElement.Clone());
+        await bridge.HandleAsync(request, CancellationToken.None);
+
+        var infoEntries = logger.Entries.Where(e => e.Level == LogLevel.Information).ToList();
+        await Assert.That(infoEntries).Contains(e => e.Message.Contains("issued") && e.Message.Contains("elicitation"));
+        await Assert.That(infoEntries).Contains(e => e.Message.Contains("resolved") && e.Message.Contains("elicitation") && e.Message.Contains("selected"));
+        await Assert.That(infoEntries).DoesNotContain(e => e.Message.Contains("Proceed?")); // never the prompt text
     }
 }

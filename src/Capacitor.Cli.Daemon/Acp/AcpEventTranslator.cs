@@ -16,7 +16,7 @@ namespace Capacitor.Cli.Daemon.Acp;
 /// inputs, not derived here). <see cref="Translate"/> never throws: an unmappable/dropped kind
 /// returns <see langword="null"/> rather than fabricating an empty envelope.
 /// </summary>
-internal static class AcpEventTranslator {
+internal static partial class AcpEventTranslator {
     /// <summary>
     /// ACP <c>ToolCallStatus</c> values that represent a FINISHED tool call —
     /// <c>pending</c>/<c>in_progress</c>/a missing status are non-terminal, status-only updates that
@@ -48,8 +48,11 @@ internal static class AcpEventTranslator {
     /// <item><description><see cref="AcpUpdateKind.Plan"/>/<see cref="AcpUpdateKind.AvailableCommands"/>
     /// → always <see langword="null"/> (not transcript content; deferred to AI-689).</description></item>
     /// <item><description><see cref="AcpUpdateKind.Unknown"/> → <see langword="null"/>, but
-    /// <see cref="AcpSessionUpdate.Raw"/> is logged via <paramref name="logger"/> (when supplied) at
-    /// debug level — never silently swallowed.</description></item>
+    /// logged via <paramref name="logger"/> (when supplied) at debug level — never silently
+    /// swallowed. <see cref="AcpSessionUpdate.Raw"/> itself is only logged verbatim when
+    /// <paramref name="debugFrames"/> is <see langword="true"/> (the operator-opt-in
+    /// <c>KCAP_ACP_DEBUG_FRAMES</c>); otherwise only its length is logged, since an unknown update's
+    /// raw JSON can carry prompt/tool/file content.</description></item>
     /// </list>
     /// Every emitted envelope carries <paramref name="seq"/>/<paramref name="timestampIso"/> and the
     /// default <c>ContractVersion = 1</c> (the <see cref="AcpEventEnvelope"/> record's own default —
@@ -60,7 +63,8 @@ internal static class AcpEventTranslator {
             long             seq,
             string           timestampIso,
             string?          aggregatedText = null,
-            ILogger?         logger         = null) {
+            ILogger?         logger         = null,
+            bool             debugFrames    = false) {
         switch (update.Kind) {
             case AcpUpdateKind.AgentMessageChunk:
                 return new AcpEventEnvelope(
@@ -103,12 +107,27 @@ internal static class AcpEventTranslator {
 
             case AcpUpdateKind.Unknown:
             default:
-                logger?.LogDebug(
-                    "ACP: dropping unrecognized session/update kind (Unknown); Raw={Raw}",
-                    update.Raw?.GetRawText());
+                // Gate on IsEnabled(Debug) first so the default path never materializes the raw JSON
+                // (GetRawText allocates the full payload) when Debug logging is disabled.
+                if (logger is not null && logger.IsEnabled(LogLevel.Debug)) {
+                    // KCAP_ACP_DEBUG_FRAMES gate (Off by default): the raw update JSON can carry
+                    // prompt/tool/file content, so it is only ever logged verbatim when the operator
+                    // has explicitly opted in — otherwise this logs shape (length) only.
+                    if (debugFrames)
+                        LogUnknownUpdateFull(logger, AcpDebugFrameLog.Cap(update.Raw?.GetRawText() ?? ""));
+                    else
+                        LogUnknownUpdateShape(logger, update.Raw?.GetRawText()?.Length ?? 0);
+                }
+
                 return null;
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "ACP: dropping unrecognized session/update kind (Unknown); Raw={Raw}")]
+    static partial void LogUnknownUpdateFull(ILogger logger, string raw);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "ACP: dropping unrecognized session/update kind (Unknown); RawLength={RawLength} chars")]
+    static partial void LogUnknownUpdateShape(ILogger logger, int rawLength);
 
     /// <summary>
     /// Builds the daemon-synthesized <c>SessionStarted</c> envelope — NOT derived

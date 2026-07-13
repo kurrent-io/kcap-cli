@@ -128,6 +128,8 @@ public static partial class DaemonRunner {
         if (Environment.GetEnvironmentVariable("KCAP_CURSOR_MODEL") is { Length: > 0 } envCursorModel)
             config.CursorModel = envCursorModel;
 
+        config.DebugFrames = ParseDebugFramesFlag(Environment.GetEnvironmentVariable("KCAP_ACP_DEBUG_FRAMES"));
+
         // Shared name resolution with the CLI supervisor — the CLI's
         // DaemonCommands and the daemon binary must agree on the name so
         // the per-name PID file the CLI inspects is the one the daemon
@@ -298,6 +300,12 @@ public static partial class DaemonRunner {
         if (ShouldWarnCursorUnavailable(runtimeFactories))
             LogCursorUnavailable(logger, config.CursorPath);
 
+        // KCAP_ACP_DEBUG_FRAMES is a static, daemon-wide setting read once above — warn once here,
+        // at the point it takes effect, rather than lazily the first time some ACP call site actually
+        // logs full content (which could fire dozens of times across one busy session).
+        if (config.DebugFrames)
+            LogAcpDebugFramesEnabled(logger);
+
         LogDaemonStarting(logger, config.Name, config.ServerUrl);
 
         // AI-1155: if the previous daemon under this name vanished without
@@ -423,6 +431,14 @@ public static partial class DaemonRunner {
     };
 
     /// <summary>
+    /// Parses <c>KCAP_ACP_DEBUG_FRAMES</c> ("1"/"true", case-insensitive, are On; anything else —
+    /// including unset/blank — is Off) into <see cref="DaemonConfig.DebugFrames"/>. Pulled out as a
+    /// pure predicate (mirroring <see cref="ParseLogLevel"/>) so it's testable without an env var.
+    /// </summary>
+    internal static bool ParseDebugFramesFlag(string? value) =>
+        value?.Trim() is { } v && (v == "1" || string.Equals(v, "true", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
     /// True when a "cursor" <see cref="IHostedAgentRuntimeFactory"/> is registered but
     /// reports itself unavailable — the signal for <see cref="RunAsync"/>'s one-time startup
     /// Warning. Pulled out as a pure predicate over the factory list (rather than inlined in
@@ -437,6 +453,9 @@ public static partial class DaemonRunner {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Cursor ACP runtime unavailable: cursor-agent CLI not found (looked for '{CursorPath}'). Cursor will not be offered as a hosted-agent vendor until this is fixed. Set KCAP_CURSOR_PATH to the cursor-agent executable, or install the Cursor CLI, then restart the daemon.")]
     static partial void LogCursorUnavailable(ILogger logger, string cursorPath);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "KCAP_ACP_DEBUG_FRAMES is enabled — ACP Debug logs may now contain full prompts, tool arguments, and file contents from every hosted Cursor session. Disable in any shared or persistently-logged environment.")]
+    static partial void LogAcpDebugFramesEnabled(ILogger logger);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Previous '{Name}' daemon (PID {Pid}) exited WITHOUT a graceful shutdown — its lock was left for the kernel to release. That is the signature of an uncatchable kill (macOS jetsam/OOM, `kill -9`), a power loss, or a hard native crash; an in-process signal handler cannot record it. If this recurs, run the daemon as a supervised service (`kcap daemon service install`) so it auto-restarts.")]
     static partial void LogPriorUncleanExit(ILogger logger, string name, string pid);
