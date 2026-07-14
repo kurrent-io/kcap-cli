@@ -207,6 +207,12 @@ static class McpFlowResultServer {
                 // finding; the AI-1139 round-token guard).
                 return ($"Error: {message}", true);
 
+            if (code == "server_catching_up")
+                // AI-1311: the server's read model is replaying — retrying inside this tool call
+                // cannot outlast a rebuild; surface the guidance and let the agent decide.
+                return ($"Error: {message}\nThe server is catching up after a read-model rebuild — " +
+                        "try again in a few minutes, or ask the user what to do.", true);
+
             return ($"Error: HTTP {(int)response.StatusCode} — {message}\n{FallbackHint}", true);
         }
 
@@ -273,6 +279,12 @@ static class McpFlowResultServer {
                 // Terminal: the flow is already closed, so there is no driver left to deliver
                 // this message to. No retry — unlike no_active_flow, more attempts can't help.
                 return ($"Error: {message}", true);
+
+            if (code == "server_catching_up")
+                // AI-1311: the server's read model is replaying — retrying inside this tool call
+                // cannot outlast a rebuild; surface the guidance and let the agent decide.
+                return ($"Error: {message}\nThe server is catching up after a read-model rebuild — " +
+                        "try again in a few minutes, or ask the user what to do.", true);
 
             return ($"Error: HTTP {(int)response.StatusCode} — {message}", true);
         }
