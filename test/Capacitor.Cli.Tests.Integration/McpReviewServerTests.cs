@@ -153,6 +153,9 @@ public class McpReviewServerTests : IDisposable {
             var result = response["result"]?.AsObject();
             await Assert.That(result).IsNotNull();
             await Assert.That(result!["serverInfo"]?["name"]?.GetValue<string>()).IsEqualTo("kcap-review");
+            // AI-1271: server-level instructions preamble steers clients toward kcap for why/history.
+            await Assert.That(result["instructions"]?.GetValue<string>()).IsNotNull();
+            await Assert.That(result["instructions"]!.GetValue<string>()).IsNotEmpty();
         } finally {
             await ShutdownAsync(proc);
         }
@@ -170,6 +173,13 @@ public class McpReviewServerTests : IDisposable {
             var names = tools!.Select(t => t?["name"]?.GetValue<string>()).ToHashSet();
             await Assert.That(names.Contains("get_pr_summary")).IsTrue();
             await Assert.That(names.Contains("get_transcript")).IsTrue();
+
+            // AI-1271 hard gate: the entrypoint tools carry the comparative routing cue so a future
+            // edit can't silently drop it.
+            string Desc(string tool) => tools!.First(t => t?["name"]?.GetValue<string>() == tool)!["description"]!.GetValue<string>();
+            await Assert.That(Desc("get_pr_summary")).Contains("before git blame or git log");
+            await Assert.That(Desc("get_file_context")).Contains("before git blame or git log");
+            await Assert.That(Desc("search_context")).Contains("before git blame or git log");
         } finally {
             await ShutdownAsync(proc);
         }
