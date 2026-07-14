@@ -9,7 +9,7 @@ namespace Capacitor.Cli.Tests.Integration;
 /// <summary>
 /// End-to-end stdio JSON-RPC handshake tests for <c>kcap mcp memory</c>. Memory previously had
 /// only unit coverage of its URL/body builders (<c>McpMemoryServerTests</c> in the unit project);
-/// this adds a spawned-process handshake so the AI-1271 server-level <c>instructions</c> preamble
+/// this adds a spawned-process handshake so the server-level <c>instructions</c> preamble
 /// and the <c>search_memories</c> routing cue can't be silently dropped. Mirrors the sessions
 /// integration harness.
 /// </summary>
@@ -94,7 +94,7 @@ public class McpMemoryServerTests : IDisposable {
             var result = response["result"]?.AsObject();
             await Assert.That(result).IsNotNull();
             await Assert.That(result!["serverInfo"]?["name"]?.GetValue<string>()).IsEqualTo("kcap-memory");
-            // AI-1271: server-level instructions preamble.
+            // server-level instructions preamble.
             await Assert.That(result["instructions"]?.GetValue<string>()).IsNotNull();
             await Assert.That(result["instructions"]!.GetValue<string>()).IsNotEmpty();
         } finally {
@@ -112,7 +112,7 @@ public class McpMemoryServerTests : IDisposable {
             await Assert.That(tools).IsNotNull();
 
             var searchDesc = tools!.First(t => t?["name"]?.GetValue<string>() == "search_memories")!["description"]!.GetValue<string>();
-            // AI-1271 hard gate: the comparative routing cue must be present.
+            // Hard gate: the comparative routing cue must be present.
             await Assert.That(searchDesc).Contains("before assuming there's no prior art");
         } finally {
             await ShutdownAsync(proc);

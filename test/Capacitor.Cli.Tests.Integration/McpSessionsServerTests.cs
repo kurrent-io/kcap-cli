@@ -189,7 +189,7 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(result).IsNotNull();
             await Assert.That(result!["serverInfo"]?["name"]?.GetValue<string>()).IsEqualTo("kcap-sessions");
             await Assert.That(result["protocolVersion"]?.GetValue<string>()).IsEqualTo("2024-11-05");
-            // AI-1271: server-level instructions preamble.
+            // server-level instructions preamble.
             await Assert.That(result["instructions"]?.GetValue<string>()).IsNotNull();
             await Assert.That(result["instructions"]!.GetValue<string>()).IsNotEmpty();
         } finally {
@@ -214,7 +214,7 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(names.Contains("get_turn")).IsTrue();
             await Assert.That(names.Contains("list_turns")).IsTrue();
 
-            // AI-1271 hard gate: search_sessions carries the comparative routing cue.
+            // Hard gate: search_sessions carries the comparative routing cue.
             var searchDesc = tools.First(t => t?["name"]?.GetValue<string>() == "search_sessions")!["description"]!.GetValue<string>();
             await Assert.That(searchDesc).Contains("before grepping the code or git log");
         } finally {

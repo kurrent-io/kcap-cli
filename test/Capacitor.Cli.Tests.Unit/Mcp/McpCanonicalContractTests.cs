@@ -26,7 +26,7 @@ public class McpCanonicalContractTests {
 
     [Test]
     public async Task Every_canonical_server_has_a_description() {
-        // AI-1271: kcap-sessions previously had a null Description. Pin that every canonical server
+        // kcap-sessions previously had a null Description. Pin that every canonical server
         // carries one so the routing/discoverability gap can't silently reopen.
         foreach (var s in KcapMcpServers.All)
             await Assert.That(string.IsNullOrWhiteSpace(s.Description))
