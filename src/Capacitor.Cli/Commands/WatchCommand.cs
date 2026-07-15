@@ -91,6 +91,54 @@ static partial class WatchCommand {
             ? TimeSpan.FromMinutes(minutes)
             : DefaultParentDeadCeiling;
 
+    /// <summary>
+    /// Shutdown completion signal for a JSONL transcript's final line: complete when the file is
+    /// empty, newline-terminated, OR its last (newline-less) line parses as JSON. Length-stability
+    /// is NOT proof of completion — a large write can pause mid-record for longer than any bounded
+    /// wait, so a static-but-unparseable tail is still incomplete. Pure so it is unit-testable
+    /// without a real file (AI-1357 task 7).
+    /// </summary>
+    internal static bool IsFinalLineComplete(string fileText) {
+        if (fileText.Length == 0 || fileText[^1] == '\n') return true;
+
+        var lastNl = fileText.LastIndexOf('\n');
+        var tail   = (lastNl < 0 ? fileText : fileText[(lastNl + 1)..]).Trim();
+
+        if (tail.Length == 0) return true;
+
+        try {
+            using var _ = JsonDocument.Parse(tail);
+            return true;
+        } catch (JsonException) {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Bounded wait (≤2s, 4×500ms) for the shutdown final drain: re-reads <paramref name="path"/>
+    /// looking for <see cref="IsFinalLineComplete"/> before the watcher decides whether it's safe to
+    /// send-and-advance the newline-less final line. Never throws — a read failure just counts as
+    /// "not yet complete" for that iteration; the delay between iterations is likewise best-effort so
+    /// cancellation/short-lived environments can't turn this into a hang.
+    /// </summary>
+    internal static async Task<bool> WaitForFinalLineCompletionAsync(string path, int attempts = 4, int delayMs = 500) {
+        for (var i = 0; i < attempts; i++) {
+            try {
+                if (IsFinalLineComplete(await File.ReadAllTextAsync(path))) return true;
+            } catch {
+                // Transient read failure (e.g. concurrent write) — try again on the next iteration.
+            }
+
+            try {
+                await Task.Delay(delayMs);
+            } catch {
+                // Never let a delay hiccup abort the shutdown path.
+            }
+        }
+
+        return false;
+    }
+
     public static async Task<int> RunWatch(
             string  baseUrl,
             string  sessionId,
@@ -480,7 +528,29 @@ static partial class WatchCommand {
             Log($"Session below threshold ({state.BufferedLines.Count}/{WatchState.TranscriptThreshold} lines), skipping final drain");
         } else {
             Log("Draining remaining lines...");
-            var finalDrained = await DrainNewLines(hubConnection, sessionId, transcriptPath, agentId, state, vendor, CancellationToken.None, isFinalDrain: true);
+
+            // Shutdown completion signal (AI-1357 task 7): the outage/idle-timeout final drain used
+            // to disable the half-written-line holdback unconditionally, which could consume a line
+            // the agent was still mid-write on. Instead, bounded-wait (≤2s) for the writer to finish
+            // — a trailing newline OR a parseable last line, NOT length-stability alone, since a
+            // large write can pause mid-record past the window. Only once that signal fires do we
+            // drop the holdback and send-and-advance the newline-less final line; otherwise the
+            // holdback stays ON (as in every other drain) so the still-incomplete tail is held, not
+            // sent, and the session is flagged needs-import so `kcap import` can pick it up later.
+            var finalLineComplete = await WaitForFinalLineCompletionAsync(transcriptPath);
+
+            if (!finalLineComplete) {
+                // Keyed on the canonical server sessionId (not agentId) even for a subagent
+                // watcher — TranscriptSpool/LifecycleSpoolDrain's session-id space is the server's,
+                // and `kcap import`/session-needs-import operate at the session level.
+                Log("Final transcript line still incomplete after bounded wait; holding it back and flagging needs-import");
+                new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"))
+                    .MarkNeedsImport(sessionId, "shutdown final drain: last transcript line never completed (no newline, unparseable)");
+            }
+
+            var finalDrained = await DrainNewLines(
+                hubConnection, sessionId, transcriptPath, agentId, state, vendor, CancellationToken.None,
+                isFinalDrain: finalLineComplete);
 
             // One last subagent-link scan on the way out — the parent may have emitted an
             // INVOKE_SUBAGENT step after the main loop's last tick but before exit, and this is
