@@ -102,16 +102,11 @@ static partial class WatchCommand {
         if (fileText.Length == 0 || fileText[^1] == '\n') return true;
 
         var lastNl = fileText.LastIndexOf('\n');
-        var tail   = (lastNl < 0 ? fileText : fileText[(lastNl + 1)..]).Trim();
+        var tail   = lastNl < 0 ? fileText : fileText[(lastNl + 1)..];
 
-        if (tail.Length == 0) return true;
-
-        try {
-            using var _ = JsonDocument.Parse(tail);
-            return true;
-        } catch (JsonException) {
-            return false;
-        }
+        // A whitespace-only trailing partial carries nothing to lose → treat as complete; otherwise
+        // the tail must parse as a complete JSON record (length-stability alone is NOT proof).
+        return tail.Trim().Length == 0 || IsCompleteJsonRecord(tail);
     }
 
     /// <summary>
@@ -531,26 +526,29 @@ static partial class WatchCommand {
 
             // Shutdown completion signal (AI-1357 task 7): the outage/idle-timeout final drain used
             // to disable the half-written-line holdback unconditionally, which could consume a line
-            // the agent was still mid-write on. Instead, bounded-wait (≤2s) for the writer to finish
-            // — a trailing newline OR a parseable last line, NOT length-stability alone, since a
-            // large write can pause mid-record past the window. Only once that signal fires do we
-            // drop the holdback and send-and-advance the newline-less final line; otherwise the
-            // holdback stays ON (as in every other drain) so the still-incomplete tail is held, not
-            // sent, and the session is flagged needs-import so `kcap import` can pick it up later.
-            var finalLineComplete = await WaitForFinalLineCompletionAsync(transcriptPath);
-
-            if (!finalLineComplete) {
-                // Keyed on the canonical server sessionId (not agentId) even for a subagent
-                // watcher — TranscriptSpool/LifecycleSpoolDrain's session-id space is the server's,
-                // and `kcap import`/session-needs-import operate at the session level.
-                Log("Final transcript line still incomplete after bounded wait; holding it back and flagging needs-import");
-                new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"))
-                    .MarkNeedsImport(sessionId, "shutdown final drain: last transcript line never completed (no newline, unparseable)");
-            }
+            // the agent was still mid-write on. Instead:
+            //   1. Bounded-wait (≤2s) to give the writer a chance to finish the final record — a
+            //      trailing newline OR a parseable last line, NOT length-stability alone, since a
+            //      large write can pause mid-record past the window. This is best-effort ONLY.
+            //   2. Run the final drain with ConsumeIfComplete: the completeness decision is re-made
+            //      on the EXACT bytes consumed, so a line that resumed growing into an incomplete
+            //      record after the wait is still held, never sent-and-advanced (no TOCTOU).
+            // If the final line was held back at consume time, flag the session needs-import so
+            // `kcap import` can recover the tail rather than dropping a truncated line.
+            await WaitForFinalLineCompletionAsync(transcriptPath);
 
             var finalDrained = await DrainNewLines(
                 hubConnection, sessionId, transcriptPath, agentId, state, vendor, CancellationToken.None,
-                isFinalDrain: finalLineComplete);
+                isFinalDrain: true);
+
+            if (state.FinalDrainHeldIncompleteLine) {
+                // Keyed on the canonical server sessionId (not agentId) even for a subagent
+                // watcher — TranscriptSpool/LifecycleSpoolDrain's session-id space is the server's,
+                // and `kcap import`/session-needs-import operate at the session level.
+                Log("Final transcript line still incomplete at consume time; held back and flagging needs-import");
+                new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"))
+                    .MarkNeedsImport(sessionId, "shutdown final drain: last transcript line never completed (no newline, unparseable)");
+            }
 
             // One last subagent-link scan on the way out — the parent may have emitted an
             // INVOKE_SUBAGENT step after the main loop's last tick but before exit, and this is
@@ -980,8 +978,21 @@ static partial class WatchCommand {
             NewTranscriptLines drainRead;
             await using (var stream = new FileStream(
                     transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) {
+                // Shutdown final drain (AI-1357 task 7): consume an unterminated final line only if
+                // the exact bytes read parse as a complete JSON record (re-validated at consume time,
+                // so no TOCTOU with the bounded pre-wait); a still-growing/unparseable tail is held.
+                // Every live drain always holds an unterminated final line (AI-1243).
                 drainRead = await ReadNewCompleteLinesAsync(
-                    stream, state.LinesProcessed, holdIncompleteFinalLine: !isFinalDrain, ct);
+                    stream, state.LinesProcessed,
+                    isFinalDrain ? IncompleteFinalLinePolicy.ConsumeIfComplete : IncompleteFinalLinePolicy.Hold,
+                    ct);
+            }
+
+            // Surface whether the final drain held back an incomplete (unterminated/unparseable)
+            // final line so the shutdown path can flag the session needs-import instead of dropping
+            // a truncated tail. Only meaningful for the final drain; live drains hold routinely.
+            if (isFinalDrain) {
+                state.FinalDrainHeldIncompleteLine = drainRead.HeldIncompleteFinalLine;
             }
 
             var newLineNumbers = drainRead.LineNumbers;
@@ -1938,10 +1949,35 @@ static partial class WatchCommand {
 
     /// <summary>
     /// Result of a transcript drain read: the new non-blank <see cref="Lines"/> (beyond the
-    /// caller's processed position), their 0-based <see cref="LineNumbers"/>, and the
-    /// <see cref="NextPosition"/> the caller should advance its watermark to.
+    /// caller's processed position), their 0-based <see cref="LineNumbers"/>, the
+    /// <see cref="NextPosition"/> the caller should advance its watermark to, and
+    /// <see cref="HeldIncompleteFinalLine"/> — true when a non-blank, unterminated (or, under
+    /// <see cref="IncompleteFinalLinePolicy.ConsumeIfComplete"/>, unparseable) final line was held
+    /// back rather than consumed. The shutdown final drain uses this to flag the session
+    /// needs-import instead of silently dropping a truncated tail.
     /// </summary>
-    public readonly record struct NewTranscriptLines(List<string> Lines, List<int> LineNumbers, int NextPosition);
+    public readonly record struct NewTranscriptLines(
+        List<string> Lines,
+        List<int>    LineNumbers,
+        int          NextPosition,
+        bool         HeldIncompleteFinalLine = false);
+
+    /// <summary>
+    /// Policy for an unterminated (no trailing newline) final transcript line at drain time.
+    /// </summary>
+    public enum IncompleteFinalLinePolicy {
+        /// <summary>Every normal live drain: ALWAYS hold an unterminated final line — the agent is
+        /// mid-write of it, and consuming its truncated prefix would permanently drop the completed
+        /// line (AI-1243).</summary>
+        Hold,
+
+        /// <summary>The shutdown final drain (AI-1357 task 7): consume the unterminated final line
+        /// ONLY IF the exact bytes read parse as a complete JSON record; otherwise hold it. The
+        /// parseable-JSON check runs on the SAME bytes being consumed, so there is no TOCTOU with a
+        /// separate pre-read completeness probe — a line that resumed growing into an incomplete
+        /// record after any earlier probe is still held, never sent-and-advanced.</summary>
+        ConsumeIfComplete
+    }
 
     /// <summary>
     /// Split <paramref name="fileText"/> into the new complete (newline-terminated) transcript
@@ -1954,9 +1990,9 @@ static partial class WatchCommand {
     /// matching the long-standing drain behaviour.
     /// </summary>
     public static NewTranscriptLines SplitNewCompleteLines(
-            string fileText,
-            int    linesProcessed,
-            bool   holdIncompleteFinalLine = true
+            string                    fileText,
+            int                       linesProcessed,
+            IncompleteFinalLinePolicy policy = IncompleteFinalLinePolicy.Hold
         ) {
         var newLines       = new List<string>();
         var newLineNumbers = new List<int>();
@@ -1976,7 +2012,7 @@ static partial class WatchCommand {
         }
 
         return ApplyPartialLineHoldback(
-            newLines, newLineNumbers, nextPosition: lineIndex, linesProcessed, endsWithNewline, holdIncompleteFinalLine);
+            newLines, newLineNumbers, nextPosition: lineIndex, linesProcessed, endsWithNewline, policy);
     }
 
     /// <summary>
@@ -1988,10 +2024,10 @@ static partial class WatchCommand {
     /// Opened by the caller with FileShare.ReadWrite (Qodo #291 #1) so the writing agent is never blocked.
     /// </summary>
     internal static async Task<NewTranscriptLines> ReadNewCompleteLinesAsync(
-            FileStream        stream,
-            int               linesProcessed,
-            bool              holdIncompleteFinalLine,
-            CancellationToken ct) {
+            FileStream                stream,
+            int                       linesProcessed,
+            IncompleteFinalLinePolicy policy,
+            CancellationToken         ct) {
         var length = stream.Length;
 
         bool endsWithNewline;
@@ -2018,33 +2054,66 @@ static partial class WatchCommand {
         }
 
         return ApplyPartialLineHoldback(
-            newLines, newLineNumbers, nextPosition: lineIndex, linesProcessed, endsWithNewline, holdIncompleteFinalLine);
+            newLines, newLineNumbers, nextPosition: lineIndex, linesProcessed, endsWithNewline, policy);
     }
 
-    // Hold back a still-being-written final line (no trailing newline yet): keep the position
-    // before it and drop it from this batch if it was collected. The final drain at session end
-    // opts out (holdIncompleteFinalLine: false) — the file is static then, so an unterminated
-    // last line is genuinely the end and must be delivered, not lost. Shared by the string helper
-    // (SplitNewCompleteLines) and the streaming reader (ReadNewCompleteLinesAsync).
+    // Decide the fate of a still-being-written final line (no trailing newline yet). Under
+    // Hold (every live drain) it is always held back: the position stays before it and it is dropped
+    // from this batch, so a later drain re-reads it once newline-terminated — consuming its truncated
+    // prefix would permanently drop the completed line (AI-1243). Under ConsumeIfComplete (the
+    // shutdown final drain — AI-1357 task 7) it is consumed ONLY IF the exact bytes read parse as a
+    // complete JSON record; a still-growing/unparseable tail is held (never sent-and-advanced) and
+    // signalled via HeldIncompleteFinalLine so the caller can flag needs-import. Because the parse
+    // check runs on the bytes actually being consumed here, there is no TOCTOU with any earlier
+    // completeness probe. Shared by the string helper (SplitNewCompleteLines) and the streaming
+    // reader (ReadNewCompleteLinesAsync).
     static NewTranscriptLines ApplyPartialLineHoldback(
-            List<string> newLines,
-            List<int>    newLineNumbers,
-            int          nextPosition,
-            int          linesProcessed,
-            bool         endsWithNewline,
-            bool         holdIncompleteFinalLine) {
-        if (holdIncompleteFinalLine && !endsWithNewline && nextPosition > linesProcessed) {
-            var partialIndex = nextPosition - 1;
-
-            if (newLineNumbers.Count > 0 && newLineNumbers[^1] == partialIndex) {
-                newLines.RemoveAt(newLines.Count - 1);
-                newLineNumbers.RemoveAt(newLineNumbers.Count - 1);
-            }
-
-            nextPosition = partialIndex;
+            List<string>              newLines,
+            List<int>                 newLineNumbers,
+            int                       nextPosition,
+            int                       linesProcessed,
+            bool                      endsWithNewline,
+            IncompleteFinalLinePolicy policy) {
+        if (endsWithNewline || nextPosition <= linesProcessed) {
+            return new NewTranscriptLines(newLines, newLineNumbers, nextPosition);
         }
 
-        return new NewTranscriptLines(newLines, newLineNumbers, nextPosition);
+        var partialIndex = nextPosition - 1;
+        var hasPartial   = newLineNumbers.Count > 0 && newLineNumbers[^1] == partialIndex;
+
+        // Consume the unterminated final line only when the policy allows it AND the exact bytes
+        // read form a complete JSON record. Anything else (Hold, blank/whitespace partial, or an
+        // unparseable tail) is held back.
+        var consume = policy == IncompleteFinalLinePolicy.ConsumeIfComplete
+                      && hasPartial
+                      && IsCompleteJsonRecord(newLines[^1]);
+
+        if (consume) {
+            return new NewTranscriptLines(newLines, newLineNumbers, nextPosition);
+        }
+
+        if (hasPartial) {
+            newLines.RemoveAt(newLines.Count - 1);
+            newLineNumbers.RemoveAt(newLineNumbers.Count - 1);
+        }
+
+        // Only a real (non-blank) held line is "incomplete content" the caller must surface; a
+        // whitespace-only trailing partial carries nothing to lose.
+        return new NewTranscriptLines(newLines, newLineNumbers, partialIndex, HeldIncompleteFinalLine: hasPartial);
+    }
+
+    /// <summary>True if <paramref name="line"/> (a single, newline-less transcript line) parses as a
+    /// complete JSON document. Used to gate consuming an unterminated final line at shutdown.</summary>
+    static bool IsCompleteJsonRecord(string line) {
+        var trimmed = line.Trim();
+        if (trimmed.Length == 0) return false;
+
+        try {
+            using var _ = JsonDocument.Parse(trimmed);
+            return true;
+        } catch (JsonException) {
+            return false;
+        }
     }
 
     /// <summary>Read-only view of <c>inner</c> that reports EOF after <c>limit</c> bytes, so a

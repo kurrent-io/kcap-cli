@@ -139,6 +139,11 @@ class WatchState {
     public int          LinesReadAhead      { get; set; } // file position while buffering
     public bool         ThresholdReached    { get; set; }
 
+    // AI-1357 task 7: set by the shutdown final drain (isFinalDrain) when it held back an
+    // unterminated/unparseable final line rather than consuming it. RunWatch reads it right after
+    // the final drain to flag the session needs-import (never drop a truncated tail).
+    public bool FinalDrainHeldIncompleteLine { get; set; }
+
     // Last wall-clock time new transcript content was observed on the rollout file.
     // Drives the Codex idle-timeout fallback (see WatchCommand.ShouldEndOnIdle).
     // Initialized when the watcher starts; updated in DrainNewLines on new lines.

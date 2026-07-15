@@ -18,21 +18,22 @@ public class ReadNewCompleteLinesAsyncTests {
     }
 
     static async Task<WatchCommand.NewTranscriptLines> ReadViaStream(
-            string path, int linesProcessed, bool holdIncompleteFinalLine) {
+            string path, int linesProcessed, WatchCommand.IncompleteFinalLinePolicy policy) {
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        return await WatchCommand.ReadNewCompleteLinesAsync(stream, linesProcessed, holdIncompleteFinalLine, default);
+        return await WatchCommand.ReadNewCompleteLinesAsync(stream, linesProcessed, policy, default);
     }
 
-    static async Task AssertParity(string content, int linesProcessed, bool holdIncompleteFinalLine) {
-        var expected = WatchCommand.SplitNewCompleteLines(content, linesProcessed, holdIncompleteFinalLine);
+    static async Task AssertParity(string content, int linesProcessed, WatchCommand.IncompleteFinalLinePolicy policy) {
+        var expected = WatchCommand.SplitNewCompleteLines(content, linesProcessed, policy);
 
         var path = WriteTemp(content);
         try {
-            var actual = await ReadViaStream(path, linesProcessed, holdIncompleteFinalLine);
+            var actual = await ReadViaStream(path, linesProcessed, policy);
 
             await Assert.That(actual.Lines).IsEquivalentTo(expected.Lines);
             await Assert.That(actual.LineNumbers).IsEquivalentTo(expected.LineNumbers);
             await Assert.That(actual.NextPosition).IsEqualTo(expected.NextPosition);
+            await Assert.That(actual.HeldIncompleteFinalLine).IsEqualTo(expected.HeldIncompleteFinalLine);
         } finally {
             File.Delete(path);
         }
@@ -42,47 +43,89 @@ public class ReadNewCompleteLinesAsyncTests {
 
     [Test]
     public async Task Parity_all_lines_when_file_ends_with_newline() =>
-        await AssertParity("a\nb\nc\n", 0, holdIncompleteFinalLine: true);
+        await AssertParity("a\nb\nc\n", 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
 
     [Test]
     public async Task Parity_partial_final_line_held_back_when_no_trailing_newline() =>
-        await AssertParity("a\nb\nc", 0, holdIncompleteFinalLine: true);
+        await AssertParity("a\nb\nc", 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
 
     [Test]
     public async Task Parity_blank_lines_skipped_but_counted() =>
-        await AssertParity("a\n\nb\n", 0, holdIncompleteFinalLine: true);
+        await AssertParity("a\n\nb\n", 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
 
     [Test]
     public async Task Parity_blank_partial_final_line() =>
-        await AssertParity("real\n   ", 0, holdIncompleteFinalLine: true);
+        await AssertParity("real\n   ", 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
 
     [Test]
     public async Task Parity_respects_lines_already_processed() =>
-        await AssertParity("a\nb\nc\n", 2, holdIncompleteFinalLine: true);
+        await AssertParity("a\nb\nc\n", 2, WatchCommand.IncompleteFinalLinePolicy.Hold);
 
     [Test]
     public async Task Parity_crlf_terminated_lines() =>
-        await AssertParity("a\r\nb\r\n", 0, holdIncompleteFinalLine: true);
+        await AssertParity("a\r\nb\r\n", 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
 
     [Test]
     public async Task Parity_lone_partial_line_holds_at_start() =>
-        await AssertParity("partial-json-being-written", 0, holdIncompleteFinalLine: true);
+        await AssertParity("partial-json-being-written", 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
 
     [Test]
     public async Task Parity_empty_file() =>
-        await AssertParity("", 0, holdIncompleteFinalLine: true);
+        await AssertParity("", 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
 
-    // ---- 2. Final drain delivers the unterminated final line ----
+    // ---- 2. Final drain (ConsumeIfComplete): consume only a parseable unterminated final line ----
 
     [Test]
-    public async Task Final_drain_delivers_unterminated_final_line() {
-        var path = WriteTemp("a\nb\nc");
+    public async Task Final_drain_consumes_a_parseable_unterminated_final_line() {
+        var path = WriteTemp("{\"a\":1}\n{\"b\":2}");
         try {
-            var r = await ReadViaStream(path, 0, holdIncompleteFinalLine: false);
+            var r = await ReadViaStream(path, 0, WatchCommand.IncompleteFinalLinePolicy.ConsumeIfComplete);
 
-            await Assert.That(r.Lines).IsEquivalentTo(new[] { "a", "b", "c" });
-            await Assert.That(r.LineNumbers).IsEquivalentTo(new[] { 0, 1, 2 });
-            await Assert.That(r.NextPosition).IsEqualTo(3);
+            await Assert.That(r.Lines).IsEquivalentTo(new[] { "{\"a\":1}", "{\"b\":2}" });
+            await Assert.That(r.LineNumbers).IsEquivalentTo(new[] { 0, 1 });
+            await Assert.That(r.NextPosition).IsEqualTo(2);
+            await Assert.That(r.HeldIncompleteFinalLine).IsFalse();
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task Final_drain_holds_an_unparseable_unterminated_final_line() {
+        var path = WriteTemp("{\"a\":1}\n{\"b\":2");
+        try {
+            var r = await ReadViaStream(path, 0, WatchCommand.IncompleteFinalLinePolicy.ConsumeIfComplete);
+
+            await Assert.That(r.Lines).IsEquivalentTo(new[] { "{\"a\":1}" });
+            await Assert.That(r.LineNumbers).IsEquivalentTo(new[] { 0 });
+            await Assert.That(r.NextPosition).IsEqualTo(1);
+            await Assert.That(r.HeldIncompleteFinalLine).IsTrue();
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    // ---- 2b. TOCTOU guard: a final line that resumes GROWING after an earlier completeness
+    // probe is re-validated on the bytes actually consumed and held, not sent-and-advanced. ----
+
+    [Test]
+    public async Task Final_drain_holds_a_line_that_grew_into_an_incomplete_record_after_the_completeness_check() {
+        var path = WriteTemp("{\"a\":1}\n");
+        try {
+            // Step 1: the bounded completeness probe sees a fully complete file.
+            await Assert.That(await WatchCommand.WaitForFinalLineCompletionAsync(path, attempts: 1, delayMs: 1)).IsTrue();
+
+            // Step 2: the writer RESUMES, appending a new partial record (no newline, unparseable)
+            // in the gap before the consuming read — the exact TOCTOU the fix must close.
+            await File.WriteAllTextAsync(path, "{\"a\":1}\n{\"b\":2");
+
+            // Step 3: the consuming final drain re-validates on the bytes it actually reads and
+            // HOLDS the still-incomplete tail — only the complete first record is delivered.
+            var r = await ReadViaStream(path, 0, WatchCommand.IncompleteFinalLinePolicy.ConsumeIfComplete);
+
+            await Assert.That(r.Lines).IsEquivalentTo(new[] { "{\"a\":1}" });
+            await Assert.That(r.NextPosition).IsEqualTo(1);
+            await Assert.That(r.HeldIncompleteFinalLine).IsTrue();
         } finally {
             File.Delete(path);
         }
@@ -106,7 +149,7 @@ public class ReadNewCompleteLinesAsyncTests {
 
             // The read still works while the handle is shared; the append landed before the read,
             // so all three complete lines are surfaced.
-            var r = await WatchCommand.ReadNewCompleteLinesAsync(readStream, 0, holdIncompleteFinalLine: true, default);
+            var r = await WatchCommand.ReadNewCompleteLinesAsync(readStream, 0, WatchCommand.IncompleteFinalLinePolicy.Hold, default);
             await Assert.That(r.Lines).IsEquivalentTo(new[] { "a", "b", "c" });
         } finally {
             File.Delete(path);
