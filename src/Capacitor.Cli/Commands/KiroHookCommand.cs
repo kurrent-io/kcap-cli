@@ -70,6 +70,14 @@ static class KiroHookCommand {
         // disable` must stop every POST and watcher restart for the session.
         if (DisabledSessions.IsDisabled(sessionId)) return 0;
 
+        // AI-1357: bounded, best-effort backlog drain so a prior session's spooled lifecycle
+        // POSTs / transcript tail replay even when this agentSpawn firing posts nothing further.
+        var spool           = new HookSpool(PathHelpers.ConfigPath("spool"));
+        var transcriptSpool = new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"));
+        spool.ReapOlderThan(TimeSpan.FromDays(30));
+        transcriptSpool.ReapOlderThan(TimeSpan.FromDays(30));
+        await AgentHookPoster.DrainSpoolsAsync(baseUrl, spool, transcriptSpool, sessionId);
+
         var cwd           = TryGetString(node, "cwd");
         var activeProfile = await AppConfig.GetActiveProfileAsync();
 
@@ -81,16 +89,17 @@ static class KiroHookCommand {
             return 0;
         }
 
-        return await HandleAgentSpawn(baseUrl, node, dashedSessionId, sessionId, cwd, activeProfile);
+        return await HandleAgentSpawn(baseUrl, node, dashedSessionId, sessionId, cwd, activeProfile, spool);
     }
 
     static async Task<int> HandleAgentSpawn(
-            string   baseUrl,
-            JsonNode node,
-            string   dashedSessionId,
-            string   sessionId,
-            string?  cwd,
-            Profile? activeProfile
+            string    baseUrl,
+            JsonNode  node,
+            string    dashedSessionId,
+            string    sessionId,
+            string?   cwd,
+            Profile?  activeProfile,
+            HookSpool spool
         ) {
         var forwarded = new JsonObject {
             ["hook_event_name"] = "agentSpawn",
@@ -132,13 +141,16 @@ static class KiroHookCommand {
             return 0;
         }
 
-        // Fail-open: a non-zero exit surfaces as a FAILED agentSpawn hook inside
-        // kiro-cli, which is exactly what this vendor wrapper must avoid on a
-        // transient server/auth blip. On a real failure PostHookAsync already logged to
-        // stderr; on an auth lapse it stayed silent (no doomed POST). Either way skip the
-        // watcher this firing and exit 0 — agentSpawn fires again next prompt and retries.
-        var outcome = await PostHookAsync(baseUrl, "session-start/kiro", enriched);
-        if (outcome != HookPostOutcome.Posted) return 0;
+        // Spawn-before-post (AI-1357): capture must start on Posted OR Spooled (auth lapse /
+        // outage) — a doomed/delayed lifecycle POST must never withhold the watcher. On a real
+        // failure PostOrSpoolAsync already logged to stderr; a lapse or transient outage instead
+        // durably spools the payload for a later drain pass. Only a permanent failure skips the
+        // watcher this firing — agentSpawn fires again next prompt and retries.
+        var outcome = await AgentHookPoster.PostOrSpoolAsync(
+            baseUrl, "session-start/kiro", enriched, "kiro-hook",
+            spool, sessionId, route: "session-start/kiro");
+
+        if (!AgentHookPoster.ShouldSpawnAfter(outcome)) return 0;
 
         // The watcher tails Kiro's own append-only session log
         // ~/.kiro/sessions/cli/{id}.jsonl (the file is named with the dashed id).
@@ -155,12 +167,6 @@ static class KiroHookCommand {
 
         return 0;
     }
-
-    // Shared auth-aware recording POST: skips the doomed POST (and the misleading per-turn
-    // "HTTP 401" stderr line) when auth has lapsed, reporting AuthLapsed so the caller exits
-    // cleanly instead of erroring. See AgentHookPoster.
-    static Task<HookPostOutcome> PostHookAsync(string baseUrl, string endpoint, string body)
-        => AgentHookPoster.PostAsync(baseUrl, endpoint, body, "kiro-hook");
 
     /// <summary>
     /// Reads the session model from the sibling <c>{id}.json</c>

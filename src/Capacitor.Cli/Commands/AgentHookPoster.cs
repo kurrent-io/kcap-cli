@@ -106,6 +106,46 @@ internal static class AgentHookPoster {
         => PostOrSpoolAsync(() => HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl),
                             baseUrl, endpoint, body, agentTag, spool, sessionId, route);
 
+    /// <summary>
+    /// AI-1357: spawn-before-post decision. Capture must start regardless of whether the lifecycle
+    /// POST was actually delivered — <c>Posted</c> and <c>Spooled</c> both proceed to
+    /// <c>WatcherManager.EnsureWatcherRunning</c>. <c>AuthLapsed</c> is kept here (spawning) as a
+    /// defensive fallback for any caller still on the legacy <see cref="PostAsync(string,string,string,string)"/>
+    /// that hasn't migrated to <see cref="PostOrSpoolAsync(string,string,string,string,HookSpool,string,string)"/>
+    /// — the whole point of AI-1357 is capture-regardless-of-POST. Only a permanent <c>Failed</c>
+    /// (a real non-2xx response, or auth lapsed on the legacy path having already been excluded)
+    /// skips the watcher.
+    /// </summary>
+    public static bool ShouldSpawnAfter(HookPostOutcome outcome) =>
+        outcome is HookPostOutcome.Posted or HookPostOutcome.Spooled or HookPostOutcome.AuthLapsed;
+
+    /// <summary>
+    /// AI-1357 Task 4: bounded, best-effort drain of the cross-vendor lifecycle + transcript spools.
+    /// Run early in a JSON-payload vendor dispatcher's <c>Handle</c> (after the disabled-session fast
+    /// path) so a prior session's backlog replays even when the current firing posts nothing further.
+    /// Skips the drain entirely when auth has lapsed — a POST attempted with no bearer token would
+    /// 401, and <see cref="LifecycleSpoolDrain"/>'s production poster treats a non-timeout/non-5xx
+    /// status as a permanent drop, which would silently discard the very backlog this protects.
+    /// Never throws — a spool-drain hiccup must not disrupt the vendor's own hook.
+    /// </summary>
+    public static async Task DrainSpoolsAsync(
+            string baseUrl, HookSpool lifecycle, TranscriptSpool transcript, string? sessionId) {
+        var budget = TimeSpan.FromSeconds(1.5);
+
+        try {
+            using var cts = new CancellationTokenSource(budget);
+            var (client, status) = await HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl, cts.Token);
+
+            using (client) {
+                if (IsAuthLapsed(status)) return;
+
+                await LifecycleSpoolDrain.RunAsync(client, baseUrl, lifecycle, transcript, sessionId, budget, cts.Token);
+            }
+        } catch {
+            // Best-effort — a drain hiccup must never disrupt the vendor's own hook.
+        }
+    }
+
     /// <summary>Core with an injectable client factory (test seam).</summary>
     internal static async Task<HookPostOutcome> PostOrSpoolAsync(
             Func<Task<(HttpClient Client, AuthStatus Status)>> clientFactory,

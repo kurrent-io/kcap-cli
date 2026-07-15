@@ -63,6 +63,14 @@ static class PiHookCommand {
             return 0;
         }
 
+        // AI-1357: bounded, best-effort backlog drain so a prior session's spooled lifecycle
+        // POSTs / transcript tail replay even when this firing posts nothing further.
+        var spool           = new HookSpool(PathHelpers.ConfigPath("spool"));
+        var transcriptSpool = new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"));
+        spool.ReapOlderThan(TimeSpan.FromDays(30));
+        transcriptSpool.ReapOlderThan(TimeSpan.FromDays(30));
+        await AgentHookPoster.DrainSpoolsAsync(baseUrl, spool, transcriptSpool, sessionId);
+
         var activeProfile = await AppConfig.GetActiveProfileAsync();
 
         if (activeProfile?.ExcludedPaths is { Length: > 0 } excludedPaths
@@ -71,20 +79,21 @@ static class PiHookCommand {
         }
 
         return eventName switch {
-            "session-start" => await HandleSessionStart(baseUrl, sessionId, file, cwd, reason, header?.Timestamp, activeProfile),
+            "session-start" => await HandleSessionStart(baseUrl, sessionId, file, cwd, reason, header?.Timestamp, activeProfile, spool),
             "session-end"   => await HandleSessionEnd(baseUrl, sessionId, file, cwd, reason),
             _               => 0   // unknown — fail-open like the other dispatchers
         };
     }
 
     static async Task<int> HandleSessionStart(
-            string         baseUrl,
-            string         sessionId,
-            string         file,
-            string?        cwd,
-            string?        reason,
+            string          baseUrl,
+            string          sessionId,
+            string          file,
+            string?         cwd,
+            string?         reason,
             DateTimeOffset? startedAt,
-            Profile?       activeProfile
+            Profile?        activeProfile,
+            HookSpool       spool
         ) {
         var source = string.IsNullOrEmpty(reason) ? "startup" : reason;
 
@@ -116,11 +125,14 @@ static class PiHookCommand {
             return 0;
         }
 
-        var outcome = await PostHookAsync(baseUrl, "session-start/pi", enriched);
+        // Spawn-before-post (AI-1357): capture must start on Posted OR Spooled (auth lapse /
+        // outage) — a doomed/delayed lifecycle POST must never withhold the watcher. Only a
+        // permanent failure keeps the prior non-zero exit and skips the watcher.
+        var outcome = await AgentHookPoster.PostOrSpoolAsync(
+            baseUrl, "session-start/pi", enriched, "pi-hook",
+            spool, sessionId, route: "session-start/pi");
 
-        // Failed keeps the prior non-zero exit; AuthLapsed exits cleanly (no error banner). Either
-        // way skip the watcher — on a lapse its POSTs would 401 too.
-        if (outcome != HookPostOutcome.Posted) return outcome == HookPostOutcome.Failed ? 1 : 0;
+        if (!AgentHookPoster.ShouldSpawnAfter(outcome)) return outcome == HookPostOutcome.Failed ? 1 : 0;
 
         await WatcherManager.EnsureWatcherRunning(
             baseUrl, sessionId, file,
