@@ -3,7 +3,7 @@ using Capacitor.Cli.Commands;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-1286 Phase 7 — the live-watcher side of Kiro context-%: <see cref="WatchCommand.EnrichKiroContextUsage"/>
+/// The live-watcher side of Kiro context-%: <see cref="WatchCommand.EnrichKiroContextUsage"/>
 /// reads the sibling <c>{id}.json</c> (derived from the TRANSCRIPT path, not the dashless session id)
 /// and stamps <c>data._kcap_usage.context_usage_percentage</c> onto AssistantMessage lines at flush,
 /// reusing the import path's <see cref="Capacitor.Cli.Core.Kiro.KiroUsage"/>. Best-effort + order-preserving.

@@ -966,13 +966,9 @@ static partial class WatchCommand {
                     return newLines;
             }
 
-            // AI-1286 Phase 7: stamp Kiro's live context-fill % onto AssistantMessage lines from the
-            // sibling {id}.json, HERE — at flush, after the below-threshold buffer decision and on the
-            // exact batch about to be sent — so the % is present at FIRST send. It can't be backfilled
-            // later: the server dedupes Kiro events by canonical id, so a later enriched copy (re-send
-            // or import) is skipped, not merged. The sibling is derived from the transcript path (Kiro's
-            // on-disk files use the dashed id; the watcher's sessionId is the dashless canonical form).
-            // Best-effort — EnrichLine no-ops non-assistant / unanchored lines and never throws.
+            // Stamp Kiro's live context-% onto AssistantMessage lines at flush so it's present on the
+            // first send — it can't be backfilled (the server dedupes Kiro events by canonical id).
+            // Best-effort; rationale in the design spec.
             if (vendor == "kiro" && newLines.Count > 0) {
                 newLines = EnrichKiroContextUsage(newLines, transcriptPath);
             }
@@ -1332,17 +1328,15 @@ static partial class WatchCommand {
     }
 
     /// <summary>
-    /// AI-1286 Phase 7 — Kiro live context-%: returns <paramref name="lines"/> with each Kiro
-    /// AssistantMessage line enriched with <c>data._kcap_usage.context_usage_percentage</c> from the
-    /// sibling <c>{id}.json</c>'s per-turn metadata, reusing the exact functions the import path uses
-    /// (<see cref="KiroUsage.AnchorMap"/> + <see cref="KiroUsage.EnrichLine"/>). Called at flush so the
-    /// % is present on first send (it can't be backfilled — the server dedupes Kiro events by canonical
-    /// id). <see cref="KiroUsage.EnrichLine"/> matches a line to its turn by the line's own
-    /// <c>message_id</c> and no-ops non-assistant / unanchored lines, so mapping it over the whole
-    /// batch is safe and order-preserving. The sibling is derived from the transcript path (dashed
-    /// on disk), NOT the dashless <c>sessionId</c>. Best-effort — never throws, never drops a line.
+    /// Kiro live context-%: returns <paramref name="lines"/> with each Kiro AssistantMessage line
+    /// stamped with <c>data._kcap_usage.context_usage_percentage</c> from the sibling <c>{id}.json</c>
+    /// (reusing <see cref="KiroUsage.AnchorMap"/> + <see cref="KiroUsage.EnrichLine"/>). The sibling is
+    /// derived from the transcript path (dashed on disk), not the dashless <c>sessionId</c>.
+    /// Best-effort, order-preserving — never throws, never drops a line. See the design spec.
     /// </summary>
     internal static List<string> EnrichKiroContextUsage(List<string> lines, string transcriptPath) {
+        // Nothing to enrich unless the batch has an AssistantMessage line — skip the file read entirely.
+        if (!lines.Any(static l => l.Contains("AssistantMessage", StringComparison.Ordinal))) return lines;
         try {
             var siblingJson = Path.ChangeExtension(transcriptPath, ".json");
             if (!File.Exists(siblingJson)) return lines;
@@ -1352,10 +1346,17 @@ static partial class WatchCommand {
 
             return lines.Select(l => KiroUsage.EnrichLine(l, anchors)).ToList();
         } catch (Exception ex) {
-            Log($"Kiro context-% enrichment failed: {ex.Message}");
+            // Log the first failure only — a persistently unreadable/malformed sibling would otherwise
+            // spam one line per flush and drown out real warnings.
+            if (!_kiroEnrichWarned) {
+                _kiroEnrichWarned = true;
+                Log($"Kiro context-% enrichment failed (further failures suppressed): {ex.Message}");
+            }
             return lines;
         }
     }
+
+    static bool _kiroEnrichWarned;
 
     /// <summary>
     /// Subagent-orchestration tool calls whose result arrives ASYNCHRONOUSLY via a separate
