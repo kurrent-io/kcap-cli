@@ -8,7 +8,8 @@
     "kcap-sessions": {
       "command": "kcap",
       "args": ["mcp", "sessions"],
-      "cwd": "${CLAUDE_PROJECT_DIR}"
+      "cwd": "${CLAUDE_PROJECT_DIR}",
+      "description": "Search and recall past Kurrent Capacitor sessions — the reasoning behind prior work (why / what-was-tried / who-decided / when). For 'have we done X before' or 'why did we' questions, reach for search_sessions before git log or grep. Repo-aware: cd into a project and search_sessions defaults to that repo's sessions."
     },
     "kcap-flows": {
       "command": "kcap",

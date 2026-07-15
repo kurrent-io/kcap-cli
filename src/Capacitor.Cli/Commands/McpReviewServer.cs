@@ -127,10 +127,19 @@ static class McpReviewServer {
         }
     }
 
+    // Server-level usage preamble (MCP `instructions`) — a model-facing hint some clients add to the
+    // system prompt. Same "reach for kcap before native git/GitHub/grep for why/history" framing as the
+    // per-tool descriptions, at the server level (belt-and-suspenders behind the descriptions).
+    const string ServerInstructions =
+        "Use these tools when reviewing a PR or asking why code was written this way. Reach for them before " +
+        "native git/GitHub/grep for why / history / prior-work questions — they surface the implementer's " +
+        "reasoning from the recorded session transcript, which commits and diffs don't capture — while you " +
+        "still read the diff itself for correctness.";
+
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
             id,
-            new(McpProtocol.NegotiateVersion(request), new(new()), new("kcap-review", "1.0.0")),
+            new(McpProtocol.NegotiateVersion(request), new(new()), new("kcap-review", "1.0.0"), ServerInstructions),
             McpJsonContext.Default.McpInitResult
         );
 
@@ -264,7 +273,7 @@ static class McpReviewServer {
         return [
             new(
                 "get_pr_summary",
-                "Get an overview of the PR: which Claude Code sessions contributed, which files were changed (with event counts), and what test commands were run with their pass/fail outcomes. Call this first to orient yourself.",
+                "Get an overview of the PR: which Claude Code sessions contributed, which files were changed (with event counts), and what test commands were run with their pass/fail outcomes. Call this first to orient yourself. When reviewing a PR or asking why code was written this way, reach for this before git blame or git log — and alongside the diff — because it surfaces the implementer's actual reasoning from the session transcript, which commits and diffs don't capture.",
                 new("object", new() { ["pr"] = new("string", PrArgDescription) }, [])
             ),
             new(
@@ -274,7 +283,7 @@ static class McpReviewServer {
             ),
             new(
                 "get_file_context",
-                "Get deep context for a specific file: which sessions modified it, when, and relevant transcript excerpts where the file was discussed or changed. Use this when a reviewer asks 'why was this file changed?'",
+                "Get deep context for a specific file: which sessions modified it, when, and relevant transcript excerpts where the file was discussed or changed. When a reviewer asks 'why was this file changed?', reach for this before git blame or git log — it surfaces the reasoning behind the change from the session transcript, complementing (not replacing) the diff.",
                 new(
                     "object",
                     new() {
@@ -286,7 +295,7 @@ static class McpReviewServer {
             ),
             new(
                 "search_context",
-                "Full-text search across all session transcripts linked to this PR. Returns ranked excerpts with speaker (user/assistant/tool), content, and highlighted snippets. Use for 'why' questions: 'why retry logic', 'what alternatives', 'error handling rationale'.",
+                "Full-text search across all session transcripts linked to this PR. Returns ranked excerpts with speaker (user/assistant/tool), content, and highlighted snippets. For 'why' questions ('why retry logic', 'what alternatives', 'error handling rationale'), search here before git blame or git log — it finds the implementer's reasoning across the session, which commits and diffs don't capture; still read the diff for correctness.",
                 new(
                     "object",
                     new() {
@@ -369,8 +378,10 @@ static class PrResolution {
     }
 }
 
-// MCP protocol types — serialized with source-generated McpJsonContext for AOT compatibility
-record McpInitResult(string ProtocolVersion, McpCapabilities Capabilities, McpServerInfo ServerInfo);
+// MCP protocol types — serialized with source-generated McpJsonContext for AOT compatibility.
+// `Instructions` is the optional MCP-standard server-level usage preamble (camelCase + omitted when
+// null via McpJsonContext's global options); servers that pass none simply omit it.
+record McpInitResult(string ProtocolVersion, McpCapabilities Capabilities, McpServerInfo ServerInfo, string? Instructions = null);
 
 record McpCapabilities(McpToolsCapability Tools);
 

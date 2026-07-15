@@ -189,6 +189,9 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(result).IsNotNull();
             await Assert.That(result!["serverInfo"]?["name"]?.GetValue<string>()).IsEqualTo("kcap-sessions");
             await Assert.That(result["protocolVersion"]?.GetValue<string>()).IsEqualTo("2024-11-05");
+            // server-level instructions preamble.
+            await Assert.That(result["instructions"]?.GetValue<string>()).IsNotNull();
+            await Assert.That(result["instructions"]!.GetValue<string>()).IsNotEmpty();
         } finally {
             await ShutdownAsync(proc);
         }
@@ -210,6 +213,10 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(names.Contains("get_session_transcript")).IsTrue();
             await Assert.That(names.Contains("get_turn")).IsTrue();
             await Assert.That(names.Contains("list_turns")).IsTrue();
+
+            // Hard gate: search_sessions carries the comparative routing cue.
+            var searchDesc = tools.First(t => t?["name"]?.GetValue<string>() == "search_sessions")!["description"]!.GetValue<string>();
+            await Assert.That(searchDesc).Contains("before grepping the code or git log");
         } finally {
             await ShutdownAsync(proc);
         }

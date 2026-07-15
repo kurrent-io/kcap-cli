@@ -16,7 +16,8 @@ public static class KcapMcpServers {
     public static readonly IReadOnlyList<KcapMcpServer> All = [
         new("kcap-review",   ["mcp", "review"],   NeedsProjectCwd: false,
             "PR review context tools — query implementation session transcripts.", ReadOnly: true),
-        new("kcap-sessions", ["mcp", "sessions"], NeedsProjectCwd: true,  null, ReadOnly: true),
+        new("kcap-sessions", ["mcp", "sessions"], NeedsProjectCwd: true,
+            "Search and recall past Kurrent Capacitor sessions — the reasoning behind prior work (why / what-was-tried / who-decided). Repo-aware; reach for it before git log or grep for history questions.", ReadOnly: true),
         new("kcap-flows",    ["mcp", "flows"],    NeedsProjectCwd: true,
             "Structured AI agent flows — launches a SEPARATE hosted participant agent; requires login + a running daemon."),
         new("kcap-memory",   ["mcp", "memory"],   NeedsProjectCwd: true,
