@@ -226,6 +226,39 @@ public class WatchCommandTests {
     static readonly TimeSpan       IdleWindow = TimeSpan.FromMinutes(60);
 
     [Test]
+    public async Task ShouldEndOnIdle_false_when_disconnected_time_covers_the_overage() {
+        // 70 min of wall-clock since last activity, but 15 of those were a SignalR outage. Connected
+        // idle = 55 min < 60 min window → must NOT idle-end (a mid-session outage is not idleness).
+        var should = WatchCommand.ShouldEndOnIdle(
+            vendor: "codex", isSessionWatcher: true, thresholdReached: true,
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(70), now: IdleNow, idleTimeout: IdleWindow,
+            toolInFlight: false, disconnectedSinceActivity: TimeSpan.FromMinutes(15));
+
+        await Assert.That(should).IsFalse();
+    }
+
+    [Test]
+    public async Task ShouldEndOnIdle_true_when_connected_idle_exceeds_window_despite_prior_outage() {
+        // 75 min wall-clock, 10 of them a brief outage → connected idle = 65 min > 60 min → idle-end.
+        // (Models repeated reconnects with no new lines still ending after the connected budget.)
+        var should = WatchCommand.ShouldEndOnIdle(
+            vendor: "codex", isSessionWatcher: true, thresholdReached: true,
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(75), now: IdleNow, idleTimeout: IdleWindow,
+            toolInFlight: false, disconnectedSinceActivity: TimeSpan.FromMinutes(10));
+
+        await Assert.That(should).IsTrue();
+    }
+
+    [Test]
+    public async Task ShouldEndOnIdle_default_disconnected_is_zero_preserving_prior_behavior() {
+        var should = WatchCommand.ShouldEndOnIdle(
+            vendor: "codex", isSessionWatcher: true, thresholdReached: true,
+            lastActivityAt: IdleNow - TimeSpan.FromMinutes(61), now: IdleNow, idleTimeout: IdleWindow);
+
+        await Assert.That(should).IsTrue();
+    }
+
+    [Test]
     public async Task ShouldEndOnIdle_true_for_idle_codex_session_watcher() {
         var should = WatchCommand.ShouldEndOnIdle(
             vendor: "codex", isSessionWatcher: true, thresholdReached: true,

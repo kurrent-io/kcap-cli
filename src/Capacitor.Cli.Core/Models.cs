@@ -144,6 +144,14 @@ class WatchState {
     // Initialized when the watcher starts; updated in DrainNewLines on new lines.
     public DateTimeOffset LastActivityAt { get; set; } = DateTimeOffset.UtcNow;
 
+    // AI-1359: idle-clock freeze while disconnected. DisconnectedSince is set when the SignalR
+    // connection drops and cleared when it returns; AccumulatedDisconnected sums the disconnected
+    // durations SINCE the last transcript activity (reset to zero when LastActivityAt advances).
+    // ShouldEndOnIdle subtracts it so a transient outage isn't counted as idleness, while a
+    // genuinely idle session still ends after the configured CONNECTED-idle budget.
+    public DateTimeOffset? DisconnectedSince       { get; set; }
+    public TimeSpan        AccumulatedDisconnected { get; set; }
+
     // Tracks Codex tool-call call_ids that are currently in flight (started but
     // not yet finished). A function_call/custom_tool_call response_item adds the
     // call_id; its matching _output removes it. While this set is non-empty, the

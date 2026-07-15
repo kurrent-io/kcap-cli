@@ -297,6 +297,10 @@ static partial class WatchCommand {
                 // Skip work while disconnected — SignalR auto-reconnect handles recovery.
                 // No point re-reading the file or attempting sends that will fail.
                 if (hubConnection.State != HubConnectionState.Connected) {
+                    // Freeze the idle clock: record when we went offline so the reconnect path can
+                    // subtract the outage from the idle measure (AI-1359).
+                    state.DisconnectedSince ??= DateTimeOffset.UtcNow;
+
                     try {
                         await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
                     } catch (OperationCanceledException) {
@@ -304,6 +308,14 @@ static partial class WatchCommand {
                     }
 
                     continue;
+                }
+
+                // Reconnected (or never disconnected): fold any accrued outage into the disconnected
+                // accumulator so the idle measure ignores it. DisconnectedSince is only ever set while
+                // disconnected, so this runs exactly once per outage.
+                if (state.DisconnectedSince is { } since) {
+                    state.AccumulatedDisconnected += DateTimeOffset.UtcNow - since;
+                    state.DisconnectedSince        = null;
                 }
 
                 // Periodically refresh repository info (every 60s)
@@ -340,7 +352,8 @@ static partial class WatchCommand {
                         // Antigravity counts PLANNER_RESPONSE calls vs result steps (AI-1157 review).
                         toolInFlight: vendor == "antigravity"
                             ? state.PendingAntigravityToolCalls > 0
-                            : state.PendingCodexToolCalls.Count > 0)) {
+                            : state.PendingCodexToolCalls.Count > 0,
+                        disconnectedSinceActivity: state.AccumulatedDisconnected)) {
                     Log($"{vendor} transcript idle for >{idleTimeout.TotalMinutes:F0}m; ending session (idle_timeout)");
                     idleExit = true;
                     cts.Cancel();
@@ -609,12 +622,13 @@ static partial class WatchCommand {
             DateTimeOffset lastActivityAt,
             DateTimeOffset now,
             TimeSpan       idleTimeout,
-            bool           toolInFlight = false
+            bool           toolInFlight              = false,
+            TimeSpan       disconnectedSinceActivity = default
         ) =>
         (vendor == "codex" || vendor == "antigravity")
         && isSessionWatcher
         && thresholdReached
-        && now - lastActivityAt > idleTimeout
+        && now - lastActivityAt - disconnectedSinceActivity > idleTimeout
         && !toolInFlight;
 
     /// <summary>
@@ -827,7 +841,10 @@ static partial class WatchCommand {
             }
 
             if (newLines.Count > 0) {
-                state.LastActivityAt = DateTimeOffset.UtcNow;
+                state.LastActivityAt          = DateTimeOffset.UtcNow;
+                // New activity restarts the idle measure, so discard disconnected time accrued
+                // before it (draining only happens while connected, so DisconnectedSince is null).
+                state.AccumulatedDisconnected = TimeSpan.Zero;
             }
 
             // Track Codex tool calls in flight across all new lines (Codex-only,
