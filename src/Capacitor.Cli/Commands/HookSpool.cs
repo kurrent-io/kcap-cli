@@ -154,6 +154,91 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
         && (File.Exists(Path.Combine(spoolDir, $"{sessionId}.jsonl"))
             || Directory.EnumerateFiles(spoolDir, $"{sessionId}.*.draining").Any());
 
+    /// <summary>Every distinct session id with a live .jsonl or recovered .draining temp, in no
+    /// particular order (callers that need current-session-first ordering add it themselves).</summary>
+    public IEnumerable<string> SessionIdsWithBacklog() {
+        if (!Directory.Exists(spoolDir)) return [];
+        var ids = new List<string>();
+        foreach (var f in Directory.EnumerateFiles(spoolDir)) {
+            var sid = SessionIdOf(f);
+            if (sid is not null && !ids.Contains(sid)) ids.Add(sid);
+        }
+        return ids;
+    }
+
+    /// <summary>
+    /// Route-filtered drain for a single session: only entries whose route is a "session-end"
+    /// (terminal, when <paramref name="isTerminal"/> is <c>true</c>) or anything else (non-terminal,
+    /// when <c>false</c>) are posted. Arrival order within the session file guarantees start-before-end,
+    /// so as soon as an entry of the OTHER phase is reached, draining stops and the remainder — including
+    /// that entry — is preserved for the caller's next phase. Used by <see cref="LifecycleSpoolDrain"/>
+    /// to enforce cross-spool ordering (lifecycle start &#8594; transcript tail &#8594; lifecycle end);
+    /// <see cref="DrainAllAsync"/> (route-agnostic FIFO) remains untouched for Claude/Cursor.
+    /// </summary>
+    public async Task DrainRoutesAsync(
+            string sid, bool isTerminal, Func<string, string, Task<DrainOutcome>> poster,
+            Func<bool> expired, CancellationToken ct) {
+        if (!SafeSessionId.IsMatch(sid) || !Directory.Exists(spoolDir)) return;
+
+        foreach (var temp in Directory.EnumerateFiles(spoolDir, $"{sid}.*.draining").OrderBy(File.GetCreationTimeUtc)) {
+            if (expired() || ct.IsCancellationRequested) return;
+            if (await DrainFileRoutesAsync(temp, isTerminal, poster, expired, ct)) return; // stopped — remainder kept
+        }
+
+        var live = Path.Combine(spoolDir, $"{sid}.jsonl");
+        if (!File.Exists(live) || expired() || ct.IsCancellationRequested) return;
+
+        var rotated = Path.Combine(spoolDir, $"{sid}.{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}.draining");
+        try { File.Move(live, rotated); }
+        catch { return; } // lost the atomic-rename race (or vanished) — the winner handles it
+        await DrainFileRoutesAsync(rotated, isTerminal, poster, expired, ct);
+    }
+
+    static bool IsTerminalRoute(string route) {
+        var slash = route.IndexOf('/');
+        var head  = slash >= 0 ? route[..slash] : route;
+        return head == "session-end";
+    }
+
+    // Drain a private temp, posting only entries matching isTerminal. Delivered/Drop advance;
+    // TransientStop, budget, or a phase mismatch stops and keeps the remainder (returns true).
+    static async Task<bool> DrainFileRoutesAsync(
+            string path, bool isTerminal, Func<string, string, Task<DrainOutcome>> poster,
+            Func<bool> expired, CancellationToken ct) {
+        string[] lines;
+        try { lines = await File.ReadAllLinesAsync(path, ct); }
+        catch { return false; }
+
+        var i = 0;
+        for (; i < lines.Length; i++) {
+            if (expired() || ct.IsCancellationRequested) break;
+            if (string.IsNullOrWhiteSpace(lines[i])) continue;
+
+            string? route, body;
+            try {
+                var node = JsonNode.Parse(lines[i]);
+                route = node?["route"]?.GetValue<string>();
+                body  = node?["body"]?.GetValue<string>();
+            } catch { route = body = null; }
+            if (route is null || body is null) continue; // skip old-format / malformed
+
+            if (IsTerminalRoute(route) != isTerminal) break; // other phase — stop, preserve order
+
+            DrainOutcome outcome;
+            try { outcome = await poster(route, body); }
+            catch { outcome = DrainOutcome.TransientStop; }
+
+            if (outcome == DrainOutcome.TransientStop) break;
+        }
+
+        if (i >= lines.Length) {
+            try { File.Delete(path); } catch { }
+            return false;
+        }
+        try { await File.WriteAllLinesAsync(path, lines.Skip(i), ct); } catch { }
+        return true;
+    }
+
     public void ReapOlderThan(TimeSpan age) {
         try {
             if (!Directory.Exists(spoolDir)) return;

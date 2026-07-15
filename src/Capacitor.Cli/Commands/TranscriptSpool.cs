@@ -85,6 +85,27 @@ public sealed partial class TranscriptSpool(string spoolDir, long capBytes = Tra
         && (File.Exists(Path.Combine(spoolDir, $"{sessionId}.transcript.jsonl"))
             || Directory.EnumerateFiles(spoolDir, $"{sessionId}.*.transcript.draining").Any());
 
+    /// <summary>Every distinct session id with a live .jsonl, a recovered .draining temp, or a
+    /// needs-import marker (a marker can outlive its transcript file if a prior pass ran out of
+    /// budget before delivering it, so it must still surface the session to the caller).</summary>
+    public IEnumerable<string> SessionIdsWithBacklog() {
+        if (!Directory.Exists(spoolDir)) return [];
+        var ids = new List<string>();
+        foreach (var f in Directory.EnumerateFiles(spoolDir)) {
+            var sid = SessionIdOf(f);
+            if (sid is not null && !ids.Contains(sid)) ids.Add(sid);
+        }
+        return ids;
+    }
+
+    static string? SessionIdOf(string filePath) {
+        var name = Path.GetFileName(filePath);
+        var dot  = name.IndexOf('.');
+        if (dot <= 0) return null;
+        var sid = name[..dot];
+        return SafeSessionId.IsMatch(sid) ? sid : null;
+    }
+
     public async Task DrainAsync(string sessionId, Func<string, Task<DrainOutcome>> poster, Func<bool> expired, CancellationToken ct) {
         var live = LivePathFor(sessionId);
         if (live is null || !Directory.Exists(spoolDir)) return;
