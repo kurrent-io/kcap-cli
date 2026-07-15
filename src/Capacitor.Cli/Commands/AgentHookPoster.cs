@@ -22,7 +22,12 @@ internal enum HookPostOutcome {
     /// Auth was usable but the POST failed (non-success status or the server was unreachable).
     /// An error was already written to stderr; the caller keeps its existing failure handling.
     /// </summary>
-    Failed
+    Failed,
+
+    /// <summary>The POST could not be delivered now (auth lapsed or a transient/unreachable failure) so
+    /// the payload was durably spooled for a later drain pass. NOT delivered — but the caller should still
+    /// proceed to spawn the watcher (spawn-before-post): capture must not depend on lifecycle delivery.</summary>
+    Spooled
 }
 
 /// <summary>
@@ -84,6 +89,64 @@ internal static class AgentHookPoster {
             } catch (HttpRequestException ex) {
                 HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
                 return HookPostOutcome.Failed;
+            }
+        }
+    }
+
+    /// <summary>
+    /// AI-1357: spawn-before-post variant. Like <see cref="PostAsync(string,string,string,string)"/>,
+    /// but on a lapsed-auth or transient (5xx/408/429/unreachable) failure it durably spools the
+    /// lifecycle payload to <paramref name="spool"/> and returns <see cref="HookPostOutcome.Spooled"/>
+    /// (a global drain pass replays it after recovery). Callers treat <c>Posted</c> OR <c>Spooled</c>
+    /// as "proceed to spawn the watcher"; never <c>Spooled</c> as delivered.
+    /// </summary>
+    public static Task<HookPostOutcome> PostOrSpoolAsync(
+            string baseUrl, string endpoint, string body, string agentTag,
+            HookSpool spool, string sessionId, string route)
+        => PostOrSpoolAsync(() => HttpClientExtensions.CreateClientWithAuthStatusAsync(baseUrl),
+                            baseUrl, endpoint, body, agentTag, spool, sessionId, route);
+
+    /// <summary>Core with an injectable client factory (test seam).</summary>
+    internal static async Task<HookPostOutcome> PostOrSpoolAsync(
+            Func<Task<(HttpClient Client, AuthStatus Status)>> clientFactory,
+            string baseUrl, string endpoint, string body, string agentTag,
+            HookSpool spool, string sessionId, string route) {
+        var (client, status) = await clientFactory();
+
+        using (client) {
+            // Auth lapsed → the POST would 401. Spool for replay after `kcap login`; caller still spawns.
+            if (IsAuthLapsed(status)) {
+                spool.Append(sessionId, route, body);
+
+                return HookPostOutcome.Spooled;
+            }
+
+            using var content = new StringContent(body, Encoding.UTF8, "application/json");
+
+            try {
+                using var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{endpoint}", content);
+
+                if (resp.IsSuccessStatusCode) {
+                    return HookPostOutcome.Posted;
+                }
+
+                var code = (int)resp.StatusCode;
+
+                // Transient (server down / rate-limit) → spool for retry; a permanent 4xx is a real failure.
+                if (code is >= 500 or 408 or 429) {
+                    spool.Append(sessionId, route, body);
+
+                    return HookPostOutcome.Spooled;
+                }
+
+                Console.Error.WriteLine($"[kcap] {agentTag} {endpoint}: HTTP {code}");
+
+                return HookPostOutcome.Failed;
+            } catch (HttpRequestException) {
+                // Unreachable after retries → transient; spool for a later drain rather than lose it.
+                spool.Append(sessionId, route, body);
+
+                return HookPostOutcome.Spooled;
             }
         }
     }

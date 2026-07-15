@@ -101,4 +101,40 @@ public class AgentHookPosterTests : IDisposable {
         await Assert.That(AgentHookPoster.IsAuthLapsed(AuthStatus.Ok)).IsFalse();
         await Assert.That(AgentHookPoster.IsAuthLapsed(AuthStatus.NoAuthRequired)).IsFalse();
     }
+
+    [Test]
+    public async Task PostOrSpool_on_auth_lapse_spools_and_returns_Spooled() {
+        var dir = Path.Combine(Path.GetTempPath(), $"kcap-poster-{Guid.NewGuid():N}");
+        try {
+            var spool = new HookSpool(dir);
+            var outcome = await AgentHookPoster.PostOrSpoolAsync(
+                () => Task.FromResult<(HttpClient, AuthStatus)>((new HttpClient(), AuthStatus.Expired)),
+                "http://localhost:1", "session-start/kiro", """{"session_id":"x"}""",
+                "kiro-hook", spool, sessionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", route: "session-start/kiro");
+
+            await Assert.That(outcome).IsEqualTo(HookPostOutcome.Spooled);
+            await Assert.That(spool.HasBacklog("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).IsTrue();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Test]
+    public async Task PostOrSpool_on_success_returns_Posted_and_spools_nothing() {
+        var dir = Path.Combine(Path.GetTempPath(), $"kcap-poster-{Guid.NewGuid():N}");
+        try {
+            var spool = new HookSpool(dir);
+            using var handler = new StubHandler(System.Net.HttpStatusCode.OK); // 200
+            var outcome = await AgentHookPoster.PostOrSpoolAsync(
+                () => Task.FromResult<(HttpClient, AuthStatus)>((new HttpClient(handler), AuthStatus.Ok)),
+                "http://server", "session-start/kiro", """{"session_id":"x"}""",
+                "kiro-hook", spool, sessionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", route: "session-start/kiro");
+
+            await Assert.That(outcome).IsEqualTo(HookPostOutcome.Posted);
+            await Assert.That(spool.HasBacklog("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).IsFalse();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+}
+
+sealed class StubHandler(System.Net.HttpStatusCode code) : HttpMessageHandler {
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage r, CancellationToken ct)
+        => Task.FromResult(new HttpResponseMessage(code));
 }
