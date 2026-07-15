@@ -108,28 +108,58 @@ internal static class AgentHookPoster {
 
     /// <summary>
     /// AI-1357: spawn-before-post decision. Capture must start regardless of whether the lifecycle
-    /// POST was actually delivered — <c>Posted</c> and <c>Spooled</c> both proceed to
-    /// <c>WatcherManager.EnsureWatcherRunning</c>. <c>AuthLapsed</c> is kept here (spawning) as a
-    /// defensive fallback for any caller still on the legacy <see cref="PostAsync(string,string,string,string)"/>
-    /// that hasn't migrated to <see cref="PostOrSpoolAsync(string,string,string,string,HookSpool,string,string)"/>
-    /// — the whole point of AI-1357 is capture-regardless-of-POST. Only a permanent <c>Failed</c>
-    /// (a real non-2xx response, or auth lapsed on the legacy path having already been excluded)
-    /// skips the watcher.
+    /// POST was actually <em>delivered</em> — both <c>Posted</c> (delivered) and <c>Spooled</c>
+    /// (durably persisted for a later drain) proceed to <c>WatcherManager.EnsureWatcherRunning</c>,
+    /// because a spooled <c>SessionStarted</c> will still reach the server on the next drain pass.
+    /// <c>AuthLapsed</c> does NOT spawn: the legacy <see cref="PostAsync(string,string,string,string)"/>
+    /// path spools NOTHING on a lapse, so tailing a session whose <c>SessionStarted</c> was
+    /// permanently dropped would produce an orphaned transcript. <c>Failed</c> (a real non-2xx) also
+    /// skips the watcher. Task-4 vendors all use <see cref="PostOrSpoolAsync(string,string,string,string,HookSpool,string,string)"/>,
+    /// which returns <c>Spooled</c> (never <c>AuthLapsed</c>) on a lapse — so capture-on-lapse is
+    /// preserved for them via the spool, not via this predicate.
     /// </summary>
     public static bool ShouldSpawnAfter(HookPostOutcome outcome) =>
-        outcome is HookPostOutcome.Posted or HookPostOutcome.Spooled or HookPostOutcome.AuthLapsed;
+        outcome is HookPostOutcome.Posted or HookPostOutcome.Spooled;
+
+    /// <summary>Minimum wall-clock gap between drain attempts (see <see cref="DrainSpoolsAsync"/>).</summary>
+    static readonly TimeSpan DrainThrottle = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// AI-1357 Task 4: bounded, best-effort drain of the cross-vendor lifecycle + transcript spools.
     /// Run early in a JSON-payload vendor dispatcher's <c>Handle</c> (after the disabled-session fast
     /// path) so a prior session's backlog replays even when the current firing posts nothing further.
-    /// Skips the drain entirely when auth has lapsed — a POST attempted with no bearer token would
-    /// 401, and <see cref="LifecycleSpoolDrain"/>'s production poster treats a non-timeout/non-5xx
-    /// status as a permanent drop, which would silently discard the very backlog this protects.
+    ///
+    /// <para><b>Throttled (AI-1357 review #1).</b> Several vendors fire their lifecycle hook on
+    /// EVERY prompt (Kiro's <c>agentSpawn</c>, OpenCode's <c>session.idle</c>-driven re-fire), so an
+    /// un-throttled drain would attempt a ~1.5s network round-trip per prompt during a server outage.
+    /// A cross-vendor on-disk stamp (<c>{spoolDir}/.last-drain</c>) caps attempts to one per
+    /// <see cref="DrainThrottle"/>. An in-memory guard can't help — every hook is a fresh AOT process
+    /// — so the stamp must be on disk. The drain is global (one pass replays ALL sessions' backlog),
+    /// so a single shared stamp is the correct granularity; it also throttles the reap that piggybacks
+    /// on the same gate. This is the Kiro-side analogue of the event-type gate applied to Copilot,
+    /// whose per-turn <c>agentStop</c>/<c>notification</c> events skip this call entirely.</para>
+    ///
+    /// <para><b>Skips on auth lapse.</b> A POST with no bearer token would 401, and
+    /// <see cref="LifecycleSpoolDrain"/>'s production poster treats a non-timeout/non-5xx status as a
+    /// permanent drop — which would silently discard the very backlog this protects.</para>
+    ///
+    /// <para><b>Fresh client (AI-1357 review #3 — documented deviation).</b> The brief's Step 3
+    /// suggested reusing the vendor's authenticated client, but the drain runs at the top of the
+    /// dispatcher BEFORE any lifecycle POST, and the vendors never hold a reusable client — each
+    /// <see cref="PostOrSpoolAsync(string,string,string,string,HookSpool,string,string)"/> builds and
+    /// disposes its own internally. Threading a client through purely for reuse would leak an
+    /// <see cref="HttpClient"/> into every code path (including those that never drain). A fresh,
+    /// budget-scoped client built and disposed here is the cleaner seam.</para>
+    ///
     /// Never throws — a spool-drain hiccup must not disrupt the vendor's own hook.
     /// </summary>
     public static async Task DrainSpoolsAsync(
             string baseUrl, HookSpool lifecycle, TranscriptSpool transcript, string? sessionId) {
+        if (!TryClaimDrainAttempt(lifecycle.Dir)) return; // throttled — a recent attempt already ran
+
+        lifecycle.ReapOlderThan(TimeSpan.FromDays(30));
+        transcript.ReapOlderThan(TimeSpan.FromDays(30));
+
         var budget = TimeSpan.FromSeconds(1.5);
 
         try {
@@ -143,6 +173,29 @@ internal static class AgentHookPoster {
             }
         } catch {
             // Best-effort — a drain hiccup must never disrupt the vendor's own hook.
+        }
+    }
+
+    /// <summary>
+    /// Cross-process drain throttle: returns <c>true</c> (and stamps the attempt) only when the last
+    /// recorded attempt is older than <see cref="DrainThrottle"/>. The stamp file name starts with a
+    /// dot so <see cref="HookSpool"/>'s / <see cref="TranscriptSpool"/>'s session-id-keyed enumerations
+    /// ignore it. Fail-open: a stamp-file hiccup must never suppress a drain, so any I/O error returns
+    /// <c>true</c>.
+    /// </summary>
+    static bool TryClaimDrainAttempt(string spoolDir) {
+        try {
+            var stamp = Path.Combine(spoolDir, ".last-drain");
+
+            if (File.Exists(stamp) && DateTime.UtcNow - File.GetLastWriteTimeUtc(stamp) < DrainThrottle) {
+                return false;
+            }
+
+            Directory.CreateDirectory(spoolDir);
+            File.WriteAllText(stamp, ""); // touch — mtime is the throttle clock
+            return true;
+        } catch {
+            return true; // never let a throttle-file error swallow a legitimate drain
         }
     }
 

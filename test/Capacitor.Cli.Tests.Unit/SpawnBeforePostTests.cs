@@ -9,10 +9,12 @@ namespace Capacitor.Cli.Tests.Unit;
 /// </summary>
 public class SpawnBeforePostTests {
     [Test]
-    public async Task spawn_after_spooled_and_posted_but_not_failed() {
+    public async Task spawn_after_posted_or_spooled_only() {
         await Assert.That(AgentHookPoster.ShouldSpawnAfter(HookPostOutcome.Posted)).IsTrue();
         await Assert.That(AgentHookPoster.ShouldSpawnAfter(HookPostOutcome.Spooled)).IsTrue();
-        await Assert.That(AgentHookPoster.ShouldSpawnAfter(HookPostOutcome.AuthLapsed)).IsTrue(); // legacy AuthLapsed also spawns now
+        // AuthLapsed (legacy PostAsync path) spools NOTHING, so spawning there would tail a session
+        // whose SessionStarted was permanently dropped — must NOT spawn (AI-1357 review #2).
+        await Assert.That(AgentHookPoster.ShouldSpawnAfter(HookPostOutcome.AuthLapsed)).IsFalse();
         await Assert.That(AgentHookPoster.ShouldSpawnAfter(HookPostOutcome.Failed)).IsFalse();
     }
 }

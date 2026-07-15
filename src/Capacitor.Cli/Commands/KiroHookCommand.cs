@@ -72,10 +72,9 @@ static class KiroHookCommand {
 
         // AI-1357: bounded, best-effort backlog drain so a prior session's spooled lifecycle
         // POSTs / transcript tail replay even when this agentSpawn firing posts nothing further.
+        // agentSpawn fires on EVERY prompt, so DrainSpoolsAsync self-throttles (+ reaps) internally.
         var spool           = new HookSpool(PathHelpers.ConfigPath("spool"));
         var transcriptSpool = new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"));
-        spool.ReapOlderThan(TimeSpan.FromDays(30));
-        transcriptSpool.ReapOlderThan(TimeSpan.FromDays(30));
         await AgentHookPoster.DrainSpoolsAsync(baseUrl, spool, transcriptSpool, sessionId);
 
         var cwd           = TryGetString(node, "cwd");

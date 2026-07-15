@@ -48,11 +48,10 @@ static class OpenCodeHookCommand {
         if (DisabledSessions.IsDisabled(sessionId)) return 0;
 
         // AI-1357: bounded, best-effort backlog drain so a prior session's spooled lifecycle
-        // POSTs / transcript tail replay even when this firing posts nothing further.
+        // POSTs / transcript tail replay even when this firing posts nothing further. The plugin
+        // re-fires session-start on each session.idle, so DrainSpoolsAsync self-throttles (+ reaps).
         var spool           = new HookSpool(PathHelpers.ConfigPath("spool"));
         var transcriptSpool = new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"));
-        spool.ReapOlderThan(TimeSpan.FromDays(30));
-        transcriptSpool.ReapOlderThan(TimeSpan.FromDays(30));
         await AgentHookPoster.DrainSpoolsAsync(baseUrl, spool, transcriptSpool, sessionId);
 
         var activeProfile = await AppConfig.GetActiveProfileAsync();
