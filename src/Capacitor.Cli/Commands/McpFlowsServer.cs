@@ -172,9 +172,8 @@ static class McpFlowsServer {
             }
 
             if (!httpResponse.IsSuccessStatusCode) {
-                // AI-1311: decode coded envelopes here too (status/close previously printed the
-                // raw body) — FormatFlowStartError is status-agnostic and falls back to the raw
-                // HTTP line for uncoded bodies.
+                // Decode coded envelopes here too (status/close previously printed the raw
+                // body) — FormatFlowStartError falls back to the raw HTTP line for uncoded bodies.
                 return BuildToolResult(id, FormatFlowStartError((int)httpResponse.StatusCode, body, wasDynamicStart: false), isError: true);
             }
 
@@ -410,18 +409,19 @@ static class McpFlowsServer {
     /// UNCODED failure on a start that included definition_yaml gets the "may not support
     /// dynamic flows" hint (the coded body is the new-server capability signal), keeping the
     /// raw body either way.</summary>
+    /// <summary>One canonical guidance line for the server's coded server_catching_up rejection,
+    /// shared by every surface that renders it (start/submit/poll/status/close here, plus both
+    /// sidecar branches in McpFlowResultServer) so the advice can never drift between tools.</summary>
+    internal const string ServerCatchingUpGuidance =
+        "The server is catching up after a read-model rebuild — try again in a few minutes, or ask the user what to do.";
+
     internal static string FormatFlowStartError(int status, string body, bool wasDynamicStart) {
         try {
             var node = JsonNode.Parse(body) as JsonObject;
             if (node?["error"] is JsonValue ev && ev.TryGetValue<string>(out var code) && code.Length > 0
                 && node["message"] is JsonValue mv && mv.TryGetValue<string>(out var message)) {
                 if (code == "server_catching_up")
-                    // AI-1311: lowercase "try again in a few minutes" (not "Try") — pinned by
-                    // FormatFlowStartError_renders_catching_up_guidance and mirrored verbatim in
-                    // McpFlowResultServer's two server_catching_up branches.
-                    return $"Error ({code}): {message}\n" +
-                           "The server is catching up after a read-model rebuild — flows are temporarily " +
-                           "disabled — try again in a few minutes, or ask the user what to do.";
+                    return $"Error ({code}): {message}\n{ServerCatchingUpGuidance}";
 
                 return $"Error ({code}): {message}";
             }

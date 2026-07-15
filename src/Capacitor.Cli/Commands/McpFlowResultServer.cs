@@ -208,10 +208,9 @@ static class McpFlowResultServer {
                 return ($"Error: {message}", true);
 
             if (code == "server_catching_up")
-                // AI-1311: the server's read model is replaying — retrying inside this tool call
-                // cannot outlast a rebuild; surface the guidance and let the agent decide.
-                return ($"Error: {message}\nThe server is catching up after a read-model rebuild — " +
-                        "try again in a few minutes, or ask the user what to do.", true);
+                // Retrying inside this tool call cannot outlast a read-model rebuild; surface the
+                // guidance and let the agent decide.
+                return ($"Error: {message}\n{McpFlowsServer.ServerCatchingUpGuidance}", true);
 
             return ($"Error: HTTP {(int)response.StatusCode} — {message}\n{FallbackHint}", true);
         }
@@ -281,10 +280,9 @@ static class McpFlowResultServer {
                 return ($"Error: {message}", true);
 
             if (code == "server_catching_up")
-                // AI-1311: the server's read model is replaying — retrying inside this tool call
-                // cannot outlast a rebuild; surface the guidance and let the agent decide.
-                return ($"Error: {message}\nThe server is catching up after a read-model rebuild — " +
-                        "try again in a few minutes, or ask the user what to do.", true);
+                // Retrying inside this tool call cannot outlast a read-model rebuild; surface the
+                // guidance and let the agent decide.
+                return ($"Error: {message}\n{McpFlowsServer.ServerCatchingUpGuidance}", true);
 
             return ($"Error: HTTP {(int)response.StatusCode} — {message}", true);
         }
