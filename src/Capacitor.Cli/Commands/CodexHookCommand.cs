@@ -39,6 +39,29 @@ static class CodexHookCommand {
     // the parser without altering behavior. See AI-635.
     const string SessionScopedOutputJson = """{"continue":true}""";
 
+    /// <summary>
+    /// Writes the session-scoped handshake JSON Codex's SessionStart/Stop stdout parser requires.
+    /// Extracted to a single seam so every call site — the happy path, the disabled/excluded
+    /// early-outs, and the fail-open fallback — goes through the same write, and so
+    /// <see cref="RunSessionStartHandshakeForTest"/> can order background work strictly after it.
+    /// </summary>
+    internal static void WriteSessionScopedOutput(TextWriter writer) => writer.Write(SessionScopedOutputJson);
+
+    /// <summary>
+    /// AI-1357 Task 5: enforces the Codex stdout-first contract — <paramref name="writeStdout"/>
+    /// (the synchronous handshake write) always completes before <paramref name="postStdoutWork"/>
+    /// (the best-effort watcher-ensure + background spool drain) even starts. The parent Codex
+    /// process blocks on the hook's stdout, so a large/unreachable spool backlog sitting behind
+    /// <paramref name="postStdoutWork"/> must never delay or gate the write. Production's
+    /// <see cref="HandleSessionStart"/> is the only non-test caller, always with real delegates;
+    /// <c>CodexStdoutContractTests</c> supplies recording/blocking ones to assert the ordering
+    /// without a live server.
+    /// </summary>
+    internal static async Task RunSessionStartHandshakeForTest(Action writeStdout, Func<Task> postStdoutWork) {
+        writeStdout();
+        await postStdoutWork();
+    }
+
     public static async Task<int> Handle(string baseUrl, TextReader stdin) {
         var body = await stdin.ReadToEndAsync();
 
@@ -66,7 +89,7 @@ static class CodexHookCommand {
         if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1") {
             switch (eventName) {
                 case "SessionStart" or "Stop":
-                    Console.Write(SessionScopedOutputJson);
+                    WriteSessionScopedOutput(Console.Out);
                     break;
                 case "PermissionRequest":
                     // Empty hookSpecificOutput → Codex falls back to its
@@ -100,7 +123,7 @@ static class CodexHookCommand {
             // then skip dispatch. (Claude's disabled branch also returns immediately
             // — see Program.cs around line 593.)
             if (eventName is "Stop" or "SessionStart") {
-                Console.Write(SessionScopedOutputJson);
+                WriteSessionScopedOutput(Console.Out);
             }
             return 0;
         }
@@ -157,7 +180,7 @@ static class CodexHookCommand {
         switch (eventName) {
             case "SessionStart" or "Stop":
                 // Codex's SessionStart/Stop parser rejects empty stdout.
-                Console.Write(SessionScopedOutputJson);
+                WriteSessionScopedOutput(Console.Out);
                 break;
             case "PermissionRequest":
                 // Empty hookSpecificOutput → Codex's local approval prompt
@@ -200,37 +223,59 @@ static class CodexHookCommand {
 
             if (excludedSessionId is not null) DisabledSessions.Mark(excludedSessionId);
 
-            Console.Write(SessionScopedOutputJson);
+            WriteSessionScopedOutput(Console.Out);
             return 0;
         }
 
-        var outcome = await PostHookAsync(baseUrl, "session-start/codex", enriched);
-        if (outcome == HookPostOutcome.Failed) return 1;
-
-        // Emit Codex's required JSON output BEFORE spawning the watcher. The
-        // watcher is best-effort and may take time to start; the parent (Codex)
-        // is waiting on stdout, and there's nothing the watcher can contribute
-        // to this response.
-        Console.Write(SessionScopedOutputJson);
-
-        // Auth lapsed: recording is paused until the user re-runs `kcap login`. We've satisfied
-        // Codex's stdout contract and exit cleanly; skip the watcher — its POSTs would 401 too.
-        if (outcome == HookPostOutcome.AuthLapsed) return 0;
-
         var enrichedNode = JsonNode.Parse(enriched);
         var sessionId    = TryGetString(enrichedNode, "session_id");
-        var transcript   = TryGetString(enrichedNode, "transcript_path");
-        var cwd          = TryGetString(enrichedNode, "cwd");
 
-        if (sessionId is not null && transcript is not null) {
-            await WatcherManager.EnsureWatcherRunning(
-                baseUrl, sessionId, transcript,
-                agentId: null, sessionIdOverride: null, cwd: cwd,
-                skipTitle: false, vendor: "codex"
-            );
-        }
+        // AI-1357: spawn-before-post. A lapsed-auth or transient/unreachable failure durably
+        // spools the payload instead of dropping it (Spooled) — never AuthLapsed here, unlike the
+        // legacy PostAsync path, so ShouldSpawnAfter below can safely spawn on Spooled too.
+        var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
+        var outcome = await AgentHookPoster.PostOrSpoolAsync(
+            baseUrl, "session-start/codex", enriched, "codex-hook", spool,
+            sessionId: sessionId ?? "", route: "session-start/codex");
+
+        if (outcome == HookPostOutcome.Failed) return 1;
+
+        // Codex blocks on this hook's stdout — satisfy the handshake contract FIRST, and only
+        // then run the best-effort watcher-ensure and the global spool drain. Routed through
+        // RunSessionStartHandshakeForTest so the ordering is provable in isolation (see
+        // CodexStdoutContractTests): a large/unreachable spool backlog behind postStdoutWork can
+        // never delay or gate the write below.
+        await RunSessionStartHandshakeForTest(
+            writeStdout: () => WriteSessionScopedOutput(Console.Out),
+            postStdoutWork: () => RunPostStdoutWork(baseUrl, spool, enrichedNode, sessionId, outcome));
 
         return 0;
+    }
+
+    // Everything here runs AFTER Codex's stdout handshake and is best-effort: spawning the
+    // watcher (when the lifecycle POST was delivered or durably spooled) and kicking off the
+    // global lifecycle/transcript spool drain in the background. Neither may precede or block on
+    // the stdout write in HandleSessionStart. The drain is fire-and-forget (never awaited) — its
+    // own internal throttle/budget/try-catch make it safe to abandon if the process exits first;
+    // reliable delivery for Codex sessions is carried by the daemon's periodic drain pass
+    // (AI-1357 Task 15), not by this opportunistic best-effort attempt.
+    static Task RunPostStdoutWork(
+            string baseUrl, HookSpool spool, JsonNode? enrichedNode, string? sessionId, HookPostOutcome outcome) {
+        var transcriptSpool = new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"));
+
+        _ = AgentHookPoster.DrainSpoolsAsync(baseUrl, spool, transcriptSpool, sessionId);
+
+        if (!AgentHookPoster.ShouldSpawnAfter(outcome)) return Task.CompletedTask;
+
+        var transcript = TryGetString(enrichedNode, "transcript_path");
+        var cwd        = TryGetString(enrichedNode, "cwd");
+
+        return sessionId is not null && transcript is not null
+            ? WatcherManager.EnsureWatcherRunning(
+                baseUrl, sessionId, transcript,
+                agentId: null, sessionIdOverride: null, cwd: cwd,
+                skipTitle: false, vendor: "codex")
+            : Task.CompletedTask;
     }
 
     static async Task<int> HandleStop(string baseUrl, JsonNode node) {
@@ -262,7 +307,7 @@ static class CodexHookCommand {
 
         // AI-635: Codex's stop-hook output parser rejects empty stdout as
         // "invalid stop hook JSON output". Emit the schema default explicitly.
-        Console.Write(SessionScopedOutputJson);
+        WriteSessionScopedOutput(Console.Out);
         return 0;
     }
 
@@ -344,12 +389,6 @@ static class CodexHookCommand {
         Console.Write(response.ToJsonString());
         return 1;
     }
-
-    // Shared auth-aware recording POST: skips the doomed POST (and the misleading per-turn
-    // "HTTP 401" stderr line) when auth has lapsed, reporting AuthLapsed so the caller exits
-    // cleanly instead of erroring. See AgentHookPoster.
-    static Task<HookPostOutcome> PostHookAsync(string baseUrl, string endpoint, string body)
-        => AgentHookPoster.PostAsync(baseUrl, endpoint, body, "codex-hook");
 
     /// <summary>
     /// Best-effort POST of <paramref name="node"/> to <c>/hooks/{endpoint}</c>, capped at
