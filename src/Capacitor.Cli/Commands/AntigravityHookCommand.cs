@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
@@ -24,7 +23,10 @@ namespace Capacitor.Cli.Commands;
 /// POSTs /hooks/session-end/antigravity. <c>Stop</c>/<c>PostInvocation</c>/tool events
 /// are no-ops here (the watcher already tails the transcript continuously).
 ///
-/// Fail-open throughout — a kcap/server problem must never disrupt the Antigravity IDE.
+/// Fail-open throughout — a kcap/server problem must never disrupt the Antigravity IDE. The
+/// session-start POST goes through <see cref="AgentHookPoster.PostOrSpoolAsync"/> (AI-1357 Task
+/// 6): a lapsed/outage POST is durably spooled for a later drain, and the watcher still spawns
+/// (<see cref="SpawnGateForTest"/>) — capture must not depend on lifecycle-POST delivery.
 /// Antigravity conversation ids are dashed UUIDs; kcap canonicalizes them to the DASHLESS form
 /// for BOTH the session-start payload and the watcher key so they resolve to one stream (the
 /// dashed id lives on only in the transcript file path). Historical import canonicalizes the
@@ -126,10 +128,18 @@ static class AntigravityHookCommand {
             return 0;
         }
 
+        // AI-1357 Task 6: spawn-before-post. Route through the shared spool-aware poster instead
+        // of the bespoke PostHookAsync (below) — a lapse/outage durably spools the payload for a
+        // later drain AND still proceeds to spawn the watcher, so capture never depends on
+        // lifecycle-POST delivery. Only a permanent Failed withholds the watcher.
+        var spool   = new HookSpool(PathHelpers.ConfigPath("spool"));
+        var outcome = await AgentHookPoster.PostOrSpoolAsync(
+            baseUrl, "session-start/antigravity", enriched, "antigravity-hook",
+            spool, sessionId, route: "session-start/antigravity");
+
         // Fail-open: a non-zero exit would surface as a failed hook; skip the watcher
         // this firing and let the next PreInvocation retry.
-        var exit = await PostHookAsync(baseUrl, "session-start/antigravity", enriched);
-        if (exit != 0) return 0;
+        if (!SpawnGateForTest(outcome)) return 0;
 
         // Watcher key = the dashless session id (kcap watch strips dashes too, so the pid
         // file + the spawned watcher's stream all agree). The dashed conversation id lives on
@@ -142,6 +152,10 @@ static class AntigravityHookCommand {
 
         return 0;
     }
+
+    /// <summary>Test seam mirroring <see cref="AgentHookPoster.ShouldSpawnAfter"/> — capture must
+    /// start on <c>Posted</c> OR <c>Spooled</c>, never gated behind lifecycle-POST delivery.</summary>
+    internal static bool SpawnGateForTest(HookPostOutcome o) => AgentHookPoster.ShouldSpawnAfter(o);
 
     /// <summary>The event name — the first positional token after <c>--antigravity</c>.</summary>
     internal static string? EventArg(string[] args) {
@@ -170,23 +184,4 @@ static class AntigravityHookCommand {
 
     static string? AsString(JsonNode? node) =>
         node is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
-
-    static async Task<int> PostHookAsync(string baseUrl, string endpoint, string body) {
-        using var client  = await HttpClientExtensions.CreateAuthenticatedClientAsync();
-        using var content = new StringContent(body, Encoding.UTF8, "application/json");
-
-        try {
-            var resp = await client.PostWithRetryAsync($"{baseUrl}/hooks/{endpoint}", content);
-
-            if (!resp.IsSuccessStatusCode) {
-                Console.Error.WriteLine($"[kcap] antigravity-hook {endpoint}: HTTP {(int)resp.StatusCode}");
-                return 1;
-            }
-
-            return 0;
-        } catch (HttpRequestException ex) {
-            HttpClientExtensions.WriteUnreachableError(baseUrl, ex);
-            return 1;
-        }
-    }
 }

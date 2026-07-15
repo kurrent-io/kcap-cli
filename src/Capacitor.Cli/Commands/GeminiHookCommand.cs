@@ -138,8 +138,9 @@ static class GeminiHookCommand {
         // way skip the watcher — on a lapse its POSTs would 401 too.
         if (outcome != HookPostOutcome.Posted) return outcome == HookPostOutcome.Failed ? 1 : 0;
 
-        EnsureWatcher(baseUrl, sessionId, node, cwd, source);
-        await Task.CompletedTask;
+        // AI-1357 Task 6: await (was fire-and-forget) so a spawn failure is observed here rather
+        // than silently swallowed, and the process isn't torn down before the spawn completes.
+        await EnsureWatcher(baseUrl, sessionId, node, cwd, source);
         return 0;
     }
 
@@ -233,7 +234,7 @@ static class GeminiHookCommand {
         return 0;
     }
 
-    static void EnsureWatcher(string baseUrl, string sessionId, JsonNode node, string? cwd, string source) {
+    static async Task EnsureWatcher(string baseUrl, string sessionId, JsonNode node, string? cwd, string source) {
         // Gemini hands us the transcript path directly (no derivation needed,
         // unlike Copilot). Empty/absent → skip (can't tail nothing).
         var transcriptPath = TryGetString(node, "transcript_path");
@@ -243,7 +244,10 @@ static class GeminiHookCommand {
         // one and resume appends to the same transcript.
         var skipTitle = source is "resume" or "clear";
 
-        _ = WatcherManager.EnsureWatcherRunning(
+        // AI-1357 Task 6: awaited (was fire-and-forget `_ =`) so a spawn failure surfaces to the
+        // caller instead of being silently dropped, and the host process doesn't exit before the
+        // spawn completes.
+        await WatcherManager.EnsureWatcherRunning(
             baseUrl, sessionId, transcriptPath,
             agentId: null, sessionIdOverride: null, cwd: cwd,
             skipTitle: skipTitle, vendor: "gemini"
