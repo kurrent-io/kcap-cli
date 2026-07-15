@@ -128,10 +128,10 @@ static class AntigravityHookCommand {
             return 0;
         }
 
-        // AI-1357 Task 6: spawn-before-post. Route through the shared spool-aware poster instead
-        // of the bespoke PostHookAsync (below) — a lapse/outage durably spools the payload for a
-        // later drain AND still proceeds to spawn the watcher, so capture never depends on
-        // lifecycle-POST delivery. Only a permanent Failed withholds the watcher.
+        // AI-1357 Task 6: spawn-before-post. Route through the shared spool-aware poster (which
+        // replaced this dispatcher's former bespoke poster) — a lapse/outage durably spools the
+        // payload for a later drain AND still proceeds to spawn the watcher, so capture never
+        // depends on lifecycle-POST delivery. Only a permanent Failed withholds the watcher.
         var spool   = new HookSpool(PathHelpers.ConfigPath("spool"));
         var outcome = await AgentHookPoster.PostOrSpoolAsync(
             baseUrl, "session-start/antigravity", enriched, "antigravity-hook",

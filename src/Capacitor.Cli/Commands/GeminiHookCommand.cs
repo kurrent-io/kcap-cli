@@ -68,6 +68,18 @@ static class GeminiHookCommand {
             return 0;
         }
 
+        // AI-1357: bounded, best-effort backlog drain so a prior session's spooled lifecycle
+        // POSTs / transcript tail replay even when this firing posts nothing further. Gated to
+        // the two lifecycle events — Notification fires on EVERY turn, and the drain's
+        // auth-discovery + potential network POST must not add per-turn latency to it. (SessionStart
+        // itself re-fires on resume/clear, but DrainSpoolsAsync self-throttles + reaps internally.)
+        var spool           = new HookSpool(PathHelpers.ConfigPath("spool"));
+        var transcriptSpool = new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"));
+
+        if (eventName is "SessionStart" or "SessionEnd") {
+            await AgentHookPoster.DrainSpoolsAsync(baseUrl, spool, transcriptSpool, sessionId);
+        }
+
         var cwd           = TryGetString(node, "cwd");
         var activeProfile = await AppConfig.GetActiveProfileAsync();
 
@@ -77,7 +89,7 @@ static class GeminiHookCommand {
         }
 
         return eventName switch {
-            "SessionStart" => await HandleSessionStart(baseUrl, node, sessionId, cwd, activeProfile),
+            "SessionStart" => await HandleSessionStart(baseUrl, node, sessionId, cwd, activeProfile, spool),
             "SessionEnd"   => await HandleSessionEnd(baseUrl, node, sessionId, cwd),
             "Notification" => await HandleNotification(baseUrl, node, sessionId, cwd),
             _              => 0   // unknown / unsubscribed — fail-open like the other dispatchers
@@ -85,11 +97,12 @@ static class GeminiHookCommand {
     }
 
     static async Task<int> HandleSessionStart(
-            string   baseUrl,
-            JsonNode node,
-            string   sessionId,
-            string?  cwd,
-            Profile? activeProfile
+            string    baseUrl,
+            JsonNode  node,
+            string    sessionId,
+            string?   cwd,
+            Profile?  activeProfile,
+            HookSpool spool
         ) {
         var source = TryGetString(node, "source") is { Length: > 0 } s ? s : "startup";
 
@@ -132,17 +145,27 @@ static class GeminiHookCommand {
             return 0;
         }
 
-        var outcome = await PostHookAsync(baseUrl, "session-start/gemini", enriched);
+        // Spawn-before-post (AI-1357 Task 6): capture must start on Posted OR Spooled (auth lapse /
+        // outage) — a doomed/delayed lifecycle POST must never withhold the watcher. On a real
+        // failure PostOrSpoolAsync already logged to stderr; a lapse or transient outage instead
+        // durably spools the payload for a later drain pass. Only a permanent failure keeps the
+        // prior non-zero exit and skips the watcher; the next resume/startup retries.
+        var outcome = await AgentHookPoster.PostOrSpoolAsync(
+            baseUrl, "session-start/gemini", enriched, "gemini-hook",
+            spool, sessionId, route: "session-start/gemini");
 
-        // Failed keeps the prior non-zero exit; AuthLapsed exits cleanly (no error banner). Either
-        // way skip the watcher — on a lapse its POSTs would 401 too.
-        if (outcome != HookPostOutcome.Posted) return outcome == HookPostOutcome.Failed ? 1 : 0;
+        if (!AgentHookPoster.ShouldSpawnAfter(outcome)) return outcome == HookPostOutcome.Failed ? 1 : 0;
 
         // AI-1357 Task 6: await (was fire-and-forget) so a spawn failure is observed here rather
         // than silently swallowed, and the process isn't torn down before the spawn completes.
         await EnsureWatcher(baseUrl, sessionId, node, cwd, source);
         return 0;
     }
+
+    /// <summary>Test seam mirroring <see cref="AgentHookPoster.ShouldSpawnAfter"/> — session-start
+    /// capture must start on <c>Posted</c> OR <c>Spooled</c>, never gated behind lifecycle-POST
+    /// delivery (AI-1357 Task 6).</summary>
+    internal static bool SpawnGateForTest(HookPostOutcome o) => AgentHookPoster.ShouldSpawnAfter(o);
 
     static async Task<int> HandleSessionEnd(string baseUrl, JsonNode node, string sessionId, string? cwd) {
         var transcriptPath = TryGetString(node, "transcript_path");
