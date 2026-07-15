@@ -12,7 +12,13 @@ namespace Capacitor.Cli.Commands;
 /// </summary>
 public sealed partial class TranscriptSpool(string spoolDir, long capBytes = TranscriptSpool.DefaultCapBytes) {
     public const long DefaultCapBytes = 8_388_608; // 8 MB per session
-    public enum AppendResult { Appended, MarkedNeedsImport }
+
+    /// <summary>Outcome of an <see cref="Append"/> call.</summary>
+    public enum AppendResult {
+        Appended,          // batch persisted to the live spool file
+        MarkedNeedsImport, // NOT persisted (cap hit or write failure) — needs-import marker set instead
+        Ignored,           // discarded before any spool interaction (malformed session id) — never a real append
+    }
 
     static readonly Regex SafeSessionId = SafeSessionIdRegex();
     static int seqCounter;
@@ -28,7 +34,7 @@ public sealed partial class TranscriptSpool(string spoolDir, long capBytes = Tra
 
     public AppendResult Append(string sessionId, string batchJson) {
         var path = LivePathFor(sessionId);
-        if (path is null) return AppendResult.Appended; // malformed id — nothing we can key on
+        if (path is null) return AppendResult.Ignored; // malformed id — nothing we can key on
         try {
             Directory.CreateDirectory(spoolDir);
             var line = batchJson.Replace("\n", "").Replace("\r", "");
@@ -41,13 +47,31 @@ public sealed partial class TranscriptSpool(string spoolDir, long capBytes = Tra
             }
             File.AppendAllText(path, $"{line}\n");
             return AppendResult.Appended;
-        } catch { return AppendResult.Appended; } // best effort — never throw on the shutdown path
+        } catch (Exception ex) {
+            // The whole point of this class is NO silent drop: a failed write is a real gap, so
+            // surface it as needs-import rather than a phantom "Appended". Never throw on the
+            // shutdown path — MarkNeedsImport logs if it too can't persist the marker.
+            MarkNeedsImport(sessionId, $"append failed: {ex.Message}");
+            return AppendResult.MarkedNeedsImport;
+        }
     }
 
-    public void MarkNeedsImport(string sessionId, string reason) {
+    /// <summary>
+    /// Records a needs-import marker for the session. Returns <c>true</c> if the marker was
+    /// persisted; <c>false</c> (and logs to stderr) if it could not be written — the caller must
+    /// not assume a marker exists just because it asked for one.
+    /// </summary>
+    public bool MarkNeedsImport(string sessionId, string reason) {
         var p = MarkerPathFor(sessionId);
-        if (p is null) return;
-        try { Directory.CreateDirectory(spoolDir); File.WriteAllText(p, $"{DateTimeOffset.UtcNow:O} {reason}\n"); } catch { }
+        if (p is null) return false;
+        try {
+            Directory.CreateDirectory(spoolDir);
+            File.WriteAllText(p, $"{DateTimeOffset.UtcNow:O} {reason}\n");
+            return true;
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"[kcap] transcript spool: failed to write needs-import marker for {sessionId}: {ex.Message}");
+            return false;
+        }
     }
 
     public bool NeedsImport(string sessionId) {

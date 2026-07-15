@@ -34,6 +34,32 @@ public class TranscriptSpoolTests {
     }
 
     [Test]
+    public async Task Append_marks_needs_import_when_the_live_write_fails() {
+        var dir = TmpDir();
+        try {
+            Directory.CreateDirectory(dir);
+            // Make the live spool path a DIRECTORY so File.AppendAllText throws, while the spool
+            // dir itself stays writable so the sibling needs-import marker can still persist.
+            Directory.CreateDirectory(Path.Combine(dir, $"{Sid}.transcript.jsonl"));
+            var spool = new TranscriptSpool(dir);
+            var r = spool.Append(Sid, """{"lines":["a"],"line_numbers":[0]}""");
+            // No silent drop: a failed write is surfaced as needs-import, never a phantom Appended.
+            await Assert.That(r).IsEqualTo(TranscriptSpool.AppendResult.MarkedNeedsImport);
+            await Assert.That(spool.NeedsImport(Sid)).IsTrue();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Test]
+    public async Task Append_ignores_malformed_session_id() {
+        var dir = TmpDir();
+        try {
+            var spool = new TranscriptSpool(dir);
+            var r = spool.Append("not-a-valid-sid", """{"n":1}""");
+            await Assert.That(r).IsEqualTo(TranscriptSpool.AppendResult.Ignored);
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Test]
     public async Task Drain_delivers_in_fifo_and_clears_file() {
         var dir = TmpDir();
         try {
