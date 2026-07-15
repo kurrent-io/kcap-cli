@@ -402,6 +402,12 @@ static class McpFlowsServer {
         }
     }
 
+    /// <summary>One canonical guidance line for the server's coded server_catching_up rejection,
+    /// shared by every surface that renders it (start/submit/poll/status/close here, plus both
+    /// sidecar branches in McpFlowResultServer) so the advice can never drift between tools.</summary>
+    internal const string ServerCatchingUpGuidance =
+        "The server is catching up after a read-model rebuild — try again in a few minutes, or ask the user what to do.";
+
     /// <summary>Maps a non-2xx start/submit (or poll) response body to the tool error text.
     /// Status-agnostic contract (dynamic flows): ANY body carrying a string "error" code plus a
     /// "message" is a coded rejection from a dynamic-flows-aware server — surface the server
@@ -409,12 +415,6 @@ static class McpFlowsServer {
     /// UNCODED failure on a start that included definition_yaml gets the "may not support
     /// dynamic flows" hint (the coded body is the new-server capability signal), keeping the
     /// raw body either way.</summary>
-    /// <summary>One canonical guidance line for the server's coded server_catching_up rejection,
-    /// shared by every surface that renders it (start/submit/poll/status/close here, plus both
-    /// sidecar branches in McpFlowResultServer) so the advice can never drift between tools.</summary>
-    internal const string ServerCatchingUpGuidance =
-        "The server is catching up after a read-model rebuild — try again in a few minutes, or ask the user what to do.";
-
     internal static string FormatFlowStartError(int status, string body, bool wasDynamicStart) {
         try {
             var node = JsonNode.Parse(body) as JsonObject;
