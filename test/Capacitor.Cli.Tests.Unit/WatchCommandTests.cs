@@ -258,6 +258,62 @@ public class WatchCommandTests {
         await Assert.That(should).IsTrue();
     }
 
+    static readonly TimeSpan RecoveryCeiling = TimeSpan.FromHours(6);
+
+    [Test]
+    public async Task DecideParentDeadRecovery_reArms_when_parent_reResolved_alive() {
+        // Preferred outcome: re-resolution found the parent and it's alive → re-arm, end nothing —
+        // even if the no-progress window already exceeds the ceiling.
+        var decision = WatchCommand.DecideParentDeadRecovery(
+            reResolvedPid: 4321, isAlive: _ => true,
+            noProgressElapsed: RecoveryCeiling + TimeSpan.FromMinutes(1), ceiling: RecoveryCeiling);
+
+        await Assert.That(decision).IsEqualTo(WatchCommand.ParentDeadRecovery.ReArm);
+    }
+
+    [Test]
+    public async Task DecideParentDeadRecovery_endsTerminal_when_resolution_fails_past_ceiling() {
+        var decision = WatchCommand.DecideParentDeadRecovery(
+            reResolvedPid: null, isAlive: _ => false,
+            noProgressElapsed: RecoveryCeiling + TimeSpan.FromMinutes(1), ceiling: RecoveryCeiling);
+
+        await Assert.That(decision).IsEqualTo(WatchCommand.ParentDeadRecovery.EndTerminal);
+    }
+
+    [Test]
+    public async Task DecideParentDeadRecovery_keepsWaiting_below_ceiling_with_no_parent() {
+        // A live-but-idle Kiro/OpenCode user parked at a prompt: no parent resolved, but under the
+        // ceiling → keep waiting, do NOT end.
+        var decision = WatchCommand.DecideParentDeadRecovery(
+            reResolvedPid: null, isAlive: _ => false,
+            noProgressElapsed: TimeSpan.FromHours(1), ceiling: RecoveryCeiling);
+
+        await Assert.That(decision).IsEqualTo(WatchCommand.ParentDeadRecovery.KeepWaiting);
+    }
+
+    [Test]
+    public async Task DecideParentDeadRecovery_keepsWaiting_when_reResolved_pid_is_dead() {
+        // Re-resolution returned a transient/dead pid → not a valid re-arm target; below ceiling.
+        var decision = WatchCommand.DecideParentDeadRecovery(
+            reResolvedPid: 9, isAlive: _ => false,
+            noProgressElapsed: TimeSpan.FromMinutes(5), ceiling: RecoveryCeiling);
+
+        await Assert.That(decision).IsEqualTo(WatchCommand.ParentDeadRecovery.KeepWaiting);
+    }
+
+    [Test]
+    [Arguments(null, 360)]   // unset → default 6h
+    [Arguments("", 360)]     // empty → default
+    [Arguments("abc", 360)]  // non-numeric → default
+    [Arguments("0", 360)]    // non-positive → default
+    [Arguments("-5", 360)]   // negative → default
+    [Arguments("120", 120)]  // valid override
+    public async Task ResolveParentDeadCeiling_parses_env_with_default(string? env, int expectedMinutes) {
+        var result = WatchCommand.ResolveParentDeadCeiling(env);
+
+        await Assert.That(result).IsEqualTo(TimeSpan.FromMinutes(expectedMinutes));
+    }
+
     [Test]
     public async Task ShouldEndOnIdle_true_for_idle_codex_session_watcher() {
         var should = WatchCommand.ShouldEndOnIdle(

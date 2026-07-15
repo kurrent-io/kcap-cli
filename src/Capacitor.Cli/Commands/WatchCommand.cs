@@ -39,6 +39,58 @@ static partial class WatchCommand {
         : !isAlive(ppid)          ? ParentWatchdog.ParentAlreadyDead
         :                           ParentWatchdog.Monitor;
 
+    /// <summary>
+    /// Staged outcome for the wedged/parent-dead recovery loop. A watcher that hit
+    /// <see cref="ParentWatchdog.ParentAlreadyDead"/> is alive-and-connected with no end path
+    /// (the server sweep only sees GONE watchers, and Kiro/OpenCode have no idle fallback), so
+    /// recovery re-resolves + re-arms the watchdog when possible and only ends on a long ceiling.
+    /// </summary>
+    internal enum ParentDeadRecovery {
+        /// <summary>Re-resolution found a live parent — re-arm the watchdog; end nothing (preferred).</summary>
+        ReArm,
+
+        /// <summary>No live parent yet AND still under the ceiling with recent progress — keep polling.</summary>
+        KeepWaiting,
+
+        /// <summary>Resolution keeps failing AND no transcript progress for longer than the ceiling — end.</summary>
+        EndTerminal
+    }
+
+    /// <summary>
+    /// Pure staged decision for the parent-dead recovery loop. Re-arm takes priority (a found,
+    /// live parent is the preferred outcome and never ends the session). Otherwise the session ends
+    /// ONLY when the no-progress window exceeds the ceiling — a user parked at a Kiro/OpenCode prompt
+    /// produces no transcript lines but must not be ended before then, and any new progress resets
+    /// <paramref name="noProgressElapsed"/> via the caller.
+    /// </summary>
+    internal static ParentDeadRecovery DecideParentDeadRecovery(
+            int?            reResolvedPid,
+            Func<int, bool> isAlive,
+            TimeSpan        noProgressElapsed,
+            TimeSpan        ceiling
+        ) =>
+        reResolvedPid is { } pid && isAlive(pid) ? ParentDeadRecovery.ReArm
+        : noProgressElapsed > ceiling            ? ParentDeadRecovery.EndTerminal
+        :                                          ParentDeadRecovery.KeepWaiting;
+
+    /// <summary>
+    /// Long ceiling for the staged parent-dead / wedged-watcher recovery. Deliberately far above the
+    /// 60-min idle default: an idle GUI conversation ends via the idle timeout, whereas this ceiling
+    /// exists only to eventually end a wedged, alive-but-connected watcher (invisible to the server
+    /// sweep) whose parent can't be re-resolved — without false-ending a user parked at a prompt.
+    /// </summary>
+    internal static readonly TimeSpan DefaultParentDeadCeiling = TimeSpan.FromHours(6);
+
+    /// <summary>
+    /// Resolves the parent-dead recovery ceiling from KCAP_PARENT_DEAD_CEILING_MINUTES, falling back
+    /// to <see cref="DefaultParentDeadCeiling"/> for unset/blank/non-numeric/non-positive values.
+    /// Pure so the parsing is unit-testable.
+    /// </summary>
+    internal static TimeSpan ResolveParentDeadCeiling(string? envValue) =>
+        int.TryParse(envValue, out var minutes) && minutes > 0
+            ? TimeSpan.FromMinutes(minutes)
+            : DefaultParentDeadCeiling;
+
     public static async Task<int> RunWatch(
             string  baseUrl,
             string  sessionId,
@@ -79,6 +131,8 @@ static partial class WatchCommand {
         // guarantees the write is observed even though awaits already act as memory
         // barriers in practice.
         var parentExited = 0;
+        // AI-1359: set by the staged parent-dead recovery loop when it ends a wedged watcher on the ceiling.
+        var wedgedCeilingExit = 0;
 
         // Handle SIGTERM/SIGINT for graceful shutdown.
         //
@@ -113,12 +167,39 @@ static partial class WatchCommand {
             ctx.Cancel = true;
         });
 
+        // AI-1359: declared before the parent-watchdog block so the staged parent-dead recovery
+        // task can read state.LastActivityAt as its no-progress clock.
+        var state = new WatchState();
+        state.LastActivityAt = DateTimeOffset.UtcNow;
+
         // Watch the spawning coding-agent process. If it dies without firing
         // session-end (crash, force-kill, IDE-detach), self-terminate within ~5s and
         // POST session-end instead of orphaning. Crucially, the cases where we DON'T
         // monitor are now logged: a silently-skipped watchdog is exactly the failure
         // that left sessions stuck "active" with the watcher still connected — the
         // resolved parent PID was already dead at startup and nothing recorded it.
+        // Local so both the initial Monitor case and the recovery re-arm start the identical poll.
+        void ArmParentMonitor(int ppid) {
+            Log($"Monitoring parent pid {ppid}");
+            _ = Task.Run(async () => {
+                while (!cts.Token.IsCancellationRequested) {
+                    try {
+                        await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
+                    } catch (OperationCanceledException) {
+                        return;
+                    }
+
+                    if (!ProcessHelpers.IsProcessAlive(ppid)) {
+                        Log($"Parent pid {ppid} exited; shutting down watcher");
+                        Interlocked.Exchange(ref parentExited, 1);
+                        cts.Cancel();
+
+                        return;
+                    }
+                }
+            }, cts.Token);
+        }
+
         switch (DecideParentWatchdog(parentPid, ProcessHelpers.IsProcessAlive)) {
             case ParentWatchdog.NoParentPid:
                 Log("No parent pid supplied; parent-exit watchdog disabled (session-end relies on the agent's own hook)");
@@ -126,38 +207,59 @@ static partial class WatchCommand {
                 break;
 
             case ParentWatchdog.ParentAlreadyDead:
-                Log($"Parent pid {parentPid} already dead at watcher startup; parent-exit watchdog NOT started — "
-                  + "session-end will not be POSTed if the agent ends abruptly. This usually means parent-PID "
-                  + "resolution returned a transient process; see ProcessHelpers.GetCodingAgentPid.");
+                Log($"Parent pid {parentPid} already dead at watcher startup; entering staged recovery — "
+                  + "will periodically re-resolve + re-arm the watchdog, and only end after a long ceiling "
+                  + "with no transcript progress and continued resolution failure (AI-1359).");
+
+                // Staged recovery: re-resolve the durable agent (using the vendor alias) and re-arm if
+                // found; otherwise end ONLY after `ceiling` of no transcript progress. Any new progress
+                // resets the window (state.LastActivityAt advances on drained lines). Session watchers
+                // only — subagent watchers are torn down by the parent's lifecycle.
+                if (agentId is null) {
+                    var ceiling = ResolveParentDeadCeiling(Environment.GetEnvironmentVariable("KCAP_PARENT_DEAD_CEILING_MINUTES"));
+
+                    _ = Task.Run(async () => {
+                        while (!cts.Token.IsCancellationRequested) {
+                            try {
+                                await Task.Delay(TimeSpan.FromSeconds(30), cts.Token);
+                            } catch (OperationCanceledException) {
+                                return;
+                            }
+
+                            var reResolved        = ProcessHelpers.GetCodingAgentPid(vendor);
+                            var noProgressElapsed = DateTimeOffset.UtcNow - state.LastActivityAt;
+
+                            switch (DecideParentDeadRecovery(reResolved, ProcessHelpers.IsProcessAlive, noProgressElapsed, ceiling)) {
+                                case ParentDeadRecovery.ReArm:
+                                    Log($"Parent re-resolved to live pid {reResolved}; re-arming the watchdog");
+                                    ArmParentMonitor(reResolved!.Value);
+
+                                    return;
+
+                                case ParentDeadRecovery.EndTerminal:
+                                    Log($"Parent unresolved and no transcript progress for >{ceiling.TotalMinutes:F0}m; "
+                                      + "ending session (parent_dead_ceiling)");
+                                    Interlocked.Exchange(ref wedgedCeilingExit, 1);
+                                    cts.Cancel();
+
+                                    return;
+
+                                case ParentDeadRecovery.KeepWaiting:
+                                default:
+                                    break; // poll again
+                            }
+                        }
+                    }, cts.Token);
+                }
 
                 break;
 
             case ParentWatchdog.Monitor:
-                var ppid = parentPid!.Value;
-                Log($"Monitoring parent pid {ppid}");
-                _ = Task.Run(async () => {
-                    while (!cts.Token.IsCancellationRequested) {
-                        try {
-                            await Task.Delay(TimeSpan.FromSeconds(5), cts.Token);
-                        } catch (OperationCanceledException) {
-                            return;
-                        }
-
-                        if (!ProcessHelpers.IsProcessAlive(ppid)) {
-                            Log($"Parent pid {ppid} exited; shutting down watcher");
-                            Interlocked.Exchange(ref parentExited, 1);
-                            cts.Cancel();
-
-                            return;
-                        }
-                    }
-                }, cts.Token);
+                ArmParentMonitor(parentPid!.Value);
 
                 break;
         }
 
-        var state = new WatchState();
-        state.LastActivityAt = DateTimeOffset.UtcNow;
         // Antigravity posts /hooks/session-start BEFORE the watcher spawns, so the session is
         // already committed server-side — the below-threshold buffering (which exists to avoid
         // junk sessions the server hasn't seen) doesn't apply. Treat it as past-threshold from
@@ -417,9 +519,10 @@ static partial class WatchCommand {
         //     server may not have a meaningful session to end.
         // Runs after SignalR dispose so the server's StopAndDrainAsync skips the
         // 10s drain wait (no live watcher connection to signal).
-        var endReason = Volatile.Read(ref parentExited) == 1 ? "parent_exited"
-                      : idleExit                              ? "idle_timeout"
-                      :                                         null;
+        var endReason = Volatile.Read(ref parentExited)      == 1 ? "parent_exited"
+                      : Volatile.Read(ref wedgedCeilingExit) == 1 ? "parent_dead_ceiling"
+                      : idleExit                                  ? "idle_timeout"
+                      :                                             null;
 
         if (endReason is not null && agentId is null && state.ThresholdReached) {
             await PostSessionEndOnParentExitAsync(baseUrl, sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
