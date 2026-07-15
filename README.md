@@ -654,7 +654,7 @@ kcap plugin install --kiro                  # clone default agent + add hook, se
 kcap plugin remove --kiro                   # restore previous default, delete kcap.json
 ```
 
-Kiro writes an append-only JSONL log per session at `~/.kiro/sessions/cli/{id}.jsonl` (plus a sibling `{id}.json` for cwd / model / title; honours `KIRO_HOME`), so the kcap watcher tails it like every other vendor. Lifecycle comes from Kiro's `agentSpawn` hook (fires every prompt → deduped server-side); since Kiro has **no session-end trigger**, the watcher synthesizes session-end on `kiro-cli` exit. Historical sessions import via `kcap import --kiro`. Kiro persists no token counts, so Kiro sessions show no token usage by design.
+Kiro writes an append-only JSONL log per session at `~/.kiro/sessions/cli/{id}.jsonl` (plus a sibling `{id}.json` for cwd / model / title; honours `KIRO_HOME`), so the kcap watcher tails it like every other vendor. Lifecycle comes from Kiro's `agentSpawn` hook (fires every prompt → deduped server-side); since Kiro has **no session-end trigger**, the watcher synthesizes session-end on `kiro-cli` exit. Historical sessions import via `kcap import --kiro`. Kiro persists no token counts, so Kiro sessions show no token usage by design — but it does report a per-turn **context-fill %**, which the watcher now stamps onto each assistant message live (read from the sibling `{id}.json` at send time, best-effort). It's captured for a turn when that turn's metadata is present at send time — the common case, since the assistant message is a turn's last line. This mirrors the import path, which has always carried it; a session imported without ever being watched live gets it fully.
 
 #### Pi extension
 

@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Antigravity;
 using Capacitor.Cli.Core.Gemini;
+using Capacitor.Cli.Core.Kiro;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
 using Capacitor.Cli.Core.Auth;
@@ -965,6 +966,17 @@ static partial class WatchCommand {
                     return newLines;
             }
 
+            // AI-1286 Phase 7: stamp Kiro's live context-fill % onto AssistantMessage lines from the
+            // sibling {id}.json, HERE — at flush, after the below-threshold buffer decision and on the
+            // exact batch about to be sent — so the % is present at FIRST send. It can't be backfilled
+            // later: the server dedupes Kiro events by canonical id, so a later enriched copy (re-send
+            // or import) is skipped, not merged. The sibling is derived from the transcript path (Kiro's
+            // on-disk files use the dashed id; the watcher's sessionId is the dashless canonical form).
+            // Best-effort — EnrichLine no-ops non-assistant / unanchored lines and never throws.
+            if (vendor == "kiro" && newLines.Count > 0) {
+                newLines = EnrichKiroContextUsage(newLines, transcriptPath);
+            }
+
             // Only include repository info when it has changed since last send
             var repoToSend = RepoPayloadChanged(state.Repository, state.LastSentRepository)
                 ? state.Repository
@@ -1317,6 +1329,32 @@ static partial class WatchCommand {
             Log($"Antigravity usage poll failed: {ex.Message}");
         }
         return maxIdx;
+    }
+
+    /// <summary>
+    /// AI-1286 Phase 7 — Kiro live context-%: returns <paramref name="lines"/> with each Kiro
+    /// AssistantMessage line enriched with <c>data._kcap_usage.context_usage_percentage</c> from the
+    /// sibling <c>{id}.json</c>'s per-turn metadata, reusing the exact functions the import path uses
+    /// (<see cref="KiroUsage.AnchorMap"/> + <see cref="KiroUsage.EnrichLine"/>). Called at flush so the
+    /// % is present on first send (it can't be backfilled — the server dedupes Kiro events by canonical
+    /// id). <see cref="KiroUsage.EnrichLine"/> matches a line to its turn by the line's own
+    /// <c>message_id</c> and no-ops non-assistant / unanchored lines, so mapping it over the whole
+    /// batch is safe and order-preserving. The sibling is derived from the transcript path (dashed
+    /// on disk), NOT the dashless <c>sessionId</c>. Best-effort — never throws, never drops a line.
+    /// </summary>
+    internal static List<string> EnrichKiroContextUsage(List<string> lines, string transcriptPath) {
+        try {
+            var siblingJson = Path.ChangeExtension(transcriptPath, ".json");
+            if (!File.Exists(siblingJson)) return lines;
+
+            var anchors = KiroUsage.AnchorMap(File.ReadAllText(siblingJson));
+            if (anchors.Count == 0) return lines;
+
+            return lines.Select(l => KiroUsage.EnrichLine(l, anchors)).ToList();
+        } catch (Exception ex) {
+            Log($"Kiro context-% enrichment failed: {ex.Message}");
+            return lines;
+        }
     }
 
     /// <summary>
