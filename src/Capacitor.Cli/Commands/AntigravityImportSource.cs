@@ -356,6 +356,7 @@ internal sealed class AntigravityImportSource : IImportSource {
         if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) p["workspace_root"] = workspaceRoot;
         if (startedAt is { } ts) p["started_at"] = ts.ToString("O");
         if (forcePrivate) p["default_visibility"] = "private";
+        p["origin"] = ImportOrigins.Historical;
         return p;
     }
 
@@ -363,6 +364,7 @@ internal sealed class AntigravityImportSource : IImportSource {
         var p = new JsonObject { ["hook_event_name"] = "sessionEnd", ["session_id"] = sid, ["reason"] = "antigravity-import" };
         if (cwd is not null) p["cwd"] = cwd;
         if (endedAt is { } ts) p["ended_at"] = ts.ToString("O");
+        p["origin"] = ImportOrigins.Historical;
         return p;
     }
 

@@ -257,6 +257,7 @@ internal sealed class GeminiImportSource : IImportSource {
             ["source"]          = "startup",
         };
         if (startedAt is { } ts) payload["started_at"] = ts.ToString("O");
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 
@@ -267,6 +268,7 @@ internal sealed class GeminiImportSource : IImportSource {
             ["reason"]          = "gemini-import",
         };
         if (endedAt is { } ts) payload["ended_at"] = ts.ToString("O");
+        payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 
