@@ -109,10 +109,17 @@ static class McpSessionsServer {
         }
     }
 
+    // Server-level usage preamble (MCP `instructions`) — steers clients toward these tools for
+    // prior-work / why / who-decided questions over native grep / git log.
+    const string ServerInstructions =
+        "Use these tools to recall prior work — 'have we done X before', 'why did we', 'who decided Y', " +
+        "'when did we work on Z'. Search here before grepping the code or git log — they search the reasoning " +
+        "across past sessions, not just the code.";
+
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
             id,
-            new(McpProtocol.NegotiateVersion(request), new(new()), new("kcap-sessions", "1.0.0")),
+            new(McpProtocol.NegotiateVersion(request), new(new()), new("kcap-sessions", "1.0.0"), ServerInstructions),
             McpJsonContext.Default.McpInitResult
         );
 
@@ -490,7 +497,7 @@ static class McpSessionsServer {
     static McpTool[] BuildToolsList() => [
         new(
             "search_sessions",
-            "Search past Kurrent Capacitor sessions in the current repo (or across all visible repos with repo: \"all\") by free-text question and/or author name. Returns ranked hits with session_id, title, owner, snippet, and (for transcript hits) hit_event_index + agent_id for drilling into the exact moment with get_session_transcript. Use this for 'why did X happen?', 'who decided Y?', 'when did we work on Z?' questions.",
+            "Search past Kurrent Capacitor sessions in the current repo (or across all visible repos with repo: \"all\") by free-text question and/or author name. Returns ranked hits with session_id, title, owner, snippet, and (for transcript hits) hit_event_index + agent_id for drilling into the exact moment with get_session_transcript. For 'have we done this before / why did we / who decided X / when did we work on Y' questions, search here before grepping the code or git log — it searches the reasoning across past sessions, not just the code.",
             new(
                 "object",
                 new() {

@@ -214,6 +214,9 @@ public class McpFlowsServerTests : IDisposable {
             await Assert.That(result).IsNotNull();
             await Assert.That(result!["serverInfo"]?["name"]?.GetValue<string>()).IsEqualTo("kcap-flows");
             await Assert.That(result["protocolVersion"]?.GetValue<string>()).IsEqualTo("2024-11-05");
+            // flows deliberately gets NO server-level instructions (we don't want more
+            // routing to a paid hosted reviewer) — the field must be omitted.
+            await Assert.That(result["instructions"]).IsNull();
         } finally {
             await ShutdownAsync(proc);
         }

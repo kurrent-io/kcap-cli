@@ -25,6 +25,23 @@ public class McpCanonicalContractTests {
     }
 
     [Test]
+    public async Task Every_canonical_server_has_a_description() {
+        // kcap-sessions previously had a null Description. Pin that every canonical server
+        // carries one so the routing/discoverability gap can't silently reopen.
+        foreach (var s in KcapMcpServers.All)
+            await Assert.That(string.IsNullOrWhiteSpace(s.Description))
+                .IsFalse().Because($"{s.Name} must have a non-empty Description");
+    }
+
+    [Test]
+    public async Task Every_bundled_claude_mcp_server_has_a_description() {
+        var servers = (JsonObject)JsonNode.Parse(File.ReadAllText(Path.Combine(KcapDir(), ".mcp.json")))!["mcpServers"]!;
+        foreach (var (name, node) in servers)
+            await Assert.That(string.IsNullOrWhiteSpace(node?["description"]?.GetValue<string>()))
+                .IsFalse().Because($"{name} in .mcp.json must have a non-empty description");
+    }
+
+    [Test]
     public async Task Bundled_codex_mcp_json_matches_the_codex_subset() {
         await Assert.That(Keys(".codex-mcp.json"))
             .IsEquivalentTo(KcapMcpServers.ForCodex.Select(s => s.Name).ToArray());
