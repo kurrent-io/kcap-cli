@@ -295,7 +295,36 @@ public static class CursorHookCommand {
             Func<bool>        budgetExpired,
             CancellationToken ct
         ) {
-        if (eventName is not ("sessionStart" or "sessionEnd")) {
+        var isStart     = eventName == "sessionStart";
+        var isStop      = eventName == "sessionEnd";
+        var isLifecycle = isStart || isStop;
+
+        // Precompute the lifecycle route + body so the ordering guard can spool it verbatim.
+        var route = isStart ? "subagent-start" : "subagent-stop";
+        var body  = isLifecycle
+            ? (isStart
+                ? CursorLiveSubagentLinker.BuildSubagentStartPayload(parentSessionId, childSessionId, subagentType, transcriptPath ?? "")
+                : CursorLiveSubagentLinker.BuildSubagentStopPayload(parentSessionId, childSessionId, subagentType, transcriptPath ?? "")
+              ).ToJsonString()
+            : null;
+
+        // Ordering guard — mirrors the top-level path's spool.HasBacklog check (HandleCore
+        // above): the HandleCore drain already tried to deliver this child's spool, so a
+        // non-empty backlog HERE means it hit a transient failure and an earlier
+        // subagent-start is still queued undelivered. Do NOT let a later subagent-stop — or
+        // the agent-routed transcript backfill — overtake it (a stop landing before its
+        // start would leave the AgentSubsession stream mis-ordered / never opened). Spool the
+        // fresh lifecycle event behind the backlog and skip the backfill; the content-less
+        // mid-lifecycle hooks simply no-op. The next hook re-drains start-first.
+        if (spool.HasBacklog(childSessionId)) {
+            if (isLifecycle) spool.Append(childSessionId, route, body!);
+            return 0;
+        }
+
+        // Content-less mid-lifecycle hooks (beforeSubmitPrompt/afterAgentThought/telemetry):
+        // only the agent-routed transcript backfill carries anything the import path can also
+        // replay, so that's all we do.
+        if (!isLifecycle) {
             if (!string.IsNullOrEmpty(transcriptPath) && !budgetExpired()) {
                 await CursorTranscriptBackfill.RunAsync(
                     client, baseUrl, parentSessionId, transcriptPath,
@@ -304,32 +333,32 @@ public static class CursorHookCommand {
             return 0;
         }
 
-        var isStart = eventName == "sessionStart";
-        var route   = isStart ? "subagent-start" : "subagent-stop";
-        var payload = isStart
-            ? CursorLiveSubagentLinker.BuildSubagentStartPayload(parentSessionId, childSessionId, subagentType, transcriptPath ?? "")
-            : CursorLiveSubagentLinker.BuildSubagentStopPayload(parentSessionId, childSessionId, subagentType, transcriptPath ?? "");
-        var body = payload.ToJsonString();
-
-        // sessionEnd: drain the transcript before the terminal hook — same ordering
-        // rationale as the top-level path, and mirrors SendSubagentLifecycleAsync (its
-        // transcript batch always precedes subagent-stop too).
-        if (!isStart && !string.IsNullOrEmpty(transcriptPath) && !budgetExpired()) {
+        // sessionEnd: drain the transcript before the terminal hook — same ordering rationale
+        // as the top-level path, and mirrors SendSubagentLifecycleAsync (its transcript batch
+        // always precedes subagent-stop too).
+        if (isStop && !string.IsNullOrEmpty(transcriptPath) && !budgetExpired()) {
             await CursorTranscriptBackfill.RunAsync(
                 client, baseUrl, parentSessionId, transcriptPath,
                 budget: budgetExpired, ct, agentId: childSessionId);
         }
 
         if (budgetExpired()) {
-            spool.Append(childSessionId, route, body);
+            spool.Append(childSessionId, route, body!);
             return 0;
         }
 
-        var posted = await TryPostHookAsync(client, baseUrl, route, body, ct);
+        var posted = await TryPostHookAsync(client, baseUrl, route, body!, ct);
         if (!posted) {
-            spool.Append(childSessionId, route, body);
+            // subagent-start POST failed → spool it and STOP: running the sessionStart
+            // backfill now would route the transcript to an AgentSubsession stream the
+            // (spooled, undelivered) subagent-start hasn't opened yet. The next hook drains
+            // the start first, then backfills.
+            spool.Append(childSessionId, route, body!);
+            return 0;
         }
 
+        // sessionStart: post subagent-start THEN backfill, so the AgentSubsession stream is
+        // opened before its first transcript batch (mirrors SendSubagentLifecycleAsync).
         if (isStart && !string.IsNullOrEmpty(transcriptPath) && !budgetExpired()) {
             await CursorTranscriptBackfill.RunAsync(
                 client, baseUrl, parentSessionId, transcriptPath,

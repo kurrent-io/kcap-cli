@@ -103,6 +103,39 @@ public class CursorLiveSubagentIntegrationTests {
         await Assert.That(fx.RouteOrder).DoesNotContain("subagent-start");
     }
 
+    [Test]
+    public async Task linked_child_subagent_stop_is_not_delivered_ahead_of_a_spooled_subagent_start() {
+        // Ordering guard: a child whose subagent-start is still spooled (a prior transient
+        // failure) must NOT get subagent-stop delivered ahead of it. With a 500 stub the
+        // HandleCore drain can't clear the backlog, so HasBacklog stays true and the divert
+        // must spool subagent-stop behind the start rather than posting it.
+        using var fx = new Fixture(postStatus: HttpStatusCode.InternalServerError);
+        var (parentId, childId, childPath) = fx.SetupLinkedPair("ordering guard");
+
+        // Establish the link marker (as the child's first hook would have) and seed the spool
+        // with an undelivered subagent-start, simulating a prior transient POST failure.
+        CursorLiveSubagentLinker.SaveLink(childId, parentId, "task");
+        fx.Spool.Append(childId, "subagent-start", $$"""{"hook_event_name":"subagent_start","session_id":"{{parentId}}","agent_id":"{{childId}}"}""");
+
+        // sessionEnd under a still-failing server: the HandleCore drain re-attempts the
+        // spooled subagent-start (500 → stays queued), so HasBacklog is true and the divert
+        // must NOT post subagent-stop ahead of it.
+        await fx.HandleAsync(childId, "sessionEnd", childPath);
+        await Assert.That(fx.RouteOrder).DoesNotContain("subagent-stop");
+
+        // Now the server recovers. Any later hook for the child drains the spool in order —
+        // subagent-start (the recovered .draining temp, oldest-first) BEFORE subagent-stop
+        // (the just-queued live file) — proving the stop never overtakes its start.
+        fx.RouteOrder.Clear();
+        fx.PostStatus = HttpStatusCode.OK;
+        await fx.HandleAsync(childId, "afterAgentResponse", childPath);
+
+        var startIdx = fx.RouteOrder.IndexOf("subagent-start");
+        var stopIdx  = fx.RouteOrder.IndexOf("subagent-stop");
+        await Assert.That(startIdx).IsGreaterThanOrEqualTo(0);
+        await Assert.That(stopIdx).IsGreaterThan(startIdx);
+    }
+
     /// <summary>
     /// AI-1151/AI-1358 A1: the agent_id the LIVE path uses (child session id, dashless) must
     /// be byte-identical to what the IMPORT path (CursorImportSource.SendSubagentLifecycleAsync)
@@ -130,18 +163,22 @@ public class CursorLiveSubagentIntegrationTests {
         readonly string _root = Path.Combine(Path.GetTempPath(), $"kcap-live-subagent-{Guid.NewGuid():N}");
 
         public string TranscriptsRoot { get; }
+        public string SpoolDir        { get; }
         public List<string> Sent       { get; } = [];
         public List<string> RouteOrder { get; } = [];
         public HookSpool    Spool      { get; }
         public HttpClient   Client     { get; }
+        public HttpStatusCode PostStatus { get; set; } = HttpStatusCode.OK;
 
         readonly List<string> _markersToClean = [];
 
-        public Fixture() {
+        public Fixture(HttpStatusCode postStatus = HttpStatusCode.OK) {
+            PostStatus = postStatus;
             Directory.CreateDirectory(_root);
             TranscriptsRoot = Path.Combine(_root, "agent-transcripts");
             Directory.CreateDirectory(TranscriptsRoot);
-            Spool = new HookSpool(Path.Combine(_root, "spool"));
+            SpoolDir = Path.Combine(_root, "spool");
+            Spool = new HookSpool(SpoolDir);
 
             var handler = new StubHandler(async req => {
                 var body = req.Content is null ? "" : await req.Content.ReadAsStringAsync();
@@ -152,7 +189,7 @@ public class CursorLiveSubagentIntegrationTests {
                 // Watermark GET — always 404 so the backfill always resumes from 0 and posts
                 // whatever's on disk right now.
                 if (req.Method == HttpMethod.Get) return new HttpResponseMessage(HttpStatusCode.NotFound);
-                return new HttpResponseMessage(HttpStatusCode.OK);
+                return new HttpResponseMessage(PostStatus);
             });
             Client = new HttpClient(handler);
         }
