@@ -126,6 +126,45 @@ public class SessionTranscriptLocatorTests {
         await Assert.That(SessionTranscriptLocator.TryMatchTranscript(lines, Worktree, StringComparison.Ordinal)).IsFalse();
     }
 
+    // ── MatchTranscript tri-state: drives the poll-loop's negative cache ─
+    //
+    // A definitive foreign cwd (No) is cached and never re-read; a file with no cwd yet
+    // (Unknown) must NOT be cached, so the agent's own transcript is re-checked once Claude
+    // writes its cwd line.
+
+    [Test]
+    public async Task MatchTranscript_MatchingCwd_ReturnsYes() {
+        var lines = new[] { Line(Worktree) };
+
+        await Assert.That(SessionTranscriptLocator.MatchTranscript(lines, Worktree, StringComparison.Ordinal))
+            .IsEqualTo(SessionTranscriptLocator.CwdMatch.Yes);
+    }
+
+    [Test]
+    public async Task MatchTranscript_ForeignCwd_ReturnsNo() {
+        // Seen a cwd, it's someone else's — permanent non-match, safe to cache.
+        var lines = new[] { Line("/home/user/dev/source-repo") };
+
+        await Assert.That(SessionTranscriptLocator.MatchTranscript(lines, Worktree, StringComparison.Ordinal))
+            .IsEqualTo(SessionTranscriptLocator.CwdMatch.No);
+    }
+
+    [Test]
+    public async Task MatchTranscript_NoCwdYet_ReturnsUnknown() {
+        // A freshly-created transcript whose cwd line hasn't been written yet. Must be
+        // Unknown (not No) so the poll loop keeps re-checking it — it could be ours.
+        var lines = new[] { """{"type":"summary"}""", """{"truncated":"partial""" };
+
+        await Assert.That(SessionTranscriptLocator.MatchTranscript(lines, Worktree, StringComparison.Ordinal))
+            .IsEqualTo(SessionTranscriptLocator.CwdMatch.Unknown);
+    }
+
+    [Test]
+    public async Task MatchTranscript_EmptyFile_ReturnsUnknown() {
+        await Assert.That(SessionTranscriptLocator.MatchTranscript([], Worktree, StringComparison.Ordinal))
+            .IsEqualTo(SessionTranscriptLocator.CwdMatch.Unknown);
+    }
+
     // ── SessionIdFromFileName: dashed → dashless normalization ──────────
 
     [Test]

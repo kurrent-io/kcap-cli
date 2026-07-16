@@ -1352,19 +1352,29 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var projectDir = ClaudePaths.ProjectDir(agent.Worktree.Path);
             var deadline   = DateTime.UtcNow + SessionIdPollTimeout;
 
+            // Transcripts confirmed to belong to another session (a foreign cwd) are remembered
+            // here so we don't re-open them every 2 s tick. A session's cwd never changes, so a
+            // definitive non-match is permanent; files still being written (no cwd yet) are NOT
+            // added, so the agent's own freshly-created transcript is always re-checked.
+            var ruledOut = new HashSet<string>();
+
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(agent.ReadCts.Token, _shutdownCts.Token);
 
             while (DateTime.UtcNow < deadline) {
                 if (agent.SessionId is not null) return; // linked by other means (hook succeeded)
 
-                if (SessionTranscriptLocator.TryLocate(projectDir, agent.Worktree.Path, spawnedAtUtc) is { } sessionId) {
+                if (SessionTranscriptLocator.TryLocate(projectDir, agent.Worktree.Path, spawnedAtUtc, ruledOut) is { } sessionId) {
                     agent.SessionId ??= sessionId;
 
                     LogSessionIdDetected(agent.Id, sessionId);
 
                     if (!agent.IsPrivate) {
-                        await _server.AgentStatusChangedAsync(agent.Id, agent.Status, sessionId);
+                        // Enqueue the run-event first: it's a non-throwing local enqueue, whereas
+                        // the SignalR status update can throw during a reconnect. Ordering it first
+                        // ensures a transient connection hiccup can't skip the durable report — the
+                        // status update then re-sends via the heartbeat loop regardless.
                         await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunHeartbeat(sessionId));
+                        await _server.AgentStatusChangedAsync(agent.Id, agent.Status, sessionId);
                     }
 
                     return;

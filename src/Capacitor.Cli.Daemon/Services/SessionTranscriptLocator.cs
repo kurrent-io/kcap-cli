@@ -49,16 +49,34 @@ internal static class SessionTranscriptLocator {
     /// session id, or null when no candidate matches yet. Best-effort: unreadable or
     /// malformed candidates are skipped, never thrown.
     /// </summary>
-    public static string? TryLocate(string projectDir, string worktreePath, DateTime spawnedAtUtc) {
+    /// <param name="ruledOut">
+    /// Optional set of file paths already confirmed to belong to another session (or to not be a
+    /// transcript at all). Since the caller polls every few seconds over a shared project dir,
+    /// caching definitive non-matches here avoids re-opening the user's own concurrently-written
+    /// sessions on every tick. Only <em>definitive</em> non-matches are added: a file whose name
+    /// isn't a session id, or one whose <c>cwd</c> is present but foreign (a cwd never changes).
+    /// Files with no <c>cwd</c> yet (still being written) are left out so the agent's own
+    /// freshly-created transcript is always re-checked.
+    /// </param>
+    public static string? TryLocate(string projectDir, string worktreePath, DateTime spawnedAtUtc, ISet<string>? ruledOut = null) {
         if (!Directory.Exists(projectDir)) return null;
 
         foreach (var file in Directory.EnumerateFiles(projectDir, "*.jsonl")) {
+            if (ruledOut?.Contains(file) == true) continue;
+
             try {
-                if (SessionIdFromFileName(file) is not { } sessionId) continue;
+                if (SessionIdFromFileName(file) is not { } sessionId) {
+                    ruledOut?.Add(file); // not a session transcript — its name won't change
+                    continue;
+                }
 
                 if (!IsNewEnough(File.GetCreationTimeUtc(file), File.GetLastWriteTimeUtc(file), spawnedAtUtc)) continue;
 
-                if (TryMatchTranscript(ReadFirstLines(file), worktreePath)) return sessionId;
+                switch (MatchTranscript(ReadFirstLines(file), worktreePath, DefaultPathComparison)) {
+                    case CwdMatch.Yes: return sessionId;
+                    case CwdMatch.No:  ruledOut?.Add(file); break; // another session's transcript — cwd is fixed
+                    // CwdMatch.Unknown: no cwd yet (file still being written) — leave uncached, re-check next tick.
+                }
             } catch {
                 // Candidate vanished mid-scan, is locked, or is otherwise unreadable — skip it;
                 // the caller polls, so a transiently unreadable match is retried next tick.
@@ -78,11 +96,32 @@ internal static class SessionTranscriptLocator {
     /// Path comparison; defaults to case-insensitive on Windows, case-sensitive elsewhere.
     /// Injectable so tests can pin either behaviour regardless of the OS they run on.
     /// </param>
-    public static bool TryMatchTranscript(IEnumerable<string> lines, string worktreePath, StringComparison? comparison = null) {
-        var cmp    = comparison ?? DefaultPathComparison;
+    public static bool TryMatchTranscript(IEnumerable<string> lines, string worktreePath, StringComparison? comparison = null)
+        => MatchTranscript(lines, worktreePath, comparison ?? DefaultPathComparison) == CwdMatch.Yes;
+
+    /// <summary>Outcome of inspecting a transcript's early lines for a <c>cwd</c>.</summary>
+    internal enum CwdMatch {
+        /// <summary>A <c>cwd</c> equal to the worktree path was found — this is the agent's transcript.</summary>
+        Yes,
+        /// <summary>A <c>cwd</c> was found but it belongs to a different session — a definitive, permanent non-match.</summary>
+        No,
+        /// <summary>No parseable <c>cwd</c> in the inspected lines — the file may still be being written; re-check later.</summary>
+        Unknown,
+    }
+
+    /// <summary>
+    /// Classifies a candidate transcript by scanning up to <see cref="MaxLinesToInspect"/> non-blank
+    /// lines for a JSON <c>cwd</c>. Returns <see cref="CwdMatch.Yes"/> on the first line whose <c>cwd</c>
+    /// equals <paramref name="worktreePath"/>, <see cref="CwdMatch.No"/> if a <c>cwd</c> was seen but none
+    /// matched, or <see cref="CwdMatch.Unknown"/> if no <c>cwd</c> was seen at all. Partial or invalid
+    /// JSON lines are tolerated (skipped — the file is being written concurrently) and both paths are
+    /// normalized (separator style, trailing separators) before comparing.
+    /// </summary>
+    internal static CwdMatch MatchTranscript(IEnumerable<string> lines, string worktreePath, StringComparison comparison) {
         var target = NormalizePath(worktreePath);
 
         var inspected = 0;
+        var sawCwd    = false;
 
         foreach (var line in lines) {
             if (inspected >= MaxLinesToInspect) break;
@@ -95,13 +134,17 @@ internal static class SessionTranscriptLocator {
             try {
                 cwd = JsonNode.Parse(line)?["cwd"]?.GetValue<string>();
             } catch {
-                continue; // partial/invalid JSONL line — tolerate and move on
+                continue; // partial/invalid JSONL line (or non-string cwd) — tolerate and move on
             }
 
-            if (cwd is not null && string.Equals(NormalizePath(cwd), target, cmp)) return true;
+            if (cwd is null) continue;
+
+            sawCwd = true;
+
+            if (string.Equals(NormalizePath(cwd), target, comparison)) return CwdMatch.Yes;
         }
 
-        return false;
+        return sawCwd ? CwdMatch.No : CwdMatch.Unknown;
     }
 
     /// <summary>
