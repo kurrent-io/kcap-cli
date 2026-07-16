@@ -188,6 +188,19 @@ class WatchState {
     // until its link POST succeeds, so a failed POST retries on the next scan (fail-open).
     public HashSet<string> PostedSubagentLinks { get; } = new(StringComparer.Ordinal);
 
+    // AI-1357 task 10: Kiro turn anchors (the turn's final message_id) already streamed as a
+    // synthetic KiroUsageBackfilled line, so a later drain never re-emits the same anchor. Mirrors
+    // LastAntigravityGenIdx above, but keyed on the anchor string rather than a row index because
+    // Kiro's sidecar has no stable ordinal — committed ONLY after a successful send (see
+    // KiroUsagePendingAnchors).
+    public HashSet<string> KiroUsageEmittedAnchors { get; } = new(StringComparer.Ordinal);
+
+    // Anchors staged by the most recent AppendKiroUsageBackfillLines call but not yet committed
+    // to KiroUsageEmittedAnchors. The watcher commits them into the set above only once the batch
+    // carrying their synthetic lines lands; a failed send leaves this list to be recomputed (and
+    // re-staged) fresh on the next drain, so nothing is lost.
+    public List<string> KiroUsagePendingAnchors { get; } = [];
+
     public const int TranscriptThreshold = 10;
 }
 

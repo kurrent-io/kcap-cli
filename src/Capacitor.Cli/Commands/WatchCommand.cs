@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Antigravity;
 using Capacitor.Cli.Core.Gemini;
+using Capacitor.Cli.Core.Kiro;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
 using Capacitor.Cli.Core.Auth;
@@ -1115,6 +1116,18 @@ static partial class WatchCommand {
                 antigravityGenMax = AppendAntigravityUsageLines(state, newLines, newLineNumbers, transcriptPath, state.LastAntigravityCreatedAt);
             }
 
+            // AI-1357 task 10: Kiro's per-turn credits/context% live in the sibling {id}.json, not
+            // the .jsonl (see KiroUsage docs) — by the time Kiro flushes that sidecar, a live drain
+            // has usually already sent the anchor's AssistantMessage line, so import-style inline
+            // enrichment can't reach it. Backfill it instead as a synthetic KiroUsageBackfilled line
+            // (server Task 12 folds these into a backfill event, keyed on the anchor). Same
+            // buffering/agentId gating as the Antigravity block above; staged anchors are committed
+            // into state.KiroUsageEmittedAnchors only after a successful send (below), so a failed
+            // batch re-reads and re-stages the same anchors next drain.
+            if (vendor == "kiro" && (agentId is not null || state.ThresholdReached)) {
+                AppendKiroUsageBackfillLines(state, newLines, newLineNumbers, transcriptPath);
+            }
+
             if (newLines.Count > 0) {
                 state.LastActivityAt          = DateTimeOffset.UtcNow;
                 // New activity restarts the idle measure, so discard disconnected time accrued
@@ -1310,6 +1323,13 @@ static partial class WatchCommand {
                 // so the rows re-read next drain instead of being skipped forever.
                 if (antigravityGenMax > state.LastAntigravityGenIdx)
                     state.LastAntigravityGenIdx = antigravityGenMax;
+
+                // Commit the Kiro usage-backfill anchors ONLY now (after the batch carrying their
+                // synthetic lines landed); a failed send above leaves KiroUsageEmittedAnchors
+                // unchanged so AppendKiroUsageBackfillLines re-stages the same anchors next drain
+                // instead of losing them.
+                foreach (var anchor in state.KiroUsagePendingAnchors)
+                    state.KiroUsageEmittedAnchors.Add(anchor);
 
                 if (repoToSend is not null) {
                     state.LastSentRepository = repoToSend;
@@ -1694,6 +1714,75 @@ static partial class WatchCommand {
             Log($"Antigravity usage poll failed: {ex.Message}");
         }
         return maxIdx;
+    }
+
+    // AI-1357 task 10: Kiro's per-turn credits/context% live in the sidecar {id}.json, not the
+    // .jsonl the live watcher tails (see KiroUsage docs) — the import path enriches the anchor
+    // AssistantMessage line inline because it reads the whole file up front, but a live drain has
+    // already sent that line by the time Kiro flushes the sidecar. So the live path emits a
+    // synthetic KiroUsageBackfilled line per turn anchor instead (server: Task 12 folds it into a
+    // backfill event, deterministic id keyed on the anchor — never the same shape/idea as a real
+    // transcript line, hence its own kind). High band keeps its line numbers clear of both real
+    // transcript lines and Antigravity's synthetic USAGE band (AntigravityUsageLineBase).
+    const long KiroUsageLineBase = 2_000_000_000L;
+
+    /// <summary>
+    /// Builds the synthetic JSONL line the server recognizes as a Kiro usage backfill for one
+    /// turn anchor (the turn's final <c>message_id</c>). <paramref name="contextPct"/> is omitted
+    /// when absent, mirroring <see cref="KiroUsage.EnrichLine"/>'s optional-field handling.
+    /// </summary>
+    internal static string BuildKiroUsageBackfillLine(string anchor, double credits, double? contextPct) {
+        var data = new JsonObject {
+            ["message_id"] = anchor,
+            ["credits"]    = credits,
+        };
+        if (contextPct is { } pct) data["context_usage_percentage"] = pct;
+
+        var root = new JsonObject {
+            ["kind"] = "KiroUsageBackfilled",
+            ["data"] = data,
+        };
+        return root.ToJsonString();
+    }
+
+    /// <summary>
+    /// Reads the sidecar <c>{id}.json</c> next to <paramref name="transcriptPath"/> and appends a
+    /// synthetic <see cref="BuildKiroUsageBackfillLine"/> line for each turn anchor NOT already in
+    /// <see cref="WatchState.KiroUsageEmittedAnchors"/>, staging the newly-seen anchors on
+    /// <see cref="WatchState.KiroUsagePendingAnchors"/> for the caller to commit after a successful
+    /// send (mirrors <see cref="AppendAntigravityUsageLines"/>'s watermark-after-send contract, but
+    /// keyed on anchor strings rather than a monotonic row index). Returns the count staged (0 on a
+    /// missing/malformed sidecar or when every turn's anchor is already emitted) — never throws;
+    /// usage is always best-effort (AI-728/AI-1196).
+    /// </summary>
+    internal static long AppendKiroUsageBackfillLines(WatchState state, List<string> newLines, List<int> newLineNumbers, string transcriptPath) {
+        state.KiroUsagePendingAnchors.Clear();
+        var staged = 0L;
+        try {
+            var metaPath = Path.ChangeExtension(transcriptPath, ".json");
+            if (!File.Exists(metaPath)) return 0;
+
+            var anchors = KiroUsage.AnchorMap(File.ReadAllText(metaPath));
+            var offset  = 0;
+
+            foreach (var (anchor, usage) in anchors) {
+                if (state.KiroUsageEmittedAnchors.Contains(anchor)) { offset++; continue; }
+
+                // Task 10 scope is credits/context% only — tokens stay upstream-blocked (AI-1196),
+                // so a turn with only (dormant, zero) token counts has nothing to backfill yet.
+                if (usage.Credits == 0 && usage.ContextPct is null) { offset++; continue; }
+
+                newLines.Add(BuildKiroUsageBackfillLine(anchor, usage.Credits, usage.ContextPct));
+                newLineNumbers.Add((int)(KiroUsageLineBase + offset));
+                state.KiroUsagePendingAnchors.Add(anchor);
+                staged++;
+                offset++;
+            }
+        } catch (Exception ex) {
+            // Usage is always best-effort (AI-728) — never let a sidecar read break the drain.
+            Log($"Kiro usage backfill poll failed: {ex.Message}");
+        }
+        return staged;
     }
 
     /// <summary>
