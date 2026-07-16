@@ -890,12 +890,18 @@ public static class ClaudeHookCommand {
         };
 
     /// <summary>
-    /// Returns true if the given session still has undelivered spool entries (live .jsonl or in-flight
-    /// .draining files). Used as an ordering guard so a stranded session-start always reaches the
-    /// server before its session-end.
+    /// Returns true if the given session still has undelivered spool entries. Used as an ordering
+    /// guard so a stranded session-start always reaches the server before its session-end.
+    ///
+    /// <para>Delegates to the public <see cref="HookSpool.HasBacklog"/> (AI-1357 Task 12) rather than
+    /// re-implementing the file checks: the ordered drain (now running on every non-Codex hook,
+    /// including <c>--claude</c>) can WITHHOLD a spooled session-end in the <c>.ordered-*</c> temp
+    /// namespace pending the transcript tail. A stale private check that only looked at
+    /// <c>{sid}.jsonl</c> / <c>{sid}.*.draining</c> would miss that withheld terminal and let a later
+    /// Claude hook (e.g. subagent-stop) post directly, AHEAD of the still-withheld session-end —
+    /// the exact cross-spool ordering violation Blockers 1/3 exist to prevent. <c>HasBacklog</c>
+    /// covers all three namespaces; <see cref="CursorHookCommand"/> already routes through it.</para>
     /// </summary>
     static bool CurrentSessionHasBacklog(HookSpool spool, string? sid) =>
-        sid is not null && Directory.Exists(spool.Dir)
-        && (File.Exists(Path.Combine(spool.Dir, $"{sid}.jsonl"))
-            || Directory.EnumerateFiles(spool.Dir, $"{sid}.*.draining").Any());
+        sid is not null && spool.HasBacklog(sid);
 }

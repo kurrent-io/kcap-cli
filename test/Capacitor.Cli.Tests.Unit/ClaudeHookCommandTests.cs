@@ -306,6 +306,26 @@ public class ClaudeHookCommandTests {
         await Assert.That(all).Contains("\"route\":\"subagent-stop\"");
     }
 
+    // AI-1357 Task 12 / BLOCKER-1+3 regression: the centralized ordered drain (now running on every
+    // non-Codex hook, incl. --claude) can WITHHOLD a spooled session-end in the ".ordered-*" temp
+    // namespace pending the transcript tail. ClaudeHookCommand.CurrentSessionHasBacklog must see that
+    // withheld terminal (it now delegates to HookSpool.HasBacklog, which covers ".ordered-*") so a
+    // later Claude subagent-stop for the SAME session spools BEHIND it rather than POSTing ahead of
+    // the still-withheld session-end — the exact cross-spool ordering violation the blockers prevent.
+    [Test]
+    public async Task subagent_stop_spools_behind_a_session_end_withheld_in_the_ordered_namespace() {
+        using var fx = new Fixture(HttpStatusCode.OK); // server up — only the ordering guard can hold the post back
+        // A withheld ordered-drain remainder, exactly as LifecycleSpoolDrain/DrainRoutesAsync leaves it.
+        fx.WriteOrderedTemp(Sid, """{"route":"session-end","body":"{\"session_id\":\"withheld\"}"}""");
+
+        await fx.HandleAsync($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}""");
+
+        // The guard saw the .ordered-* backlog: the fresh subagent-stop was spooled, NOT posted.
+        await Assert.That(fx.RouteOrder).DoesNotContain("subagent-stop");
+        var all = string.Concat(fx.SpoolFiles.Select(File.ReadAllText));
+        await Assert.That(all).Contains("\"route\":\"subagent-stop\"");
+    }
+
     sealed class Fixture : IDisposable {
         readonly string _tmpHome = Path.Combine(Path.GetTempPath(), $"kcap-claude-hook-{Guid.NewGuid():N}");
         readonly string _spoolPath;
@@ -341,6 +361,13 @@ public class ClaudeHookCommandTests {
 
         public IEnumerable<string> SpoolFiles =>
             Directory.Exists(_spoolPath) ? Directory.EnumerateFiles(_spoolPath) : [];
+
+        /// <summary>Drops a ".ordered-*" temp (the ordered drain's withheld-remainder namespace)
+        /// straight into the spool dir, simulating a session-end held back by a prior ordered pass.</summary>
+        public void WriteOrderedTemp(string sid, string jsonLine) {
+            Directory.CreateDirectory(_spoolPath);
+            File.WriteAllText(Path.Combine(_spoolPath, $"{sid}.ordered-1-1"), jsonLine + "\n");
+        }
 
         public void Dispose() { Client.Dispose(); try { Directory.Delete(_tmpHome, true); } catch { } }
     }
