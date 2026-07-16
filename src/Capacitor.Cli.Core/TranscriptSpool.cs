@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace Capacitor.Cli.Commands;
+namespace Capacitor.Cli.Core;
 
 /// <summary>
 /// Dedicated on-disk spool for the UNDELIVERED TRANSCRIPT TAIL captured at shutdown during an
@@ -9,6 +9,10 @@ namespace Capacitor.Cli.Commands;
 /// this is bounded with NO SILENT DROP: on cap exhaustion it stops appending and writes a
 /// <c>needs-import</c> marker so the session is surfaced as requiring `kcap import` rather than
 /// truncated. Per-session JSONL of transcript batch JSON, one per line, arrival order.
+///
+/// <para>Moved to <c>Capacitor.Cli.Core</c> (AI-1357 Task 12) alongside <see cref="HookSpool"/> and
+/// <see cref="LifecycleSpoolDrain"/> so both the CLI and the daemon can share the ordered-drain
+/// primitives.</para>
 /// </summary>
 public sealed partial class TranscriptSpool(string spoolDir, long capBytes = TranscriptSpool.DefaultCapBytes) {
     public const long DefaultCapBytes = 8_388_608; // 8 MB per session

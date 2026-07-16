@@ -1,4 +1,4 @@
-using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -82,6 +82,68 @@ public class LifecycleSpoolDrainTests {
                 $"L:session-needs-import:{{\"session_id\":\"{Sid}\",\"needs_import\":true}}",
                 """L:session-end/kiro:{"phase":"end"}""",
             ]);
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    // AI-1357 Task 12 / BLOCKER-3: session-start/subagent-stop/session-end now share one spool
+    // file in prod, so a subagent-stop that arrives (or is only discovered) AFTER session-end was
+    // already delivered is reachable. Same-pass, DrainRoutesAsync's phase-mismatch break already
+    // withholds it correctly — but a bare re-run of RunAsync on a FRESH file containing only that
+    // straggler would, without a durable "already ended" marker, treat it as an ordinary phase-1
+    // non-terminal entry and deliver it — a real cross-pass ordering violation (the server would
+    // see activity for a session it already closed).
+    [Test]
+    public async Task marks_session_ended_after_terminal_delivery_and_drops_a_later_straggler() {
+        var dir = TmpDir();
+        try {
+            var life = new HookSpool(Path.Combine(dir, "spool"));
+            var tx   = new TranscriptSpool(Path.Combine(dir, "tx"));
+            life.Append(Sid, "session-start/kiro", """{"phase":"start"}""");
+            life.Append(Sid, "session-end/kiro",   """{"phase":"end"}""");
+
+            var order = new List<string>();
+            Task<DrainOutcome> Deliver(string route, string body) { order.Add(body); return Task.FromResult(DrainOutcome.Delivered); }
+
+            await LifecycleSpoolDrain.RunAsync(life, tx, currentSessionId: null,
+                lifecyclePoster: Deliver,
+                transcriptPoster: body => { order.Add(body); return Task.FromResult(DrainOutcome.Delivered); },
+                budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+
+            await Assert.That(order).IsEquivalentTo(["""{"phase":"start"}""", """{"phase":"end"}"""]);
+            await Assert.That(life.IsMarkedEnded(Sid)).IsTrue();
+
+            // A late straggler lands in a brand-new pass, with nothing else in its way — the only
+            // thing stopping it from looking like an ordinary phase-1 entry is the ended marker.
+            life.Append(Sid, "subagent-stop/kiro", """{"phase":"straggler"}""");
+            order.Clear();
+
+            await LifecycleSpoolDrain.RunAsync(life, tx, currentSessionId: null,
+                lifecyclePoster: Deliver,
+                transcriptPoster: body => { order.Add(body); return Task.FromResult(DrainOutcome.Delivered); },
+                budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+
+            await Assert.That(order).IsEmpty(); // never delivered
+            await Assert.That(life.HasBacklog(Sid)).IsFalse(); // discarded, not left pending retry
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    [Test]
+    public async Task does_not_mark_ended_when_the_terminal_post_only_transiently_fails() {
+        var dir = TmpDir();
+        try {
+            var life = new HookSpool(Path.Combine(dir, "spool"));
+            var tx   = new TranscriptSpool(Path.Combine(dir, "tx"));
+            life.Append(Sid, "session-end/kiro", """{"phase":"end"}""");
+
+            await LifecycleSpoolDrain.RunAsync(life, tx, currentSessionId: null,
+                lifecyclePoster: (_, _) => Task.FromResult(DrainOutcome.TransientStop),
+                transcriptPoster: _ => Task.FromResult(DrainOutcome.Delivered),
+                budget: TimeSpan.FromSeconds(5), ct: CancellationToken.None);
+
+            // A transient failure must not be mistaken for "session ended" — the entry stays
+            // spooled so a later pass can retry it, exactly as before.
+            await Assert.That(life.IsMarkedEnded(Sid)).IsFalse();
+            await Assert.That(life.HasBacklog(Sid)).IsTrue();
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 

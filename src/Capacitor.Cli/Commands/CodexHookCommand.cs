@@ -258,7 +258,7 @@ static class CodexHookCommand {
     // the stdout write in HandleSessionStart. The drain is fire-and-forget (never awaited) — its
     // own internal throttle/budget/try-catch make it safe to abandon if the process exits first;
     // reliable delivery for Codex sessions is carried by the daemon's periodic drain pass
-    // (AI-1357 Task 15), not by this opportunistic best-effort attempt.
+    // (AI-1357 Task 12), not by this opportunistic best-effort attempt.
     static Task RunPostStdoutWork(
             string baseUrl, HookSpool spool, JsonNode? enrichedNode, string? sessionId, HookPostOutcome outcome) {
         var transcriptSpool = new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"));

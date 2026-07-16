@@ -63,12 +63,9 @@ static class PiHookCommand {
             return 0;
         }
 
-        // AI-1357: bounded, best-effort backlog drain so a prior session's spooled lifecycle
-        // POSTs / transcript tail replay even when this firing posts nothing further.
-        // DrainSpoolsAsync self-throttles (+ reaps) internally.
-        var spool           = new HookSpool(PathHelpers.ConfigPath("spool"));
-        var transcriptSpool = new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"));
-        await AgentHookPoster.DrainSpoolsAsync(baseUrl, spool, transcriptSpool, sessionId);
+        // AI-1357 Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
+        // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
+        var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
 
         var activeProfile = await AppConfig.GetActiveProfileAsync();
 

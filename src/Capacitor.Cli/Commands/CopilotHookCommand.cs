@@ -97,17 +97,9 @@ static class CopilotHookCommand {
             return 0;
         }
 
-        // AI-1357: bounded, best-effort backlog drain so a prior session's spooled lifecycle
-        // POSTs / transcript tail replay even when this firing posts nothing further. Gated to
-        // the two lifecycle events — agentStop/notification fire on EVERY turn, and the drain's
-        // auth-discovery + potential network POST must not add per-turn latency to those.
-        // (DrainSpoolsAsync also self-throttles + reaps, but the event gate skips it outright.)
-        var spool           = new HookSpool(PathHelpers.ConfigPath("spool"));
-        var transcriptSpool = new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"));
-
-        if (eventName is "sessionStart" or "sessionEnd") {
-            await AgentHookPoster.DrainSpoolsAsync(baseUrl, spool, transcriptSpool, sessionId);
-        }
+        // AI-1357 Task 12: the cross-vendor backlog drain now runs centrally in Program.cs's
+        // `case "hook":` before dispatch — no longer wired here (removes the double-wire).
+        var spool = new HookSpool(PathHelpers.ConfigPath("spool"));
 
         var cwd           = TryGetString(node, "cwd");
         var activeProfile = await AppConfig.GetActiveProfileAsync();

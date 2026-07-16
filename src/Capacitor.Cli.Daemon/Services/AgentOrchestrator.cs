@@ -208,6 +208,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // even for a failing refresh or a short-lived token that keeps re-entering the window.
     readonly PeriodicTimer _tokenRefresh = new(TimeSpan.FromSeconds(60));
 
+    // AI-1357 Task 12: periodic sweep of the cross-vendor lifecycle + transcript spools. Covers
+    // backlogs left behind by vendors whose session-end never fires another `kcap` hook process
+    // (Kiro/OpenCode watcher-owned session-end, Antigravity/Codex-desktop GUI idle/parent-exit) —
+    // see SpoolDrainLoop's doc comment. 60s mirrors the reaper-style cadence of the other timers;
+    // the drain's own per-tick budget keeps a slow/unreachable server from stalling the daemon.
+    readonly PeriodicTimer _spoolDrain = new(TimeSpan.FromSeconds(60));
+
     // Refresh once the token is within this much of its expiry. Comfortably above the 60 s tick
     // so the window is never stepped over.
     static readonly TimeSpan ProactiveRefreshWindow = TimeSpan.FromMinutes(5);
@@ -278,6 +285,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _ = RunHeartbeatLoopAsync(_shutdownCts.Token);
         _ = RunDaemonHeartbeatLoopAsync(_shutdownCts.Token);
         _ = RunTokenRefreshLoopAsync(_shutdownCts.Token);
+        _ = RunSpoolDrainLoopAsync(_shutdownCts.Token);
     }
 
     internal int ActiveCount => _agents.Count(a => a.Value.Status is "Starting" or "Running");
@@ -1523,6 +1531,28 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
+    async Task RunSpoolDrainLoopAsync(CancellationToken ct) {
+        var loop = new SpoolDrainLoop(
+            _config.ServerUrl,
+            new HookSpool(PathHelpers.ConfigPath("spool")),
+            new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool")),
+            _logger,
+            onWhatsDoneRequested: SpawnWhatsDoneGenerator);
+
+        while (await _spoolDrain.WaitForNextTickAsync(ct)) {
+            // Defence in depth: TickAsync is intentionally total, but this runs as an
+            // unobserved background Task — guard here so the loop survives even if a
+            // future change lets an exception escape the tick.
+            try {
+                await loop.TickAsync(ct);
+            } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                return;
+            } catch (Exception ex) {
+                _logger.LogWarning(ex, "Spool-drain tick faulted — continuing loop");
+            }
+        }
+    }
+
     async Task CleanupAgentAsync(string agentId) {
         if (!_agents.TryRemove(agentId, out var agent)) {
             return;
@@ -1585,6 +1615,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _heartbeatTimer.Dispose();
         _daemonHeartbeat.Dispose();
         _tokenRefresh.Dispose();
+        _spoolDrain.Dispose();
     }
 
     /// <summary>

@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
-namespace Capacitor.Cli.Commands;
+namespace Capacitor.Cli.Core;
 
 /// <summary>Result of a single spooled-entry replay attempt.</summary>
 public enum DrainOutcome {
@@ -19,6 +19,11 @@ public enum DrainOutcome {
 /// rotate-on-drain: the live file is atomically renamed to a private
 /// <c>.draining</c> temp before reading, so concurrent appends never collide
 /// with an in-flight drain.
+///
+/// <para>Moved to <c>Capacitor.Cli.Core</c> (AI-1357 Task 12) so both the CLI
+/// (<c>Capacitor.Cli</c>, an AOT exe) and the daemon (<c>Capacitor.Cli.Daemon</c>,
+/// a separate AOT exe) can share the ordered-drain primitives without either
+/// project referencing the other's exe as a library.</para>
 /// </summary>
 public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.DefaultCapBytes) {
     public const int DefaultCapBytes = 1_048_576; // 1 MB per session file
@@ -97,6 +102,13 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
     }
 
     // Recovered temps (oldest first) then the rotated live file. Returns true => stop the whole pass.
+    // NOTE (AI-1357 Task 12 / BLOCKER-1): only ever recovers ITS OWN ".draining" temps — never the
+    // ordered drain's ".ordered-*" temps (see DrainRoutesAsync below). The ordered drain deliberately
+    // WITHHOLDS a phase's remainder mid-pass (e.g. a session-end held back until the transcript tail
+    // and the leading non-terminal run are done); if this route-agnostic FIFO recovered that withheld
+    // remainder it would happily re-deliver it immediately, out of order, via a different poster —
+    // reintroducing the exact race the ordered drain exists to prevent. Distinct temp namespaces keep
+    // the two drains from ever cross-consuming each other's in-flight files.
     async Task<bool> DrainSessionAsync(
             string sid, Func<string, string, Task<DrainOutcome>> poster, Func<bool> expired, CancellationToken ct) {
         foreach (var temp in Directory.EnumerateFiles(spoolDir, $"{sid}.*.draining").OrderBy(File.GetCreationTimeUtc)) {
@@ -148,14 +160,19 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
         return true;
     }
 
-    /// <summary>True if this session still has undelivered spool entries (live .jsonl or .draining temp).</summary>
+    /// <summary>True if this session still has undelivered spool entries: a live .jsonl, a
+    /// route-agnostic-drain (Claude/Cursor) ".draining" temp, or an ordered-drain ".ordered-*" temp.
+    /// Callers use this as an ordering guard (e.g. "don't post my fresh session-end directly — a
+    /// withheld ordered-drain phase is still in flight for this session") so both temp namespaces
+    /// must be visible here even though only the ordered drain ever creates/consumes the latter.</summary>
     public bool HasBacklog(string sessionId) =>
         SafeSessionId.IsMatch(sessionId) && Directory.Exists(spoolDir)
         && (File.Exists(Path.Combine(spoolDir, $"{sessionId}.jsonl"))
-            || Directory.EnumerateFiles(spoolDir, $"{sessionId}.*.draining").Any());
+            || Directory.EnumerateFiles(spoolDir, $"{sessionId}.*.draining").Any()
+            || Directory.EnumerateFiles(spoolDir, $"{sessionId}.ordered-*").Any());
 
-    /// <summary>Every distinct session id with a live .jsonl or recovered .draining temp, in no
-    /// particular order (callers that need current-session-first ordering add it themselves).</summary>
+    /// <summary>Every distinct session id with a live .jsonl or recovered .draining/.ordered-* temp,
+    /// in no particular order (callers that need current-session-first ordering add it themselves).</summary>
     public IEnumerable<string> SessionIdsWithBacklog() {
         if (!Directory.Exists(spoolDir)) return [];
         var ids = new List<string>();
@@ -172,44 +189,62 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
     /// when <c>false</c>) are posted. Arrival order within the session file guarantees start-before-end,
     /// so as soon as an entry of the OTHER phase is reached, draining stops and the remainder — including
     /// that entry — is preserved for the caller's next phase. Used by <see cref="LifecycleSpoolDrain"/>
-    /// to enforce cross-spool ordering (lifecycle start &#8594; transcript tail &#8594; lifecycle end);
-    /// <see cref="DrainAllAsync"/> (route-agnostic FIFO) remains untouched for Claude/Cursor.
+    /// to enforce cross-spool ordering (lifecycle start &#8594; transcript tail &#8594; lifecycle end).
+    ///
+    /// <para><b>Distinct temp namespace (AI-1357 Task 12 / BLOCKER-1).</b> Rotates the live file to a
+    /// <c>{sid}.ordered-{pid}-{seq}</c> temp — NOT the <c>{sid}.{pid}-{seq}.draining</c> shape
+    /// <see cref="DrainAllAsync"/> (route-agnostic FIFO, still used by Claude/Cursor) uses — so a
+    /// deliberately-withheld phase can never be recovered and redelivered out of order by the
+    /// unrelated FIFO drain, and vice versa.</para>
+    ///
+    /// <para>Returns the number of entries actually resolved (delivered or permanently dropped) in
+    /// THIS call — never those left for a retry by a <c>TransientStop</c> or the budget. The caller
+    /// uses a non-zero terminal-phase count to durably mark the session ended (see
+    /// <see cref="MarkEnded"/>), which is how <see cref="LifecycleSpoolDrain"/> prevents a later
+    /// straggler non-terminal entry from ever being delivered after session-end (BLOCKER-3).</para>
     /// </summary>
-    public async Task DrainRoutesAsync(
+    public async Task<int> DrainRoutesAsync(
             string sid, bool isTerminal, Func<string, string, Task<DrainOutcome>> poster,
             Func<bool> expired, CancellationToken ct) {
-        if (!SafeSessionId.IsMatch(sid) || !Directory.Exists(spoolDir)) return;
+        if (!SafeSessionId.IsMatch(sid) || !Directory.Exists(spoolDir)) return 0;
 
-        foreach (var temp in Directory.EnumerateFiles(spoolDir, $"{sid}.*.draining").OrderBy(File.GetCreationTimeUtc)) {
-            if (expired() || ct.IsCancellationRequested) return;
-            if (await DrainFileRoutesAsync(temp, isTerminal, poster, expired, ct)) return; // stopped — remainder kept
+        var consumed = 0;
+
+        foreach (var temp in Directory.EnumerateFiles(spoolDir, $"{sid}.ordered-*").OrderBy(File.GetCreationTimeUtc)) {
+            if (expired() || ct.IsCancellationRequested) return consumed;
+            var (stopped, n) = await DrainFileRoutesAsync(temp, isTerminal, poster, expired, ct);
+            consumed += n;
+            if (stopped) return consumed; // stopped — remainder kept
         }
 
         var live = Path.Combine(spoolDir, $"{sid}.jsonl");
-        if (!File.Exists(live) || expired() || ct.IsCancellationRequested) return;
+        if (!File.Exists(live) || expired() || ct.IsCancellationRequested) return consumed;
 
-        var rotated = Path.Combine(spoolDir, $"{sid}.{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}.draining");
+        var rotated = Path.Combine(spoolDir, $"{sid}.ordered-{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}");
         try { File.Move(live, rotated); }
-        catch { return; } // lost the atomic-rename race (or vanished) — the winner handles it
-        await DrainFileRoutesAsync(rotated, isTerminal, poster, expired, ct);
+        catch { return consumed; } // lost the atomic-rename race (or vanished) — the winner handles it
+        var (_, more) = await DrainFileRoutesAsync(rotated, isTerminal, poster, expired, ct);
+        return consumed + more;
     }
 
-    static bool IsTerminalRoute(string route) {
+    internal static bool IsTerminalRoute(string route) {
         var slash = route.IndexOf('/');
         var head  = slash >= 0 ? route[..slash] : route;
         return head == "session-end";
     }
 
-    // Drain a private temp, posting only entries matching isTerminal. Delivered/Drop advance;
-    // TransientStop, budget, or a phase mismatch stops and keeps the remainder (returns true).
-    static async Task<bool> DrainFileRoutesAsync(
+    // Drain a private temp, posting only entries matching isTerminal. Delivered/Drop advance and
+    // count toward the returned "consumed" total; TransientStop, budget, or a phase mismatch stops
+    // (Stopped=true) and keeps the remainder for a later pass.
+    static async Task<(bool Stopped, int Consumed)> DrainFileRoutesAsync(
             string path, bool isTerminal, Func<string, string, Task<DrainOutcome>> poster,
             Func<bool> expired, CancellationToken ct) {
         string[] lines;
         try { lines = await File.ReadAllLinesAsync(path, ct); }
-        catch { return false; }
+        catch { return (false, 0); }
 
         var i = 0;
+        var consumed = 0;
         for (; i < lines.Length; i++) {
             if (expired() || ct.IsCancellationRequested) break;
             if (string.IsNullOrWhiteSpace(lines[i])) continue;
@@ -229,15 +264,62 @@ public sealed partial class HookSpool(string spoolDir, int capBytes = HookSpool.
             catch { outcome = DrainOutcome.TransientStop; }
 
             if (outcome == DrainOutcome.TransientStop) break;
+            consumed++;
         }
 
         if (i >= lines.Length) {
             try { File.Delete(path); } catch { }
-            return false;
+            return (false, consumed);
         }
         try { await File.WriteAllLinesAsync(path, lines.Skip(i), ct); } catch { }
-        return true;
+        return (true, consumed);
     }
+
+    /// <summary>
+    /// True if a terminal (session-end) entry for this session has already been durably delivered
+    /// (or permanently dropped) by a previous ordered-drain pass — see <see cref="MarkEnded"/>.
+    /// AI-1357 Task 12 / BLOCKER-3: once true, <see cref="LifecycleSpoolDrain"/> must never attempt
+    /// to deliver a straggler non-terminal entry for this session, even one that arrives (or is
+    /// discovered) in a later pass — that would be a real cross-pass ordering violation, not just a
+    /// same-pass one (the same-pass case is already prevented by <see cref="DrainRoutesAsync"/>'s
+    /// phase-mismatch break).
+    /// </summary>
+    public bool IsMarkedEnded(string sessionId) =>
+        SafeSessionId.IsMatch(sessionId) && File.Exists(EndedMarkerPath(sessionId));
+
+    /// <summary>Durably marks a session as ended (see <see cref="IsMarkedEnded"/>). The marker's
+    /// filename is dot-prefixed so it is invisible to <see cref="SessionIdOf"/> / the session-id-keyed
+    /// enumerations (matching the existing <c>.last-drain</c> throttle-stamp convention) — it is swept
+    /// only by <see cref="ReapOlderThan"/>'s unconditional file-age sweep.</summary>
+    public void MarkEnded(string sessionId) {
+        if (!SafeSessionId.IsMatch(sessionId)) return;
+        try {
+            Directory.CreateDirectory(spoolDir);
+            File.WriteAllText(EndedMarkerPath(sessionId), "");
+        } catch { }
+    }
+
+    /// <summary>
+    /// Deletes any lifecycle entries remaining for a session already <see cref="MarkEnded"/> —
+    /// a post-end straggler (e.g. a subagent-stop that arrived after session-end was already
+    /// delivered) must be dropped, never delivered out of order (AI-1357 Task 12 / BLOCKER-3).
+    /// </summary>
+    public void DiscardRemainder(string sessionId) {
+        if (!SafeSessionId.IsMatch(sessionId)) return;
+        try {
+            if (!Directory.Exists(spoolDir)) return;
+
+            var live = Path.Combine(spoolDir, $"{sessionId}.jsonl");
+            if (File.Exists(live)) File.Delete(live);
+
+            foreach (var temp in Directory.EnumerateFiles(spoolDir, $"{sessionId}.*.draining"))
+                try { File.Delete(temp); } catch { }
+            foreach (var temp in Directory.EnumerateFiles(spoolDir, $"{sessionId}.ordered-*"))
+                try { File.Delete(temp); } catch { }
+        } catch { }
+    }
+
+    string EndedMarkerPath(string sessionId) => Path.Combine(spoolDir, $".ended-{sessionId}");
 
     public void ReapOlderThan(TimeSpan age) {
         try {

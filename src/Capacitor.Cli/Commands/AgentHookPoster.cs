@@ -125,9 +125,16 @@ internal static class AgentHookPoster {
     static readonly TimeSpan DrainThrottle = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// AI-1357 Task 4: bounded, best-effort drain of the cross-vendor lifecycle + transcript spools.
-    /// Run early in a JSON-payload vendor dispatcher's <c>Handle</c> (after the disabled-session fast
-    /// path) so a prior session's backlog replays even when the current firing posts nothing further.
+    /// AI-1357 Task 4 (Task 12: centralized): bounded, best-effort drain of the cross-vendor
+    /// lifecycle + transcript spools. Introduced in Task 4 as a per-vendor call from each
+    /// JSON-payload dispatcher's <c>Handle</c>; Task 12 centralized the call site into
+    /// <c>Program.cs</c>'s <c>case "hook":</c> (before dispatch, non-Codex) so it runs exactly once
+    /// per invocation and additionally covers Claude/Cursor, which never called it directly. Codex
+    /// still calls this itself, but from the BACKGROUND after its stdout contract. Also reused by
+    /// the daemon's own periodic sweep (<c>SpoolDrainLoop</c>) for the equivalent Core primitives —
+    /// the daemon can't reference this CLI-project method, so it composes
+    /// <see cref="LifecycleSpoolDrain.RunAsync(HttpClient,string,HookSpool,TranscriptSpool,string?,TimeSpan,CancellationToken,Action{string,string}?)"/>
+    /// directly instead.
     ///
     /// <para><b>Throttled (AI-1357 review #1).</b> Several vendors fire their lifecycle hook on
     /// EVERY prompt (Kiro's <c>agentSpawn</c>, OpenCode's <c>session.idle</c>-driven re-fire), so an
@@ -169,7 +176,12 @@ internal static class AgentHookPoster {
             using (client) {
                 if (IsAuthLapsed(status)) return;
 
-                await LifecycleSpoolDrain.RunAsync(client, baseUrl, lifecycle, transcript, sessionId, budget, cts.Token);
+                // AI-1357 Task 12 / BLOCKER-2: a generically-drained session-end (any vendor — the
+                // server's generate_whats_done signal is vendor-agnostic, see WatchCommand's
+                // parent-exit path) must still trigger the what's-done generator, mirroring
+                // ClaudeHookCommand.ClaudePoster's own session-end replay side effect.
+                await LifecycleSpoolDrain.RunAsync(client, baseUrl, lifecycle, transcript, sessionId, budget, cts.Token,
+                    onWhatsDoneRequested: (sid, vendor) => WatcherManager.SpawnWhatsDoneGenerator(baseUrl, sid, vendor));
             }
         } catch {
             // Best-effort — a drain hiccup must never disrupt the vendor's own hook.
