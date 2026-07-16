@@ -34,6 +34,17 @@ internal sealed class CursorImportSource : IImportSource {
     readonly Lazy<IReadOnlyDictionary<string, string?>>  _sanitizedToFolder;
     readonly Func<string, Task<RepositoryPayload?>>      _repoDetector;
 
+    // AI-1358 (item 5): per-cwd cache of the detected repo payload, populated during
+    // ImportSessionAsync. Historical import can walk many sessions that share one workspace
+    // folder — without this, each session would re-run repo detection for the same cwd. Keyed
+    // by the resolved workspace folder (Ordinal — the same string ImportSessionAsync already
+    // compares against SourceMeta["WorkspaceFolder"], no case-folding needed for a cache key).
+    // Caches the RepositoryPayload rather than the built JsonObject: a JsonNode can only ever
+    // have one parent, so reusing the same JsonObject instance across two sessions' payloads
+    // throws InvalidOperationException on the second attach — BuildRepositoryNode must be
+    // called fresh per session from the cached payload.
+    readonly Dictionary<string, RepositoryPayload?> _repoCache = new(StringComparer.Ordinal);
+
     public CursorImportSource(
         string?                                  projectsDirOverride         = null,
         string?                                  workspaceStorageDirOverride = null,
@@ -42,11 +53,15 @@ internal sealed class CursorImportSource : IImportSource {
         _projectsDir         = projectsDirOverride         ?? CursorPaths.ProjectsDir();
         _workspaceStorageDir = workspaceStorageDirOverride ?? CursorPaths.Resolve().WorkspaceStorageDir;
         _sanitizedToFolder   = new Lazy<IReadOnlyDictionary<string, string?>>(BuildSanitizedToFolderMap);
-        // Cursor is the one import source that emits a `repository` node in its synthetic
-        // session-start (AI-1152) via BuildRepositoryNode, which includes pr_* when populated —
-        // so it keeps live PR detection (unlike the owner/repo-only detectors in the other
-        // sources). Dropping it here would silently strip PR tagging from imported Cursor sessions.
-        _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd));
+        // AI-1358 (item 5): historical import must never attach a live PR to an old session —
+        // stamping today's open PR onto a transcript from weeks ago is an anachronism, and it's
+        // exactly the wasted `gh pr view` / `glab api` round-trip per cwd that AI-1122 already
+        // skips for the other import sources. detectPullRequest:false still resolves
+        // owner/repo/branch (BuildRepositoryNode's non-PR fields), so imported sessions keep
+        // grouping under their repo — they just never carry pr_number/pr_title/pr_url/pr_head_ref.
+        // The LIVE Cursor hook path (CursorHookCommand → EnrichWithRepositoryInfoFromCwd) is a
+        // separate call site untouched by this default and keeps live PR detection.
+        _repoDetector        = repoDetector ?? (cwd => RepositoryDetection.DetectRepositoryAsync(cwd, detectPullRequest: false));
     }
 
     /// <summary>
@@ -361,14 +376,21 @@ internal sealed class CursorImportSource : IImportSource {
         // sessionStart carries a `repository` node → server emits RepositoryDetected
         // and the (historical/backfilled) session groups under its repo. Fail-open:
         // a non-git workspace or detection error leaves it null and unattributed.
+        //
+        // AI-1358 (item 5): cached per cwd — a historical import walks every session under a
+        // workspace, and many share one cwd, so this only runs detection once per distinct
+        // folder for the whole import rather than once per session.
         JsonObject? repositoryNode = null;
         if (workspaceFolder is not null) {
-            try {
-                var repo = await _repoDetector(workspaceFolder);
-                if (repo is not null) repositoryNode = RepositoryDetection.BuildRepositoryNode(repo);
-            } catch {
-                repositoryNode = null;
+            if (!_repoCache.TryGetValue(workspaceFolder, out var repo)) {
+                try {
+                    repo = await _repoDetector(workspaceFolder);
+                } catch {
+                    repo = null;
+                }
+                _repoCache[workspaceFolder] = repo;
             }
+            if (repo is not null) repositoryNode = RepositoryDetection.BuildRepositoryNode(repo);
         }
 
         // sessionStart MUST succeed before transcript advances the server
