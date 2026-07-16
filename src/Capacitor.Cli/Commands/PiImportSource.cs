@@ -165,7 +165,10 @@ internal sealed class PiImportSource : IImportSource {
                 continue;
             }
 
-            meta.LastTimestamp = TryGetLastWriteUtc(transcriptPath);
+            // Pi transcript records carry a per-record "timestamp" field (AI-1358 A3);
+            // prefer the tail-scanned last one over file mtime, which can be skewed
+            // by unrelated later writes to the same session-scoped file.
+            meta.LastTimestamp = EndedAtResolvers.LastTimestampFromJsonl(transcriptPath) ?? TryGetLastWriteUtc(transcriptPath);
 
             string? repoKey = null;
             if (hasExcludes && s.Cwd is { } cwd) {

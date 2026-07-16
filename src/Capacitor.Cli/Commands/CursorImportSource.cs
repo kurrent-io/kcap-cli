@@ -270,6 +270,13 @@ internal sealed class CursorImportSource : IImportSource {
                 continue;
             }
 
+            // Ended-at contract (AI-1358 A3): unlike Copilot (session.shutdown record) or
+            // Gemini/Pi (per-record "timestamp" field), Cursor's Anthropic content-block
+            // transcript carries no authoritative session-end record to tail-scan. The
+            // fallback is: the last parsed user-wrapper timestamp when the normalizer
+            // surfaced one (live-hook path), else this file's last-write time. Do NOT
+            // treat a tail-scan of this transcript as authoritative — there is no
+            // per-line timestamp field here the way there is for Gemini/Pi.
             try {
                 meta.LastTimestamp = File.GetLastWriteTimeUtc(transcriptPath);
             } catch {

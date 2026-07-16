@@ -187,10 +187,16 @@ internal sealed class CopilotImportSource : IImportSource {
             }
 
             // workspace.yaml's updated_at is stamped when Copilot assigns the
-            // session name (near session START), not at session end — the
-            // transcript file's last-write time is the only reliable
-            // end-time proxy (same approach as Cursor).
-            meta.LastTimestamp = TryGetLastWriteUtc(transcriptPath);
+            // session name (near session START), not at session end. The
+            // truthful end time is the session-final `session.shutdown`
+            // record's own timestamp (AI-1358 A3) — read directly off the raw
+            // transcript, NOT through IsImportRelevantLine, which deliberately
+            // skips session.* records for a different purpose (watermark
+            // comparison against the server's normalized line count above).
+            // Fall back to a tail-scan of any timestamped record, then mtime.
+            meta.LastTimestamp = EndedAtResolvers.CopilotShutdownTimestamp(transcriptPath)
+                ?? EndedAtResolvers.LastTimestampFromJsonl(transcriptPath)
+                ?? TryGetLastWriteUtc(transcriptPath);
 
             string? repoKey = null;
             if (hasExcludes && s.Cwd is { } cwd) {

@@ -154,7 +154,10 @@ internal sealed class GeminiImportSource : IImportSource {
                 continue;
             }
 
-            meta.LastTimestamp = TryGetLastWriteUtc(transcriptPath);
+            // Gemini chat records carry a per-message "timestamp" field (AI-1358 A3);
+            // prefer the tail-scanned last one over file mtime, which can be skewed
+            // by unrelated later writes to the same session-scoped file.
+            meta.LastTimestamp = EndedAtResolvers.LastTimestampFromJsonl(transcriptPath) ?? TryGetLastWriteUtc(transcriptPath);
 
             var status       = ImportCommand.ClassificationStatus.New;
             var resumeFromLn = 0;
