@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Antigravity;
 using Capacitor.Cli.Core.Gemini;
+using Capacitor.Cli.Core.Kiro;
 using Capacitor.Cli.Core.OpenCode;
 using Capacitor.Cli.Core.Pi;
 using Capacitor.Cli.Core.Auth;
@@ -965,6 +966,13 @@ static partial class WatchCommand {
                     return newLines;
             }
 
+            // Stamp Kiro's live context-% onto AssistantMessage lines at flush so it's present on the
+            // first send — it can't be backfilled (the server dedupes Kiro events by canonical id).
+            // Best-effort; rationale in the design spec.
+            if (vendor == "kiro" && newLines.Count > 0) {
+                newLines = EnrichKiroContextUsage(newLines, transcriptPath);
+            }
+
             // Only include repository info when it has changed since last send
             var repoToSend = RepoPayloadChanged(state.Repository, state.LastSentRepository)
                 ? state.Repository
@@ -1318,6 +1326,37 @@ static partial class WatchCommand {
         }
         return maxIdx;
     }
+
+    /// <summary>
+    /// Kiro live context-%: returns <paramref name="lines"/> with each Kiro AssistantMessage line
+    /// stamped with <c>data._kcap_usage.context_usage_percentage</c> from the sibling <c>{id}.json</c>
+    /// (reusing <see cref="KiroUsage.AnchorMap"/> + <see cref="KiroUsage.EnrichLine"/>). The sibling is
+    /// derived from the transcript path (dashed on disk), not the dashless <c>sessionId</c>.
+    /// Best-effort, order-preserving — never throws, never drops a line. See the design spec.
+    /// </summary>
+    internal static List<string> EnrichKiroContextUsage(List<string> lines, string transcriptPath) {
+        // Nothing to enrich unless the batch has an AssistantMessage line — skip the file read entirely.
+        if (!lines.Any(static l => l.Contains("AssistantMessage", StringComparison.Ordinal))) return lines;
+        try {
+            var siblingJson = Path.ChangeExtension(transcriptPath, ".json");
+            if (!File.Exists(siblingJson)) return lines;
+
+            var anchors = KiroUsage.AnchorMap(File.ReadAllText(siblingJson));
+            if (anchors.Count == 0) return lines;
+
+            return lines.Select(l => KiroUsage.EnrichLine(l, anchors)).ToList();
+        } catch (Exception ex) {
+            // Log the first failure only — a persistently unreadable/malformed sibling would otherwise
+            // spam one line per flush and drown out real warnings.
+            if (!_kiroEnrichWarned) {
+                _kiroEnrichWarned = true;
+                Log($"Kiro context-% enrichment failed (further failures suppressed): {ex.Message}");
+            }
+            return lines;
+        }
+    }
+
+    static bool _kiroEnrichWarned;
 
     /// <summary>
     /// Subagent-orchestration tool calls whose result arrives ASYNCHRONOUSLY via a separate
