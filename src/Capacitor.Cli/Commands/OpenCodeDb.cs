@@ -4,14 +4,18 @@ using Microsoft.Data.Sqlite;
 
 namespace Capacitor.Cli.Commands;
 
-/// <summary>One OpenCode session row (subset used by import).</summary>
+/// <summary>
+/// One OpenCode session row (subset used by import). <c>TimeCreated</c>/<c>TimeUpdated</c>
+/// are <c>null</c> when the column is NULL or 0 (both observed in the wild) — "unknown",
+/// never epoch (AI-1358).
+/// </summary>
 internal sealed record OpenCodeSessionRow(
     string  Id,
     string? ParentId,
     string? Directory,
     string  Title,
-    long    TimeCreated,
-    long    TimeUpdated);
+    long?   TimeCreated,
+    long?   TimeUpdated);
 
 /// <summary>
 /// Read-only reader over OpenCode's SQLite db (<c>~/.local/share/opencode/opencode.db</c>).
@@ -63,8 +67,8 @@ internal sealed class OpenCodeDb : IDisposable {
                     ParentId:    r.IsDBNull(1) ? null : r.GetString(1),
                     Directory:   r.IsDBNull(2) ? null : r.GetString(2),
                     Title:       r.IsDBNull(3) ? "" : r.GetString(3),
-                    TimeCreated: r.IsDBNull(4) ? 0 : r.GetInt64(4),
-                    TimeUpdated: r.IsDBNull(5) ? 0 : r.GetInt64(5));
+                    TimeCreated: r.IsDBNull(4) ? null : NonZero(r.GetInt64(4)),
+                    TimeUpdated: r.IsDBNull(5) ? null : NonZero(r.GetInt64(5)));
             } catch {
                 continue; // skip a malformed / schema-drifted row rather than abort the scan
             }
@@ -72,6 +76,10 @@ internal sealed class OpenCodeDb : IDisposable {
         }
         return rows;
     }
+
+    // A 0 epoch is observed alongside NULL for an unset time_created/time_updated
+    // column — both mean "unknown", not the 1970 epoch (AI-1358).
+    static long? NonZero(long v) => v == 0 ? null : v;
 
     /// <summary>
     /// Streams one reconstructed <c>{info,parts}</c> JSONL line per message, in

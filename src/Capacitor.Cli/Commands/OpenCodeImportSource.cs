@@ -62,13 +62,15 @@ internal sealed class OpenCodeImportSource : IImportSource {
                 if (filters.FilterSession is { } fs && !string.Equals(row.Id, fs, StringComparison.Ordinal)) continue;
                 if (normalizedCwd is not null &&
                     (row.Directory is null || !Norm(row.Directory).Equals(normalizedCwd, PathComparison))) continue;
-                if (sinceMs is { } cutoff && row.TimeCreated < cutoff) continue;
+                // A null TimeCreated ("unknown") is best-effort KEPT — only a KNOWN-older
+                // row is skipped by the since filter (AI-1358).
+                if (sinceMs is { } cutoff && row.TimeCreated is { } tc && tc < cutoff) continue;
 
                 result.Add(new DiscoveredSession(
                     SessionId:      row.Id, // raw ses_… — no GUID normalization
                     Vendor:         Vendor,
                     Cwd:            row.Directory,
-                    FirstTimestamp: FromEpoch(row.TimeCreated),
+                    FirstTimestamp: row.TimeCreated is { } created ? FromEpoch(created) : null,
                     SourceMeta:     new Dictionary<string, object?> {
                         ["Title"]       = row.Title,
                         ["TimeUpdated"] = row.TimeUpdated,
