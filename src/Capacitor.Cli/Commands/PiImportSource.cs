@@ -76,7 +76,7 @@ internal sealed class PiImportSource : IImportSource {
         var result = new List<DiscoveredSession>();
         var seen   = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var jsonl in Directory.EnumerateFiles(_sessionsDir, "*.jsonl", SearchOption.AllDirectories)) {
+        foreach (var jsonl in GuardedDiscovery.EnumerateFiles(_sessionsDir, "*.jsonl")) {
             ct.ThrowIfCancellationRequested();
 
             var header = await TryReadHeaderAsync(jsonl, ct);

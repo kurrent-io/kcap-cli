@@ -114,71 +114,81 @@ internal sealed class CursorImportSource : IImportSource {
         var result       = new List<DiscoveredSession>();
 
         foreach (var sanitizedDir in Directory.EnumerateDirectories(_projectsDir)) {
-            var sanitized      = Path.GetFileName(sanitizedDir);
-            var transcriptsDir = Path.Combine(sanitizedDir, "agent-transcripts");
+            try {
+                var sanitized      = Path.GetFileName(sanitizedDir);
+                var transcriptsDir = Path.Combine(sanitizedDir, "agent-transcripts");
 
-            if (!Directory.Exists(transcriptsDir)) continue;
+                if (!Directory.Exists(transcriptsDir)) continue;
 
-            // sanitizedMap value is null when the sanitized key collided with
-            // multiple distinct workspace folders (lossy encoding) — treat as
-            // unknown rather than misattributing to one of them.
-            sanitizedMap.TryGetValue(sanitized, out var workspaceFolder);
+                // sanitizedMap value is null when the sanitized key collided with
+                // multiple distinct workspace folders (lossy encoding) — treat as
+                // unknown rather than misattributing to one of them.
+                sanitizedMap.TryGetValue(sanitized, out var workspaceFolder);
 
-            if (normalizedCwd is not null
-             && (workspaceFolder is null
-              || !workspaceFolder.Equals(normalizedCwd, PathComparison))) {
+                if (normalizedCwd is not null
+                 && (workspaceFolder is null
+                  || !workspaceFolder.Equals(normalizedCwd, PathComparison))) {
+                    continue;
+                }
+
+                foreach (var sessionDir in Directory.EnumerateDirectories(transcriptsDir)) {
+                    try {
+                        var sessionDirName = Path.GetFileName(sessionDir);
+                        var jsonl          = Path.Combine(sessionDir, sessionDirName + ".jsonl");
+
+                        if (!File.Exists(jsonl)) continue;
+
+                        var dashless = NormalizeCursorSessionId(sessionDirName);
+
+                        if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
+                            continue;
+
+                        // Use the JSONL file's creation time as the session-start
+                        // proxy. Cursor's transcript JSONL lines carry no timestamp
+                        // field (Anthropic content-block format without metadata),
+                        // and the file is created when the session starts and
+                        // appended throughout — so birth-time on supported
+                        // filesystems (APFS, NTFS) is the closest proxy.
+                        //
+                        // `--since` MUST gate on session-start, not last-modified,
+                        // or any old session appended to after the cutoff would be
+                        // re-imported.
+                        //
+                        // Linux note: .NET's File.GetCreationTimeUtc on Linux ext4
+                        // falls back to mtime when btime isn't queryable. On those
+                        // hosts started_at == ended_at and `--since` effectively
+                        // gates on last-write. Acceptable degradation — most Cursor
+                        // users are on macOS/Windows and the production behavior is
+                        // still strictly better than not having `--since` at all.
+                        DateTimeOffset? firstTimestamp = null;
+                        try {
+                            firstTimestamp = File.GetCreationTimeUtc(jsonl);
+                        } catch {
+                            // Best effort.
+                        }
+
+                        if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) {
+                            continue;
+                        }
+
+                        result.Add(new DiscoveredSession(
+                            SessionId:      dashless,
+                            Vendor:         Vendor,
+                            Cwd:            workspaceFolder,
+                            FirstTimestamp: firstTimestamp,
+                            SourceMeta:     new Dictionary<string, object?> {
+                                ["TranscriptPath"]  = jsonl,
+                                ["WorkspaceFolder"] = workspaceFolder,
+                                ["SanitizedDir"]    = sanitized,
+                            }));
+                    } catch {
+                        // A hostile/inaccessible session subtree must not abort the whole scan.
+                        continue;
+                    }
+                }
+            } catch {
+                // A hostile/inaccessible workspace subtree must not abort the whole scan.
                 continue;
-            }
-
-            foreach (var sessionDir in Directory.EnumerateDirectories(transcriptsDir)) {
-                var sessionDirName = Path.GetFileName(sessionDir);
-                var jsonl          = Path.Combine(sessionDir, sessionDirName + ".jsonl");
-
-                if (!File.Exists(jsonl)) continue;
-
-                var dashless = NormalizeCursorSessionId(sessionDirName);
-
-                if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
-                    continue;
-
-                // Use the JSONL file's creation time as the session-start
-                // proxy. Cursor's transcript JSONL lines carry no timestamp
-                // field (Anthropic content-block format without metadata),
-                // and the file is created when the session starts and
-                // appended throughout — so birth-time on supported
-                // filesystems (APFS, NTFS) is the closest proxy.
-                //
-                // `--since` MUST gate on session-start, not last-modified,
-                // or any old session appended to after the cutoff would be
-                // re-imported.
-                //
-                // Linux note: .NET's File.GetCreationTimeUtc on Linux ext4
-                // falls back to mtime when btime isn't queryable. On those
-                // hosts started_at == ended_at and `--since` effectively
-                // gates on last-write. Acceptable degradation — most Cursor
-                // users are on macOS/Windows and the production behavior is
-                // still strictly better than not having `--since` at all.
-                DateTimeOffset? firstTimestamp = null;
-                try {
-                    firstTimestamp = File.GetCreationTimeUtc(jsonl);
-                } catch {
-                    // Best effort.
-                }
-
-                if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) {
-                    continue;
-                }
-
-                result.Add(new DiscoveredSession(
-                    SessionId:      dashless,
-                    Vendor:         Vendor,
-                    Cwd:            workspaceFolder,
-                    FirstTimestamp: firstTimestamp,
-                    SourceMeta:     new Dictionary<string, object?> {
-                        ["TranscriptPath"]  = jsonl,
-                        ["WorkspaceFolder"] = workspaceFolder,
-                        ["SanitizedDir"]    = sanitized,
-                    }));
             }
 
             ct.ThrowIfCancellationRequested();

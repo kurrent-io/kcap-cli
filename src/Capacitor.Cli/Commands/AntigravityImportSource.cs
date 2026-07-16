@@ -65,7 +65,13 @@ internal sealed class AntigravityImportSource : IImportSource {
         // root's subagents. Cycle-/non-tree-safe (BuildRootDescendants) so a deep chain isn't
         // lost and a cycle imports standalone rather than vanishing. Linkage is complete on disk.
         var parentMap = AntigravitySubagents.BuildParentMap(_home, _geminiCliHome, ct);
-        var convIds   = Directory.EnumerateDirectories(BrainRoot).Select(Path.GetFileName).OfType<string>().ToList();
+        List<string> convIds;
+        try {
+            convIds = Directory.EnumerateDirectories(BrainRoot).Select(Path.GetFileName).OfType<string>().ToList();
+        } catch {
+            // A hostile/inaccessible brain root must not abort the whole import pass.
+            convIds = [];
+        }
         var byRoot    = AntigravitySubagents.BuildRootDescendants(convIds, parentMap);
 
         // AI-1218 drift observability: surface format drift without a messages fallback.

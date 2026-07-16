@@ -65,7 +65,7 @@ internal sealed class KiroImportSource : IImportSource {
         if (!Directory.Exists(_sessionsDir))
             return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
 
-        foreach (var jsonl in Directory.EnumerateFiles(_sessionsDir, "*.jsonl")) {
+        foreach (var jsonl in GuardedDiscovery.EnumerateFiles(_sessionsDir, "*.jsonl")) {
             ct.ThrowIfCancellationRequested();
 
             // Filename stem is the dashed session UUID Kiro uses for both files.

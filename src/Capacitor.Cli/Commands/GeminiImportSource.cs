@@ -62,40 +62,45 @@ internal sealed class GeminiImportSource : IImportSource {
         foreach (var projectDir in Directory.EnumerateDirectories(_tmpDir)) {
             ct.ThrowIfCancellationRequested();
 
-            if (cwdBasename is not null
-             && !string.Equals(Path.GetFileName(projectDir), cwdBasename, PathComparison)) {
-                continue;
-            }
-
-            var chatsDir = GeminiPaths.ChatsDir(projectDir);
-            if (!Directory.Exists(chatsDir)) continue;
-
-            foreach (var file in Directory.EnumerateFiles(chatsDir, "session-*.jsonl")) {
-                var (sessionId, startTime) = ReadHeader(file);
-
-                if (sessionId is null || !Guid.TryParse(sessionId, out _)) continue;
-
-                var dashless = sessionId.Replace("-", "");
-
-                if (!seen.Add(dashless)) continue;
-                if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
+            try {
+                if (cwdBasename is not null
+                 && !string.Equals(Path.GetFileName(projectDir), cwdBasename, PathComparison)) {
                     continue;
-
-                var firstTimestamp = startTime;
-                if (firstTimestamp is null) {
-                    try { firstTimestamp = File.GetCreationTimeUtc(file); } catch { /* best effort */ }
                 }
 
-                if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) continue;
+                var chatsDir = GeminiPaths.ChatsDir(projectDir);
+                if (!Directory.Exists(chatsDir)) continue;
 
-                result.Add(new DiscoveredSession(
-                    SessionId:      dashless,
-                    Vendor:         Vendor,
-                    Cwd:            null,
-                    FirstTimestamp: firstTimestamp,
-                    SourceMeta:     new Dictionary<string, object?> {
-                        ["TranscriptPath"] = file,
-                    }));
+                foreach (var file in GuardedDiscovery.EnumerateFiles(chatsDir, "session-*.jsonl")) {
+                    var (sessionId, startTime) = ReadHeader(file);
+
+                    if (sessionId is null || !Guid.TryParse(sessionId, out _)) continue;
+
+                    var dashless = sessionId.Replace("-", "");
+
+                    if (!seen.Add(dashless)) continue;
+                    if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal))
+                        continue;
+
+                    var firstTimestamp = startTime;
+                    if (firstTimestamp is null) {
+                        try { firstTimestamp = File.GetCreationTimeUtc(file); } catch { /* best effort */ }
+                    }
+
+                    if (sinceUtc is { } cutoff && firstTimestamp is { } ts && ts < cutoff) continue;
+
+                    result.Add(new DiscoveredSession(
+                        SessionId:      dashless,
+                        Vendor:         Vendor,
+                        Cwd:            null,
+                        FirstTimestamp: firstTimestamp,
+                        SourceMeta:     new Dictionary<string, object?> {
+                            ["TranscriptPath"] = file,
+                        }));
+                }
+            } catch {
+                // A hostile/inaccessible project subtree must not abort the whole scan.
+                continue;
             }
         }
 

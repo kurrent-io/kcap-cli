@@ -2068,11 +2068,15 @@ static class ImportCommand {
 
             var encodedCwd = Path.GetFileName(cwdDir);
 
-            results.AddRange(
-                from jsonlFile in Directory.GetFiles(cwdDir, "*.jsonl")
-                let sessionId = NormalizeGuid(Path.GetFileNameWithoutExtension(jsonlFile))
-                select (sessionId, jsonlFile, encodedCwd)
-            );
+            try {
+                results.AddRange(
+                    from jsonlFile in Directory.GetFiles(cwdDir, "*.jsonl")
+                    let sessionId = NormalizeGuid(Path.GetFileNameWithoutExtension(jsonlFile))
+                    select (sessionId, jsonlFile, encodedCwd)
+                );
+            } catch {
+                // A hostile/inaccessible project dir must not abort the whole scan.
+            }
         }
 
         return results;
