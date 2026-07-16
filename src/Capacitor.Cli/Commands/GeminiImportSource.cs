@@ -71,7 +71,7 @@ internal sealed class GeminiImportSource : IImportSource {
                 var chatsDir = GeminiPaths.ChatsDir(projectDir);
                 if (!Directory.Exists(chatsDir)) continue;
 
-                foreach (var file in GuardedDiscovery.EnumerateFiles(chatsDir, "session-*.jsonl")) {
+                foreach (var file in GuardedDiscovery.EnumerateFiles(chatsDir, "session-*.jsonl", recursive: false)) {
                     var (sessionId, startTime) = ReadHeader(file);
 
                     if (sessionId is null || !Guid.TryParse(sessionId, out _)) continue;

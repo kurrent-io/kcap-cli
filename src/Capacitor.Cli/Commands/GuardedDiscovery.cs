@@ -6,11 +6,11 @@ namespace Capacitor.Cli.Commands;
 /// now shares this so a symlinked/large session tree can't loop, explode, or abort a pass.
 /// </summary>
 internal static class GuardedDiscovery {
-    public static IEnumerable<string> EnumerateFiles(string root, string pattern, int maxDepth = 8) {
+    public static IEnumerable<string> EnumerateFiles(string root, string pattern, int maxDepth = 8, bool recursive = true) {
         if (!Directory.Exists(root)) yield break;
 
         var opts = new EnumerationOptions {
-            RecurseSubdirectories = true,
+            RecurseSubdirectories = recursive,
             MaxRecursionDepth     = maxDepth,
             IgnoreInaccessible    = true,           // survive an inaccessible dir
             AttributesToSkip      = FileAttributes.ReparsePoint, // skip symlinked dirs/files

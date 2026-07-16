@@ -29,4 +29,20 @@ public class GuardedDiscoveryTests : IDisposable {
         var files = GuardedDiscovery.EnumerateFiles(Path.Combine(_root, "does-not-exist"), "*.jsonl").ToList();
         await Assert.That(files.Count).IsEqualTo(0);
     }
+
+    [Test]
+    public async Task EnumerateFiles_flat_mode_excludes_nested_files() {
+        // Top-level file — must be returned in flat mode.
+        File.WriteAllText(Path.Combine(_root, "top.jsonl"), "{}");
+
+        // Nested file one level down — must NOT be returned in flat mode.
+        var sub = Path.Combine(_root, "nested");
+        Directory.CreateDirectory(sub);
+        File.WriteAllText(Path.Combine(sub, "deep.jsonl"), "{}");
+
+        var files = GuardedDiscovery.EnumerateFiles(_root, "*.jsonl", recursive: false).ToList();
+
+        await Assert.That(files.Count).IsEqualTo(1);
+        await Assert.That(files[0]).EndsWith("top.jsonl");
+    }
 }
