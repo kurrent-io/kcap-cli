@@ -151,13 +151,61 @@ static class WatcherManager {
     }
 
     /// <summary>
+    /// Deletes the per-key heartbeat + started markers (AI-1357 task 9) so they don't leak
+    /// per-session the way the pid file never did. Deliberately does NOT touch the
+    /// <c>{key}.spawnlock</c> file: <see cref="KillWatcher"/> can run from inside
+    /// <see cref="WithSpawnLock"/> (the wedged-watcher reap path), and unlinking a held lock
+    /// file on POSIX lets a racing hook open a fresh inode with a non-conflicting flock —
+    /// reopening the double-spawn hole (the same reason <c>DaemonLock</c> never unlinks its
+    /// lock file). The spawn lock is swept by <see cref="PurgeAuxiliaryFiles"/> / <c>kcap cleanup</c>.
+    /// </summary>
+    static void DeleteHeartbeatFiles(string key) {
+        try { File.Delete(GetHeartbeatFilePath(key)); } catch { /* best-effort */ }
+        try { File.Delete(GetStartedFilePath(key)); } catch { /* best-effort */ }
+    }
+
+    /// <summary>
+    /// Removes every leftover per-key auxiliary file (<c>*.heartbeat</c>/<c>*.started</c>/
+    /// <c>*.spawnlock</c>) in the watcher directory. Called by <c>kcap cleanup</c> after all
+    /// watchers are killed — the one place it is safe to unlink spawn-lock files, since cleanup
+    /// holds no spawn lock. Returns the number of files removed (AI-1357 task 9).
+    /// </summary>
+    public static int PurgeAuxiliaryFiles() {
+        var dir = GetWatcherDir();
+
+        if (!Directory.Exists(dir)) {
+            return 0;
+        }
+
+        var removed = 0;
+
+        foreach (var pattern in new[] { "*.heartbeat", "*.started", "*.spawnlock" }) {
+            foreach (var file in Directory.GetFiles(dir, pattern)) {
+                try {
+                    File.Delete(file);
+                    removed++;
+                } catch {
+                    /* best-effort */
+                }
+            }
+        }
+
+        return removed;
+    }
+
+    /// <summary>
     /// Kills the watcher process for the given key. Returns true if the watcher was running and was killed,
-    /// false if it was already dead or no PID file existed.
+    /// false if it was already dead or no PID file existed. Always removes the per-key
+    /// heartbeat/started markers (AI-1357 task 9); see <see cref="DeleteHeartbeatFiles"/> for
+    /// why the spawn lock is intentionally left behind here.
     /// </summary>
     public static async Task<bool> KillWatcher(string key) {
         var pidFile = GetPidFilePath(key);
 
         if (!File.Exists(pidFile)) {
+            // No live watcher, but sweep any orphaned heartbeat/started markers for this key.
+            DeleteHeartbeatFiles(key);
+
             return false;
         }
 
@@ -203,6 +251,8 @@ static class WatcherManager {
             try { File.Delete(pidFile); } catch {
                 /* ignore */
             }
+
+            DeleteHeartbeatFiles(key);
         }
     }
 

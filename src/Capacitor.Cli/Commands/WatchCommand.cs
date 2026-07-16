@@ -134,6 +134,33 @@ static partial class WatchCommand {
         return false;
     }
 
+    /// <summary>
+    /// Maximum single wait between heartbeat touches (AI-1357 task 9). Comfortably below the
+    /// <c>WatcherHeartbeat.Threshold</c> so no chunked wait can ever look stale, and matches the
+    /// main loop's disconnected-branch poll cadence.
+    /// </summary>
+    internal static readonly TimeSpan HeartbeatSlice = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Splits a total wait into consecutive chunks of at most <paramref name="maxSlice"/> so the
+    /// caller can refresh the heartbeat between each — keeping a reconnecting-but-alive watcher
+    /// from ever crossing the staleness threshold while it waits out a long connect-retry backoff.
+    /// Pure so the "no chunk exceeds the slice" guarantee is unit-testable without spawning a
+    /// watcher or a real server (AI-1357 task 9). A non-positive total yields no chunks.
+    /// </summary>
+    internal static IReadOnlyList<TimeSpan> HeartbeatSlices(TimeSpan total, TimeSpan maxSlice) {
+        var slices    = new List<TimeSpan>();
+        var remaining = total;
+
+        while (remaining > TimeSpan.Zero) {
+            var chunk = remaining < maxSlice ? remaining : maxSlice;
+            slices.Add(chunk);
+            remaining -= chunk;
+        }
+
+        return slices;
+    }
+
     public static async Task<int> RunWatch(
             string  baseUrl,
             string  sessionId,
@@ -180,6 +207,25 @@ static partial class WatchCommand {
         }
 
         using var cts = new CancellationTokenSource();
+
+        // A cancellable delay that keeps the heartbeat fresh across long waits. The connect-retry
+        // backoff grows to 30s — longer than the ~20s staleness threshold — so a single Task.Delay
+        // would let the heartbeat go stale mid-wait and get a healthy-but-reconnecting watcher
+        // falsely reaped. Chunk the wait into ≤5s slices (the same cadence as the main loop's
+        // disconnected branch), touching before each slice. Returns false if cancelled (AI-1357 task 9).
+        async Task<bool> DelayWithHeartbeatAsync(TimeSpan total) {
+            foreach (var chunk in HeartbeatSlices(total, HeartbeatSlice)) {
+                TouchHeartbeat();
+
+                try {
+                    await Task.Delay(chunk, cts.Token);
+                } catch (OperationCanceledException) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
 
         // Tracks whether shutdown was triggered by the parent coding-agent process
         // dying without firing session-end. When true (1), the watcher takes over the
@@ -422,6 +468,13 @@ static partial class WatchCommand {
         var connectRetryDelay = TimeSpan.FromSeconds(1);
 
         while (!cts.Token.IsCancellationRequested) {
+            // AI-1357 task 9: touch every connect-retry iteration too. A server outage at
+            // startup (backoff up to 30s) that lasts longer than grace+threshold (~50s) is a
+            // healthy-but-reconnecting watcher, NOT a wedged one — without a heartbeat here
+            // the hook probe would judge it stale and reap+respawn it repeatedly for the
+            // whole outage. Staleness must mean "the loop is wedged", not "the server is down".
+            TouchHeartbeat();
+
             try {
                 await hubConnection.StartAsync(cts.Token);
 
@@ -432,9 +485,9 @@ static partial class WatchCommand {
             } catch (Exception ex) {
                 Log($"SignalR connect failed, retrying in {connectRetryDelay.TotalSeconds}s: {ex.Message}");
 
-                try {
-                    await Task.Delay(connectRetryDelay, cts.Token);
-                } catch (OperationCanceledException) {
+                // Heartbeat-aware wait: the backoff caps at 30s > the staleness threshold, so a
+                // plain Task.Delay here would falsely mark a reconnecting watcher stale (AI-1357).
+                if (!await DelayWithHeartbeatAsync(connectRetryDelay)) {
                     break;
                 }
 

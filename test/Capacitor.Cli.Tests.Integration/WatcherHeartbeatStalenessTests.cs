@@ -172,6 +172,53 @@ public class WatcherHeartbeatStalenessTests {
     }
 
     [Test]
+    public async Task KillWatcher_RemovesHeartbeatAndStartedFiles() {
+        // AI-1357 task 9 (review issue 2): the new sidecar files must not leak per-session the
+        // way the pid file never did. KillWatcher removes the heartbeat + started markers.
+        var (key, transcriptPath, pidFile) = NewKey("kill-cleanup");
+        using var dummy = StartDummyProcess();
+
+        var heartbeat = Cli.WatcherManager.GetHeartbeatFilePath(key);
+        var started   = Path.Combine(TempDir, $"{key}.started");
+
+        try {
+            File.WriteAllText(pidFile, dummy.Id.ToString());
+            WatcherHeartbeat.Touch(started, DateTimeOffset.UtcNow);
+            WatcherHeartbeat.Touch(heartbeat, DateTimeOffset.UtcNow);
+
+            await Cli.WatcherManager.KillWatcher(key);
+
+            await Assert.That(File.Exists(pidFile)).IsFalse();
+            await Assert.That(File.Exists(heartbeat)).IsFalse();
+            await Assert.That(File.Exists(started)).IsFalse();
+        } finally {
+            try { dummy.Kill(entireProcessTree: true); } catch { /* best effort */ }
+            File.Delete(transcriptPath);
+        }
+    }
+
+    [Test]
+    public async Task PurgeAuxiliaryFiles_RemovesHeartbeatStartedAndSpawnlock() {
+        // Cleanup is the one place spawn locks are swept (KillWatcher intentionally leaves them
+        // to avoid the unlink-race). Verify all three auxiliary kinds are removed, including orphans.
+        var key       = $"purge-{Guid.NewGuid():N}";
+        var heartbeat = Cli.WatcherManager.GetHeartbeatFilePath(key);
+        var started   = Path.Combine(TempDir, $"{key}.started");
+        var spawnlock = Path.Combine(TempDir, $"{key}.spawnlock");
+
+        WatcherHeartbeat.Touch(heartbeat, DateTimeOffset.UtcNow);
+        WatcherHeartbeat.Touch(started, DateTimeOffset.UtcNow);
+        File.WriteAllText(spawnlock, "");
+
+        var removed = Cli.WatcherManager.PurgeAuxiliaryFiles();
+
+        await Assert.That(removed).IsGreaterThanOrEqualTo(3);
+        await Assert.That(File.Exists(heartbeat)).IsFalse();
+        await Assert.That(File.Exists(started)).IsFalse();
+        await Assert.That(File.Exists(spawnlock)).IsFalse();
+    }
+
+    [Test]
     public async Task EnsureWatcherRunning_HealthyWatcher_DoesNotReap() {
         var (key, transcriptPath, pidFile) = NewKey("no-reap");
         using var dummy = StartDummyProcess();
