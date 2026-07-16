@@ -2293,6 +2293,19 @@ static class ImportCommand {
 
     internal enum SessionImportOutcome { Loaded, Resumed, Errored }
 
+    /// <summary>
+    /// Prefer the already remap-/worktree-resolved cwd computed up front into
+    /// <paramref name="sessionCwds"/> (see <see cref="ResolveTranscriptReposAsync"/>) so
+    /// workspace_root discovery and repo detection agree with what the missing-cwd report
+    /// showed the user — falling back to the raw transcript cwd when this session has no
+    /// entry (e.g. a non-file source, or resolution failed to produce one). Shared by both
+    /// the New and Partial branches of <see cref="ImportSingleSessionAsync"/>.
+    /// </summary>
+    static string? ResolveCwd(SessionClassification session, IReadOnlyDictionary<string, string>? sessionCwds) =>
+        sessionCwds is not null && sessionCwds.TryGetValue(session.SessionId, out var resolvedCwd)
+            ? resolvedCwd
+            : session.Meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(session.EncodedCwd);
+
     static async Task<(SessionImportOutcome Outcome, int LinesSent)> ImportSingleSessionAsync(
             HttpClient            httpClient,
             string                baseUrl,
@@ -2327,6 +2340,8 @@ static class ImportCommand {
 
         if (session.Status == ClassificationStatus.Partial) {
             try {
+                // Fail-closed tail: a rejected/half-applied resume must NOT be finalized
+                // (posting session-end after a gap would mark the session ended with a hole).
                 var linesSent = await SessionImporter.SendTranscriptBatches(
                     httpClient,
                     baseUrl,
@@ -2335,12 +2350,37 @@ static class ImportCommand {
                     agentId: null,
                     startLine: session.ResumeFromLine,
                     progress: perSessionProgress,
-                    vendor: session.Vendor
+                    vendor: session.Vendor,
+                    failOnError: true
                 );
+
+                // End-only reassertion: session-end has server-side idempotency guards,
+                // whereas the generic SessionStarted uses random ids — re-asserting start
+                // would duplicate it. So finalize a resumed session with end ONLY.
+                var resumeLastTs  = ExtractLastTimestamp(session.FilePath);
+                var resumeEndHook = new JsonObject {
+                    ["session_id"]      = session.SessionId,
+                    ["transcript_path"] = session.FilePath,
+                    ["cwd"]             = ResolveCwd(session, sessionCwds) ?? "",
+                    ["reason"]          = "Other",
+                    ["hook_event_name"] = "session_end",
+                    ["origin"]          = ImportOrigins.Historical,
+                };
+                if (resumeLastTs is not null) resumeEndHook["ended_at"] = resumeLastTs.Value.ToString("O");
+
+                using var endContent = new StringContent(resumeEndHook.ToJsonString(), Encoding.UTF8, "application/json");
+                using var endResp    = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/session-end/{session.Vendor}", endContent, ct: ct);
+
+                if (!endResp.IsSuccessStatusCode) {
+                    events.OnSessionErrored(slot, session.SessionId, $"resume session-end failed: HTTP {(int)endResp.StatusCode}");
+
+                    return (SessionImportOutcome.Errored, linesSent);
+                }
 
                 return (SessionImportOutcome.Resumed, linesSent);
             } catch (HttpRequestException ex) {
-                events.OnSessionErrored(slot, session.SessionId, $"server unreachable: {ex.Message}");
+                // Includes the fail-closed tail's thrown rejection — do NOT finalize.
+                events.OnSessionErrored(slot, session.SessionId, $"resume tail failed: {ex.Message}");
 
                 return (SessionImportOutcome.Errored, 0);
             } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
@@ -2354,14 +2394,7 @@ static class ImportCommand {
 
         // status == New: session-start → import → session-end → enqueue background tasks
         var meta = session.Meta;
-        // Prefer the already remap-/worktree-resolved cwd computed up front into sessionCwds
-        // (see ResolveTranscriptReposAsync / the Cursor branch above it) so workspace_root
-        // discovery below and repo detection agree with what the missing-cwd report showed
-        // the user — falling back to the raw transcript cwd when this session has no entry
-        // (e.g. a Cursor-less non-file source, or resolution failed to produce one).
-        var cwd = sessionCwds is not null && sessionCwds.TryGetValue(session.SessionId, out var resolvedCwd)
-            ? resolvedCwd
-            : meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(session.EncodedCwd);
+        var cwd  = ResolveCwd(session, sessionCwds);
 
         var startHook = new JsonObject {
             ["session_id"]      = session.SessionId,
@@ -2370,6 +2403,7 @@ static class ImportCommand {
             ["source"]          = "Startup",
             ["hook_event_name"] = "session_start",
             ["model"]           = meta.Model,
+            ["origin"]          = ImportOrigins.Historical,
         };
         if (meta.FirstTimestamp is not null) startHook["started_at"]                = meta.FirstTimestamp.Value.ToString("O");
         if (session.PreviousSessionId is not null) startHook["previous_session_id"] = session.PreviousSessionId;
@@ -2469,6 +2503,7 @@ static class ImportCommand {
             ["cwd"]             = cwd ?? "",
             ["reason"]          = "Other",
             ["hook_event_name"] = "session_end",
+            ["origin"]          = ImportOrigins.Historical,
         };
         if (lastTs is not null) endHook["ended_at"] = lastTs.Value.ToString("O");
 
