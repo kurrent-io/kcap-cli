@@ -20,13 +20,21 @@ public static class CursorTranscriptBackfill {
 
     public readonly record struct Stats(int LinesPosted, bool Failed);
 
+    /// <param name="agentId">
+    /// AI-1151 (live subagent linking): when set, <paramref name="sessionId"/> is the
+    /// PARENT session and the batch is routed to its <c>AgentSubsession-{sessionId}-{agentId}</c>
+    /// stream instead of the top-level <c>AgentSession-{sessionId}</c> — mirroring the watermark
+    /// probe + transcript POST shape <c>CursorImportSource.SendSubagentLifecycleAsync</c> uses for
+    /// historical import, so live and import converge on the same subsession watermark.
+    /// </param>
     public static async Task<Stats> RunAsync(
             HttpClient        client,
             string            baseUrl,
             string            sessionId,
             string?           transcriptPath,
             Func<bool>        budget,
-            CancellationToken ct
+            CancellationToken ct,
+            string?           agentId = null
         ) {
         if (string.IsNullOrEmpty(transcriptPath) || !File.Exists(transcriptPath)) {
             return new Stats(0, false);
@@ -34,9 +42,13 @@ public static class CursorTranscriptBackfill {
 
         int resumeFrom;
 
+        var watermarkUrl = string.IsNullOrEmpty(agentId)
+            ? $"{baseUrl}/api/sessions/{sessionId}/last-line"
+            : $"{baseUrl}/api/sessions/{sessionId}/last-line?agentId={Uri.EscapeDataString(agentId)}";
+
         try {
             using var resp = await client.GetOnceAsync(
-                $"{baseUrl}/api/sessions/{sessionId}/last-line",
+                watermarkUrl,
                 WatermarkTimeout,
                 ct
             );
@@ -84,6 +96,7 @@ public static class CursorTranscriptBackfill {
 
         var batch = new TranscriptBatch {
             SessionId   = sessionId,
+            AgentId     = agentId,
             Lines       = [..lines],
             LineNumbers = [..lineNumbers],
             Vendor      = "cursor",

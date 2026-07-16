@@ -116,16 +116,53 @@ public static class CursorHookCommand {
                 node["canonical_event_id"] = StableThoughtId(sid, gen, txt);
             }
 
-            var sessionId = TryGetString(node, "session_id");
+            var sessionId      = TryGetString(node, "session_id");
+            var transcriptPath = TryGetString(node, "transcript_path");
 
             if (sessionId is not null && DisabledSessions.IsDisabled(sessionId)) return 0;
+
+            // AI-1151 (live): bring CursorSubagentCorrelator into the live hook/backfill
+            // path. Cursor is NOT watcher-backed, so the correlation must run right here in
+            // the per-hook CLI dispatcher rather than in a background watcher. The decision
+            // (linked to a parent, or not) is made once — at the child's own sessionStart —
+            // and persisted to a small on-disk marker (this process exits after every hook
+            // call, so nothing survives in memory across invocations); every later hook call
+            // for the same session_id (mid-lifecycle events, sessionEnd) consults the marker
+            // instead of re-running the correlator, so the top-level-vs-subagent choice can't
+            // flip mid-session once acted on.
+            string? subagentParentId  = null;
+            string? subagentAgentType = null;
+            if (sessionId is not null) {
+                var marker = CursorLiveSubagentLinker.TryLoadLink(sessionId);
+                if (marker is { } m) {
+                    (subagentParentId, subagentAgentType) = (m.ParentSessionId, m.SubagentType);
+                } else if (eventName == "sessionStart" && !string.IsNullOrEmpty(transcriptPath)) {
+                    try {
+                        var candidates = CursorLiveSubagentLinker.DiscoverSiblingTranscripts(transcriptPath);
+                        var link       = CursorLiveSubagentLinker.ResolveParent(sessionId, transcriptPath, candidates);
+                        if (link is { } l) {
+                            subagentParentId  = l.ParentSessionId;
+                            subagentAgentType = string.IsNullOrEmpty(l.SubagentType) ? "task" : l.SubagentType;
+                            CursorLiveSubagentLinker.SaveLink(sessionId, subagentParentId, subagentAgentType);
+                        }
+                    } catch {
+                        // Fail-open: a locked/unreadable sibling transcript must never abort
+                        // the hook. See CursorLiveSubagentLinker.ResolveParent's doc for the
+                        // eventual-consistency gap this also covers (parent's Task tool_use
+                        // not yet flushed to disk at the child's first hook).
+                    }
+                }
+            }
+            var isSubagentChild = subagentParentId is not null;
 
             // AI-1152: attach a `repository` node on sessionStart so the session groups
             // under its repo in the sidebar. Cursor payloads carry `workspace_roots`
             // rather than `cwd`, so the generic EnrichWithRepositoryInfo (which reads
             // `cwd`) can't be used — detect from workspace_roots[0] instead. Bounded by
             // the remaining dispatcher budget; fail-open (git detection is cached).
-            if (eventName == "sessionStart") {
+            // Skipped for a linked subagent child — its top-level sessionStart is never
+            // posted (see below), so there is no session to attach a repository to.
+            if (eventName == "sessionStart" && !isSubagentChild) {
                 // Safe extract: workspace_roots[0] may be absent or a non-string; GetValue<string>
                 // would throw and (via the outer catch) drop the whole sessionStart hook.
                 string? workspaceRoot = null;
@@ -157,6 +194,16 @@ public static class CursorHookCommand {
                 }, budgetTotal, ct);
             }
 
+            // AI-1151 (live): a linked subagent child takes over entirely from here — it never
+            // gets the normal mapping.RouteSegment POST (mirroring CursorImportSource.
+            // SendSubagentLifecycleAsync, which never gives a correlated child its own top-level
+            // lifecycle either). See HandleSubagentChildEventAsync for the divert.
+            if (isSubagentChild) {
+                return await HandleSubagentChildEventAsync(
+                    client, baseUrl, spool, sessionId!, eventName, transcriptPath,
+                    subagentParentId!, subagentAgentType!, BudgetExpired, ct);
+            }
+
             // Ordering guard: if a transient drain failure left this session's backlog in place,
             // spool the fresh event so an earlier queued event (e.g. sessionStart) is not overtaken.
             if (sessionId is not null && mapping.SpoolOnFailure && spool.HasBacklog(sessionId)) {
@@ -174,8 +221,6 @@ public static class CursorHookCommand {
                 }
                 return 0;
             }
-
-            var transcriptPath = TryGetString(node, "transcript_path");
 
             // For sessionEnd the server's HandleSessionEnd clears the per-session
             // CursorAttachmentsFifo before transcript_line normalization could
@@ -221,6 +266,77 @@ public static class CursorHookCommand {
             // crash Cursor's agent loop.
             return 0;
         }
+    }
+
+    /// <summary>
+    /// AI-1151 (live): the divert path for a Cursor hook belonging to a subagent child
+    /// already linked to a parent (<see cref="CursorLiveSubagentLinker"/>). Mirrors
+    /// <c>CursorImportSource.SendSubagentLifecycleAsync</c> — only three things ever happen
+    /// for a linked child, regardless of which Cursor hook fired: <c>subagent-start</c>
+    /// (once, from its own <c>sessionStart</c>), transcript backfill routed under the parent
+    /// with <c>agent_id=child</c> (on every hook — Cursor gives us no line-granular signal,
+    /// so the watermark is just re-checked each time), and <c>subagent-stop</c> (once, from
+    /// its own <c>sessionEnd</c>). Every other Cursor hook for a linked child
+    /// (<c>beforeSubmitPrompt</c>/<c>afterAgentThought</c>/telemetry) carries no signal the
+    /// import path can ever replay either (Cursor's on-disk transcript has no side channel
+    /// for them), so — for live/import parity — they are simply not forwarded, rather than
+    /// being appended to a phantom <c>AgentSession-{child}</c> stream that never got a
+    /// <c>SessionStarted</c>.
+    /// </summary>
+    static async Task<int> HandleSubagentChildEventAsync(
+            HttpClient        client,
+            string            baseUrl,
+            HookSpool         spool,
+            string            childSessionId,
+            string?           eventName,
+            string?           transcriptPath,
+            string            parentSessionId,
+            string            subagentType,
+            Func<bool>        budgetExpired,
+            CancellationToken ct
+        ) {
+        if (eventName is not ("sessionStart" or "sessionEnd")) {
+            if (!string.IsNullOrEmpty(transcriptPath) && !budgetExpired()) {
+                await CursorTranscriptBackfill.RunAsync(
+                    client, baseUrl, parentSessionId, transcriptPath,
+                    budget: budgetExpired, ct, agentId: childSessionId);
+            }
+            return 0;
+        }
+
+        var isStart = eventName == "sessionStart";
+        var route   = isStart ? "subagent-start" : "subagent-stop";
+        var payload = isStart
+            ? CursorLiveSubagentLinker.BuildSubagentStartPayload(parentSessionId, childSessionId, subagentType, transcriptPath ?? "")
+            : CursorLiveSubagentLinker.BuildSubagentStopPayload(parentSessionId, childSessionId, subagentType, transcriptPath ?? "");
+        var body = payload.ToJsonString();
+
+        // sessionEnd: drain the transcript before the terminal hook — same ordering
+        // rationale as the top-level path, and mirrors SendSubagentLifecycleAsync (its
+        // transcript batch always precedes subagent-stop too).
+        if (!isStart && !string.IsNullOrEmpty(transcriptPath) && !budgetExpired()) {
+            await CursorTranscriptBackfill.RunAsync(
+                client, baseUrl, parentSessionId, transcriptPath,
+                budget: budgetExpired, ct, agentId: childSessionId);
+        }
+
+        if (budgetExpired()) {
+            spool.Append(childSessionId, route, body);
+            return 0;
+        }
+
+        var posted = await TryPostHookAsync(client, baseUrl, route, body, ct);
+        if (!posted) {
+            spool.Append(childSessionId, route, body);
+        }
+
+        if (isStart && !string.IsNullOrEmpty(transcriptPath) && !budgetExpired()) {
+            await CursorTranscriptBackfill.RunAsync(
+                client, baseUrl, parentSessionId, transcriptPath,
+                budget: budgetExpired, ct, agentId: childSessionId);
+        }
+
+        return 0;
     }
 
     /// <summary>
