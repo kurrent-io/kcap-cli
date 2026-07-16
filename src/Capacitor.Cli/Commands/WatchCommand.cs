@@ -554,16 +554,16 @@ static partial class WatchCommand {
             }
 
             // AI-1357 task 8: shutdown-during-outage. DrainNewLines above only advances
-            // state.LinesProcessed past lines the hub actually confirmed — if the hub is down (or
-            // still reconnecting) at shutdown, the SendTranscriptBatch2 invoke inside it failed and
-            // left LinesProcessed exactly where it was, so any lines between there and EOF were
-            // never delivered and this is the LAST chance to act (the process exits right after).
-            // Spool them into the dedicated TranscriptSpool so the global drain (task 3) replays
-            // them once the hub is back, instead of silently dropping the tail.
-            if (hubConnection.State != HubConnectionState.Connected) {
-                await SpoolUndeliveredTranscriptTailAsync(
-                    transcriptSpool, transcriptPath, sessionId, agentId, vendor, state.LinesProcessed, CancellationToken.None);
-            }
+            // state.LinesProcessed past lines the hub actually CONFIRMED — a failed final-drain send
+            // (hub down, OR a HubException while the connection stays Connected — the generic catch
+            // below does not change connection state) leaves LinesProcessed unchanged, so any lines
+            // between there and EOF are undelivered and this is the LAST chance to act (the process
+            // exits right after). Run UNCONDITIONALLY — never gate on connection state: it is a cheap
+            // no-op when nothing is undelivered (position already == EOF). Spool the tail into the
+            // dedicated TranscriptSpool so the global drain (task 3) replays it after recovery,
+            // instead of silently dropping it.
+            await SpoolUndeliveredTranscriptTailAsync(
+                transcriptSpool, transcriptPath, sessionId, agentId, vendor, state.LinesProcessed, CancellationToken.None);
 
             // One last subagent-link scan on the way out — the parent may have emitted an
             // INVOKE_SUBAGENT step after the main loop's last tick but before exit, and this is
@@ -1321,7 +1321,12 @@ static partial class WatchCommand {
 
         if (tail.Lines.Count == 0) return null;
 
-        var batch  = BuildTranscriptSpoolBatch(sessionId, agentId, vendor, tail.Lines, tail.LineNumbers);
+        // Redact secrets exactly as the live drain does (DrainNewLines: drainRead.Lines.Select(
+        // SecretRedactor.RedactLine)) — otherwise the spooled tail lands on disk raw and is POSTed
+        // unredacted on replay, leaking secrets the live path would have stripped.
+        var redacted = tail.Lines.Select(SecretRedactor.RedactLine).ToList();
+
+        var batch  = BuildTranscriptSpoolBatch(sessionId, agentId, vendor, redacted, tail.LineNumbers);
         var result = transcriptSpool.Append(sessionId, batch);
 
         switch (result) {

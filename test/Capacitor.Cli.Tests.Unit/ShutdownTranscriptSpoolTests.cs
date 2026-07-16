@@ -147,4 +147,78 @@ public class ShutdownTranscriptSpoolTests {
             await Assert.That(result).IsNull();
         } finally { try { Directory.Delete(spoolDir, true); } catch { } }
     }
+
+    /// <summary>
+    /// Review fix 1: the spool must fire whenever the tail is undelivered, NOT only when the hub is
+    /// disconnected. A HubException thrown by SendTranscriptBatch2 leaves the connection Connected
+    /// but the batch undelivered — so DrainNewLines does not advance state.LinesProcessed. The helper
+    /// itself never consults connection state: it spools purely on "LinesProcessed &lt; EOF", which is
+    /// exactly what that scenario produces. This test pins that state-agnostic behaviour so the
+    /// unconditional call site can never regress back to a connection-state gate that drops the tail.
+    /// </summary>
+    [Test]
+    public async Task undelivered_tail_spooled_even_though_connection_stayed_up() {
+        var dir            = TmpDir("shut-hubex");
+        var spoolDir       = TmpDir("shut-hubex-spool");
+        var transcriptPath = Path.Combine(dir, "transcript.jsonl");
+
+        try {
+            Directory.CreateDirectory(dir);
+            // Send of line 0 threw a HubException (connection stayed up) → LinesProcessed still 0,
+            // line 0 is the undelivered tail.
+            await File.WriteAllTextAsync(transcriptPath, "{\"line\":0}\n");
+
+            var spool  = new TranscriptSpool(spoolDir);
+            var result = await WatchCommand.SpoolUndeliveredTranscriptTailAsync(
+                spool, transcriptPath, Sid, agentId: null, vendor: "kiro", linesProcessed: 0, CancellationToken.None);
+
+            await Assert.That(result).IsEqualTo(TranscriptSpool.AppendResult.Appended);
+            await Assert.That(spool.HasBacklog(Sid)).IsTrue();
+        } finally {
+            try { Directory.Delete(dir, true); } catch { }
+            try { Directory.Delete(spoolDir, true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Review fix 2 (SECURITY): the spooled tail must be secret-redacted exactly like the live drain
+    /// (DrainNewLines → SecretRedactor.RedactLine). Otherwise a secret in an undelivered line lands
+    /// on disk raw and is POSTed unredacted on replay. A GitHub `ghp_` token must be replaced with
+    /// [REDACTED] in the spooled batch, and the raw token must appear nowhere on disk.
+    /// </summary>
+    [Test]
+    public async Task spooled_tail_is_secret_redacted() {
+        var dir            = TmpDir("shut-redact");
+        var spoolDir       = TmpDir("shut-redact-spool");
+        var transcriptPath = Path.Combine(dir, "transcript.jsonl");
+        const string secret = "ghp_0123456789abcdefABCDEF";
+
+        try {
+            Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(transcriptPath, "{\"token\":\"" + secret + "\"}\n");
+
+            var spool  = new TranscriptSpool(spoolDir);
+            var result = await WatchCommand.SpoolUndeliveredTranscriptTailAsync(
+                spool, transcriptPath, Sid, agentId: null, vendor: "kiro", linesProcessed: 0, CancellationToken.None);
+
+            await Assert.That(result).IsEqualTo(TranscriptSpool.AppendResult.Appended);
+
+            // The raw secret must appear nowhere in the spool directory; the placeholder must.
+            foreach (var f in Directory.EnumerateFiles(spoolDir)) {
+                var content = await File.ReadAllTextAsync(f);
+                await Assert.That(content).DoesNotContain(secret);
+            }
+
+            var replayed = new List<string>();
+            await spool.DrainAsync(Sid, body => { replayed.Add(body); return Task.FromResult(DrainOutcome.Delivered); },
+                                   () => false, CancellationToken.None);
+            var node  = System.Text.Json.Nodes.JsonNode.Parse(replayed[0])!;
+            var lines = node["lines"]!.AsArray().Select(l => l!.GetValue<string>()).ToList();
+            await Assert.That(lines[0]).Contains("[REDACTED]");
+            await Assert.That(lines[0]).DoesNotContain(secret);
+        } finally {
+            try { Directory.Delete(dir, true); } catch { }
+            try { Directory.Delete(spoolDir, true); } catch { }
+        }
+    }
 }
