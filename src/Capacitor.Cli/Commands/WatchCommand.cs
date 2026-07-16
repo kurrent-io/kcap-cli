@@ -215,6 +215,10 @@ static partial class WatchCommand {
         var state = new WatchState();
         state.LastActivityAt = DateTimeOffset.UtcNow;
 
+        // AI-1357 task 8: the dedicated undelivered-transcript-tail spool, shared by the final-drain
+        // needs-import marker below and the shutdown-during-outage tail spool.
+        var transcriptSpool = new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"));
+
         // Watch the spawning coding-agent process. If it dies without firing
         // session-end (crash, force-kill, IDE-detach), self-terminate within ~5s and
         // POST session-end instead of orphaning. Crucially, the cases where we DON'T
@@ -546,8 +550,19 @@ static partial class WatchCommand {
                 // watcher — TranscriptSpool/LifecycleSpoolDrain's session-id space is the server's,
                 // and `kcap import`/session-needs-import operate at the session level.
                 Log("Final transcript line still incomplete at consume time; held back and flagging needs-import");
-                new TranscriptSpool(PathHelpers.ConfigPath("transcript-spool"))
-                    .MarkNeedsImport(sessionId, "shutdown final drain: last transcript line never completed (no newline, unparseable)");
+                transcriptSpool.MarkNeedsImport(sessionId, "shutdown final drain: last transcript line never completed (no newline, unparseable)");
+            }
+
+            // AI-1357 task 8: shutdown-during-outage. DrainNewLines above only advances
+            // state.LinesProcessed past lines the hub actually confirmed — if the hub is down (or
+            // still reconnecting) at shutdown, the SendTranscriptBatch2 invoke inside it failed and
+            // left LinesProcessed exactly where it was, so any lines between there and EOF were
+            // never delivered and this is the LAST chance to act (the process exits right after).
+            // Spool them into the dedicated TranscriptSpool so the global drain (task 3) replays
+            // them once the hub is back, instead of silently dropping the tail.
+            if (hubConnection.State != HubConnectionState.Connected) {
+                await SpoolUndeliveredTranscriptTailAsync(
+                    transcriptSpool, transcriptPath, sessionId, agentId, vendor, state.LinesProcessed, CancellationToken.None);
             }
 
             // One last subagent-link scan on the way out — the parent may have emitted an
@@ -1243,6 +1258,86 @@ static partial class WatchCommand {
         }
 
         return [];
+    }
+
+    /// <summary>
+    /// Pure builder (AI-1357 task 8) for the JSON payload spooled into <see cref="TranscriptSpool"/>
+    /// at shutdown when the hub is down and the final drain's still-undelivered tail cannot be sent
+    /// live. Mirrors the <see cref="TranscriptBatch"/> construction in <see cref="DrainNewLines"/>
+    /// (the live SignalR send) so the shape the global drain (task 3) later POSTs to
+    /// <c>/hooks/transcript</c> on replay is identical to a normal live batch.
+    /// </summary>
+    internal static string BuildTranscriptSpoolBatch(
+            string                sessionId,
+            string?               agentId,
+            string                vendor,
+            IReadOnlyList<string> lines,
+            IReadOnlyList<int>    lineNumbers
+        ) => JsonSerializer.Serialize(
+            new TranscriptBatch {
+                SessionId   = sessionId,
+                AgentId     = agentId,
+                Lines       = lines.ToArray(),
+                LineNumbers = lineNumbers.ToArray(),
+                Vendor      = vendor,
+            },
+            CapacitorJsonContext.Default.TranscriptBatch);
+
+    /// <summary>
+    /// AI-1357 task 8: called from the shutdown path only when the hub is NOT connected at the point
+    /// the final drain finishes. Re-reads the transcript from <paramref name="linesProcessed"/> (the
+    /// last line the server actually confirmed, per <see cref="DrainNewLines"/>'s
+    /// "only advance position after successful send" rule) to EOF, using the same
+    /// <see cref="IncompleteFinalLinePolicy.ConsumeIfComplete"/> decision as the final drain itself so
+    /// a still-growing/unparseable last line is never spooled prematurely. Any resulting lines are the
+    /// tail the outage prevented from being delivered live; spools them via
+    /// <see cref="TranscriptSpool.Append"/> so the global drain (task 3) replays them once the hub
+    /// recovers, rather than dropping them when this process exits.
+    /// Returns <c>null</c> when there is nothing undelivered (nothing spooled), otherwise the
+    /// <see cref="TranscriptSpool.AppendResult"/> from the spool write.
+    /// </summary>
+    internal static async Task<TranscriptSpool.AppendResult?> SpoolUndeliveredTranscriptTailAsync(
+            TranscriptSpool   transcriptSpool,
+            string            transcriptPath,
+            string            sessionId,
+            string?           agentId,
+            string            vendor,
+            int               linesProcessed,
+            CancellationToken ct
+        ) {
+        if (!File.Exists(transcriptPath)) return null;
+
+        NewTranscriptLines tail;
+        try {
+            await using var stream = new FileStream(
+                transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            tail = await ReadNewCompleteLinesAsync(
+                stream, linesProcessed, IncompleteFinalLinePolicy.ConsumeIfComplete, ct);
+        } catch (IOException ex) {
+            Log($"Shutdown-tail spool: failed to read transcript for {sessionId}: {ex.Message}");
+
+            return null;
+        }
+
+        if (tail.Lines.Count == 0) return null;
+
+        var batch  = BuildTranscriptSpoolBatch(sessionId, agentId, vendor, tail.Lines, tail.LineNumbers);
+        var result = transcriptSpool.Append(sessionId, batch);
+
+        switch (result) {
+            case TranscriptSpool.AppendResult.Appended:
+                Log($"Spooled {tail.Lines.Count} undelivered transcript line(s) at shutdown for "
+                  + $"{sessionId} (hub down) — will replay on the next global drain");
+
+                break;
+            case TranscriptSpool.AppendResult.MarkedNeedsImport:
+                Log($"Undelivered transcript tail for {sessionId} could not be spooled (cap exhausted "
+                  + "or write failed); session flagged needs-import — recover via `kcap import`");
+
+                break;
+        }
+
+        return result;
     }
 
     static void SetFirstUserText(WatchState state, string userText) {
