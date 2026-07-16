@@ -15,6 +15,38 @@ static class WatcherManager {
 
     static string GetPidFilePath(string key) => Path.Combine(GetWatcherDir(), $"{key}.pid");
 
+    /// <summary>
+    /// Per-key heartbeat file (touched every main-loop iteration by the watcher itself —
+    /// see <c>WatchCommand.RunWatch</c>) used by <see cref="IsWatcherAlive"/> to tell a
+    /// wedged (hung-but-alive) watcher from a healthy one (AI-1357 task 9).
+    /// </summary>
+    internal static string GetHeartbeatFilePath(string key) => WatcherHeartbeat.HeartbeatPath(GetWatcherDir(), key);
+
+    /// <summary>
+    /// Per-key start-time marker, written by <see cref="SpawnWatcher"/> at the moment the
+    /// process is spawned (not by the watcher itself — the probe must know when THIS
+    /// instance started even if it never gets far enough to touch its own heartbeat).
+    /// Backs the startup-grace window in <see cref="IsWatcherAlive"/>.
+    /// </summary>
+    static string GetStartedFilePath(string key) => Path.Combine(GetWatcherDir(), $"{key}.started");
+
+    /// <summary>
+    /// Per-key spawn lock file — same cross-platform primitive as <c>DaemonLock</c>
+    /// (<c>FileShare.None</c> maps to <c>flock(LOCK_EX)</c> on POSIX and a real exclusive
+    /// lock on Windows) — guarding every spawn decision in <see cref="EnsureWatcherRunning"/>
+    /// (both "no watcher yet" and "reap a wedged one first") so concurrent hooks racing the
+    /// same key can't double-spawn (AI-1357 task 9).
+    /// </summary>
+    static string GetSpawnLockFilePath(string key) => Path.Combine(GetWatcherDir(), $"{key}.spawnlock");
+
+    /// <summary>
+    /// Test-only seam: when set, <see cref="EnsureWatcherRunning"/> invokes this instead of
+    /// the real <see cref="SpawnWatcher"/> (which launches a real OS process). Lets the
+    /// lock-guarded reap-and-respawn logic be exercised deterministically without spawning
+    /// anything. Always null in production.
+    /// </summary>
+    internal static Func<string, Task>? SpawnOverrideForTesting;
+
     internal static string BuildSpawnArgs(
             string  key,
             string  transcriptPath,
@@ -103,6 +135,16 @@ static class WatcherManager {
             process.StandardError.Close();
 
             await File.WriteAllTextAsync(GetPidFilePath(key), process.Id.ToString());
+
+            // AI-1357 task 9: record this instance's start time so a later staleness probe
+            // knows whether it's still within the startup grace window — written here (not
+            // by the watcher itself) so it exists even if the child never gets far enough to
+            // touch its own heartbeat.
+            try {
+                WatcherHeartbeat.Touch(GetStartedFilePath(key), DateTimeOffset.UtcNow);
+            } catch {
+                /* best-effort — a missing marker just means IsWatcherAlive treats "now" as startupAt */
+            }
         } catch (Exception ex) {
             await Console.Error.WriteLineAsync($"Failed to spawn watcher for {key}: {ex.Message}");
         }
@@ -164,7 +206,8 @@ static class WatcherManager {
         }
     }
 
-    static bool IsWatcherAlive(string key) {
+    /// <summary>PID-only liveness: the process exists, irrespective of whether it's wedged.</summary>
+    static bool PidAlive(string key) {
         var pidFile = GetPidFilePath(key);
 
         if (!File.Exists(pidFile)) {
@@ -190,6 +233,72 @@ static class WatcherManager {
         }
     }
 
+    /// <summary>
+    /// True when the watcher's PID exists AND its heartbeat isn't stale (after the startup
+    /// grace) — i.e. the process is alive AND its main loop is provably still turning, not
+    /// wedged (AI-1357 task 9). A PID-only check (the old behavior, still available via
+    /// <see cref="PidAlive"/>) can't tell a hung watcher from a healthy one.
+    /// </summary>
+    internal static bool IsWatcherAlive(string key) {
+        if (!PidAlive(key)) {
+            return false;
+        }
+
+        var now       = DateTimeOffset.UtcNow;
+        var lastBeat  = WatcherHeartbeat.Read(GetHeartbeatFilePath(key));
+        // A missing started marker (shouldn't happen in practice — SpawnWatcher always
+        // writes it) falls back to "now", i.e. the freshest possible grace window rather
+        // than treating an unknown start time as long-past and immediately stale.
+        var startupAt = WatcherHeartbeat.Read(GetStartedFilePath(key)) ?? now;
+
+        return !WatcherHeartbeat.IsStale(lastBeat, startupAt, now, WatcherHeartbeat.Grace, WatcherHeartbeat.Threshold);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="body"/> while holding the per-key spawn lock (see
+    /// <see cref="GetSpawnLockFilePath"/>). If another process already holds it, returns
+    /// immediately WITHOUT running <paramref name="body"/> — the current holder is either
+    /// already reaping + respawning this key, or about to, so there is nothing for the
+    /// loser to do but skip (AI-1357 task 9: prevents two concurrent hooks from
+    /// double-spawning a watcher for the same key).
+    /// </summary>
+    internal static async Task WithSpawnLock(string key, Func<Task> body) {
+        var watcherDir = GetWatcherDir();
+        Directory.CreateDirectory(watcherDir);
+
+        FileStream stream;
+
+        try {
+            // FileShare.None maps to flock(LOCK_EX) on POSIX and a real exclusive lock on
+            // Windows — the same cross-platform primitive DaemonLock uses. FileMode.OpenOrCreate
+            // keeps a stale lock file on disk from ever blocking acquisition; the kernel lock,
+            // not file presence, is what enforces exclusion.
+            stream = new FileStream(GetSpawnLockFilePath(key), FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
+        } catch (IOException) {
+            return; // contended — the current holder wins; we skip rather than wait.
+        }
+
+        try {
+            await body();
+        } finally {
+            stream.Dispose();
+        }
+    }
+
+    static Task SpawnForKeyAsync(
+            string  baseUrl,
+            string  key,
+            string  transcriptPath,
+            string? agentId,
+            string? sessionIdOverride,
+            string? cwd,
+            bool    skipTitle,
+            string  vendor
+        ) =>
+        SpawnOverrideForTesting is { } fake
+            ? fake(key)
+            : SpawnWatcher(baseUrl, key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, vendor);
+
     public static async Task EnsureWatcherRunning(
             string  baseUrl,
             string  key,
@@ -201,10 +310,32 @@ static class WatcherManager {
             string  vendor            = "claude"
         ) {
         if (IsWatcherAlive(key)) {
-            return;
+            return; // fast path: no lock needed to observe an already-healthy watcher.
         }
 
-        await SpawnWatcher(baseUrl, key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, vendor);
+        // Everything past this point — the kill-if-wedged step AND the spawn itself — runs
+        // under the per-key spawn lock. Guarding ONLY the kill+respawn of a wedged watcher
+        // would leave a race: KillWatcher deletes the pid file before releasing the lock, so
+        // a second hook arriving in that window would see "no pid" and take an unguarded
+        // plain-spawn path, double-spawning anyway. Locking the whole decision — including
+        // the plain "no watcher yet" spawn — closes that window (AI-1357 task 9).
+        await WithSpawnLock(key, async () => {
+            // Re-check under the lock: another hook may have already reaped + respawned (or
+            // spawned from scratch) this key while we were waiting to acquire it.
+            if (IsWatcherAlive(key)) {
+                return;
+            }
+
+            if (PidAlive(key)) {
+                // The process exists but its heartbeat is stale: wedged, not dead. Reap before
+                // respawning — still holding the lock, so no other hook can race the gap
+                // between the kill and the new pid file landing.
+                await Console.Error.WriteLineAsync($"Watcher {key} heartbeat stale; reaping wedged watcher and respawning");
+                await KillWatcher(key);
+            }
+
+            await SpawnForKeyAsync(baseUrl, key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, vendor);
+        });
     }
 
     public static void SpawnWhatsDoneGenerator(string baseUrl, string sessionId, string vendor = "claude") {

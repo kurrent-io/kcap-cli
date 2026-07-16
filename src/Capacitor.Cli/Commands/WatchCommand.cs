@@ -153,6 +153,23 @@ static partial class WatchCommand {
         Console.SetOut(logWriter);
         Console.SetError(logWriter);
 
+        // AI-1357 task 9: `logKey` is already the same `{sessionId}` / `{sessionId}-{agentId}`
+        // key WatcherManager uses for the pid file, so it doubles as the heartbeat key. Touch
+        // once here (startup) and then every main-loop iteration below so a hook-side
+        // staleness probe can distinguish a wedged (hung-but-alive) watcher from a healthy
+        // one — a PID-only liveness check can't tell the difference.
+        var heartbeatPath = WatcherManager.GetHeartbeatFilePath(logKey);
+
+        void TouchHeartbeat() {
+            try {
+                WatcherHeartbeat.Touch(heartbeatPath, DateTimeOffset.UtcNow);
+            } catch {
+                /* best-effort — a missed touch just risks one false-stale reading, never worse */
+            }
+        }
+
+        TouchHeartbeat();
+
         // Detach from controlling terminal so closing the parent's terminal does
         // not deliver SIGHUP to the watcher. Without this, both the coding agent
         // and the watcher die simultaneously when the user closes the terminal
@@ -435,6 +452,7 @@ static partial class WatchCommand {
         // Register with server and get resume position
         state.LinesProcessed = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, cts.Token);
         Log($"Connected via SignalR, resuming from line {state.LinesProcessed}");
+        TouchHeartbeat();
 
         // Gemini fires no subagent hooks, so the parent watcher discovers nested subagent
         // transcripts itself and spawns a child watcher per subagent (AI-900). Tracks the
@@ -443,6 +461,11 @@ static partial class WatchCommand {
 
         try {
             while (!cts.Token.IsCancellationRequested) {
+                // AI-1357 task 9: touch every iteration — including no-content drains and
+                // while disconnected/reconnecting below — so staleness unambiguously means
+                // the loop itself is wedged, not merely idle or mid-reconnect.
+                TouchHeartbeat();
+
                 // Skip work while disconnected — SignalR auto-reconnect handles recovery.
                 // No point re-reading the file or attempting sends that will fail.
                 if (hubConnection.State != HubConnectionState.Connected) {
