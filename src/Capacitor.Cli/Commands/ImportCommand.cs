@@ -1517,7 +1517,16 @@ static class ImportCommand {
                 }
             }
 
-            // Scan from the end
+            // Scan from the end. Confirmed (AI-1358 A3.3) that Codex rollout
+            // records also key their per-record timestamp under root-level
+            // "timestamp" (same envelope shape session_meta/response_item/
+            // event_msg all share) — verified against
+            // test/data/codex/sessions/2026/05/07/rollout-...019e0228-....jsonl
+            // and .../2026/07/11/rollout-2026-07-11-update-plan-fixture.jsonl
+            // in the kcap-server repo, and against CodexImportSource /
+            // ImportCommand.ExtractCwdFromTranscript(codex: true) which reads
+            // the sibling "payload" envelope at the same root level. No second
+            // probe is needed.
             for (var i = tail.Count - 1; i >= 0; i--) {
                 try {
                     using var doc  = JsonDocument.Parse(tail[i]);
