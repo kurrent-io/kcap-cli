@@ -1,6 +1,5 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
+using Capacitor.Cli.Core.Cursor;
 
 namespace Capacitor.Cli.Commands;
 
@@ -103,7 +102,7 @@ public static class CursorSubagentCorrelator {
                         if (b.ValueKind == JsonValueKind.Object
                          && b.TryGetProperty("type", out var ty) && ty.GetString() == "text"
                          && b.TryGetProperty("text", out var tx) && tx.ValueKind == JsonValueKind.String) {
-                            firstUserHash = Hash(StripUserQueryWrapper(tx.GetString() ?? ""));
+                            firstUserHash = CursorPromptCanonicalizer.Hash(tx.GetString() ?? "");
                             break;
                         }
                     }
@@ -118,7 +117,7 @@ public static class CursorSubagentCorrelator {
                         var prompt = pr.GetString();
                         if (string.IsNullOrWhiteSpace(prompt)) continue;
                         var subType = inp.TryGetProperty("subagent_type", out var st) ? st.GetString() : null;
-                        tasks.Add((Hash(prompt), subType));
+                        tasks.Add((CursorPromptCanonicalizer.Hash(prompt), subType));
                     }
                 }
             }
@@ -126,15 +125,4 @@ public static class CursorSubagentCorrelator {
 
         return firstUserHash;
     }
-
-    static string StripUserQueryWrapper(string text) {
-        var t = text.Trim();
-        const string open = "<user_query>", close = "</user_query>";
-        return t.StartsWith(open, StringComparison.Ordinal) && t.EndsWith(close, StringComparison.Ordinal)
-            ? t[open.Length..^close.Length].Trim()
-            : t;
-    }
-
-    static string Hash(string s) =>
-        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(s.Trim())));
 }
