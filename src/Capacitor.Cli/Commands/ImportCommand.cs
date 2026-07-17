@@ -295,6 +295,52 @@ static class ImportCommand {
         public IReadOnlyDictionary<string, object?>? SourceMeta { get; init; }
     }
 
+    /// <summary>
+    /// AI-1156 (D5): reconcile Cursor subagent children whose correlated parent isn't itself
+    /// part of THIS run's routed plan. <see cref="CursorImportSource.ClassifyAsync"/> widens its
+    /// correlator input to same-workspace discovery (F1), so it can stamp
+    /// <c>IsSubagentChild</c>/<c>ParentSessionId</c> on a child even when the parent falls
+    /// outside <c>--session</c>/<c>--cwd</c>/<c>--since</c>/scope for this run and is never
+    /// classified at all. Such an orphan must import STANDALONE — never silently dropped by
+    /// <see cref="CursorImportSource.ImportSessionAsync"/>'s nested-child skip, and never
+    /// triggering a <c>subagent-start</c> against an un-planned (possibly ended) parent. Clearing
+    /// the flags here makes that skip no-op for the orphan, so it falls through to the ordinary
+    /// standalone session-start/transcript/session-end path. The server-side
+    /// <c>CursorSubagentAdoptionSweep</c> (AI-1156 D4) adopts it under its real parent later, once
+    /// the parent exists server-side. A child whose parent IS among `routed` (the common case) is
+    /// left untouched — it keeps importing nested, under the parent's own
+    /// <c>ImportSessionAsync</c> call.
+    /// </summary>
+    internal static List<SessionClassification> ReconcileOrphanedCursorSubagentChildren(
+        List<SessionClassification> routed
+    ) {
+        var routedIds = routed.Select(c => c.SessionId).ToHashSet(StringComparer.Ordinal);
+
+        return [
+            .. routed.Select(c => {
+                if (c.SourceMeta is not { } meta
+                 || !(meta.TryGetValue("IsSubagentChild", out var isChildObj) && isChildObj is true)) {
+                    return c;
+                }
+
+                var parentId = meta.TryGetValue("ParentSessionId", out var parentIdObj) ? parentIdObj as string : null;
+
+                // Parent is (or will be) imported in this same run — leave the nested-child
+                // flags in place so CursorImportSource keeps skipping this child's own routed
+                // import in favor of the parent importing it inline.
+                if (parentId is not null && routedIds.Contains(parentId)) return c;
+
+                // Orphan: the parent isn't part of this run's plan. Clear the flags so this
+                // child's own ImportSessionAsync call falls through to a standalone import.
+                var reconciled = new Dictionary<string, object?>(meta);
+                reconciled.Remove("IsSubagentChild");
+                reconciled.Remove("ParentSessionId");
+
+                return c with { SourceMeta = reconciled };
+            })
+        ];
+    }
+
     internal sealed record ClassificationCounts(
             int New,
             int Partial,
@@ -893,6 +939,13 @@ static class ImportCommand {
                     or ClassificationStatus.AlreadyLoaded
             )
             .ToList();
+
+        // AI-1156 (D5): a Cursor subagent child whose correlated parent isn't itself among
+        // `routed` (e.g. `--session <child>` excluded the parent from this run's classify slice,
+        // or the parent was classified but excluded from import for any other reason) must import
+        // standalone rather than being silently dropped by CursorImportSource.ImportSessionAsync's
+        // nested-child skip.
+        routed = ReconcileOrphanedCursorSubagentChildren(routed);
 
         var chains = BuildImportChains(fileBased);
 

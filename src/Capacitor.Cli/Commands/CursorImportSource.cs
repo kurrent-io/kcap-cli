@@ -382,6 +382,13 @@ internal sealed class CursorImportSource : IImportSource {
         ) {
         // AI-1153: a correlated subagent child is imported by its parent (below), under the
         // parent's AgentSubsession stream — never as a standalone top-level session.
+        //
+        // AI-1156 (D5): this flag is no longer unconditional. ImportCommand reconciles `routed`
+        // right after building it — an ORPHANED child (its correlated parent isn't itself part
+        // of this run's plan) has IsSubagentChild/ParentSessionId cleared before reaching here,
+        // so this check only still fires for a child whose parent IS about to run its own
+        // ImportSessionAsync (and will import this child inline, below in that parent's call).
+        // An orphan instead falls through to the ordinary standalone start→transcript→end path.
         if (classification.SourceMeta!.TryGetValue("IsSubagentChild", out var scObj) && scObj is true) {
             return ImportOutcome.Skipped;
         }
