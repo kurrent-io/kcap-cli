@@ -709,7 +709,7 @@ static partial class WatchCommand {
         // exits and final-drains; posting here would race/duplicate whichever of those two
         // eventually fires. Cursor's other exit paths (StopWatcher, parent-exit) are unaffected —
         // this skip is scoped to idleExit specifically.
-        var cursorSuppressesEndPost = vendor == "cursor" && idleExit;
+        var cursorSuppressesEndPost = CursorSuppressesEndPost(vendor, idleExit);
 
         if (endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
             await PostSessionEndOnParentExitAsync(baseUrl, sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
@@ -944,6 +944,17 @@ static partial class WatchCommand {
         && thresholdReached
         && now - lastActivityAt - disconnectedSinceActivity > idleTimeout
         && !toolInFlight;
+
+    /// <summary>
+    /// AI-1382 Task 13 — pure extraction of the end-synthesis suppression <see cref="RunWatch"/>
+    /// applies to its own idle-ceiling exit. Cursor's end-of-session synthesis has exactly one
+    /// owner (the <c>sessionEnd</c> hook, or the server-side lease-gated sweep as a backstop);
+    /// unlike Codex/Antigravity, the watcher posting <c>session-end</c> itself on an idle-ceiling
+    /// exit would race/duplicate whichever of those two eventually fires. Scoped to
+    /// <paramref name="idleExit"/> specifically — Cursor's other exit paths (<c>StopWatcher</c>,
+    /// parent-exit) still post normally through the same call site this guards.
+    /// </summary>
+    internal static bool CursorSuppressesEndPost(string vendor, bool idleExit) => vendor == "cursor" && idleExit;
 
     /// <summary>
     /// Updates <paramref name="pending"/> based on a single Codex rollout line.

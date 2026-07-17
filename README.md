@@ -619,6 +619,29 @@ kcap plugin install --cursor --skip-cursor-mcp  # hooks only, skip ~/.cursor/mcp
 kcap plugin remove --cursor                 # remove Cursor hooks + kcap MCP servers
 ```
 
+**Live capture is watcher-backed (AI-1382).** Every Cursor hook (any of the 8, not just
+`sessionStart`) spawns — or heals — a per-session `kcap watch --vendor cursor` background watcher
+that tails `~/.cursor/projects/<sanitized>/agent-transcripts/<sid>/<sid>.jsonl` and streams new
+lines the moment Cursor writes them, instead of relying solely on the next hook's HTTP backfill.
+Hooks are kept as belt-and-braces: `subagent-start`/`subagent-stop`/`session-end` POSTs still
+fire, a spooled hook is still retried on the next invocation, and a per-hook backfill still runs
+as a fallback — the watcher just makes capture continuous instead of hook-triggered. A subagent
+gets its own child watcher, tailing its own transcript file, spawned only once its diverted
+`subagent-start` is acknowledged by the server (so no subagent transcript line can ever arrive
+before its lifecycle is opened) — a spooled (unacknowledged) start defers the spawn until a later
+hook's spool drain delivers it. If Cursor is force-quit mid-turn, the watcher's shutdown drain
+still recovers the last (possibly newline-less but complete) transcript line before exiting; if a
+session goes idle past `KCAP_CURSOR_IDLE_CEILING_MINUTES` (default `60`) the watcher exits WITHOUT
+posting `session-end` itself — end-of-session synthesis for Cursor stays owned by the
+`sessionEnd` hook or, as a backstop, a server-side lease-gated sweep — and the next hook for that
+session (any of the 8, not just `sessionStart`) reactivates a fresh watcher. A runtime rewrite
+guard defends against Cursor ever rewriting a transcript in place (expected append-only, but not
+hook-guaranteed): a detected rewrite discards the unsent batch and quarantines the session rather
+than risk re-sending stale byte ranges. `kcap cursor-verify-appendonly --path <file>` is a hidden
+diagnostic (not listed in `--help`) that samples a live transcript file for a bounded duration and
+reports whether it stayed append-only — the empirical evidence behind the watcher promotion, not
+something you need to run day to day.
+
 #### GitHub Copilot CLI hooks
 
 Copilot CLI is detected via `~/.copilot/` (created on Copilot's first run) or the `copilot` binary on `PATH`. kcap writes its own hooks file — Copilot merges every `*.json` under `~/.copilot/hooks/`, so your other hook files are never touched. Copilot loads hook config at startup: restart any running `copilot` session after installing.
@@ -784,6 +807,7 @@ verbatim, exactly like every other agent, with no Cursor/ACP-specific redaction.
 |----------------------|---------|-------------|
 | `KCAP_CODEX_IDLE_MINUTES` | `60` | How long a Codex rollout file may be idle (no new rollout lines and no Codex tool call in flight) before the `kcap watch` background watcher ends the session (`reason: idle_timeout`). Increase for very long thinking/compute turns; decrease for faster cleanup of abandoned sessions. Invalid or non-positive values fall back to the 60-minute default. |
 | `KCAP_PARENT_DEAD_CEILING_MINUTES` | `360` | Staged recovery ceiling for a watcher whose parent coding-agent PID was already dead at startup (a resolution glitch) and can't be re-resolved. The watcher first periodically re-resolves and re-arms the parent-exit watchdog; only if that keeps failing AND the transcript makes no progress for this long does it post `session-end` (`reason: parent_dead_ceiling`). Deliberately far above the idle timeout so a user parked at a Kiro/OpenCode prompt is never ended prematurely. Invalid or non-positive values fall back to 360 minutes (6h). |
+| `KCAP_CURSOR_IDLE_CEILING_MINUTES` | `60` | How long a Cursor session's transcript watcher may go idle before it exits (AI-1382). Unlike Codex/Antigravity, this exit does NOT itself POST `session-end` — Cursor's end-of-session synthesis stays owned by the `sessionEnd` hook or, as a backstop, a server-side lease-gated sweep; the next hook for that session reactivates a fresh watcher. Invalid or non-positive values fall back to the 60-minute default. |
 
 #### Daemon log verbosity
 
