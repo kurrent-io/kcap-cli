@@ -85,6 +85,16 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <see cref="GetLiveAgentIds"/> on <c>DaemonConnect</c>. Optional — null when not wired (tests).</summary>
     public Func<LiveAgentInfo[]>? GetLiveAgents { get; set; }
 
+    /// <summary>AI-1313 Phase B (D2): send the periodic daemon self-report ONE-WAY (never
+    /// <c>InvokeAsync</c>) — an old server without the <c>DaemonStatusReport</c> handler produces only
+    /// a server-side log line, and any send exception is swallowed so the agent loops are untouched.
+    /// Virtual so tests can capture the report without a live hub.</summary>
+    public virtual async Task DaemonStatusReportAsync(DaemonStatusReport report) {
+        if (!IsReady) return;
+        try { await _hub.SendAsync("DaemonStatusReport", report, cancellationToken: _ct); }
+        catch (Exception ex) { _logger.LogDebug(ex, "DaemonStatusReport send failed (old server or transient)"); }
+    }
+
     public ServerConnection(DaemonConfig config, ILoggerFactory loggerFactory, ILogger<ServerConnection> logger) {
         _config = config;
         _logger = logger;

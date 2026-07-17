@@ -297,6 +297,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _ = RunDaemonHeartbeatLoopAsync(_shutdownCts.Token);
         _ = RunTokenRefreshLoopAsync(_shutdownCts.Token);
         _ = RunSpoolDrainLoopAsync(_shutdownCts.Token);
+        _ = RunDaemonStatusReportLoopAsync(_shutdownCts.Token); // AI-1313 Phase B (D2): periodic self-report
     }
 
     internal int ActiveCount => _agents.Count(a => a.Value.Status is "Starting" or "Running");
@@ -324,6 +325,32 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
 
         return result;
+    }
+
+    /// <summary>AI-1313 Phase B (D2): the daemon's self-report snapshot — its authoritative
+    /// <see cref="ActiveCount"/> plus the live-agent metadata (and, once D4/Task 8 lands, the
+    /// kill-quarantine). Pure; the send loop + tests share it.</summary>
+    internal DaemonStatusReport BuildStatusReport() =>
+        new(ActiveCount, [.. BuildLiveAgents()], [.. QuarantineSnapshot()]);
+
+    /// <summary>AI-1313 Phase B: the kill-quarantine snapshot for the status report. Empty until D4
+    /// Task 8 wires the real <c>AgentKillQuarantine</c>; kept as a seam so BuildStatusReport is stable.</summary>
+    internal IReadOnlyList<QuarantinedAgentInfo> QuarantineSnapshot() => [];
+
+    /// <summary>AI-1313 Phase B (D2): build + send one status report, one-way, swallowing errors (an
+    /// old server has no handler; a transient send failure must not touch the agent loops).</summary>
+    internal async Task SendDaemonStatusReportOnceAsync() {
+        try { await _server.DaemonStatusReportAsync(BuildStatusReport()); }
+        catch (Exception ex) { _logger.LogDebug(ex, "DaemonStatusReport send failed — ignoring"); }
+    }
+
+    async Task RunDaemonStatusReportLoopAsync(CancellationToken ct) {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+        while (await timer.WaitForNextTickAsync(ct)) {
+            try { await SendDaemonStatusReportOnceAsync(); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+            catch (Exception ex) { _logger.LogWarning(ex, "DaemonStatusReport loop tick faulted — continuing"); }
+        }
     }
 
     /// <summary>AI-1313 Phase B (D2): one <see cref="LiveAgentInfo"/> per currently-live (Starting or
