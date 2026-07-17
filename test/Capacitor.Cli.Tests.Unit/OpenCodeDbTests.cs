@@ -100,10 +100,11 @@ public class OpenCodeDbTests {
         InsertSession(db, "ses_grandchild", "ses_child", "/w", "Grandchild", 300);
 
         using var ocdb = new OpenCodeDb(db);
-        var (descendants, omitted, omittedIds) = ocdb.QueryDescendants("ses_root");
+        var (descendants, omitted, omittedIds, truncated) = ocdb.QueryDescendants("ses_root");
 
         await Assert.That(omitted).IsEqualTo(0);
         await Assert.That(omittedIds.Count).IsEqualTo(0);
+        await Assert.That(truncated).IsFalse();
         await Assert.That(descendants.Select(d => (d.Row.Id, d.Depth)))
             .IsEquivalentTo(new[] { ("ses_child", 1), ("ses_grandchild", 2) });
     }
@@ -123,7 +124,7 @@ public class OpenCodeDbTests {
         }
 
         using var ocdb = new OpenCodeDb(db);
-        var (descendants, omitted, omittedIds) = ocdb.QueryDescendants("ses_root");
+        var (descendants, omitted, omittedIds, truncated) = ocdb.QueryDescendants("ses_root");
 
         // Depths 1..8 import; depth 9 is omitted, not imported, not promoted.
         await Assert.That(descendants.Select(d => d.Row.Id).OrderBy(x => x))
@@ -132,6 +133,7 @@ public class OpenCodeDbTests {
         await Assert.That(descendants.Max(d => d.Depth)).IsEqualTo(8);
         await Assert.That(omitted).IsEqualTo(1);
         await Assert.That(omittedIds).IsEquivalentTo(new[] { "ses_n9" });
+        await Assert.That(truncated).IsFalse();
     }
 
     // AI-1383 D3 review fix #3: the walker used to stop AT the boundary child (depth 9) and
@@ -153,13 +155,14 @@ public class OpenCodeDbTests {
         }
 
         using var ocdb = new OpenCodeDb(db);
-        var (descendants, omitted, omittedIds) = ocdb.QueryDescendants("ses_root");
+        var (descendants, omitted, omittedIds, truncated) = ocdb.QueryDescendants("ses_root");
 
         // Depths 1..8 import; depths 9 AND 10 are omitted — TWO, not one.
         await Assert.That(descendants.Select(d => d.Row.Id).OrderBy(x => x))
             .IsEquivalentTo(Enumerable.Range(1, 8).Select(i => $"ses_n{i}"));
         await Assert.That(omitted).IsEqualTo(2);
         await Assert.That(omittedIds).IsEquivalentTo(new[] { "ses_n9", "ses_n10" });
+        await Assert.That(truncated).IsFalse();
     }
 
     [Test]
@@ -173,13 +176,104 @@ public class OpenCodeDbTests {
         InsertSession(db, "ses_y", "ses_x", "/w", "Y", 200);
 
         using var ocdb = new OpenCodeDb(db);
-        var (descendants, omitted, omittedIds) = ocdb.QueryDescendants("ses_x");
+        var (descendants, omitted, omittedIds, truncated) = ocdb.QueryDescendants("ses_x");
 
         // Terminates (the awaited assertion below is reachable at all — a hang would time
         // out the test) and does not re-discover ses_x as its own descendant.
         await Assert.That(descendants.Select(d => d.Row.Id)).IsEquivalentTo(new[] { "ses_y" });
         await Assert.That(omitted).IsEqualTo(0);
         await Assert.That(omittedIds.Count).IsEqualTo(0);
+        await Assert.That(truncated).IsFalse();
+    }
+
+    // ── MaxCountingNodes scope (AI-1383 D3 review fix #4) ───────────────────────────────────
+    //
+    // The counting ceiling used to gate the WHOLE unified traversal via the shared visited-id
+    // set's total size, so a root with a wide IN-CAP fan-out (well within MaxDescendantDepth)
+    // could itself get silently truncated once 10,000 total ids had been discovered — corrupting
+    // the import set, not merely the below-cap counting walk. It must now apply ONLY to
+    // descendants already beyond the import cap.
+
+    [Test]
+    public async Task QueryDescendants_wide_in_cap_fanout_beyond_the_counting_ceiling_imports_every_child() {
+        using var tmp = new TempDir();
+        var db = BuildDb(tmp.Path);
+        InsertSession(db, "ses_root", null, "/w", "Root", 100);
+
+        // MaxCountingNodes + 50 direct (depth-1, well within MaxDescendantDepth=8) children —
+        // before the fix, the old `visited.Count >= MaxCountingNodes` ceiling (which counted the
+        // root + every discovered id, in-cap or not) would silently stop importing after ~10,000
+        // total visited ids, dropping the tail of this real, in-cap import set.
+        const int childCount = OpenCodeDb.MaxCountingNodes + 50;
+        InsertManyChildren(db, "ses_root", "ses_kid", childCount, baseTime: 200);
+
+        using var ocdb = new OpenCodeDb(db);
+        var (descendants, omitted, omittedIds, truncated) = ocdb.QueryDescendants("ses_root");
+
+        await Assert.That(descendants.Count).IsEqualTo(childCount);
+        await Assert.That(descendants.All(d => d.Depth == 1)).IsTrue();
+        await Assert.That(omitted).IsEqualTo(0);
+        await Assert.That(omittedIds.Count).IsEqualTo(0);
+        await Assert.That(truncated).IsFalse();
+    }
+
+    [Test]
+    public async Task QueryDescendants_below_cap_ceiling_hit_does_not_corrupt_in_cap_descendants() {
+        using var tmp = new TempDir();
+        var db = BuildDb(tmp.Path);
+        InsertSession(db, "ses_root", null, "/w", "Root", 100);
+
+        // A depth 1..8 chain (in-cap, imported), then MaxCountingNodes + 50 direct children of
+        // the depth-8 node — ALL at depth 9, i.e. entirely below the import cap. This pushes the
+        // below-cap counting walk past MaxCountingNodes, which must set CountTruncated and stop
+        // growing the below-cap subtree WITHOUT touching the in-cap descendants gathered above.
+        var prev = "ses_root";
+        for (var depth = 1; depth <= 8; depth++) {
+            var id = $"ses_n{depth}";
+            InsertSession(db, id, prev, "/w", $"N{depth}", 100 + depth);
+            prev = id;
+        }
+        const int belowCapCount = OpenCodeDb.MaxCountingNodes + 50;
+        InsertManyChildren(db, "ses_n8", "ses_deep", belowCapCount, baseTime: 1000);
+
+        using var ocdb = new OpenCodeDb(db);
+        var (descendants, omitted, omittedIds, truncated) = ocdb.QueryDescendants("ses_root");
+
+        // The in-cap import set (depths 1..8) is complete and uncorrupted.
+        await Assert.That(descendants.Select(d => d.Row.Id).OrderBy(x => x))
+            .IsEquivalentTo(Enumerable.Range(1, 8).Select(i => $"ses_n{i}"));
+        await Assert.That(descendants.Max(d => d.Depth)).IsEqualTo(8);
+
+        // The below-cap counting walk hit the ceiling: truncated, and the omitted count/ids are
+        // a lower bound (exactly MaxCountingNodes, not the true belowCapCount), never silently
+        // reported as an exact/complete count.
+        await Assert.That(truncated).IsTrue();
+        await Assert.That(omitted).IsEqualTo(OpenCodeDb.MaxCountingNodes);
+        await Assert.That(omittedIds.Count).IsEqualTo(OpenCodeDb.MaxCountingNodes);
+    }
+
+    // Bulk-inserts `count` direct children of `parentId` in a single transaction with a reused
+    // prepared command — the per-call-connection InsertSession helper above is far too slow for
+    // the 10,000+ row scale these MaxCountingNodes tests need.
+    static void InsertManyChildren(string dbPath, string parentId, string idPrefix, int count, long baseTime) {
+        using var c = new SqliteConnection($"Data Source={dbPath}");
+        c.Open();
+        using var tx  = c.BeginTransaction();
+        using var cmd = c.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText =
+            "INSERT INTO session(id,parent_id,directory,title,version,time_created,time_updated) " +
+            "VALUES($i,$p,'/w','T','1.17',$tc,$tc)";
+        var pId = cmd.CreateParameter(); pId.ParameterName = "$i"; cmd.Parameters.Add(pId);
+        var pParent = cmd.CreateParameter(); pParent.ParameterName = "$p"; pParent.Value = parentId; cmd.Parameters.Add(pParent);
+        var pTc = cmd.CreateParameter(); pTc.ParameterName = "$tc"; cmd.Parameters.Add(pTc);
+
+        for (var i = 0; i < count; i++) {
+            pId.Value = $"{idPrefix}{i}";
+            pTc.Value = baseTime + i;
+            cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
     }
 
     [Test]

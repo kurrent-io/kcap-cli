@@ -50,12 +50,17 @@ public static class GeminiSubagentDiscovery {
     public const int MaxDescendantDepth = 8;
 
     /// <summary>
-    /// Hard ceiling on the total number of nodes visited by the below-cap COUNTING walk
-    /// (AI-1383 D3 review fix #2/#3) — mirrors <c>OpenCodeDb.MaxCountingNodes</c> for symmetry.
-    /// The visited-id set already prevents an infinite loop on a reachable cycle; this bounds
-    /// the total work a pathologically huge or wide capped subtree could otherwise force onto a
-    /// single import pass. A real Gemini subagent tree tops out at a handful of nodes, so this
-    /// is a generous safety valve, not a realistic limit.
+    /// Hard ceiling on the total number of BELOW-CAP (omitted) nodes visited by the counting
+    /// walk (AI-1383 D3 review fix #2/#3, scope-corrected by review fix #4) — mirrors
+    /// <c>OpenCodeDb.MaxCountingNodes</c> for symmetry. This bounds ONLY the walk into
+    /// descendants already beyond <see cref="MaxDescendantDepth"/> — it never applies to in-cap
+    /// import discovery, which is always complete (see <see cref="EnumerateDescendantFiles"/>).
+    /// The visited-id set already prevents an infinite loop on a reachable cycle; this ceiling
+    /// instead bounds the total work a pathologically huge or wide UNIMPORTED subtree could
+    /// otherwise force onto a single import pass. A real Gemini subagent tree tops out at a
+    /// handful of nodes, so this is a generous safety valve, not a realistic limit — if it's
+    /// ever hit, <see cref="DescendantDiscoveryResult.CountTruncated"/> is set so the omitted
+    /// count/ids are treated as a LOWER BOUND rather than silently corrupting anything.
     /// </summary>
     public const int MaxCountingNodes = 10_000;
 
@@ -73,17 +78,21 @@ public static class GeminiSubagentDiscovery {
         string DashedId,
         int    Depth);
 
-    /// <summary>Recursive descendant discovery result. <see cref="Files"/> holds every
-    /// descendant WITHIN <see cref="MaxDescendantDepth"/> — the import set.
-    /// <see cref="DescendantsOmitted"/> is the ACCURATE total count of every descendant BELOW
+    /// <summary>Recursive descendant discovery result. <see cref="Files"/> holds EVERY
+    /// descendant WITHIN <see cref="MaxDescendantDepth"/> — the import set — and is NEVER
+    /// truncated by <see cref="MaxCountingNodes"/> (AI-1383 D3 review fix #4): in-cap discovery
+    /// is unbounded. <see cref="DescendantsOmitted"/> is the count of every descendant BELOW
     /// the cap, not merely the boundary children immediately past it — a chain through depths 9
-    /// and 10 reports 2, not 1 (AI-1383 D3 review fix #3). <see cref="OmittedDescendantIds"/>
-    /// carries those same omitted (dashed) ids, sorted, order-independent (AI-1383 D3 review fix
-    /// #2). Never silent — the caller surfaces the count in the import summary.</summary>
+    /// and 10 reports 2, not 1 (AI-1383 D3 review fix #3) — UNLESS <see cref="CountTruncated"/>
+    /// is true, in which case it (and <see cref="OmittedDescendantIds"/>) is a LOWER BOUND: the
+    /// below-cap counting walk hit <see cref="MaxCountingNodes"/> before it could finish,
+    /// so the true omitted count/identity set may be larger. Never silent — the caller surfaces
+    /// the count (and any truncation) in the import summary.</summary>
     public readonly record struct DescendantDiscoveryResult(
         IReadOnlyList<DescendantFile> Files,
         int                           DescendantsOmitted,
-        IReadOnlyList<string>         OmittedDescendantIds);
+        IReadOnlyList<string>         OmittedDescendantIds,
+        bool                          CountTruncated);
 
     /// <summary>
     /// Recursively discovers every descendant subagent transcript under
@@ -92,27 +101,31 @@ public static class GeminiSubagentDiscovery {
     /// and so on. Child directories are always derived from the ROOT's <c>chats/</c> directory,
     /// never relative to a nested dir. Deterministic BFS (files ordered by filename at each
     /// level); a visited-id set guards against a reachable cycle (it simply stops re-descending,
-    /// terminating the walk). Depth &gt; <see cref="MaxDescendantDepth"/> is never imported, but
-    /// the walk still recurses into it (same visited-set guard, bounded by
-    /// <see cref="MaxCountingNodes"/>) purely to COUNT the whole omitted subtree accurately and
-    /// surface its identities (AI-1383 D3 review fix #2/#3) —
-    /// <see cref="DescendantDiscoveryResult.DescendantsOmitted"/> and
-    /// <see cref="DescendantDiscoveryResult.OmittedDescendantIds"/>. Import-only for now (see
-    /// <see cref="EnumerateSubagentFiles"/>).
+    /// terminating the walk). In-cap discovery (depth &lt;= <see cref="MaxDescendantDepth"/>) is
+    /// ALWAYS complete — never bounded by <see cref="MaxCountingNodes"/> (AI-1383 D3 review fix
+    /// #4: the ceiling used to gate the whole unified traversal via the shared visited-set size,
+    /// so a wide/deep IN-CAP subtree could itself get silently truncated once 10,000 total ids
+    /// had been discovered). Depth &gt; <see cref="MaxDescendantDepth"/> is never imported, but
+    /// the walk still recurses into it (same visited-set guard) purely to COUNT the whole
+    /// omitted subtree accurately and surface its identities (AI-1383 D3 review fix #2/#3) —
+    /// this below-cap-only counting/signature walk is what <see cref="MaxCountingNodes"/>
+    /// bounds; if it's hit, <see cref="DescendantDiscoveryResult.CountTruncated"/> is set and
+    /// the omitted count/ids become a lower bound instead of silently under-reporting as
+    /// complete. Import-only for now (see <see cref="EnumerateSubagentFiles"/>).
     /// </summary>
     public static DescendantDiscoveryResult EnumerateDescendantFiles(string rootTranscriptPath) {
-        if (ReadParentSessionId(rootTranscriptPath) is not { } rootDashedId) return new([], 0, []);
-        if (Path.GetDirectoryName(rootTranscriptPath) is not { } chatsDir) return new([], 0, []);
+        if (ReadParentSessionId(rootTranscriptPath) is not { } rootDashedId) return new([], 0, [], false);
+        if (Path.GetDirectoryName(rootTranscriptPath) is not { } chatsDir) return new([], 0, [], false);
 
-        var files      = new List<DescendantFile>();
-        var visited    = new HashSet<string>(StringComparer.Ordinal) { rootDashedId };
-        var omittedIds = new List<string>();
+        var files          = new List<DescendantFile>();
+        var visited        = new HashSet<string>(StringComparer.Ordinal) { rootDashedId };
+        var omittedIds     = new List<string>();
+        var countTruncated = false;
 
         var frontier = new Queue<(string TranscriptPath, string DashedId, int Depth)>();
         frontier.Enqueue((rootTranscriptPath, rootDashedId, 0));
 
         while (frontier.Count > 0) {
-            if (visited.Count >= MaxCountingNodes) break; // hard ceiling — see MaxCountingNodes
             var (transcriptPath, dashedId, depth) = frontier.Dequeue();
 
             var subDir = GeminiPaths.SubagentDir(chatsDir, dashedId);
@@ -126,28 +139,35 @@ public static class GeminiSubagentDiscovery {
             }
 
             foreach (var file in children) {
-                if (visited.Count >= MaxCountingNodes) break;
                 var subId = Path.GetFileNameWithoutExtension(file);
                 if (!Guid.TryParse(subId, out _)) continue; // only well-formed <subId>.jsonl
                 if (!visited.Add(subId)) continue;           // cycle guard — already reached
 
                 var childDepth = depth + 1;
                 if (childDepth > MaxDescendantDepth) {
-                    // Below the import cap: never imported, but keep walking (same visited-set
-                    // guard) so the count reflects the WHOLE omitted subtree, not just its
-                    // boundary (AI-1383 D3 review fix #2/#3).
+                    // Below the import cap: this counting/signature walk ALONE is bounded by
+                    // MaxCountingNodes — never the in-cap import set below. Once the ceiling is
+                    // hit, stop growing the below-cap subtree further and mark the result
+                    // truncated (a lower bound), rather than silently under-reporting it as
+                    // complete (AI-1383 D3 review fix #4).
+                    if (omittedIds.Count >= MaxCountingNodes) {
+                        countTruncated = true;
+                        continue;
+                    }
                     omittedIds.Add(subId);
                     frontier.Enqueue((file, subId, childDepth));
                     continue;
                 }
 
+                // IN-CAP: the import set — always fully discovered, never bounded by
+                // MaxCountingNodes (AI-1383 D3 review fix #4).
                 files.Add(new DescendantFile(file, transcriptPath, subId, childDepth));
                 frontier.Enqueue((file, subId, childDepth));
             }
         }
 
         omittedIds.Sort(StringComparer.Ordinal);
-        return new DescendantDiscoveryResult(files, omittedIds.Count, omittedIds);
+        return new DescendantDiscoveryResult(files, omittedIds.Count, omittedIds, countTruncated);
     }
 
     /// <summary>

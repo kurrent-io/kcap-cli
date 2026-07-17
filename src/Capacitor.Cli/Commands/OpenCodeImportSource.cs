@@ -113,12 +113,23 @@ internal sealed class OpenCodeImportSource : IImportSource {
 
             var meta = MetaFor(s);
 
-            int total, importable; string fingerprint;
+            int total, importable; string fingerprint; bool countTruncated;
             try {
-                (total, importable, fingerprint) = ComputeClassificationInfo(db, s.SessionId);
+                (total, importable, fingerprint, countTruncated) = ComputeClassificationInfo(db, s.SessionId);
             } catch {
                 results.Add(Make(s, meta, ImportCommand.ClassificationStatus.ProbeError, 0, "transcript read failed"));
                 continue;
+            }
+
+            if (countTruncated) {
+                // AI-1383 D3 review fix #4: the below-cap counting/signature walk hit
+                // MaxCountingNodes, so the fingerprint can't see the WHOLE omitted subtree — a
+                // ledger AlreadyLoaded hit can no longer be trusted to reflect completeness.
+                // Surface it and fall through past the ledger check below (never silent).
+                Console.Error.WriteLine(
+                    $"[kcap] opencode: root {s.SessionId} descendant-count ceiling " +
+                    $"({OpenCodeDb.MaxCountingNodes}) hit — omitted-subtree signature is a lower " +
+                    "bound; skipping the completeness ledger for this session.");
             }
 
             if (importable < ctx.MinLines) {
@@ -128,9 +139,10 @@ internal sealed class OpenCodeImportSource : IImportSource {
 
             // Completeness is tracked client-side (the ledger): a hit on this server with a
             // matching content fingerprint (parent transcript + children) means we already
-            // fully imported it AND it hasn't changed since — skip.
+            // fully imported it AND it hasn't changed since — skip. Never trusted when the
+            // below-cap counting walk was truncated (see above).
             lock (_ledgerLock) {
-                if (_ledger.IsComplete(ctx.BaseUrl, s.SessionId, fingerprint)) {
+                if (!countTruncated && _ledger.IsComplete(ctx.BaseUrl, s.SessionId, fingerprint)) {
                     results.Add(Make(s, meta, ImportCommand.ClassificationStatus.AlreadyLoaded, total));
                     continue;
                 }
@@ -264,11 +276,14 @@ internal sealed class OpenCodeImportSource : IImportSource {
     /// </summary>
     async Task ImportDescendantsAsync(HttpClient client, string baseUrl, string rootId, CancellationToken ct) {
         using var db = new OpenCodeDb(_dbPath);
-        var (descendants, omitted, _) = db.QueryDescendants(rootId); // BFS, per-level ordered like QueryChildren
+        var (descendants, omitted, _, countTruncated) = db.QueryDescendants(rootId); // BFS, per-level ordered like QueryChildren
 
         if (omitted > 0) {
+            // AI-1383 D3 review fix #4: once the below-cap counting ceiling is hit, `omitted`
+            // is a LOWER BOUND, not an exact count — say so, rather than implying completeness.
+            var lowerBoundNote = countTruncated ? " (lower bound — counting ceiling hit)" : "";
             Console.Error.WriteLine(
-                $"[kcap] opencode: root {rootId} descendants_omitted={omitted} " +
+                $"[kcap] opencode: root {rootId} descendants_omitted={omitted}{lowerBoundNote} " +
                 $"(depth cap {OpenCodeDb.MaxDescendantDepth} exceeded)");
         }
 
@@ -368,11 +383,13 @@ internal sealed class OpenCodeImportSource : IImportSource {
     // post-upgrade import re-classifies and picks up whatever the old fingerprint couldn't see.
     const string FingerprintSchemaVersion = "v3-recursive-descendants-with-omitted-signature";
 
-    // Parent total reconstructed lines, importable lines (gates MinLines), and a content
+    // Parent total reconstructed lines, importable lines (gates MinLines), a content
     // fingerprint over the parent transcript AND every transitive descendant — the ledger key,
     // so a same-line-count mutation (tool completing, in-place edit, changed/added/removed
-    // descendant at any depth) re-imports.
-    static (int Total, int Importable, string Fingerprint) ComputeClassificationInfo(OpenCodeDb db, string sessionId) {
+    // descendant at any depth) re-imports — and whether the below-cap counting walk was
+    // truncated (AI-1383 D3 review fix #4): when true, the fingerprint's omitted-subtree
+    // signature is a LOWER BOUND, and the caller must not trust a ledger match as complete.
+    static (int Total, int Importable, string Fingerprint, bool CountTruncated) ComputeClassificationInfo(OpenCodeDb db, string sessionId) {
         using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
         void Feed(string s) { hash.AppendData(Encoding.UTF8.GetBytes(s)); hash.AppendData("\n"u8); }
 
@@ -384,7 +401,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
             if (OpenCodeDb.IsImportRelevantLine(line)) importable++;
             Feed(line);
         }
-        var (descendants, _, omittedIds) = db.QueryDescendants(sessionId);
+        var (descendants, _, omittedIds, countTruncated) = db.QueryDescendants(sessionId);
         // Fed unconditionally, including an EMPTY descendant set, so the fingerprint always
         // reflects the descendant edge shape, not merely its presence (AI-1383 D3).
         Feed(" descendants:" + descendants.Count);
@@ -400,7 +417,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
         // descendants_omitted diagnostic) never even ran.
         Feed(" omitted:" + omittedIds.Count);
         foreach (var oid in omittedIds) Feed(" omitted_child:" + oid);
-        return (total, importable, Convert.ToHexString(hash.GetHashAndReset()));
+        return (total, importable, Convert.ToHexString(hash.GetHashAndReset()), countTruncated);
     }
 
     static Dictionary<string, object?> WithFingerprint(IReadOnlyDictionary<string, object?> src, string fingerprint) {

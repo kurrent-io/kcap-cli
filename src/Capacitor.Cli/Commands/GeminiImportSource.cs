@@ -302,12 +302,15 @@ internal sealed class GeminiImportSource : IImportSource {
         HttpClient client, string baseUrl, string parentSessionIdDashless, string transcriptPath, CancellationToken ct
     ) {
         // Gemini has no completeness-fingerprint ledger (unlike OpenCode), so the omitted ids
-        // are unused here — the diagnostic below only needs the count.
-        var (descendants, omitted, _) = GeminiSubagentDiscovery.EnumerateDescendantFiles(transcriptPath);
+        // are unused here — the diagnostic below only needs the count (and, when the below-cap
+        // counting walk was truncated, whether that count is a lower bound — AI-1383 D3 review
+        // fix #4).
+        var (descendants, omitted, _, countTruncated) = GeminiSubagentDiscovery.EnumerateDescendantFiles(transcriptPath);
 
         if (omitted > 0) {
+            var lowerBoundNote = countTruncated ? " (lower bound — counting ceiling hit)" : "";
             Console.Error.WriteLine(
-                $"[kcap] gemini: root {parentSessionIdDashless} descendants_omitted={omitted} " +
+                $"[kcap] gemini: root {parentSessionIdDashless} descendants_omitted={omitted}{lowerBoundNote} " +
                 $"(depth cap {GeminiSubagentDiscovery.MaxDescendantDepth} exceeded)");
         }
 
