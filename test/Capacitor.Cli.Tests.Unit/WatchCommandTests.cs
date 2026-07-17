@@ -390,6 +390,47 @@ public class WatchCommandTests {
 
         await Assert.That(should).IsFalse();
     }
+
+    // AI-1382 Task 11 (D1) — Cursor joins the idle-ceiling vendor set (D1/D3): no shell hooks
+    // fire per-conversation the way a parent-exit watchdog needs, so an idle transcript (no file
+    // growth AND heartbeat gone stale) is the fallback signal a Cursor session has ended. Unlike
+    // Codex/Antigravity, the watcher itself must NOT synthesize session-end on this path — end
+    // synthesis has exactly one owner (the hook or the server-side sweep) — so the idle-ceiling
+    // exit is wired to skip PostSessionEndOnParentExitAsync at the RunWatch call site.
+    [Test]
+    public async Task Cursor_idle_ceiling_ends_on_idle_without_posting_session_end() {
+        var now  = DateTimeOffset.UtcNow;
+        var idle = now.AddMinutes(-61);
+
+        await Assert.That(WatchCommand.ShouldEndOnIdle(
+            vendor: "cursor", isSessionWatcher: true, thresholdReached: true,
+            lastActivityAt: idle, now: now, idleTimeout: TimeSpan.FromMinutes(60))).IsTrue();
+
+        await Assert.That(WatchCommand.ShouldEndOnIdle(
+            vendor: "cursor", isSessionWatcher: true, thresholdReached: true,
+            lastActivityAt: now.AddMinutes(-5), now: now, idleTimeout: TimeSpan.FromMinutes(60))).IsFalse();
+    }
+
+    [Test]
+    public async Task Cursor_acked_ack_sets_next_line_cursor() {
+        var ack = System.Text.Json.JsonSerializer.Deserialize(
+            """{"next_line_number":7}""", CapacitorJsonContext.Default.TranscriptBatchAck);
+
+        await Assert.That(ack.NextLineNumber).IsEqualTo(7);
+    }
+
+    [Test]
+    [Arguments(null, 60)]      // unset → default 60 min
+    [Arguments("", 60)]        // empty → default
+    [Arguments("abc", 60)]     // non-numeric → default
+    [Arguments("0", 60)]       // non-positive → default (clamped)
+    [Arguments("-5", 60)]      // negative → default
+    [Arguments("30", 30)]      // valid override
+    public async Task ResolveCursorIdleCeiling_parses_env_with_default(string? env, int expectedMinutes) {
+        var result = WatchCommand.ResolveCursorIdleCeiling(env);
+
+        await Assert.That(result).IsEqualTo(TimeSpan.FromMinutes(expectedMinutes));
+    }
 }
 
 public class UpdateCodexPendingToolCallsTests {
