@@ -633,6 +633,110 @@ public class CursorImportSourceTests {
         await Assert.That(result.SentChildContent).IsFalse();
     }
 
+    // --- AI-1154 round-3 review fix (finding 1): fail-open probe must not assert new content ---
+
+    [Test]
+    public async Task already_loaded_parent_with_failing_child_watermark_probe_does_not_report_sent_child_content() {
+        // Round-3 finding 1: when the child subsession watermark probe fails transiently (5xx),
+        // SendSubagentLifecycleAsync fails open — startLine resets to 0 and the WHOLE child is
+        // reposted. Those reposted lines are server-side idempotent duplicates when the child was
+        // already complete, but SendTranscriptBatches still returns the count of lines POSTED, so a
+        // naive childSent>0 check would wrongly report SentChildContent=true — recreating the
+        // double-count / re-privatization bug this signal exists to prevent (an AlreadyLoaded
+        // parent wrongly counted as newly Loaded and added to importedSessionIds). The probe
+        // failure itself must make SentChildContent false regardless of how many lines got posted.
+        using var fx = new ProjectsDirFixture();
+
+        var parentJsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
+        var childJsonl  = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        var posted = new List<string>();
+
+        using var handler = new StubHandler(
+            // The child subsession watermark probe fails transiently (5xx) — a fail-open trigger.
+            getResponse: _ => new HttpResponseMessage(HttpStatusCode.InternalServerError),
+            postCapture: (req, _) => {
+                posted.Add(req.RequestUri!.AbsolutePath);
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        );
+        using var client = new HttpClient(handler);
+
+        var parentClass = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.AlreadyLoaded,
+            TotalLines = 3,
+            Vendor     = "cursor",
+            SourceMeta = new Dictionary<string, object?> {
+                ["TranscriptPath"]   = parentJsonl,
+                ["SubagentChildren"] = new List<CursorImportSource.CursorSubagentChild> {
+                    new("22222222222222222222222222222222", childJsonl, "generalPurpose"),
+                },
+            },
+        };
+
+        var result = await src.ImportSessionAsync(
+            parentClass, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        // The fail-open repost still happens (idempotent server-side)...
+        await Assert.That(posted).Contains("/hooks/transcript");
+        // ...but a probe failure must never assert "new content" on its own.
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Resumed);
+        await Assert.That(result.SentChildContent).IsFalse();
+    }
+
+    [Test]
+    public async Task already_loaded_parent_with_known_child_watermark_and_lines_beyond_it_reports_sent_child_content() {
+        // Counterpart to the fail-open case above: when the watermark probe SUCCEEDS (no
+        // exception) and returns a real value with genuinely new lines beyond it, that IS real new
+        // content and must still report SentChildContent=true — the fix must not blanket-suppress
+        // every resend, only the fail-open, indeterminate ones.
+        using var fx = new ProjectsDirFixture();
+
+        var parentJsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
+        // 3 child lines; the probe reports last_line_number=0 (only the first line previously
+        // ingested), so lines 1 and 2 are genuinely new.
+        var childJsonl = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n{\"z\":3}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        using var handler = new StubHandler(
+            getResponse: _ => new HttpResponseMessage(HttpStatusCode.OK) {
+                Content = new StringContent("{\"last_line_number\":0}", System.Text.Encoding.UTF8, "application/json"),
+            },
+            postCapture: (_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        );
+        using var client = new HttpClient(handler);
+
+        var parentClass = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.AlreadyLoaded,
+            TotalLines = 3,
+            Vendor     = "cursor",
+            SourceMeta = new Dictionary<string, object?> {
+                ["TranscriptPath"]   = parentJsonl,
+                ["SubagentChildren"] = new List<CursorImportSource.CursorSubagentChild> {
+                    new("22222222222222222222222222222222", childJsonl, "generalPurpose"),
+                },
+            },
+        };
+
+        var result = await src.ImportSessionAsync(
+            parentClass, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Resumed);
+        await Assert.That(result.SentChildContent).IsTrue();
+    }
+
     [Test]
     public async Task import_session_attaches_repository_from_detected_workspace_repo() {
         // AI-1152: the import/backfill path must attach a `repository` node to the

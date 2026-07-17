@@ -586,6 +586,16 @@ internal sealed class CursorImportSource : IImportSource {
     /// happened even when the PARENT's own <c>sent</c> count is zero (e.g. an AlreadyLoaded
     /// parent attaching a previously-unloaded child).
     /// </para>
+    ///
+    /// <para>
+    /// AI-1154 review fix (P2, round-3): <c>SentContent</c> only reflects GENUINELY new content.
+    /// A fail-open resend — the child subsession watermark probe itself threw, so
+    /// <c>startLine</c> resets to 0 and the whole child is reposted — is server-side idempotent
+    /// when the child was already complete, but <c>SendTranscriptBatches</c> still returns the
+    /// count of lines POSTED (not "new"). That resend alone must NOT assert <c>SentContent</c>;
+    /// only a resend where the watermark was genuinely known (the probe succeeded, whether it
+    /// returned a value or nothing at all) counts as new content.
+    /// </para>
     /// </summary>
     async Task<(bool Success, bool SentContent)> SendSubagentLifecycleAsync(
             string            parentSessionId,
@@ -613,12 +623,24 @@ internal sealed class CursorImportSource : IImportSource {
 
         // Resume from the subsession watermark (AgentSubsession-{parent}-{child}) so a re-import
         // doesn't repost the full child transcript every time. Fail-open to a full send.
-        var startLine = 0;
+        //
+        // AI-1154 review fix (P2, round-3): a fail-open resend (the probe itself threw — e.g. a
+        // transient 5xx) resets startLine to 0 and reposts the WHOLE child. Those events are
+        // server-side idempotent duplicates when the child was already complete, but
+        // SendTranscriptBatches still returns the number of lines POSTED (not "new"), so a naive
+        // `childSent > 0` would wrongly assert SentContent=true — recreating the double-count /
+        // re-privatization bug this signal exists to prevent. Track whether the watermark probe
+        // itself succeeded (probeFailed) so a fail-open full repost can never assert "new content"
+        // on its own; only a resend where the watermark WAS known (probe succeeded, whichever
+        // value it returned) counts.
+        var startLine   = 0;
+        var probeFailed = false;
         try {
             if (await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, parentSessionId, ct, agentId) is { } last)
                 startLine = last + 1;
         } catch {
-            startLine = 0;
+            startLine   = 0;
+            probeFailed = true;
         }
 
         int childSent;
@@ -654,7 +676,7 @@ internal sealed class CursorImportSource : IImportSource {
             ["strict"]                 = true,                 // fail-closed: 500 if SubagentCompleted isn't persisted
         }, ct);
 
-        return (stopOk, stopOk && childSent > 0);
+        return (stopOk, stopOk && childSent > 0 && !probeFailed);
     }
 
     internal static JsonObject BuildSessionStartPayload(
