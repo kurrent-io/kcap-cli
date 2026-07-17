@@ -1642,38 +1642,48 @@ static partial class WatchCommand {
                 ? state.Repository
                 : null;
 
-            if (newLines.Count == 0 && repoToSend is null) {
-                // AI-1382 review fix (r4, finding #1) — keep the BYTE frontier in lockstep with the
-                // LINE frontier even on this early-return path. Before this fix, a poll that consumed
-                // only blank/whitespace lines (newLines.Count == 0 here, but linesRead — the new
-                // NextPosition — > priorLineCursorForGuard, the position this poll STARTED from)
-                // advanced ONLY state.LinesProcessed below, leaving state.CursorByteOffset and the
-                // guard's own checkpoint pointed at the OLD byte boundary. The NEXT poll's bounded
-                // decoder then re-reads those SAME already-"processed" blank bytes (its read starts
-                // from CursorByteOffset) but seeds its base line number from the ALREADY-ADVANCED
-                // LinesProcessed (ReadNewCompleteLinesAsync's newRangeByteOffset branch derives
-                // lineIndex from `linesProcessed`) — so an idle poll re-inflates LinesProcessed every
-                // time, and the next REAL line is sent under a wrong line number with its ack mapped
-                // to the wrong byte offset. Mirrors the ack path's own ByteOffsetForAckedLines +
-                // Checkpoint composition below (same helper, same guard-checkpoint discipline) —
-                // cursorGuardSnapshot is this poll's already-captured/verified read, so no extra I/O.
-                if (vendor == "cursor" && cursorGuard is not null && cursorGuardSnapshot is not null
-                 && linesRead > priorLineCursorForGuard && cursorGuardNewLength > cursorGuardOldOffset) {
-                    var blankLineCount = linesRead - priorLineCursorForGuard;
-                    var rangeLength     = (int)(cursorGuardNewLength - cursorGuardOldOffset);
-                    var rangeBytes      = cursorGuardSnapshot.AsSpan((int)(cursorGuardOldOffset - cursorGuardSnapshotAt), rangeLength);
-                    var advancedByteOffset = ByteOffsetForAckedLines(rangeBytes, cursorGuardOldOffset, blankLineCount);
-
-                    state.CursorByteOffset = advancedByteOffset;
-
-                    var trailingLength = (int)Math.Min(cursorGuard.TrailingBytes, advancedByteOffset);
-                    var trailingHash   = trailingLength <= 0
-                        ? CursorAppendOnlyProbe.Sha256Hex(ReadOnlySpan<byte>.Empty)
-                        : CursorAppendOnlyProbe.Sha256Hex(
-                              cursorGuardSnapshot.AsSpan((int)(advancedByteOffset - trailingLength - cursorGuardSnapshotAt), trailingLength));
-
-                    cursorGuard.Checkpoint(advancedByteOffset, trailingHash);
+            // AI-1382 review fix (r4, findings #1 + the repo-only-failed branch below) — keep the
+            // BYTE frontier in lockstep with the LINE frontier on EVERY path that advances
+            // state.LinesProcessed past blank/whitespace-only lines WITHOUT a send that returns an
+            // ack. Before this, such a poll (newLines.Count == 0, but linesRead — the new
+            // NextPosition — > priorLineCursorForGuard, the position this poll STARTED from) advanced
+            // ONLY state.LinesProcessed, leaving state.CursorByteOffset and the guard's own checkpoint
+            // at the OLD byte boundary. The NEXT poll's bounded decoder then re-reads those SAME
+            // already-"processed" blank bytes (its read starts from CursorByteOffset) but seeds its
+            // base line number from the ALREADY-ADVANCED LinesProcessed (ReadNewCompleteLinesAsync's
+            // newRangeByteOffset branch derives lineIndex from `linesProcessed`) — so an idle poll
+            // re-inflates LinesProcessed every time, and the next REAL line is sent under a wrong
+            // line number with its ack mapped to the wrong byte offset. This mirrors the ack path's
+            // own ByteOffsetForAckedLines + Checkpoint composition (same helper, same guard-checkpoint
+            // discipline) — cursorGuardSnapshot is this poll's already-captured/verified read, so no
+            // extra I/O. A local function so the two call sites (the "no content, no repo change"
+            // early return AND the repo-only-send-failed catch branch) stay byte-for-byte identical.
+            void AdvanceCursorBlankByteFrontierInLockstep() {
+                if (vendor != "cursor" || cursorGuard is null || cursorGuardSnapshot is null
+                 || linesRead <= priorLineCursorForGuard || cursorGuardNewLength <= cursorGuardOldOffset) {
+                    return;
                 }
+
+                var blankLineCount     = linesRead - priorLineCursorForGuard;
+                var rangeLength        = (int)(cursorGuardNewLength - cursorGuardOldOffset);
+                var rangeBytes         = cursorGuardSnapshot.AsSpan((int)(cursorGuardOldOffset - cursorGuardSnapshotAt), rangeLength);
+                var advancedByteOffset = ByteOffsetForAckedLines(rangeBytes, cursorGuardOldOffset, blankLineCount);
+
+                state.CursorByteOffset = advancedByteOffset;
+
+                var trailingLength = (int)Math.Min(cursorGuard.TrailingBytes, advancedByteOffset);
+                var trailingHash   = trailingLength <= 0
+                    ? CursorAppendOnlyProbe.Sha256Hex(ReadOnlySpan<byte>.Empty)
+                    : CursorAppendOnlyProbe.Sha256Hex(
+                          cursorGuardSnapshot.AsSpan((int)(advancedByteOffset - trailingLength - cursorGuardSnapshotAt), trailingLength));
+
+                cursorGuard.Checkpoint(advancedByteOffset, trailingHash);
+            }
+
+            if (newLines.Count == 0 && repoToSend is null) {
+                // AI-1382 review fix (r4, finding #1) — advance the byte frontier together with the
+                // line frontier (see AdvanceCursorBlankByteFrontierInLockstep above).
+                AdvanceCursorBlankByteFrontierInLockstep();
 
                 // No content lines and no repo changes — safe to advance past blank/whitespace lines
                 state.LinesProcessed = linesRead;
@@ -1829,7 +1839,19 @@ static partial class WatchCommand {
                     Log($"SendTranscriptBatch failed, will retry from line {state.LinesProcessed}: {ex.Message}");
                 } else {
                     // Repo-only batch failed — no transcript lines at risk, so advance
-                    // position and defer retry to the next 60s repo detection cycle
+                    // position and defer retry to the next 60s repo detection cycle.
+                    //
+                    // AI-1382 review fix (r4) — this branch reaches the send path only because a
+                    // repo change was pending (repoToSend != null); newLines.Count == 0 here means
+                    // any lines this poll DID read were blank/whitespace-only. Advancing
+                    // LinesProcessed alone would leave CursorByteOffset/checkpoint behind exactly as
+                    // the "no content, no repo change" early return did before finding #1's fix — so
+                    // advance the byte frontier in the SAME lockstep, via the shared helper, before
+                    // moving the line cursor. (No ack came back — the send threw — so this is the
+                    // blank-line path, not the acked path; the helper maps the consumed blank-line
+                    // count to its true byte offset and re-checkpoints from the same snapshot.)
+                    AdvanceCursorBlankByteFrontierInLockstep();
+
                     state.LinesProcessed    = linesRead;
                     state.LastRepoDetection = DateTimeOffset.UtcNow;
                     Log($"Repo info send failed, will retry in 60s: {ex.Message}");

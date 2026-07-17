@@ -377,4 +377,71 @@ public class CursorGuardWiringTests {
             await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse();
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
+
+    // AI-1382 review fix (r4, the repo-only-failed drain branch) — the SAME byte/line-lockstep the
+    // finding-#1 blank-only early-return got must also hold on the OTHER path that advances
+    // LinesProcessed past blank lines without an acked send: the "repo-only batch failed" catch
+    // branch. That branch is only reached when a repo change was pending (repoToSend != null) AND
+    // newLines.Count == 0 (any lines read this poll were blank/whitespace), and the repo-only RPC
+    // threw. Before the fix it advanced LinesProcessed alone, so — exactly like the pre-#1-fix
+    // early return — CursorByteOffset/checkpoint lagged and the next poll re-decoded the same blank
+    // bytes under an inflated line number. This mirrors the finding-#1 test with a pending repo
+    // change and an RPC that fails (the unconnected hub).
+    [Test]
+    public async Task DrainNewLines_keeps_frontiers_in_lockstep_across_a_blank_only_poll_whose_repo_only_send_fails() {
+        var sid = NewSessionId();
+        var dir = Directory.CreateTempSubdirectory("kcap-cursor-guard-blank-repofail-lockstep").FullName;
+        try {
+            var transcriptPath = Path.Combine(dir, "t.jsonl");
+            // Two real (non-blank) lines already "delivered" — seeded directly (same baseline
+            // technique as the finding-#1 test).
+            await File.WriteAllTextAsync(transcriptPath, "a\nb\n");
+
+            var guard = new CursorRewriteGuard(sid);
+            guard.Checkpoint(offset: 4, trailingSha: CursorAppendOnlyProbe.Sha256Hex("a\nb\n"u8));
+            var state = new WatchState {
+                LinesProcessed   = 2,
+                CursorByteOffset = 4,
+                ThresholdReached = true,
+                // A pending repo change (Repository set, nothing sent yet) is what forces this poll
+                // into the send path even though it read only blank lines — and, once the send
+                // fails, into the repo-only-failed catch branch under test.
+                Repository       = new RepositoryPayload { Owner = "acme", RepoName = "widgets" },
+            };
+
+            await using var hub = UnconnectedHub(); // every send RPC throws (never connected)
+
+            // Append TWO blank/whitespace-only lines.
+            await File.AppendAllTextAsync(transcriptPath, "\n   \n"); // 5 bytes → EOF at 9
+
+            var pollA = await WatchCommand.DrainNewLines(
+                hub, sid, transcriptPath, agentId: null, state, vendor: "cursor", CancellationToken.None,
+                cursorGuard: guard, onCursorRewriteDetected: () => { });
+
+            await Assert.That(pollA).IsEmpty(); // both new lines blank — nothing sent; the repo-only RPC threw
+            await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse();
+
+            // THE FIX: even though the send failed, the byte frontier must land at the true end of
+            // the two blank lines (9), in lockstep with the line frontier (4) — not stay stuck at 4.
+            await Assert.That(state.LinesProcessed).IsEqualTo(4);
+            await Assert.That(state.CursorByteOffset).IsEqualTo(9L);
+            // The failed repo-only send left LastSentRepository unset, so the change is still pending
+            // (it retries on a later cycle) — this must NOT re-inflate the line frontier.
+            await Assert.That(state.LastSentRepository).IsNull();
+
+            // Poll B: genuinely idle — nothing appended since poll A. The repo change is still
+            // pending, so this poll again reaches (and fails) the repo-only send; but with the byte
+            // frontier already at the true EOF (9), there is nothing left to decode, so neither
+            // frontier moves again. Before the fix, CursorByteOffset stuck at 4 would have re-read
+            // the same two blank lines and pushed LinesProcessed to 6.
+            var pollB = await WatchCommand.DrainNewLines(
+                hub, sid, transcriptPath, agentId: null, state, vendor: "cursor", CancellationToken.None,
+                cursorGuard: guard, onCursorRewriteDetected: () => { });
+
+            await Assert.That(pollB).IsEmpty();
+            await Assert.That(state.LinesProcessed).IsEqualTo(4);    // unchanged — nothing new to find
+            await Assert.That(state.CursorByteOffset).IsEqualTo(9L); // unchanged — already at true EOF
+            await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
 }
