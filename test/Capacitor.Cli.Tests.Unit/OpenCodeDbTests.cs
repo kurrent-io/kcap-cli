@@ -100,9 +100,10 @@ public class OpenCodeDbTests {
         InsertSession(db, "ses_grandchild", "ses_child", "/w", "Grandchild", 300);
 
         using var ocdb = new OpenCodeDb(db);
-        var (descendants, omitted) = ocdb.QueryDescendants("ses_root");
+        var (descendants, omitted, omittedIds) = ocdb.QueryDescendants("ses_root");
 
         await Assert.That(omitted).IsEqualTo(0);
+        await Assert.That(omittedIds.Count).IsEqualTo(0);
         await Assert.That(descendants.Select(d => (d.Row.Id, d.Depth)))
             .IsEquivalentTo(new[] { ("ses_child", 1), ("ses_grandchild", 2) });
     }
@@ -122,7 +123,7 @@ public class OpenCodeDbTests {
         }
 
         using var ocdb = new OpenCodeDb(db);
-        var (descendants, omitted) = ocdb.QueryDescendants("ses_root");
+        var (descendants, omitted, omittedIds) = ocdb.QueryDescendants("ses_root");
 
         // Depths 1..8 import; depth 9 is omitted, not imported, not promoted.
         await Assert.That(descendants.Select(d => d.Row.Id).OrderBy(x => x))
@@ -130,6 +131,35 @@ public class OpenCodeDbTests {
         await Assert.That(descendants.Any(d => d.Row.Id == "ses_n9")).IsFalse();
         await Assert.That(descendants.Max(d => d.Depth)).IsEqualTo(8);
         await Assert.That(omitted).IsEqualTo(1);
+        await Assert.That(omittedIds).IsEquivalentTo(new[] { "ses_n9" });
+    }
+
+    // AI-1383 D3 review fix #3: the walker used to stop AT the boundary child (depth 9) and
+    // never look below it, so a chain continuing to depth 10 was still counted as ONE omitted
+    // descendant — undercounting the true size of the omitted subtree. The walk must now
+    // continue (never importing) below the cap to count the WHOLE subtree.
+    [Test]
+    public async Task QueryDescendants_depth_9_and_10_chain_reports_omitted_two_not_one() {
+        using var tmp = new TempDir();
+        var db = BuildDb(tmp.Path);
+        InsertSession(db, "ses_root", null, "/w", "Root", 100);
+
+        // A 10-level chain below the root: n1 (depth 1) ... n10 (depth 10).
+        var prev = "ses_root";
+        for (var depth = 1; depth <= 10; depth++) {
+            var id = $"ses_n{depth}";
+            InsertSession(db, id, prev, "/w", $"N{depth}", 100 + depth);
+            prev = id;
+        }
+
+        using var ocdb = new OpenCodeDb(db);
+        var (descendants, omitted, omittedIds) = ocdb.QueryDescendants("ses_root");
+
+        // Depths 1..8 import; depths 9 AND 10 are omitted — TWO, not one.
+        await Assert.That(descendants.Select(d => d.Row.Id).OrderBy(x => x))
+            .IsEquivalentTo(Enumerable.Range(1, 8).Select(i => $"ses_n{i}"));
+        await Assert.That(omitted).IsEqualTo(2);
+        await Assert.That(omittedIds).IsEquivalentTo(new[] { "ses_n9", "ses_n10" });
     }
 
     [Test]
@@ -143,12 +173,13 @@ public class OpenCodeDbTests {
         InsertSession(db, "ses_y", "ses_x", "/w", "Y", 200);
 
         using var ocdb = new OpenCodeDb(db);
-        var (descendants, omitted) = ocdb.QueryDescendants("ses_x");
+        var (descendants, omitted, omittedIds) = ocdb.QueryDescendants("ses_x");
 
         // Terminates (the awaited assertion below is reachable at all — a hang would time
         // out the test) and does not re-discover ses_x as its own descendant.
         await Assert.That(descendants.Select(d => d.Row.Id)).IsEquivalentTo(new[] { "ses_y" });
         await Assert.That(omitted).IsEqualTo(0);
+        await Assert.That(omittedIds.Count).IsEqualTo(0);
     }
 
     [Test]

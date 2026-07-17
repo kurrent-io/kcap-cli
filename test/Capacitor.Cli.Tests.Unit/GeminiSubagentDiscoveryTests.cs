@@ -208,6 +208,44 @@ public class GeminiSubagentDiscoveryTests {
             await Assert.That(result.Files.Count).IsEqualTo(8);
             await Assert.That(result.Files.Max(f => f.Depth)).IsEqualTo(8);
             await Assert.That(result.DescendantsOmitted).IsEqualTo(1);
+            await Assert.That(result.OmittedDescendantIds.Count).IsEqualTo(1);
+        } finally {
+            Directory.Delete(tmp, recursive: true);
+        }
+    }
+
+    // AI-1383 D3 review fix #3: the walker used to stop AT the boundary child (depth 9) and
+    // never look below it, so a chain continuing to depth 10 was still counted as ONE omitted
+    // descendant. The walk must now continue (never importing) below the cap to count the
+    // WHOLE omitted subtree.
+    [Test]
+    public async Task EnumerateDescendantFiles_depth_9_and_10_chain_reports_omitted_two_not_one() {
+        var tmp = Directory.CreateTempSubdirectory("kcap-gsd-desc").FullName;
+        try {
+            var chats = Path.Combine(tmp, "chats");
+            Directory.CreateDirectory(chats);
+
+            var rootId = "00000000-0000-4000-8000-000000000000";
+            var root   = Path.Combine(chats, "session-root.jsonl");
+            File.WriteAllText(root, $$"""{"sessionId":"{{rootId}}","kind":"main"}""" + "\n");
+
+            // A 10-level chain of subagent dirs below the root.
+            var prevId = rootId;
+            for (var depth = 1; depth <= 10; depth++) {
+                var id  = $"00000000-0000-4000-8000-{depth:D12}";
+                var dir = Path.Combine(chats, prevId);
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, id + ".jsonl"), $$"""{"sessionId":"{{id}}","kind":"subagent"}""" + "\n");
+                prevId = id;
+            }
+
+            var result = GeminiSubagentDiscovery.EnumerateDescendantFiles(root);
+
+            await Assert.That(result.Files.Count).IsEqualTo(8);
+            await Assert.That(result.Files.Max(f => f.Depth)).IsEqualTo(8);
+            // Depths 9 AND 10 are omitted — TWO, not one.
+            await Assert.That(result.DescendantsOmitted).IsEqualTo(2);
+            await Assert.That(result.OmittedDescendantIds.Count).IsEqualTo(2);
         } finally {
             Directory.Delete(tmp, recursive: true);
         }

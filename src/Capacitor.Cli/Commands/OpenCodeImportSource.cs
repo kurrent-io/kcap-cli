@@ -264,7 +264,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
     /// </summary>
     async Task ImportDescendantsAsync(HttpClient client, string baseUrl, string rootId, CancellationToken ct) {
         using var db = new OpenCodeDb(_dbPath);
-        var (descendants, omitted) = db.QueryDescendants(rootId); // BFS, per-level ordered like QueryChildren
+        var (descendants, omitted, _) = db.QueryDescendants(rootId); // BFS, per-level ordered like QueryChildren
 
         if (omitted > 0) {
             Console.Error.WriteLine(
@@ -358,15 +358,15 @@ internal sealed class OpenCodeImportSource : IImportSource {
         SourceMeta       = s.SourceMeta,
     };
 
-    // Fingerprint-schema version (AI-1383 D3). The fingerprint used to cover only the parent
-    // transcript + its DIRECT QueryChildren, so an AlreadyLoaded ledger hit could skip a root
-    // wholesale forever even though its grandchildren were never imported (single-level
-    // discovery silently dropped them). The fingerprint is now recursive over EVERY descendant
-    // (see below), and this version marker is fed into the hash too — bump it whenever the
-    // fingerprint's shape/inputs change, so every pre-upgrade ledger entry is cache-busted and
-    // the first post-upgrade import re-classifies and picks up whatever the old single-level
-    // fingerprint couldn't see.
-    const string FingerprintSchemaVersion = "v2-recursive-descendants";
+    // Fingerprint-schema version (AI-1383 D3, bumped by the D3 review fix #2). The fingerprint
+    // used to cover only the parent transcript + its DIRECT QueryChildren, so an AlreadyLoaded
+    // ledger hit could skip a root wholesale forever even though its grandchildren were never
+    // imported (single-level discovery silently dropped them). The fingerprint is now recursive
+    // over EVERY descendant AND the omitted-subtree signature beyond the import cap (see below),
+    // and this version marker is fed into the hash too — bump it whenever the fingerprint's
+    // shape/inputs change, so every pre-upgrade ledger entry is cache-busted and the first
+    // post-upgrade import re-classifies and picks up whatever the old fingerprint couldn't see.
+    const string FingerprintSchemaVersion = "v3-recursive-descendants-with-omitted-signature";
 
     // Parent total reconstructed lines, importable lines (gates MinLines), and a content
     // fingerprint over the parent transcript AND every transitive descendant — the ledger key,
@@ -384,7 +384,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
             if (OpenCodeDb.IsImportRelevantLine(line)) importable++;
             Feed(line);
         }
-        var (descendants, _) = db.QueryDescendants(sessionId);
+        var (descendants, _, omittedIds) = db.QueryDescendants(sessionId);
         // Fed unconditionally, including an EMPTY descendant set, so the fingerprint always
         // reflects the descendant edge shape, not merely its presence (AI-1383 D3).
         Feed(" descendants:" + descendants.Count);
@@ -392,6 +392,14 @@ internal sealed class OpenCodeImportSource : IImportSource {
             Feed(" child:" + d.Row.Id + ":" + d.Depth);
             foreach (var line in db.SynthesizeLines(d.Row.Id)) Feed(line);
         }
+        // Fed too, by id — a descendant BEYOND the import cap is never imported, but its
+        // presence/absence must still invalidate the ledger (AI-1383 D3 review fix #2): the old
+        // fingerprint hashed only the in-cap descendant list, so a newly-reachable capped
+        // descendant left the fingerprint unchanged and an AlreadyLoaded hit skipped the session
+        // wholesale forever — silently, since ImportDescendantsAsync (and its
+        // descendants_omitted diagnostic) never even ran.
+        Feed(" omitted:" + omittedIds.Count);
+        foreach (var oid in omittedIds) Feed(" omitted_child:" + oid);
         return (total, importable, Convert.ToHexString(hash.GetHashAndReset()));
     }
 

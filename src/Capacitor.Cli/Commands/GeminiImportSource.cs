@@ -301,7 +301,9 @@ internal sealed class GeminiImportSource : IImportSource {
     async Task ImportSubagentsAsync(
         HttpClient client, string baseUrl, string parentSessionIdDashless, string transcriptPath, CancellationToken ct
     ) {
-        var (descendants, omitted) = GeminiSubagentDiscovery.EnumerateDescendantFiles(transcriptPath);
+        // Gemini has no completeness-fingerprint ledger (unlike OpenCode), so the omitted ids
+        // are unused here — the diagnostic below only needs the count.
+        var (descendants, omitted, _) = GeminiSubagentDiscovery.EnumerateDescendantFiles(transcriptPath);
 
         if (omitted > 0) {
             Console.Error.WriteLine(

@@ -46,8 +46,18 @@ public static class GeminiSubagentDiscovery {
     }
 
     /// <summary>Import-side recursion depth cap (AI-1383 D3) — a descendant beyond this depth
-    /// is neither discovered nor recursed into; the caller surfaces the count.</summary>
+    /// is neither imported nor promoted; the caller surfaces the count.</summary>
     public const int MaxDescendantDepth = 8;
+
+    /// <summary>
+    /// Hard ceiling on the total number of nodes visited by the below-cap COUNTING walk
+    /// (AI-1383 D3 review fix #2/#3) — mirrors <c>OpenCodeDb.MaxCountingNodes</c> for symmetry.
+    /// The visited-id set already prevents an infinite loop on a reachable cycle; this bounds
+    /// the total work a pathologically huge or wide capped subtree could otherwise force onto a
+    /// single import pass. A real Gemini subagent tree tops out at a handful of nodes, so this
+    /// is a generous safety valve, not a realistic limit.
+    /// </summary>
+    public const int MaxCountingNodes = 10_000;
 
     /// <summary>
     /// One recursively-discovered descendant subagent file. <c>ImmediateParentTranscriptPath</c>
@@ -63,12 +73,17 @@ public static class GeminiSubagentDiscovery {
         string DashedId,
         int    Depth);
 
-    /// <summary>Recursive descendant discovery result: the discovered files plus a count of
-    /// descendants beyond <see cref="MaxDescendantDepth"/> that were deliberately NOT imported
-    /// (never silent — the caller surfaces this in the import summary).</summary>
+    /// <summary>Recursive descendant discovery result. <see cref="Files"/> holds every
+    /// descendant WITHIN <see cref="MaxDescendantDepth"/> — the import set.
+    /// <see cref="DescendantsOmitted"/> is the ACCURATE total count of every descendant BELOW
+    /// the cap, not merely the boundary children immediately past it — a chain through depths 9
+    /// and 10 reports 2, not 1 (AI-1383 D3 review fix #3). <see cref="OmittedDescendantIds"/>
+    /// carries those same omitted (dashed) ids, sorted, order-independent (AI-1383 D3 review fix
+    /// #2). Never silent — the caller surfaces the count in the import summary.</summary>
     public readonly record struct DescendantDiscoveryResult(
         IReadOnlyList<DescendantFile> Files,
-        int                           DescendantsOmitted);
+        int                           DescendantsOmitted,
+        IReadOnlyList<string>         OmittedDescendantIds);
 
     /// <summary>
     /// Recursively discovers every descendant subagent transcript under
@@ -77,22 +92,27 @@ public static class GeminiSubagentDiscovery {
     /// and so on. Child directories are always derived from the ROOT's <c>chats/</c> directory,
     /// never relative to a nested dir. Deterministic BFS (files ordered by filename at each
     /// level); a visited-id set guards against a reachable cycle (it simply stops re-descending,
-    /// terminating the walk). Depth &gt; <see cref="MaxDescendantDepth"/> is neither imported nor
-    /// promoted — counted in <see cref="DescendantDiscoveryResult.DescendantsOmitted"/> instead
-    /// (AI-1383 D3). Import-only for now (see <see cref="EnumerateSubagentFiles"/>).
+    /// terminating the walk). Depth &gt; <see cref="MaxDescendantDepth"/> is never imported, but
+    /// the walk still recurses into it (same visited-set guard, bounded by
+    /// <see cref="MaxCountingNodes"/>) purely to COUNT the whole omitted subtree accurately and
+    /// surface its identities (AI-1383 D3 review fix #2/#3) —
+    /// <see cref="DescendantDiscoveryResult.DescendantsOmitted"/> and
+    /// <see cref="DescendantDiscoveryResult.OmittedDescendantIds"/>. Import-only for now (see
+    /// <see cref="EnumerateSubagentFiles"/>).
     /// </summary>
     public static DescendantDiscoveryResult EnumerateDescendantFiles(string rootTranscriptPath) {
-        if (ReadParentSessionId(rootTranscriptPath) is not { } rootDashedId) return new([], 0);
-        if (Path.GetDirectoryName(rootTranscriptPath) is not { } chatsDir) return new([], 0);
+        if (ReadParentSessionId(rootTranscriptPath) is not { } rootDashedId) return new([], 0, []);
+        if (Path.GetDirectoryName(rootTranscriptPath) is not { } chatsDir) return new([], 0, []);
 
-        var files   = new List<DescendantFile>();
-        var visited = new HashSet<string>(StringComparer.Ordinal) { rootDashedId };
-        var omitted = 0;
+        var files      = new List<DescendantFile>();
+        var visited    = new HashSet<string>(StringComparer.Ordinal) { rootDashedId };
+        var omittedIds = new List<string>();
 
         var frontier = new Queue<(string TranscriptPath, string DashedId, int Depth)>();
         frontier.Enqueue((rootTranscriptPath, rootDashedId, 0));
 
         while (frontier.Count > 0) {
+            if (visited.Count >= MaxCountingNodes) break; // hard ceiling — see MaxCountingNodes
             var (transcriptPath, dashedId, depth) = frontier.Dequeue();
 
             var subDir = GeminiPaths.SubagentDir(chatsDir, dashedId);
@@ -106,19 +126,28 @@ public static class GeminiSubagentDiscovery {
             }
 
             foreach (var file in children) {
+                if (visited.Count >= MaxCountingNodes) break;
                 var subId = Path.GetFileNameWithoutExtension(file);
                 if (!Guid.TryParse(subId, out _)) continue; // only well-formed <subId>.jsonl
                 if (!visited.Add(subId)) continue;           // cycle guard — already reached
 
                 var childDepth = depth + 1;
-                if (childDepth > MaxDescendantDepth) { omitted++; continue; }
+                if (childDepth > MaxDescendantDepth) {
+                    // Below the import cap: never imported, but keep walking (same visited-set
+                    // guard) so the count reflects the WHOLE omitted subtree, not just its
+                    // boundary (AI-1383 D3 review fix #2/#3).
+                    omittedIds.Add(subId);
+                    frontier.Enqueue((file, subId, childDepth));
+                    continue;
+                }
 
                 files.Add(new DescendantFile(file, transcriptPath, subId, childDepth));
                 frontier.Enqueue((file, subId, childDepth));
             }
         }
 
-        return new DescendantDiscoveryResult(files, omitted);
+        omittedIds.Sort(StringComparer.Ordinal);
+        return new DescendantDiscoveryResult(files, omittedIds.Count, omittedIds);
     }
 
     /// <summary>

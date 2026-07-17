@@ -54,50 +54,83 @@ internal sealed class OpenCodeDb : IDisposable {
     /// is neither imported nor promoted; the caller surfaces the count.</summary>
     public const int MaxDescendantDepth = 8;
 
+    /// <summary>
+    /// Hard ceiling on the total number of nodes visited by the below-cap COUNTING walk
+    /// (AI-1383 D3 review fix #2/#3). The visited-id set already prevents an infinite loop on a
+    /// reachable cycle; this bounds the total work a pathologically huge or wide capped subtree
+    /// could otherwise force onto a single classify/import pass. A real OpenCode session graph
+    /// tops out at a few dozen nodes, so this is a generous safety valve, not a realistic limit —
+    /// if it's ever hit, the walk simply stops early (an undercounted omission is safer than an
+    /// unbounded scan).
+    /// </summary>
+    public const int MaxCountingNodes = 10_000;
+
     /// <summary>One recursively-discovered descendant row at its depth below the root (a direct
     /// child is depth 1, a grandchild depth 2, etc.).</summary>
     public readonly record struct DescendantRow(OpenCodeSessionRow Row, int Depth);
 
-    /// <summary>Recursive descendant discovery result: every descendant within the depth cap
-    /// (BFS, deterministic — each level ordered like <see cref="QueryChildren"/>), plus a count
-    /// of descendants beyond <see cref="MaxDescendantDepth"/> that were deliberately NOT
-    /// discovered (never silent — the caller surfaces this in the import summary).</summary>
+    /// <summary>
+    /// Recursive descendant discovery result. <see cref="Descendants"/> holds every descendant
+    /// WITHIN <see cref="MaxDescendantDepth"/> — the import set (BFS, deterministic, each level
+    /// ordered like <see cref="QueryChildren"/>). <see cref="DescendantsOmitted"/> is the
+    /// ACCURATE total count of every descendant BELOW the cap, not merely the boundary children
+    /// immediately past it — a chain through depths 9 and 10 reports 2, not 1 (AI-1383 D3 review
+    /// fix #3). <see cref="OmittedDescendantIds"/> carries those same omitted ids (sorted,
+    /// order-independent) so a caller can fold them into a completeness fingerprint: a
+    /// newly-reachable capped descendant then changes the fingerprint even though its content is
+    /// never imported (AI-1383 D3 review fix #2). Never silent — the caller surfaces the count in
+    /// the import summary.
+    /// </summary>
     public readonly record struct DescendantDiscoveryResult(
         IReadOnlyList<DescendantRow> Descendants,
-        int                          DescendantsOmitted);
+        int                          DescendantsOmitted,
+        IReadOnlyList<string>        OmittedDescendantIds);
 
     /// <summary>
     /// Recursively walks <c>parent_id</c> edges from <paramref name="rootId"/> — per-level
     /// <see cref="QueryChildren"/>, a visited-id set to guard a reachable cycle (traversal
-    /// simply stops re-descending, terminating the walk), depth capped at
-    /// <see cref="MaxDescendantDepth"/>. Descendants beyond the cap are counted in
-    /// <see cref="DescendantDiscoveryResult.DescendantsOmitted"/> instead of being returned
-    /// (AI-1383 D3 — previously <see cref="QueryChildren"/> was called directly, a single-level
-    /// query that silently dropped grandchildren).
+    /// simply stops re-descending, terminating the walk), IMPORT depth capped at
+    /// <see cref="MaxDescendantDepth"/> (AI-1383 D3 — previously <see cref="QueryChildren"/> was
+    /// called directly, a single-level query that silently dropped grandchildren). A descendant
+    /// beyond the cap is never imported, but the walk still recurses into it (same visited-set
+    /// guard, bounded by <see cref="MaxCountingNodes"/>) purely to COUNT the whole omitted
+    /// subtree accurately and surface its identities (AI-1383 D3 review fix #2/#3) —
+    /// <see cref="DescendantDiscoveryResult.DescendantsOmitted"/> and
+    /// <see cref="DescendantDiscoveryResult.OmittedDescendantIds"/>.
     /// </summary>
     public DescendantDiscoveryResult QueryDescendants(string rootId) {
-        var result  = new List<DescendantRow>();
-        var visited = new HashSet<string>(StringComparer.Ordinal) { rootId };
-        var omitted = 0;
+        var result     = new List<DescendantRow>();
+        var visited    = new HashSet<string>(StringComparer.Ordinal) { rootId };
+        var omittedIds = new List<string>();
 
         var frontier = new Queue<(string Id, int Depth)>();
         frontier.Enqueue((rootId, 0));
 
         while (frontier.Count > 0) {
+            if (visited.Count >= MaxCountingNodes) break; // hard ceiling — see MaxCountingNodes
             var (id, depth) = frontier.Dequeue();
 
             foreach (var child in QueryChildren(id)) {
+                if (visited.Count >= MaxCountingNodes) break;
                 if (!visited.Add(child.Id)) continue; // cycle guard — already reached
 
                 var childDepth = depth + 1;
-                if (childDepth > MaxDescendantDepth) { omitted++; continue; }
+                if (childDepth > MaxDescendantDepth) {
+                    // Below the import cap: never imported, but keep walking (same visited-set
+                    // guard) so the count/signature reflect the WHOLE omitted subtree, not just
+                    // its boundary (AI-1383 D3 review fix #2/#3).
+                    omittedIds.Add(child.Id);
+                    frontier.Enqueue((child.Id, childDepth));
+                    continue;
+                }
 
                 result.Add(new DescendantRow(child, childDepth));
                 frontier.Enqueue((child.Id, childDepth));
             }
         }
 
-        return new DescendantDiscoveryResult(result, omitted);
+        omittedIds.Sort(StringComparer.Ordinal);
+        return new DescendantDiscoveryResult(result, omittedIds.Count, omittedIds);
     }
 
     IReadOnlyList<OpenCodeSessionRow> QuerySessions(string whereClause, string? parent) {

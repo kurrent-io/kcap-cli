@@ -447,4 +447,66 @@ public class OpenCodeImportSourceImportTests : IDisposable {
         }
     }
 
+    // NotInParallel with NO group key — globally sequential, mirroring
+    // ClaudeHookStdoutTests: this test redirects the process-global Console.Error, and a group
+    // key alone wouldn't stop an unrelated test under a different key from writing to stderr
+    // concurrently and leaking into the capture (AI-737).
+    [Test, NotInParallel]
+    public async Task new_depth_9_descendant_invalidates_the_fingerprint_and_reimports_with_omitted_warning() {
+        // AI-1383 D3 review fix #2: the completeness fingerprint used to hash only the IN-CAP
+        // descendant list, so a descendant added BELOW the depth cap (which never changes the
+        // in-cap set) left the fingerprint unchanged and the ledger stuck AlreadyLoaded forever
+        // — even though the new descendant should at least be surfaced via descendants_omitted.
+        _fix.AddSession("ses_root", null, "/work/a", "Root", 100);
+        _fix.AddMessageWithText("ses_root", "msg_root", "root says hi", 100);
+
+        var prev = "ses_root";
+        for (var depth = 1; depth <= 8; depth++) {
+            var id = $"ses_n{depth}";
+            _fix.AddSession(id, prev, "/work/a", $"N{depth}", 100 + depth);
+            _fix.AddMessageWithTextAndAgent(id, $"msg_{depth}", $"n{depth} work", 100 + depth, agent: "general");
+            prev = id;
+        }
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(404));
+        StubOk("/hooks/session-start/opencode", "/hooks/transcript", "/hooks/set-title",
+               "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/opencode");
+
+        using var client = new HttpClient();
+        var ctx       = new ClassifyContext(client, _server.Url!, 0, null, null);
+        var importCtx = new ImportContext(client, _server.Url!, false);
+
+        // Run 1: root + depths 1..8 (all within the import cap) — fully imported, ledger marked.
+        var s1 = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+        var c1 = await s1.ClassifyAsync(
+            await s1.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
+        await Assert.That(c1[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
+        await Assert.That(await s1.ImportSessionAsync(c1[0], importCtx, CancellationToken.None)).IsEqualTo(ImportOutcome.Loaded);
+
+        // Add a depth-9 descendant (child of the depth-8 node) — BEYOND the import cap, so the
+        // IN-CAP descendant set (depths 1..8) is completely unchanged.
+        _fix.AddSession("ses_n9", "ses_n8", "/work/a", "N9", 200);
+        _fix.AddMessageWithTextAndAgent("ses_n9", "msg_9", "n9 work", 200, agent: "general");
+
+        var originalErr = Console.Error;
+        var captured    = new StringWriter();
+        try {
+            Console.SetError(captured);
+
+            var s2 = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+            var c2 = await s2.ClassifyAsync(
+                await s2.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None), ctx, CancellationToken.None);
+
+            // NOT AlreadyLoaded — the omitted-subtree signature changed even though the in-cap
+            // descendant set (depths 1..8) did not.
+            await Assert.That(c2[0].Status).IsNotEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
+
+            await Assert.That(await s2.ImportSessionAsync(c2[0], importCtx, CancellationToken.None)).IsEqualTo(ImportOutcome.Loaded);
+        } finally {
+            Console.SetError(originalErr);
+        }
+
+        await Assert.That(captured.ToString()).Contains("descendants_omitted=1");
+    }
 }
