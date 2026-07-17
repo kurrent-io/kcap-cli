@@ -945,6 +945,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(LiveAgentInfo))]
 [JsonSerializable(typeof(QuarantinedAgentInfo))]
 [JsonSerializable(typeof(DaemonStatusReport))]
+[JsonSerializable(typeof(AgentPidRecord))]
 [JsonSerializable(typeof(AgentRegistered))]
 [JsonSerializable(typeof(AgentStatusChanged))]
 [JsonSerializable(typeof(AgentUnregistered))]
@@ -1261,6 +1262,24 @@ public readonly record struct DaemonStatusReport(
         int                  ActiveCount,
         LiveAgentInfo[]      LiveAgents,
         QuarantinedAgentInfo[] Quarantined
+    );
+
+/// <summary>AI-1313 Phase B (D4 §6.4(2)): the durable per-agent PID record written atomically at spawn
+/// to <c>&lt;state-dir&gt;/agents/{agentId}.json</c>, so a restarted daemon can reap a surviving child
+/// by EXACT identity. <see cref="StartIdentity"/> is the AI-839 <c>ProcessStartToken</c> string
+/// (kernel starttime / absolute start ticks — exact, no tolerance). <see cref="DaemonId"/> = hash of
+/// the daemon state-dir path (stable logical identity); <see cref="DaemonEpoch"/> = fresh per boot.</summary>
+public readonly record struct AgentPidRecord(
+        string         AgentId,
+        int            Pid,
+        string         StartIdentity,
+        string         Kind,
+        string         Vendor,
+        string?        FlowRunId,
+        string?        FlowRole,
+        string         DaemonId,
+        string         DaemonEpoch,
+        DateTimeOffset SpawnedAt
     );
 
 public readonly record struct ReviewLaunchInfo(
