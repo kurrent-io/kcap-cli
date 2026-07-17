@@ -26,8 +26,12 @@ public partial class AgentOrchestratorVendorTests {
 
         await orch.HandleStopAgent("ghost");
 
-        if (OperatingSystem.IsLinux()) {
-            // Env-confirmable → reaped by identity, record deleted on confirmed death.
+        // The record-pass reap kills once ownership is provable: Linux confirms via the KCAP_AGENT_ID
+        // env, Windows has no Unix env guard so an exact (pid, start-identity) match is sufficient. Only
+        // macOS 26 spares — its env is redacted, so the (Unix) env guard can't confirm and ambiguity
+        // never kills.
+        if (!OperatingSystem.IsMacOS()) {
+            // Linux / Windows → reaped by identity, record deleted on confirmed death.
             dummy.WaitForExit(TimeSpan.FromSeconds(10));
             await Assert.That(dummy.HasExited).IsTrue();
             await Assert.That(orch.PidRecordsForTest().Any(r => r.AgentId == "ghost")).IsFalse();

@@ -33,7 +33,10 @@ public class OrphanReaperTests {
         var reaper = new OrphanReaper(store, daemonId: "did", currentEpoch: "new-epoch", NullLogger.Instance);
         await reaper.ReapOnceAsync();
 
-        if (OperatingSystem.IsLinux()) {
+        // Record-pass kills once ownership is provable: Linux confirms via the KCAP_AGENT_ID env,
+        // Windows has no Unix env guard so an exact (pid, start-identity) match suffices. Only macOS 26
+        // spares (env redacted → the Unix env guard can't confirm; ambiguity never kills).
+        if (!OperatingSystem.IsMacOS()) {
             dummy.WaitForExit(TimeSpan.FromSeconds(8));
             await Assert.That(dummy.HasExited).IsTrue();
             await Assert.That(store.ReadAll()).IsEmpty();
