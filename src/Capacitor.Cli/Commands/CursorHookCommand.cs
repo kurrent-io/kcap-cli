@@ -262,9 +262,12 @@ public static class CursorHookCommand {
                                && !string.IsNullOrEmpty(transcriptPath);
 
             if (drainBeforePost && !BudgetExpired()) {
+                // AI-1382 Task 10 (D2): this IS the sessionEnd pre-end drain — the hook is the
+                // last component that will ever observe this transcript, so a valid
+                // newline-less final record must be consumed rather than held forever.
                 await CursorTranscriptBackfill.RunAsync(
                     client, baseUrl, sessionId!, transcriptPath,
-                    budget: BudgetExpired, ct);
+                    budget: BudgetExpired, ct, finalDrain: true);
             }
 
             if (BudgetExpired()) {
@@ -377,11 +380,12 @@ public static class CursorHookCommand {
 
         // sessionEnd: drain the transcript before the terminal hook — same ordering rationale
         // as the top-level path, and mirrors SendSubagentLifecycleAsync (its transcript batch
-        // always precedes subagent-stop too).
+        // always precedes subagent-stop too). AI-1382 Task 10 (D2): this is the child's own
+        // pre-end drain, so consume a complete-but-unterminated final line rather than holding it.
         if (isStop && !string.IsNullOrEmpty(transcriptPath) && !budgetExpired()) {
             await CursorTranscriptBackfill.RunAsync(
                 client, baseUrl, parentSessionId, transcriptPath,
-                budget: budgetExpired, ct, agentId: childSessionId);
+                budget: budgetExpired, ct, agentId: childSessionId, finalDrain: true);
         }
 
         if (budgetExpired()) {

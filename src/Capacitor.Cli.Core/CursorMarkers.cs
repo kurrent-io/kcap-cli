@@ -19,6 +19,14 @@ public static class CursorMarkers {
     public static string HeartbeatPath(string sessionId)  => Path.Combine(PathHelpers.ConfigPath("cursor-heartbeat"), $"{sessionId}.json");
 
     /// <summary>
+    /// AI-1382 Tasks 10/11 — the shared bound every <see cref="BarrierPending"/> caller (the
+    /// backfill and the live watcher) uses to decide when a barrier has aged out. A single
+    /// source of truth so the backfill and the watcher agree on how long they hold transcript
+    /// delivery for the same session before proceeding past a crashed hook's uncleared barrier.
+    /// </summary>
+    public static readonly TimeSpan DefaultBarrierBound = TimeSpan.FromSeconds(60);
+
+    /// <summary>
     /// True once <see cref="Quarantine"/> has written a marker for this session. Fail-open on any
     /// read error (corrupt/partial marker, permission issue) — a broken quarantine check must
     /// never itself become the reason live capture stalls. Consulted by the backfill and import

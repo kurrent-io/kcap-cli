@@ -350,8 +350,12 @@ public class CursorHookCommandTests {
         public HttpClient Client                { get; }
         public string     TranscriptPathEscaped => _transcriptPath.Replace(@"\", @"\\");
 
+        // AI-1382 Task 10: the backfill now holds a non-newline-terminated final line on every
+        // mid-session (Hold-policy) call — a real Cursor transcript line is newline-terminated
+        // once flushed, so tests write content the same way rather than exercising the
+        // holdback edge case incidentally.
         public Task WriteTranscript(string content) =>
-            File.WriteAllTextAsync(_transcriptPath, content);
+            File.WriteAllTextAsync(_transcriptPath, content.EndsWith('\n') ? content : content + "\n");
 
         public IEnumerable<string> SpoolFiles =>
             Directory.Exists(_spoolPath) ? Directory.EnumerateFiles(_spoolPath, "*.jsonl") : [];

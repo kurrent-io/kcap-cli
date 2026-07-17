@@ -1,10 +1,96 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Tests.Unit.Cursor;
 
 public class CursorTranscriptBackfillTests {
+    static string NewSessionId() => Guid.NewGuid().ToString("N");
+
+    [Test]
+    public async Task Backfill_holds_unterminated_final_line_mid_session() {
+        using var tmp = new TempDir();
+        var transcript = Path.Combine(tmp.Path, "t.jsonl");
+        // Two complete lines + a half-written third with NO trailing newline.
+        await File.WriteAllTextAsync(transcript,
+            "{\"role\":\"user\",\"message\":{\"content\":[]}}\n{\"role\":\"assistant\",\"message\":{\"content\":[]}}\n{\"role\":\"user\",\"mess");
+
+        string? postedBody = null;
+        using var handler = new RecordingHandler(
+            getResponse: r => r.RequestUri!.AbsolutePath.EndsWith("/last-line")
+                ? new HttpResponseMessage(HttpStatusCode.NoContent) : null, // resume from 0
+            postCapture: (_, b) => { postedBody = b; return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var client = new HttpClient(handler);
+
+        var stats = await CursorTranscriptBackfill.RunAsync(
+            client, "http://s", NewSessionId(), transcript, () => false, CancellationToken.None, finalDrain: false);
+
+        var lines = JsonNode.Parse(postedBody!)!["lines"]!.AsArray();
+        await Assert.That(lines.Count).IsEqualTo(2); // the half-written line was HELD
+        await Assert.That(stats.LinesPosted).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Backfill_consumes_unterminated_final_line_on_finalDrain_when_complete() {
+        using var tmp = new TempDir();
+        var transcript = Path.Combine(tmp.Path, "t.jsonl");
+        // Two complete lines + a THIRD complete JSON record with no trailing newline —
+        // finalDrain (sessionEnd pre-end drain) must consume it via ConsumeIfComplete rather
+        // than stranding a valid final record just because the agent process died before the
+        // watcher (whichever component is down) flushed a trailing newline.
+        await File.WriteAllTextAsync(transcript,
+            "{\"role\":\"user\",\"message\":{\"content\":[]}}\n{\"role\":\"assistant\",\"message\":{\"content\":[]}}\n{\"role\":\"user\",\"message\":{\"content\":[]}}");
+
+        string? postedBody = null;
+        using var handler = new RecordingHandler(
+            getResponse: r => r.RequestUri!.AbsolutePath.EndsWith("/last-line")
+                ? new HttpResponseMessage(HttpStatusCode.NoContent) : null,
+            postCapture: (_, b) => { postedBody = b; return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var client = new HttpClient(handler);
+
+        var stats = await CursorTranscriptBackfill.RunAsync(
+            client, "http://s", NewSessionId(), transcript, () => false, CancellationToken.None, finalDrain: true);
+
+        var lines = JsonNode.Parse(postedBody!)!["lines"]!.AsArray();
+        await Assert.That(lines.Count).IsEqualTo(3); // the complete-but-unterminated final line was CONSUMED
+        await Assert.That(stats.LinesPosted).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task Backfill_noops_when_quarantined() {
+        var sessionId = NewSessionId();
+        using var tmp = new TempDir();
+        var transcript = Path.Combine(tmp.Path, "t.jsonl");
+        await File.WriteAllTextAsync(transcript, "{\"role\":\"user\",\"message\":{\"content\":[]}}\n");
+        CursorMarkers.Quarantine(sessionId, "rewrite detected");
+
+        var postCount = 0;
+        using var client = new HttpClient(new RecordingHandler(_ => null, (_, _) => { postCount++; return new HttpResponseMessage(HttpStatusCode.OK); }));
+        var stats = await CursorTranscriptBackfill.RunAsync(client, "http://s", sessionId, transcript, () => false, CancellationToken.None);
+
+        await Assert.That(stats.LinesPosted).IsEqualTo(0);
+        await Assert.That(postCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Backfill_holds_when_barrier_pending() {
+        var sessionId = NewSessionId();
+        using var tmp = new TempDir();
+        var transcript = Path.Combine(tmp.Path, "t.jsonl");
+        await File.WriteAllTextAsync(transcript, "{\"role\":\"user\",\"message\":{\"content\":[]}}\n");
+        CursorMarkers.CreateBarrier(sessionId, DateTimeOffset.UtcNow);
+
+        var postCount = 0;
+        using var client = new HttpClient(new RecordingHandler(
+            r => r.RequestUri!.AbsolutePath.EndsWith("/last-line") ? new HttpResponseMessage(HttpStatusCode.NoContent) : null,
+            (_, _) => { postCount++; return new HttpResponseMessage(HttpStatusCode.OK); }));
+        var stats = await CursorTranscriptBackfill.RunAsync(client, "http://s", sessionId, transcript, () => false, CancellationToken.None);
+
+        await Assert.That(stats.LinesPosted).IsEqualTo(0);
+        await Assert.That(postCount).IsEqualTo(0);
+    }
+
     [Test]
     public async Task RunAsync_returns_zero_when_transcript_path_null() {
         using var tmp = new TempDir();
