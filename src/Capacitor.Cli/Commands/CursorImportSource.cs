@@ -471,14 +471,33 @@ internal sealed class CursorImportSource : IImportSource {
 
         int sent;
         try {
+            // AI-1382 review fix (r3, finding #4) — abortDelivery re-checks the ALREADY-resolved
+            // quarantineIdentity (a cheap marker-file read, no correlator re-run) before every
+            // 100-line batch. Without this, a quarantine written by the live watcher's runtime
+            // rewrite guard between batch 1 and batch 2 (or later) still let every remaining batch
+            // post — this closes that window by aborting delivery mid-flight.
             sent = await SessionImporter.SendTranscriptBatches(
-                httpClient: ctx.HttpClient,
-                baseUrl:    ctx.BaseUrl,
-                sessionId:  classification.SessionId,
-                filePath:   transcriptPath,
-                agentId:    null,
-                startLine:  startLine,
-                vendor:     Vendor);
+                httpClient:    ctx.HttpClient,
+                baseUrl:       ctx.BaseUrl,
+                sessionId:     classification.SessionId,
+                filePath:      transcriptPath,
+                agentId:       null,
+                startLine:     startLine,
+                vendor:        Vendor,
+                abortDelivery: () => CursorMarkers.IsQuarantined(quarantineIdentity));
+        } catch (SessionImporter.TranscriptDeliveryAbortedException) {
+            // Quarantine tripped mid-delivery — same best-effort close-and-fail contract as the
+            // two boundary checks above: best-effort session-end so the session doesn't hang open
+            // "active" forever, no children/remaining batches (we return before reaching them), and
+            // Failed so a re-run hits the pre-flight check and cleanly Skips from then on.
+            var abortDurationMs = createdUtc is { } midAc && modifiedUtc is { } midAm && midAm >= midAc
+                ? (long?)(midAm - midAc).TotalMilliseconds
+                : null;
+            await PostSyntheticHookAsync(
+                ctx.HttpClient, ctx.BaseUrl, "session-end/cursor",
+                BuildSessionEndPayload(classification.SessionId, transcriptPath, abortDurationMs, modifiedUtc),
+                ct);
+            return ImportOutcome.Failed;
         } catch {
             return ImportOutcome.Failed;
         }
@@ -491,7 +510,7 @@ internal sealed class CursorImportSource : IImportSource {
         if (classification.SourceMeta!.TryGetValue("SubagentChildren", out var kidsObj)
          && kidsObj is List<CursorSubagentChild> children) {
             foreach (var child in children) {
-                if (!await SendSubagentLifecycleAsync(classification.SessionId, child, ctx, ct))
+                if (!await SendSubagentLifecycleAsync(classification.SessionId, child, ctx, quarantineIdentity, ct))
                     return ImportOutcome.Failed;
             }
         }
@@ -576,6 +595,7 @@ internal sealed class CursorImportSource : IImportSource {
             string            parentSessionId,
             CursorSubagentChild child,
             ImportContext     ctx,
+            string            quarantineIdentity,
             CancellationToken ct
         ) {
         if (string.IsNullOrEmpty(child.TranscriptPath) || !File.Exists(child.TranscriptPath))
@@ -610,15 +630,21 @@ internal sealed class CursorImportSource : IImportSource {
             // failOnError: fail-closed like the parent lifecycle — a rejected/failed child
             // transcript POST must abort so the parent import fails and a re-run repairs it,
             // rather than leaving an empty completed subagent while reporting success.
+            //
+            // AI-1382 review fix (r3, finding #4) — abortDelivery closes over the SAME
+            // already-resolved quarantineIdentity as the parent's own send (no extra correlator
+            // work), so a quarantine tripping mid-child-transcript also aborts the remaining
+            // child batches, not just the parent's.
             await SessionImporter.SendTranscriptBatches(
-                httpClient:  ctx.HttpClient,
-                baseUrl:     ctx.BaseUrl,
-                sessionId:   parentSessionId,
-                filePath:    child.TranscriptPath,
-                agentId:     agentId,
-                startLine:   startLine,
-                vendor:      Vendor,
-                failOnError: true);
+                httpClient:    ctx.HttpClient,
+                baseUrl:       ctx.BaseUrl,
+                sessionId:     parentSessionId,
+                filePath:      child.TranscriptPath,
+                agentId:       agentId,
+                startLine:     startLine,
+                vendor:        Vendor,
+                failOnError:   true,
+                abortDelivery: () => CursorMarkers.IsQuarantined(quarantineIdentity));
         } catch {
             return false;
         }

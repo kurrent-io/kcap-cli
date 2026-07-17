@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
@@ -1001,6 +1002,66 @@ public class CursorImportSourceTests {
             await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
             await Assert.That(posted).Contains("/hooks/session-start/cursor");
             await Assert.That(posted).DoesNotContain("/hooks/transcript");
+            await Assert.That(posted).Contains("/hooks/session-end/cursor");
+        } finally { try { File.Delete(CursorMarkers.QuarantinePath(sessionId)); } catch { } }
+    }
+
+    // AI-1382 review fix (r3, finding #4) — the round-2 fix above only re-checked quarantine
+    // immediately BEFORE SendTranscriptBatches; that method itself streamed the (mutable) file and
+    // posted one request per 100 lines with NO quarantine check at all, so a quarantine written by
+    // the live watcher's runtime rewrite guard AFTER the first transcript POST still let every
+    // remaining batch post. This test drives a transcript large enough to need TWO batches (150
+    // lines: one 100-line flush, one 50-line final flush) and quarantines the session the instant
+    // the FIRST batch lands, proving the second is aborted rather than delivered.
+    [Test]
+    public async Task import_session_aborts_the_remaining_batch_when_quarantine_is_written_between_batches() {
+        using var fx = new ProjectsDirFixture();
+        var sessionIdWithDashes = Guid.NewGuid().ToString();
+        var sessionId           = CursorImportSource.NormalizeCursorSessionId(sessionIdWithDashes);
+        var lines = string.Concat(Enumerable.Range(0, 150).Select(i => $$"""{"n":{{i}}}""" + "\n"));
+        var jsonl = fx.AddSession("Users-me-proj", sessionIdWithDashes, lines);
+        var src   = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        var posted         = new List<string>();
+        var transcriptPosts = 0;
+        using var handler = new StubHandler(postCapture: (req, _) => {
+            var path = req.RequestUri!.AbsolutePath;
+            posted.Add(path);
+            if (path == "/hooks/transcript") {
+                transcriptPosts++;
+                if (transcriptPosts == 1) {
+                    // The live watcher's runtime rewrite guard trips WHILE the first 100-line
+                    // batch is "in flight" (simulated side effect, mirroring the sessionStart test
+                    // above but at the transcript-batch boundary instead).
+                    CursorMarkers.Quarantine(sessionId, "test");
+                }
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        using var client = new HttpClient(handler);
+
+        try {
+            var outcome = await src.ImportSessionAsync(
+                new ImportCommand.SessionClassification {
+                    SessionId  = sessionId,
+                    FilePath   = "",
+                    EncodedCwd = "",
+                    Meta       = new SessionMetadata(),
+                    Status     = ImportCommand.ClassificationStatus.New,
+                    Vendor     = "cursor",
+                    SourceMeta = new Dictionary<string, object?> { ["TranscriptPath"] = jsonl },
+                },
+                new ImportContext(client, "http://localhost", ForcePrivate: false),
+                CancellationToken.None
+            );
+
+            await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+            // Exactly ONE transcript batch posted (the first 100 lines) — the second (remaining
+            // 50 lines) must never be sent once the quarantine marker appears.
+            await Assert.That(transcriptPosts).IsEqualTo(1);
+            await Assert.That(posted).Contains("/hooks/session-start/cursor");
+            // Best-effort closed rather than left hanging "active" forever (same contract as the
+            // two boundary checks — pre-flight and post-sessionStart — above).
             await Assert.That(posted).Contains("/hooks/session-end/cursor");
         } finally { try { File.Delete(CursorMarkers.QuarantinePath(sessionId)); } catch { } }
     }

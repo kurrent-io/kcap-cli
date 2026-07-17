@@ -460,6 +460,18 @@ static class SessionImporter {
     /// "claude" (default) or "codex" — stamped on the outgoing
     /// <see cref="TranscriptBatch"/> so the server picks the matching normalizer.
     /// </param>
+    /// <param name="abortDelivery">
+    /// AI-1382 review fix (r3, finding #4) — checked immediately before every batch POST (including
+    /// the very first). When it returns true, delivery aborts by throwing
+    /// <see cref="TranscriptDeliveryAbortedException"/> WITHOUT posting the pending batch — no
+    /// remaining batches (or, for the Cursor caller, the child lifecycle/transcript POSTs that
+    /// follow this call) are ever sent. Cursor's live rewrite guard can quarantine a session AFTER
+    /// this method's caller last checked (its own check only runs once, before the first byte of
+    /// this multi-batch send), and without a check re-run inside the loop every remaining 100-line
+    /// batch would still be posted. The predicate should be cheap (a marker-file check, not a
+    /// re-run of any correlator) — the caller is expected to close over an already-resolved
+    /// identity rather than recompute it per batch.
+    /// </param>
     internal static async Task<int> SendTranscriptBatches(
             HttpClient                 httpClient,
             string                     baseUrl,
@@ -470,7 +482,8 @@ static class SessionImporter {
             IProgress<ImportProgress>? progress          = null,
             string                     vendor            = "claude",
             int                        lineNumberOffset  = 0,
-            bool                       failOnError       = false
+            bool                       failOnError       = false,
+            Func<bool>?                abortDelivery     = null
         ) {
         if (!File.Exists(filePath)) return 0;
 
@@ -499,6 +512,8 @@ static class SessionImporter {
             lineIndex++;
 
             if (batchLines.Count >= batchSize) {
+                if (abortDelivery?.Invoke() == true) throw new TranscriptDeliveryAbortedException();
+
                 await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers, vendor, failOnError);
                 var flushed = batchLines.Count;
                 totalSent += flushed;
@@ -509,6 +524,8 @@ static class SessionImporter {
         }
 
         if (batchLines.Count > 0) {
+            if (abortDelivery?.Invoke() == true) throw new TranscriptDeliveryAbortedException();
+
             await PostTranscriptBatch(httpClient, baseUrl, sessionId, agentId, batchLines, batchLineNumbers, vendor, failOnError);
             var flushed = batchLines.Count;
             totalSent += flushed;
@@ -517,6 +534,15 @@ static class SessionImporter {
 
         return totalSent;
     }
+
+    /// <summary>
+    /// AI-1382 review fix (r3, finding #4) — thrown by <see cref="SendTranscriptBatches"/> when its
+    /// <c>abortDelivery</c> predicate trips mid-delivery (between batches). Distinct from a generic
+    /// send failure so a caller that wants to react specially (Cursor's best-effort session-end —
+    /// see <see cref="CursorImportSource.ImportSessionAsync"/>) can catch it before a broader
+    /// catch-all.
+    /// </summary>
+    internal sealed class TranscriptDeliveryAbortedException : Exception;
 
     static async Task PostTranscriptBatch(
             HttpClient   httpClient,
