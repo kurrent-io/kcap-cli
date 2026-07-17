@@ -73,7 +73,10 @@ public static class GeminiPaths {
     /// Nested subagent-recording directory for a parent session:
     /// <c>&lt;chats&gt;/&lt;parentSessionId&gt;/</c>. Gemini records each subagent's transcript
     /// here as <c>&lt;subId&gt;.jsonl</c> (subId = a fresh dashed UUID — the executor's agent
-    /// id; nested subagents at any depth stay flat under the top-level session).
+    /// id). A subagent that itself spawns subagents gets its OWN nested dir the same way —
+    /// <c>&lt;chats&gt;/&lt;subId&gt;/&lt;grandSubId&gt;.jsonl</c> — so deeper invocations are
+    /// discovered by recursing into each descendant's own directory, not by assuming a flat
+    /// layout (AI-1383 D3; see <see cref="GeminiSubagentDiscovery.EnumerateDescendantFiles"/>).
     /// <paramref name="parentSessionId"/> is the DASHED form from the parent transcript's
     /// header, matching the on-disk directory name. AI-900.
     /// </summary>

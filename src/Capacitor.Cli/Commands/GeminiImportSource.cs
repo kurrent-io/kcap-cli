@@ -285,40 +285,55 @@ internal sealed class GeminiImportSource : IImportSource {
     }
 
     /// <summary>
-    /// Imports any nested subagent transcripts (chats/&lt;parentSessionId&gt;/&lt;subId&gt;.jsonl)
-    /// recorded alongside the parent. Each is sent under the parent session id with the
-    /// subagent's canonical (dashless) id so the server routes it to AgentSubsession-*.
-    /// subagent-start is fail-closed (skip a subagent's content if start fails) so a subagent
-    /// stream never exists without the SubagentStarted that lets chat/trace nest it. Re-runs
-    /// are idempotent (deterministic server-side ids). AI-900.
+    /// Imports every TRANSITIVE descendant subagent transcript (root's own
+    /// chats/&lt;parentSessionId&gt;/&lt;subId&gt;.jsonl, then each discovered subagent's own
+    /// nested dir, recursively — depth-capped, AI-1383 D3) as a DIRECT subagent of the
+    /// top-level root (Model A's flat stream key can't express deeper nesting, so flattening
+    /// is what preserves content that would otherwise be dropped). Each descendant's
+    /// agent_name/type is resolved from its OWN immediate parent's transcript — not the
+    /// root's — since that's where its invoke_agent call was recorded; a per-parent cache
+    /// avoids re-scanning the same transcript for siblings. subagent-start is fail-closed
+    /// (skip a descendant's content if start fails) so a subagent stream never exists without
+    /// the SubagentStarted that lets chat/trace nest it. Re-runs are idempotent (deterministic
+    /// server-side ids). Any descendants beyond the depth cap are surfaced (never silent) via a
+    /// stderr diagnostic. AI-900, AI-1383 D3.
     /// </summary>
     async Task ImportSubagentsAsync(
         HttpClient client, string baseUrl, string parentSessionIdDashless, string transcriptPath, CancellationToken ct
     ) {
-        var subFiles = GeminiSubagentDiscovery.EnumerateSubagentFiles(transcriptPath);
-        if (subFiles.Count == 0) return;
+        var (descendants, omitted) = GeminiSubagentDiscovery.EnumerateDescendantFiles(transcriptPath);
 
-        var types = GeminiSubagentDiscovery.ResolveAgentTypes(transcriptPath);
+        if (omitted > 0) {
+            Console.Error.WriteLine(
+                $"[kcap] gemini: root {parentSessionIdDashless} descendants_omitted={omitted} " +
+                $"(depth cap {GeminiSubagentDiscovery.MaxDescendantDepth} exceeded)");
+        }
 
-        foreach (var subFile in subFiles) {
+        if (descendants.Count == 0) return;
+
+        var typesByParentTranscript = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal);
+
+        foreach (var d in descendants) {
             ct.ThrowIfCancellationRequested();
 
-            var subId = Path.GetFileNameWithoutExtension(subFile);
-            if (!Guid.TryParse(subId, out _)) continue; // only well-formed <subId>.jsonl
+            if (!typesByParentTranscript.TryGetValue(d.ImmediateParentTranscriptPath, out var types)) {
+                types = GeminiSubagentDiscovery.ResolveAgentTypes(d.ImmediateParentTranscriptPath);
+                typesByParentTranscript[d.ImmediateParentTranscriptPath] = types;
+            }
 
-            var agentId   = GeminiSubagentDiscovery.CanonicalAgentId(subId); // dashless — matches server routing + correlation
-            var agentType = types.GetValueOrDefault(subId) ?? "subagent";    // agent_name from the parent invoke_agent call
+            var agentId   = GeminiSubagentDiscovery.CanonicalAgentId(d.DashedId); // dashless — matches server routing + correlation
+            var agentType = types.GetValueOrDefault(d.DashedId) ?? "subagent";    // agent_name from the IMMEDIATE parent's invoke_agent call
 
             // Fail-closed: don't stream content unless the subagent registered first.
             var startOk = await PostSyntheticHookAsync(
                 client, baseUrl, "subagent-start",
-                GeminiSubagentDiscovery.BuildStartPayload(parentSessionIdDashless, agentId, agentType, subFile), ct);
+                GeminiSubagentDiscovery.BuildStartPayload(parentSessionIdDashless, agentId, agentType, d.File), ct);
             if (!startOk) continue;
 
             try {
                 await SessionImporter.SendTranscriptBatches(
                     httpClient: client, baseUrl: baseUrl,
-                    sessionId:  parentSessionIdDashless, filePath: subFile,
+                    sessionId:  parentSessionIdDashless, filePath: d.File,
                     agentId:    agentId, startLine: 0, vendor: Vendor);
             } catch {
                 continue; // leave subagent-stop unsent; a re-import retries (idempotent)
@@ -326,7 +341,7 @@ internal sealed class GeminiImportSource : IImportSource {
 
             await PostSyntheticHookAsync(
                 client, baseUrl, "subagent-stop",
-                GeminiSubagentDiscovery.BuildStopPayload(parentSessionIdDashless, agentId, agentType, subFile), ct);
+                GeminiSubagentDiscovery.BuildStopPayload(parentSessionIdDashless, agentId, agentType, d.File), ct);
         }
     }
 

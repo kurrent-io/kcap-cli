@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core; // JsonElement Str/Obj/Arr extensions
@@ -30,6 +31,9 @@ public static class GeminiSubagentDiscovery {
     /// <summary>
     /// Nested subagent <c>*.jsonl</c> files recorded alongside a parent main transcript
     /// (empty when the session spawned none). Path: <c>chats/&lt;dashedParent&gt;/*.jsonl</c>.
+    /// Single-level — shared by the live watcher/teardown paths, which stay single-level for
+    /// now (AI-1383 D3 scoped the recursive fix to import only; see
+    /// <see cref="EnumerateDescendantFiles"/>).
     /// </summary>
     public static IReadOnlyList<string> EnumerateSubagentFiles(string transcriptPath) {
         if (ReadParentSessionId(transcriptPath) is not { } dashedParent) return [];
@@ -39,6 +43,82 @@ public static class GeminiSubagentDiscovery {
         if (!Directory.Exists(subDir)) return [];
 
         return Directory.EnumerateFiles(subDir, "*.jsonl").ToList();
+    }
+
+    /// <summary>Import-side recursion depth cap (AI-1383 D3) — a descendant beyond this depth
+    /// is neither discovered nor recursed into; the caller surfaces the count.</summary>
+    public const int MaxDescendantDepth = 8;
+
+    /// <summary>
+    /// One recursively-discovered descendant subagent file. <c>ImmediateParentTranscriptPath</c>
+    /// is THIS descendant's own immediate parent's transcript — NOT the root's — because a
+    /// grandchild's <c>agent_name</c>/invocation-type mapping lives in its immediate parent's
+    /// <c>invoke_agent</c> tool call, not the root's (AI-1383 D3). <c>DashedId</c> is the
+    /// descendant's own dashed session id (the filename stem), and <c>Depth</c> is 1 for a
+    /// direct child of the root, 2 for a grandchild, etc.
+    /// </summary>
+    public readonly record struct DescendantFile(
+        string File,
+        string ImmediateParentTranscriptPath,
+        string DashedId,
+        int    Depth);
+
+    /// <summary>Recursive descendant discovery result: the discovered files plus a count of
+    /// descendants beyond <see cref="MaxDescendantDepth"/> that were deliberately NOT imported
+    /// (never silent — the caller surfaces this in the import summary).</summary>
+    public readonly record struct DescendantDiscoveryResult(
+        IReadOnlyList<DescendantFile> Files,
+        int                           DescendantsOmitted);
+
+    /// <summary>
+    /// Recursively discovers every descendant subagent transcript under
+    /// <paramref name="rootTranscriptPath"/>: the root's own <c>chats/&lt;root&gt;/*.jsonl</c>,
+    /// then — for each discovered subagent — that subagent's OWN <c>chats/&lt;sub&gt;/*.jsonl</c>,
+    /// and so on. Child directories are always derived from the ROOT's <c>chats/</c> directory,
+    /// never relative to a nested dir. Deterministic BFS (files ordered by filename at each
+    /// level); a visited-id set guards against a reachable cycle (it simply stops re-descending,
+    /// terminating the walk). Depth &gt; <see cref="MaxDescendantDepth"/> is neither imported nor
+    /// promoted — counted in <see cref="DescendantDiscoveryResult.DescendantsOmitted"/> instead
+    /// (AI-1383 D3). Import-only for now (see <see cref="EnumerateSubagentFiles"/>).
+    /// </summary>
+    public static DescendantDiscoveryResult EnumerateDescendantFiles(string rootTranscriptPath) {
+        if (ReadParentSessionId(rootTranscriptPath) is not { } rootDashedId) return new([], 0);
+        if (Path.GetDirectoryName(rootTranscriptPath) is not { } chatsDir) return new([], 0);
+
+        var files   = new List<DescendantFile>();
+        var visited = new HashSet<string>(StringComparer.Ordinal) { rootDashedId };
+        var omitted = 0;
+
+        var frontier = new Queue<(string TranscriptPath, string DashedId, int Depth)>();
+        frontier.Enqueue((rootTranscriptPath, rootDashedId, 0));
+
+        while (frontier.Count > 0) {
+            var (transcriptPath, dashedId, depth) = frontier.Dequeue();
+
+            var subDir = GeminiPaths.SubagentDir(chatsDir, dashedId);
+            if (!Directory.Exists(subDir)) continue;
+
+            IEnumerable<string> children;
+            try {
+                children = Directory.EnumerateFiles(subDir, "*.jsonl").OrderBy(f => f, StringComparer.Ordinal).ToList();
+            } catch {
+                continue; // hostile/inaccessible nested dir must not abort the whole walk
+            }
+
+            foreach (var file in children) {
+                var subId = Path.GetFileNameWithoutExtension(file);
+                if (!Guid.TryParse(subId, out _)) continue; // only well-formed <subId>.jsonl
+                if (!visited.Add(subId)) continue;           // cycle guard — already reached
+
+                var childDepth = depth + 1;
+                if (childDepth > MaxDescendantDepth) { omitted++; continue; }
+
+                files.Add(new DescendantFile(file, transcriptPath, subId, childDepth));
+                frontier.Enqueue((file, subId, childDepth));
+            }
+        }
+
+        return new DescendantDiscoveryResult(files, omitted);
     }
 
     /// <summary>
