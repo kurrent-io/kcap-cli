@@ -252,6 +252,47 @@ public class OpenCodeDbTests {
         await Assert.That(omittedIds.Count).IsEqualTo(OpenCodeDb.MaxCountingNodes);
     }
 
+    // AI-1383 D3 review fix #5: the ceiling used to bound the RETURNED omitted count/ids, but
+    // not the actual WORK — every below-cap node already enqueued before the ceiling was hit
+    // (up to MaxCountingNodes of them) still got individually dequeued and queried afterward.
+    // Once truncation is established, the below-cap frontier must be abandoned outright rather
+    // than drained node-by-node, so QueryChildren is never called on any of those below-cap
+    // nodes' own children.
+    [Test]
+    public async Task QueryDescendants_below_cap_truncation_stops_expanding_already_queued_below_cap_nodes() {
+        using var tmp = new TempDir();
+        var db = BuildDb(tmp.Path);
+        InsertSession(db, "ses_root", null, "/w", "Root", 100);
+
+        // A depth 1..8 chain (in-cap), then MaxCountingNodes + 50 direct children of the
+        // depth-8 node — ALL at depth 9 (below cap). A SINGLE QueryChildren("ses_n8") call
+        // returns this entire cap+50 list, so truncation is established while still inside the
+        // IN-CAP walk's processing of ses_n8 — before the below-cap frontier is ever drained.
+        var prev = "ses_root";
+        for (var depth = 1; depth <= 8; depth++) {
+            var id = $"ses_n{depth}";
+            InsertSession(db, id, prev, "/w", $"N{depth}", 100 + depth);
+            prev = id;
+        }
+        const int belowCapCount = OpenCodeDb.MaxCountingNodes + 50;
+        InsertManyChildren(db, "ses_n8", "ses_deep", belowCapCount, baseTime: 1000);
+
+        using var ocdb = new OpenCodeDb(db);
+        var (descendants, omitted, omittedIds, truncated) = ocdb.QueryDescendants("ses_root");
+
+        // Sanity: same correctness guarantees as the sibling test above.
+        await Assert.That(descendants.Select(d => d.Row.Id).OrderBy(x => x))
+            .IsEquivalentTo(Enumerable.Range(1, 8).Select(i => $"ses_n{i}"));
+        await Assert.That(truncated).IsTrue();
+        await Assert.That(omitted).IsEqualTo(OpenCodeDb.MaxCountingNodes);
+
+        // The actual WORK is bounded too: only the in-cap chain (root + n1..n7, each with one
+        // child, plus n8's own single big query) is ever queried — 9 calls total. None of the
+        // ~10,000 below-cap "ses_deep*" nodes is ever individually dequeued and queried for its
+        // OWN children (which would have driven QueryChildrenCallCount into the thousands).
+        await Assert.That(ocdb.QueryChildrenCallCount).IsLessThanOrEqualTo(9);
+    }
+
     // Bulk-inserts `count` direct children of `parentId` in a single transaction with a reused
     // prepared command — the per-call-connection InsertSession helper above is far too slow for
     // the 10,000+ row scale these MaxCountingNodes tests need.

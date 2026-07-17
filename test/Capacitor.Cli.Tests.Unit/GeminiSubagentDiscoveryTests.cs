@@ -346,4 +346,60 @@ public class GeminiSubagentDiscoveryTests {
             Directory.Delete(tmp, recursive: true);
         }
     }
+
+    // AI-1383 D3 review fix #5: the ceiling used to bound the RETURNED omitted count/ids, but
+    // not the actual WORK — every below-cap node already enqueued before the ceiling was hit
+    // (up to MaxCountingNodes of them) still got individually dequeued and directory-enumerated
+    // afterward. Once truncation is established, the below-cap frontier must be abandoned
+    // outright rather than drained node-by-node, so the walk never probes any of those
+    // below-cap nodes' own subdirectories.
+    [Test]
+    public async Task EnumerateDescendantFiles_below_cap_truncation_stops_expanding_already_queued_below_cap_nodes() {
+        var tmp = Directory.CreateTempSubdirectory("kcap-gsd-desc").FullName;
+        try {
+            var chats = Path.Combine(tmp, "chats");
+            Directory.CreateDirectory(chats);
+
+            var rootId = "00000000-0000-4000-8000-000000000000";
+            var root   = Path.Combine(chats, "session-root.jsonl");
+            File.WriteAllText(root, $$"""{"sessionId":"{{rootId}}","kind":"main"}""" + "\n");
+
+            // A depth 1..8 chain (in-cap), then MaxCountingNodes + 50 direct subagent files
+            // under the depth-8 node's own dir — ALL at depth 9 (below cap). A SINGLE directory
+            // enumeration of that dir returns this entire cap+50 list, so truncation is
+            // established while still inside the IN-CAP walk's processing of the depth-8 node —
+            // before the below-cap frontier is ever drained.
+            var prevId = rootId;
+            for (var depth = 1; depth <= 8; depth++) {
+                var id  = $"00000000-0000-4000-8000-{depth:D12}";
+                var dir = Path.Combine(chats, prevId);
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, id + ".jsonl"), $$"""{"sessionId":"{{id}}","kind":"subagent"}""" + "\n");
+                prevId = id;
+            }
+
+            var belowCapCount = GeminiSubagentDiscovery.MaxCountingNodes + 50;
+            var depth8Dir     = Path.Combine(chats, prevId); // prevId is now the depth-8 node's own id
+            Directory.CreateDirectory(depth8Dir);
+            for (var i = 0; i < belowCapCount; i++) {
+                var id = $"22222222-{i / 100000000:D4}-4000-8000-{i:D12}";
+                File.WriteAllText(Path.Combine(depth8Dir, id + ".jsonl"), $$"""{"sessionId":"{{id}}","kind":"subagent"}""" + "\n");
+            }
+
+            var dequeuedBelowCapCount = 0;
+            var result = GeminiSubagentDiscovery.EnumerateDescendantFiles(root, () => dequeuedBelowCapCount++);
+
+            // Sanity: same correctness guarantees as the sibling test above.
+            await Assert.That(result.Files.Count).IsEqualTo(8);
+            await Assert.That(result.CountTruncated).IsTrue();
+            await Assert.That(result.DescendantsOmitted).IsEqualTo(GeminiSubagentDiscovery.MaxCountingNodes);
+
+            // The actual WORK is bounded too: truncation is already established from the single
+            // directory enumeration of the depth-8 node's dir (an IN-CAP node), so the below-cap
+            // frontier — which would hold up to ~10,000 depth-9 nodes — is never drained at all.
+            await Assert.That(dequeuedBelowCapCount).IsEqualTo(0);
+        } finally {
+            Directory.Delete(tmp, recursive: true);
+        }
+    }
 }
