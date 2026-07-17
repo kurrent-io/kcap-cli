@@ -183,6 +183,14 @@ public static class CursorHookCommand {
                 if (node["workspace_roots"] is JsonArray roots && roots.Count > 0
                  && roots[0] is JsonValue wv && wv.TryGetValue<string>(out var wr))
                     workspaceRoot = wr;
+
+                // AI-1382 Task 9: spawn (or heal) this session's tailing Cursor watcher FIRST —
+                // live transcript capture must never be lost even if the repo-enrichment call
+                // below (or the eventual POST) is slow or fails. Idempotent; a no-op once alive.
+                if (sessionId is not null && !string.IsNullOrEmpty(transcriptPath)) {
+                    await MaybeSpawnWatcherAsync(baseUrl, sessionId, transcriptPath, workspaceRoot, eventName, isSubagentChild);
+                }
+
                 if (!string.IsNullOrEmpty(workspaceRoot)) {
                     var remaining = budgetTotal - sw.Elapsed;
                     if (remaining > TimeSpan.Zero) {
@@ -276,6 +284,15 @@ public static class CursorHookCommand {
             // succeeded — clear the barrier it created above.
             if (posted && eventName == "beforeSubmitPrompt" && sessionId is not null) {
                 CursorMarkers.ClearBarrier(sessionId);
+            }
+
+            // AI-1382 Task 9: recovery spawn from a non-start hook — ONLY once this
+            // invocation's own lifecycle POST has actually landed (never race a fresh watcher
+            // ahead of the metadata the server needs to attribute its lines to). sessionStart
+            // already spawned before its POST above; ShouldSpawnWatcher is false for sessionEnd
+            // regardless, so this is safe to reach unconditionally for every other event.
+            if (posted && eventName != "sessionStart" && sessionId is not null && !string.IsNullOrEmpty(transcriptPath)) {
+                await MaybeSpawnWatcherAsync(baseUrl, sessionId, transcriptPath, cwd: null, eventName, isSubagentChild);
             }
 
             if (!drainBeforePost && !BudgetExpired() && sessionId is not null && !string.IsNullOrEmpty(transcriptPath)) {
@@ -391,6 +408,49 @@ public static class CursorHookCommand {
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// AI-1382 Task 9 — pure precedence predicate for whether THIS hook invocation should
+    /// spawn (or heal) the per-session top-level Cursor watcher. Precedence, from the D1
+    /// design: ① a terminal hook (<c>sessionEnd</c>) never spawns — only the pre-end drain and
+    /// the terminal POST matter there, and spawning a watcher moments before killing the
+    /// session would be pure churn; ② a correlated subagent child never spawns a top-level
+    /// <c>key=sessionId</c> watcher — it is routed through the gated
+    /// <c>parentSessionId-childSessionId</c> watcher instead (wired in a later task); ③/④ every
+    /// other hook — <c>sessionStart</c> or a later recovery hook — may spawn.
+    /// </summary>
+    internal static bool ShouldSpawnWatcher(string eventName, bool isSubagentChild) {
+        if (eventName == "sessionEnd") return false;
+        if (isSubagentChild) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// AI-1382 Task 9 — spawns (or heals, via <see cref="WatcherManager.EnsureWatcherRunning"/>'s
+    /// existing idempotent PID+heartbeat check) the per-session top-level Cursor watcher for
+    /// <paramref name="sessionId"/>, unless: the session is quarantined (a runtime rewrite-guard
+    /// trip — Task 7 — must not keep resurrecting a watcher for a session already given up on),
+    /// <see cref="ShouldSpawnWatcher"/> says no for this <paramref name="eventName"/>/
+    /// <paramref name="isSubagentChild"/> combination, or there is no transcript path to tail.
+    /// Always vendor <c>"cursor"</c>, keyed on the bare session id (top-level only — a linked
+    /// child's watcher is a distinct, gated key from a later task).
+    /// </summary>
+    internal static Task MaybeSpawnWatcherAsync(
+            string  baseUrl,
+            string  sessionId,
+            string  transcriptPath,
+            string? cwd,
+            string  eventName,
+            bool    isSubagentChild
+        ) {
+        if (CursorMarkers.IsQuarantined(sessionId)) return Task.CompletedTask;
+        if (!ShouldSpawnWatcher(eventName, isSubagentChild)) return Task.CompletedTask;
+        if (string.IsNullOrEmpty(transcriptPath)) return Task.CompletedTask;
+
+        return WatcherManager.EnsureWatcherRunning(
+            baseUrl, key: sessionId, transcriptPath,
+            agentId: null, cwd: cwd, vendor: "cursor");
     }
 
     /// <summary>
