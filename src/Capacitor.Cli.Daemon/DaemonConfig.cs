@@ -7,7 +7,7 @@ public class DaemonConfig {
     public int      MaxConcurrentAgents { get; set; } = 5;
 
     /// <summary>
-    /// AI-1313 Phase B (D3): backstop lifetime/idle bounds for a hosted review-flow reviewer, enforced
+    /// Phase B (D3): backstop lifetime/idle bounds for a hosted review-flow reviewer, enforced
     /// in the daemon heartbeat. A reviewer whose run went terminal on the server without the daemon
     /// hearing about it (or whose driver vanished) is reaped here so it can't hold a slot forever.
     /// Defaults 6h lifetime / 2h idle; <see cref="TimeSpan.Zero"/> disables that bound. Overridden at
@@ -19,14 +19,14 @@ public class DaemonConfig {
     public TimeSpan ReviewerIdleTimeout { get; set; } = TimeSpan.FromHours(2);
 
     /// <summary>
-    /// AI-1313 Phase B (D4): root directory under which this daemon writes its per-agent PID records
+    /// Phase B (D4): root directory under which this daemon writes its per-agent PID records
     /// (<c>{StateDir}/{name}/agents/{agentId}.json</c>). Null → the shared daemon state dir
     /// (<c>DaemonLockPaths.Directory</c>); tests point it at a temp dir. The per-name subdir keeps a
     /// daemon's records "its own" so the startup reap only ever touches this daemon's leftovers.
     /// </summary>
     public string? StateDir { get; set; }
 
-    /// <summary>AI-1313 Phase B (D4): a fresh per-boot epoch (GUID). Written into each spawned child's
+    /// <summary>Phase B (D4): a fresh per-boot epoch (GUID). Written into each spawned child's
     /// <c>KCAP_DAEMON_EPOCH</c> env marker; the startup env-marker scan kills same-daemon children
     /// whose epoch differs from the current one (i.e. survivors of a prior incarnation). Null → the
     /// orchestrator generates one at construction.</summary>

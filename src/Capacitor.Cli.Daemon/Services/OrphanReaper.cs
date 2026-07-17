@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// AI-1313 Phase B (D4 §6.4(3)): reaps hosted-agent children that OUTLIVED the daemon that spawned
+/// Phase B (D4 §6.4(3)): reaps hosted-agent children that OUTLIVED the daemon that spawned
 /// them — the crash/restart case where the in-memory registry is empty but a review-flow reviewer (or
 /// any hosted child) is still running and holding a slot. Runs once at boot under the daemon lock (next
 /// to <c>WorktreeManager.CleanupOrphanedAsync</c>) and again on a heartbeat tick. Two passes, in order:

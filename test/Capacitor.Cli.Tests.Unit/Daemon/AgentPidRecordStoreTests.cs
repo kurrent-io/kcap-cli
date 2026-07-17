@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
-/// AI-1313 Phase B (D4 §6.4(2)): <see cref="AgentPidRecordStore"/> — atomic write/read/delete round-trip
+/// Phase B (D4 §6.4(2)): <see cref="AgentPidRecordStore"/> — atomic write/read/delete round-trip
 /// (exact identity preserved) and corrupt-record quarantine.
 /// </summary>
 public class AgentPidRecordStoreTests {
@@ -50,6 +50,24 @@ public class AgentPidRecordStoreTests {
         await Assert.That(all.Select(r => r.AgentId)).IsEquivalentTo(new[] { "good" });
         await Assert.That(File.Exists(Path.Combine(agentsDir, "bad.json.corrupt"))).IsTrue();
         await Assert.That(File.Exists(Path.Combine(agentsDir, "bad.json"))).IsFalse();
+    }
+
+    [Test]
+    public async Task Write_hashes_a_path_traversal_agent_id_inside_the_agents_dir() {
+        var dir   = NewStateDir();
+        var store = new AgentPidRecordStore(dir, NullLogger.Instance);
+        var agentsDir = Path.Combine(dir, "agents");
+
+        // A hostile agent id (path separators / ".." — the id crosses the wire unconstrained) must not
+        // escape the agents directory: the filename is a hash, and the record round-trips by its original id.
+        store.Write(Rec("../../evil", pid: 7));
+
+        var files = Directory.GetFiles(agentsDir, "*.json");
+        await Assert.That(files.Length).IsEqualTo(1);
+        await Assert.That(Path.GetFileName(files[0])).DoesNotContain("evil"); // hashed, not the raw id
+        await Assert.That(store.ReadAll().Any(r => r.AgentId == "../../evil")).IsTrue();
+        await Assert.That(store.Delete("../../evil")).IsTrue();
+        await Assert.That(store.ReadAll()).IsEmpty();
     }
 
     [Test]

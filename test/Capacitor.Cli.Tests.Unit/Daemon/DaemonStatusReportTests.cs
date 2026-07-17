@@ -4,7 +4,7 @@ using Capacitor.Cli.Daemon.Services;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-1313 Phase B (D2): <see cref="AgentOrchestrator.BuildStatusReport"/> reports the daemon's
+/// Phase B (D2): <see cref="AgentOrchestrator.BuildStatusReport"/> reports the daemon's
 /// authoritative ActiveCount + live-agent metadata (quarantine wired in D4/Task 8).
 /// Partial of <see cref="AgentOrchestratorVendorTests"/> to reuse its test doubles.
 /// </summary>

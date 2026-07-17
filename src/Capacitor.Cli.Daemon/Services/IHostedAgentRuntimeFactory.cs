@@ -93,7 +93,7 @@ internal sealed record RuntimeStartContext(
         // checkout), carried from LaunchAgentCommand.Borrowed through to LauncherContext.Work.
         // Defaults to OwnedWorktree — today's only exercised path — unchanged.
         WorkLocation       Work = WorkLocation.OwnedWorktree,
-        // AI-1313 Phase B (D4 §6.4(3)): daemon-identity env markers stamped into the spawned child so a
+        // Phase B (D4 §6.4(3)): daemon-identity env markers stamped into the spawned child so a
         // RESTARTED daemon's OrphanReaper env-marker scan can recognize a recordless survivor as its
         // own (KCAP_DAEMON_ID == this daemon) from a PRIOR incarnation (KCAP_DAEMON_EPOCH != current)
         // and reap it. Empty when a test/legacy caller omits them — the markers are simply not written.

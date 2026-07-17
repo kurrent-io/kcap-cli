@@ -5,7 +5,7 @@ using Capacitor.Cli.Tests.Unit.Daemon;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-1313 Phase B (D4 §6.4(3)): <c>HandleStopAgent</c> for an id not in the registry falls back to the
+/// Phase B (D4 §6.4(3)): <c>HandleStopAgent</c> for an id not in the registry falls back to the
 /// PID record and reaps a matching live process by exact identity. OS-aware: Linux confirms the
 /// <c>KCAP_AGENT_ID</c> env and reaps; macOS 26 can't read the env, so it SPARES (ambiguity never
 /// kills). Partial of <see cref="AgentOrchestratorVendorTests"/> to call the private HandleStopAgent.

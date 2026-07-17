@@ -62,7 +62,7 @@ public static partial class DaemonRunner {
             }
         }
 
-        // AI-1313 Phase B (D3): reviewer lifetime/idle backstop overrides from env (seconds; 0 disables).
+        // Phase B (D3): reviewer lifetime/idle backstop overrides from env (seconds; 0 disables).
         config.ReviewerMaxLifetime = ParseSecondsEnv("KCAP_REVIEWER_MAX_LIFETIME", config.ReviewerMaxLifetime);
         config.ReviewerIdleTimeout = ParseSecondsEnv("KCAP_REVIEWER_IDLE_TIMEOUT", config.ReviewerIdleTimeout);
 
@@ -366,7 +366,7 @@ public static partial class DaemonRunner {
         // exactly what this bridge is meant to avoid.
         await host.StartAsync(lifetime.ApplicationStopping);
 
-        // AI-1313 Phase B (D4 §6.4(3)): resolve the orchestrator (which wires OnLaunchAgent +
+        // Phase B (D4 §6.4(3)): resolve the orchestrator (which wires OnLaunchAgent +
         // GetLiveAgents in its ctor) and reap any hosted-agent children that outlived a PRIOR daemon run
         // — all BEFORE ConnectAsync advertises this daemon and the server can dispatch launches. Doing
         // it after connect would let new work be admitted while old capacity is still being reclaimed
@@ -442,7 +442,7 @@ public static partial class DaemonRunner {
         _                              => null
     };
 
-    /// <summary>AI-1313 Phase B (D3): parse a seconds-valued env var into a <see cref="TimeSpan"/>
+    /// <summary>Phase B (D3): parse a seconds-valued env var into a <see cref="TimeSpan"/>
     /// (<c>0</c> → <see cref="TimeSpan.Zero"/>, which disables the bound). Unset/blank/invalid/negative
     /// → the supplied <paramref name="fallback"/>.</summary>
     internal static TimeSpan ParseSecondsEnv(string name, TimeSpan fallback) {

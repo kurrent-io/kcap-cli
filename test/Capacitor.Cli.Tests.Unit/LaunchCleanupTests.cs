@@ -7,7 +7,7 @@ using Capacitor.Cli.Tests.Unit.Daemon;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-1313 Phase B (D1 + D4 §6.4(2a)): the single-flight teardown and the kill-quarantine.
+/// Phase B (D1 + D4 §6.4(2a)): the single-flight teardown and the kill-quarantine.
 /// <list type="bullet">
 /// <item>A post-insert launch failure (e.g. a throwing RegisterAgentAsync) routes through the same
 /// <c>CleanupAgentAsync</c> teardown, so it can never strand an agent whose child is still live.</item>

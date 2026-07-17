@@ -4,7 +4,7 @@ using Capacitor.Cli.Daemon.Services;
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
-/// AI-1313 Phase B (D3): the reviewer lifetime/idle backstop — <see cref="AgentOrchestrator.FindReviewersToReap"/>
+/// Phase B (D3): the reviewer lifetime/idle backstop — <see cref="AgentOrchestrator.FindReviewersToReap"/>
 /// reaps a Running ReviewFlow agent past its lifetime/idle bound and never an interactive agent.
 /// Partial of <see cref="AgentOrchestratorVendorTests"/> to reuse its test doubles.
 /// </summary>

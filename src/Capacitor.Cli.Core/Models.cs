@@ -1204,7 +1204,7 @@ public readonly record struct LaunchAgentCommand(
         // fields above.
         bool               Borrowed = false,
         string?            BorrowCwd = null,
-        // AI-1313 Phase B (D2): flow identity for a ReviewFlow launch, so the daemon can store it on
+        // Phase B (D2): flow identity for a ReviewFlow launch, so the daemon can store it on
         // the AgentInstance and report it in LiveAgents / DaemonStatusReport (lets a restarted server
         // associate a surviving unassigned reviewer with its role). Appended last, same wire-compat
         // rule as the fields above — old daemons ignore them, old servers never set them.
@@ -1226,9 +1226,9 @@ public enum LaunchKind {
     ReviewFlow = 2
 }
 
-// ── AI-1313 Phase B (D2): daemon self-report DTOs ────────────────────────────────────────────────
+// ── Phase B (D2): daemon self-report DTOs ────────────────────────────────────────────────
 
-/// <summary>AI-1313 Phase B (D2): one live hosted agent in the daemon's self-report. <see cref="Kind"/>
+/// <summary>Phase B (D2): one live hosted agent in the daemon's self-report. <see cref="Kind"/>
 /// is the <see cref="LaunchKind"/> name; <see cref="FlowRunId"/>/<see cref="FlowRole"/> are set only
 /// for a ReviewFlow launch. Carried additively on <see cref="DaemonConnect.LiveAgents"/> and in
 /// <see cref="DaemonStatusReport"/> so the server can associate a surviving unassigned reviewer with
@@ -1241,7 +1241,7 @@ public readonly record struct LiveAgentInfo(
         string?        FlowRole  = null
     );
 
-/// <summary>AI-1313 Phase B (D4 §6.4(2a)): an agent whose death could NOT be confirmed (record-write
+/// <summary>Phase B (D4 §6.4(2a)): an agent whose death could NOT be confirmed (record-write
 /// or kill failure) and is being retried by the daemon heartbeat. Same shape as
 /// <see cref="LiveAgentInfo"/>; reported separately so the server can see it counts against admission
 /// (<c>EffectiveCount = ActiveCount + Quarantined.Count</c>) without changing <c>ActiveCount</c>'s
@@ -1254,7 +1254,7 @@ public readonly record struct QuarantinedAgentInfo(
         string?        FlowRole  = null
     );
 
-/// <summary>AI-1313 Phase B (D2): the periodic (60s) one-way daemon→server self-report. Sent via a
+/// <summary>Phase B (D2): the periodic (60s) one-way daemon→server self-report. Sent via a
 /// one-way <c>SendAsync</c> (never <c>InvokeAsync</c>) so an old server without the handler produces
 /// only a server-side log line, not a client fault. <see cref="ActiveCount"/> is exactly the daemon's
 /// Starting/Running agent count (its wire meaning never changes).</summary>
@@ -1264,9 +1264,9 @@ public readonly record struct DaemonStatusReport(
         QuarantinedAgentInfo[] Quarantined
     );
 
-/// <summary>AI-1313 Phase B (D4 §6.4(2)): the durable per-agent PID record written atomically at spawn
+/// <summary>Phase B (D4 §6.4(2)): the durable per-agent PID record written atomically at spawn
 /// to <c>&lt;state-dir&gt;/agents/{agentId}.json</c>, so a restarted daemon can reap a surviving child
-/// by EXACT identity. <see cref="StartIdentity"/> is the AI-839 <c>ProcessStartToken</c> string
+/// by EXACT identity. <see cref="StartIdentity"/> is the <c>ProcessStartToken</c> string
 /// (kernel starttime / absolute start ticks — exact, no tolerance). <see cref="DaemonId"/> = hash of
 /// the daemon state-dir path (stable logical identity); <see cref="DaemonEpoch"/> = fresh per boot.</summary>
 public readonly record struct AgentPidRecord(
@@ -1359,7 +1359,7 @@ public readonly record struct DaemonConnect(
         string?   Version          = null,
         string[]? SupportedVendors = null,
         string?   MachineId        = null,
-        // AI-1313 Phase B (D2): richer live-agent metadata alongside the existing LiveAgentIds
+        // Phase B (D2): richer live-agent metadata alongside the existing LiveAgentIds
         // (kept for back-compat). Trailing/optional — old servers ignore it, old daemons never set it.
         LiveAgentInfo[]? LiveAgents = null
     );

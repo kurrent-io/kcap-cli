@@ -7,8 +7,8 @@ using Capacitor.Cli.Daemon.Pty.Unix;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// AI-1313 Phase B (D4 §6.4(2)): exact process start-identity, liveness, and agent-env read for the
-/// PID-record + env-marker reap. The start-identity REUSES the AI-839 <see cref="ProcessStartToken"/>
+/// Phase B (D4 §6.4(2)): exact process start-identity, liveness, and agent-env read for the
+/// PID-record + env-marker reap. The start-identity REUSES the <see cref="ProcessStartToken"/>
 /// (Linux kernel <c>starttime</c> + <c>boot_id</c>; macOS/Windows absolute <c>StartTime.Ticks</c>) —
 /// exact-equality with NO tolerance window, cross-reader-stable, and PID-reuse-safe — so the spec's
 /// "no fuzzy DateTime comparison" requirement is met by construction. A gone/recycled/uncomparable
@@ -25,13 +25,13 @@ internal static partial class ProcessIdentity {
     public static string? Capture(int pid) => pid > 0 ? ProcessStartToken.ForPid(pid) : null;
 
     /// <summary>True IFF a live process at <paramref name="pid"/> has EXACTLY
-    /// <paramref name="expectedIdentity"/> (AI-839 tri-state == true). A gone pid, a recycled pid
+    /// <paramref name="expectedIdentity"/> (tri-state == true). A gone pid, a recycled pid
     /// (different incarnation), an uncomparable token, or a non-positive pid all return false —
     /// ambiguity never kills.</summary>
     public static bool Matches(int pid, string expectedIdentity) =>
         pid > 0 && ProcessStartToken.Matches(pid, expectedIdentity) == true;
 
-    /// <summary>The AI-839 TRI-STATE identity comparison, preserved for reap decisions that must tell
+    /// <summary>The TRI-STATE identity comparison, preserved for reap decisions that must tell
     /// "conclusively a different incarnation (recycled pid) — safe to treat as gone" (<c>false</c>) apart
     /// from "can't compare — token unreadable or foreign scheme, must SPARE and retain" (<c>null</c>).
     /// A non-positive pid is uncomparable → <c>null</c>. Collapsing <c>null</c> to <c>false</c> (as

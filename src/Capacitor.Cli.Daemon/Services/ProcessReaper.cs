@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// AI-1313 Phase B (D4 §6.4): the shared "reap by exact identity" primitive used by the
+/// Phase B (D4 §6.4): the shared "reap by exact identity" primitive used by the
 /// <c>HandleStopAgent</c> PID-record fallback (T7), the kill-quarantine retry (T8), and the startup
 /// <c>OrphanReaper</c> (T9). Kills a leftover child ONLY when its identity is proven — never on
 /// ambiguity — and reports whether death is CONFIRMED (so the caller deletes the record / drains the

@@ -81,11 +81,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// </summary>
     public Func<string[]>? GetLiveAgentIds { get; set; }
 
-    /// <summary>AI-1313 Phase B (D2): richer live-agent metadata (kind + flow identity) sent alongside
+    /// <summary>Phase B (D2): richer live-agent metadata (kind + flow identity) sent alongside
     /// <see cref="GetLiveAgentIds"/> on <c>DaemonConnect</c>. Optional — null when not wired (tests).</summary>
     public Func<LiveAgentInfo[]>? GetLiveAgents { get; set; }
 
-    /// <summary>AI-1313 Phase B (D2): send the periodic daemon self-report ONE-WAY (never
+    /// <summary>Phase B (D2): send the periodic daemon self-report ONE-WAY (never
     /// <c>InvokeAsync</c>) — an old server without the <c>DaemonStatusReport</c> handler produces only
     /// a server-side log line, and any send exception is swallowed so the agent loops are untouched.
     /// Virtual so tests can capture the report without a live hub.</summary>
@@ -383,7 +383,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
         var repoPaths = await MergeRepoPathsAsync();
         var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
-        var liveAgents = GetLiveAgents?.Invoke(); // AI-1313 Phase B (D2): additive; null on an unwired/old path
+        var liveAgents = GetLiveAgents?.Invoke(); // Phase B (D2): additive; null on an unwired/old path
 
         try {
             await _hub.InvokeAsync(

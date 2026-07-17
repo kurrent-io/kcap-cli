@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// AI-1313 Phase B (D4 §6.4(2a)): the in-memory kill-quarantine — agents whose death could NOT be
+/// Phase B (D4 §6.4(2a)): the in-memory kill-quarantine — agents whose death could NOT be
 /// confirmed at teardown (kill failed / record write failed while the process is still alive). The
 /// heartbeat retries the kill until it confirms death. While an entry sits here it:
 /// <list type="bullet">

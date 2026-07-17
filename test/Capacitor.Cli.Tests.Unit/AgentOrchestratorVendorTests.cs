@@ -67,7 +67,7 @@ public partial class AgentOrchestratorVendorTests {
             ClaudePath          = "claude",
             MaxConcurrentAgents = 5,
             WorktreeRoot        = Path.Combine(Path.GetTempPath(), "kcap-orch-wt-" + Guid.NewGuid().ToString("N")[..8]),
-            // AI-1313 Phase B (D4): isolate the PID-record store to a temp dir so tests never touch the
+            // Phase B (D4): isolate the PID-record store to a temp dir so tests never touch the
             // real ~/.config/kcap/daemons.
             StateDir            = Path.Combine(Path.GetTempPath(), "kcap-orch-state-" + Guid.NewGuid().ToString("N")[..8])
         };
@@ -76,7 +76,7 @@ public partial class AgentOrchestratorVendorTests {
             config.AllowedRepoPaths = [allowedRepoPath];
         }
 
-        configure?.Invoke(config); // AI-1313 Phase B: let a test tweak the config (e.g. reviewer TTL bounds)
+        configure?.Invoke(config); // Phase B: let a test tweak the config (e.g. reviewer TTL bounds)
 
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance);
@@ -1093,7 +1093,7 @@ public partial class AgentOrchestratorVendorTests {
         /// CleanupAgentAsync, so a useful signal that local cleanup completed.</summary>
         public Action? OnAgentUnregistered { get; init; }
 
-        /// <summary>Every agent id passed to AgentUnregisteredAsync, in call order. AI-1313 Phase B
+        /// <summary>Every agent id passed to AgentUnregisteredAsync, in call order. Phase B
         /// (D1): a single-flight teardown must unregister an agent exactly once even under a racing
         /// launch-catch + read-loop cleanup.</summary>
         public List<string> AgentUnregisteredCalls { get; } = [];

@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
-/// AI-1313 Phase B (D4 §6.4(3)): <see cref="OrphanReaper"/> — reaps hosted-agent children that outlived
+/// Phase B (D4 §6.4(3)): <see cref="OrphanReaper"/> — reaps hosted-agent children that outlived
 /// a prior daemon run. Acts only on test-owned <see cref="DummyProcess"/> instances. OS-aware: the
 /// env-dependent reaps confirm-and-kill on Linux (readable <c>/proc/{pid}/environ</c>) but SPARE on
 /// macOS 26 (env redacted — ambiguity never kills); the epoch-guard and gone-process paths are

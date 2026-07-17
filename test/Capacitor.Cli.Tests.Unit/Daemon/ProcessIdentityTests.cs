@@ -3,7 +3,7 @@ using Capacitor.Cli.Daemon.Services;
 namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
-/// AI-1313 Phase B (D4): <see cref="ProcessIdentity"/> — exact start-identity match against a live
+/// Phase B (D4): <see cref="ProcessIdentity"/> — exact start-identity match against a live
 /// process (and NOT after it exits), plus reading a KCAP_* env marker from a live process. Acts only
 /// on test-owned <see cref="DummyProcess"/> instances.
 /// </summary>

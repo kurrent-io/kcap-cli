@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
-/// AI-1313 Phase B (D4 §6.4(2a)): <see cref="AgentKillQuarantine"/> — the in-memory holding pen for
+/// Phase B (D4 §6.4(2a)): <see cref="AgentKillQuarantine"/> — the in-memory holding pen for
 /// agents whose death could not be confirmed at teardown. A quarantined entry counts against admission
 /// (via the orchestrator's <c>EffectiveCount</c>) and the heartbeat retries the kill by EXACT identity
 /// until confirmed gone, then drains it. Acts only on a test-owned <see cref="DummyProcess"/>.

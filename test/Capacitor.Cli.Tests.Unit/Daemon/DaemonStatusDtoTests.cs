@@ -4,7 +4,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit.Daemon;
 
 /// <summary>
-/// AI-1313 Phase B (D2): the additive daemon self-report DTOs round-trip through the source-gen
+/// Phase B (D2): the additive daemon self-report DTOs round-trip through the source-gen
 /// <see cref="CapacitorJsonContext"/>, and the new trailing fields on existing wire types stay
 /// backward-compatible (an old server's JSON without them still deserializes).
 /// </summary>
