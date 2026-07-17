@@ -154,4 +154,59 @@ public class ImportDoneBreakdownTests {
         await Assert.That(claudeRow.Excluded + cursorRow.Excluded).IsEqualTo(2); // 0 + 2 (Skipped)
         await Assert.That(claudeRow.Errored + cursorRow.Errored).IsEqualTo(2);   // 1 + 1
     }
+
+    // --- IsLifecycleOnlyRoutedReplay (AI-1154 review fix, P2) ---
+    //
+    // The routed-phase loop in HandleImport increments routedLoaded/importedSessionIds whenever
+    // ImportOutcome is Loaded/Resumed. For an AlreadyLoaded Cursor classification, ImportSessionAsync
+    // re-asserts lifecycle hooks (repository backfill, C2) rather than importing new content, but
+    // still returns Loaded/Resumed since there's nothing past the watermark to distinguish it by.
+    // IsLifecycleOnlyRoutedReplay is the gate that keeps that replay from being double-counted on
+    // top of the classify-time AlreadyLoaded bucket, and from joining importedSessionIds (which a
+    // later --private pass would wrongly apply to).
+
+    [Test]
+    public async Task already_loaded_plus_loaded_outcome_is_a_lifecycle_only_replay() {
+        var result = ImportCommand.IsLifecycleOnlyRoutedReplay(
+            ImportCommand.ClassificationStatus.AlreadyLoaded, ImportOutcome.Loaded);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task already_loaded_plus_resumed_outcome_is_a_lifecycle_only_replay() {
+        // The actual shape CursorImportSource.ImportSessionAsync returns for AlreadyLoaded: nothing
+        // sent past a non-zero startLine (TotalLines) is classified Resumed, not Loaded.
+        var result = ImportCommand.IsLifecycleOnlyRoutedReplay(
+            ImportCommand.ClassificationStatus.AlreadyLoaded, ImportOutcome.Resumed);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task new_plus_loaded_outcome_is_not_a_lifecycle_only_replay() {
+        // A genuine first-time import must still count as newly Loaded.
+        var result = ImportCommand.IsLifecycleOnlyRoutedReplay(
+            ImportCommand.ClassificationStatus.New, ImportOutcome.Loaded);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task partial_plus_resumed_outcome_is_not_a_lifecycle_only_replay() {
+        // A genuine resume of a partially-imported session must still count as newly Loaded.
+        var result = ImportCommand.IsLifecycleOnlyRoutedReplay(
+            ImportCommand.ClassificationStatus.Partial, ImportOutcome.Resumed);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task already_loaded_plus_failed_outcome_is_not_a_lifecycle_only_replay() {
+        // A failed lifecycle-reassert POST must still surface as Errored, not be swallowed.
+        var result = ImportCommand.IsLifecycleOnlyRoutedReplay(
+            ImportCommand.ClassificationStatus.AlreadyLoaded, ImportOutcome.Failed);
+
+        await Assert.That(result).IsFalse();
+    }
 }

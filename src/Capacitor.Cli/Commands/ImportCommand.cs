@@ -372,6 +372,22 @@ static class ImportCommand {
         ];
     }
 
+    /// <summary>
+    /// AI-1154 review fix (P2): a routed-phase <c>AlreadyLoaded</c> classification (Cursor) is
+    /// included in `routed` solely so its <c>ImportSessionAsync</c> call can re-assert lifecycle
+    /// hooks and backfill the <c>repository</c> node on an already-fully-ingested session (the C2
+    /// suppressed-repo-import contract) — <em>not</em> to import new transcript content. Because
+    /// nothing past the watermark exists, that call still returns <see cref="ImportOutcome.Loaded"/>
+    /// or <see cref="ImportOutcome.Resumed"/> (no line 0 to distinguish "nothing sent" from "brand
+    /// new"). Without this check that success is folded into the routed Loaded counter — on top of
+    /// the classify-time <c>AlreadyLoaded</c> bucket the same session already contributes to —
+    /// double-counting one session as both Loaded and Already-loaded, and adding it to
+    /// <c>importedSessionIds</c> so a later <c>--private</c> pass wrongly re-privates a session
+    /// this run never actually (re)imported.
+    /// </summary>
+    internal static bool IsLifecycleOnlyRoutedReplay(ClassificationStatus status, ImportOutcome outcome) =>
+        status == ClassificationStatus.AlreadyLoaded && outcome is ImportOutcome.Loaded or ImportOutcome.Resumed;
+
     internal sealed record ClassificationCounts(
             int New,
             int Partial,
@@ -1273,21 +1289,36 @@ static class ImportCommand {
                                 async (c, _) => {
                                     var outcome = await ImportOne(c);
 
-                                    routedOutcomesByVendor.AddOrUpdate(
-                                        c.Vendor,
-                                        addValueFactory: _ => AddRoutedOutcome((0, 0, 0), outcome),
-                                        updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome)
-                                    );
+                                    // AI-1154 review fix (P2): an AlreadyLoaded session's routed
+                                    // call is a lifecycle/repo-backfill replay, not a new import —
+                                    // it must not double-count on top of the classify-time
+                                    // AlreadyLoaded bucket, nor join importedSessionIds (which
+                                    // --private later re-privates).
+                                    var isLifecycleOnlyReplay = IsLifecycleOnlyRoutedReplay(c.Status, outcome);
+
+                                    if (!isLifecycleOnlyReplay) {
+                                        routedOutcomesByVendor.AddOrUpdate(
+                                            c.Vendor,
+                                            addValueFactory: _ => AddRoutedOutcome((0, 0, 0), outcome),
+                                            updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome)
+                                        );
+                                    }
 
                                     switch (outcome) {
                                         case ImportOutcome.Loaded:
                                         case ImportOutcome.Resumed:
-                                            Interlocked.Increment(ref routedLoaded);
-                                            importedSessionIds.Add(c.SessionId);
+                                            if (isLifecycleOnlyReplay) {
+                                                AnsiConsole.MarkupLine(
+                                                    $"[grey]·[/] Refreshed [cyan]{Markup.Escape(c.SessionId)}[/] (repository backfill, already loaded)"
+                                                );
+                                            } else {
+                                                Interlocked.Increment(ref routedLoaded);
+                                                importedSessionIds.Add(c.SessionId);
 
-                                            AnsiConsole.MarkupLine(
-                                                $"[green]✓[/] Loading [cyan]{Markup.Escape(c.SessionId)}[/] ({Markup.Escape(c.Vendor)})"
-                                            );
+                                                AnsiConsole.MarkupLine(
+                                                    $"[green]✓[/] Loading [cyan]{Markup.Escape(c.SessionId)}[/] ({Markup.Escape(c.Vendor)})"
+                                                );
+                                            }
 
                                             break;
                                         case ImportOutcome.Skipped:
@@ -1320,18 +1351,28 @@ static class ImportCommand {
                     async (c, _) => {
                         var outcome = await ImportOne(c);
 
-                        routedOutcomesByVendor.AddOrUpdate(
-                            c.Vendor,
-                            addValueFactory: _ => AddRoutedOutcome((0, 0, 0), outcome),
-                            updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome)
-                        );
+                        // AI-1154 review fix (P2): see the Tty branch above for why an
+                        // AlreadyLoaded lifecycle-only replay must not count as Loaded.
+                        var isLifecycleOnlyReplay = IsLifecycleOnlyRoutedReplay(c.Status, outcome);
+
+                        if (!isLifecycleOnlyReplay) {
+                            routedOutcomesByVendor.AddOrUpdate(
+                                c.Vendor,
+                                addValueFactory: _ => AddRoutedOutcome((0, 0, 0), outcome),
+                                updateValueFactory: (_, prev) => AddRoutedOutcome(prev, outcome)
+                            );
+                        }
 
                         switch (outcome) {
                             case ImportOutcome.Loaded:
                             case ImportOutcome.Resumed:
-                                Interlocked.Increment(ref routedLoaded);
-                                importedSessionIds.Add(c.SessionId);
-                                display.Line($"Loading {c.SessionId} ({c.Vendor})");
+                                if (isLifecycleOnlyReplay) {
+                                    display.Line($"Refreshed {c.SessionId} (repository backfill, already loaded)");
+                                } else {
+                                    Interlocked.Increment(ref routedLoaded);
+                                    importedSessionIds.Add(c.SessionId);
+                                    display.Line($"Loading {c.SessionId} ({c.Vendor})");
+                                }
 
                                 break;
                             case ImportOutcome.Skipped:
