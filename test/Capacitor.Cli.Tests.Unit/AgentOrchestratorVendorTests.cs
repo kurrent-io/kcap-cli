@@ -896,8 +896,9 @@ public partial class AgentOrchestratorVendorTests {
     }
 
     sealed class SpyPtyProcessFactory : IPtyProcessFactory {
-        public int     SpawnCalls  { get; private set; }
-        public string? LastCommand { get; private set; }
+        public int                         SpawnCalls  { get; private set; }
+        public string?                     LastCommand { get; private set; }
+        public Dictionary<string, string>? LastEnv     { get; private set; }
 
         public IPtyProcess Spawn(
                 string                      command,
@@ -909,6 +910,7 @@ public partial class AgentOrchestratorVendorTests {
             ) {
             SpawnCalls++;
             LastCommand = command;
+            LastEnv     = extraEnv;
 
             return new StubPtyProcess();
         }

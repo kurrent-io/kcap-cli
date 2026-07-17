@@ -91,6 +91,31 @@ public partial class AgentOrchestratorVendorTests {
         dummy.Kill();
     }
 
+    [Test]
+    public async Task Launch_stamps_daemon_identity_env_markers_on_the_spawned_child() {
+        var (repoPath, cleanup) = CreateGitRepo();
+
+        try {
+            var server     = new CaptureServerConnection();
+            var ptyFactory = new SpyPtyProcessFactory();
+
+            await using var orch = BuildOrchestrator(server, ptyFactory, Launcher("claude"), allowedRepoPath: repoPath);
+
+            await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+                AgentId: "env-1", Prompt: "hi", Model: "opus", Effort: null,
+                RepoPath: repoPath, Tools: null, AttachmentIds: null, Vendor: "claude"));
+
+            // The OrphanReaper env-marker scan (D4 §6.4(3)) recognizes a recordless survivor by these
+            // three markers on the LIVE child's own env — so the spawn must stamp all three.
+            await Assert.That(ptyFactory.LastEnv).IsNotNull();
+            await Assert.That(ptyFactory.LastEnv!["KCAP_AGENT_ID"]).IsEqualTo("env-1");
+            await Assert.That(ptyFactory.LastEnv!["KCAP_DAEMON_ID"]).IsEqualTo(orch.DaemonIdForTest);
+            await Assert.That(ptyFactory.LastEnv!["KCAP_DAEMON_EPOCH"]).IsEqualTo(orch.DaemonEpochForTest);
+        } finally {
+            cleanup();
+        }
+    }
+
     /// <summary>An <see cref="IPtyProcess"/> that reports a real live child's pid but whose disposal
     /// and termination are deliberately no-ops — models a child that survives teardown, so
     /// CleanupAgentAsync's confirm-death step must quarantine it.</summary>

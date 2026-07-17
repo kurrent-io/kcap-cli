@@ -185,6 +185,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // crash-survivor reaping. Initialized in the ctor from config.
     AgentPidRecordStore? _pidRecords;
     AgentKillQuarantine? _quarantine;
+    OrphanReaper?        _orphanReaper;
     string               _daemonId    = "";
     string               _daemonEpoch = "";
     readonly DaemonConfig                                      _config;
@@ -296,6 +297,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _quarantine  = new AgentKillQuarantine(logger);
         _daemonId    = ComputeDaemonId(config.Name);
         _daemonEpoch = config.DaemonEpoch ?? Guid.NewGuid().ToString("N");
+        _orphanReaper = new OrphanReaper(_pidRecords, _daemonId, _daemonEpoch, logger);
 
         // Wire up server commands
         _server.OnLaunchAgent            += HandleLaunchAgent;
@@ -416,6 +418,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (confirmedGone) _pidRecords.Delete(agentId); // delete ONLY on confirmed death (spec §6.4(2))
 
         return confirmedGone;
+    }
+
+    /// <summary>AI-1313 Phase B (D4 §6.4(3)): run the startup orphan reap once — called by DaemonRunner
+    /// at boot under the daemon lock (next to WorktreeManager.CleanupOrphanedAsync), and re-run on each
+    /// heartbeat tick. Best-effort: a reaper fault is logged and swallowed, never faulting the caller.</summary>
+    internal async Task ReapOrphansOnceAsync(CancellationToken ct = default) {
+        if (_orphanReaper is null) return;
+        try { await _orphanReaper.ReapOnceAsync(ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) { _logger.LogWarning(ex, "OrphanReaper sweep faulted — continuing"); }
     }
 
     /// <summary>AI-1313 Phase B (D2): build + send one status report, one-way, swallowing errors (an
@@ -654,7 +666,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 DaemonBridgeUrl: daemonBridgeUrl,
                 CapacitorPath: _config.CapacitorPath,
                 McpAllowlist: effectiveAllowlist,
-                Work: work
+                Work: work,
+                DaemonId: _daemonId,       // AI-1313 Phase B (D4 §6.4(3)): child env markers for the OrphanReaper scan
+                DaemonEpoch: _daemonEpoch
             );
 
             HostedRuntimeStart start;
@@ -1682,6 +1696,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // AI-1313 Phase B (D4 §6.4(2a)): retry killing any unconfirmed-death quarantined process,
             // draining those confirmed gone (frees admission).
             if (_quarantine is { Count: > 0 }) _ = _quarantine.RetryAllAsync(ct);
+
+            // AI-1313 Phase B (D4 §6.4(3)): re-run the orphan reap — record pass is epoch-guarded (never
+            // touches a current-incarnation live agent), env-marker scan reaps a prior incarnation's
+            // recordless survivors. Fire-and-forget; ReapOrphansOnceAsync swallows its own faults.
+            _ = ReapOrphansOnceAsync(ct);
 
             foreach (var (id, reason) in FindReviewersToReap()) {
                 if (_agents.TryGetValue(id, out var reviewer)) {

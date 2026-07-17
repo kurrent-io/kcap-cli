@@ -384,6 +384,11 @@ public static partial class DaemonRunner {
         await worktreeManager.CleanupOrphanedAsync();
 
         var orchestrator = host.Services.GetRequiredService<AgentOrchestrator>();
+
+        // AI-1313 Phase B (D4 §6.4(3)): reap hosted-agent children that outlived a prior daemon run
+        // (crash/restart) BEFORE we accept new launches — under the daemon lock, next to the worktree
+        // cleanup above. The heartbeat re-runs it thereafter. Best-effort (swallows its own faults).
+        await orchestrator.ReapOrphansOnceAsync();
         // Instantiate EvalRunner so it wires the per-phase eval handlers
         // (PrepareEval / RunQuestion / FinalizeEval / CancelEval) on the
         // ServerConnection. It's stateless beyond the handler assignment —
