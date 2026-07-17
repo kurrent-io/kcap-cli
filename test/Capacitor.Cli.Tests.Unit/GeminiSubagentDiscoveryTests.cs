@@ -456,4 +456,74 @@ public class GeminiSubagentDiscoveryTests {
             Directory.Delete(tmp, recursive: true);
         }
     }
+
+    // AI-1383 D3 review fix #7 (P2): a below-cap parent's bounded directory read caps RAW files
+    // via Take(), but non-GUID filtering happens AFTER that — so a junk (non-GUID) *.jsonl file
+    // landing inside the sentinel window used to silently consume the sole sentinel slot, filling
+    // omittedIds to exactly MaxCountingNodes valid ids while CountTruncated stayed false: a false
+    // "complete" report, even though the true descendant count could be larger. The bounded
+    // enumerator must now report HitLimit from the RAW touched count (regardless of how many
+    // entries turned out to be well-formed <GUID>.jsonl files), so this case is always caught.
+    [Test]
+    public async Task EnumerateDescendantFiles_below_cap_boundary_plus_junk_entry_is_never_falsely_reported_complete() {
+        var tmp = Directory.CreateTempSubdirectory("kcap-gsd-desc").FullName;
+        try {
+            var chats = Path.Combine(tmp, "chats");
+            Directory.CreateDirectory(chats);
+
+            var rootId = "00000000-0000-4000-8000-000000000000";
+            var root   = Path.Combine(chats, "session-root.jsonl");
+            File.WriteAllText(root, $$"""{"sessionId":"{{rootId}}","kind":"main"}""" + "\n");
+
+            var prevId = rootId;
+            for (var depth = 1; depth <= 8; depth++) {
+                var id  = $"00000000-0000-4000-8000-{depth:D12}";
+                var dir = Path.Combine(chats, prevId);
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, id + ".jsonl"), $$"""{"sessionId":"{{id}}","kind":"subagent"}""" + "\n");
+                prevId = id;
+            }
+
+            var depth8Dir = Path.Combine(chats, prevId); // prevId is now the depth-8 node's own id
+            Directory.CreateDirectory(depth8Dir);
+
+            // MaxCountingNodes - 1 valid (GUID-named) below-cap descendant files, plus ONE
+            // non-GUID junk *.jsonl file — MaxCountingNodes raw directory entries total, strictly
+            // BELOW the bounded fetch's limit (MaxCountingNodes + 1). A definite raw EOF: the
+            // whole directory is seen, so this is (correctly) NOT truncated.
+            for (var i = 0; i < GeminiSubagentDiscovery.MaxCountingNodes - 1; i++) {
+                var id = $"22222222-{i / 100000000:D4}-4000-8000-{i:D12}";
+                File.WriteAllText(Path.Combine(depth8Dir, id + ".jsonl"), $$"""{"sessionId":"{{id}}","kind":"subagent"}""" + "\n");
+            }
+            File.WriteAllText(Path.Combine(depth8Dir, "not-a-guid.jsonl"), """{"sessionId":"junk","kind":"subagent"}""" + "\n");
+
+            var before = GeminiSubagentDiscovery.EnumerateDescendantFiles(root);
+            await Assert.That(before.CountTruncated).IsFalse();
+            await Assert.That(before.DescendantsOmitted).IsEqualTo(GeminiSubagentDiscovery.MaxCountingNodes - 1);
+
+            // Add ONE more genuinely-new valid descendant file under the SAME dir, pushing its
+            // raw entry count to exactly MaxCountingNodes + 1 (MaxCountingNodes valid + 1 junk) —
+            // precisely the bounded fetch's sentinel-inflated limit, so the junk file now lands
+            // inside the sentinel window.
+            var extraId = "33333333-0000-4000-8000-000000000000";
+            File.WriteAllText(Path.Combine(depth8Dir, extraId + ".jsonl"), $$"""{"sessionId":"{{extraId}}","kind":"subagent"}""" + "\n");
+
+            var after = GeminiSubagentDiscovery.EnumerateDescendantFiles(root);
+
+            // The in-cap import set (depths 1..8) is unaffected either way.
+            await Assert.That(after.Files.Count).IsEqualTo(8);
+
+            // Before the fix: the junk entry silently consumed the sole sentinel slot, so exactly
+            // MaxCountingNodes valid ids filled omittedIds and CountTruncated stayed false — the
+            // genuinely-new descendant added above must change the reported signature:
+            // DescendantsOmitted grows from MaxCountingNodes - 1 to MaxCountingNodes AND
+            // CountTruncated flips to true (a safe over-report — the raw fetch exhausted its
+            // limit, so we can no longer prove there isn't yet another descendant beyond it).
+            await Assert.That(after.CountTruncated).IsTrue();
+            await Assert.That(after.DescendantsOmitted).IsEqualTo(GeminiSubagentDiscovery.MaxCountingNodes);
+            await Assert.That(after.OmittedDescendantIds.Count).IsEqualTo(GeminiSubagentDiscovery.MaxCountingNodes);
+        } finally {
+            Directory.Delete(tmp, recursive: true);
+        }
+    }
 }

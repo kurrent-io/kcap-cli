@@ -134,6 +134,19 @@ public static class GeminiSubagentDiscovery {
     /// are ALL necessarily below the cap — so that read (and every below-cap-frontier read after
     /// it) now goes through a bounded enumerator capped to (remaining counting capacity + 1
     /// sentinel entry) instead.</para>
+    ///
+    /// <para>AI-1383 D3 review fix #7 (P2): a bounded directory read caps RAW files, but
+    /// non-GUID filtering and visited-set dedup happen AFTER the read — so a malformed or
+    /// already-visited entry landing inside the bounded window could consume the sole sentinel
+    /// slot without itself being counted as omitted, letting a genuinely-omitted valid descendant
+    /// just past it go undetected and the walk falsely conclude
+    /// <see cref="DescendantDiscoveryResult.CountTruncated"/> is <c>false</c>. The bounded
+    /// enumerator now also reports whether the RAW read actually reached <c>limit</c> entries; if
+    /// so, truncation is asserted regardless of how many of them turned out valid — the only case
+    /// that can't prove otherwise is a raw count strictly below the limit (definite EOF). This can
+    /// over-report truncation in the rare case where the directory holds exactly <c>limit</c> raw
+    /// entries and no more (safe: the omitted count/ids were already documented as a lower bound
+    /// once truncated).</para>
     /// </summary>
     public static DescendantDiscoveryResult EnumerateDescendantFiles(string rootTranscriptPath) =>
         EnumerateDescendantFiles(rootTranscriptPath, onDequeueBelowCapNode: null);
@@ -188,7 +201,17 @@ public static class GeminiSubagentDiscovery {
         // only sorted AFTER truncating to `limit` entries, so which files land in an over-limit
         // sample is OS-dependent — acceptable because once CountTruncated is set the omitted-id
         // set is already documented as a lower bound, never a claimed-complete/exact enumeration.
-        List<string>? EnumerateChildFilesBounded(string dashedId, int limit) {
+        //
+        // Returns null when the directory doesn't exist/can't be read; otherwise the (possibly
+        // filtered downstream) file list plus HitLimit — AI-1383 D3 review fix #7 (P2): HitLimit
+        // is `touched == limit`, i.e. whether the RAW directory enumeration actually supplied
+        // `limit` entries — NOT whether `limit` of them turned out to be well-formed <GUID>.jsonl
+        // files. A non-GUID or already-visited entry landing inside the bounded window can
+        // otherwise consume the sole sentinel slot without itself being counted as omitted,
+        // masking a genuinely-omitted valid descendant just past it (caller must treat HitLimit,
+        // not the returned/valid file count, as the signal that more entries may exist beyond
+        // this fetch).
+        (List<string> Files, bool HitLimit)? EnumerateChildFilesBounded(string dashedId, int limit) {
             var subDir = GeminiPaths.SubagentDir(chatsDir, dashedId);
             if (!Directory.Exists(subDir)) return null;
             try {
@@ -203,7 +226,7 @@ public static class GeminiSubagentDiscovery {
                     .OrderBy(f => f, StringComparer.Ordinal)
                     .ToList();
                 onBelowCapDirectoryRead?.Invoke(touched);
-                return taken;
+                return (taken, touched >= limit);
             } catch {
                 return null;
             }
@@ -242,7 +265,8 @@ public static class GeminiSubagentDiscovery {
             if (countTruncated) continue; // already known to be a lower bound — skip the read entirely
 
             var remaining = MaxCountingNodes - omittedIds.Count;
-            if (EnumerateChildFilesBounded(dashedId, remaining + 1) is not { } belowChildren) continue;
+            if (EnumerateChildFilesBounded(dashedId, remaining + 1) is not { } fetch) continue;
+            var (belowChildren, hitLimit) = fetch;
 
             foreach (var file in belowChildren) {
                 var subId = Path.GetFileNameWithoutExtension(file);
@@ -256,6 +280,14 @@ public static class GeminiSubagentDiscovery {
                 omittedIds.Add(subId);
                 belowCapFrontier.Enqueue((file, subId));
             }
+            // AI-1383 D3 review fix #7 (P2): a non-GUID/already-visited entry inside the bounded
+            // window can consume the sole sentinel slot without counting as omitted, so the
+            // valid-count threshold above can under-report. HitLimit — the raw directory read
+            // actually reached `limit` entries — is the only proof we lack; when true we cannot
+            // rule out further valid descendants beyond this fetch, so treat it as truncation too
+            // (a safe over-report in the rare exact-boundary+junk case; a raw count strictly
+            // below the limit is definite EOF and needs no such fallback).
+            if (hitLimit) countTruncated = true;
         }
 
         // Below-cap counting walk — every node here is already below-cap, so every one of its
@@ -269,7 +301,8 @@ public static class GeminiSubagentDiscovery {
             onDequeueBelowCapNode?.Invoke();
 
             var remaining = MaxCountingNodes - omittedIds.Count;
-            if (EnumerateChildFilesBounded(dashedId, remaining + 1) is not { } children) continue;
+            if (EnumerateChildFilesBounded(dashedId, remaining + 1) is not { } fetch) continue;
+            var (children, hitLimit) = fetch;
 
             foreach (var file in children) {
                 var subId = Path.GetFileNameWithoutExtension(file);
@@ -283,6 +316,7 @@ public static class GeminiSubagentDiscovery {
                 omittedIds.Add(subId);
                 belowCapFrontier.Enqueue((file, subId));
             }
+            if (hitLimit) countTruncated = true; // AI-1383 D3 review fix #7 (P2) — see above
         }
 
         omittedIds.Sort(StringComparer.Ordinal);

@@ -328,6 +328,80 @@ public class OpenCodeDbTests {
         await Assert.That(ocdb.QueryChildrenMaxRowsReturned).IsLessThanOrEqualTo(OpenCodeDb.MaxCountingNodes + 1);
     }
 
+    // AI-1383 D3 review fix #7 (P2): a below-cap parent's bounded row fetch caps RAW SQL rows via
+    // `LIMIT`, but QuerySessions's per-row try/catch skip of a malformed row happens AFTER that —
+    // so a malformed row landing inside the sentinel window used to silently consume the sole
+    // sentinel slot, filling omittedIds to exactly MaxCountingNodes valid ids while CountTruncated
+    // stayed false: a false "complete" report, even though the parent's true child count could be
+    // larger. QueryChildrenBounded must now report HitLimit from the RAW row count (regardless of
+    // how many rows survived mapping), so this case is always caught.
+    [Test]
+    public async Task QueryDescendants_below_cap_boundary_plus_malformed_row_is_never_falsely_reported_complete() {
+        using var tmp = new TempDir();
+        var db = BuildDb(tmp.Path);
+        InsertSession(db, "ses_root", null, "/w", "Root", 100);
+
+        var prev = "ses_root";
+        for (var depth = 1; depth <= 8; depth++) {
+            var id = $"ses_n{depth}";
+            InsertSession(db, id, prev, "/w", $"N{depth}", 100 + depth);
+            prev = id;
+        }
+
+        // MaxCountingNodes - 1 valid below-cap children of ses_n8, plus ONE malformed row (NULL
+        // id — SQLite permits NULL in a non-INTEGER PRIMARY KEY column; QuerySessions's
+        // r.GetString(0) throws on it, and the per-row try/catch skips it during mapping) —
+        // MaxCountingNodes raw rows total, strictly BELOW the bounded fetch's limit
+        // (MaxCountingNodes + 1). A definite raw EOF: the whole result set is seen, so this is
+        // (correctly) NOT truncated.
+        InsertManyChildren(db, "ses_n8", "ses_deep", OpenCodeDb.MaxCountingNodes - 1, baseTime: 1000);
+        InsertMalformedChild(db, "ses_n8", time: 1000 + OpenCodeDb.MaxCountingNodes);
+
+        using var ocdb = new OpenCodeDb(db);
+        var before = ocdb.QueryDescendants("ses_root");
+
+        await Assert.That(before.CountTruncated).IsFalse();
+        await Assert.That(before.DescendantsOmitted).IsEqualTo(OpenCodeDb.MaxCountingNodes - 1);
+
+        // Add ONE more genuinely-new valid child of ses_n8, pushing its row count to exactly
+        // MaxCountingNodes + 1 (MaxCountingNodes valid + 1 malformed) — precisely the bounded
+        // fetch's sentinel-inflated limit, so the malformed row now lands inside the sentinel
+        // window.
+        InsertSession(db, "ses_deep_extra", "ses_n8", "/w", "Extra", 1000 + OpenCodeDb.MaxCountingNodes + 1);
+
+        var after = ocdb.QueryDescendants("ses_root");
+
+        // The in-cap import set (depths 1..8) is unaffected either way.
+        await Assert.That(after.Descendants.Select(d => d.Row.Id).OrderBy(x => x))
+            .IsEquivalentTo(Enumerable.Range(1, 8).Select(i => $"ses_n{i}"));
+
+        // Before the fix: the malformed row silently consumed the sole sentinel slot, so exactly
+        // MaxCountingNodes valid ids filled omittedIds and CountTruncated stayed false — the
+        // genuinely-new child added above must change the reported signature: DescendantsOmitted
+        // grows from MaxCountingNodes - 1 to MaxCountingNodes AND CountTruncated flips to true (a
+        // safe over-report — the raw fetch exhausted its limit, so we can no longer prove there
+        // isn't yet another child beyond it).
+        await Assert.That(after.CountTruncated).IsTrue();
+        await Assert.That(after.DescendantsOmitted).IsEqualTo(OpenCodeDb.MaxCountingNodes);
+        await Assert.That(after.OmittedDescendantIds.Count).IsEqualTo(OpenCodeDb.MaxCountingNodes);
+    }
+
+    // A NULL id is allowed by SQLite in a non-INTEGER PRIMARY KEY column (unlike the SQL
+    // standard, SQLite doesn't imply NOT NULL for PRIMARY KEY unless it aliases rowid) — this
+    // simulates a malformed/schema-drifted row that passes the SQL WHERE/LIMIT but fails
+    // QuerySessions's row mapping (r.GetString(0) on a NULL column throws).
+    static void InsertMalformedChild(string dbPath, string parentId, long time) {
+        using var c = new SqliteConnection($"Data Source={dbPath}");
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText =
+            "INSERT INTO session(id,parent_id,directory,title,version,time_created,time_updated) " +
+            "VALUES (NULL,$p,'/w','Malformed','1.17',$tc,$tc)";
+        cmd.Parameters.AddWithValue("$p", parentId);
+        cmd.Parameters.AddWithValue("$tc", time);
+        cmd.ExecuteNonQuery();
+    }
+
     // Bulk-inserts `count` direct children of `parentId` in a single transaction with a reused
     // prepared command — the per-call-connection InsertSession helper above is far too slow for
     // the 10,000+ row scale these MaxCountingNodes tests need.

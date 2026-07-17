@@ -45,11 +45,11 @@ internal sealed class OpenCodeDb : IDisposable {
     }
 
     public IReadOnlyList<OpenCodeSessionRow> QueryRoots() =>
-        QuerySessions("(parent_id IS NULL OR parent_id = '')", parent: null);
+        QuerySessions("(parent_id IS NULL OR parent_id = '')", parent: null).Rows;
 
     public IReadOnlyList<OpenCodeSessionRow> QueryChildren(string parentId) {
         QueryChildrenCallCount++;
-        var rows = QuerySessions("parent_id = $parent", parentId);
+        var (rows, _) = QuerySessions("parent_id = $parent", parentId);
         TrackRowsReturned(rows.Count);
         return rows;
     }
@@ -66,12 +66,20 @@ internal sealed class OpenCodeDb : IDisposable {
     /// the remaining capacity allows. NEVER used for an in-cap parent — those keep the unbounded
     /// <see cref="QueryChildren"/> (see <see cref="QueryDescendants"/>), preserving the
     /// always-complete in-cap discovery contract.
+    ///
+    /// <para>AI-1383 D3 review fix #7 (P2): the returned <c>HitLimit</c> reflects the number of
+    /// RAW rows the SQL <c>LIMIT</c> actually returned — BEFORE <see cref="QuerySessions"/>'s
+    /// per-row try/catch skips a malformed row — not the count of rows that survived mapping.
+    /// A malformed or already-visited row can otherwise silently consume the sole sentinel slot,
+    /// masking a genuinely-omitted valid descendant just beyond it: the caller must treat
+    /// <c>HitLimit</c>, not the returned row count, as the signal that more rows may exist
+    /// beyond this fetch (see <see cref="QueryDescendants"/>).</para>
     /// </summary>
-    internal IReadOnlyList<OpenCodeSessionRow> QueryChildrenBounded(string parentId, int limit) {
+    internal (IReadOnlyList<OpenCodeSessionRow> Rows, bool HitLimit) QueryChildrenBounded(string parentId, int limit) {
         QueryChildrenCallCount++;
-        var rows = QuerySessions("parent_id = $parent", parentId, limit);
+        var (rows, rawCount) = QuerySessions("parent_id = $parent", parentId, limit);
         TrackRowsReturned(rows.Count);
-        return rows;
+        return (rows, rawCount >= limit);
     }
 
     /// <summary>
@@ -184,6 +192,19 @@ internal sealed class OpenCodeDb : IDisposable {
     /// sentinel row). An in-cap parent (depth &lt; <see cref="MaxDescendantDepth"/>) keeps the
     /// unbounded <see cref="QueryChildren"/> — its children are always in-cap, so the round-2 P1
     /// unbounded-in-cap-discovery contract is untouched.</para>
+    ///
+    /// <para>AI-1383 D3 review fix #7 (P2): a bounded fetch's <c>limit</c> caps RAW rows, but
+    /// <see cref="QuerySessions"/> filters malformed rows and this walk dedups already-visited
+    /// ids AFTER the fetch — so a malformed or duplicate row landing inside the bounded window
+    /// could consume the sole sentinel row without itself being counted as an omitted
+    /// descendant, letting a genuinely-omitted valid descendant just past it go undetected and
+    /// the walk falsely conclude <see cref="DescendantDiscoveryResult.CountTruncated"/> is
+    /// <c>false</c>. <see cref="QueryChildrenBounded"/> now also reports whether the RAW <c>LIMIT</c>
+    /// was actually exhausted (<c>HitLimit</c>); if so, truncation is asserted regardless of how
+    /// many rows in the batch turned out valid — the only case that can't prove otherwise is a
+    /// raw count strictly below the limit (definite EOF). This can over-report truncation in the
+    /// rare case where the directory holds exactly <c>limit</c> raw rows and no more (safe: the
+    /// omitted count/ids were already documented as a lower bound once truncated).</para>
     /// </summary>
     public DescendantDiscoveryResult QueryDescendants(string rootId) {
         var result         = new List<DescendantRow>();
@@ -219,7 +240,8 @@ internal sealed class OpenCodeDb : IDisposable {
             if (countTruncated) continue; // already known to be a lower bound — skip the query entirely
 
             var remaining = MaxCountingNodes - omittedIds.Count;
-            foreach (var child in QueryChildrenBounded(id, remaining + 1)) {
+            var (belowChildren, hitLimit) = QueryChildrenBounded(id, remaining + 1);
+            foreach (var child in belowChildren) {
                 if (!visited.Add(child.Id)) continue; // cycle guard — already reached
 
                 if (omittedIds.Count >= MaxCountingNodes) {
@@ -229,6 +251,14 @@ internal sealed class OpenCodeDb : IDisposable {
                 omittedIds.Add(child.Id);
                 belowCapFrontier.Enqueue(child.Id);
             }
+            // AI-1383 D3 review fix #7 (P2): a malformed/already-visited row can consume the sole
+            // sentinel slot before it's counted as an omitted descendant, so the valid-count
+            // threshold above can under-report. HitLimit — the raw SQL LIMIT was actually
+            // exhausted — is the only proof we lack; when it's true we cannot rule out further
+            // valid descendants beyond this fetch, so treat it as truncation too (a safe
+            // over-report in the rare exact-boundary+junk case; a raw count strictly below the
+            // limit is definite EOF and needs no such fallback).
+            if (hitLimit) countTruncated = true;
         }
 
         // Below-cap counting/signature walk — every node here is already below-cap, so every
@@ -242,7 +272,8 @@ internal sealed class OpenCodeDb : IDisposable {
             var id = belowCapFrontier.Dequeue();
 
             var remaining = MaxCountingNodes - omittedIds.Count;
-            foreach (var child in QueryChildrenBounded(id, remaining + 1)) {
+            var (children, hitLimit) = QueryChildrenBounded(id, remaining + 1);
+            foreach (var child in children) {
                 if (!visited.Add(child.Id)) continue; // cycle guard — already reached
 
                 if (omittedIds.Count >= MaxCountingNodes) {
@@ -252,13 +283,22 @@ internal sealed class OpenCodeDb : IDisposable {
                 omittedIds.Add(child.Id);
                 belowCapFrontier.Enqueue(child.Id);
             }
+            if (hitLimit) countTruncated = true; // AI-1383 D3 review fix #7 (P2) — see above
         }
 
         omittedIds.Sort(StringComparer.Ordinal);
         return new DescendantDiscoveryResult(result, omittedIds.Count, omittedIds, countTruncated);
     }
 
-    IReadOnlyList<OpenCodeSessionRow> QuerySessions(string whereClause, string? parent, int? limit = null) {
+    /// <summary>
+    /// <c>RawCount</c> (AI-1383 D3 review fix #7, P2) is every row the reader actually yielded —
+    /// INCLUDING one skipped below for being malformed — never just <c>Rows.Count</c>. Only
+    /// <c>RawCount</c> can prove whether a <c>LIMIT</c> was truly exhausted: a malformed row
+    /// still consumes one of the SQL engine's <c>LIMIT</c> slots even though it never reaches
+    /// <c>Rows</c>, so a caller checking <c>Rows.Count == limit</c> instead could be fooled into
+    /// thinking fewer raw rows existed than actually did.
+    /// </summary>
+    (IReadOnlyList<OpenCodeSessionRow> Rows, int RawCount) QuerySessions(string whereClause, string? parent, int? limit = null) {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText =
             $"SELECT id, parent_id, directory, title, time_created, time_updated " +
@@ -267,9 +307,11 @@ internal sealed class OpenCodeDb : IDisposable {
         if (parent is not null) cmd.Parameters.AddWithValue("$parent", parent);
         if (limit is not null) cmd.Parameters.AddWithValue("$limit", limit.Value);
 
-        var rows = new List<OpenCodeSessionRow>();
+        var rows     = new List<OpenCodeSessionRow>();
+        var rawCount = 0;
         using var r = cmd.ExecuteReader();
         while (r.Read()) {
+            rawCount++;
             OpenCodeSessionRow row;
             try {
                 row = new OpenCodeSessionRow(
@@ -284,7 +326,7 @@ internal sealed class OpenCodeDb : IDisposable {
             }
             rows.Add(row);
         }
-        return rows;
+        return (rows, rawCount);
     }
 
     // A 0 epoch is observed alongside NULL for an unset time_created/time_updated
