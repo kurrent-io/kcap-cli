@@ -81,6 +81,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// </summary>
     public Func<string[]>? GetLiveAgentIds { get; set; }
 
+    /// <summary>AI-1313 Phase B (D2): richer live-agent metadata (kind + flow identity) sent alongside
+    /// <see cref="GetLiveAgentIds"/> on <c>DaemonConnect</c>. Optional — null when not wired (tests).</summary>
+    public Func<LiveAgentInfo[]>? GetLiveAgents { get; set; }
+
     public ServerConnection(DaemonConfig config, ILoggerFactory loggerFactory, ILogger<ServerConnection> logger) {
         _config = config;
         _logger = logger;
@@ -369,13 +373,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
         var repoPaths = await MergeRepoPathsAsync();
         var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
+        var liveAgents = GetLiveAgents?.Invoke(); // AI-1313 Phase B (D2): additive; null on an unwired/old path
 
         try {
             await _hub.InvokeAsync(
                 "DaemonConnect",
                 new DaemonConnect(
                     _config.Name, platform, repoPaths, _config.MaxConcurrentAgents, liveIds,
-                    _config.InstanceId, _config.Version, _config.SupportedVendors, MachineId.Get()
+                    _config.InstanceId, _config.Version, _config.SupportedVendors, MachineId.Get(), liveAgents
                 ),
                 cancellationToken: _ct
             );

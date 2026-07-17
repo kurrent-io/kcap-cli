@@ -28,10 +28,18 @@ internal record AgentInstance(
     ) {
     public string?              SessionId         { get; set; }
     public string               Status            { get; set; } = "Starting";
-    public DateTime             CreatedAt         { get; }      = DateTime.UtcNow;
+    public DateTime             CreatedAt         { get; init; } = DateTime.UtcNow;
     public DateTime             LastOutputAt      { get; set; } = DateTime.UtcNow;
     public bool                 HasReceivedOutput { get; set; }
     public TerminalOutputBuffer OutputBuffer      { get; } = new();
+
+    /// <summary>AI-1313 Phase B (D2): the launch kind + (for a ReviewFlow launch) the flow identity,
+    /// captured from <see cref="LaunchAgentCommand"/> at construction. Reported in
+    /// <c>LiveAgents</c>/<c>DaemonStatusReport</c> so a restarted server can associate a surviving
+    /// unassigned reviewer with its role. Defaults preserve pre-D2 behavior for any non-D2 launch path.</summary>
+    public LaunchKind           Kind              { get; init; } = LaunchKind.Default;
+    public string?              FlowRunId         { get; init; }
+    public string?              FlowRole          { get; init; }
 
     /// <summary>Temp MCP config path written for hosted PR reviews; deleted on cleanup.</summary>
     public string? McpConfigPath { get; set; }
@@ -281,6 +289,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 .Select(kvp => kvp.Key)
         ];
 
+        // AI-1313 Phase B (D2): richer live-agent metadata (kind + flow identity) alongside the ids.
+        _server.GetLiveAgents = () => [.. BuildLiveAgents()];
+
         // Start heartbeat loops
         _ = RunHeartbeatLoopAsync(_shutdownCts.Token);
         _ = RunDaemonHeartbeatLoopAsync(_shutdownCts.Token);
@@ -289,6 +300,35 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     internal int ActiveCount => _agents.Count(a => a.Value.Status is "Starting" or "Running");
+
+    /// <summary>AI-1313 Phase B (D2): one <see cref="LiveAgentInfo"/> per currently-live (Starting or
+    /// Running), non-private agent, carrying its kind + flow identity. Mirrors the
+    /// <see cref="ServerConnection.GetLiveAgentIds"/> filter (private-local agents excluded).</summary>
+    internal IReadOnlyList<LiveAgentInfo> BuildLiveAgents() =>
+        [.. _agents.Values
+            .Where(a => a.Status is "Starting" or "Running" && !a.IsPrivate)
+            .Select(a => new LiveAgentInfo(a.Id, a.Kind.ToString(), a.CreatedAt, a.FlowRunId, a.FlowRole))];
+
+    /// <summary>AI-1313 Phase B: test-only seam — insert a minimal <see cref="AgentInstance"/> (Noop
+    /// PTY runtime, no real process/worktree) so unit tests can exercise <see cref="BuildLiveAgents"/>
+    /// / status-report / reviewer-TTL logic without a live launch. Never called in production.</summary>
+    internal AgentInstance SeedAgentForTest(
+            string id, LaunchKind kind = LaunchKind.Default, string status = "Running",
+            string? flowRunId = null, string? flowRole = null,
+            DateTime? createdAt = null, DateTime? lastOutputAt = null, bool isPrivate = false) {
+        var agent = new AgentInstance(
+            id, null, "default", null, "/repo", "codex",
+            new PtyHostedAgentRuntime("codex", NoopPtyProcess.Instance),
+            new WorktreeInfo("/repo", "b", "/repo"),
+            new CancellationTokenSource()) {
+            Kind = kind, FlowRunId = flowRunId, FlowRole = flowRole, IsPrivate = isPrivate,
+            CreatedAt = createdAt ?? DateTime.UtcNow
+        };
+        agent.Status = status;
+        if (lastOutputAt is { } lo) agent.LastOutputAt = lo;
+        _agents[id] = agent;
+        return agent;
+    }
 
     async Task HandleLaunchAgent(LaunchAgentCommand cmd) {
         var agentId       = cmd.AgentId;
@@ -518,7 +558,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 CurrentCols         = HostedPtyCols,
                 CurrentRows         = HostedPtyRows,
                 Work                = work,
-                ReviewerBridgeToken = reviewerToken
+                ReviewerBridgeToken = reviewerToken,
+                Kind                = cmd.Kind,       // AI-1313 Phase B (D2): flow identity + kind for LiveAgents/status report
+                FlowRunId           = cmd.FlowRunId,
+                FlowRole            = cmd.FlowRole
             };
             _agents[agentId] = agent;
 
