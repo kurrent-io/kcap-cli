@@ -85,7 +85,7 @@ if (args.Skip(1).Any(a => a is "--help" or "-h")) {
 }
 
 // Commands that don't need a server URL
-string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "update", "plugin", "profile", "use", "repos", "login", "ignore", "remap", "uninstall"];
+string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "update", "plugin", "profile", "use", "repos", "login", "ignore", "remap", "uninstall", "cursor-verify-appendonly"];
 
 if (baseUrl is null && !offlineCommands.Contains(command)) {
     Console.Error.WriteLine("No server configured. Run `kcap setup` or set KCAP_URL.");
@@ -748,6 +748,11 @@ switch (command) {
         await Console.Error.WriteLineAsync(
             "kcap cursor import has been removed. Use 'kcap import --cursor' instead.");
         return 2;
+    // Internal: AI-1382 D0 phase-0 empirical append-only verification harness. Hidden —
+    // not in help-usage.txt — run manually against a live Cursor transcript while gathering
+    // the D0 evidence; not part of the normal watch/hook/import surface.
+    case "cursor-verify-appendonly":
+        return await CursorVerifyAppendOnlyCommand.RunAsync(args);
 }
 
 Console.Error.WriteLine($"Unknown command: {command}");

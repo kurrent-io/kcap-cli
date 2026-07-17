@@ -955,6 +955,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(PermissionResolution))]
 [JsonSerializable(typeof(EndAgentSessionResult))]
 [JsonSerializable(typeof(MachineIdFile))]
+[JsonSerializable(typeof(CursorQuarantineMarker))]
 [JsonSerializable(typeof(int))]
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(string[]))]
