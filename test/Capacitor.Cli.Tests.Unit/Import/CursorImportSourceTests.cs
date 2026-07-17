@@ -979,6 +979,69 @@ public class CursorImportSourceTests {
     }
 
     [Test]
+    public async Task cross_workspace_prompt_match_does_not_link_child_to_parent_in_a_different_workspace() {
+        // Qodo fix regression test: same-workspace discovery only exists to give a filtered/scoped
+        // import VISIBILITY into a parent — it must also CONSTRAIN correlation to that workspace.
+        // A child in workspace A whose first user_query happens to canonically match a Task prompt
+        // issued by a parent in a DIFFERENT workspace B must stay standalone; correlating across the
+        // union of every workspace touched by this classify call would wrongly nest it.
+        using var fx = new ProjectsDirFixture();
+
+        const string prompt      = "EXPLORE the repo and report back";
+        var          childUserText = System.Text.Json.JsonSerializer.Serialize("<user_query>\n" + prompt + "\n</user_query>");
+        var          taskPrompt    = System.Text.Json.JsonSerializer.Serialize(prompt);
+
+        // Parent (Task prompt) lives in workspace B.
+        fx.AddSession("Workspace-B", "11111111-1111-1111-1111-111111111111",
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"go\"}]}}\n" +
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Task\",\"input\":{\"description\":\"d\",\"prompt\":" + taskPrompt + ",\"subagent_type\":\"generalPurpose\"}}]}}\n");
+        // Child (matching first user_query) lives in a DIFFERENT workspace A — unrelated to the
+        // parent above other than the coincidental prompt match.
+        fx.AddSession("Workspace-A", "22222222-2222-2222-2222-222222222222",
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":" + childUserText + "}]}}\n" +
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+        using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
+        using var client  = new HttpClient(handler);
+
+        var discovered = await src.DiscoverAsync(Filters(), CancellationToken.None);
+        var classified = await src.ClassifyAsync(discovered, Ctx(client, minLines: 1), CancellationToken.None);
+
+        var parentClass = classified.Single(c => c.SessionId == "11111111111111111111111111111111");
+        var childClass  = classified.Single(c => c.SessionId == "22222222222222222222222222222222");
+
+        // The child must NOT be linked to the cross-workspace parent...
+        await Assert.That(childClass.SourceMeta!.ContainsKey("IsSubagentChild")).IsFalse();
+        // ...and the parent must NOT list the cross-workspace session as one of its children.
+        await Assert.That(parentClass.SourceMeta!.ContainsKey("SubagentChildren")).IsFalse();
+    }
+
+    [Test]
+    public async Task classify_throws_promptly_when_cancelled_during_same_workspace_scan() {
+        // Qodo fix regression test: the same-workspace transcript-path scan
+        // (DiscoverSameWorkspaceSessionPaths) must consult the CancellationToken passed to
+        // ClassifyAsync rather than running an uncancelable, synchronous directory walk to
+        // completion — otherwise Ctrl-C hangs on a large/slow filesystem.
+        using var fx = new ProjectsDirFixture();
+        fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{}\n");
+        fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+        using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
+        using var client  = new HttpClient(handler);
+
+        var discovered = await src.DiscoverAsync(Filters(), CancellationToken.None);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => src.ClassifyAsync(discovered, Ctx(client, minLines: 1), cts.Token)
+        );
+    }
+
+    [Test]
     public async Task import_session_omits_workspace_roots_when_cwd_unresolved() {
         using var fx    = new ProjectsDirFixture();
         var       jsonl = fx.AddSession("unknown-workspace", "11111111-1111-1111-1111-111111111111", "{}\n");

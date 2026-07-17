@@ -240,7 +240,21 @@ internal sealed class CursorImportSource : IImportSource {
         // never discover the parent's Task prompt and the child would wrongly import top-level.
         // Repo detection below still runs ONLY on the filtered `sessions` slice — this widening
         // is purely a same-workspace file scan, no git/network work.
-        var pathBySession = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Qodo fix: same-workspace discovery below is only meant to ensure a filtered/scoped
+        // import can still SEE a parent for visibility purposes — it must also CONSTRAIN
+        // correlation. Correlating across the union of every workspace touched by this classify
+        // call let a child in workspace A link to a parent in workspace B whenever their
+        // canonical prompt hashes happened to match, corrupting nesting/attribution. Each
+        // workspace gets its own path map and its own Correlate() call; the resulting links are
+        // merged (session ids are unique across workspaces, so no collisions).
+        var pathBySession      = new Dictionary<string, string>(StringComparer.Ordinal); // flat, for child-path lookups only
+        var pathsByWorkspace   = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+
+        Dictionary<string, string> WorkspaceMap(string key) {
+            if (!pathsByWorkspace.TryGetValue(key, out var map))
+                pathsByWorkspace[key] = map = new Dictionary<string, string>(StringComparer.Ordinal);
+            return map;
+        }
 
         var sanitizedDirs = sessions
             .Select(s => s.SourceMeta!.TryGetValue("SanitizedDir", out var sd) ? sd as string : null)
@@ -248,19 +262,35 @@ internal sealed class CursorImportSource : IImportSource {
             .Select(sd => sd!)
             .Distinct(StringComparer.Ordinal);
 
-        foreach (var sanitizedDir in sanitizedDirs)
-            foreach (var (sid, path) in DiscoverSameWorkspaceSessionPaths(sanitizedDir))
+        foreach (var sanitizedDir in sanitizedDirs) {
+            var workspaceMap = WorkspaceMap(sanitizedDir);
+            foreach (var (sid, path) in DiscoverSameWorkspaceSessionPaths(sanitizedDir, ct)) {
+                workspaceMap[sid] = path;
                 pathBySession[sid] = path;
+            }
+        }
 
         // Ensure every session actually being classified in this run is present even if its own
         // workspace directory couldn't be (re-)walked above (e.g. injected SourceMeta without a
-        // SanitizedDir in a test double) — this run's own slice must never be lost.
+        // SanitizedDir in a test double) — this run's own slice must never be lost. Keyed by the
+        // session's own SanitizedDir so correlation stays workspace-scoped; a session with no
+        // SanitizedDir gets an isolated per-session bucket since its true peer set is unknown.
         foreach (var s in sessions) {
-            if (s.SourceMeta!.TryGetValue("TranscriptPath", out var tp) && tp is string p && p.Length > 0)
-                pathBySession[s.SessionId] = p;
+            if (!s.SourceMeta!.TryGetValue("TranscriptPath", out var tp) || tp is not string p || p.Length == 0)
+                continue;
+
+            var workspaceKey = s.SourceMeta!.TryGetValue("SanitizedDir", out var sd) && sd is string sdStr
+                ? sdStr
+                : $" single:{s.SessionId}";
+
+            WorkspaceMap(workspaceKey)[s.SessionId] = p;
+            pathBySession[s.SessionId] = p;
         }
 
-        var subagentLinks    = CursorSubagentCorrelator.Correlate(pathBySession.Select(kv => (kv.Key, kv.Value)));
+        var subagentLinks = new Dictionary<string, CursorSubagentCorrelator.SubagentLink>(StringComparer.Ordinal);
+        foreach (var workspaceMap in pathsByWorkspace.Values)
+            foreach (var (childId, lnk) in CursorSubagentCorrelator.Correlate(workspaceMap.Select(kv => (kv.Key, kv.Value))))
+                subagentLinks[childId] = lnk;
         var childrenByParent = new Dictionary<string, List<CursorSubagentChild>>(StringComparer.Ordinal);
         foreach (var (childId, lnk) in subagentLinks) {
             if (!childrenByParent.TryGetValue(lnk.ParentSessionId, out var kids)) {
@@ -533,16 +563,14 @@ internal sealed class CursorImportSource : IImportSource {
     }
 
     /// <summary>
-    /// AI-1156 (D5): every session id → transcript path found directly under ONE workspace's
-    /// <c>agent-transcripts/</c> directory (identified by its Cursor-sanitized folder name),
-    /// with NO <c>--session</c>/<c>--cwd</c>/<c>--since</c>/scope filtering applied — cheap,
-    /// local file reads only. Used exclusively to widen the subagent correlator's input so a
-    /// filtered/scoped import (e.g. <c>--session &lt;child&gt;</c>) still sees the child's parent
-    /// (and siblings) for correlation, even though the parent itself may fall outside this run's
-    /// classify slice and never get imported in this run. Mirrors the per-workspace walk in
-    /// <see cref="DiscoverAsync"/>, minus the session/cwd/since filters.
+    /// Every session id → transcript path found directly under ONE workspace's
+    /// <c>agent-transcripts/</c> directory — no <c>--session</c>/<c>--cwd</c>/<c>--since</c>/scope
+    /// filtering, cheap local file reads only. Widens the subagent correlator's input so a
+    /// filtered/scoped import still sees a session's parent/siblings for correlation even when
+    /// they fall outside this run's classify slice. Mirrors the per-workspace walk in
+    /// <see cref="DiscoverAsync"/> minus the filters.
     /// </summary>
-    IReadOnlyDictionary<string, string> DiscoverSameWorkspaceSessionPaths(string sanitizedDir) {
+    IReadOnlyDictionary<string, string> DiscoverSameWorkspaceSessionPaths(string sanitizedDir, CancellationToken ct) {
         var map            = new Dictionary<string, string>(StringComparer.Ordinal);
         var transcriptsDir = Path.Combine(_projectsDir, sanitizedDir, "agent-transcripts");
 
@@ -550,6 +578,7 @@ internal sealed class CursorImportSource : IImportSource {
 
         try {
             foreach (var sessionDir in Directory.EnumerateDirectories(transcriptsDir)) {
+                ct.ThrowIfCancellationRequested();
                 try {
                     var sessionDirName = Path.GetFileName(sessionDir);
                     var jsonl          = Path.Combine(sessionDir, sessionDirName + ".jsonl");
@@ -557,12 +586,12 @@ internal sealed class CursorImportSource : IImportSource {
                     if (!File.Exists(jsonl)) continue;
 
                     map[NormalizeCursorSessionId(sessionDirName)] = jsonl;
-                } catch {
+                } catch (Exception ex) when (ex is not OperationCanceledException) {
                     // A hostile/inaccessible session subtree must not abort the whole scan.
                     continue;
                 }
             }
-        } catch {
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
             // A hostile/inaccessible workspace subtree must not abort the whole scan.
         }
 
