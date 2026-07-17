@@ -395,13 +395,27 @@ static class ImportCommand {
     /// out-of-band signal (see <see cref="ImportSessionResult"/>) that lets this distinguish the
     /// two: only a replay that sent no child content either is truly lifecycle-only.
     /// </para>
+    ///
+    /// <para>
+    /// Round-3 finding 2: this gate is CURSOR-ONLY. <c>SentChildContent</c> is populated only by
+    /// <see cref="CursorImportSource"/> — every other routed vendor's <c>ImportSessionResult</c>
+    /// leaves it at its default <c>false</c> via the implicit <c>ImportOutcome</c> conversion,
+    /// including cases (e.g. Antigravity's <c>AlreadyLoaded</c> repair path, which can legitimately
+    /// POST new nested-child content via <c>ImportChildrenAsync</c> before returning
+    /// <see cref="ImportOutcome.Skipped"/>) where that default does NOT mean "no new work". The
+    /// lifecycle-only-replay behavior this models — repo-backfill <c>AlreadyLoaded</c> replays with
+    /// no new content — is specific to Cursor's repo-backfill contract, so gating the whole check on
+    /// the Cursor vendor is what keeps a real import on another vendor from being wrongly suppressed.
+    /// </para>
     /// </summary>
     internal static bool IsLifecycleOnlyRoutedReplay(
-            ClassificationStatus status,
-            ImportOutcome        outcome,
+            string                vendor,
+            ClassificationStatus  status,
+            ImportOutcome         outcome,
             bool                  sentChildContent
         ) =>
-        status == ClassificationStatus.AlreadyLoaded
+        vendor == "cursor"
+     && status == ClassificationStatus.AlreadyLoaded
      && outcome is ImportOutcome.Loaded or ImportOutcome.Resumed or ImportOutcome.Skipped
      && !sentChildContent;
 
@@ -1316,7 +1330,7 @@ static class ImportCommand {
                                     // sentChildContent overrides this for an AlreadyLoaded parent
                                     // that attached a brand-new nested child (round-2 finding 1) —
                                     // that IS real new work.
-                                    var isLifecycleOnlyReplay = IsLifecycleOnlyRoutedReplay(c.Status, outcome, result.SentChildContent);
+                                    var isLifecycleOnlyReplay = IsLifecycleOnlyRoutedReplay(c.Vendor, c.Status, outcome, result.SentChildContent);
 
                                     if (!isLifecycleOnlyReplay) {
                                         routedOutcomesByVendor.AddOrUpdate(
@@ -1391,7 +1405,7 @@ static class ImportCommand {
                         // Tty branch above for why an AlreadyLoaded lifecycle-only replay must
                         // not count as Loaded/Excluded, and why sentChildContent overrides that
                         // for a parent that attached brand-new nested-child content.
-                        var isLifecycleOnlyReplay = IsLifecycleOnlyRoutedReplay(c.Status, outcome, result.SentChildContent);
+                        var isLifecycleOnlyReplay = IsLifecycleOnlyRoutedReplay(c.Vendor, c.Status, outcome, result.SentChildContent);
 
                         if (!isLifecycleOnlyReplay) {
                             routedOutcomesByVendor.AddOrUpdate(
