@@ -164,6 +164,77 @@ public class CursorHookCommandTests {
     }
 
     [Test]
+    public async Task telemetry_only_hook_touches_the_heartbeat_file() {
+        // AI-1382 Task 8: even a telemetry-only hook (never spooled, lossy on failure) must
+        // touch the per-session heartbeat — it reflects "Cursor is still firing hooks",
+        // independent of whatever the transcript/spool machinery is doing.
+        using var fx = new Fixture();
+        var       sid = Guid.NewGuid().ToString("N");
+        var       before = DateTimeOffset.UtcNow;
+
+        await fx.HandleAsync($$"""{"hook_event_name":"postToolUse","session_id":"{{sid}}","tool_name":"Bash"}""");
+
+        var heartbeat = WatcherHeartbeat.Read(CursorMarkers.HeartbeatPath(sid));
+        await Assert.That(heartbeat).IsNotNull();
+        await Assert.That(heartbeat!.Value).IsGreaterThanOrEqualTo(before);
+    }
+
+    [Test]
+    public async Task beforeSubmitPrompt_clears_its_barrier_once_the_live_POST_succeeds() {
+        using var fx  = new Fixture(); // defaults to HttpStatusCode.OK
+        var       sid = Guid.NewGuid().ToString("N");
+
+        await fx.HandleAsync($$"""{"hook_event_name":"beforeSubmitPrompt","session_id":"{{sid}}","prompt":"hi"}""");
+
+        await Assert.That(CursorMarkers.BarrierPending(sid, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(60))).IsFalse();
+    }
+
+    [Test]
+    public async Task beforeSubmitPrompt_barrier_stays_pending_when_the_live_POST_fails() {
+        using var fx  = new Fixture(postStatus: HttpStatusCode.InternalServerError);
+        var       sid = Guid.NewGuid().ToString("N");
+
+        await fx.HandleAsync($$"""{"hook_event_name":"beforeSubmitPrompt","session_id":"{{sid}}","prompt":"hi"}""");
+
+        await Assert.That(CursorMarkers.BarrierPending(sid, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(60))).IsTrue();
+    }
+
+    [Test]
+    public async Task sessionEnd_drains_the_hook_spool_before_the_pre_end_transcript_drain_and_clears_the_barrier() {
+        // AI-1382 Task 8: a beforeSubmitPrompt whose live POST previously failed left a barrier
+        // + a spooled user-prompt/cursor entry behind. sessionEnd must deliver that spooled
+        // entry (clearing the barrier) BEFORE running its pre-end transcript drain, so a
+        // transcript line depending on the attachment is never normalized ahead of it.
+        using var fx  = new Fixture();
+        var       sid = Guid.NewGuid().ToString("N");
+
+        CursorMarkers.CreateBarrier(sid, DateTimeOffset.UtcNow);
+        fx.Spool.Append(sid, "user-prompt/cursor", $$"""{"hook_event_name":"beforeSubmitPrompt","session_id":"{{sid}}"}""");
+
+        await fx.WriteTranscript(
+            """{"role":"user","message":{"content":[{"type":"text","text":"final prompt"}]}}"""
+        );
+
+        await fx.HandleAsync(
+            $$"""
+               {"hook_event_name":"sessionEnd","session_id":"{{sid}}","transcript_path":"{{fx.TranscriptPathEscaped}}"}
+               """
+        );
+
+        var promptIdx     = fx.RouteOrder.FindIndex(r => r == "user-prompt/cursor");
+        var transcriptIdx = fx.RouteOrder.FindIndex(r => r == "transcript");
+        var sessionEndIdx = fx.RouteOrder.FindIndex(r => r == "session-end/cursor");
+
+        await Assert.That(promptIdx).IsGreaterThanOrEqualTo(0);
+        await Assert.That(transcriptIdx).IsGreaterThanOrEqualTo(0);
+        await Assert.That(sessionEndIdx).IsGreaterThanOrEqualTo(0);
+        await Assert.That(promptIdx).IsLessThan(transcriptIdx);
+        await Assert.That(transcriptIdx).IsLessThan(sessionEndIdx);
+
+        await Assert.That(CursorMarkers.BarrierPending(sid, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(60))).IsFalse();
+    }
+
+    [Test]
     public async Task null_transcript_path_does_not_trigger_backfill() {
         using var fx = new Fixture();
         await fx.HandleAsync("""{"hook_event_name":"sessionStart","session_id":"abc","transcript_path":null}""");

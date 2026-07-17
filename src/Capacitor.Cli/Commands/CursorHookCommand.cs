@@ -119,6 +119,20 @@ public static class CursorHookCommand {
             var sessionId      = TryGetString(node, "session_id");
             var transcriptPath = TryGetString(node, "transcript_path");
 
+            if (sessionId is not null) {
+                // AI-1382 Task 8: every invocation carrying a session id touches the hook
+                // heartbeat — including telemetry-only hooks — so it reflects "Cursor is still
+                // firing hooks" independent of the tailing watcher's own liveness.
+                CursorMarkers.TouchHeartbeat(sessionId, DateTimeOffset.UtcNow);
+
+                // AI-1382 Task 8: beforeSubmitPrompt is ordering-sensitive — its server-side
+                // effect (queuing an attachment onto the per-session FIFO) must land before
+                // transcript-line normalization can consume it. Create the barrier BEFORE
+                // anything below attempts to post or spool it; cleared on a 2xx from either
+                // the live POST below or a later spool-drain delivery of this same entry.
+                if (eventName == "beforeSubmitPrompt") CursorMarkers.CreateBarrier(sessionId, DateTimeOffset.UtcNow);
+            }
+
             if (sessionId is not null && DisabledSessions.IsDisabled(sessionId)) return 0;
 
             // AI-1151 (live): bring CursorSubagentCorrelator into the live hook/backfill
@@ -187,7 +201,13 @@ public static class CursorHookCommand {
                     try {
                         using var content = new StringContent(entryBody, Encoding.UTF8, "application/json");
                         using var resp    = await client.PostOnceAsync($"{baseUrl}/hooks/{route}", content, HookPostTimeout, ct);
-                        if (resp.IsSuccessStatusCode) return DrainOutcome.Delivered;
+                        if (resp.IsSuccessStatusCode) {
+                            // AI-1382 Task 8: a spooled beforeSubmitPrompt (user-prompt/cursor)
+                            // finally being delivered here means the side-effect barrier this
+                            // session may be holding on can now be cleared.
+                            if (route == "user-prompt/cursor") CursorMarkers.ClearBarrier(sessionId);
+                            return DrainOutcome.Delivered;
+                        }
                         var code = (int)resp.StatusCode;
                         return code is >= 500 or 408 or 429 ? DrainOutcome.TransientStop : DrainOutcome.Drop;
                     } catch { return DrainOutcome.TransientStop; }
@@ -251,6 +271,11 @@ public static class CursorHookCommand {
             var posted = await TryPostHookAsync(client, baseUrl, mapping.RouteSegment, normalized, ct);
             if (!posted && mapping.SpoolOnFailure && sessionId is not null) {
                 spool.Append(sessionId, mapping.RouteSegment, normalized);
+            }
+            // AI-1382 Task 8: the ordering-sensitive beforeSubmitPrompt's own live POST just
+            // succeeded — clear the barrier it created above.
+            if (posted && eventName == "beforeSubmitPrompt" && sessionId is not null) {
+                CursorMarkers.ClearBarrier(sessionId);
             }
 
             if (!drainBeforePost && !BudgetExpired() && sessionId is not null && !string.IsNullOrEmpty(transcriptPath)) {

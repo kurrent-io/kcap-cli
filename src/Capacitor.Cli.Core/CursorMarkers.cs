@@ -4,13 +4,14 @@ namespace Capacitor.Cli.Core;
 
 /// <summary>
 /// AI-1382 D0/D1 — per-session on-disk marker paths for the Cursor tailing watcher's runtime
-/// rewrite guard (quarantine — read/write logic lives here, this task), ordering-sensitive hook
-/// side-effect barrier, and heartbeat (the latter two are introduced as PATH helpers only; Task 8
-/// wires the barrier's create/clear logic and the heartbeat touch/read calls against
-/// <see cref="WatcherHeartbeat"/>). One dot-namespaced directory per marker kind under the CLI's
-/// config dir (honouring <c>KCAP_CONFIG_DIR</c> via <see cref="PathHelpers.ConfigPath"/>), one
-/// file per session keyed by the dashless session id, so every process on this machine — hook,
-/// watcher, backfill, import — resolves the same path.
+/// rewrite guard (quarantine), ordering-sensitive hook side-effect barrier, and hook heartbeat.
+/// One dot-namespaced directory per marker kind under the CLI's config dir (honouring
+/// <c>KCAP_CONFIG_DIR</c> via <see cref="PathHelpers.ConfigPath"/>), one file per session keyed
+/// by the dashless session id, so every process on this machine — hook, watcher, backfill,
+/// import — resolves the same path. The barrier and heartbeat markers are thin wrappers over
+/// <see cref="WatcherHeartbeat"/>'s atomic timestamp read/write (Task 8); the quarantine marker
+/// carries a small JSON payload (reason + timestamp) instead, since it is a permanent,
+/// human-diagnostic record rather than a rolling liveness signal.
 /// </summary>
 public static class CursorMarkers {
     public static string QuarantinePath(string sessionId) => Path.Combine(PathHelpers.ConfigPath("cursor-quarantine"), $"{sessionId}.json");
@@ -65,6 +66,52 @@ public static class CursorMarkers {
             return null;
         }
     }
+
+    /// <summary>
+    /// AI-1382 Task 8 — creates (or refreshes) the per-session side-effect barrier at
+    /// <paramref name="now"/>. Created BEFORE the POST of an ordering-sensitive hook whose
+    /// server-side effect must land before transcript-line normalization can consume it
+    /// (today: <c>beforeSubmitPrompt</c> → <c>user-prompt/cursor</c>, which queues an
+    /// attachment the Cursor normalizer later attaches to the matching user transcript line).
+    /// Reuses <see cref="WatcherHeartbeat.Touch"/>'s atomic sibling-temp-then-rename write —
+    /// the barrier is just a timestamp marker, same shape as a heartbeat.
+    /// </summary>
+    public static void CreateBarrier(string sessionId, DateTimeOffset now) =>
+        WatcherHeartbeat.Touch(BarrierPath(sessionId), now);
+
+    /// <summary>
+    /// True while a barrier created for <paramref name="sessionId"/> is still within
+    /// <paramref name="bound"/> of its creation timestamp — while true, the watcher and the
+    /// backfill (wired in later tasks) HOLD transcript delivery for this session rather than
+    /// risk normalizing a line ahead of the attachment it depends on. False when no barrier
+    /// was ever created (or one already <see cref="ClearBarrier"/>ed), and false once
+    /// <paramref name="now"/> has moved <paramref name="bound"/> past the recorded timestamp —
+    /// a hook that crashed before clearing its own barrier must not wedge delivery forever;
+    /// past the bound, delivery proceeds (a bounded, deliberate attachment loss).
+    /// </summary>
+    public static bool BarrierPending(string sessionId, DateTimeOffset now, TimeSpan bound) {
+        var stamp = WatcherHeartbeat.Read(BarrierPath(sessionId));
+        return stamp is { } s && now - s < bound;
+    }
+
+    /// <summary>
+    /// Clears the barrier — called on a 2xx response from the ordering-sensitive hook's own
+    /// live POST, or when a later invocation's hook-spool drain delivers that same spooled
+    /// entry. Best-effort: an absent marker (nothing to clear) is not an error.
+    /// </summary>
+    public static void ClearBarrier(string sessionId) {
+        try { File.Delete(BarrierPath(sessionId)); } catch { /* best-effort */ }
+    }
+
+    /// <summary>
+    /// AI-1382 Task 8 — touches the per-session hook heartbeat at <paramref name="now"/>.
+    /// Called at the top of EVERY <see cref="Capacitor.Cli.Commands.CursorHookCommand"/>
+    /// invocation that carries a session id — including telemetry-only hooks — so the
+    /// heartbeat reflects "Cursor is still firing hooks for this session" independent of
+    /// whether the tailing watcher is itself alive. Reuses <see cref="WatcherHeartbeat.Touch"/>.
+    /// </summary>
+    public static void TouchHeartbeat(string sessionId, DateTimeOffset now) =>
+        WatcherHeartbeat.Touch(HeartbeatPath(sessionId), now);
 }
 
 /// <summary>Quarantine marker persisted to <see cref="CursorMarkers.QuarantinePath"/>.</summary>

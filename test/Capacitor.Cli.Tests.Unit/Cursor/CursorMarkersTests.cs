@@ -63,4 +63,45 @@ public class CursorMarkersTests {
 
         await Assert.That(CursorMarkers.ReadMarker(sid)).IsNull();
     }
+
+    [Test]
+    public async Task BarrierPending_false_when_no_barrier_created() {
+        var sid = NewSessionId();
+
+        await Assert.That(CursorMarkers.BarrierPending(sid, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(60))).IsFalse();
+    }
+
+    [Test]
+    public async Task Barrier_pending_until_cleared_then_expires_past_bound() {
+        var sid = NewSessionId();
+        var now = DateTimeOffset.UtcNow;
+
+        CursorMarkers.CreateBarrier(sid, now);
+
+        await Assert.That(CursorMarkers.BarrierPending(sid, now.AddSeconds(5), TimeSpan.FromSeconds(60))).IsTrue();
+        await Assert.That(CursorMarkers.BarrierPending(sid, now.AddSeconds(61), TimeSpan.FromSeconds(60))).IsFalse(); // expired — proceeds
+
+        CursorMarkers.ClearBarrier(sid);
+
+        await Assert.That(CursorMarkers.BarrierPending(sid, now.AddSeconds(5), TimeSpan.FromSeconds(60))).IsFalse();
+    }
+
+    [Test]
+    public async Task ClearBarrier_is_a_noop_when_nothing_was_created() {
+        var sid = NewSessionId();
+
+        CursorMarkers.ClearBarrier(sid); // must not throw
+
+        await Assert.That(CursorMarkers.BarrierPending(sid, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(60))).IsFalse();
+    }
+
+    [Test]
+    public async Task TouchHeartbeat_writes_a_timestamp_WatcherHeartbeat_can_read_back() {
+        var sid = NewSessionId();
+        var now = DateTimeOffset.UtcNow;
+
+        CursorMarkers.TouchHeartbeat(sid, now);
+
+        await Assert.That(WatcherHeartbeat.Read(CursorMarkers.HeartbeatPath(sid))).IsEqualTo(now);
+    }
 }
