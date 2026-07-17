@@ -15,6 +15,10 @@ namespace Capacitor.Cli.Daemon.Services;
 /// process NEVER matches, so an identity mismatch can never authorize a kill.
 /// </summary>
 internal static partial class ProcessIdentity {
+    /// <summary><c>ESRCH</c> ("no such process") — 3 on both Linux and macOS. The only <c>kill(pid, 0)</c>
+    /// errno that proves the process is gone; every other error means present/indeterminate.</summary>
+    const int Esrch = 3;
+
     /// <summary>The exact start-identity token for <paramref name="pid"/>, or null if the process is
     /// gone or the value can't be read. A non-positive pid (0 = a degenerate/Noop runtime; negative =
     /// never a real child) is not a reapable process → null.</summary>
@@ -49,7 +53,13 @@ internal static partial class ProcessIdentity {
             catch { return false; }
         }
 
-        if (UnixPtyInterop.kill(pid, 0) != 0) return false; // ESRCH → gone
+        if (UnixPtyInterop.kill(pid, 0) != 0) {
+            // kill(pid, 0) fails with ESRCH (no such process → gone) OR EPERM (the process EXISTS but we
+            // may not signal it — e.g. it changed credentials). Only ESRCH is "gone"; any other errno
+            // means present-or-indeterminate → treat as ALIVE so we never free capacity or delete a
+            // record for a still-running child (fail closed). ESRCH is 3 on Linux and macOS.
+            return System.Runtime.InteropServices.Marshal.GetLastPInvokeError() != Esrch;
+        }
 
         // A ZOMBIE (exited but not yet reaped by its parent) still answers kill(pid, 0), but it is
         // effectively dead — its pid holds a slot only until reaped. Treat it as not-alive so a reaper

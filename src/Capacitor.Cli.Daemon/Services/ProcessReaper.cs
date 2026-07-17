@@ -59,16 +59,20 @@ internal static class ProcessReaper {
                 return false;
         }
 
-        // Ours. Unix env guard: only kill if the process still proves it is OUR agent. Unreadable → spare.
+        // Ours (the EXACT start token already proves this is the same incarnation recorded at spawn).
+        // Unix env guard, defense-in-depth: only kill if the live process ALSO still carries our
+        // KCAP_AGENT_ID. Unreadable OR mismatched env → SPARE and retain the record: it means ownership
+        // can't be proven strongly enough to kill, NOT that the process is gone. Reporting confirmed-gone
+        // here would strand a live child and drop its durable tracking (esp. on macOS, where the marker
+        // scan can't recover it). Only Dead / a conclusive token recycle return confirmed-gone.
         if (!OperatingSystem.IsWindows()) {
             var envAgentId = ProcessIdentity.ReadAgentEnv(pid, "KCAP_AGENT_ID");
-            if (envAgentId is null) {
+            if (envAgentId is null || !string.Equals(envAgentId, record.AgentId, StringComparison.Ordinal)) {
                 logger.LogWarning(
-                    "ProcessReaper: env unreadable for pid {Pid} (agent {AgentId}) — sparing (ambiguity never kills)",
+                    "ProcessReaper: env unreadable/mismatched for pid {Pid} (agent {AgentId}) — sparing (ambiguity never kills)",
                     pid, record.AgentId);
                 return false;
             }
-            if (!string.Equals(envAgentId, record.AgentId, StringComparison.Ordinal)) return true; // not our agent
         }
 
         return await KillConfirmAsync(pid, record.StartIdentity, record.AgentId, logger, ct);
