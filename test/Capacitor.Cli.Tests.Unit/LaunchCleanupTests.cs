@@ -125,13 +125,14 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
-        // A live, unrelated process occupies the pid, but the agent's STORED identity is a DIFFERENT real
-        // process's token — same OS token scheme, different value, so it compares CONCLUSIVELY unequal
-        // (exactly what a recycled pid looks like: our child exited, the pid was reused). Teardown must
-        // treat our agent as gone — never quarantine, never kill the unrelated occupant.
+        // A live process occupies the pid, but the agent's STORED identity is a same-scheme token with a
+        // CONCLUSIVELY different value — exactly what a recycled pid looks like (our child exited, the pid
+        // was reused). Derive it from the occupant's OWN token + a suffix so it's guaranteed different yet
+        // same-scheme on every OS. (Deriving it from a second process is not safe: on Linux the start
+        // token is boot-relative clock ticks — two rapidly-started processes can collide on the same
+        // value.) Teardown must treat our agent as gone — never quarantine, never kill the occupant.
         using var occupant = DummyProcess.StartSleep(30);
-        using var other    = DummyProcess.StartSleep(30);
-        var wrongIdentity  = ProcessIdentity.Capture(other.Pid)!; // real, same-scheme, ≠ occupant's identity
+        var wrongIdentity  = ProcessIdentity.Capture(occupant.Pid)! + "9"; // same scheme, ≠ occupant's value
 
         orch.SeedAgentForTest("recycled", LaunchKind.ReviewFlow, status: "Running",
             pty: new LiveNoKillPtyProcess(occupant.Pid), startIdentity: wrongIdentity);
@@ -141,10 +142,9 @@ public partial class AgentOrchestratorVendorTests {
         await Assert.That(orch.GetAgentForTest("recycled")).IsNull();
         await Assert.That(orch.QuarantineSnapshot().Any(q => q.Id == "recycled")).IsFalse();
         await Assert.That(orch.EffectiveCount).IsEqualTo(0);
-        await Assert.That(occupant.HasExited).IsFalse(); // the unrelated occupant was never signalled
+        await Assert.That(occupant.HasExited).IsFalse(); // the occupant was never signalled
 
         occupant.Kill();
-        other.Kill();
     }
 
     [Test]
