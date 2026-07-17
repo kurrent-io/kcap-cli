@@ -3,15 +3,15 @@ using System.Text.Json;
 namespace Capacitor.Cli.Core;
 
 /// <summary>
-/// AI-1382 D0/D1 — per-session on-disk marker paths for the Cursor tailing watcher's runtime
-/// rewrite guard (quarantine), ordering-sensitive hook side-effect barrier, and hook heartbeat.
-/// One dot-namespaced directory per marker kind under the CLI's config dir (honouring
+/// Per-session on-disk marker paths for the Cursor tailing watcher's runtime rewrite guard
+/// (quarantine), ordering-sensitive hook side-effect barrier, and hook heartbeat. One
+/// dot-namespaced directory per marker kind under the CLI's config dir (honouring
 /// <c>KCAP_CONFIG_DIR</c> via <see cref="PathHelpers.ConfigPath"/>), one file per session keyed
 /// by the dashless session id, so every process on this machine — hook, watcher, backfill,
-/// import — resolves the same path. The barrier and heartbeat markers are thin wrappers over
-/// <see cref="WatcherHeartbeat"/>'s atomic timestamp read/write (Task 8); the quarantine marker
-/// carries a small JSON payload (reason + timestamp) instead, since it is a permanent,
-/// human-diagnostic record rather than a rolling liveness signal.
+/// import — resolves the same path. The barrier and heartbeat markers wrap
+/// <see cref="WatcherHeartbeat"/>'s atomic timestamp read/write; the quarantine marker carries a
+/// small JSON payload (reason + timestamp) instead, as a permanent diagnostic record rather than
+/// a rolling liveness signal.
 /// </summary>
 public static class CursorMarkers {
     public static string QuarantinePath(string sessionId) => Path.Combine(PathHelpers.ConfigPath("cursor-quarantine"), $"{sessionId}.json");
@@ -19,19 +19,19 @@ public static class CursorMarkers {
     public static string HeartbeatPath(string sessionId)  => Path.Combine(PathHelpers.ConfigPath("cursor-heartbeat"), $"{sessionId}.json");
 
     /// <summary>
-    /// AI-1382 review fix #5 — per-CHILD marker path recording that this subagent's
-    /// <c>subagent-start</c> was durably acknowledged (2xx), either via its own live POST or a
-    /// later spool-drain replay. Keyed on the child's own dashless session id (not the parent) —
-    /// mirrors <see cref="CursorLiveSubagentLinker"/>'s marker keying.
+    /// Per-CHILD marker path recording that this subagent's <c>subagent-start</c> was durably
+    /// acknowledged (2xx), either via its own live POST or a later spool-drain replay. Keyed on
+    /// the child's own dashless session id (not the parent) — mirrors
+    /// <see cref="CursorLiveSubagentLinker"/>'s marker keying.
     /// </summary>
     public static string SubagentStartAckPath(string childSessionId) =>
         Path.Combine(PathHelpers.ConfigPath("cursor-subagent-start-ack"), $"{childSessionId}.json");
 
     /// <summary>
-    /// AI-1382 Tasks 10/11 — the shared bound every <see cref="BarrierPending"/> caller (the
-    /// backfill and the live watcher) uses to decide when a barrier has aged out. A single
-    /// source of truth so the backfill and the watcher agree on how long they hold transcript
-    /// delivery for the same session before proceeding past a crashed hook's uncleared barrier.
+    /// The shared bound every <see cref="BarrierPending"/> caller (the backfill and the live
+    /// watcher) uses to decide when a barrier has aged out. A single source of truth so the
+    /// backfill and the watcher agree on how long they hold transcript delivery for the same
+    /// session before proceeding past a crashed hook's uncleared barrier.
     /// </summary>
     public static readonly TimeSpan DefaultBarrierBound = TimeSpan.FromSeconds(60);
 
@@ -49,23 +49,32 @@ public static class CursorMarkers {
     /// Writes a timestamped quarantine marker for <paramref name="sessionId"/>, atomically
     /// (sibling temp file + rename — the <see cref="WatcherHeartbeat.Touch"/> precedent) so a
     /// concurrent reader never observes a partial write. Idempotent — a session quarantined twice
-    /// keeps the FIRST reason/timestamp (the first detection is the useful diagnostic; a later
-    /// trip is corroborating, not new information) unless the existing marker is corrupt or
-    /// unreadable, in which case it's replaced.
+    /// keeps the FIRST reason/timestamp unless the existing marker is corrupt/unreadable, in which
+    /// case it's replaced.
+    ///
+    /// Best-effort: this is called mid-drain-loop (<see cref="CursorRewriteGuard.Reject"/>), which
+    /// has no broad exception handler above it, so any write failure here (permissions, disk full,
+    /// read-only volume) must never throw — it's caught and logged instead. The caller's
+    /// Verify*/Reject return value is what actually stops delivery; a lost marker only means a
+    /// later process can't see this session was already quarantined.
     /// </summary>
     public static void Quarantine(string sessionId, string reason) {
         if (ReadMarker(sessionId) is not null) return; // already quarantined; keep the first reason
 
-        var path = QuarantinePath(sessionId);
-        var dir  = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        try {
+            var path = QuarantinePath(sessionId);
+            var dir  = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-        var marker = new CursorQuarantineMarker(reason, DateTimeOffset.UtcNow);
-        var json   = JsonSerializer.Serialize(marker, CapacitorJsonContext.Default.CursorQuarantineMarker);
-        var tmp    = $"{path}.tmp";
+            var marker = new CursorQuarantineMarker(reason, DateTimeOffset.UtcNow);
+            var json   = JsonSerializer.Serialize(marker, CapacitorJsonContext.Default.CursorQuarantineMarker);
+            var tmp    = $"{path}.tmp";
 
-        File.WriteAllText(tmp, json);
-        File.Move(tmp, path, overwrite: true);
+            File.WriteAllText(tmp, json);
+            File.Move(tmp, path, overwrite: true);
+        } catch (Exception e) {
+            Console.Error.WriteLine($"cursor_quarantine_marker_write_failed: session {sessionId}: {e.Message}");
+        }
     }
 
     /// <summary>The persisted quarantine marker for this session, or null if absent/corrupt.</summary>
@@ -85,8 +94,8 @@ public static class CursorMarkers {
     }
 
     /// <summary>
-    /// AI-1382 Task 8 — creates (or refreshes) the per-session side-effect barrier at
-    /// <paramref name="now"/>. Created BEFORE the POST of an ordering-sensitive hook whose
+    /// Creates (or refreshes) the per-session side-effect barrier at <paramref name="now"/>.
+    /// Created BEFORE the POST of an ordering-sensitive hook whose
     /// server-side effect must land before transcript-line normalization can consume it
     /// (today: <c>beforeSubmitPrompt</c> → <c>user-prompt/cursor</c>, which queues an
     /// attachment the Cursor normalizer later attaches to the matching user transcript line).
@@ -121,8 +130,8 @@ public static class CursorMarkers {
     }
 
     /// <summary>
-    /// AI-1382 Task 8 — touches the per-session hook heartbeat at <paramref name="now"/>.
-    /// Called at the top of EVERY <see cref="Capacitor.Cli.Commands.CursorHookCommand"/>
+    /// Touches the per-session hook heartbeat at <paramref name="now"/>. Called at the top of
+    /// EVERY <see cref="Capacitor.Cli.Commands.CursorHookCommand"/>
     /// invocation that carries a session id — including telemetry-only hooks — so the
     /// heartbeat reflects "Cursor is still firing hooks for this session" independent of
     /// whether the tailing watcher is itself alive. Reuses <see cref="WatcherHeartbeat.Touch"/>.
@@ -131,8 +140,8 @@ public static class CursorMarkers {
         WatcherHeartbeat.Touch(HeartbeatPath(sessionId), now);
 
     /// <summary>
-    /// AI-1382 review fix #5 — true once a positive (2xx) acknowledgement of this child's
-    /// <c>subagent-start</c> has been recorded. Fail-open on any read error (an unreadable marker
+    /// True once a positive (2xx) acknowledgement of this child's <c>subagent-start</c> has been
+    /// recorded. Fail-open on any read error (an unreadable marker
     /// is treated as "not acked yet", never as a crash) — consulted by
     /// <c>CursorHookCommand.HandleSubagentChildEventAsync</c> before any content-less backfill,
     /// the child's own <c>subagent-stop</c>, or the child watcher spawn: none of those may ever
@@ -145,8 +154,8 @@ public static class CursorMarkers {
     }
 
     /// <summary>
-    /// AI-1382 review fix #5 — marks <paramref name="childSessionId"/>'s <c>subagent-start</c> as
-    /// durably acknowledged. Called the moment a 2xx is observed for that entry — either the
+    /// Marks <paramref name="childSessionId"/>'s <c>subagent-start</c> as durably acknowledged.
+    /// Called the moment a 2xx is observed for that entry — either the
     /// live POST in <c>HandleSubagentChildEventAsync</c> or a later spool-drain delivery in
     /// <c>CursorHookCommand.MaybeSpawnChildWatcherFromPayloadAsync</c> — so every subsequent hook
     /// invocation for this child (a fresh process each time) can see the ack without re-deriving

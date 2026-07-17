@@ -57,6 +57,28 @@ public class CursorMarkersTests {
         await Assert.That(marker!.Value.Reason).IsEqualTo("first reason");
     }
 
+    // Qodo PR #324 finding #4 — Quarantine's file operations must be fail-open, like
+    // IsQuarantined/ReadMarker, since it's invoked from CursorRewriteGuard.Reject deep in the
+    // watcher's drain loop with no broad exception handler above it. Occupy the marker's own
+    // path with a directory so the final File.Move onto it fails; the call must swallow that
+    // rather than throw, and a later read correctly still reports "not quarantined" (the
+    // marker never actually landed).
+    [Test]
+    public async Task Quarantine_swallows_a_write_failure_instead_of_throwing() {
+        var sid  = NewSessionId();
+        var path = CursorMarkers.QuarantinePath(sid);
+
+        Directory.CreateDirectory(path); // occupies the marker's own file path as a directory
+
+        try {
+            CursorMarkers.Quarantine(sid, "rewrite detected"); // must not throw
+
+            await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse();
+        } finally {
+            Directory.Delete(path);
+        }
+    }
+
     [Test]
     public async Task ReadMarker_null_when_no_marker_written() {
         var sid = NewSessionId();
