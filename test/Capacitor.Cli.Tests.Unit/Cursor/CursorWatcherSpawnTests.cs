@@ -323,6 +323,107 @@ public class CursorWatcherSpawnTests {
         }
     }
 
+    // AI-1382 review fix #5 — once subagent-start is acked, every LATER NONTERMINAL hook for the
+    // same child must attempt to (re)spawn its watcher — not just the child's own sessionStart.
+    // Before the fix, only sessionStart ever called MaybeSpawnChildWatcherAsync, so a child
+    // watcher that later exited (the newly-enabled idle ceiling), crashed, or never actually
+    // started (e.g. its acked sessionStart carried no transcript path) was never restarted.
+    [Test]
+    public async Task Later_nonterminal_child_hook_self_heals_a_dead_or_never_started_child_watcher_via_the_ack_marker() {
+        using var tmp = new TempDir();
+        Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", tmp.Path);
+        try {
+            var spawned = new List<string>();
+            WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+
+            var child     = NewSessionId();
+            var parent    = NewSessionId();
+            var childFile = Path.Combine(tmp.Path, $"{child}.jsonl");
+            await File.WriteAllTextAsync(childFile, """{"role":"assistant","message":{"content":[]}}""" + "\n");
+
+            // Subagent-start was acked in an EARLIER process invocation (durable marker) — the
+            // watcher spawned then may since have died; this is a LATER, separate hook call.
+            CursorMarkers.MarkSubagentStartAcked(child);
+
+            using var handler = new StubHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK));
+            using var client  = new HttpClient(handler);
+            var spool = new HookSpool(Path.Combine(tmp.Path, "spool"));
+
+            await CursorHookCommand.HandleSubagentChildEventAsync(
+                client, "http://s", spool, child, "postToolUse", childFile, parent, "task",
+                budgetExpired: () => false, ct: CancellationToken.None);
+
+            await Assert.That(spawned).IsEquivalentTo([$"{parent}-{child}"]);
+        } finally {
+            WatcherManager.SpawnOverrideForTesting = null;
+            Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", null);
+        }
+    }
+
+    // Retain the terminal no-spawn rule: sessionEnd must never trigger a self-heal spawn, even
+    // once the ack marker exists — subagent-stop is the child's last hook, and spawning a watcher
+    // moments before the session ends would be pure churn (mirrors ShouldSpawnWatcher's ①).
+    [Test]
+    public async Task Terminal_sessionEnd_child_hook_still_never_spawns_even_when_acked() {
+        using var tmp = new TempDir();
+        Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", tmp.Path);
+        try {
+            var spawned = new List<string>();
+            WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+
+            var child     = NewSessionId();
+            var parent    = NewSessionId();
+            var childFile = Path.Combine(tmp.Path, $"{child}.jsonl");
+            await File.WriteAllTextAsync(childFile, """{"role":"assistant","message":{"content":[]}}""" + "\n");
+            CursorMarkers.MarkSubagentStartAcked(child);
+
+            using var handler = new StubHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK));
+            using var client  = new HttpClient(handler);
+            var spool = new HookSpool(Path.Combine(tmp.Path, "spool"));
+
+            await CursorHookCommand.HandleSubagentChildEventAsync(
+                client, "http://s", spool, child, "sessionEnd", childFile, parent, "task",
+                budgetExpired: () => false, ct: CancellationToken.None);
+
+            await Assert.That(spawned).IsEmpty();
+        } finally {
+            WatcherManager.SpawnOverrideForTesting = null;
+            Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", null);
+        }
+    }
+
+    // A later nonterminal hook for a child WITHOUT the ack marker must still self-heal nothing —
+    // the existing no-ack gate (review fix #5's round-1 sibling) already returns before this
+    // point, so the self-heal spawn never even gets a chance to run.
+    [Test]
+    public async Task Later_nonterminal_child_hook_does_not_spawn_when_never_acked() {
+        using var tmp = new TempDir();
+        Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", tmp.Path);
+        try {
+            var spawned = new List<string>();
+            WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+
+            var child     = NewSessionId();
+            var parent    = NewSessionId();
+            var childFile = Path.Combine(tmp.Path, $"{child}.jsonl");
+            await File.WriteAllTextAsync(childFile, """{"role":"assistant","message":{"content":[]}}""" + "\n");
+            // No CursorMarkers.MarkSubagentStartAcked call — never acked.
+
+            using var handler = new StubHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK));
+            using var client  = new HttpClient(handler);
+            var spool = new HookSpool(Path.Combine(tmp.Path, "spool"));
+
+            await CursorHookCommand.HandleSubagentChildEventAsync(
+                client, "http://s", spool, child, "postToolUse", childFile, parent, "task",
+                budgetExpired: () => false, ct: CancellationToken.None);
+
+            await Assert.That(spawned).IsEmpty();
+        } finally {
+            WatcherManager.SpawnOverrideForTesting = null;
+            Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", null);
+        }
+    }
+
     sealed class StubHandler(Func<HttpRequestMessage, string, HttpResponseMessage> impl) : HttpMessageHandler {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             var body = request.Content is null ? "" : await request.Content.ReadAsStringAsync(ct);

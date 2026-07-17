@@ -399,9 +399,22 @@ public static class CursorHookCommand {
 
         // Content-less mid-lifecycle hooks (beforeSubmitPrompt/afterAgentThought/telemetry):
         // only the agent-routed transcript backfill carries anything the import path can also
-        // replay, so that's all we do.
+        // replay, so that's all we do (plus a self-heal spawn — see below).
         if (!isLifecycle) {
             if (!string.IsNullOrEmpty(transcriptPath) && !budgetExpired()) {
+                // AI-1382 review fix #5 — self-heal. HasSubagentStartAck (above) only proves
+                // subagent-start was acknowledged (2xx) AT SOME POINT — the child watcher process
+                // itself may since have exited (the newly-enabled idle ceiling), crashed, or never
+                // actually spawned at all (e.g. its acked sessionStart hook carried no transcript
+                // path, and THIS later hook is the first one that does). Before this fix, only the
+                // child's own sessionStart ever called MaybeSpawnChildWatcherAsync — every later
+                // nonterminal hook did nothing but backfill, so a dead/never-started child watcher
+                // was never restarted. EnsureWatcherRunning is idempotent (PID+heartbeat check), so
+                // calling it here on every nonterminal hook is a cheap no-op once the watcher is
+                // alive and a real recovery when it's not; the terminal (sessionEnd) branch below
+                // still never spawns.
+                await MaybeSpawnChildWatcherAsync(baseUrl, parentSessionId, childSessionId, transcriptPath);
+
                 await CursorTranscriptBackfill.RunAsync(
                     client, baseUrl, parentSessionId, transcriptPath,
                     budget: budgetExpired, ct, agentId: childSessionId);
