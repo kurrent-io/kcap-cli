@@ -46,6 +46,13 @@ internal record AgentInstance(
     /// one teardown runs even if the launch-catch and the read-loop's finally race.</summary>
     public int CleanupStarted;
 
+    /// <summary>AI-1313 Phase B (D4): the child's EXACT start-identity captured ONCE at spawn (the AI-839
+    /// <c>ProcessStartToken</c>). Teardown uses THIS stored token — never a freshly-recaptured one — to
+    /// decide "still ours vs PID reused": if the pid was recycled after the child exited, a re-capture
+    /// would adopt an unrelated process's identity and the heartbeat would then kill it. Null only when
+    /// the pid was never capturable (a non-live/degenerate pid — nothing to track).</summary>
+    public string? StartIdentity { get; set; }
+
     /// <summary>Temp MCP config path written for hosted PR reviews; deleted on cleanup.</summary>
     public string? McpConfigPath { get; set; }
 
@@ -375,22 +382,31 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(name ?? "")))
         [..16].ToLowerInvariant();
 
-    /// <summary>AI-1313 Phase B (D4 §6.4(2)): write the durable PID record for a just-spawned agent
-    /// (best-effort — a lost record falls to the env-marker scan backstop; D4/Task 8 hardens the
-    /// write-failure path to fail-closed). Captures the EXACT start-identity for the pid.</summary>
-    void WritePidRecordBestEffort(AgentInstance agent, int pid) {
+    /// <summary>AI-1313 Phase B (D4 §6.4(2)/(2a)): capture the child's EXACT start-identity ONCE, store it
+    /// on the agent (teardown reuses it — never re-captures a possibly-recycled pid), and persist the
+    /// durable PID record FAIL-CLOSED. A write failure (I/O) or a live-but-unidentifiable child THROWS —
+    /// caught by the post-insert single-flight cleanup, so a spawned child we cannot durably track never
+    /// stays admitted holding capacity. A non-live/degenerate pid (already gone, or pid&lt;=0) has nothing
+    /// to track, so it returns cleanly rather than failing an already-doomed launch.</summary>
+    void PersistPidRecordOrThrow(AgentInstance agent, int pid) {
         if (_pidRecords is null) return;
 
         var identity = ProcessIdentity.Capture(pid);
-        if (identity is null) return; // unidentifiable pid → skip (env-marker scan backstops it)
+        if (identity is null) {
+            if (ProcessIdentity.IsAlive(pid))
+                throw new InvalidOperationException(
+                    $"Could not capture start-identity for live agent {agent.Id} (pid {pid}) — failing launch closed");
 
-        try {
-            _pidRecords.Write(new AgentPidRecord(
-                agent.Id, pid, identity, agent.Kind.ToString(), agent.Vendor,
-                agent.FlowRunId, agent.FlowRole, _daemonId, _daemonEpoch, DateTimeOffset.UtcNow));
-        } catch (Exception ex) {
-            _logger.LogWarning(ex, "Failed to write PID record for agent {AgentId}", agent.Id);
+            return; // no live capturable process → nothing to record or leak
         }
+
+        agent.StartIdentity = identity;
+
+        // Write throws on I/O failure → propagates → post-insert single-flight cleanup (fail closed):
+        // a spawned, capturable child we cannot durably record must not stay admitted without a record.
+        _pidRecords.Write(new AgentPidRecord(
+            agent.Id, pid, identity, agent.Kind.ToString(), agent.Vendor,
+            agent.FlowRunId, agent.FlowRole, _daemonId, _daemonEpoch, DateTimeOffset.UtcNow));
     }
 
     /// <summary>Delete an agent's PID record after its death is confirmed (teardown / confirmed reap).</summary>
@@ -461,14 +477,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             string id, LaunchKind kind = LaunchKind.Default, string status = "Running",
             string? flowRunId = null, string? flowRole = null,
             DateTime? createdAt = null, DateTime? lastOutputAt = null, bool isPrivate = false,
-            IPtyProcess? pty = null) {
+            IPtyProcess? pty = null, string? startIdentity = null) {
         var agent = new AgentInstance(
             id, null, "default", null, "/repo", "codex",
             new PtyHostedAgentRuntime("codex", pty ?? NoopPtyProcess.Instance),
             new WorktreeInfo("/repo", "b", "/repo"),
             new CancellationTokenSource()) {
             Kind = kind, FlowRunId = flowRunId, FlowRole = flowRole, IsPrivate = isPrivate,
-            CreatedAt = createdAt ?? DateTime.UtcNow
+            CreatedAt = createdAt ?? DateTime.UtcNow, StartIdentity = startIdentity
         };
         agent.Status = status;
         if (lastOutputAt is { } lo) agent.LastOutputAt = lo;
@@ -713,9 +729,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             };
             _agents[agentId] = agent;
 
-            // AI-1313 Phase B (D4 §6.4(2)): write the durable PID record immediately after the process
-            // exists (before registration) so a daemon crash right after this leaves a reapable record.
-            WritePidRecordBestEffort(agent, runtime.Pid);
+            // AI-1313 Phase B (D4 §6.4(2)): capture the start-identity + write the durable PID record
+            // immediately after the process exists (before registration) so a daemon crash right after
+            // this leaves a reapable record. FAIL-CLOSED: a write/identity failure throws → the catch
+            // routes it through the single-flight cleanup (the agent is already in _agents).
+            PersistPidRecordOrThrow(agent, runtime.Pid);
 
             await RegisterAgentAsync(agent);
 
@@ -1141,7 +1159,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Mark this as a user-initiated stop so the read-loop's finally-block
             // EndAgentSessionAsync call uses "agent_stopped" if it ends up being
             // the only successful call (e.g., transient SignalR failure here).
-            agent.PendingEndReason = "agent_stopped";
+            // AI-1313 Phase B (D3): but PRESERVE a backstop reason the heartbeat already stamped
+            // (reviewer_ttl_expired / reviewer_idle_expired) — only overwrite the "agent_exited"
+            // default, so server-side attribution can tell a TTL/idle reap from a user stop.
+            if (agent.PendingEndReason == "agent_exited") agent.PendingEndReason = "agent_stopped";
             _                      = _server.AgentStatusChangedAsync(agentId, "Completed", agent.SessionId);
             _                      = _server.AppendAgentRunEventAsync(agentId, new AgentRunStopped("user", null));
 
@@ -1790,12 +1811,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task CleanupAgentAsync(string agentId) {
-        if (!_agents.TryRemove(agentId, out var agent)) {
-            return;
-        }
-
-        // AI-1313 Phase B (D1): single-flight — belt-and-suspenders on top of the TryRemove above, so a
-        // racing launch-catch + read-loop finally can never double-run the teardown for one agent.
+        // AI-1313 Phase B (D1): claim the single-flight teardown BEFORE removing the agent from _agents.
+        // TryGetValue (not TryRemove) keeps the agent COUNTED in ActiveCount for the whole teardown, so a
+        // concurrent launch can't observe an under-counted EffectiveCount mid-teardown and over-admit
+        // (the P2 admission race). The CompareExchange latch on the SAME instance guarantees exactly one
+        // teardown even if the launch-catch and the read-loop's finally race here.
+        if (!_agents.TryGetValue(agentId, out var agent)) return;
         if (Interlocked.CompareExchange(ref agent.CleanupStarted, 1, 0) != 0) return;
 
         // The reviewer process has exited by the time we get here (this runs off the read-loop's exit
@@ -1824,20 +1845,30 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             try { await WorktreeManager.RemoveAsync(agent.Worktree); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
         }
 
-        // AI-1313 Phase B (D4 §6.4(2)/(2a)): confirm the process is actually gone before dropping its
-        // PID record. If DisposeAsync didn't kill it (a stuck child), QUARANTINE it — retain the record
-        // and count it against admission (fail closed) so the heartbeat retries the kill to confirmed
-        // death. A confirmed-dead process's record is deleted.
-        var pid          = agent.Runtime.Pid;
-        var stillIdentity = ProcessIdentity.Capture(pid);
-        if (stillIdentity is not null && ProcessIdentity.IsAlive(pid)) {
+        // AI-1313 Phase B (D4 §6.4(2)/(2a)): confirm the process is actually gone before dropping its PID
+        // record. Prove "still ours" with the STORED spawn identity — NEVER a freshly-recaptured token:
+        // if the child exited and its pid was recycled, a re-capture would adopt the unrelated process's
+        // identity and the heartbeat would later kill it. Quarantine ONLY when the pid is alive AND still
+        // matches the stored identity (a stuck child of ours) — retain the record + count it against
+        // admission (fail closed) so the heartbeat retries the kill to confirmed death. A dead pid, a
+        // recycled pid (proven mismatch), or an agent with no captured identity → confirmed gone, delete
+        // the record. Add to quarantine BEFORE removing from _agents so EffectiveCount never dips
+        // (Activeized→quarantined is count-preserving).
+        var pid = agent.Runtime.Pid;
+        if (agent.StartIdentity is { } startIdentity
+            && ProcessIdentity.IsAlive(pid)
+            && ProcessIdentity.Matches(pid, startIdentity)) {
             _quarantine?.Add(new AgentKillQuarantine.Entry(
-                agent.Id, pid, stillIdentity, agent.Kind.ToString(), agent.CreatedAt, agent.FlowRunId, agent.FlowRole));
+                agent.Id, pid, startIdentity, agent.Kind.ToString(), agent.CreatedAt, agent.FlowRunId, agent.FlowRole));
             _logger.LogWarning(
                 "Agent {AgentId} (pid {Pid}) still alive after teardown — quarantined for heartbeat kill-retry", agent.Id, pid);
         } else {
-            DeletePidRecord(agentId); // confirmed dead
+            DeletePidRecord(agentId); // confirmed dead / recycled pid / never-identified
         }
+
+        // Now drop the agent from the live registry — after a surviving child is already in quarantine,
+        // so a concurrent launch never sees EffectiveCount transiently under-count this agent.
+        _agents.TryRemove(agentId, out _);
 
         // Skip server unregister during shutdown — _ct is cancelled and the call
         // would throw TaskCanceledException. The server detects the daemon

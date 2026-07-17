@@ -366,6 +366,15 @@ public static partial class DaemonRunner {
         // exactly what this bridge is meant to avoid.
         await host.StartAsync(lifetime.ApplicationStopping);
 
+        // AI-1313 Phase B (D4 §6.4(3)): resolve the orchestrator (which wires OnLaunchAgent +
+        // GetLiveAgents in its ctor) and reap any hosted-agent children that outlived a PRIOR daemon run
+        // — all BEFORE ConnectAsync advertises this daemon and the server can dispatch launches. Doing
+        // it after connect would let new work be admitted while old capacity is still being reclaimed
+        // (those survivors aren't yet in EffectiveCount), and would leave a window where a launch races
+        // an unwired handler. Under the daemon lock; best-effort (swallows its own faults).
+        var orchestrator = host.Services.GetRequiredService<AgentOrchestrator>();
+        await orchestrator.ReapOrphansOnceAsync();
+
         try {
             await connection.ConnectAsync(lifetime.ApplicationStopping);
         } catch (Exception ex) when (nameInUse) {
@@ -383,12 +392,6 @@ public static partial class DaemonRunner {
         var worktreeManager = host.Services.GetRequiredService<WorktreeManager>();
         await worktreeManager.CleanupOrphanedAsync();
 
-        var orchestrator = host.Services.GetRequiredService<AgentOrchestrator>();
-
-        // AI-1313 Phase B (D4 §6.4(3)): reap hosted-agent children that outlived a prior daemon run
-        // (crash/restart) BEFORE we accept new launches — under the daemon lock, next to the worktree
-        // cleanup above. The heartbeat re-runs it thereafter. Best-effort (swallows its own faults).
-        await orchestrator.ReapOrphansOnceAsync();
         // Instantiate EvalRunner so it wires the per-phase eval handlers
         // (PrepareEval / RunQuestion / FinalizeEval / CancelEval) on the
         // ServerConnection. It's stateless beyond the handler assignment —

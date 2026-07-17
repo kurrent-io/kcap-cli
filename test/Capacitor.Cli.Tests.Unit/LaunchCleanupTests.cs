@@ -71,11 +71,13 @@ public partial class AgentOrchestratorVendorTests {
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         // A real, live child whose runtime Dispose/Terminate are no-ops — so it is STILL ALIVE after
-        // CleanupAgentAsync's disposal step, exactly like a stuck child that ignored SIGTERM.
+        // CleanupAgentAsync's disposal step, exactly like a stuck child that ignored SIGTERM. Its stored
+        // start-identity is what proves "still ours" at teardown (recycled-pid-safe).
         using var dummy = DummyProcess.StartSleep(
             30, new Dictionary<string, string> { ["KCAP_AGENT_ID"] = "stuck" });
         orch.SeedAgentForTest("stuck", LaunchKind.ReviewFlow, status: "Running",
-            flowRunId: "flow-1", flowRole: "reviewer", pty: new LiveNoKillPtyProcess(dummy.Pid));
+            flowRunId: "flow-1", flowRole: "reviewer", pty: new LiveNoKillPtyProcess(dummy.Pid),
+            startIdentity: ProcessIdentity.Capture(dummy.Pid));
 
         await orch.CleanupAgentForTest("stuck");
 
@@ -114,6 +116,31 @@ public partial class AgentOrchestratorVendorTests {
         } finally {
             cleanup();
         }
+    }
+
+    [Test]
+    public async Task Teardown_does_not_quarantine_or_kill_a_recycled_pid() {
+        var server = new CaptureServerConnection();
+
+        await using var orch = BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        // A live, unrelated process occupies the pid, but the agent's STORED identity does not match it
+        // (exactly what a recycled pid looks like: our child exited, the pid was reused). Teardown must
+        // treat our agent as gone — never quarantine, never kill the unrelated occupant.
+        using var unrelated = DummyProcess.StartSleep(30);
+        orch.SeedAgentForTest("recycled", LaunchKind.ReviewFlow, status: "Running",
+            pty: new LiveNoKillPtyProcess(unrelated.Pid),
+            startIdentity: "lx:boot0000:0000000000"); // deliberately NOT the live process's identity
+
+        await orch.CleanupAgentForTest("recycled");
+
+        await Assert.That(orch.GetAgentForTest("recycled")).IsNull();
+        await Assert.That(orch.QuarantineSnapshot().Any(q => q.Id == "recycled")).IsFalse();
+        await Assert.That(orch.EffectiveCount).IsEqualTo(0);
+        await Assert.That(unrelated.HasExited).IsFalse(); // the unrelated process was never signalled
+
+        unrelated.Kill();
     }
 
     /// <summary>An <see cref="IPtyProcess"/> that reports a real live child's pid but whose disposal

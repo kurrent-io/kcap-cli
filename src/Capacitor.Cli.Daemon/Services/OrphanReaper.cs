@@ -73,15 +73,18 @@ internal sealed class OrphanReaper(
             if (handledPids.Contains(pid)) continue;       // already covered by the record pass
             if (!ProcessIdentity.IsAlive(pid)) continue;
 
-            // Full identity is read from the LIVE process's own env — no native stamp needed.
+            // The FULL marker triple must be readable and prove "this daemon, prior incarnation" before
+            // we kill. Any missing/unreadable member SPARES (ambiguity never kills) — this covers a
+            // process/PID race, a partial read, and a current-incarnation recordless child whose epoch
+            // read momentarily fails (record writes may fail, so such a child can exist).
             var agentId = ProcessIdentity.ReadAgentEnv(pid, "KCAP_AGENT_ID");
             if (agentId is null) continue;                 // not a hosted agent / env unreadable → spare
 
             var did = ProcessIdentity.ReadAgentEnv(pid, "KCAP_DAEMON_ID");
-            if (!string.Equals(did, daemonId, StringComparison.Ordinal)) continue;      // another daemon → spare
+            if (did is null || !string.Equals(did, daemonId, StringComparison.Ordinal)) continue;   // unreadable / another daemon → spare
 
             var epoch = ProcessIdentity.ReadAgentEnv(pid, "KCAP_DAEMON_EPOCH");
-            if (string.Equals(epoch, currentEpoch, StringComparison.Ordinal)) continue; // current incarnation → spare
+            if (epoch is null || string.Equals(epoch, currentEpoch, StringComparison.Ordinal)) continue; // unreadable / current incarnation → spare
 
             // Recordless survivor of a PRIOR incarnation of THIS daemon → reap by marker.
             try {
