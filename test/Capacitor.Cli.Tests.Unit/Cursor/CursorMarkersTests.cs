@@ -104,4 +104,29 @@ public class CursorMarkersTests {
 
         await Assert.That(WatcherHeartbeat.Read(CursorMarkers.HeartbeatPath(sid))).IsEqualTo(now);
     }
+
+    // AI-1382 review fix #5 — the durable per-child subagent-start-acknowledgement marker.
+    [Test]
+    public async Task HasSubagentStartAck_false_before_any_ack_is_recorded() {
+        var childSid = NewSessionId();
+
+        await Assert.That(CursorMarkers.HasSubagentStartAck(childSid)).IsFalse();
+    }
+
+    [Test]
+    public async Task MarkSubagentStartAcked_makes_HasSubagentStartAck_true() {
+        var childSid = NewSessionId();
+
+        CursorMarkers.MarkSubagentStartAcked(childSid);
+
+        await Assert.That(CursorMarkers.HasSubagentStartAck(childSid)).IsTrue();
+    }
+
+    [Test]
+    public async Task SubagentStartAckPath_is_dot_namespaced_under_the_shared_config_dir_and_keyed_by_child() {
+        var childSid = NewSessionId();
+
+        await Assert.That(CursorMarkers.SubagentStartAckPath(childSid))
+            .IsEqualTo(Path.Combine(RepoPathStoreGlobalSetup.SharedConfigDir, "cursor-subagent-start-ack", $"{childSid}.json"));
+    }
 }

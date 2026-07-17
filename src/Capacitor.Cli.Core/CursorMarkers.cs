@@ -19,6 +19,15 @@ public static class CursorMarkers {
     public static string HeartbeatPath(string sessionId)  => Path.Combine(PathHelpers.ConfigPath("cursor-heartbeat"), $"{sessionId}.json");
 
     /// <summary>
+    /// AI-1382 review fix #5 — per-CHILD marker path recording that this subagent's
+    /// <c>subagent-start</c> was durably acknowledged (2xx), either via its own live POST or a
+    /// later spool-drain replay. Keyed on the child's own dashless session id (not the parent) —
+    /// mirrors <see cref="CursorLiveSubagentLinker"/>'s marker keying.
+    /// </summary>
+    public static string SubagentStartAckPath(string childSessionId) =>
+        Path.Combine(PathHelpers.ConfigPath("cursor-subagent-start-ack"), $"{childSessionId}.json");
+
+    /// <summary>
     /// AI-1382 Tasks 10/11 — the shared bound every <see cref="BarrierPending"/> caller (the
     /// backfill and the live watcher) uses to decide when a barrier has aged out. A single
     /// source of truth so the backfill and the watcher agree on how long they hold transcript
@@ -120,6 +129,34 @@ public static class CursorMarkers {
     /// </summary>
     public static void TouchHeartbeat(string sessionId, DateTimeOffset now) =>
         WatcherHeartbeat.Touch(HeartbeatPath(sessionId), now);
+
+    /// <summary>
+    /// AI-1382 review fix #5 — true once a positive (2xx) acknowledgement of this child's
+    /// <c>subagent-start</c> has been recorded. Fail-open on any read error (an unreadable marker
+    /// is treated as "not acked yet", never as a crash) — consulted by
+    /// <c>CursorHookCommand.HandleSubagentChildEventAsync</c> before any content-less backfill,
+    /// the child's own <c>subagent-stop</c>, or the child watcher spawn: none of those may ever
+    /// run without this marker, so a permanently-dropped spooled start (non-transient 4xx —
+    /// <see cref="HookSpool"/>'s <c>DrainOutcome.Drop</c>) can never open an ungated transcript
+    /// path for a subagent whose <c>SubagentStarted</c> was never appended server-side.
+    /// </summary>
+    public static bool HasSubagentStartAck(string childSessionId) {
+        try { return File.Exists(SubagentStartAckPath(childSessionId)); } catch { return false; }
+    }
+
+    /// <summary>
+    /// AI-1382 review fix #5 — marks <paramref name="childSessionId"/>'s <c>subagent-start</c> as
+    /// durably acknowledged. Called the moment a 2xx is observed for that entry — either the
+    /// live POST in <c>HandleSubagentChildEventAsync</c> or a later spool-drain delivery in
+    /// <c>CursorHookCommand.MaybeSpawnChildWatcherFromPayloadAsync</c> — so every subsequent hook
+    /// invocation for this child (a fresh process each time) can see the ack without re-deriving
+    /// it. Reuses <see cref="WatcherHeartbeat.Touch"/>'s atomic write; the content is unused, only
+    /// the marker's presence matters.
+    /// </summary>
+    public static void MarkSubagentStartAcked(string childSessionId) {
+        try { WatcherHeartbeat.Touch(SubagentStartAckPath(childSessionId), DateTimeOffset.UtcNow); }
+        catch { /* best-effort — see HasSubagentStartAck's fail-open contract */ }
+    }
 }
 
 /// <summary>Quarantine marker persisted to <see cref="CursorMarkers.QuarantinePath"/>.</summary>

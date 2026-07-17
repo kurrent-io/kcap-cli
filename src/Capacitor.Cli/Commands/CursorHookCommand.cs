@@ -227,6 +227,16 @@ public static class CursorHookCommand {
                 }, budgetTotal, ct);
             }
 
+            // AI-1382 review fix #4 — capture whether this session STILL has spool backlog after
+            // the drain attempt above. A TransientStop mid-drain (or budget expiry) can leave
+            // entries undelivered — including an earlier canonical lifecycle event like
+            // sessionStart — and the ordering guard below only early-returns for mappings whose
+            // OWN SpoolOnFailure is true. A telemetry-only mapping (preToolUse/postToolUse/etc.,
+            // SpoolOnFailure == false) would otherwise sail past that guard and let the recovery
+            // watcher spawn near the bottom of this method start streaming transcript content
+            // before the still-backlogged earlier event ever reaches the server.
+            var hasRemainingSpoolBacklog = sessionId is not null && spool.HasBacklog(sessionId);
+
             // AI-1151 (live): a linked subagent child takes over entirely from here — it never
             // gets the normal mapping.RouteSegment POST (mirroring CursorImportSource.
             // SendSubagentLifecycleAsync, which never gives a correlated child its own top-level
@@ -299,7 +309,11 @@ public static class CursorHookCommand {
             // ahead of the metadata the server needs to attribute its lines to). sessionStart
             // already spawned before its POST above; ShouldSpawnWatcher is false for sessionEnd
             // regardless, so this is safe to reach unconditionally for every other event.
-            if (posted && eventName != "sessionStart" && sessionId is not null && !string.IsNullOrEmpty(transcriptPath)) {
+            // AI-1382 review fix #4 — additionally require no remaining spool backlog: this
+            // invocation's own POST landing is not enough if an EARLIER queued event for this
+            // session is still stuck undelivered (hasRemainingSpoolBacklog, captured above).
+            if (posted && eventName != "sessionStart" && sessionId is not null && !string.IsNullOrEmpty(transcriptPath)
+             && !hasRemainingSpoolBacklog) {
                 await MaybeSpawnWatcherAsync(baseUrl, sessionId, transcriptPath, cwd: null, eventName, isSubagentChild);
             }
 
@@ -371,6 +385,18 @@ public static class CursorHookCommand {
             return 0;
         }
 
+        // AI-1382 review fix #5 — a non-start hook for a child whose subagent-start was never
+        // acknowledged (2xx) must not let ANY child transcript flow, nor its own subagent-stop
+        // POST. The backlog check above only catches a start that's still PENDING retry; a start
+        // that hit a non-transient 4xx is permanently DROPPED by the generic drain (HandleCore's
+        // poster callback) — the entry vanishes from the spool, so HasBacklog goes false even
+        // though no AgentSubsession stream was ever opened server-side. Gate on the durable
+        // positive-ack marker instead of "no backlog" so a dropped start permanently blocks this
+        // child (an accepted, diagnosable loss — the same posture as D0's quarantine).
+        if (!isStart && !CursorMarkers.HasSubagentStartAck(childSessionId)) {
+            return 0;
+        }
+
         // Content-less mid-lifecycle hooks (beforeSubmitPrompt/afterAgentThought/telemetry):
         // only the agent-routed transcript backfill carries anything the import path can also
         // replay, so that's all we do.
@@ -411,6 +437,11 @@ public static class CursorHookCommand {
             spool.Append(childSessionId, route, body!);
             return 0;
         }
+
+        // AI-1382 review fix #5 — persist the positive ack so HandleSubagentChildEventAsync's
+        // no-ack gate (above) is satisfied for every subsequent hook invocation for this child
+        // (a fresh process each time, so nothing survives in memory).
+        if (isStart) CursorMarkers.MarkSubagentStartAcked(childSessionId);
 
         // AI-1382 Task 12 — subagent-start is ACKNOWLEDGED (2xx) via this live POST. Only now
         // may the child's own tailing watcher be spawned — the invariant this task exists for
@@ -483,6 +514,10 @@ public static class CursorHookCommand {
             if (parentSessionId is null || childSessionId is null || string.IsNullOrEmpty(transcriptPath)) {
                 return Task.CompletedTask;
             }
+            // AI-1382 review fix #5 — this delivery IS the 2xx ack for a previously-spooled
+            // subagent-start; persist it so the no-ack gate in HandleSubagentChildEventAsync is
+            // satisfied for this child from here on.
+            CursorMarkers.MarkSubagentStartAcked(childSessionId);
             return MaybeSpawnChildWatcherAsync(baseUrl, parentSessionId, childSessionId, transcriptPath);
         } catch { return Task.CompletedTask; }
     }

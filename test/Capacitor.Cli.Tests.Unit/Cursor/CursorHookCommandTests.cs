@@ -95,6 +95,53 @@ public class CursorHookCommandTests {
         await Assert.That(fx.RouteOrder).IsEquivalentTo(["session-start/cursor", "session-end/cursor"]);
     }
 
+    // AI-1382 review fix #4 — a telemetry-only mapping (postToolUse, SpoolOnFailure=false) must
+    // NOT let the recovery-spawn watcher start while an EARLIER queued canonical event (here:
+    // sessionStart) is still stuck undelivered. Simulate: sessionStart is already spooled from a
+    // prior failed invocation; THIS invocation's generic top-of-method drain retries it and hits
+    // a TRANSIENT failure (503) so it stays queued, while postToolUse's OWN POST succeeds. Before
+    // the fix, postToolUse's SpoolOnFailure=false meant the ordering guard never even looked at
+    // the backlog, and the recovery spawn ran regardless.
+    [Test]
+    public async Task telemetry_hook_does_not_recovery_spawn_while_an_earlier_canonical_event_is_still_stuck() {
+        var sid = Guid.NewGuid().ToString("N");
+        var dir = Path.Combine(Path.GetTempPath(), $"kcap-cursor-fix4-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", dir);
+
+        var spool = new HookSpool(Path.Combine(dir, "spool"));
+        spool.Append(sid, "session-start/cursor", $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""");
+
+        var spawned = new List<string>();
+        WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+
+        try {
+            using var handler = new StubHandler(req => {
+                var path = req.RequestUri!.AbsolutePath;
+                if (path == "/hooks/session-start/cursor") {
+                    // Transient failure on retry — the entry stays queued (NOT delivered, NOT dropped).
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+                }
+                if (req.Method == HttpMethod.Get) return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)); // postToolUse's own POST succeeds
+            });
+            using var client = new HttpClient(handler);
+
+            var exit = await CursorHookCommand.HandleCore(
+                client, "http://localhost",
+                new StringReader($$"""{"hook_event_name":"postToolUse","session_id":"{{sid}}","tool_name":"Bash","transcript_path":"/tmp/{{sid}}.jsonl"}"""),
+                spool, TimeSpan.FromSeconds(2));
+
+            await Assert.That(exit).IsEqualTo(0);
+            await Assert.That(spawned).IsEmpty(); // must NOT spawn while sessionStart is still stuck
+            await Assert.That(spool.HasBacklog(sid)).IsTrue(); // confirms the premise: still queued, not delivered
+        } finally {
+            WatcherManager.SpawnOverrideForTesting = null;
+            Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", null);
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
     [Test]
     public async Task afterAgentThought_canonical_id_is_stable_across_replays() {
         using var fx   = new Fixture();

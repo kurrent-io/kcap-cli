@@ -244,6 +244,85 @@ public class CursorWatcherSpawnTests {
         }
     }
 
+    // AI-1382 review fix #5 — a subagent-start that hits a non-transient 4xx on retry (via
+    // HandleCore's generic top-of-method spool drain) is permanently DROPPED — HookSpool removes
+    // the entry, so HasBacklog goes false even though no AgentSubsession stream was ever opened
+    // server-side. Before the fix, that emptied backlog let the child's own content-less hooks
+    // (and its own subagent-stop) run the agent-routed transcript backfill unconditionally. The
+    // fix gates on the durable ack marker instead of "no backlog", so a dropped start must
+    // permanently block ALL child transcript delivery — not just the watcher spawn.
+    [Test]
+    public async Task Permanently_dropped_subagent_start_gates_all_child_transcript_delivery_forever() {
+        using var tmp = new TempDir();
+        Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", tmp.Path);
+        try {
+            var spawned = new List<string>();
+            WatcherManager.SpawnOverrideForTesting = key => { spawned.Add(key); return Task.CompletedTask; };
+
+            var child     = NewSessionId();
+            var parent    = NewSessionId();
+            var childFile = Path.Combine(tmp.Path, $"{child}.jsonl");
+            await File.WriteAllTextAsync(childFile, """{"role":"assistant","message":{"content":[]}}""" + "\n");
+
+            // Pre-link the child to its parent so every hook for `child` diverts through
+            // HandleSubagentChildEventAsync without needing the correlator to re-run.
+            CursorLiveSubagentLinker.SaveLink(child, parent, "task");
+
+            var subagentStartAttempts = 0;
+            var transcriptPosts       = 0;
+            using var handler = new StubHandler((req, _) => {
+                if (req.RequestUri!.AbsolutePath == "/hooks/subagent-start") {
+                    subagentStartAttempts++;
+                    return subagentStartAttempts == 1
+                        ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) // 1st live attempt: spooled (transient)
+                        : new HttpResponseMessage(HttpStatusCode.BadRequest);        // retry: non-transient 4xx -> permanently Dropped
+                }
+                if (req.RequestUri!.AbsolutePath == "/hooks/transcript") {
+                    transcriptPosts++;
+                    return new HttpResponseMessage(HttpStatusCode.OK);
+                }
+                return req.Method == HttpMethod.Get
+                    ? new HttpResponseMessage(HttpStatusCode.NotFound)
+                    : new HttpResponseMessage(HttpStatusCode.OK);
+            });
+            using var client = new HttpClient(handler);
+            var spool = new HookSpool(Path.Combine(tmp.Path, "spool"));
+
+            var childFileEscaped = childFile.Replace(@"\", @"\\");
+
+            // 1st invocation: the child's own sessionStart. subagent-start POSTs 503 -> spooled.
+            await CursorHookCommand.HandleCore(
+                client, "http://s",
+                new StringReader($$"""{"hook_event_name":"sessionStart","session_id":"{{child}}","transcript_path":"{{childFileEscaped}}"}"""),
+                spool, TimeSpan.FromSeconds(2));
+
+            await Assert.That(spawned).IsEmpty();
+
+            // 2nd invocation: any later hook for this child. HandleCore's generic top-of-method
+            // spool drain retries the spooled subagent-start FIRST — this time it 400s, which
+            // HookSpool treats as a permanent Drop (the entry is discarded, not re-queued).
+            await CursorHookCommand.HandleCore(
+                client, "http://s",
+                new StringReader($$"""{"hook_event_name":"afterAgentThought","session_id":"{{child}}","generation_id":"g","text":"t","transcript_path":"{{childFileEscaped}}"}"""),
+                spool, TimeSpan.FromSeconds(2));
+
+            // 3rd invocation: another content-less hook. Before the fix, the dropped start left
+            // HasBacklog false and this would run the agent-routed transcript backfill despite
+            // SubagentStarted never having been appended.
+            await CursorHookCommand.HandleCore(
+                client, "http://s",
+                new StringReader($$"""{"hook_event_name":"postToolUse","session_id":"{{child}}","tool_name":"Bash","transcript_path":"{{childFileEscaped}}"}"""),
+                spool, TimeSpan.FromSeconds(2));
+
+            await Assert.That(spawned).IsEmpty();      // never acked -> no child watcher ever
+            await Assert.That(transcriptPosts).IsEqualTo(0); // never acked -> no child transcript ever
+            await Assert.That(CursorMarkers.HasSubagentStartAck(child)).IsFalse();
+        } finally {
+            WatcherManager.SpawnOverrideForTesting = null;
+            Environment.SetEnvironmentVariable("KCAP_CONFIG_DIR", null);
+        }
+    }
+
     sealed class StubHandler(Func<HttpRequestMessage, string, HttpResponseMessage> impl) : HttpMessageHandler {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             var body = request.Content is null ? "" : await request.Content.ReadAsStringAsync(ct);
