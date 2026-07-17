@@ -515,7 +515,19 @@ static partial class WatchCommand {
                     // rewind so a concurrently-running DrainNewLines (main loop or final drain)
                     // can never interleave with it (see cursorRewindGate's declaration above).
                     // Thin wrapper over the directly-testable GatedApplyReconnectRewindAsync.
-                    await GatedApplyReconnectRewindAsync(cursorRewindGate, state, serverPosition, vendor, transcriptPath, cursorGuard, cts.Token);
+                    var rewound = await GatedApplyReconnectRewindAsync(
+                        cursorRewindGate, state, serverPosition, sessionId, vendor, transcriptPath, cursorGuard, cts.Token);
+
+                    if (!rewound) {
+                        // AI-1382 review fix (r4, finding #5) — the server's frontier couldn't be
+                        // resolved to an exact local byte offset (the local transcript has fewer
+                        // lines than the server acknowledged — truncated/replaced while this watcher
+                        // was disconnected). SeedCursorByteOffsetAsync already quarantined the
+                        // session rather than seed a bogus baseline; exit the same way a runtime
+                        // rewrite detection does — neither the byte nor the line frontier moved.
+                        Log("cursor_transcript_rewrite_detected: reconnect frontier beyond local transcript — quarantined, exiting");
+                        cts.Cancel();
+                    }
                 }
             } catch (Exception ex) {
                 Log($"Re-register after reconnect failed: {ex.Message}");
@@ -583,7 +595,17 @@ static partial class WatchCommand {
         // from 0, so a full ack of M resumed lines checkpointed at file offset M instead of N's
         // true offset plus M — a permanent, silent line/byte-frontier misalignment that made the
         // guard re-scan/re-hash old history forever.
-        await SeedCursorByteOffsetAsync(state, state.LinesProcessed, vendor, transcriptPath, cursorGuard, cts.Token);
+        //
+        // AI-1382 review fix (r4, finding #5) — this resumed line number N is the server's own
+        // acknowledged frontier, which can legitimately exceed the local transcript's line count
+        // when it was truncated/replaced while this watcher was offline (e.g. across a restart).
+        // SeedCursorByteOffsetAsync quarantines the session and returns false in that case rather
+        // than seed a bogus (clamped-to-EOF) baseline; exit the same way a runtime rewrite
+        // detection does — the loop below never runs against a state that never resolved.
+        if (!await SeedCursorByteOffsetAsync(state, state.LinesProcessed, sessionId, vendor, transcriptPath, cursorGuard, cts.Token)) {
+            Log("cursor_transcript_rewrite_detected: initial resume frontier beyond local transcript — quarantined, exiting");
+            cts.Cancel();
+        }
 
         // Gemini fires no subagent hooks, so the parent watcher discovers nested subagent
         // transcripts itself and spawns a child watcher per subagent (AI-900). Tracks the
@@ -1288,8 +1310,9 @@ static partial class WatchCommand {
             // told where to start — an idle poll with nothing new then allocates ~nothing instead
             // of a file-sized buffer every second, which the previous unconditional whole-file
             // `captureRawBytes` read did even for large, mostly-unchanged Cursor transcripts.
-            var cursorFullPrefixPollNow = false;
-            var cursorBoundedReadFrom   = 0L;
+            var cursorFullPrefixPollNow  = false;
+            var cursorBoundedReadFrom    = 0L;
+            var cursorGuardPollCountPeek = 0;
 
             if (vendor == "cursor" && cursorGuard is not null) {
                 // Periodic full-prefix re-hash: CursorRewriteGuard.VerifyFullPrefix existed (D0)
@@ -1299,9 +1322,20 @@ static partial class WatchCommand {
                 // an early seed, a mid-region rewrite landing anywhere in polls 1..N-1 has no
                 // baseline to be caught against until poll N seeds the ALREADY-rewritten file as if
                 // it were the original, valid one. Every Nth poll after that still compares.
-                state.CursorGuardPollCount++;
-                cursorFullPrefixPollNow = state.CursorGuardPollCount == 1
-                    || state.CursorGuardPollCount % CursorFullPrefixVerifyEveryNPolls == 0;
+                //
+                // AI-1382 review fix (r4, finding #4) — PEEK the would-be next count for this
+                // poll's cadence decision WITHOUT committing it to state yet. The old code
+                // incremented state.CursorGuardPollCount right here, unconditionally — if the
+                // guarded read below then hit a transient IOException (caught by this method's
+                // outer catch), the counter was already advanced even though VerifyFullPrefix was
+                // never reached for this poll, so the NEXT successful poll saw a cadence value one
+                // past due and silently skipped the full-prefix baseline it was supposed to
+                // perform — recreating the polls-1..N-1 blind window this cadence exists to close.
+                // The counter is committed (see below, right after the read actually succeeds)
+                // ONLY once the read this decision fed has actually completed.
+                cursorGuardPollCountPeek = state.CursorGuardPollCount + 1;
+                cursorFullPrefixPollNow = cursorGuardPollCountPeek == 1
+                    || cursorGuardPollCountPeek % CursorFullPrefixVerifyEveryNPolls == 0;
 
                 if (!cursorFullPrefixPollNow) {
                     cursorBoundedReadFrom = Math.Max(0, cursorGuardOldOffset - cursorGuard.TrailingBytes);
@@ -1332,6 +1366,14 @@ static partial class WatchCommand {
                     ct, captureRawBytes: vendor == "cursor",
                     rawBytesReadFrom: cursorBoundedReadFrom,
                     newRangeByteOffset: vendor == "cursor" ? cursorGuardOldOffset : null);
+            }
+
+            // AI-1382 review fix (r4, finding #4) — commit the cadence counter now that the guarded
+            // read above actually completed without throwing. A failure never reaches this line, so
+            // the next poll re-peeks from the SAME starting count — if THIS poll was full-prefix-due
+            // but failed before reading, the next successful poll is still due (nothing was skipped).
+            if (vendor == "cursor" && cursorGuard is not null) {
+                state.CursorGuardPollCount = cursorGuardPollCountPeek;
             }
 
             // Surface whether the final drain held back an incomplete (unterminated/unparseable)
@@ -1601,6 +1643,38 @@ static partial class WatchCommand {
                 : null;
 
             if (newLines.Count == 0 && repoToSend is null) {
+                // AI-1382 review fix (r4, finding #1) — keep the BYTE frontier in lockstep with the
+                // LINE frontier even on this early-return path. Before this fix, a poll that consumed
+                // only blank/whitespace lines (newLines.Count == 0 here, but linesRead — the new
+                // NextPosition — > priorLineCursorForGuard, the position this poll STARTED from)
+                // advanced ONLY state.LinesProcessed below, leaving state.CursorByteOffset and the
+                // guard's own checkpoint pointed at the OLD byte boundary. The NEXT poll's bounded
+                // decoder then re-reads those SAME already-"processed" blank bytes (its read starts
+                // from CursorByteOffset) but seeds its base line number from the ALREADY-ADVANCED
+                // LinesProcessed (ReadNewCompleteLinesAsync's newRangeByteOffset branch derives
+                // lineIndex from `linesProcessed`) — so an idle poll re-inflates LinesProcessed every
+                // time, and the next REAL line is sent under a wrong line number with its ack mapped
+                // to the wrong byte offset. Mirrors the ack path's own ByteOffsetForAckedLines +
+                // Checkpoint composition below (same helper, same guard-checkpoint discipline) —
+                // cursorGuardSnapshot is this poll's already-captured/verified read, so no extra I/O.
+                if (vendor == "cursor" && cursorGuard is not null && cursorGuardSnapshot is not null
+                 && linesRead > priorLineCursorForGuard && cursorGuardNewLength > cursorGuardOldOffset) {
+                    var blankLineCount = linesRead - priorLineCursorForGuard;
+                    var rangeLength     = (int)(cursorGuardNewLength - cursorGuardOldOffset);
+                    var rangeBytes      = cursorGuardSnapshot.AsSpan((int)(cursorGuardOldOffset - cursorGuardSnapshotAt), rangeLength);
+                    var advancedByteOffset = ByteOffsetForAckedLines(rangeBytes, cursorGuardOldOffset, blankLineCount);
+
+                    state.CursorByteOffset = advancedByteOffset;
+
+                    var trailingLength = (int)Math.Min(cursorGuard.TrailingBytes, advancedByteOffset);
+                    var trailingHash   = trailingLength <= 0
+                        ? CursorAppendOnlyProbe.Sha256Hex(ReadOnlySpan<byte>.Empty)
+                        : CursorAppendOnlyProbe.Sha256Hex(
+                              cursorGuardSnapshot.AsSpan((int)(advancedByteOffset - trailingLength - cursorGuardSnapshotAt), trailingLength));
+
+                    cursorGuard.Checkpoint(advancedByteOffset, trailingHash);
+                }
+
                 // No content lines and no repo changes — safe to advance past blank/whitespace lines
                 state.LinesProcessed = linesRead;
 
@@ -2811,19 +2885,25 @@ static partial class WatchCommand {
     }
 
     /// <summary>
-    /// AI-1382 review fix #2 — scans <paramref name="transcriptPath"/> from byte 0 to find the
-    /// byte offset immediately after the <paramref name="lineNumber"/>-th newline (0 for a
-    /// non-positive <paramref name="lineNumber"/>, a missing file, or a file with fewer lines than
-    /// requested — clamped to EOF, which should never actually happen: the reconnect path only
-    /// ever rewinds to a line count the server itself acknowledged, which by construction can't
-    /// exceed what this file has ever contained). Used ONLY on the rare reconnect-rewind path
-    /// (<see cref="RunWatch"/>'s <c>Reconnected</c> handler) — a full-file scan there is cheap
-    /// relative to the reconnect's own network round-trip, and precise beats the alternative of
-    /// resetting the byte checkpoint to 0 and forcing a re-verification of the entire file's
-    /// history on every poll from then on.
+    /// AI-1382 review fix #2 — scans <paramref name="transcriptPath"/> from byte 0 to find the byte
+    /// offset immediately after the <paramref name="lineNumber"/>-th newline. Returns 0 for a
+    /// non-positive <paramref name="lineNumber"/> (nothing to resolve). Returns null when the file
+    /// is missing, or has fewer lines than requested — <b>AI-1382 review fix (r4, finding #5)</b>:
+    /// this used to silently CLAMP to EOF instead, on the stated assumption that the reconnect path
+    /// only ever rewinds to a line count the server itself acknowledged, which "by construction"
+    /// can't exceed what the file has ever contained. That assumption breaks on an initial resume
+    /// after the transcript was truncated/replaced while the watcher was offline (or, symmetrically,
+    /// on a reconnect after the same happened mid-session): the server can legitimately hand back a
+    /// line number N that the CURRENT local file — fewer than N lines — can no longer produce.
+    /// Clamping there seeded a rewrite guard baseline against the WRONG (truncated) file while the
+    /// bounded decoder went on labelling subsequent local lines starting at N — exactly the
+    /// history-rewrite the guard exists to catch, let through by the seed path instead. Callers
+    /// (<see cref="SeedCursorByteOffsetAsync"/>) must treat null as "cannot resolve this frontier
+    /// exactly" and quarantine rather than seed a bogus baseline.
     /// </summary>
-    internal static async Task<long> ResolveByteOffsetForLineAsync(string transcriptPath, int lineNumber, CancellationToken ct) {
-        if (lineNumber <= 0 || !File.Exists(transcriptPath)) return 0;
+    internal static async Task<long?> ResolveByteOffsetForLineAsync(string transcriptPath, int lineNumber, CancellationToken ct) {
+        if (lineNumber <= 0) return 0;
+        if (!File.Exists(transcriptPath)) return null;
 
         await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         var buffer = new byte[81920];
@@ -2842,7 +2922,7 @@ static partial class WatchCommand {
             }
         }
 
-        return offset; // fewer lines on disk than requested — clamp to EOF
+        return null; // fewer lines on disk than requested — the caller must quarantine, never clamp
     }
 
     /// <summary>
@@ -2855,10 +2935,21 @@ static partial class WatchCommand {
     /// but the byte guard has not (or vice versa). Extracted out of <see cref="RunWatch"/>'s
     /// <c>Reconnected</c> handler so the atomicity is unit-testable without a live SignalR
     /// reconnect. A no-op byte-side rewind for every non-Cursor vendor (no guard to keep in sync).
+    ///
+    /// <para>
+    /// AI-1382 review fix (r4, finding #5) — returns false, WITHOUT touching
+    /// <see cref="WatchState.LinesProcessed"/> or <see cref="WatchState.CursorByteOffset"/> at all,
+    /// when <paramref name="serverPosition"/> cannot be resolved to an exact local byte offset (the
+    /// session has already been quarantined by <see cref="SeedCursorByteOffsetAsync"/> in that case).
+    /// The caller (RunWatch's <c>Reconnected</c> handler) must treat false the same way it treats a
+    /// runtime rewrite detection — discard and exit — rather than proceed with a rewind that never
+    /// actually happened.
+    /// </para>
     /// </summary>
-    internal static async Task ApplyReconnectRewindAsync(
+    internal static async Task<bool> ApplyReconnectRewindAsync(
             WatchState          state,
             int                 serverPosition,
+            string              sessionId,
             string              vendor,
             string              transcriptPath,
             CursorRewriteGuard? cursorGuard,
@@ -2867,16 +2958,21 @@ static partial class WatchCommand {
         // AI-1382 review fix (r3, finding #2) — shares the byte-side seed with RunWatch's INITIAL
         // WatcherConnect registration (see SeedCursorByteOffsetAsync's own doc) so both paths that
         // resume at a server-given line number map it to the true byte offset identically.
-        await SeedCursorByteOffsetAsync(state, serverPosition, vendor, transcriptPath, cursorGuard, ct);
+        if (!await SeedCursorByteOffsetAsync(state, serverPosition, sessionId, vendor, transcriptPath, cursorGuard, ct)) {
+            return false;
+        }
+
         state.LinesProcessed = serverPosition;
+
+        return true;
     }
 
     /// <summary>
     /// AI-1382 review fix (r3, finding #2) — resolves <paramref name="lineNumber"/> to its TRUE
     /// byte offset in <paramref name="transcriptPath"/> and seeds <see cref="WatchState.CursorByteOffset"/>
     /// with it, resetting the guard's checkpoint so the two-zone checks start clean from that
-    /// offset (exactly as if this were the guard's very first poll). No-op for every non-Cursor
-    /// vendor (no guard to keep in sync).
+    /// offset (exactly as if this were the guard's very first poll). No-op (returns true) for every
+    /// non-Cursor vendor (no guard to keep in sync).
     ///
     /// Shared by two call sites that both resume the watcher at a server-given line number and
     /// must keep the byte/line frontier aligned from the very first poll: <see cref="ApplyReconnectRewindAsync"/>
@@ -2887,19 +2983,45 @@ static partial class WatchCommand {
     /// its default (0) while <see cref="WatchState.LinesProcessed"/> was already N, so the
     /// ack-to-byte mapping (<see cref="ByteOffsetForAckedLines"/>) measured acked lines relative to
     /// N but counted their bytes from 0 — a permanent, silent line/byte-frontier misalignment.
+    ///
+    /// <para>
+    /// AI-1382 review fix (r4, finding #5) — <paramref name="lineNumber"/> is the server's own
+    /// acknowledged frontier, so it is normally exactly resolvable; when it is NOT (fewer local
+    /// lines exist than the server claims — a transcript truncated/replaced while the watcher was
+    /// offline), seeding CursorByteOffset to a clamped EOF offset would establish the rewrite
+    /// guard's baseline against the wrong (truncated) file while the line cursor still advanced to
+    /// N — exactly the rewrite the guard exists to catch, let through by the seed path itself.
+    /// Returns false and quarantines <paramref name="sessionId"/> via <see cref="CursorMarkers.Quarantine"/>
+    /// in that case, WITHOUT touching <see cref="WatchState.CursorByteOffset"/> or the guard's
+    /// checkpoint — callers must not advance <see cref="WatchState.LinesProcessed"/> either.
+    /// </para>
     /// </summary>
-    internal static async Task SeedCursorByteOffsetAsync(
+    internal static async Task<bool> SeedCursorByteOffsetAsync(
             WatchState          state,
             int                 lineNumber,
+            string              sessionId,
             string              vendor,
             string              transcriptPath,
             CursorRewriteGuard? cursorGuard,
             CancellationToken   ct
         ) {
-        if (vendor != "cursor" || cursorGuard is null) return;
+        if (vendor != "cursor" || cursorGuard is null) return true;
 
-        state.CursorByteOffset = await ResolveByteOffsetForLineAsync(transcriptPath, lineNumber, ct);
+        var resolved = await ResolveByteOffsetForLineAsync(transcriptPath, lineNumber, ct);
+
+        if (resolved is null) {
+            CursorMarkers.Quarantine(
+                sessionId,
+                $"cursor_transcript_rewrite_detected: session {sessionId} zone=resume_frontier — "
+              + $"server-acknowledged line {lineNumber} exceeds the local transcript's line count");
+
+            return false;
+        }
+
+        state.CursorByteOffset = resolved.Value;
         cursorGuard.ResetCheckpoint();
+
+        return true;
     }
 
     /// <summary>
@@ -2915,25 +3037,28 @@ static partial class WatchCommand {
     /// method (rather than inlined in RunWatch's Reconnected handler) so the gate composition
     /// itself — not just <see cref="ApplyReconnectRewindAsync"/>'s own atomicity — is directly
     /// unit-testable without a live SignalR reconnect.
+    ///
+    /// Returns false (AI-1382 review fix r4, finding #5) when the rewind could not resolve the
+    /// server's frontier exactly and quarantined the session instead — the caller must exit the
+    /// same way it would for a runtime rewrite detection.
     /// </summary>
-    internal static async Task GatedApplyReconnectRewindAsync(
+    internal static async Task<bool> GatedApplyReconnectRewindAsync(
             SemaphoreSlim?      gate,
             WatchState          state,
             int                 serverPosition,
+            string              sessionId,
             string              vendor,
             string              transcriptPath,
             CursorRewriteGuard? cursorGuard,
             CancellationToken   ct
         ) {
         if (gate is null) {
-            await ApplyReconnectRewindAsync(state, serverPosition, vendor, transcriptPath, cursorGuard, ct);
-
-            return;
+            return await ApplyReconnectRewindAsync(state, serverPosition, sessionId, vendor, transcriptPath, cursorGuard, ct);
         }
 
         await gate.WaitAsync(ct);
         try {
-            await ApplyReconnectRewindAsync(state, serverPosition, vendor, transcriptPath, cursorGuard, ct);
+            return await ApplyReconnectRewindAsync(state, serverPosition, sessionId, vendor, transcriptPath, cursorGuard, ct);
         } finally {
             gate.Release();
         }

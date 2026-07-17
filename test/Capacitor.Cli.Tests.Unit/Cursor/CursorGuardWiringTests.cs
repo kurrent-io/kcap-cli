@@ -268,4 +268,113 @@ public class CursorGuardWiringTests {
             await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse();
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
+
+    // AI-1382 review fix (r4, finding #1) — a poll that reads ONLY blank/whitespace lines
+    // (newLines.Count == 0, but the line frontier still advanced past them) must move
+    // CursorByteOffset in LOCKSTEP with LinesProcessed. Before the fix, only LinesProcessed
+    // advanced here, leaving CursorByteOffset (and the guard's own checkpoint) pointed at the OLD
+    // byte boundary — the NEXT poll's bounded decoder then re-read those SAME already-"processed"
+    // blank bytes (its read starts from CursorByteOffset) but seeded its line numbering from the
+    // ALREADY-ADVANCED LinesProcessed, so a truly idle poll (nothing new on disk at all) kept
+    // re-"discovering" the same blank lines and re-inflating LinesProcessed forever.
+    [Test]
+    public async Task DrainNewLines_keeps_byte_and_line_frontier_in_lockstep_across_a_blank_only_poll_so_the_next_idle_poll_re_decodes_nothing() {
+        var sid = NewSessionId();
+        var dir  = Directory.CreateTempSubdirectory("kcap-cursor-guard-blank-lockstep").FullName;
+        try {
+            var transcriptPath = Path.Combine(dir, "t.jsonl");
+            // Two real (non-blank) lines already "delivered" by a prior poll — seeded directly
+            // (mirrors the existing bounded-read tests' pattern) to establish a clean baseline
+            // without needing a live hub round trip.
+            await File.WriteAllTextAsync(transcriptPath, "a\nb\n");
+
+            var guard = new CursorRewriteGuard(sid);
+            guard.Checkpoint(offset: 4, trailingSha: CursorAppendOnlyProbe.Sha256Hex("a\nb\n"u8));
+            var state = new WatchState {
+                LinesProcessed   = 2,
+                CursorByteOffset = 4,
+                ThresholdReached = true,
+            };
+
+            await using var hub = UnconnectedHub();
+
+            // Append TWO blank/whitespace-only lines — complete (newline-terminated), so the
+            // decoder must consume them, but nothing a real agent would ever emit as content.
+            await File.AppendAllTextAsync(transcriptPath, "\n   \n"); // 5 bytes: "\n" then "   \n"
+
+            var pollA = await WatchCommand.DrainNewLines(
+                hub, sid, transcriptPath, agentId: null, state, vendor: "cursor", CancellationToken.None,
+                cursorGuard: guard, onCursorRewriteDetected: () => { });
+
+            await Assert.That(pollA).IsEmpty(); // both new lines are blank — nothing to send
+            await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse();
+
+            // THE FIX: the byte frontier must land at the TRUE end of the two blank lines (offset
+            // 9), in lockstep with the line frontier (4) — not stuck at the old offset (4) while
+            // LinesProcessed alone raced ahead.
+            await Assert.That(state.LinesProcessed).IsEqualTo(4);
+            await Assert.That(state.CursorByteOffset).IsEqualTo(9L);
+
+            // Poll B: a genuinely idle poll — NOTHING new appended since poll A. Before the fix,
+            // CursorByteOffset would have stayed at 4 (the OLD offset), so this poll would re-read
+            // and re-"discover" the SAME two blank lines all over again, numbered starting from the
+            // now-inflated LinesProcessed (4) and pushing it to 6 — repeating forever on every
+            // subsequent idle poll. With the fix, CursorByteOffset already sits at the TRUE EOF (9),
+            // so there is nothing left to decode — neither frontier moves again.
+            var pollB = await WatchCommand.DrainNewLines(
+                hub, sid, transcriptPath, agentId: null, state, vendor: "cursor", CancellationToken.None,
+                cursorGuard: guard, onCursorRewriteDetected: () => { });
+
+            await Assert.That(pollB).IsEmpty();
+            await Assert.That(state.LinesProcessed).IsEqualTo(4);    // unchanged — nothing new to find
+            await Assert.That(state.CursorByteOffset).IsEqualTo(9L); // unchanged — already at true EOF
+            await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    // AI-1382 review fix (r4, finding #4) — CursorGuardPollCount (the full-prefix cadence counter)
+    // must only be committed once the guarded read it fed actually completes. Before the fix, the
+    // counter incremented UNCONDITIONALLY before opening the file — a transient IOException on that
+    // open/read (e.g. a concurrent writer briefly holding an exclusive lock) still "used up" the
+    // cadence slot even though VerifyFullPrefix was never reached, so the NEXT successful poll saw a
+    // cadence value one past due and silently skipped the full-prefix baseline it was supposed to
+    // perform, recreating the polls-1..N-1 history-rewrite blind window the cadence exists to close.
+    [Test]
+    public async Task DrainNewLines_does_not_consume_the_full_prefix_cadence_when_the_guarded_read_fails() {
+        var sid = NewSessionId();
+        var dir  = Directory.CreateTempSubdirectory("kcap-cursor-guard-failed-read-cadence").FullName;
+        try {
+            var transcriptPath = Path.Combine(dir, "t.jsonl");
+            await File.WriteAllTextAsync(transcriptPath, "line1\nline2\nline3\n");
+
+            var guard = new CursorRewriteGuard(sid);
+            var state = new WatchState(); // CursorGuardPollCount starts at 0 — this poll is poll 1 (full-prefix-due)
+
+            await using var hub = UnconnectedHub();
+
+            // Force the guarded read to throw IOException for the duration of this one poll only,
+            // by holding an exclusive lock (FileShare.None denies DrainNewLines's own
+            // FileShare.ReadWrite open — verified to throw System.IO.IOException on this platform).
+            await using (new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.None)) {
+                var failedResult = await WatchCommand.DrainNewLines(
+                    hub, sid, transcriptPath, agentId: null, state, vendor: "cursor", CancellationToken.None,
+                    cursorGuard: guard, onCursorRewriteDetected: () => { });
+
+                await Assert.That(failedResult).IsEmpty();
+            }
+
+            // The failed poll must NOT have consumed the cadence counter.
+            await Assert.That(state.CursorGuardPollCount).IsEqualTo(0);
+
+            // The NEXT (successful) poll must still be treated as poll 1 — i.e. it must still be
+            // the one that performs the full-prefix baseline seed, not skip it as if some earlier
+            // poll (the failed one) had already used up that slot.
+            await WatchCommand.DrainNewLines(
+                hub, sid, transcriptPath, agentId: null, state, vendor: "cursor", CancellationToken.None,
+                cursorGuard: guard, onCursorRewriteDetected: () => { });
+
+            await Assert.That(state.CursorGuardPollCount).IsEqualTo(1);
+            await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
 }
