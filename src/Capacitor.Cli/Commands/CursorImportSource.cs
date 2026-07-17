@@ -588,13 +588,20 @@ internal sealed class CursorImportSource : IImportSource {
     /// </para>
     ///
     /// <para>
-    /// AI-1154 review fix (P2, round-3): <c>SentContent</c> only reflects GENUINELY new content.
-    /// A fail-open resend — the child subsession watermark probe itself threw, so
-    /// <c>startLine</c> resets to 0 and the whole child is reposted — is server-side idempotent
-    /// when the child was already complete, but <c>SendTranscriptBatches</c> still returns the
-    /// count of lines POSTED (not "new"). That resend alone must NOT assert <c>SentContent</c>;
-    /// only a resend where the watermark was genuinely known (the probe succeeded, whether it
-    /// returned a value or nothing at all) counts as new content.
+    /// AI-1154 review fix (P1, round-4): a fail-open resend — the child subsession watermark
+    /// probe itself threw, so <c>startLine</c> resets to 0 and the whole child is reposted — is
+    /// INDETERMINATE, not proof of "no new content". The round-3 fix treated a probe failure as
+    /// "definitely a duplicate resend" and forced <c>SentContent = false</c>; but when the child
+    /// is genuinely NEW and the watermark endpoint merely 500s transiently, that full resend
+    /// really does POST new content — yet the caller was told nothing new happened. For an
+    /// AlreadyLoaded parent, that meant a newly-attached child's content could stay on a public
+    /// parent under <c>--private</c>: a privacy leak. So a probe failure must NOT be treated as
+    /// "no new content"; it's indeterminate, and the safe default is to treat a posted resend as
+    /// content that MAY be new (<c>SentContent = true</c>), same as the probe-succeeded path.
+    /// This can cause a cosmetic double-count for an already-complete child that gets
+    /// fail-open-resent (its AlreadyLoaded parent counted in both Loaded and AlreadyLoaded) —
+    /// that's a known, separately-tracked follow-up (deferred P2); privacy correctness wins over
+    /// count precision.
     /// </para>
     /// </summary>
     async Task<(bool Success, bool SentContent)> SendSubagentLifecycleAsync(
@@ -624,23 +631,22 @@ internal sealed class CursorImportSource : IImportSource {
         // Resume from the subsession watermark (AgentSubsession-{parent}-{child}) so a re-import
         // doesn't repost the full child transcript every time. Fail-open to a full send.
         //
-        // AI-1154 review fix (P2, round-3): a fail-open resend (the probe itself threw — e.g. a
-        // transient 5xx) resets startLine to 0 and reposts the WHOLE child. Those events are
-        // server-side idempotent duplicates when the child was already complete, but
-        // SendTranscriptBatches still returns the number of lines POSTED (not "new"), so a naive
-        // `childSent > 0` would wrongly assert SentContent=true — recreating the double-count /
-        // re-privatization bug this signal exists to prevent. Track whether the watermark probe
-        // itself succeeded (probeFailed) so a fail-open full repost can never assert "new content"
-        // on its own; only a resend where the watermark WAS known (probe succeeded, whichever
-        // value it returned) counts.
-        var startLine   = 0;
-        var probeFailed = false;
+        // AI-1154 review fix (P1, round-4): a fail-open resend (the probe itself threw — e.g. a
+        // transient 5xx) resets startLine to 0 and reposts the WHOLE child. That resend is
+        // INDETERMINATE — it MAY be a duplicate of an already-complete child, or it MAY be
+        // genuinely new content that a transient probe failure prevented us from resuming
+        // correctly. Treating probe failure as proof of "no new content" (the round-3 fix) is a
+        // privacy regression: a real new child attached to an AlreadyLoaded parent would then be
+        // reported as no content sent, the parent would be excluded from `--private`, and its
+        // new child content would leak on a public session. So probe failure alone is no longer
+        // tracked as a reason to suppress SentContent below — the safe default when content was
+        // actually posted is to count it, whether or not the watermark was known.
+        var startLine = 0;
         try {
             if (await FetchServerLastLineAsync(ctx.HttpClient, ctx.BaseUrl, parentSessionId, ct, agentId) is { } last)
                 startLine = last + 1;
         } catch {
-            startLine   = 0;
-            probeFailed = true;
+            startLine = 0;
         }
 
         int childSent;
@@ -676,7 +682,14 @@ internal sealed class CursorImportSource : IImportSource {
             ["strict"]                 = true,                 // fail-closed: 500 if SubagentCompleted isn't persisted
         }, ct);
 
-        return (stopOk, stopOk && childSent > 0 && !probeFailed);
+        // Privacy-safe by construction: whether the probe succeeded (known watermark) or failed
+        // (fail-open full resend), any lines actually POSTED count as SentContent. A probe
+        // failure is indeterminate, never a "definitely no new content" verdict — see the
+        // fail-open comment above. Known trade-off: an already-complete child that gets
+        // fail-open-resent will also report SentContent=true, which can cosmetically double-count
+        // its AlreadyLoaded parent (Loaded + AlreadyLoaded buckets) — deferred, separately
+        // tracked follow-up; privacy correctness wins over count precision.
+        return (stopOk, stopOk && childSent > 0);
     }
 
     internal static JsonObject BuildSessionStartPayload(
