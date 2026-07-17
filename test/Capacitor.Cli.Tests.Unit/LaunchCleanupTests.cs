@@ -170,6 +170,37 @@ public partial class AgentOrchestratorVendorTests {
         dummy.Kill();
     }
 
+    [Test]
+    public async Task Quarantine_drain_deletes_the_retained_pid_record() {
+        var server = new CaptureServerConnection();
+
+        await using var orch = BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        // A live child with a durable PID record. Teardown quarantines it (still alive) and RETAINS the
+        // record. Once the child is gone, the quarantine retry must both drain the entry AND delete the
+        // record — otherwise the current-epoch record leaks (the orphan sweep skips it until restart).
+        using var dummy = DummyProcess.StartSleep(30, new Dictionary<string, string> { ["KCAP_AGENT_ID"] = "qr" });
+        var identity = ProcessIdentity.Capture(dummy.Pid)!;
+        orch.WritePidRecordForTest(new AgentPidRecord(
+            "qr", dummy.Pid, identity, "ReviewFlow", "codex", "f1", "reviewer",
+            orch.DaemonIdForTest, orch.DaemonEpochForTest, DateTimeOffset.UtcNow));
+        orch.SeedAgentForTest("qr", LaunchKind.ReviewFlow, status: "Running",
+            pty: new LiveNoKillPtyProcess(dummy.Pid), startIdentity: identity);
+
+        await orch.CleanupAgentForTest("qr");
+        await Assert.That(orch.QuarantineSnapshot().Any(q => q.Id == "qr")).IsTrue();
+        await Assert.That(orch.PidRecordsForTest().Any(r => r.AgentId == "qr")).IsTrue(); // retained while quarantined
+
+        // Child is now gone (reaped) → the retry confirms death, drains the entry, and deletes the record.
+        dummy.Kill();
+        dummy.WaitForExit(TimeSpan.FromSeconds(8));
+        await orch.RetryQuarantineForTest();
+
+        await Assert.That(orch.QuarantineSnapshot().Any(q => q.Id == "qr")).IsFalse();
+        await Assert.That(orch.PidRecordsForTest().Any(r => r.AgentId == "qr")).IsFalse();
+    }
+
     /// <summary>An <see cref="IPtyProcess"/> that reports a real live child's pid but whose disposal
     /// and termination are deliberately no-ops — models a child that survives teardown, so
     /// CleanupAgentAsync's confirm-death step must quarantine it.</summary>

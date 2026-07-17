@@ -470,7 +470,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (_quarantine is not { Count: > 0 }) return;
         if (Interlocked.CompareExchange(ref _quarantineSweepRunning, 1, 0) != 0) return;
 
-        try { await _quarantine.RetryAllAsync(ct); }
+        try {
+            // Delete the durable PID record of every agent whose death the retry CONFIRMED — teardown
+            // retained it (with the current epoch) while the child was quarantined, so without this it
+            // would be skipped by the orphan sweep and leak until the next daemon restart.
+            foreach (var agentId in await _quarantine.RetryAllAsync(ct)) DeletePidRecord(agentId);
+        }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex) { _logger.LogWarning(ex, "quarantine retry sweep faulted — continuing"); }
         finally { Interlocked.Exchange(ref _quarantineSweepRunning, 0); }
@@ -2074,6 +2079,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Test-only entry point to the private cleanup path.</summary>
     internal Task CleanupAgentForTest(string agentId) => CleanupAgentAsync(agentId);
+
+    /// <summary>AI-1313 Phase B (D4 §6.4(2a)): drive one quarantine-retry sweep (drains confirmed-dead
+    /// entries and deletes their durable records) so a test needn't wait for a heartbeat tick.</summary>
+    internal Task RetryQuarantineForTest() => RetryQuarantineOnceAsync(_shutdownCts.Token);
 
     /// <summary>Test-only: number of agents currently tracked (for awaiting cleanup).</summary>
     internal int ActiveAgentCountForTest => _agents.Count;
