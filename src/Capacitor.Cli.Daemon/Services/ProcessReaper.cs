@@ -8,42 +8,57 @@ namespace Capacitor.Cli.Daemon.Services;
 /// AI-1313 Phase B (D4 §6.4): the shared "reap by exact identity" primitive used by the
 /// <c>HandleStopAgent</c> PID-record fallback (T7), the kill-quarantine retry (T8), and the startup
 /// <c>OrphanReaper</c> (T9). Kills a leftover child ONLY when its identity is proven — never on
-/// ambiguity — and reports whether death is CONFIRMED (so the caller deletes the record only then, per
-/// spec §6.4(2)).
-/// <para>PID-reuse safety: the expected start-identity token is re-validated before EVERY signal and
-/// after every wait (<see cref="StillTarget"/>). If the target exits and its pid is recycled by an
-/// unrelated process at any point in the TERM→grace→KILL sequence, the mismatch is detected and the
-/// signal is NOT sent — "ours is gone" is reported instead of killing the new occupant.</para>
-/// <para>Two kill regimes (spec §6.4(2b)):</para>
-/// <list type="bullet">
-/// <item><b>Record regime</b> (<see cref="ReapByRecordAsync"/>): exact <c>(pid, start-identity)</c>
-/// match PLUS, on Unix, the <c>KCAP_AGENT_ID</c> env check. If the env can't be read (macOS 26 redacts
-/// it — see <see cref="ProcessIdentity.ReadAgentEnv"/>) the process is SPARED.</item>
-/// <item><b>Marker regime</b> (<see cref="ReapByMarkerAsync"/>): the caller has already validated the
-/// live process's env triple; this captures the process's start-identity and kills by it (so PID reuse
-/// during the kill still can't hit the wrong process). If the identity can't be captured, it SPARES.</item>
-/// </list>
+/// ambiguity — and reports whether death is CONFIRMED (so the caller deletes the record / drains the
+/// quarantine only then, per spec §6.4(2)).
+/// <para><b>Tri-state identity (fail-closed).</b> The leader pid is classified against its expected
+/// start token as one of: <c>Dead</c> (pid gone), <c>Ours</c> (alive, exact match), <c>Recycled</c>
+/// (alive, CONCLUSIVELY a different incarnation — same scheme, different value), or <c>Ambiguous</c>
+/// (alive but token unreadable / foreign scheme). Only <c>Dead</c> and <c>Recycled</c> are "confirmed
+/// gone"; <c>Ambiguous</c> SPARES (returns "not gone") so a still-alive child is never dropped on an
+/// unreadable token.</para>
+/// <para><b>PID-reuse safety.</b> The token is re-classified before EVERY signal and after every wait,
+/// so a pid recycled anywhere in the TERM→grace→KILL window is seen as <c>Recycled</c> and no signal is
+/// sent to the new occupant.</para>
+/// <para><b>Descendant containment.</b> Signals go to the process GROUP (<c>kill(-pid)</c>; a hosted
+/// agent is a forkpty session leader with pgid==pid, so its mcp children are in the group). When the
+/// leader dies (on TERM or otherwise) any orphaned descendants that inherited its group are swept with
+/// an uncatchable group SIGKILL — but only while the leader pid slot is empty, so a reused pid's group
+/// is never touched. (Full group-liveness *confirmation* — distinguishing "group empty" from "not a
+/// group leader" — needs the same OS-primitive work as the deferred native-containment sub-phase; the
+/// uncatchable group SIGKILL already guarantees descendants are cleared.)</para>
 /// </summary>
 internal static class ProcessReaper {
     static readonly TimeSpan GraceBeforeKill = TimeSpan.FromSeconds(5);
 
-    /// <summary>True IFF <paramref name="pid"/> is alive AND (no identity was supplied OR it still
-    /// matches <paramref name="expectedIdentity"/>). Returns false when the target is gone OR the pid
-    /// has been recycled by a different process — the caller then treats it as "ours is gone" and never
-    /// signals.</summary>
-    static bool StillTarget(int pid, string? expectedIdentity) =>
-        ProcessIdentity.IsAlive(pid) && (expectedIdentity is not { } id || ProcessIdentity.Matches(pid, id));
+    enum LeaderState { Dead, Ours, Recycled, Ambiguous }
 
-    /// <summary>Record-regime reap. Returns true when the target is CONFIRMED gone (already dead,
-    /// killed + observed dead, or a proven identity mismatch — i.e. our agent's process is not there),
-    /// false when it may still be alive (kill unconfirmed, or SPARED for unreadable env).</summary>
+    static LeaderState Classify(int pid, string expectedIdentity) {
+        if (!ProcessIdentity.IsAlive(pid)) return LeaderState.Dead;
+
+        return ProcessIdentity.MatchesTri(pid, expectedIdentity) switch {
+            true  => LeaderState.Ours,
+            false => LeaderState.Recycled,   // same scheme, different value → conclusively a different process
+            _     => LeaderState.Ambiguous,  // unreadable / foreign scheme → can't prove → spare
+        };
+    }
+
+    /// <summary>Record-regime reap. Returns true when the target is CONFIRMED gone (dead, killed +
+    /// observed dead, or a proven identity mismatch — our agent's process is not there), false when it
+    /// may still be alive (kill unconfirmed, SPARED for an unreadable env, or an uncomparable token).</summary>
     public static async Task<bool> ReapByRecordAsync(AgentPidRecord record, ILogger logger, CancellationToken ct) {
         var pid = record.Pid;
 
-        if (!ProcessIdentity.IsAlive(pid)) return true;                          // gone
-        if (!ProcessIdentity.Matches(pid, record.StartIdentity)) return true;    // PID reused by an unrelated proc — ours is gone
+        switch (Classify(pid, record.StartIdentity)) {
+            case LeaderState.Dead:      SweepDeadLeaderGroup(pid); return true; // gone — sweep any orphaned descendants
+            case LeaderState.Recycled:  return true;                            // pid reused by an unrelated proc — ours is gone
+            case LeaderState.Ambiguous:
+                logger.LogWarning(
+                    "ProcessReaper: identity uncomparable for pid {Pid} (agent {AgentId}) — sparing (ambiguity never kills)",
+                    pid, record.AgentId);
+                return false;
+        }
 
-        // Unix env guard: only kill if the process still proves it is OUR agent. Unreadable env → spare.
+        // Ours. Unix env guard: only kill if the process still proves it is OUR agent. Unreadable → spare.
         if (!OperatingSystem.IsWindows()) {
             var envAgentId = ProcessIdentity.ReadAgentEnv(pid, "KCAP_AGENT_ID");
             if (envAgentId is null) {
@@ -58,75 +73,97 @@ internal static class ProcessReaper {
         return await KillConfirmAsync(pid, record.StartIdentity, record.AgentId, logger, ct);
     }
 
-    /// <summary>Marker-regime reap of a recordless survivor: the caller has already read + validated the
-    /// env triple from the live process. Captures the process's start-identity so the kill sequence is
-    /// PID-reuse-safe; SPARES (returns false) if the identity can't be captured. Returns true when
-    /// confirmed gone.</summary>
-    public static Task<bool> ReapByMarkerAsync(int pid, string agentId, ILogger logger, CancellationToken ct) {
-        if (!ProcessIdentity.IsAlive(pid)) return Task.FromResult(true);
-
-        var identity = ProcessIdentity.Capture(pid);
-        if (identity is null) {
-            logger.LogWarning(
-                "ProcessReaper: could not capture identity for pid {Pid} (agent {AgentId}) — sparing (ambiguity never kills)",
-                pid, agentId);
-            return Task.FromResult(false);
-        }
-
-        return KillConfirmAsync(pid, identity, agentId, logger, ct);
-    }
+    /// <summary>Marker-regime reap of a recordless survivor. The caller (OrphanReaper) has already
+    /// captured the process's start token BEFORE reading its env-marker triple and re-validated it after,
+    /// so <paramref name="expectedIdentity"/> is bound to the same incarnation whose markers proved
+    /// ownership — no recapture here (which could adopt a replacement after a mid-scan PID reuse).</summary>
+    public static Task<bool> ReapByMarkerAsync(int pid, string expectedIdentity, string agentId, ILogger logger, CancellationToken ct)
+        => KillConfirmAsync(pid, expectedIdentity, agentId, logger, ct);
 
     /// <summary>Kill-quarantine retry (spec §6.4(2a)): the entry is a KNOWN-ours process whose death
-    /// wasn't confirmed at teardown. Kill it by EXACT identity (no env check needed — we already own it,
-    /// and the identity match handles PID reuse) and report confirmed-gone. Gone / PID-reused → true
-    /// (drain it); still alive after SIGKILL → false (retry next tick).</summary>
-    public static Task<bool> ReapByIdentityAsync(int pid, string expectedIdentity, string agentId, ILogger logger, CancellationToken ct) {
-        if (!StillTarget(pid, expectedIdentity)) return Task.FromResult(true); // gone / reused → ours is gone
-        return KillConfirmAsync(pid, expectedIdentity, agentId, logger, ct);
-    }
+    /// wasn't confirmed at teardown. Kill it by EXACT identity and report confirmed-gone (drain) vs
+    /// still-alive/uncomparable (retain for the next tick).</summary>
+    public static Task<bool> ReapByIdentityAsync(int pid, string expectedIdentity, string agentId, ILogger logger, CancellationToken ct)
+        => KillConfirmAsync(pid, expectedIdentity, agentId, logger, ct);
 
-    /// <summary>SIGTERM the process group (Unix; the forkpty child is a session leader so its pgid ==
-    /// pid, taking descendants too), wait <see cref="GraceBeforeKill"/>, then SIGKILL; confirm death.
-    /// The <paramref name="expectedIdentity"/> is re-validated before EACH signal and after each wait,
-    /// so a pid recycled mid-sequence is detected as "ours is gone" and never signalled. Windows falls
-    /// back to a best-effort <see cref="System.Diagnostics.Process"/> kill.</summary>
-    static async Task<bool> KillConfirmAsync(int pid, string? expectedIdentity, string agentId, ILogger logger, CancellationToken ct) {
+    /// <summary>SIGTERM the process group, wait <see cref="GraceBeforeKill"/>, then SIGKILL; confirm the
+    /// leader is gone. Re-classifies before/after each step so a pid recycled mid-sequence is detected as
+    /// "ours is gone" and never signalled; a leader that dies at any point has its orphaned descendants
+    /// swept. Returns true only on confirmed death (or proven recycle), false on unconfirmed/ambiguous.</summary>
+    static async Task<bool> KillConfirmAsync(int pid, string expectedIdentity, string agentId, ILogger logger, CancellationToken ct) {
         try {
-            if (!StillTarget(pid, expectedIdentity)) return true; // exited / recycled before we signal
-
-            if (OperatingSystem.IsWindows()) {
-                try { using var p = System.Diagnostics.Process.GetProcessById(pid); p.Kill(entireProcessTree: true); }
-                catch { /* gone / unkillable */ }
-            } else {
-                // Negative pid → the whole process group (killpg equivalent). Fall back to the pid alone.
-                if (UnixPtyInterop.kill(-pid, UnixPtyInterop.SIGTERM) != 0)
-                    UnixPtyInterop.kill(pid, UnixPtyInterop.SIGTERM);
+            switch (Classify(pid, expectedIdentity)) {
+                case LeaderState.Dead:      SweepDeadLeaderGroup(pid); return true;
+                case LeaderState.Recycled:  return true;
+                case LeaderState.Ambiguous: return false;
             }
+
+            SignalGroup(pid, hard: false); // SIGTERM the group
 
             for (var waited = TimeSpan.Zero; waited < GraceBeforeKill; waited += TimeSpan.FromMilliseconds(250)) {
-                if (!StillTarget(pid, expectedIdentity)) return true;
+                switch (Classify(pid, expectedIdentity)) {
+                    case LeaderState.Dead:      SweepDeadLeaderGroup(pid); return true; // died on TERM → sweep descendants
+                    case LeaderState.Recycled:  return true;
+                    case LeaderState.Ambiguous: return false;
+                }
                 await Task.Delay(250, ct);
             }
 
-            // Re-validate AFTER the grace wait, immediately before the hard kill — the pid may have been
-            // recycled during the 5s window, and SIGKILL to a recycled pid would hit an unrelated process.
-            if (!StillTarget(pid, expectedIdentity)) return true;
-
-            if (!OperatingSystem.IsWindows()) {
-                if (UnixPtyInterop.kill(-pid, UnixPtyInterop.SIGKILL) != 0)
-                    UnixPtyInterop.kill(pid, UnixPtyInterop.SIGKILL);
-                await Task.Delay(250, ct);
+            // Grace elapsed. Re-classify immediately before the hard kill — the pid may have been recycled
+            // during the last wait, and SIGKILL to a recycled group would hit unrelated processes.
+            switch (Classify(pid, expectedIdentity)) {
+                case LeaderState.Dead:      SweepDeadLeaderGroup(pid); return true;
+                case LeaderState.Recycled:  return true;
+                case LeaderState.Ambiguous: return false;
             }
 
-            var gone = !StillTarget(pid, expectedIdentity);
-            if (!gone) logger.LogWarning("ProcessReaper: pid {Pid} (agent {AgentId}) still alive after SIGKILL — retained for next sweep", pid, agentId);
+            SignalGroup(pid, hard: true); // SIGKILL the group
+            await Task.Delay(250, ct);
 
-            return gone;
+            switch (Classify(pid, expectedIdentity)) {
+                case LeaderState.Dead:      SweepDeadLeaderGroup(pid); return true;
+                case LeaderState.Recycled:  return true;
+                case LeaderState.Ambiguous: return false; // became uncomparable → unconfirmed, retain
+                default:
+                    logger.LogWarning("ProcessReaper: pid {Pid} (agent {AgentId}) still alive after SIGKILL — retained for next sweep", pid, agentId);
+                    return false;
+            }
         } catch (OperationCanceledException) {
             return false;
         } catch (Exception ex) {
             logger.LogWarning(ex, "ProcessReaper: kill of pid {Pid} (agent {AgentId}) failed", pid, agentId);
             return false;
         }
+    }
+
+    /// <summary>SIGTERM/SIGKILL the target's process group (Unix; falls back to the bare pid when it
+    /// isn't a group leader). On Windows there are no process groups, so the soft call tree-kills and the
+    /// hard call is a no-op (the tree is already gone).</summary>
+    static void SignalGroup(int pid, bool hard) {
+        if (pid <= 0) return;
+
+        if (OperatingSystem.IsWindows()) {
+            if (!hard) {
+                try { using var p = System.Diagnostics.Process.GetProcessById(pid); p.Kill(entireProcessTree: true); }
+                catch { /* gone / unkillable */ }
+            }
+
+            return;
+        }
+
+        var sig = hard ? UnixPtyInterop.SIGKILL : UnixPtyInterop.SIGTERM;
+        if (UnixPtyInterop.kill(-pid, sig) != 0) UnixPtyInterop.kill(pid, sig); // -pid = the group; fall back to the pid
+    }
+
+    /// <summary>Our leader is confirmed gone → SIGKILL any orphaned descendants that inherited its
+    /// process group. Reuse-safe: only fires while the leader pid slot is EMPTY (a reused pid would be
+    /// alive → skipped), so it can only reach our dead leader's lineage, never a new process's group.
+    /// Best-effort; SIGKILL is uncatchable, so the group is cleared. Unix-only (Windows tree-kill already
+    /// swept the descendants).</summary>
+    static void SweepDeadLeaderGroup(int pid) {
+        if (pid <= 0 || OperatingSystem.IsWindows()) return;
+        if (ProcessIdentity.IsAlive(pid)) return; // pid slot occupied — never signal a possibly-reused leader's group
+
+        UnixPtyInterop.kill(-pid, UnixPtyInterop.SIGKILL);
     }
 }

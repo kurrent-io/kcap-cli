@@ -125,22 +125,49 @@ public partial class AgentOrchestratorVendorTests {
         await using var orch = BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
-        // A live, unrelated process occupies the pid, but the agent's STORED identity does not match it
+        // A live, unrelated process occupies the pid, but the agent's STORED identity is a DIFFERENT real
+        // process's token — same OS token scheme, different value, so it compares CONCLUSIVELY unequal
         // (exactly what a recycled pid looks like: our child exited, the pid was reused). Teardown must
         // treat our agent as gone — never quarantine, never kill the unrelated occupant.
-        using var unrelated = DummyProcess.StartSleep(30);
+        using var occupant = DummyProcess.StartSleep(30);
+        using var other    = DummyProcess.StartSleep(30);
+        var wrongIdentity  = ProcessIdentity.Capture(other.Pid)!; // real, same-scheme, ≠ occupant's identity
+
         orch.SeedAgentForTest("recycled", LaunchKind.ReviewFlow, status: "Running",
-            pty: new LiveNoKillPtyProcess(unrelated.Pid),
-            startIdentity: "lx:boot0000:0000000000"); // deliberately NOT the live process's identity
+            pty: new LiveNoKillPtyProcess(occupant.Pid), startIdentity: wrongIdentity);
 
         await orch.CleanupAgentForTest("recycled");
 
         await Assert.That(orch.GetAgentForTest("recycled")).IsNull();
         await Assert.That(orch.QuarantineSnapshot().Any(q => q.Id == "recycled")).IsFalse();
         await Assert.That(orch.EffectiveCount).IsEqualTo(0);
-        await Assert.That(unrelated.HasExited).IsFalse(); // the unrelated process was never signalled
+        await Assert.That(occupant.HasExited).IsFalse(); // the unrelated occupant was never signalled
 
-        unrelated.Kill();
+        occupant.Kill();
+        other.Kill();
+    }
+
+    [Test]
+    public async Task Teardown_quarantines_when_the_stored_identity_is_uncomparable() {
+        var server = new CaptureServerConnection();
+
+        await using var orch = BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        // A live child whose stored identity uses a FOREIGN token scheme ("zz:") — uncomparable on every
+        // OS (tri-state null), so ownership can neither be proven nor disproven. Fail closed: retain +
+        // quarantine (count against admission) rather than dropping a possibly-live child's record.
+        using var dummy = DummyProcess.StartSleep(30);
+        orch.SeedAgentForTest("ambiguous", LaunchKind.ReviewFlow, status: "Running",
+            pty: new LiveNoKillPtyProcess(dummy.Pid), startIdentity: "zz:unknown-scheme-token");
+
+        await orch.CleanupAgentForTest("ambiguous");
+
+        await Assert.That(orch.GetAgentForTest("ambiguous")).IsNull();
+        await Assert.That(orch.QuarantineSnapshot().Any(q => q.Id == "ambiguous")).IsTrue();
+        await Assert.That(orch.EffectiveCount).IsEqualTo(1);
+
+        dummy.Kill();
     }
 
     /// <summary>An <see cref="IPtyProcess"/> that reports a real live child's pid but whose disposal

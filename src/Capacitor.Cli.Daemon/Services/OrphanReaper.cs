@@ -73,6 +73,13 @@ internal sealed class OrphanReaper(
             if (handledPids.Contains(pid)) continue;       // already covered by the record pass
             if (!ProcessIdentity.IsAlive(pid)) continue;
 
+            // Capture the start token BEFORE reading the env markers, so the token is bound to the SAME
+            // incarnation whose markers we're about to trust. If the pid is recycled between the marker
+            // reads and the kill, the post-read re-validation (below) catches it — a recapture-after-read
+            // would instead adopt the replacement's identity. Uncapturable → spare.
+            var token = ProcessIdentity.Capture(pid);
+            if (token is null) continue;
+
             // The FULL marker triple must be readable and prove "this daemon, prior incarnation" before
             // we kill. Any missing/unreadable member SPARES (ambiguity never kills) — this covers a
             // process/PID race, a partial read, and a current-incarnation recordless child whose epoch
@@ -86,9 +93,13 @@ internal sealed class OrphanReaper(
             var epoch = ProcessIdentity.ReadAgentEnv(pid, "KCAP_DAEMON_EPOCH");
             if (epoch is null || string.Equals(epoch, currentEpoch, StringComparison.Ordinal)) continue; // unreadable / current incarnation → spare
 
-            // Recordless survivor of a PRIOR incarnation of THIS daemon → reap by marker.
+            // Re-validate the SAME token after all three reads: if the pid was recycled mid-scan, the
+            // markers we just read belong to a different incarnation — the token no longer matches, so spare.
+            if (ProcessIdentity.MatchesTri(pid, token) != true) continue;
+
+            // Recordless survivor of a PRIOR incarnation of THIS daemon → reap by the captured identity.
             try {
-                var gone = await ProcessReaper.ReapByMarkerAsync(pid, agentId, logger, ct);
+                var gone = await ProcessReaper.ReapByMarkerAsync(pid, token, agentId, logger, ct);
                 if (gone)
                     logger.LogInformation(
                         "OrphanReaper: reaped recordless survivor {AgentId} (pid {Pid}) of a prior daemon incarnation", agentId, pid);

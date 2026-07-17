@@ -195,6 +195,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     OrphanReaper?        _orphanReaper;
     string               _daemonId    = "";
     string               _daemonEpoch = "";
+
+    // AI-1313 Phase B (D4 §6.4(2a)/(3)): single-flight latches so a slow sweep (each survivor consumes a
+    // ~5s TERM grace sequentially) can't overlap itself when the next heartbeat tick fires — otherwise
+    // sweeps accumulate, double-signal, and re-scan /proc concurrently. A tick whose prior sweep is still
+    // running is simply skipped. 0 = idle, 1 = running (Interlocked-gated).
+    int _orphanSweepRunning;
+    int _quarantineSweepRunning;
     readonly DaemonConfig                                      _config;
     readonly ServerConnection                                  _server;
     readonly WorktreeManager                                   _worktreeManager;
@@ -369,10 +376,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>AI-1313 Phase B (D4 §6.4(2a)): the kill-quarantine snapshot for the status report.</summary>
     internal IReadOnlyList<QuarantinedAgentInfo> QuarantineSnapshot() => _quarantine?.Snapshot() ?? [];
 
-    /// <summary>AI-1313 Phase B (D4 §6.4(2a)): the daemon's admission gate — committed active agents
-    /// PLUS unconfirmed-death quarantined ones, so a persistent kill/record-write failure shrinks
+    /// <summary>AI-1313 Phase B (D4 §6.4(2a)): the daemon's admission gate — EVERY live registry entry
+    /// (not just Starting/Running — a Completed/Failed agent still mid-teardown holds its slot until
+    /// CleanupAgentAsync's count-preserving remove) PLUS unconfirmed-death quarantined ones. Using the
+    /// full <c>_agents.Count</c> (rather than <see cref="ActiveCount"/>, whose Starting/Running meaning is
+    /// the wire contract) keeps a slot reserved across the whole teardown, so a concurrent launch can't
+    /// observe a transiently-freed slot and over-admit. A persistent kill/record-write failure shrinks
     /// admission (fails closed) rather than minting processes beyond the budget.</summary>
-    internal int EffectiveCount => ActiveCount + (_quarantine?.Count ?? 0);
+    internal int EffectiveCount => _agents.Count + (_quarantine?.Count ?? 0);
 
     /// <summary>AI-1313 Phase B (D4): this daemon's stable logical id = a hash of its name, written
     /// into each child's <c>KCAP_DAEMON_ID</c> marker. Per-name so a different daemon under the same
@@ -438,12 +449,31 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>AI-1313 Phase B (D4 §6.4(3)): run the startup orphan reap once — called by DaemonRunner
     /// at boot under the daemon lock (next to WorktreeManager.CleanupOrphanedAsync), and re-run on each
-    /// heartbeat tick. Best-effort: a reaper fault is logged and swallowed, never faulting the caller.</summary>
+    /// heartbeat tick. SINGLE-FLIGHT: if a prior sweep is still running (a long /proc scan + sequential
+    /// TERM graces can outlast the 30s heartbeat, and the ctor-started heartbeat can overlap the boot
+    /// call), this tick is skipped rather than piling on. Best-effort: a reaper fault is logged and
+    /// swallowed, never faulting the caller.</summary>
     internal async Task ReapOrphansOnceAsync(CancellationToken ct = default) {
         if (_orphanReaper is null) return;
+        if (Interlocked.CompareExchange(ref _orphanSweepRunning, 1, 0) != 0) return; // a sweep is already in flight
+
         try { await _orphanReaper.ReapOnceAsync(ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex) { _logger.LogWarning(ex, "OrphanReaper sweep faulted — continuing"); }
+        finally { Interlocked.Exchange(ref _orphanSweepRunning, 0); }
+    }
+
+    /// <summary>AI-1313 Phase B (D4 §6.4(2a)): retry the kill-quarantine once — SINGLE-FLIGHT, mirroring
+    /// <see cref="ReapOrphansOnceAsync"/>, so a slow retry (each entry a ~5s TERM grace) can't overlap the
+    /// next heartbeat tick. Skipped when empty or already running.</summary>
+    async Task RetryQuarantineOnceAsync(CancellationToken ct) {
+        if (_quarantine is not { Count: > 0 }) return;
+        if (Interlocked.CompareExchange(ref _quarantineSweepRunning, 1, 0) != 0) return;
+
+        try { await _quarantine.RetryAllAsync(ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) { _logger.LogWarning(ex, "quarantine retry sweep faulted — continuing"); }
+        finally { Interlocked.Exchange(ref _quarantineSweepRunning, 0); }
     }
 
     /// <summary>AI-1313 Phase B (D2): build + send one status report, one-way, swallowing errors (an
@@ -1715,12 +1745,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // stamped on PendingEndReason so the end attribution is correct even if HandleStopAgent's
             // own end call loses to the read-loop's.
             // AI-1313 Phase B (D4 §6.4(2a)): retry killing any unconfirmed-death quarantined process,
-            // draining those confirmed gone (frees admission).
-            if (_quarantine is { Count: > 0 }) _ = _quarantine.RetryAllAsync(ct);
+            // draining those confirmed gone (frees admission). Single-flight (skips if a prior retry runs).
+            _ = RetryQuarantineOnceAsync(ct);
 
             // AI-1313 Phase B (D4 §6.4(3)): re-run the orphan reap — record pass is epoch-guarded (never
             // touches a current-incarnation live agent), env-marker scan reaps a prior incarnation's
-            // recordless survivors. Fire-and-forget; ReapOrphansOnceAsync swallows its own faults.
+            // recordless survivors. Fire-and-forget; single-flight; swallows its own faults.
             _ = ReapOrphansOnceAsync(ct);
 
             foreach (var (id, reason) in FindReviewersToReap()) {
@@ -1855,15 +1885,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // the record. Add to quarantine BEFORE removing from _agents so EffectiveCount never dips
         // (Activeized→quarantined is count-preserving).
         var pid = agent.Runtime.Pid;
+        // Quarantine (retain + count) when the child may still be OURS-and-alive: a stored identity that
+        // still matches (true) OR is uncomparable (null — unreadable/foreign token). Delete only on a
+        // proven-gone pid: dead, a conclusive recycle (MatchesTri == false), or an agent that was never
+        // identified. Collapsing the uncomparable case to "gone" would drop a live child's record.
         if (agent.StartIdentity is { } startIdentity
             && ProcessIdentity.IsAlive(pid)
-            && ProcessIdentity.Matches(pid, startIdentity)) {
+            && ProcessIdentity.MatchesTri(pid, startIdentity) != false) {
             _quarantine?.Add(new AgentKillQuarantine.Entry(
                 agent.Id, pid, startIdentity, agent.Kind.ToString(), agent.CreatedAt, agent.FlowRunId, agent.FlowRole));
             _logger.LogWarning(
                 "Agent {AgentId} (pid {Pid}) still alive after teardown — quarantined for heartbeat kill-retry", agent.Id, pid);
         } else {
-            DeletePidRecord(agentId); // confirmed dead / recycled pid / never-identified
+            DeletePidRecord(agentId); // confirmed dead / conclusively recycled pid / never-identified
         }
 
         // Now drop the agent from the live registry — after a surviving child is already in quarantine,

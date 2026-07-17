@@ -27,6 +27,15 @@ internal static partial class ProcessIdentity {
     public static bool Matches(int pid, string expectedIdentity) =>
         pid > 0 && ProcessStartToken.Matches(pid, expectedIdentity) == true;
 
+    /// <summary>The AI-839 TRI-STATE identity comparison, preserved for reap decisions that must tell
+    /// "conclusively a different incarnation (recycled pid) — safe to treat as gone" (<c>false</c>) apart
+    /// from "can't compare — token unreadable or foreign scheme, must SPARE and retain" (<c>null</c>).
+    /// A non-positive pid is uncomparable → <c>null</c>. Collapsing <c>null</c> to <c>false</c> (as
+    /// <see cref="Matches"/> does) would drop a still-alive child's record on an unreadable token, so
+    /// callers that delete records / drain quarantine must use THIS, not <see cref="Matches"/>.</summary>
+    public static bool? MatchesTri(int pid, string expectedIdentity) =>
+        pid > 0 ? ProcessStartToken.Matches(pid, expectedIdentity) : null;
+
     /// <summary>Best-effort liveness of <paramref name="pid"/> regardless of identity — only used to
     /// decide whether it's worth probing identity/env. Unix: <c>kill(pid, 0) == 0</c> (ESRCH → dead);
     /// Windows: <see cref="Process.GetProcessById(int)"/> succeeds. A non-positive pid returns false:
@@ -40,7 +49,34 @@ internal static partial class ProcessIdentity {
             catch { return false; }
         }
 
-        return UnixPtyInterop.kill(pid, 0) == 0;
+        if (UnixPtyInterop.kill(pid, 0) != 0) return false; // ESRCH → gone
+
+        // A ZOMBIE (exited but not yet reaped by its parent) still answers kill(pid, 0), but it is
+        // effectively dead — its pid holds a slot only until reaped. Treat it as not-alive so a reaper
+        // confirms death (rather than seeing a live pid whose token is now unreadable → "ambiguous →
+        // spare" → a slot held forever). Linux reads /proc/{pid}/stat state 'Z'. (macOS keeps the
+        // kill(0) answer — its parent-reaping and the retry-next-tick cadence clear the window; a prior
+        // daemon's orphans reparent to init, which reaps promptly.)
+        if (OperatingSystem.IsLinux() && IsLinuxZombie(pid)) return false;
+
+        return true;
+    }
+
+    /// <summary>True if <paramref name="pid"/> is a Linux zombie (state field 'Z' in /proc/{pid}/stat).
+    /// Best-effort: any read/parse failure returns false (fall back to the kill(0) liveness answer).</summary>
+    static bool IsLinuxZombie(int pid) {
+        try {
+            var stat      = File.ReadAllText($"/proc/{pid}/stat");
+            var afterComm = stat.LastIndexOf(')'); // comm can contain spaces/parens; state is the token after the last ')'
+
+            if (afterComm < 0 || afterComm + 2 >= stat.Length) return false;
+
+            var fields = stat[(afterComm + 2)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+            return fields.Length > 0 && fields[0].StartsWith('Z');
+        } catch {
+            return false;
+        }
     }
 
     /// <summary>

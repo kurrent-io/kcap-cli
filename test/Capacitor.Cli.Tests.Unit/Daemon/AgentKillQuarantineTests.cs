@@ -51,11 +51,16 @@ public class AgentKillQuarantineTests {
 
         await Assert.That(q.Count).IsEqualTo(1);
 
-        // One retry kills the child by exact identity (no env check needed — we own it) and, on
-        // confirmed death, drains the entry so it stops counting against admission.
+        // First retry kills the child by exact identity (no env check needed — we own it). The child
+        // dies but, as a direct child of this test process, may linger as an unreaped zombie whose
+        // liveness is momentarily ambiguous — so it is retained (fail closed), exactly as a stuck child
+        // is across heartbeat ticks in production.
         await q.RetryAllAsync(CancellationToken.None);
-
+        dummy.WaitForExit(TimeSpan.FromSeconds(8)); // reap it → liveness is now unambiguous
         await Assert.That(dummy.HasExited).IsTrue();
+
+        // Second retry observes CONFIRMED death and drains the entry so it stops counting against admission.
+        await q.RetryAllAsync(CancellationToken.None);
         await Assert.That(q.Count).IsEqualTo(0);
     }
 
