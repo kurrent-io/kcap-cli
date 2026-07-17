@@ -1142,6 +1142,26 @@ static class ImportCommand {
         // sub-grid attributes Skipped-at-import to Excluded (not Errored).
         var routedOutcomesByVendor = new ConcurrentDictionary<string, (int Loaded, int Skipped, int Failed)>(StringComparer.Ordinal);
 
+        // AI-1154 review fix (r6, P1): a SEPARATE tracker from `importedSessionIds`, used
+        // ONLY to decide what gets privatized under --private — never fed into the Done-grid
+        // counting (`importedSessionIds`/`doneBySource` stay exactly as they were; the AI-1389
+        // cosmetic double-count concern is intentionally left alone). `importedSessionIds`
+        // only gains a Cursor session id when this run did "real new work" by the
+        // Loaded/Failed/AlreadyLoaded + SentChildContent accounting — but privacy must NOT
+        // depend on that classification: a lifecycle POST (subagent-stop/session-end) can fail
+        // AFTER a child transcript has already persisted new content (this run's own
+        // ImportSessionAsync then returns Failed), or a later retry can see the child read as
+        // already-complete (SentChildContent=false) even though a PRIOR run attached new
+        // content that was never privatized. Either way `importedSessionIds` would exclude the
+        // session and a public session would stay public. So every Cursor routed classification
+        // this run touches — regardless of its outcome — is unconditionally captured here when
+        // --private is requested, and privatized at the end independent of Loaded/Failed/
+        // AlreadyLoaded/SentChildContent. Scoped to Cursor (vendor == "cursor") because
+        // SentChildContent/this lifecycle-after-content-persisted shape is Cursor-specific;
+        // every other routed vendor's own default_visibility-on-session-start stamp already
+        // privatizes atomically and isn't exposed to this gap.
+        var privateScopeSessionIds = new ConcurrentBag<string>();
+
         static (int Loaded, int Skipped, int Failed) AddRoutedOutcome(
                 (int Loaded, int Skipped, int Failed) prev,
                 ImportOutcome                         outcome
@@ -1321,6 +1341,15 @@ static class ImportCommand {
                                     var result  = await ImportOne(c);
                                     var outcome = result.Outcome;
 
+                                    // AI-1154 review fix (r6, P1): capture for privatization BEFORE
+                                    // any Loaded/Failed/AlreadyLoaded classification below — see the
+                                    // declaration comment on privateScopeSessionIds. Deliberately
+                                    // unconditional: even a Failed outcome (lifecycle POST failed
+                                    // after content already persisted) must still get privatized.
+                                    if (forcePrivate && c.Vendor == "cursor") {
+                                        privateScopeSessionIds.Add(c.SessionId);
+                                    }
+
                                     // AI-1154 review fix (P2, broadened by the round-2 follow-up):
                                     // an AlreadyLoaded session's routed call is a lifecycle/repo-
                                     // backfill replay (or, for a nested child, an inline-handled
@@ -1401,6 +1430,12 @@ static class ImportCommand {
                         var result  = await ImportOne(c);
                         var outcome = result.Outcome;
 
+                        // AI-1154 review fix (r6, P1): see the Tty branch above — unconditional
+                        // privatization capture, independent of the outcome classification below.
+                        if (forcePrivate && c.Vendor == "cursor") {
+                            privateScopeSessionIds.Add(c.SessionId);
+                        }
+
                         // AI-1154 review fix (P2, broadened by the round-2 follow-up): see the
                         // Tty branch above for why an AlreadyLoaded lifecycle-only replay must
                         // not count as Loaded/Excluded, and why sentChildContent overrides that
@@ -1449,9 +1484,22 @@ static class ImportCommand {
         }
 
         // --- --private: mark all imported sessions owner-only ---
-        if (forcePrivate && !importedSessionIds.IsEmpty) {
-            display.BeginPhase("Marking imported sessions private");
-            await SetVisibilityNoneForAll(httpClient, baseUrl, [.. importedSessionIds]);
+        //
+        // AI-1154 review fix (r6, P1): the privatize set is importedSessionIds (chain-phase +
+        // routed-phase "real new work") UNIONED with privateScopeSessionIds (every Cursor
+        // routed classification touched this run under --private, regardless of outcome — see
+        // its declaration above). The union — not a replacement — keeps chain-phase and
+        // non-Cursor routed privatization exactly as before; it only widens what Cursor
+        // contributes so privacy no longer depends on the Loaded/Failed/AlreadyLoaded/
+        // SentChildContent accounting used for import counts.
+        if (forcePrivate) {
+            var toPrivatize = new HashSet<string>(importedSessionIds, StringComparer.Ordinal);
+            toPrivatize.UnionWith(privateScopeSessionIds);
+
+            if (toPrivatize.Count > 0) {
+                display.BeginPhase("Marking imported sessions private");
+                await SetVisibilityNoneForAll(httpClient, baseUrl, [.. toPrivatize]);
+            }
         }
 
         // --- Background phase (titles / summaries) ---
