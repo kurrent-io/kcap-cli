@@ -138,6 +138,64 @@ public class CursorOrphanedChildStandaloneTests {
     }
 
     [Test]
+    public async Task reconciliation_prunes_a_child_excluded_from_the_routed_plan_off_the_parents_subagent_children() {
+        // AI-1154 review fix (P1): the reverse direction of F1/F2. `--session <parent>` puts the
+        // PARENT in this run's routed plan but never classifies the child (excluded by the
+        // --session filter) — yet ClassifyAsync's widened same-workspace scan still correlates and
+        // stamps SubagentChildren=[child] onto the parent. Attaching that child in
+        // ImportSessionAsync would WIDEN the plan (contrary to D5) and ship a session the user
+        // explicitly filtered out. Reconciliation must prune it: the parent imports without ever
+        // sending the excluded child's subagent-start/-stop or transcript.
+        using var fx = new ProjectsDirFixture();
+        WriteParentAndChild(fx);
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+        using var getHandler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
+        using var getClient  = new HttpClient(getHandler);
+
+        // Only the PARENT is part of this run's slice — the child is excluded by --session.
+        var discovered = await src.DiscoverAsync(Filters(filterSession: ParentId), CancellationToken.None);
+        await Assert.That(discovered.Count).IsEqualTo(1);
+        await Assert.That(discovered[0].SessionId).IsEqualTo(ParentId);
+
+        var classified = await src.ClassifyAsync(discovered, Ctx(getClient), CancellationToken.None);
+        var parentClass = classified.Single(c => c.SessionId == ParentId);
+
+        // Sanity: the widened same-workspace scan still correlated the child onto the parent
+        // (this is F1's widening, working exactly as intended for link DISCOVERY).
+        await Assert.That(parentClass.SourceMeta!.ContainsKey("SubagentChildren")).IsTrue();
+
+        // This run's routed plan contains only the parent — the child was never classified.
+        var routed = new List<ImportCommand.SessionClassification> { parentClass };
+
+        var reconciled     = ImportCommand.ReconcileOrphanedCursorSubagentChildren(routed);
+        var reconciledParent = reconciled.Single();
+
+        // The out-of-plan child must be pruned off — never attached for import here.
+        await Assert.That(reconciledParent.SourceMeta!.ContainsKey("SubagentChildren")).IsFalse();
+
+        var posted = new List<string>();
+        using var postHandler = new StubHandler(
+            postCapture: (req, _) => { posted.Add(req.RequestUri!.AbsolutePath); return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var postClient  = new HttpClient(postHandler);
+
+        var outcome = await src.ImportSessionAsync(
+            reconciledParent,
+            new ImportContext(postClient, "http://localhost", ForcePrivate: false),
+            CancellationToken.None);
+
+        // The parent still imports normally...
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
+        await Assert.That(posted).Contains("/hooks/session-start/cursor");
+        await Assert.That(posted).Contains("/hooks/transcript");
+        await Assert.That(posted).Contains("/hooks/session-end/cursor");
+
+        // ...but never sends the excluded child's subagent lifecycle or transcript.
+        await Assert.That(posted).DoesNotContain("/hooks/subagent-start");
+        await Assert.That(posted).DoesNotContain("/hooks/subagent-stop");
+    }
+
+    [Test]
     public async Task reconciliation_leaves_nested_child_untouched_when_parent_is_in_the_routed_plan() {
         // Regression: the common case (both parent and child are part of this run) must keep
         // importing nested — reconciliation is a no-op when the parent IS in `routed`.

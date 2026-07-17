@@ -310,6 +310,17 @@ static class ImportCommand {
     /// the parent exists server-side. A child whose parent IS among `routed` (the common case) is
     /// left untouched — it keeps importing nested, under the parent's own
     /// <c>ImportSessionAsync</c> call.
+    ///
+    /// <para>
+    /// AI-1154 review fix (P1): the reverse direction is pruned too. <c>SubagentChildren</c> on a
+    /// routed PARENT was built from the same widened same-workspace scan, so it can list a child
+    /// that fell outside THIS run's routed/filtered plan (e.g. <c>--session &lt;parent&gt;</c>, or a
+    /// <c>--since</c>/scope filter that excludes the child). Attaching such a child would WIDEN
+    /// the import plan and ship a session the user explicitly filtered out — the widened set may
+    /// only be used to DISCOVER links, never to decide what gets attached. Children not in
+    /// `routed` are stripped from <c>SubagentChildren</c> here; they import standalone on their
+    /// own run, or get adopted later by the server-side sweep.
+    /// </para>
     /// </summary>
     internal static List<SessionClassification> ReconcileOrphanedCursorSubagentChildren(
         List<SessionClassification> routed
@@ -318,25 +329,45 @@ static class ImportCommand {
 
         return [
             .. routed.Select(c => {
-                if (c.SourceMeta is not { } meta
-                 || !(meta.TryGetValue("IsSubagentChild", out var isChildObj) && isChildObj is true)) {
-                    return c;
+                if (c.SourceMeta is not { } meta) return c;
+
+                var reconciled = meta;
+                var changed    = false;
+
+                // Child side: an orphan whose parent isn't part of this run's routed plan must
+                // import standalone rather than being silently skipped by ImportSessionAsync.
+                if (meta.TryGetValue("IsSubagentChild", out var isChildObj) && isChildObj is true) {
+                    var parentId = meta.TryGetValue("ParentSessionId", out var parentIdObj) ? parentIdObj as string : null;
+
+                    // Parent is (or will be) imported in this same run — leave the nested-child
+                    // flags in place so CursorImportSource keeps skipping this child's own routed
+                    // import in favor of the parent importing it inline.
+                    if (parentId is null || !routedIds.Contains(parentId)) {
+                        var d = new Dictionary<string, object?>(reconciled);
+                        d.Remove("IsSubagentChild");
+                        d.Remove("ParentSessionId");
+                        reconciled = d;
+                        changed    = true;
+                    }
                 }
 
-                var parentId = meta.TryGetValue("ParentSessionId", out var parentIdObj) ? parentIdObj as string : null;
+                // Parent side: prune SubagentChildren down to children that are actually part of
+                // this run's routed plan. A child excluded from `routed` must never be attached
+                // and imported here.
+                if (reconciled.TryGetValue("SubagentChildren", out var kidsObj)
+                 && kidsObj is List<CursorImportSource.CursorSubagentChild> kids) {
+                    var keptKids = kids.Where(k => routedIds.Contains(k.SessionId)).ToList();
 
-                // Parent is (or will be) imported in this same run — leave the nested-child
-                // flags in place so CursorImportSource keeps skipping this child's own routed
-                // import in favor of the parent importing it inline.
-                if (parentId is not null && routedIds.Contains(parentId)) return c;
+                    if (keptKids.Count != kids.Count) {
+                        var d = new Dictionary<string, object?>(reconciled);
+                        if (keptKids.Count > 0) d["SubagentChildren"] = keptKids;
+                        else                     d.Remove("SubagentChildren");
+                        reconciled = d;
+                        changed    = true;
+                    }
+                }
 
-                // Orphan: the parent isn't part of this run's plan. Clear the flags so this
-                // child's own ImportSessionAsync call falls through to a standalone import.
-                var reconciled = new Dictionary<string, object?>(meta);
-                reconciled.Remove("IsSubagentChild");
-                reconciled.Remove("ParentSessionId");
-
-                return c with { SourceMeta = reconciled };
+                return changed ? c with { SourceMeta = reconciled } : c;
             })
         ];
     }
