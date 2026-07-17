@@ -566,6 +566,18 @@ public class WatchCommandTests {
 
         await Assert.That(result).IsEqualTo(TimeSpan.FromMinutes(expectedMinutes));
     }
+
+    // AI-1382 review fix #4 — Cursor's own sessionStart hook posts (and spawns this very watcher)
+    // before any transcript line is ever read, exactly like Antigravity — so the generic
+    // below-threshold buffer must not apply to it either.
+    [Test]
+    [Arguments("antigravity", true)]
+    [Arguments("cursor",      true)]
+    [Arguments("codex",       false)]
+    [Arguments("claude",      false)]
+    [Arguments("gemini",      false)]
+    public async Task SkipsThresholdBuffering_matches_only_the_vendors_that_pre_commit_the_session(string vendor, bool expected) =>
+        await Assert.That(WatchCommand.SkipsThresholdBuffering(vendor)).IsEqualTo(expected);
 }
 
 public class UpdateCodexPendingToolCallsTests {

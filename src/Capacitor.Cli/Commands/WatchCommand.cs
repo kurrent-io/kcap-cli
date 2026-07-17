@@ -401,7 +401,21 @@ static partial class WatchCommand {
         // the start so short conversations stream live and still idle-end + post session-end
         // (otherwise a <10-line conversation would never reach threshold, never idle-end, and
         // leave the session Active with the watcher lingering — the IDE process outlives it).
-        if (vendor == "antigravity") state.ThresholdReached = true;
+        //
+        // AI-1382 review fix #4 — Cursor's own sessionStart hook ALSO posts (and spawns this very
+        // watcher) before any transcript line is ever read, so the same reasoning applies: the
+        // generic 10-line buffer exists only to avoid polluting the server with a session it has
+        // never heard of, which isn't true for Cursor either. Without this, a top-level Cursor
+        // watcher re-added its still-unread lines to BufferedLines every poll (the line cursor
+        // never advances while buffering) until they eventually flushed as duplicates, and — worse
+        // — a watcher that force-quit before crossing the artificial threshold skipped its final
+        // drain AND shutdown spool (below) entirely, and was permanently ineligible for the Cursor
+        // idle ceiling (ShouldEndOnIdle's `isSessionWatcher` branch requires ThresholdReached).
+        // Scoped to session (agentId is null) AND child watchers alike — child watchers never
+        // consult ThresholdReached in the buffering switch below (it only matches `agentId: null`
+        // cases) or in the final-drain/end-synthesis gates (both explicitly agentId-is-null-gated
+        // too), so setting it unconditionally here is a no-op for them either way.
+        if (SkipsThresholdBuffering(vendor)) state.ThresholdReached = true;
         // Antigravity is a GUI app like the Codex desktop: its shared process never
         // exits per-conversation, so (like Codex) the idle timeout — not a parent-exit
         // watchdog — is the per-conversation session-end path. Its own knob so tenants
@@ -992,6 +1006,22 @@ static partial class WatchCommand {
     /// parent-exit) still post normally through the same call site this guards.
     /// </summary>
     internal static bool CursorSuppressesEndPost(string vendor, bool idleExit) => vendor == "cursor" && idleExit;
+
+    /// <summary>
+    /// AI-1382 review fix #4 — vendors whose sessionStart hook (or, for Antigravity, an
+    /// equivalent pre-spawn POST) commits the session server-side BEFORE the tailing watcher
+    /// itself ever reads a transcript line, so the generic below-threshold buffer (which exists
+    /// solely to avoid polluting the server with a session it has never heard of) does not apply.
+    /// Before this fix, only Antigravity got this treatment — a top-level Cursor watcher re-added
+    /// its still-unread lines to <see cref="WatchState.BufferedLines"/> every poll (the line
+    /// cursor never advances while buffering) until they eventually flushed as duplicates, and a
+    /// watcher that exited before crossing the artificial threshold skipped its final drain AND
+    /// shutdown spool entirely, and was permanently ineligible for the Cursor idle ceiling
+    /// (<see cref="ShouldEndOnIdle"/>'s <c>isSessionWatcher</c> branch requires
+    /// <see cref="WatchState.ThresholdReached"/>). Pure so it's unit-testable; see
+    /// <see cref="RunWatch"/>'s call site.
+    /// </summary>
+    internal static bool SkipsThresholdBuffering(string vendor) => vendor is "antigravity" or "cursor";
 
     /// <summary>
     /// AI-1382 review fix #6 — the idle clock <see cref="ShouldEndOnIdle"/> measures against for
