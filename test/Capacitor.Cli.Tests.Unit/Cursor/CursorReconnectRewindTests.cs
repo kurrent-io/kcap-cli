@@ -27,8 +27,15 @@ public class CursorReconnectRewindTests {
             var path = Path.Combine(dir, "t.jsonl");
             await File.WriteAllTextAsync(path, "line1\nline2\nline3\n");
 
-            await Assert.That(await WatchCommand.ResolveByteOffsetForLineAsync(path, 0, CancellationToken.None)).IsEqualTo(0L);
-            await Assert.That(await WatchCommand.ResolveByteOffsetForLineAsync(path, -1, CancellationToken.None)).IsEqualTo(0L);
+            // AI-1382 review fix (r6): the method now returns a (ByteOffset, LineNumber) pair —
+            // trivial for a non-positive request, LineNumber just carries the input through.
+            var zero = await WatchCommand.ResolveByteOffsetForLineAsync(path, 0, CancellationToken.None);
+            await Assert.That(zero!.Value.ByteOffset).IsEqualTo(0L);
+            await Assert.That(zero!.Value.LineNumber).IsEqualTo(0);
+
+            var negative = await WatchCommand.ResolveByteOffsetForLineAsync(path, -1, CancellationToken.None);
+            await Assert.That(negative!.Value.ByteOffset).IsEqualTo(0L);
+            await Assert.That(negative!.Value.LineNumber).IsEqualTo(-1);
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
@@ -50,9 +57,20 @@ public class CursorReconnectRewindTests {
             // Deliberately uneven line lengths so a naive "count * avg-length" guess would be wrong.
             await File.WriteAllTextAsync(path, "a\nbbbb\ncc\n"); // offsets: line0 ends at 2, line1 ends at 7, line2 ends at 10
 
-            await Assert.That(await WatchCommand.ResolveByteOffsetForLineAsync(path, 1, CancellationToken.None)).IsEqualTo(2L);
-            await Assert.That(await WatchCommand.ResolveByteOffsetForLineAsync(path, 2, CancellationToken.None)).IsEqualTo(7L);
-            await Assert.That(await WatchCommand.ResolveByteOffsetForLineAsync(path, 3, CancellationToken.None)).IsEqualTo(10L);
+            // AI-1382 review fix (r6): unchanged mid-file case — the returned pair's LineNumber is
+            // always the requested lineNumber unchanged; only the r5 unterminated-final-record case
+            // (covered below) rewinds it.
+            var r1 = await WatchCommand.ResolveByteOffsetForLineAsync(path, 1, CancellationToken.None);
+            await Assert.That(r1!.Value.ByteOffset).IsEqualTo(2L);
+            await Assert.That(r1!.Value.LineNumber).IsEqualTo(1);
+
+            var r2 = await WatchCommand.ResolveByteOffsetForLineAsync(path, 2, CancellationToken.None);
+            await Assert.That(r2!.Value.ByteOffset).IsEqualTo(7L);
+            await Assert.That(r2!.Value.LineNumber).IsEqualTo(2);
+
+            var r3 = await WatchCommand.ResolveByteOffsetForLineAsync(path, 3, CancellationToken.None);
+            await Assert.That(r3!.Value.ByteOffset).IsEqualTo(10L);
+            await Assert.That(r3!.Value.LineNumber).IsEqualTo(3);
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
@@ -70,15 +88,24 @@ public class CursorReconnectRewindTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
-    // AI-1382 review fix (r5) — a COMPLETE final record with no trailing newline yet must resolve
-    // at EOF, not quarantine. This is exactly what the watcher's own shutdown final drain
+    // AI-1382 review fix (r5) — a COMPLETE final record with no trailing newline yet must resolve,
+    // not quarantine. This is exactly what the watcher's own shutdown final drain
     // (IncompleteFinalLinePolicy.ConsumeIfComplete) and historical import's StreamReader-based
     // splitting both send as the last line of a file. Before this fix, the round-4 guard treated
     // "fewer newline-terminated lines than requested" as an unconditional shortfall, so a later
     // watcher restart resuming at that same final line (server frontier == local line count) would
     // permanently quarantine an otherwise-healthy, append-only session.
+    //
+    // AI-1382 review fix (r6) — the r5 fix originally resolved this case at EOF, unchanged
+    // LineNumber. That seeded CursorByteOffset exactly where Cursor's OWN later-arriving
+    // terminator for this SAME already-acked record lands; when it arrived, the bounded reader
+    // (seeding its own line index from LinesProcessed, left at the record's line number) misread
+    // the terminator as closing a phantom empty line, permanently shifting every following line's
+    // number by one. The fix REWINDS instead: the pair now points at the record's own START
+    // (identical to line 1's END below) with LineNumber one less — the record is re-read/re-sent
+    // next poll, harmlessly deduped by the server's source-ack frontier.
     [Test]
-    public async Task ResolveByteOffsetForLineAsync_resolves_a_complete_unterminated_final_line_at_eof() {
+    public async Task ResolveByteOffsetForLineAsync_rewinds_a_complete_unterminated_final_line_to_its_start() {
         var dir = Directory.CreateTempSubdirectory("kcap-reconnect-offset-unterminated").FullName;
         try {
             var path = Path.Combine(dir, "t.jsonl");
@@ -86,12 +113,16 @@ public class CursorReconnectRewindTests {
             await File.WriteAllTextAsync(path, content);
 
             // Line 1 (newline-terminated) resolves exactly as before.
-            await Assert.That(await WatchCommand.ResolveByteOffsetForLineAsync(path, 1, CancellationToken.None))
-                .IsEqualTo(8L); // "{\"a\":1}\n".Length
+            var r1 = await WatchCommand.ResolveByteOffsetForLineAsync(path, 1, CancellationToken.None);
+            await Assert.That(r1!.Value.ByteOffset).IsEqualTo(8L); // "{\"a\":1}\n".Length
+            await Assert.That(r1!.Value.LineNumber).IsEqualTo(1);
 
-            // Line 2 — the complete, unterminated final record — resolves at EOF (the whole file).
-            await Assert.That(await WatchCommand.ResolveByteOffsetForLineAsync(path, 2, CancellationToken.None))
-                .IsEqualTo((long)content.Length);
+            // Line 2 — the complete, unterminated final record — rewinds to the record's own start
+            // (same byte offset as line 1's end, NOT EOF) paired with LineNumber - 1 (NOT counted
+            // as processed yet).
+            var r2 = await WatchCommand.ResolveByteOffsetForLineAsync(path, 2, CancellationToken.None);
+            await Assert.That(r2!.Value.ByteOffset).IsEqualTo(8L);
+            await Assert.That(r2!.Value.LineNumber).IsEqualTo(1);
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
@@ -188,9 +219,19 @@ public class CursorReconnectRewindTests {
     // (IncompleteFinalLinePolicy.ConsumeIfComplete) sends a complete but unterminated final record,
     // the watcher exits (idle), and a LATER hook restarts the watcher with the server resuming it at
     // that exact same final line (server frontier == local line count, file STILL lacks the trailing
-    // newline). SeedCursorByteOffsetAsync must seed the true EOF byte offset and NOT quarantine.
+    // newline). SeedCursorByteOffsetAsync must seed a valid byte offset and NOT quarantine.
+    //
+    // AI-1382 review fix (r6) — reproduces the P1 finding this seeds against: the r5 fix seeded
+    // CursorByteOffset at EOF while leaving LinesProcessed at the (already-acked) final record's own
+    // line number. That put the byte cursor exactly where Cursor's OWN later-arriving terminator
+    // for this SAME record lands; when it arrived, the bounded reader — seeding its line index from
+    // LinesProcessed — misread the terminator as a phantom empty line and shifted every subsequent
+    // line's number by one, permanently. The fix REWINDS: CursorByteOffset seeds to the record's own
+    // START (byte 8, right after line 1's newline) and LinesProcessed rewinds to 1 (the record is
+    // NOT yet counted as processed — it will be re-read/re-sent next poll, harmlessly deduped by the
+    // server's source-ack frontier).
     [Test]
-    public async Task SeedCursorByteOffsetAsync_seeds_at_eof_for_a_final_drains_complete_unterminated_line() {
+    public async Task SeedCursorByteOffsetAsync_rewinds_a_final_drains_complete_unterminated_line_instead_of_seeding_at_eof() {
         var dir = Directory.CreateTempSubdirectory("kcap-seed-unterminated-final").FullName;
         var sid = NewSessionId();
         try {
@@ -207,7 +248,8 @@ public class CursorReconnectRewindTests {
                 state, lineNumber: 2, sid, vendor: "cursor", transcriptPath, guard, CancellationToken.None);
 
             await Assert.That(ok).IsTrue();
-            await Assert.That(state.CursorByteOffset).IsEqualTo((long)content.Length); // seeded at EOF
+            await Assert.That(state.CursorByteOffset).IsEqualTo(8L); // rewound to the record's own start, NOT EOF (15)
+            await Assert.That(state.LinesProcessed).IsEqualTo(1);    // rewound — record not yet counted as processed
             await Assert.That(guard.VerifyPriorZone("anything-at-all")).IsTrue();
             await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse(); // NOT quarantined
         } finally {
@@ -217,18 +259,21 @@ public class CursorReconnectRewindTests {
     }
 
     [Test]
-    public async Task SeedCursorByteOffsetAsync_is_a_no_op_for_non_cursor_vendors() {
+    public async Task SeedCursorByteOffsetAsync_is_a_byte_only_no_op_for_non_cursor_vendors() {
+        // AI-1382 review fix (r6): SeedCursorByteOffsetAsync now sets state.LinesProcessed for
+        // EVERY vendor (previously only its callers did) — the "no-op" is byte-side only.
         var dir = Directory.CreateTempSubdirectory("kcap-seed-initial-resume-noncursor").FullName;
         try {
             var transcriptPath = Path.Combine(dir, "t.jsonl");
             await File.WriteAllTextAsync(transcriptPath, "a\nbbbb\ncc\n");
 
-            var state = new WatchState { LinesProcessed = 2, CursorByteOffset = 999 };
+            var state = new WatchState { LinesProcessed = 0, CursorByteOffset = 999 };
             var ok = await WatchCommand.SeedCursorByteOffsetAsync(
                 state, lineNumber: 2, NewSessionId(), vendor: "codex", transcriptPath, cursorGuard: null, CancellationToken.None);
 
             await Assert.That(ok).IsTrue();
             await Assert.That(state.CursorByteOffset).IsEqualTo(999L); // untouched — no guard to keep in sync
+            await Assert.That(state.LinesProcessed).IsEqualTo(2);      // still set to lineNumber
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 

@@ -2934,15 +2934,41 @@ static partial class WatchCommand {
     /// <paramref name="lineNumber"/> == C + 1, if the bytes after the last newline (or from byte 0,
     /// if there is no newline at all) form a complete JSON record (the same
     /// <see cref="IsCompleteJsonRecord"/> predicate <see cref="ApplyPartialLineHoldback"/> uses to
-    /// gate consuming an unterminated final line), that record IS line C + 1 and resolves to EOF —
+    /// gate consuming an unterminated final line), that record IS line C + 1 and is resolvable —
     /// matching <see cref="ByteOffsetForAckedLines"/>, which already treats a full ack beyond the
     /// range's newline count as consuming through EOF. Any other case (no trailing content, or a
     /// trailing tail that doesn't parse, or <paramref name="lineNumber"/> &gt; C + 1) is a genuine
     /// local shortfall and still returns null so the caller quarantines.
     /// </para>
+    ///
+    /// <para>
+    /// AI-1382 review fix (r6) — the C + 1 case no longer resolves to EOF paired with the
+    /// unchanged <paramref name="lineNumber"/>. Seeding <see cref="WatchState.CursorByteOffset"/>
+    /// at EOF while <see cref="WatchState.LinesProcessed"/> stayed at C + 1 (the r5 behaviour) put
+    /// the byte cursor exactly where Cursor's OWN later-arriving terminator for this SAME
+    /// already-acknowledged record lands (Cursor normally writes that <c>'\n'</c> before appending
+    /// the next JSONL record). When it arrives, the bounded reader
+    /// (<see cref="ReadNewCompleteLinesAsync"/>) starts reading right there and — because it seeds
+    /// its own line index from <see cref="WatchState.LinesProcessed"/>, already at C + 1 — treats
+    /// the leading terminator as closing a NEW, phantom empty line, then labels every real line
+    /// after it one too high, permanently: the server is left waiting at the true frontier while
+    /// the watcher repeatedly resends from the stale offset.
+    /// </para>
+    ///
+    /// <para>
+    /// The fix rewinds instead of seeding at EOF: the C + 1 case now returns
+    /// (<c>lastNewlineEnd</c>, <paramref name="lineNumber"/> - 1) — the byte offset the final
+    /// record itself STARTS at, paired with a line count that does NOT count that record as
+    /// processed. The record is then re-read (and re-sent) on the next poll exactly as if it had
+    /// never been acknowledged — harmless, because Cursor's normalizer emits deterministic event
+    /// ids, so the server's source-ack frontier dedupes a resend at/behind it rather than treating
+    /// it as new. When the terminator later lands, the record is read and counted normally as line
+    /// C (0-based), and the following record lands at line C + 1 — no phantom line, no drift. This
+    /// keeps the byte/line frontier in lockstep exactly like every other seed path in this file.
+    /// </para>
     /// </summary>
-    internal static async Task<long?> ResolveByteOffsetForLineAsync(string transcriptPath, int lineNumber, CancellationToken ct) {
-        if (lineNumber <= 0) return 0;
+    internal static async Task<(long ByteOffset, int LineNumber)?> ResolveByteOffsetForLineAsync(string transcriptPath, int lineNumber, CancellationToken ct) {
+        if (lineNumber <= 0) return (0, lineNumber);
         if (!File.Exists(transcriptPath)) return null;
 
         await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -2959,7 +2985,7 @@ static partial class WatchCommand {
                 if (buffer[i] != (byte)'\n') continue;
 
                 seen++;
-                if (seen == lineNumber) return offset;
+                if (seen == lineNumber) return (offset, lineNumber);
                 lastNewlineEnd = offset;
             }
         }
@@ -2976,7 +3002,13 @@ static partial class WatchCommand {
 
         if (trailingRead != trailingLength) return null; // file shrank underneath us — don't guess
 
-        return IsCompleteJsonRecord(Encoding.UTF8.GetString(trailing)) ? offset : null;
+        // AI-1382 review fix (r6) — rewind to the record's own start (lastNewlineEnd) and drop
+        // LineNumber by one (not yet "processed" — it will be re-read/re-sent) instead of
+        // resolving at EOF with LineNumber unchanged. See the method doc for why the EOF seed
+        // drifted line numbering once Cursor's own terminator for this record later arrived.
+        return IsCompleteJsonRecord(Encoding.UTF8.GetString(trailing))
+            ? (lastNewlineEnd, lineNumber - 1)
+            : null;
     }
 
     /// <summary>
@@ -2999,6 +3031,14 @@ static partial class WatchCommand {
     /// runtime rewrite detection — discard and exit — rather than proceed with a rewind that never
     /// actually happened.
     /// </para>
+    ///
+    /// <para>
+    /// AI-1382 review fix (r6) — <see cref="WatchState.LinesProcessed"/> is no longer set to
+    /// <paramref name="serverPosition"/> unconditionally here; <see cref="SeedCursorByteOffsetAsync"/>
+    /// now owns that assignment (for every vendor) so it can substitute a REWOUND line count for
+    /// the r5 complete-unterminated-final-record case, keeping it in lockstep with the byte offset
+    /// it seeds in the same call. See that method's doc for why.
+    /// </para>
     /// </summary>
     internal static async Task<bool> ApplyReconnectRewindAsync(
             WatchState          state,
@@ -3012,21 +3052,19 @@ static partial class WatchCommand {
         // AI-1382 review fix (r3, finding #2) — shares the byte-side seed with RunWatch's INITIAL
         // WatcherConnect registration (see SeedCursorByteOffsetAsync's own doc) so both paths that
         // resume at a server-given line number map it to the true byte offset identically.
-        if (!await SeedCursorByteOffsetAsync(state, serverPosition, sessionId, vendor, transcriptPath, cursorGuard, ct)) {
-            return false;
-        }
-
-        state.LinesProcessed = serverPosition;
-
-        return true;
+        //
+        // AI-1382 review fix (r6) — SeedCursorByteOffsetAsync now sets state.LinesProcessed itself
+        // (possibly rewound), so this no longer duplicates that assignment afterward.
+        return await SeedCursorByteOffsetAsync(state, serverPosition, sessionId, vendor, transcriptPath, cursorGuard, ct);
     }
 
     /// <summary>
     /// AI-1382 review fix (r3, finding #2) — resolves <paramref name="lineNumber"/> to its TRUE
     /// byte offset in <paramref name="transcriptPath"/> and seeds <see cref="WatchState.CursorByteOffset"/>
     /// with it, resetting the guard's checkpoint so the two-zone checks start clean from that
-    /// offset (exactly as if this were the guard's very first poll). No-op (returns true) for every
-    /// non-Cursor vendor (no guard to keep in sync).
+    /// offset (exactly as if this were the guard's very first poll). A no-op byte-side seed for
+    /// every non-Cursor vendor (no guard to keep in sync) — but see r6 below, which now also owns
+    /// <see cref="WatchState.LinesProcessed"/> for every vendor, not just Cursor.
     ///
     /// Shared by two call sites that both resume the watcher at a server-given line number and
     /// must keep the byte/line frontier aligned from the very first poll: <see cref="ApplyReconnectRewindAsync"/>
@@ -3049,6 +3087,23 @@ static partial class WatchCommand {
     /// in that case, WITHOUT touching <see cref="WatchState.CursorByteOffset"/> or the guard's
     /// checkpoint — callers must not advance <see cref="WatchState.LinesProcessed"/> either.
     /// </para>
+    ///
+    /// <para>
+    /// AI-1382 review fix (r6) — <see cref="ResolveByteOffsetForLineAsync"/> now returns a
+    /// (byte offset, line number) PAIR rather than a bare byte offset, because the r5
+    /// complete-unterminated-final-record case resolves to a REWOUND pair (the record's own start,
+    /// paired with <paramref name="lineNumber"/> - 1) instead of EOF paired with
+    /// <paramref name="lineNumber"/> unchanged — see that method's doc for the full rationale (a
+    /// terminator Cursor appends for this SAME already-acked record later would otherwise be
+    /// misread as a phantom empty line, permanently shifting every following line's number by
+    /// one). This method now assigns BOTH halves of that pair to <see cref="WatchState.CursorByteOffset"/>
+    /// and <see cref="WatchState.LinesProcessed"/> together, for every vendor — including
+    /// non-Cursor, which previously relied on both call sites to separately set
+    /// <see cref="WatchState.LinesProcessed"/> themselves (now removed; see
+    /// <see cref="ApplyReconnectRewindAsync"/>) — so the pair is assigned atomically from one
+    /// source of truth instead of the byte offset and line count being written by two different
+    /// call paths that could disagree.
+    /// </para>
     /// </summary>
     internal static async Task<bool> SeedCursorByteOffsetAsync(
             WatchState          state,
@@ -3059,7 +3114,10 @@ static partial class WatchCommand {
             CursorRewriteGuard? cursorGuard,
             CancellationToken   ct
         ) {
-        if (vendor != "cursor" || cursorGuard is null) return true;
+        if (vendor != "cursor" || cursorGuard is null) {
+            state.LinesProcessed = lineNumber;
+            return true;
+        }
 
         var resolved = await ResolveByteOffsetForLineAsync(transcriptPath, lineNumber, ct);
 
@@ -3072,7 +3130,8 @@ static partial class WatchCommand {
             return false;
         }
 
-        state.CursorByteOffset = resolved.Value;
+        state.CursorByteOffset = resolved.Value.ByteOffset;
+        state.LinesProcessed   = resolved.Value.LineNumber;
         cursorGuard.ResetCheckpoint();
 
         return true;

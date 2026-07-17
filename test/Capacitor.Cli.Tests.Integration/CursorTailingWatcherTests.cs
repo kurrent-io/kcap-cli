@@ -237,4 +237,82 @@ public class CursorTailingWatcherTests {
             await Assert.That(spawned).IsEquivalentTo([sessionId]);
         } finally { try { Directory.Delete(dir, recursive: true); } catch { } }
     }
+
+    // ── 5. Resume at an unterminated final line, then its terminator arrives → no line drift (r6) ──
+
+    /// <summary>
+    /// AI-1382 review fix (r6) — end-to-end regression for the P1 finding: a watcher resumes at a
+    /// server frontier that lands exactly on a COMPLETE-but-unterminated final record (the r5
+    /// scenario — a prior process's shutdown final drain already sent and the server already
+    /// acked that record), then Cursor appends the record's own trailing newline before writing
+    /// its NEXT record (Cursor's normal write order: body, then '\n', then the next record).
+    ///
+    /// Before this fix, <c>SeedCursorByteOffsetAsync</c> seeded <c>CursorByteOffset</c> at EOF
+    /// while leaving <c>LinesProcessed</c> at the final record's own (already-acked) line number.
+    /// The next poll's bounded read then started exactly at that EOF, saw the freshly-appended
+    /// leading <c>'\n'</c>, and — because <see cref="WatchCommand.ReadNewCompleteLinesAsync"/>
+    /// seeds its line index from <c>LinesProcessed</c> — misread it as closing a NEW, phantom
+    /// empty line, then labelled the real next record one line too high, permanently: the server,
+    /// still waiting at the true frontier, would see a persistent apparent gap while the watcher
+    /// kept resending from the stale offset.
+    ///
+    /// This composes the same two pure seams the rest of this class uses instead of a live
+    /// SignalR round trip: <see cref="WatchCommand.SeedCursorByteOffsetAsync"/> (the resume) and
+    /// <see cref="WatchCommand.ReadNewCompleteLinesAsync"/> (the next poll's bounded read), fed
+    /// from the SAME <c>WatchState</c> fields <c>RunWatch</c>/<c>DrainNewLines</c> thread between
+    /// them in production.
+    /// </summary>
+    [Test]
+    public async Task ResumeAtUnterminatedFinalLine_ThenTerminatorArrives_NextRecordKeepsItsTrueLineNumber() {
+        var dir = Directory.CreateTempSubdirectory("kcap-cursor-r6-terminator-drift").FullName;
+        var sessionId = NewSessionId();
+        try {
+            var transcriptPath = Path.Combine(dir, "session.jsonl");
+            // Line 0 (terminated) + line 1, complete but not yet terminated — exactly what a
+            // prior watcher's shutdown final drain sent and the server already acknowledged.
+            await File.WriteAllTextAsync(transcriptPath, "{\"a\":1}\n{\"b\":2}");
+
+            var guard = new CursorRewriteGuard(sessionId);
+            // The server resumes this fresh watcher process at line 2 (1-based: 2 lines already
+            // acked — line 0 and the unterminated line 1).
+            var state = new WatchState { LinesProcessed = 2 };
+
+            var seeded = await WatchCommand.SeedCursorByteOffsetAsync(
+                state, lineNumber: 2, sessionId, vendor: "cursor", transcriptPath, guard, CancellationToken.None);
+
+            await Assert.That(seeded).IsTrue();
+            await Assert.That(CursorMarkers.IsQuarantined(sessionId)).IsFalse();
+            // Rewound to the unterminated record's own start, NOT EOF — and LinesProcessed
+            // rewound with it, so the two frontiers stay in lockstep.
+            await Assert.That(state.CursorByteOffset).IsEqualTo(8L);  // "{\"a\":1}\n".Length
+            await Assert.That(state.LinesProcessed).IsEqualTo(1);
+
+            // Cursor now appends the terminator for the already-acked line 1, followed by the
+            // NEXT record — its normal write order (body, then '\n', then the next record's body).
+            await File.AppendAllTextAsync(transcriptPath, "\n{\"c\":3}\n");
+
+            await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            var drainRead = await WatchCommand.ReadNewCompleteLinesAsync(
+                stream, state.LinesProcessed, WatchCommand.IncompleteFinalLinePolicy.Hold, CancellationToken.None,
+                captureRawBytes: true, rawBytesReadFrom: state.CursorByteOffset, newRangeByteOffset: state.CursorByteOffset);
+
+            // The rewound line 1 ("{"b":2}") is re-read/re-sent — harmless, the server's
+            // source-ack frontier dedupes a resend at/behind it. No phantom empty line appears
+            // between it and the next record.
+            await Assert.That(drainRead.Lines).IsEquivalentTo(["{\"b\":2}", "{\"c\":3}"]);
+            await Assert.That(drainRead.LineNumbers).IsEquivalentTo([1, 2]);
+
+            // The critical assertion: {"c":3} is NOT shifted to line 3 — it keeps its true,
+            // natural 0-indexed position (2), immediately after line 1.
+            var newRecordIndex = drainRead.Lines.IndexOf("{\"c\":3}");
+            await Assert.That(drainRead.LineNumbers[newRecordIndex]).IsEqualTo(2);
+
+            // Byte/line frontiers stay aligned — NextPosition (the next LinesProcessed value) is
+            // exactly 3, matching the file's true 3 complete lines; no permanent gap opens up.
+            await Assert.That(drainRead.NextPosition).IsEqualTo(3);
+        } finally {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+            try { File.Delete(CursorMarkers.QuarantinePath(sessionId)); } catch { }
+        }
+    }
 }
