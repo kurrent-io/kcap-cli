@@ -373,20 +373,37 @@ static class ImportCommand {
     }
 
     /// <summary>
-    /// AI-1154 review fix (P2): a routed-phase <c>AlreadyLoaded</c> classification (Cursor) is
-    /// included in `routed` solely so its <c>ImportSessionAsync</c> call can re-assert lifecycle
-    /// hooks and backfill the <c>repository</c> node on an already-fully-ingested session (the C2
-    /// suppressed-repo-import contract) — <em>not</em> to import new transcript content. Because
-    /// nothing past the watermark exists, that call still returns <see cref="ImportOutcome.Loaded"/>
+    /// AI-1154 review fix (P2, broadened by the round-2 follow-up findings): a routed-phase
+    /// <c>AlreadyLoaded</c> classification (Cursor) is included in `routed` solely so its
+    /// <c>ImportSessionAsync</c> call can re-assert lifecycle hooks and backfill the
+    /// <c>repository</c> node on an already-fully-ingested session (the C2 suppressed-repo-import
+    /// contract), or — for a correlated nested child — because its parent needs it present in
+    /// `routed` to import it inline; neither case is "new work" on its own. Because nothing past
+    /// the parent's own watermark exists, its own call still returns <see cref="ImportOutcome.Loaded"/>
     /// or <see cref="ImportOutcome.Resumed"/> (no line 0 to distinguish "nothing sent" from "brand
-    /// new"). Without this check that success is folded into the routed Loaded counter — on top of
-    /// the classify-time <c>AlreadyLoaded</c> bucket the same session already contributes to —
-    /// double-counting one session as both Loaded and Already-loaded, and adding it to
-    /// <c>importedSessionIds</c> so a later <c>--private</c> pass wrongly re-privates a session
-    /// this run never actually (re)imported.
+    /// new"), and a nested child's own call always short-circuits to <see cref="ImportOutcome.Skipped"/>
+    /// (its content is sent inline by the parent, not by its own call). Without this check either
+    /// success would double-count on top of the classify-time <c>AlreadyLoaded</c> bucket the same
+    /// session already contributes to (as both Loaded/Already-loaded, or as both Excluded/Already-
+    /// loaded), and a parent replay would wrongly join <c>importedSessionIds</c> so a later
+    /// <c>--private</c> pass re-privates a session this run never actually (re)imported.
+    ///
+    /// <para>
+    /// Round-2 finding 1: an <c>AlreadyLoaded</c> parent can still ship brand-new content by
+    /// attaching a previously-unloaded nested child — real work that must NOT be suppressed just
+    /// because the parent's OWN outcome looks like a no-op replay. <c>sentChildContent</c> is the
+    /// out-of-band signal (see <see cref="ImportSessionResult"/>) that lets this distinguish the
+    /// two: only a replay that sent no child content either is truly lifecycle-only.
+    /// </para>
     /// </summary>
-    internal static bool IsLifecycleOnlyRoutedReplay(ClassificationStatus status, ImportOutcome outcome) =>
-        status == ClassificationStatus.AlreadyLoaded && outcome is ImportOutcome.Loaded or ImportOutcome.Resumed;
+    internal static bool IsLifecycleOnlyRoutedReplay(
+            ClassificationStatus status,
+            ImportOutcome        outcome,
+            bool                  sentChildContent
+        ) =>
+        status == ClassificationStatus.AlreadyLoaded
+     && outcome is ImportOutcome.Loaded or ImportOutcome.Resumed or ImportOutcome.Skipped
+     && !sentChildContent;
 
     internal sealed record ClassificationCounts(
             int New,
@@ -1263,7 +1280,7 @@ static class ImportCommand {
                 ForcePrivate: forcePrivate
             );
 
-            async Task<ImportOutcome> ImportOne(SessionClassification c) {
+            async Task<ImportSessionResult> ImportOne(SessionClassification c) {
                 if (!byVendor.TryGetValue(c.Vendor, out var src)) {
                     return ImportOutcome.Failed;
                 }
@@ -1287,14 +1304,19 @@ static class ImportCommand {
                                 routed,
                                 new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount },
                                 async (c, _) => {
-                                    var outcome = await ImportOne(c);
+                                    var result  = await ImportOne(c);
+                                    var outcome = result.Outcome;
 
-                                    // AI-1154 review fix (P2): an AlreadyLoaded session's routed
-                                    // call is a lifecycle/repo-backfill replay, not a new import —
-                                    // it must not double-count on top of the classify-time
-                                    // AlreadyLoaded bucket, nor join importedSessionIds (which
-                                    // --private later re-privates).
-                                    var isLifecycleOnlyReplay = IsLifecycleOnlyRoutedReplay(c.Status, outcome);
+                                    // AI-1154 review fix (P2, broadened by the round-2 follow-up):
+                                    // an AlreadyLoaded session's routed call is a lifecycle/repo-
+                                    // backfill replay (or, for a nested child, an inline-handled
+                                    // no-op), not a new import — it must not double-count on top
+                                    // of the classify-time AlreadyLoaded bucket, nor join
+                                    // importedSessionIds (which --private later re-privates).
+                                    // sentChildContent overrides this for an AlreadyLoaded parent
+                                    // that attached a brand-new nested child (round-2 finding 1) —
+                                    // that IS real new work.
+                                    var isLifecycleOnlyReplay = IsLifecycleOnlyRoutedReplay(c.Status, outcome, result.SentChildContent);
 
                                     if (!isLifecycleOnlyReplay) {
                                         routedOutcomesByVendor.AddOrUpdate(
@@ -1322,11 +1344,24 @@ static class ImportCommand {
 
                                             break;
                                         case ImportOutcome.Skipped:
-                                            Interlocked.Increment(ref routedExcluded);
+                                            if (isLifecycleOnlyReplay) {
+                                                // Round-2 finding 2: a correlated nested child whose
+                                                // own classification is AlreadyLoaded and whose own
+                                                // routed call short-circuited to Skipped (handled
+                                                // inline by its parent) is NOT excluded work — it
+                                                // already contributes to the classify-time
+                                                // Already-loaded bucket and must not also land in
+                                                // Excluded.
+                                                AnsiConsole.MarkupLine(
+                                                    $"[grey]·[/] Already loaded [cyan]{Markup.Escape(c.SessionId)}[/] (nested under parent)"
+                                                );
+                                            } else {
+                                                Interlocked.Increment(ref routedExcluded);
 
-                                            AnsiConsole.MarkupLine(
-                                                $"[yellow]~[/] Skipping [cyan]{Markup.Escape(c.SessionId)}[/] (already current)"
-                                            );
+                                                AnsiConsole.MarkupLine(
+                                                    $"[yellow]~[/] Skipping [cyan]{Markup.Escape(c.SessionId)}[/] (already current)"
+                                                );
+                                            }
 
                                             break;
                                         case ImportOutcome.Failed:
@@ -1349,11 +1384,14 @@ static class ImportCommand {
                     routed,
                     new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount },
                     async (c, _) => {
-                        var outcome = await ImportOne(c);
+                        var result  = await ImportOne(c);
+                        var outcome = result.Outcome;
 
-                        // AI-1154 review fix (P2): see the Tty branch above for why an
-                        // AlreadyLoaded lifecycle-only replay must not count as Loaded.
-                        var isLifecycleOnlyReplay = IsLifecycleOnlyRoutedReplay(c.Status, outcome);
+                        // AI-1154 review fix (P2, broadened by the round-2 follow-up): see the
+                        // Tty branch above for why an AlreadyLoaded lifecycle-only replay must
+                        // not count as Loaded/Excluded, and why sentChildContent overrides that
+                        // for a parent that attached brand-new nested-child content.
+                        var isLifecycleOnlyReplay = IsLifecycleOnlyRoutedReplay(c.Status, outcome, result.SentChildContent);
 
                         if (!isLifecycleOnlyReplay) {
                             routedOutcomesByVendor.AddOrUpdate(
@@ -1376,8 +1414,13 @@ static class ImportCommand {
 
                                 break;
                             case ImportOutcome.Skipped:
-                                Interlocked.Increment(ref routedExcluded);
-                                display.Line($"Skipping {c.SessionId} (already current)");
+                                if (isLifecycleOnlyReplay) {
+                                    // Round-2 finding 2: see the Tty branch above.
+                                    display.Line($"Already loaded {c.SessionId} (nested under parent)");
+                                } else {
+                                    Interlocked.Increment(ref routedExcluded);
+                                    display.Line($"Skipping {c.SessionId} (already current)");
+                                }
 
                                 break;
                             case ImportOutcome.Failed:

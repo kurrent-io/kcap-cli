@@ -155,7 +155,7 @@ public class ImportDoneBreakdownTests {
         await Assert.That(claudeRow.Errored + cursorRow.Errored).IsEqualTo(2);   // 1 + 1
     }
 
-    // --- IsLifecycleOnlyRoutedReplay (AI-1154 review fix, P2) ---
+    // --- IsLifecycleOnlyRoutedReplay (AI-1154 review fix, P2; broadened round-2) ---
     //
     // The routed-phase loop in HandleImport increments routedLoaded/importedSessionIds whenever
     // ImportOutcome is Loaded/Resumed. For an AlreadyLoaded Cursor classification, ImportSessionAsync
@@ -164,11 +164,18 @@ public class ImportDoneBreakdownTests {
     // IsLifecycleOnlyRoutedReplay is the gate that keeps that replay from being double-counted on
     // top of the classify-time AlreadyLoaded bucket, and from joining importedSessionIds (which a
     // later --private pass would wrongly apply to).
+    //
+    // Round-2 follow-up findings broadened the gate two ways:
+    //   (1) sentChildContent overrides the gate — an AlreadyLoaded parent that attached a
+    //       brand-new nested child DID do real work and must not be suppressed.
+    //   (2) AlreadyLoaded + Skipped (a correlated child whose own routed call short-circuits
+    //       to Skipped because its parent imports it inline) is now also recognized, so it
+    //       isn't double-counted as both Already-loaded and Excluded.
 
     [Test]
     public async Task already_loaded_plus_loaded_outcome_is_a_lifecycle_only_replay() {
         var result = ImportCommand.IsLifecycleOnlyRoutedReplay(
-            ImportCommand.ClassificationStatus.AlreadyLoaded, ImportOutcome.Loaded);
+            ImportCommand.ClassificationStatus.AlreadyLoaded, ImportOutcome.Loaded, sentChildContent: false);
 
         await Assert.That(result).IsTrue();
     }
@@ -178,7 +185,7 @@ public class ImportDoneBreakdownTests {
         // The actual shape CursorImportSource.ImportSessionAsync returns for AlreadyLoaded: nothing
         // sent past a non-zero startLine (TotalLines) is classified Resumed, not Loaded.
         var result = ImportCommand.IsLifecycleOnlyRoutedReplay(
-            ImportCommand.ClassificationStatus.AlreadyLoaded, ImportOutcome.Resumed);
+            ImportCommand.ClassificationStatus.AlreadyLoaded, ImportOutcome.Resumed, sentChildContent: false);
 
         await Assert.That(result).IsTrue();
     }
@@ -187,7 +194,7 @@ public class ImportDoneBreakdownTests {
     public async Task new_plus_loaded_outcome_is_not_a_lifecycle_only_replay() {
         // A genuine first-time import must still count as newly Loaded.
         var result = ImportCommand.IsLifecycleOnlyRoutedReplay(
-            ImportCommand.ClassificationStatus.New, ImportOutcome.Loaded);
+            ImportCommand.ClassificationStatus.New, ImportOutcome.Loaded, sentChildContent: false);
 
         await Assert.That(result).IsFalse();
     }
@@ -196,7 +203,7 @@ public class ImportDoneBreakdownTests {
     public async Task partial_plus_resumed_outcome_is_not_a_lifecycle_only_replay() {
         // A genuine resume of a partially-imported session must still count as newly Loaded.
         var result = ImportCommand.IsLifecycleOnlyRoutedReplay(
-            ImportCommand.ClassificationStatus.Partial, ImportOutcome.Resumed);
+            ImportCommand.ClassificationStatus.Partial, ImportOutcome.Resumed, sentChildContent: false);
 
         await Assert.That(result).IsFalse();
     }
@@ -205,7 +212,53 @@ public class ImportDoneBreakdownTests {
     public async Task already_loaded_plus_failed_outcome_is_not_a_lifecycle_only_replay() {
         // A failed lifecycle-reassert POST must still surface as Errored, not be swallowed.
         var result = ImportCommand.IsLifecycleOnlyRoutedReplay(
-            ImportCommand.ClassificationStatus.AlreadyLoaded, ImportOutcome.Failed);
+            ImportCommand.ClassificationStatus.AlreadyLoaded, ImportOutcome.Failed, sentChildContent: false);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    // --- Round-2 finding 1: sentChildContent overrides the replay gate ---
+
+    [Test]
+    public async Task already_loaded_plus_resumed_outcome_with_sent_child_content_is_not_a_lifecycle_only_replay() {
+        // An AlreadyLoaded parent whose own transcript has nothing new (outcome Resumed) can
+        // still attach a brand-new, previously-unloaded nested child inline. That IS real work —
+        // the replay gate must not suppress it, so the parent joins importedSessionIds/routedLoaded
+        // and a later --private pass correctly re-privates it.
+        var result = ImportCommand.IsLifecycleOnlyRoutedReplay(
+            ImportCommand.ClassificationStatus.AlreadyLoaded, ImportOutcome.Resumed, sentChildContent: true);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task already_loaded_plus_loaded_outcome_with_sent_child_content_is_not_a_lifecycle_only_replay() {
+        var result = ImportCommand.IsLifecycleOnlyRoutedReplay(
+            ImportCommand.ClassificationStatus.AlreadyLoaded, ImportOutcome.Loaded, sentChildContent: true);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    // --- Round-2 finding 2: AlreadyLoaded + Skipped is now recognized ---
+
+    [Test]
+    public async Task already_loaded_plus_skipped_outcome_is_a_lifecycle_only_replay() {
+        // A correlated nested child (its own status is AlreadyLoaded from a prior run) whose own
+        // routed call short-circuits to Skipped because its parent imports it inline. This must
+        // not double-count as both Already-loaded (classify time) and Excluded (routed outcome).
+        var result = ImportCommand.IsLifecycleOnlyRoutedReplay(
+            ImportCommand.ClassificationStatus.AlreadyLoaded, ImportOutcome.Skipped, sentChildContent: false);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task new_plus_skipped_outcome_is_not_a_lifecycle_only_replay() {
+        // A first-time-seen correlated child (status New, not AlreadyLoaded) whose own routed
+        // call is Skipped still rolls up into the Excluded bucket — only the AlreadyLoaded case
+        // is a double-count.
+        var result = ImportCommand.IsLifecycleOnlyRoutedReplay(
+            ImportCommand.ClassificationStatus.New, ImportOutcome.Skipped, sentChildContent: false);
 
         await Assert.That(result).IsFalse();
     }
