@@ -70,6 +70,60 @@ public class CursorReconnectRewindTests {
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
 
+    // AI-1382 review fix (r5) — a COMPLETE final record with no trailing newline yet must resolve
+    // at EOF, not quarantine. This is exactly what the watcher's own shutdown final drain
+    // (IncompleteFinalLinePolicy.ConsumeIfComplete) and historical import's StreamReader-based
+    // splitting both send as the last line of a file. Before this fix, the round-4 guard treated
+    // "fewer newline-terminated lines than requested" as an unconditional shortfall, so a later
+    // watcher restart resuming at that same final line (server frontier == local line count) would
+    // permanently quarantine an otherwise-healthy, append-only session.
+    [Test]
+    public async Task ResolveByteOffsetForLineAsync_resolves_a_complete_unterminated_final_line_at_eof() {
+        var dir = Directory.CreateTempSubdirectory("kcap-reconnect-offset-unterminated").FullName;
+        try {
+            var path = Path.Combine(dir, "t.jsonl");
+            const string content = "{\"a\":1}\n{\"b\":2}"; // 1 newline-terminated line + 1 complete, unterminated final record
+            await File.WriteAllTextAsync(path, content);
+
+            // Line 1 (newline-terminated) resolves exactly as before.
+            await Assert.That(await WatchCommand.ResolveByteOffsetForLineAsync(path, 1, CancellationToken.None))
+                .IsEqualTo(8L); // "{\"a\":1}\n".Length
+
+            // Line 2 — the complete, unterminated final record — resolves at EOF (the whole file).
+            await Assert.That(await WatchCommand.ResolveByteOffsetForLineAsync(path, 2, CancellationToken.None))
+                .IsEqualTo((long)content.Length);
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    // AI-1382 review fix (r5) — the completeness gate matters: an unterminated tail that ISN'T a
+    // parseable JSON record (still being written, or genuinely truncated mid-record) must still
+    // quarantine — only a demonstrably COMPLETE trailing record is allowed to resolve at EOF.
+    [Test]
+    public async Task ResolveByteOffsetForLineAsync_returns_null_when_the_trailing_unterminated_content_is_incomplete_json() {
+        var dir = Directory.CreateTempSubdirectory("kcap-reconnect-offset-incomplete-tail").FullName;
+        try {
+            var path = Path.Combine(dir, "t.jsonl");
+            await File.WriteAllTextAsync(path, "{\"a\":1}\n{\"b\":2"); // final record missing its closing brace
+
+            await Assert.That(await WatchCommand.ResolveByteOffsetForLineAsync(path, 2, CancellationToken.None)).IsNull();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    // AI-1382 review fix (r4, finding #5), preserved under r5 — a request for a line further beyond
+    // the local file than "the final unterminated record" is a genuine shortfall (truncation/rewrite)
+    // and must still quarantine, never resolve. (No trailing content at all here — both requested
+    // lines are already accounted for by the two newlines, and line 5 is nowhere close.)
+    [Test]
+    public async Task ResolveByteOffsetForLineAsync_still_returns_null_when_the_request_is_genuinely_beyond_eof() {
+        var dir = Directory.CreateTempSubdirectory("kcap-reconnect-offset-beyond-eof").FullName;
+        try {
+            var path = Path.Combine(dir, "t.jsonl");
+            await File.WriteAllTextAsync(path, "a\nb\n"); // exactly 2 complete, terminated lines, no trailing content
+
+            await Assert.That(await WatchCommand.ResolveByteOffsetForLineAsync(path, 5, CancellationToken.None)).IsNull();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
     // ---- CursorRewriteGuard.ResetCheckpoint ----
 
     [Test]
@@ -128,6 +182,38 @@ public class CursorReconnectRewindTests {
             await Assert.That(guard.VerifyPriorZone("anything-at-all")).IsTrue();
             await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse();
         } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
+
+    // AI-1382 review fix (r5) — reproduces the actual failure scenario: a final drain
+    // (IncompleteFinalLinePolicy.ConsumeIfComplete) sends a complete but unterminated final record,
+    // the watcher exits (idle), and a LATER hook restarts the watcher with the server resuming it at
+    // that exact same final line (server frontier == local line count, file STILL lacks the trailing
+    // newline). SeedCursorByteOffsetAsync must seed the true EOF byte offset and NOT quarantine.
+    [Test]
+    public async Task SeedCursorByteOffsetAsync_seeds_at_eof_for_a_final_drains_complete_unterminated_line() {
+        var dir = Directory.CreateTempSubdirectory("kcap-seed-unterminated-final").FullName;
+        var sid = NewSessionId();
+        try {
+            var transcriptPath = Path.Combine(dir, "t.jsonl");
+            const string content = "{\"a\":1}\n{\"b\":2}"; // line 1 terminated, line 2 complete but no trailing '\n'
+            await File.WriteAllTextAsync(transcriptPath, content);
+
+            var guard = new CursorRewriteGuard(sid);
+            // Resuming exactly at line 2 — the final, unterminated-but-complete record the prior
+            // watcher's shutdown drain already sent and the server already acknowledged.
+            var state = new WatchState { LinesProcessed = 2 };
+
+            var ok = await WatchCommand.SeedCursorByteOffsetAsync(
+                state, lineNumber: 2, sid, vendor: "cursor", transcriptPath, guard, CancellationToken.None);
+
+            await Assert.That(ok).IsTrue();
+            await Assert.That(state.CursorByteOffset).IsEqualTo((long)content.Length); // seeded at EOF
+            await Assert.That(guard.VerifyPriorZone("anything-at-all")).IsTrue();
+            await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse(); // NOT quarantined
+        } finally {
+            try { Directory.Delete(dir, true); } catch { }
+            try { File.Delete(CursorMarkers.QuarantinePath(sid)); } catch { }
+        }
     }
 
     [Test]

@@ -2922,6 +2922,24 @@ static partial class WatchCommand {
     /// history-rewrite the guard exists to catch, let through by the seed path instead. Callers
     /// (<see cref="SeedCursorByteOffsetAsync"/>) must treat null as "cannot resolve this frontier
     /// exactly" and quarantine rather than seed a bogus baseline.
+    ///
+    /// <para>
+    /// AI-1382 review fix (r5) — finding #5's guard was slightly too strict: a COMPLETE final
+    /// record with no trailing newline yet (exactly what this watcher's own shutdown final drain,
+    /// <see cref="IncompleteFinalLinePolicy.ConsumeIfComplete"/>, sends — and what historical
+    /// import's <c>StreamReader</c>-based line splitting also sends for a file with no final
+    /// newline) is a legitimately resolvable "last line", not a truncation. Let C be the number of
+    /// <c>'\n'</c> bytes in the file. For <paramref name="lineNumber"/> &lt;= C this still resolves
+    /// to the byte offset right after that newline (unchanged). For
+    /// <paramref name="lineNumber"/> == C + 1, if the bytes after the last newline (or from byte 0,
+    /// if there is no newline at all) form a complete JSON record (the same
+    /// <see cref="IsCompleteJsonRecord"/> predicate <see cref="ApplyPartialLineHoldback"/> uses to
+    /// gate consuming an unterminated final line), that record IS line C + 1 and resolves to EOF —
+    /// matching <see cref="ByteOffsetForAckedLines"/>, which already treats a full ack beyond the
+    /// range's newline count as consuming through EOF. Any other case (no trailing content, or a
+    /// trailing tail that doesn't parse, or <paramref name="lineNumber"/> &gt; C + 1) is a genuine
+    /// local shortfall and still returns null so the caller quarantines.
+    /// </para>
     /// </summary>
     internal static async Task<long?> ResolveByteOffsetForLineAsync(string transcriptPath, int lineNumber, CancellationToken ct) {
         if (lineNumber <= 0) return 0;
@@ -2931,6 +2949,7 @@ static partial class WatchCommand {
         var buffer = new byte[81920];
         var seen   = 0;
         long offset = 0;
+        long lastNewlineEnd = 0;
 
         int read;
         while ((read = await stream.ReadAsync(buffer, ct)) > 0) {
@@ -2941,10 +2960,23 @@ static partial class WatchCommand {
 
                 seen++;
                 if (seen == lineNumber) return offset;
+                lastNewlineEnd = offset;
             }
         }
 
-        return null; // fewer lines on disk than requested — the caller must quarantine, never clamp
+        // Fewer newline-terminated lines than requested. The one remaining possibility is that the
+        // requested line IS the final, unterminated-but-complete record — never a shortfall further
+        // back than that.
+        if (lineNumber != seen + 1 || offset <= lastNewlineEnd) return null;
+
+        var trailingLength = (int)(offset - lastNewlineEnd);
+        var trailing        = new byte[trailingLength];
+        stream.Position      = lastNewlineEnd;
+        var trailingRead     = await ReadFullyAsync(stream, trailing, ct);
+
+        if (trailingRead != trailingLength) return null; // file shrank underneath us — don't guess
+
+        return IsCompleteJsonRecord(Encoding.UTF8.GetString(trailing)) ? offset : null;
     }
 
     /// <summary>
