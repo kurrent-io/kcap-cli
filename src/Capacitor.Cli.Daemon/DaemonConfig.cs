@@ -10,10 +10,10 @@ public class DaemonConfig {
     /// AI-1313 Phase B (D3): backstop lifetime/idle bounds for a hosted review-flow reviewer, enforced
     /// in the daemon heartbeat. A reviewer whose run went terminal on the server without the daemon
     /// hearing about it (or whose driver vanished) is reaped here so it can't hold a slot forever.
-    /// Defaults 6h lifetime / 2h idle; <see cref="TimeSpan.Zero"/> disables that bound. Config keys
-    /// <c>daemon.reviewer_max_lifetime</c>/<c>daemon.reviewer_idle_timeout</c>; env
-    /// <c>KCAP_REVIEWER_MAX_LIFETIME</c>/<c>KCAP_REVIEWER_IDLE_TIMEOUT</c> (seconds). Interactive
-    /// agents are never touched by these.
+    /// Defaults 6h lifetime / 2h idle; <see cref="TimeSpan.Zero"/> disables that bound. Overridden at
+    /// startup from env <c>KCAP_REVIEWER_MAX_LIFETIME</c>/<c>KCAP_REVIEWER_IDLE_TIMEOUT</c> (seconds);
+    /// a profile config-key form is reserved but not yet wired. Interactive agents are never touched
+    /// by these.
     /// </summary>
     public TimeSpan ReviewerMaxLifetime { get; set; } = TimeSpan.FromHours(6);
     public TimeSpan ReviewerIdleTimeout { get; set; } = TimeSpan.FromHours(2);
