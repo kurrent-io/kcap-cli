@@ -91,6 +91,67 @@ public class CursorTranscriptBackfillTests {
         await Assert.That(postCount).IsEqualTo(0);
     }
 
+    // AI-1382 review fix #8 — the markers must be re-checked IMMEDIATELY at the delivery
+    // boundary (right before the POST), not only before the watermark GET. Simulate a
+    // concurrent quarantine landing DURING the watermark probe — after the early check already
+    // passed, but before the POST — by setting the marker as a side effect of the GET call
+    // itself. Only the late (pre-POST) recheck can catch this; the early check alone would miss
+    // it and the corrupted tail would still be posted.
+    [Test]
+    public async Task Backfill_rechecks_quarantine_immediately_before_the_POST_even_if_set_during_the_watermark_probe() {
+        var sessionId = NewSessionId();
+        using var tmp = new TempDir();
+        var transcript = Path.Combine(tmp.Path, "t.jsonl");
+        await File.WriteAllTextAsync(transcript, "{\"role\":\"user\",\"message\":{\"content\":[]}}\n");
+
+        var postCount = 0;
+        using var handler = new RecordingHandler(
+            getResponse: r => {
+                if (r.RequestUri!.AbsolutePath.EndsWith("/last-line")) {
+                    // A concurrent watcher-side rewrite-guard trip lands exactly here — between
+                    // the early check (already passed, since the marker didn't exist yet) and
+                    // the POST below.
+                    CursorMarkers.Quarantine(sessionId, "rewrite detected mid-flight");
+                    return new HttpResponseMessage(HttpStatusCode.NoContent);
+                }
+                return null;
+            },
+            postCapture: (_, _) => { postCount++; return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var client = new HttpClient(handler);
+
+        var stats = await CursorTranscriptBackfill.RunAsync(client, "http://s", sessionId, transcript, () => false, CancellationToken.None);
+
+        await Assert.That(postCount).IsEqualTo(0);
+        await Assert.That(stats.LinesPosted).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Backfill_rechecks_barrier_immediately_before_the_POST_even_if_created_during_the_watermark_probe() {
+        var sessionId = NewSessionId();
+        using var tmp = new TempDir();
+        var transcript = Path.Combine(tmp.Path, "t.jsonl");
+        await File.WriteAllTextAsync(transcript, "{\"role\":\"user\",\"message\":{\"content\":[]}}\n");
+
+        var postCount = 0;
+        using var handler = new RecordingHandler(
+            getResponse: r => {
+                if (r.RequestUri!.AbsolutePath.EndsWith("/last-line")) {
+                    // A concurrent beforeSubmitPrompt hook creates its ordering barrier exactly
+                    // here — after the early check, before the POST.
+                    CursorMarkers.CreateBarrier(sessionId, DateTimeOffset.UtcNow);
+                    return new HttpResponseMessage(HttpStatusCode.NoContent);
+                }
+                return null;
+            },
+            postCapture: (_, _) => { postCount++; return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var client = new HttpClient(handler);
+
+        var stats = await CursorTranscriptBackfill.RunAsync(client, "http://s", sessionId, transcript, () => false, CancellationToken.None);
+
+        await Assert.That(postCount).IsEqualTo(0);
+        await Assert.That(stats.LinesPosted).IsEqualTo(0);
+    }
+
     [Test]
     public async Task RunAsync_returns_zero_when_transcript_path_null() {
         using var tmp = new TempDir();

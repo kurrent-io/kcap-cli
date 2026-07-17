@@ -114,6 +114,17 @@ public static class CursorTranscriptBackfill {
 
         if (lines.Count == 0 || budget()) return new(0, Failed: false);
 
+        // AI-1382 review fix #8 — re-check both markers IMMEDIATELY at the delivery boundary,
+        // not only before the watermark GET + file read above. A concurrent beforeSubmitPrompt
+        // (creating its barrier) or a guard trip on the live watcher (quarantining the session)
+        // landing in that window — between the early check and this POST — must still be caught
+        // here rather than let the transcript line overtake the attachment it depends on, or
+        // escape the quarantine the watcher just imposed.
+        if (CursorMarkers.IsQuarantined(sessionId)
+         || CursorMarkers.BarrierPending(sessionId, DateTimeOffset.UtcNow, CursorMarkers.DefaultBarrierBound)) {
+            return new Stats(0, false);
+        }
+
         var batch = new TranscriptBatch {
             SessionId   = sessionId,
             AgentId     = agentId,

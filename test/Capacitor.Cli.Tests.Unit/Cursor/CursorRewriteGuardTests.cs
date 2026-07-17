@@ -114,6 +114,28 @@ public class CursorRewriteGuardTests {
         await Assert.That(CursorMarkers.IsQuarantined(sid)).IsTrue();
     }
 
+    // AI-1382 review fix #2 — a shrink is unambiguous evidence of a rewrite on its own; the
+    // watcher's original wiring gated the whole zone check behind "did the file grow", so a
+    // shrink slipped through entirely undetected.
+    [Test]
+    public async Task VerifyNotShrunk_true_when_length_at_or_above_the_checkpoint() {
+        var guard = new CursorRewriteGuard(NewSessionId());
+
+        await Assert.That(guard.VerifyNotShrunk(newLength: 100, checkpointOffset: 100)).IsTrue();
+        await Assert.That(guard.VerifyNotShrunk(newLength: 150, checkpointOffset: 100)).IsTrue();
+    }
+
+    [Test]
+    public async Task VerifyNotShrunk_false_and_quarantines_on_a_shrink() {
+        var sid   = NewSessionId();
+        var guard = new CursorRewriteGuard(sid);
+
+        var ok = guard.VerifyNotShrunk(newLength: 4, checkpointOffset: 100);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(CursorMarkers.IsQuarantined(sid)).IsTrue();
+    }
+
     [Test]
     public async Task HashPriorZone_does_not_disturb_the_stream_position() {
         var guard = new CursorRewriteGuard(NewSessionId());

@@ -143,6 +143,16 @@ static partial class WatchCommand {
     internal static readonly TimeSpan HeartbeatSlice = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// AI-1382 review fix #2 — cadence for the periodic full-prefix re-hash
+    /// (<see cref="CursorRewriteGuard.VerifyFullPrefix"/>), the coarser-grained safety net beyond
+    /// the per-poll two-zone checks: every Nth poll (~1s cadence — roughly once a minute), the
+    /// whole file is re-read from byte 0 and its prefix hash compared to the last sample, so a
+    /// rewrite entirely inside an already-checkpointed-and-forgotten middle region can still be
+    /// caught even though the two-zone checks never look there.
+    /// </summary>
+    internal const int CursorFullPrefixVerifyEveryNPolls = 60;
+
+    /// <summary>
     /// Splits a total wait into consecutive chunks of at most <paramref name="maxSlice"/> so the
     /// caller can refresh the heartbeat between each — keeping a reconnecting-but-alive watcher
     /// from ever crossing the staleness threshold while it waits out a long connect-retry backoff.
@@ -586,11 +596,21 @@ static partial class WatchCommand {
                     await ScanAntigravitySubagentLinks(baseUrl, sessionId, drained, state.PostedSubagentLinks, cts.Token);
                 }
 
+                // AI-1382 review fix #6 — the Cursor idle clock must be the LATER of transcript
+                // activity AND the hook heartbeat mtime. Keyed on the CHILD's own session id for
+                // a child watcher (agentId), matching how CursorHookCommand actually writes the
+                // heartbeat (each hook touches its OWN raw session_id, never remapped to the
+                // parent) — not the RunWatch `sessionId` parameter, which for a child watcher is
+                // the PARENT id.
+                var cursorIdleClockAt = ResolveCursorIdleClock(
+                    vendor, state.LastActivityAt,
+                    vendor == "cursor" ? WatcherHeartbeat.Read(CursorMarkers.HeartbeatPath(agentId ?? sessionId)) : null);
+
                 if (ShouldEndOnIdle(
                         vendor,
                         isSessionWatcher: agentId is null,
                         state.ThresholdReached,
-                        state.LastActivityAt,
+                        cursorIdleClockAt,
                         DateTimeOffset.UtcNow,
                         idleTimeout,
                         // A tool awaiting its result suppresses idle-end: Codex tracks call_ids,
@@ -914,9 +934,12 @@ static partial class WatchCommand {
     /// watchdog can't fire per-conversation — codex (the desktop app's shared app-server never
     /// exits per session), antigravity (the IDE process outlives any one conversation), and
     /// cursor (AI-1382: no shell hooks fire a reliable per-conversation parent-exit signal
-    /// either — its own idle ceiling is the fallback) — session watchers (not subagents), and
-    /// threshold-reached sessions (below-threshold short-lived sessions have no server session
-    /// to end). Uses strictly-greater-than so the boundary tick is not yet considered idle. Also
+    /// either — its own idle ceiling is the fallback). Session watchers additionally require
+    /// threshold-reached (below-threshold short-lived sessions have no server session to end);
+    /// Cursor CHILD (subagent) watchers are eligible too (AI-1382 review fix #6) WITHOUT the
+    /// threshold gate — they never buffer, so ThresholdReached never flips true for them; see
+    /// <see cref="RunWatch"/>'s call site for the same fix's heartbeat-aware idle clock. Uses
+    /// strictly-greater-than so the boundary tick is not yet considered idle. Also
     /// suppressed when a tool call is in flight (<paramref name="toolInFlight"/> true): a
     /// long-running shell command / custom tool legitimately produces no new rollout lines
     /// between its function_call start and its _output completion — ending while it's running
@@ -938,12 +961,26 @@ static partial class WatchCommand {
             TimeSpan       idleTimeout,
             bool           toolInFlight              = false,
             TimeSpan       disconnectedSinceActivity = default
-        ) =>
-        (vendor == "codex" || vendor == "antigravity" || vendor == "cursor")
-        && isSessionWatcher
-        && thresholdReached
-        && now - lastActivityAt - disconnectedSinceActivity > idleTimeout
-        && !toolInFlight;
+        ) {
+        if (vendor != "codex" && vendor != "antigravity" && vendor != "cursor") return false;
+
+        // AI-1382 review fix #6 — a Cursor CHILD (subagent) watcher never buffers and so never
+        // sets ThresholdReached (WatchState.ThresholdReached only ever flips true on the
+        // agentId==null buffering-flush branch in DrainNewLines) — requiring it here would make
+        // child watchers permanently ineligible for the idle ceiling. Session watchers keep the
+        // threshold gate (a below-threshold session was never flushed to the server, so there's
+        // nothing to end); the exemption is scoped to Cursor specifically — Codex/Antigravity
+        // never spawn agentId!=null watchers via WatcherManager, so a non-session-watcher of
+        // either vendor should never reach this predicate true in practice, and this makes that
+        // explicit rather than accidental.
+        if (isSessionWatcher) {
+            if (!thresholdReached) return false;
+        } else if (vendor != "cursor") {
+            return false;
+        }
+
+        return now - lastActivityAt - disconnectedSinceActivity > idleTimeout && !toolInFlight;
+    }
 
     /// <summary>
     /// AI-1382 Task 13 — pure extraction of the end-synthesis suppression <see cref="RunWatch"/>
@@ -955,6 +992,27 @@ static partial class WatchCommand {
     /// parent-exit) still post normally through the same call site this guards.
     /// </summary>
     internal static bool CursorSuppressesEndPost(string vendor, bool idleExit) => vendor == "cursor" && idleExit;
+
+    /// <summary>
+    /// AI-1382 review fix #6 — the idle clock <see cref="ShouldEndOnIdle"/> measures against for
+    /// Cursor must be the LATER of transcript activity (<paramref name="lastActivityAt"/>) and the
+    /// hook heartbeat mtime (<paramref name="hookHeartbeatAt"/>): every Cursor hook invocation —
+    /// including telemetry-only ones — touches <c>CursorMarkers.HeartbeatPath</c> independent of
+    /// whether the tailing watcher itself observes new transcript content, so a session Cursor is
+    /// still actively firing hooks for (but which happens to produce no new transcript lines)
+    /// must not idle-exit underneath the user. For every other vendor <paramref name="hookHeartbeatAt"/>
+    /// is always null (the caller only reads the heartbeat file for vendor == "cursor"), so this
+    /// degrades to plain <paramref name="lastActivityAt"/> — unchanged behavior. Pure so it's
+    /// unit-testable without a real heartbeat file.
+    /// </summary>
+    internal static DateTimeOffset ResolveCursorIdleClock(
+            string          vendor,
+            DateTimeOffset  lastActivityAt,
+            DateTimeOffset? hookHeartbeatAt
+        ) =>
+        vendor == "cursor" && hookHeartbeatAt is { } hb && hb > lastActivityAt
+            ? hb
+            : lastActivityAt;
 
     /// <summary>
     /// Updates <paramref name="pending"/> based on a single Codex rollout line.
@@ -1109,7 +1167,12 @@ static partial class WatchCommand {
     static readonly Regex CommandNameRegex = CommandNameRx();
     static          bool  parseErrorLogged;
 
-    static async Task<IReadOnlyList<string>> DrainNewLines(
+    // AI-1382 review fix #2/#3 — internal (not private) so the Cursor rewrite-guard wiring
+    // (shrink detection, the periodic full-prefix cadence, and the acked-byte-offset checkpoint)
+    // is directly regression-testable: every path exercised by those tests trips the guard and
+    // returns BEFORE ever touching `hubConnection`, so an unconnected/never-started HubConnection
+    // instance is sufficient — no live SignalR server needed.
+    internal static async Task<IReadOnlyList<string>> DrainNewLines(
             HubConnection      hubConnection,
             string             sessionId,
             string             transcriptPath,
@@ -1174,22 +1237,46 @@ static partial class WatchCommand {
             // a rewrite racing between the two reads is exactly what VerifyNewRange/VerifyPriorZone
             // are built to catch. A trip discards the unsent batch and quarantines the session (the
             // guard does that itself); the caller (RunWatch) exits via onCursorRewriteDetected.
-            var cursorGuardOldOffset = state.CursorByteOffset;
-            var cursorGuardNewLength = cursorGuardOldOffset;
+            //
+            // AI-1382 review fix #3 — cursorGuardNewLength is the SAME capped byte length
+            // ReadNewCompleteLinesAsync sampled while building drainRead above
+            // (drainRead.SnapshotByteLength), NOT a fresh FileInfo.Length re-sample. Re-sampling
+            // here raced an append between that line-based read and this call: any bytes appended
+            // in that window would be hashed/checkpointed below as part of "the batch just sent"
+            // even though drainRead (and therefore newLines/newLineNumbers) never saw them — a
+            // silent, permanent skip on the next poll, since the guard's next prior-zone start
+            // would already be past them.
+            var cursorGuardOldOffset    = state.CursorByteOffset;
+            var priorLineCursorForGuard = state.LinesProcessed;
+            var cursorGuardNewLength    = drainRead.SnapshotByteLength;
+            byte[]? cursorGuardVerifiedRange = null;
 
             if (vendor == "cursor" && cursorGuard is not null) {
                 try {
-                    cursorGuardNewLength = new FileInfo(transcriptPath).Length;
+                    // AI-1382 review fix #2 — a shrink must trip the guard even though nothing
+                    // "new" was read. The previous `cursorGuardNewLength > cursorGuardOldOffset`
+                    // gate skipped the ENTIRE zone check — including the prior-zone re-hash —
+                    // whenever the file hadn't grown, silently missing both a shrink and an
+                    // in-place same-length rewrite. VerifyNotShrunk owns writing the quarantine
+                    // marker itself (mirroring every other Verify* method on the guard).
+                    if (!cursorGuard.VerifyNotShrunk(cursorGuardNewLength, cursorGuardOldOffset)) {
+                        onCursorRewriteDetected?.Invoke();
+                        return [];
+                    }
+
+                    await using var guardStream = new FileStream(
+                        transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+
+                    // AI-1382 review fix #2 — prior-zone check now runs unconditionally
+                    // (independent of growth): an in-place rewrite of already-checkpointed bytes
+                    // that doesn't change the file's length is caught here even when
+                    // cursorGuardNewLength == cursorGuardOldOffset.
+                    if (!cursorGuard.VerifyPriorZone(cursorGuard.HashPriorZone(guardStream))) {
+                        onCursorRewriteDetected?.Invoke();
+                        return [];
+                    }
 
                     if (cursorGuardNewLength > cursorGuardOldOffset) {
-                        await using var guardStream = new FileStream(
-                            transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-
-                        if (!cursorGuard.VerifyPriorZone(cursorGuard.HashPriorZone(guardStream))) {
-                            onCursorRewriteDetected?.Invoke();
-                            return [];
-                        }
-
                         var rangeLength = (int)(cursorGuardNewLength - cursorGuardOldOffset);
                         var rangeBuffer = new byte[rangeLength];
                         guardStream.Position = cursorGuardOldOffset;
@@ -1197,6 +1284,26 @@ static partial class WatchCommand {
                         cursorGuard.RecordNewRangeRead(cursorGuardOldOffset, rangeLength, rangeBuffer.AsSpan(0, rangeRead));
 
                         if (!cursorGuard.VerifyPriorZone(cursorGuard.HashPriorZone(guardStream))) {
+                            onCursorRewriteDetected?.Invoke();
+                            return [];
+                        }
+                    }
+
+                    // AI-1382 review fix #2 — periodic full-prefix re-hash: CursorRewriteGuard.
+                    // VerifyFullPrefix existed (D0) but was never called from anywhere. Every Nth
+                    // poll, re-read the whole file from byte 0 and compare its prefix hash against
+                    // the last sample — the two-zone checks above only ever look at the
+                    // trailing/new-range bytes, so a rewrite entirely inside an already-
+                    // checkpointed-and-forgotten middle region would otherwise never be caught.
+                    state.CursorGuardPollCount++;
+                    if (state.CursorGuardPollCount % CursorFullPrefixVerifyEveryNPolls == 0) {
+                        var fullBuffer = new byte[cursorGuardNewLength];
+                        guardStream.Position = 0;
+                        var fullRead = await ReadFullyAsync(guardStream, fullBuffer, ct);
+                        var sample = new CursorAppendOnlyProbe.Sample(
+                            fullRead, CursorAppendOnlyProbe.Sha256Hex(fullBuffer.AsSpan(0, fullRead)));
+
+                        if (!cursorGuard.VerifyFullPrefix(sample, fullBuffer.AsSpan(0, fullRead))) {
                             onCursorRewriteDetected?.Invoke();
                             return [];
                         }
@@ -1429,6 +1536,12 @@ static partial class WatchCommand {
                             return newLines;
                         }
                     }
+
+                    // AI-1382 review fix #3 — this is the freshest, just-re-verified copy of the
+                    // exact bytes about to be sent; stash it so the checkpoint logic below can map
+                    // the server's acked LINE count to a precise byte offset within it, instead of
+                    // assuming the whole range was delivered.
+                    cursorGuardVerifiedRange = rangeBuffer;
                 }
 
                 // SendTranscriptBatch takes a single TranscriptBatch record (arity 1) —
@@ -1454,6 +1567,17 @@ static partial class WatchCommand {
                 int? cursorAckNextLine = null;
 
                 if (vendor == "cursor") {
+                    // AI-1382 review fix #8 — re-check both markers IMMEDIATELY at the delivery
+                    // boundary. The early checks at the top of this method ran before the guard's
+                    // file reads/re-verification above (which can take real, if small, wall-clock
+                    // time), so a beforeSubmitPrompt barrier created — or a quarantine written by
+                    // a concurrent process — in that window must still be caught here, never sent.
+                    // Hold (never advance state) so the next poll re-evaluates from scratch.
+                    if (CursorMarkers.IsQuarantined(sessionId)
+                     || CursorMarkers.BarrierPending(sessionId, DateTimeOffset.UtcNow, CursorMarkers.DefaultBarrierBound)) {
+                        return newLines;
+                    }
+
                     var ack = await hubConnection.InvokeAsync<TranscriptBatchAck>("SendTranscriptBatchAcked", batch, ct);
                     cursorAckNextLine = ack.NextLineNumber;
                 } else {
@@ -1479,20 +1603,35 @@ static partial class WatchCommand {
                 state.LinesProcessed = cursorAckNextLine ?? linesRead;
 
                 if (cursorAckNextLine is not null) {
-                    state.CursorByteOffset = cursorGuardNewLength;
+                    // AI-1382 review fix #3 — checkpoint only the bytes the ack actually covers.
+                    // A partially-disposed batch (D3's "halt-at-the-gap" policy) acks fewer lines
+                    // than were sent; the previous code advanced CursorByteOffset to the full
+                    // capped snapshot length regardless, silently checkpointing the unacked tail
+                    // as if it had been delivered — those bytes would never be re-sent, yet the
+                    // server never durably disposed of them. Map the acked LINE count (an absolute
+                    // frontier, same numbering as priorLineCursorForGuard) to a byte offset within
+                    // the freshly-verified range; fall back to the full snapshot length only when
+                    // nothing grew this poll (cursorGuardVerifiedRange is null exactly then, and
+                    // cursorGuardNewLength == cursorGuardOldOffset in that case anyway).
+                    var ackedLineCount  = cursorAckNextLine.Value - priorLineCursorForGuard;
+                    var ackedByteOffset = cursorGuardVerifiedRange is { } verifiedRange
+                        ? ByteOffsetForAckedLines(verifiedRange, cursorGuardOldOffset, ackedLineCount)
+                        : cursorGuardNewLength;
+
+                    state.CursorByteOffset = ackedByteOffset;
 
                     if (cursorGuard is not null) {
-                        var trailingLength = (int)Math.Min(cursorGuard.TrailingBytes, cursorGuardNewLength);
+                        var trailingLength = (int)Math.Min(cursorGuard.TrailingBytes, ackedByteOffset);
                         var trailingBuffer = new byte[trailingLength];
 
                         if (trailingLength > 0) {
                             await using var trailingStream = new FileStream(
                                 transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                            trailingStream.Position = cursorGuardNewLength - trailingLength;
+                            trailingStream.Position = ackedByteOffset - trailingLength;
                             await ReadFullyAsync(trailingStream, trailingBuffer, ct);
                         }
 
-                        cursorGuard.Checkpoint(cursorGuardNewLength, CursorAppendOnlyProbe.Sha256Hex(trailingBuffer));
+                        cursorGuard.Checkpoint(ackedByteOffset, CursorAppendOnlyProbe.Sha256Hex(trailingBuffer));
                     }
                 }
 
@@ -1580,6 +1719,21 @@ static partial class WatchCommand {
             CancellationToken ct
         ) {
         if (!File.Exists(transcriptPath)) return null;
+
+        // AI-1382 review fix #1 — a Cursor session already quarantined by the runtime rewrite
+        // guard must never have its tail re-read and spooled here either: the bytes past
+        // `linesProcessed` ARE the exact corrupted batch the guard just discarded (the discard
+        // never advanced state.LinesProcessed), so without this check a later global drain
+        // (LifecycleSpoolDrain) would replay from the spool precisely what the guard existed to
+        // block. No needs-import marker either — D0's quarantine is a deliberate, permanent,
+        // diagnosable stop (see CursorRewriteGuard), and `kcap import` also refuses a quarantined
+        // session (review fix #7), so a needs-import marker here would just be inert.
+        if (vendor == "cursor" && CursorMarkers.IsQuarantined(sessionId)) {
+            Log($"Cursor session {sessionId} is quarantined; skipping shutdown-tail spool "
+              + "(no line-number path may keep feeding a corrupted cursor)");
+
+            return null;
+        }
 
         NewTranscriptLines tail;
         try {
@@ -2434,7 +2588,8 @@ static partial class WatchCommand {
         List<string> Lines,
         List<int>    LineNumbers,
         int          NextPosition,
-        bool         HeldIncompleteFinalLine = false);
+        bool         HeldIncompleteFinalLine = false,
+        long         SnapshotByteLength      = 0);
 
     /// <summary>
     /// Policy for an unterminated (no trailing newline) final transcript line at drain time.
@@ -2485,6 +2640,10 @@ static partial class WatchCommand {
             lineIndex++;
         }
 
+        // AI-1382 review fix #3: this string-based helper has no independent byte-length sample
+        // of its own (its caller already materialized the whole file into `fileText` elsewhere),
+        // so SnapshotByteLength stays at its default (0, unused here) — only
+        // ReadNewCompleteLinesAsync below (the Cursor watcher's actual read path) populates it.
         return ApplyPartialLineHoldback(
             newLines, newLineNumbers, nextPosition: lineIndex, linesProcessed, endsWithNewline, policy);
     }
@@ -2506,6 +2665,35 @@ static partial class WatchCommand {
         }
 
         return total;
+    }
+
+    /// <summary>
+    /// AI-1382 review fix #3 — maps a server-acknowledged LINE count within the Cursor guard's
+    /// freshly-verified new-range byte buffer to the byte offset immediately after that many
+    /// lines' terminating newlines. <paramref name="range"/> spans file bytes starting at
+    /// <paramref name="rangeStartOffset"/>; <paramref name="ackedLineCount"/> is how many of the
+    /// lines within it the server's source-acknowledgement frontier actually disposed of (D3's
+    /// per-line halt-at-the-gap — fewer than were sent whenever a line is retry-blocked or
+    /// persist-blocked). Used to advance the guard's byte checkpoint only that far, never the
+    /// whole capped range just because more bytes happened to be present in the same poll's read.
+    /// Pure so it's unit-testable without a real file.
+    /// </summary>
+    internal static long ByteOffsetForAckedLines(ReadOnlySpan<byte> range, long rangeStartOffset, int ackedLineCount) {
+        if (ackedLineCount <= 0) return rangeStartOffset;
+
+        var seen = 0;
+
+        for (var i = 0; i < range.Length; i++) {
+            if (range[i] != (byte)'\n') continue;
+
+            seen++;
+
+            if (seen == ackedLineCount) return rangeStartOffset + i + 1;
+        }
+
+        // Acked at least as many lines as this range's newlines account for (a full ack) — the
+        // whole verified range was consumed.
+        return rangeStartOffset + range.Length;
     }
 
     /// <summary>
@@ -2546,8 +2734,14 @@ static partial class WatchCommand {
             lineIndex++;
         }
 
+        // AI-1382 review fix #3: `length` is the exact byte boundary this read was capped at
+        // (sampled once, above, before any concurrent append could grow the file further) —
+        // threaded through as SnapshotByteLength so the Cursor rewrite guard can use THIS value
+        // instead of re-sampling FileInfo.Length later and risking a race with an append that
+        // landed in between the two samples.
         return ApplyPartialLineHoldback(
-            newLines, newLineNumbers, nextPosition: lineIndex, linesProcessed, endsWithNewline, policy);
+            newLines, newLineNumbers, nextPosition: lineIndex, linesProcessed, endsWithNewline, policy,
+            snapshotByteLength: length);
     }
 
     // Decide the fate of a still-being-written final line (no trailing newline yet). Under
@@ -2566,9 +2760,10 @@ static partial class WatchCommand {
             int                       nextPosition,
             int                       linesProcessed,
             bool                      endsWithNewline,
-            IncompleteFinalLinePolicy policy) {
+            IncompleteFinalLinePolicy policy,
+            long                      snapshotByteLength = 0) {
         if (endsWithNewline || nextPosition <= linesProcessed) {
-            return new NewTranscriptLines(newLines, newLineNumbers, nextPosition);
+            return new NewTranscriptLines(newLines, newLineNumbers, nextPosition, SnapshotByteLength: snapshotByteLength);
         }
 
         var partialIndex = nextPosition - 1;
@@ -2582,7 +2777,7 @@ static partial class WatchCommand {
                       && IsCompleteJsonRecord(newLines[^1]);
 
         if (consume) {
-            return new NewTranscriptLines(newLines, newLineNumbers, nextPosition);
+            return new NewTranscriptLines(newLines, newLineNumbers, nextPosition, SnapshotByteLength: snapshotByteLength);
         }
 
         if (hasPartial) {
@@ -2591,8 +2786,11 @@ static partial class WatchCommand {
         }
 
         // Only a real (non-blank) held line is "incomplete content" the caller must surface; a
-        // whitespace-only trailing partial carries nothing to lose.
-        return new NewTranscriptLines(newLines, newLineNumbers, partialIndex, HeldIncompleteFinalLine: hasPartial);
+        // whitespace-only trailing partial carries nothing to lose. SnapshotByteLength still
+        // reflects the FULL capped read (including the held-back tail's bytes) — the guard must
+        // still verify those bytes weren't rewritten even though they weren't sent this poll.
+        return new NewTranscriptLines(
+            newLines, newLineNumbers, partialIndex, HeldIncompleteFinalLine: hasPartial, SnapshotByteLength: snapshotByteLength);
     }
 
     /// <summary>True if <paramref name="line"/> (a single, newline-less transcript line) parses as a

@@ -42,6 +42,22 @@ public sealed class CursorRewriteGuard(string sessionId) {
     public void Checkpoint(long offset, string trailingSha) => _checkpoint = (offset, trailingSha);
 
     /// <summary>
+    /// AI-1382 review fix #2 — a shrink (the file is now SHORTER than <paramref name="checkpointOffset"/>,
+    /// the last committed checkpoint) is unambiguous evidence of a rewrite on its own, independent
+    /// of every other zone check — the runtime guard's original wiring gated the ENTIRE zone check
+    /// behind "did the file grow", so a shrink slipped through completely undetected. True (no
+    /// trip) when the file hasn't shrunk below the checkpoint. On a trip, writes the structured
+    /// diagnostic and quarantines the session, exactly like every other Verify* method here.
+    /// </summary>
+    public bool VerifyNotShrunk(long newLength, long checkpointOffset) {
+        if (newLength >= checkpointOffset) return true;
+
+        Reject("shrink", $"file length {newLength} is now shorter than the last checkpoint offset {checkpointOffset}");
+
+        return false;
+    }
+
+    /// <summary>
     /// Hashes the trailing <see cref="TrailingBytes"/> bytes ending at the current checkpoint
     /// offset in <paramref name="stream"/>, without disturbing its position. Call once before and
     /// once after the new-range snapshot read, feeding each result to <see cref="VerifyPriorZone"/>.

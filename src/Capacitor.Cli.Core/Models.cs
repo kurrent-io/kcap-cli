@@ -209,6 +209,12 @@ class WatchState {
     // range it last verified. Only ever set for vendor == "cursor".
     public long CursorByteOffset { get; set; }
 
+    // AI-1382 review fix #2 — poll counter driving the periodic full-prefix re-hash cadence
+    // (WatchCommand.CursorFullPrefixVerifyEveryNPolls). Incremented once per poll for vendor ==
+    // "cursor" only; a plain counter (not wall-clock time) so the cadence is exact regardless of
+    // how long any individual poll takes.
+    public int CursorGuardPollCount { get; set; }
+
     public const int TranscriptThreshold = 10;
 }
 
