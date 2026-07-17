@@ -1066,6 +1066,207 @@ public class CursorImportSourceTests {
         } finally { try { File.Delete(CursorMarkers.QuarantinePath(sessionId)); } catch { } }
     }
 
+    // AI-1382 review fix (r4, finding #3) — the round-3 fix above only proved the SECOND of TWO
+    // batches gets aborted; it never exercised a transcript that is a SINGLE (final and only)
+    // batch, which is exactly the gap SendTranscriptBatches' round-3 wiring left open (no "next"
+    // pre-POST check ever runs for a one-batch send). This drives a transcript of 30 lines
+    // (well under the 100-line flush threshold) and quarantines the instant that one-and-only
+    // transcript POST lands, proving it is still observed and routed through the same
+    // best-effort close-and-fail contract.
+    [Test]
+    public async Task import_session_aborts_when_quarantine_is_written_during_the_only_batch_post() {
+        using var fx = new ProjectsDirFixture();
+        var sessionIdWithDashes = Guid.NewGuid().ToString();
+        var sessionId           = CursorImportSource.NormalizeCursorSessionId(sessionIdWithDashes);
+        var lines = string.Concat(Enumerable.Range(0, 30).Select(i => $$"""{"n":{{i}}}""" + "\n"));
+        var jsonl = fx.AddSession("Users-me-proj", sessionIdWithDashes, lines);
+        var src   = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        var posted           = new List<string>();
+        var transcriptPosts  = 0;
+        using var handler = new StubHandler(postCapture: (req, _) => {
+            var path = req.RequestUri!.AbsolutePath;
+            posted.Add(path);
+            if (path == "/hooks/transcript") {
+                transcriptPosts++;
+                // The live watcher's runtime rewrite guard trips WHILE this — the ONLY — batch is
+                // "in flight" (simulated side effect). There is no second batch to catch this on a
+                // pre-POST check; the fix must observe it immediately AFTER this POST instead.
+                CursorMarkers.Quarantine(sessionId, "test");
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        using var client = new HttpClient(handler);
+
+        try {
+            var outcome = await src.ImportSessionAsync(
+                new ImportCommand.SessionClassification {
+                    SessionId  = sessionId,
+                    FilePath   = "",
+                    EncodedCwd = "",
+                    Meta       = new SessionMetadata(),
+                    Status     = ImportCommand.ClassificationStatus.New,
+                    Vendor     = "cursor",
+                    SourceMeta = new Dictionary<string, object?> { ["TranscriptPath"] = jsonl },
+                },
+                new ImportContext(client, "http://localhost", ForcePrivate: false),
+                CancellationToken.None
+            );
+
+            await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+            // Exactly ONE transcript POST — the only batch this transcript ever needed.
+            await Assert.That(transcriptPosts).IsEqualTo(1);
+            await Assert.That(posted).Contains("/hooks/session-start/cursor");
+            // Best-effort closed rather than left hanging "active" forever.
+            await Assert.That(posted).Contains("/hooks/session-end/cursor");
+        } finally { try { File.Delete(CursorMarkers.QuarantinePath(sessionId)); } catch { } }
+    }
+
+    // AI-1382 review fix (r4, finding #2) — a quarantine trip during a CHILD's own transcript
+    // delivery must propagate to the parent's best-effort close-and-fail path — the same contract
+    // as a trip during the parent's OWN transcript. Before the fix, SendSubagentLifecycleAsync's
+    // catch-all swallowed the typed TranscriptDeliveryAbortedException into a bare `false`, so
+    // ImportSessionAsync returned Failed WITHOUT ever posting the parent's session-end — even
+    // though the child's subagent-start had already landed, leaving the parent/subsession stuck
+    // Active forever (the quarantine marker makes the next run Skip at preflight instead of
+    // repairing it).
+    [Test]
+    public async Task import_session_closes_and_fails_when_a_child_transcript_quarantine_trips_mid_delivery() {
+        using var fx = new ProjectsDirFixture();
+        var parentIdWithDashes = Guid.NewGuid().ToString();
+        var parentId           = CursorImportSource.NormalizeCursorSessionId(parentIdWithDashes);
+        var childIdWithDashes  = Guid.NewGuid().ToString();
+        var childId            = CursorImportSource.NormalizeCursorSessionId(childIdWithDashes);
+
+        var parentJsonl = fx.AddSession("Users-me-proj", parentIdWithDashes, "{\"a\":1}\n");
+        var childJsonl  = fx.AddSession("Users-me-proj", childIdWithDashes, "{\"b\":1}\n{\"c\":2}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        var posted = new List<string>();
+        using var handler = new StubHandler(
+            getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound), // subsession watermark → New
+            postCapture: (req, body) => {
+                var path = req.RequestUri!.AbsolutePath;
+                posted.Add(path);
+                if (path == "/hooks/transcript" && JsonNode.Parse(body)!["agent_id"] is not null) {
+                    // The child's OWN transcript delivery is what trips the guard mid-flight.
+                    CursorMarkers.Quarantine(parentId, "test");
+                }
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            });
+        using var client = new HttpClient(handler);
+
+        try {
+            var classification = new ImportCommand.SessionClassification {
+                SessionId  = parentId,
+                FilePath   = "",
+                EncodedCwd = "",
+                Meta       = new SessionMetadata(),
+                Status     = ImportCommand.ClassificationStatus.New,
+                Vendor     = "cursor",
+                SourceMeta = new Dictionary<string, object?> {
+                    ["TranscriptPath"]    = parentJsonl,
+                    ["SubagentChildren"]  = new List<CursorImportSource.CursorSubagentChild> {
+                        new(childId, childJsonl, "task"),
+                    },
+                },
+            };
+
+            var outcome = await src.ImportSessionAsync(
+                classification,
+                new ImportContext(client, "http://localhost", ForcePrivate: false),
+                CancellationToken.None
+            );
+
+            await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+            // The child's subagent-start WAS already posted before the quarantine tripped mid its
+            // OWN transcript delivery.
+            await Assert.That(posted).Contains("/hooks/subagent-start");
+            // The abort happens before subagent-stop — the child is left correctly unfinished.
+            await Assert.That(posted).DoesNotContain("/hooks/subagent-stop");
+            // The parent must still be best-effort closed instead of left hanging Active forever
+            // (this is exactly the case the pre-fix bare-`false` return skipped).
+            await Assert.That(posted).Contains("/hooks/session-end/cursor");
+        } finally { try { File.Delete(CursorMarkers.QuarantinePath(parentId)); } catch { } }
+    }
+
+    // AI-1382 review fix (r4, finding #2a) — never START a NEW child once the family is found
+    // quarantined, even when that quarantine was NOT tripped by this child's own delivery (a
+    // concurrent trip — the live watcher runs alongside this import — discovered only when it's
+    // this child's turn in the loop). Two children are configured in a fixed, known order; the
+    // quarantine lands the instant child A's OWN lifecycle finishes cleanly (its subagent-stop),
+    // simulating a trip unrelated to anything child B does. Child B must never be started.
+    [Test]
+    public async Task import_session_never_starts_a_later_child_once_the_family_is_found_quarantined() {
+        using var fx = new ProjectsDirFixture();
+        var parentIdWithDashes = Guid.NewGuid().ToString();
+        var parentId           = CursorImportSource.NormalizeCursorSessionId(parentIdWithDashes);
+        var childAIdWithDashes = Guid.NewGuid().ToString();
+        var childAId           = CursorImportSource.NormalizeCursorSessionId(childAIdWithDashes);
+        var childBIdWithDashes = Guid.NewGuid().ToString();
+        var childBId           = CursorImportSource.NormalizeCursorSessionId(childBIdWithDashes);
+
+        var parentJsonl = fx.AddSession("Users-me-proj", parentIdWithDashes, "{\"a\":1}\n");
+        var childAJsonl = fx.AddSession("Users-me-proj", childAIdWithDashes, "{\"b\":1}\n");
+        var childBJsonl = fx.AddSession("Users-me-proj", childBIdWithDashes, "{\"c\":1}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        var bodies = new List<(string Path, string Body)>();
+        using var handler = new StubHandler(
+            getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+            postCapture: (req, body) => {
+                var path = req.RequestUri!.AbsolutePath;
+                bodies.Add((path, body));
+                if (path == "/hooks/subagent-stop" && JsonNode.Parse(body)!["agent_id"]!.GetValue<string>() == childAId) {
+                    // A trip unrelated to child A's own (clean) delivery — e.g. the live watcher
+                    // concurrently detected a rewrite — lands right as child A finishes.
+                    CursorMarkers.Quarantine(parentId, "test");
+                }
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            });
+        using var client = new HttpClient(handler);
+
+        try {
+            var classification = new ImportCommand.SessionClassification {
+                SessionId  = parentId,
+                FilePath   = "",
+                EncodedCwd = "",
+                Meta       = new SessionMetadata(),
+                Status     = ImportCommand.ClassificationStatus.New,
+                Vendor     = "cursor",
+                SourceMeta = new Dictionary<string, object?> {
+                    ["TranscriptPath"]   = parentJsonl,
+                    ["SubagentChildren"] = new List<CursorImportSource.CursorSubagentChild> {
+                        new(childAId, childAJsonl, "task"),
+                        new(childBId, childBJsonl, "task"),
+                    },
+                },
+            };
+
+            var outcome = await src.ImportSessionAsync(
+                classification,
+                new ImportContext(client, "http://localhost", ForcePrivate: false),
+                CancellationToken.None
+            );
+
+            await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+
+            var subagentStartAgentIds = bodies
+                .Where(b => b.Path == "/hooks/subagent-start")
+                .Select(b => JsonNode.Parse(b.Body)!["agent_id"]!.GetValue<string>())
+                .ToList();
+
+            // Child A started and completed normally before the quarantine appeared.
+            await Assert.That(subagentStartAgentIds).Contains(childAId);
+            // Child B must NEVER be started once the family is found quarantined — even though
+            // nothing about child B's OWN delivery caused the trip.
+            await Assert.That(subagentStartAgentIds).DoesNotContain(childBId);
+            await Assert.That(bodies.Any(b => b.Path == "/hooks/session-end/cursor")).IsTrue();
+        } finally { try { File.Delete(CursorMarkers.QuarantinePath(parentId)); } catch { } }
+    }
+
     // AI-1382 review fix #7 — subagentLinks is only ever computed from the sessions THIS batch
     // discovered. A --session <child> filter excludes the parent from that batch entirely, so the
     // in-batch correlator can never produce the family link. The persisted CursorLiveSubagentLinker
