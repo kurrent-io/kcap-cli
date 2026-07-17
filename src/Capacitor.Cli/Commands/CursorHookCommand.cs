@@ -214,6 +214,11 @@ public static class CursorHookCommand {
                             // finally being delivered here means the side-effect barrier this
                             // session may be holding on can now be cleared.
                             if (route == "user-prompt/cursor") CursorMarkers.ClearBarrier(sessionId);
+                            // AI-1382 Task 12: this IS "a later invocation whose spool drain
+                            // delivers the start" — a subagent-start that failed its first live
+                            // POST (see HandleSubagentChildEventAsync) just got acknowledged here
+                            // instead. Perform the deferred child-watcher spawn now.
+                            if (route == "subagent-start") await MaybeSpawnChildWatcherFromPayloadAsync(baseUrl, entryBody);
                             return DrainOutcome.Delivered;
                         }
                         var code = (int)resp.StatusCode;
@@ -328,7 +333,7 @@ public static class CursorHookCommand {
     /// being appended to a phantom <c>AgentSession-{child}</c> stream that never got a
     /// <c>SessionStarted</c>.
     /// </summary>
-    static async Task<int> HandleSubagentChildEventAsync(
+    internal static async Task<int> HandleSubagentChildEventAsync(
             HttpClient        client,
             string            baseUrl,
             HookSpool         spool,
@@ -395,12 +400,23 @@ public static class CursorHookCommand {
 
         var posted = await TryPostHookAsync(client, baseUrl, route, body!, ct);
         if (!posted) {
-            // subagent-start POST failed → spool it and STOP: running the sessionStart
-            // backfill now would route the transcript to an AgentSubsession stream the
-            // (spooled, undelivered) subagent-start hasn't opened yet. The next hook drains
-            // the start first, then backfills.
+            // AI-1382 Task 12 — subagent-start POST failed (spooled): the child watcher must
+            // NOT spawn here. Spawning now would let the watcher's own poll deliver child
+            // transcript lines before SubagentStarted is ever appended (the server has no
+            // AgentSubsession stream open yet to receive them). Spool it and STOP; running the
+            // sessionStart backfill now would hit the same problem. HandleCore's generic
+            // top-of-method spool drain (keyed on this same childSessionId) is what redelivers
+            // this entry on a later hook invocation — see its "subagent-start" branch, which
+            // performs the deferred spawn itself once that redelivery succeeds.
             spool.Append(childSessionId, route, body!);
             return 0;
+        }
+
+        // AI-1382 Task 12 — subagent-start is ACKNOWLEDGED (2xx) via this live POST. Only now
+        // may the child's own tailing watcher be spawned — the invariant this task exists for
+        // is that no child transcript line ever reaches the server before SubagentStarted.
+        if (isStart && !string.IsNullOrEmpty(transcriptPath)) {
+            await MaybeSpawnChildWatcherAsync(baseUrl, parentSessionId, childSessionId, transcriptPath);
         }
 
         // sessionStart: post subagent-start THEN backfill, so the AgentSubsession stream is
@@ -412,6 +428,63 @@ public static class CursorHookCommand {
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// AI-1382 Task 12 — spawns (or heals) the child (subagent) Cursor watcher, keyed
+    /// <c>{parentSessionId}-{childSessionId}</c> so it never collides with the parent's own
+    /// top-level watcher key. Tails the CHILD's own transcript file and routes every batch it
+    /// sends under <paramref name="parentSessionId"/> with <c>agentId = childSessionId</c>
+    /// (<see cref="WatcherManager.EnsureWatcherRunning"/>'s <c>sessionIdOverride</c>/<c>agentId</c>
+    /// pair — the same shape <c>ClaudeHookCommand</c>'s <c>subagent-start</c> case uses). Callers
+    /// MUST only invoke this after an acknowledged (2xx) <c>subagent-start</c> — see the call site
+    /// in <see cref="HandleSubagentChildEventAsync"/>.
+    ///
+    /// Quarantine is keyed on <paramref name="parentSessionId"/>, not the child: the runtime
+    /// rewrite guard (<see cref="CursorRewriteGuard"/>) and <c>WatchCommand.RunWatch</c> both
+    /// construct their guard/quarantine identity from the watcher process's own
+    /// <c>sessionId</c> argument, which — for a child watcher spawned with
+    /// <c>sessionIdOverride: parentSessionId</c> — resolves to the PARENT id
+    /// (<c>WatcherManager.BuildSpawnArgs</c>: <c>sessionId = sessionIdOverride ?? key</c>). A
+    /// parent session already given up on by the guard must not keep spawning fresh child
+    /// watchers either.
+    /// </summary>
+    internal static Task MaybeSpawnChildWatcherAsync(
+            string baseUrl,
+            string parentSessionId,
+            string childSessionId,
+            string transcriptPath
+        ) {
+        if (CursorMarkers.IsQuarantined(parentSessionId)) return Task.CompletedTask;
+        if (string.IsNullOrEmpty(transcriptPath)) return Task.CompletedTask;
+
+        return WatcherManager.EnsureWatcherRunning(
+            baseUrl, key: $"{parentSessionId}-{childSessionId}", transcriptPath,
+            agentId: childSessionId, sessionIdOverride: parentSessionId, vendor: "cursor");
+    }
+
+    /// <summary>
+    /// AI-1382 Task 12 — the generic spool-drain callback (<see cref="HandleCore"/>'s top-of-method
+    /// drain, which runs for every session BEFORE the <c>isSubagentChild</c> divert) has just
+    /// delivered a previously-spooled <c>subagent-start</c> entry. Parses the parent/child/
+    /// transcript-path triple back out of its own payload shape
+    /// (<see cref="CursorLiveSubagentLinker.BuildSubagentStartPayload"/>: <c>session_id</c> =
+    /// parent, <c>agent_id</c> = child, <c>transcript_path</c> = the child's own file) and performs
+    /// the spawn this deferred delivery unblocks. Fail-open: a malformed payload (should never
+    /// happen — this method only ever spools its own generated JSON) just skips the spawn rather
+    /// than risking the drain loop itself.
+    /// </summary>
+    static Task MaybeSpawnChildWatcherFromPayloadAsync(string baseUrl, string subagentStartBody) {
+        try {
+            var payload         = JsonNode.Parse(subagentStartBody);
+            var parentSessionId = TryGetString(payload, "session_id");
+            var childSessionId  = TryGetString(payload, "agent_id");
+            var transcriptPath  = TryGetString(payload, "transcript_path");
+            if (parentSessionId is null || childSessionId is null || string.IsNullOrEmpty(transcriptPath)) {
+                return Task.CompletedTask;
+            }
+            return MaybeSpawnChildWatcherAsync(baseUrl, parentSessionId, childSessionId, transcriptPath);
+        } catch { return Task.CompletedTask; }
     }
 
     /// <summary>
