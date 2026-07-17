@@ -26,7 +26,7 @@ public static class GeminiPaths {
     /// root is NOT sufficient because <c>~/.gemini</c> is SHARED with Google
     /// Antigravity, which stores its state under <c>antigravity/</c> +
     /// <c>antigravity-cli/</c> — so an Antigravity-only home would otherwise falsely
-    /// read as a Gemini install (AI-1158). Require one of the config/recording
+    /// read as a Gemini install. Require one of the config/recording
     /// markers Gemini CLI creates that Antigravity does not: <c>settings.json</c>,
     /// <c>projects.json</c>, or the <c>tmp/</c> chat-recording dir. The binary name
     /// <c>gemini</c> is too generic to be the only signal, so callers that want a
@@ -76,9 +76,9 @@ public static class GeminiPaths {
     /// id). A subagent that itself spawns subagents gets its OWN nested dir the same way —
     /// <c>&lt;chats&gt;/&lt;subId&gt;/&lt;grandSubId&gt;.jsonl</c> — so deeper invocations are
     /// discovered by recursing into each descendant's own directory, not by assuming a flat
-    /// layout (AI-1383 D3; see <see cref="GeminiSubagentDiscovery.EnumerateDescendantFiles"/>).
+    /// layout (see <see cref="GeminiSubagentDiscovery.EnumerateDescendantFiles"/>).
     /// <paramref name="parentSessionId"/> is the DASHED form from the parent transcript's
-    /// header, matching the on-disk directory name. AI-900.
+    /// header, matching the on-disk directory name.
     /// </summary>
     public static string SubagentDir(string chatsDir, string parentSessionId)
         => Path.Combine(chatsDir, parentSessionId);

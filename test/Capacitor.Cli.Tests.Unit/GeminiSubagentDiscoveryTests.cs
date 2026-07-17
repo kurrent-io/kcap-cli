@@ -464,6 +464,91 @@ public class GeminiSubagentDiscoveryTests {
     // "complete" report, even though the true descendant count could be larger. The bounded
     // enumerator must now report HitLimit from the RAW touched count (regardless of how many
     // entries turned out to be well-formed <GUID>.jsonl files), so this case is always caught.
+    // Qodo review (PR #326, finding #3): an unreadable descendant directory (permissions, I/O
+    // error) used to be swallowed by a bare `catch { return null; }`, silently dropping that
+    // whole subtree with no counter and no diagnostic. It must now be counted in
+    // UnreadableDescendantDirs so the omission is observable, while the walk still completes
+    // for every other (readable) branch.
+    [Test]
+    public async Task EnumerateDescendantFiles_unreadable_in_cap_directory_is_counted_not_silent() {
+        if (OperatingSystem.IsWindows()) return; // chmod-based unreadable dir is Unix-only
+
+        var tmp = Directory.CreateTempSubdirectory("kcap-gsd-desc").FullName;
+        try {
+            var root = WriteParentWithSubagent(tmp, "codebase_investigator");
+
+            // Sub's own nested dir (where any grandchildren would live) exists but can't be
+            // read — simulating a permissions error or a hostile/corrupt filesystem entry.
+            var subDir = Path.Combine(tmp, "chats", DashedSub);
+            Directory.CreateDirectory(subDir);
+            File.SetUnixFileMode(subDir, UnixFileMode.None);
+
+            try {
+                var result = GeminiSubagentDiscovery.EnumerateDescendantFiles(root);
+
+                // Sub itself (discovered from the ROOT's own chats dir) is still found — only
+                // ITS children are unreachable.
+                await Assert.That(result.Files.Select(f => f.DashedId)).IsEquivalentTo(new[] { DashedSub });
+                await Assert.That(result.UnreadableDescendantDirs).IsEqualTo(1);
+                await Assert.That(result.DescendantsOmitted).IsEqualTo(0);
+                await Assert.That(result.CountTruncated).IsFalse();
+            } finally {
+                File.SetUnixFileMode(subDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+        } finally {
+            Directory.Delete(tmp, recursive: true);
+        }
+    }
+
+    // Same bug, below-cap code path: the depth-8 node's own directory (necessarily below-cap
+    // children) is unreadable. Must still be counted, and must not be confused with
+    // CountTruncated (that's reserved for "we proved there might be more below the counting
+    // cap," not "we couldn't read this directory at all").
+    [Test]
+    public async Task EnumerateDescendantFiles_unreadable_below_cap_directory_is_counted_not_silent() {
+        if (OperatingSystem.IsWindows()) return;
+
+        var tmp = Directory.CreateTempSubdirectory("kcap-gsd-desc").FullName;
+        try {
+            var chats = Path.Combine(tmp, "chats");
+            Directory.CreateDirectory(chats);
+
+            var rootId = "00000000-0000-4000-8000-000000000000";
+            var root   = Path.Combine(chats, "session-root.jsonl");
+            File.WriteAllText(root, $$"""{"sessionId":"{{rootId}}","kind":"main"}""" + "\n");
+
+            var prevId = rootId;
+            for (var depth = 1; depth <= 8; depth++) {
+                var id  = $"00000000-0000-4000-8000-{depth:D12}";
+                var dir = Path.Combine(chats, prevId);
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, id + ".jsonl"), $$"""{"sessionId":"{{id}}","kind":"subagent"}""" + "\n");
+                prevId = id;
+            }
+
+            // The depth-8 node's own dir would hold only below-cap (depth-9) children — make it
+            // unreadable instead of giving it any.
+            var depth8Dir = Path.Combine(chats, prevId);
+            Directory.CreateDirectory(depth8Dir);
+            File.SetUnixFileMode(depth8Dir, UnixFileMode.None);
+
+            try {
+                var result = GeminiSubagentDiscovery.EnumerateDescendantFiles(root);
+
+                // The in-cap import set (depths 1..8) is unaffected.
+                await Assert.That(result.Files.Count).IsEqualTo(8);
+                await Assert.That(result.Files.Max(f => f.Depth)).IsEqualTo(8);
+                await Assert.That(result.UnreadableDescendantDirs).IsEqualTo(1);
+                await Assert.That(result.DescendantsOmitted).IsEqualTo(0);
+                await Assert.That(result.CountTruncated).IsFalse();
+            } finally {
+                File.SetUnixFileMode(depth8Dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+        } finally {
+            Directory.Delete(tmp, recursive: true);
+        }
+    }
+
     [Test]
     public async Task EnumerateDescendantFiles_below_cap_boundary_plus_junk_entry_is_never_falsely_reported_complete() {
         var tmp = Directory.CreateTempSubdirectory("kcap-gsd-desc").FullName;
