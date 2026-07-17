@@ -296,31 +296,16 @@ static class ImportCommand {
     }
 
     /// <summary>
-    /// AI-1156 (D5): reconcile Cursor subagent children whose correlated parent isn't itself
-    /// part of THIS run's routed plan. <see cref="CursorImportSource.ClassifyAsync"/> widens its
-    /// correlator input to same-workspace discovery (F1), so it can stamp
-    /// <c>IsSubagentChild</c>/<c>ParentSessionId</c> on a child even when the parent falls
-    /// outside <c>--session</c>/<c>--cwd</c>/<c>--since</c>/scope for this run and is never
-    /// classified at all. Such an orphan must import STANDALONE — never silently dropped by
-    /// <see cref="CursorImportSource.ImportSessionAsync"/>'s nested-child skip, and never
-    /// triggering a <c>subagent-start</c> against an un-planned (possibly ended) parent. Clearing
-    /// the flags here makes that skip no-op for the orphan, so it falls through to the ordinary
-    /// standalone session-start/transcript/session-end path. The server-side
-    /// <c>CursorSubagentAdoptionSweep</c> (AI-1156 D4) adopts it under its real parent later, once
-    /// the parent exists server-side. A child whose parent IS among `routed` (the common case) is
-    /// left untouched — it keeps importing nested, under the parent's own
-    /// <c>ImportSessionAsync</c> call.
-    ///
-    /// <para>
-    /// AI-1154 review fix (P1): the reverse direction is pruned too. <c>SubagentChildren</c> on a
-    /// routed PARENT was built from the same widened same-workspace scan, so it can list a child
-    /// that fell outside THIS run's routed/filtered plan (e.g. <c>--session &lt;parent&gt;</c>, or a
-    /// <c>--since</c>/scope filter that excludes the child). Attaching such a child would WIDEN
-    /// the import plan and ship a session the user explicitly filtered out — the widened set may
-    /// only be used to DISCOVER links, never to decide what gets attached. Children not in
-    /// `routed` are stripped from <c>SubagentChildren</c> here; they import standalone on their
-    /// own run, or get adopted later by the server-side sweep.
-    /// </para>
+    /// Reconciles Cursor subagent correlation against this run's actual routed plan, which may be
+    /// narrower than the same-workspace scan <see cref="CursorImportSource.ClassifyAsync"/> used
+    /// to discover links. An orphaned child — correlated to a parent that isn't itself in
+    /// <paramref name="routed"/> — has its child flags cleared so it imports standalone instead
+    /// of being silently skipped by <see cref="CursorImportSource.ImportSessionAsync"/>'s
+    /// nested-child skip (the server-side adoption sweep attaches it to its real parent later).
+    /// Conversely, a routed parent's <c>SubagentChildren</c> is pruned to children that are
+    /// actually in <paramref name="routed"/> — the wider discovery scan may only be used to
+    /// DISCOVER links, never to WIDEN the import plan with a session the caller filtered out.
+    /// Children whose parent IS in <paramref name="routed"/> are left untouched.
     /// </summary>
     internal static List<SessionClassification> ReconcileOrphanedCursorSubagentChildren(
         List<SessionClassification> routed
