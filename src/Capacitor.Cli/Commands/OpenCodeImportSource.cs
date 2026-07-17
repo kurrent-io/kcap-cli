@@ -157,7 +157,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
         return results;
     }
 
-    public async Task<ImportOutcome> ImportSessionAsync(
+    public async Task<ImportSessionResult> ImportSessionAsync(
         ImportCommand.SessionClassification c, ImportContext ctx, CancellationToken ct) {
         if (c.Status == ImportCommand.ClassificationStatus.AlreadyLoaded) return ImportOutcome.Skipped;
 

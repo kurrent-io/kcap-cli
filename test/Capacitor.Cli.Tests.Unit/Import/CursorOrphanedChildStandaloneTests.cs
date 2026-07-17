@@ -127,7 +127,7 @@ public class CursorOrphanedChildStandaloneTests {
             CancellationToken.None);
 
         // Standalone lifecycle — not Skipped, not dropped.
-        await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
+        await Assert.That(outcome.Outcome).IsEqualTo(ImportOutcome.Loaded);
         await Assert.That(posted).Contains("/hooks/session-start/cursor");
         await Assert.That(posted).Contains("/hooks/transcript");
         await Assert.That(posted).Contains("/hooks/session-end/cursor");
@@ -185,7 +185,7 @@ public class CursorOrphanedChildStandaloneTests {
             CancellationToken.None);
 
         // The parent still imports normally...
-        await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
+        await Assert.That(outcome.Outcome).IsEqualTo(ImportOutcome.Loaded);
         await Assert.That(posted).Contains("/hooks/session-start/cursor");
         await Assert.That(posted).Contains("/hooks/transcript");
         await Assert.That(posted).Contains("/hooks/session-end/cursor");

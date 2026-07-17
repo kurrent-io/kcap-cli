@@ -375,7 +375,7 @@ internal sealed class CursorImportSource : IImportSource {
         return results;
     }
 
-    public async Task<ImportOutcome> ImportSessionAsync(
+    public async Task<ImportSessionResult> ImportSessionAsync(
             ImportCommand.SessionClassification classification,
             ImportContext                       ctx,
             CancellationToken                   ct
@@ -467,11 +467,18 @@ internal sealed class CursorImportSource : IImportSource {
         // (reactivation event) appended after the parent's SessionEnded would flip the
         // ended parent back to Active. Hard-fail on child failure (same contract as the
         // parent lifecycle) so a re-run — idempotent via deterministic ids — repairs it.
+        //
+        // AI-1154 review fix (P1): track whether any child ACTUALLY sent new transcript bytes,
+        // independent of the parent's own `sent`/`startLine`. An AlreadyLoaded parent (nothing
+        // past its own watermark) can still attach a previously-unloaded child here — that's
+        // real new work, and ImportCommand's IsLifecycleOnlyRoutedReplay must not suppress it.
+        var sentChildContent = false;
         if (classification.SourceMeta!.TryGetValue("SubagentChildren", out var kidsObj)
          && kidsObj is List<CursorSubagentChild> children) {
             foreach (var child in children) {
-                if (!await SendSubagentLifecycleAsync(classification.SessionId, child, ctx, ct))
-                    return ImportOutcome.Failed;
+                var (childOk, childSent) = await SendSubagentLifecycleAsync(classification.SessionId, child, ctx, ct);
+                if (!childOk) return ImportOutcome.Failed;
+                sentChildContent |= childSent;
             }
         }
 
@@ -486,9 +493,13 @@ internal sealed class CursorImportSource : IImportSource {
             ct);
         if (!endOk) return ImportOutcome.Failed;
 
-        if (sent == 0) return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
+        if (sent == 0) {
+            var noOwnContentOutcome = startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
+            return new ImportSessionResult(noOwnContentOutcome, SentChildContent: sentChildContent);
+        }
 
-        return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
+        var outcome = startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
+        return new ImportSessionResult(outcome, SentChildContent: sentChildContent);
     }
 
     /// <summary>A Cursor subagent child correlated to a parent: its own session id (used as the
@@ -564,18 +575,26 @@ internal sealed class CursorImportSource : IImportSource {
     /// (session_id=parent, agent_id=child) → transcript batches routed with <c>agent_id</c>=child
     /// (resumed from the subsession watermark so re-imports don't repost the whole child) →
     /// <c>subagent-stop</c>. Called from the parent's <see cref="ImportSessionAsync"/> BEFORE the
-    /// parent's session-end. Returns false on a hard failure (start/transcript/stop POST failed);
-    /// a missing child transcript is skipped non-fatally. No standalone session lifecycle is
-    /// emitted for the child, so it never becomes a top-level session card.
+    /// parent's session-end. Returns <c>(false, _)</c> on a hard failure (start/transcript/stop
+    /// POST failed); a missing child transcript is skipped non-fatally (<c>(true, false)</c>). No
+    /// standalone session lifecycle is emitted for the child, so it never becomes a top-level
+    /// session card.
+    ///
+    /// <para>
+    /// AI-1154 review fix (P1): also reports whether this call actually POSTed new transcript
+    /// bytes for the child (<c>SentContent</c>) — the caller needs that to know real new work
+    /// happened even when the PARENT's own <c>sent</c> count is zero (e.g. an AlreadyLoaded
+    /// parent attaching a previously-unloaded child).
+    /// </para>
     /// </summary>
-    async Task<bool> SendSubagentLifecycleAsync(
+    async Task<(bool Success, bool SentContent)> SendSubagentLifecycleAsync(
             string            parentSessionId,
             CursorSubagentChild child,
             ImportContext     ctx,
             CancellationToken ct
         ) {
         if (string.IsNullOrEmpty(child.TranscriptPath) || !File.Exists(child.TranscriptPath))
-            return true; // missing child transcript — skip, non-fatal
+            return (true, false); // missing child transcript — skip, non-fatal
 
         var agentId      = child.SessionId; // the child session id doubles as the subagent id
         var subagentType = string.IsNullOrEmpty(child.SubagentType) ? "task" : child.SubagentType!;
@@ -590,7 +609,7 @@ internal sealed class CursorImportSource : IImportSource {
             ["cwd"]             = "",                    // required by HookBase
             ["strict"]          = true,                  // fail-closed: 500 if SubagentStarted isn't persisted
         }, ct);
-        if (!startOk) return false;
+        if (!startOk) return (false, false);
 
         // Resume from the subsession watermark (AgentSubsession-{parent}-{child}) so a re-import
         // doesn't repost the full child transcript every time. Fail-open to a full send.
@@ -602,11 +621,12 @@ internal sealed class CursorImportSource : IImportSource {
             startLine = 0;
         }
 
+        int childSent;
         try {
             // failOnError: fail-closed like the parent lifecycle — a rejected/failed child
             // transcript POST must abort so the parent import fails and a re-run repairs it,
             // rather than leaving an empty completed subagent while reporting success.
-            await SessionImporter.SendTranscriptBatches(
+            childSent = await SessionImporter.SendTranscriptBatches(
                 httpClient:  ctx.HttpClient,
                 baseUrl:     ctx.BaseUrl,
                 sessionId:   parentSessionId,
@@ -616,12 +636,12 @@ internal sealed class CursorImportSource : IImportSource {
                 vendor:      Vendor,
                 failOnError: true);
         } catch {
-            return false;
+            return (false, false);
         }
 
         // Full SubagentStopHook shape (mirrors the Gemini/OpenCode builders) — the server
         // binds all fields, so an incomplete body can be rejected before HandleSubagentStop.
-        return await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-stop", new JsonObject {
+        var stopOk = await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-stop", new JsonObject {
             ["hook_event_name"]        = "subagent_stop",
             ["session_id"]             = parentSessionId,
             ["agent_id"]               = agentId,
@@ -633,6 +653,8 @@ internal sealed class CursorImportSource : IImportSource {
             ["last_assistant_message"] = "",
             ["strict"]                 = true,                 // fail-closed: 500 if SubagentCompleted isn't persisted
         }, ct);
+
+        return (stopOk, stopOk && childSent > 0);
     }
 
     internal static JsonObject BuildSessionStartPayload(

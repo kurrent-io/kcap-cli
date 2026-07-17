@@ -333,7 +333,7 @@ public class CursorImportSourceTests {
 
         var outcome = await src.ImportSessionAsync(classification, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
 
-        await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
+        await Assert.That(outcome.Outcome).IsEqualTo(ImportOutcome.Loaded);
         await Assert.That(posted.Count).IsEqualTo(3);
 
         // Order matters: session-start before transcript, session-end after.
@@ -454,7 +454,7 @@ public class CursorImportSourceTests {
             CancellationToken.None
         );
 
-        await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+        await Assert.That(outcome.Outcome).IsEqualTo(ImportOutcome.Failed);
         // Transcript MUST NOT be posted when session-start failed —
         // otherwise the watermark advances and next-run sees AlreadyLoaded.
         await Assert.That(posted).DoesNotContain("/hooks/transcript");
@@ -488,7 +488,7 @@ public class CursorImportSourceTests {
             CancellationToken.None
         );
 
-        await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+        await Assert.That(outcome.Outcome).IsEqualTo(ImportOutcome.Failed);
     }
 
     [Test]
@@ -534,10 +534,103 @@ public class CursorImportSourceTests {
             CancellationToken.None
         );
 
-        await Assert.That(outcome).IsEqualTo(ImportOutcome.Resumed);
+        await Assert.That(outcome.Outcome).IsEqualTo(ImportOutcome.Resumed);
+        await Assert.That(outcome.SentChildContent).IsFalse(); // no SubagentChildren attached
         await Assert.That(posted).Contains("/hooks/session-start/cursor");
         await Assert.That(posted).Contains("/hooks/session-end/cursor");
         await Assert.That(posted).DoesNotContain("/hooks/transcript");
+    }
+
+    // --- AI-1154 round-2 review fix (finding 1): SentChildContent signal ---
+
+    [Test]
+    public async Task already_loaded_parent_reports_sent_child_content_when_attaching_a_new_child() {
+        // Round-2 finding 1: an AlreadyLoaded parent (nothing past its OWN watermark, so its own
+        // outcome is Resumed/Skipped) can still attach a previously-unloaded nested child inline.
+        // That IS real new work — ImportSessionAsync must surface it via SentChildContent so
+        // ImportCommand's IsLifecycleOnlyRoutedReplay doesn't wrongly suppress it (which would
+        // drop the parent from importedSessionIds and leave a --private run's parent still public).
+        using var fx = new ProjectsDirFixture();
+
+        var parentJsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
+        var childJsonl  = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        using var handler = new StubHandler(
+            getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound), // child subsession watermark: nothing sent yet
+            postCapture: (_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        );
+        using var client = new HttpClient(handler);
+
+        var parentClass = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.AlreadyLoaded,
+            TotalLines = 3,
+            Vendor     = "cursor",
+            SourceMeta = new Dictionary<string, object?> {
+                ["TranscriptPath"]   = parentJsonl,
+                ["SubagentChildren"] = new List<CursorImportSource.CursorSubagentChild> {
+                    new("22222222222222222222222222222222", childJsonl, "generalPurpose"),
+                },
+            },
+        };
+
+        var result = await src.ImportSessionAsync(
+            parentClass, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        // The parent's OWN transcript has nothing new past its watermark...
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Resumed);
+        // ...but the new child DID send content, and that must be visible to the caller.
+        await Assert.That(result.SentChildContent).IsTrue();
+    }
+
+    [Test]
+    public async Task already_loaded_parent_with_already_loaded_child_reports_no_sent_child_content() {
+        // Counterpart: an AlreadyLoaded parent whose correlated child is ALSO already fully
+        // ingested (subsession watermark already covers the whole child transcript) sends zero
+        // new bytes for the child too — a genuine lifecycle-only replay, SentChildContent stays
+        // false.
+        using var fx = new ProjectsDirFixture();
+
+        var parentJsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
+        var childJsonl  = fx.AddSession("Users-me-proj", "22222222-2222-2222-2222-222222222222", "{\"x\":1}\n{\"y\":2}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+
+        using var handler = new StubHandler(
+            // Subsession watermark already covers both child lines (0-indexed last_line_number=1).
+            getResponse: _ => new HttpResponseMessage(HttpStatusCode.OK) {
+                Content = new StringContent("{\"last_line_number\":1}", System.Text.Encoding.UTF8, "application/json"),
+            },
+            postCapture: (_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        );
+        using var client = new HttpClient(handler);
+
+        var parentClass = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.AlreadyLoaded,
+            TotalLines = 3,
+            Vendor     = "cursor",
+            SourceMeta = new Dictionary<string, object?> {
+                ["TranscriptPath"]   = parentJsonl,
+                ["SubagentChildren"] = new List<CursorImportSource.CursorSubagentChild> {
+                    new("22222222222222222222222222222222", childJsonl, "generalPurpose"),
+                },
+            },
+        };
+
+        var result = await src.ImportSessionAsync(
+            parentClass, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Resumed);
+        await Assert.That(result.SentChildContent).IsFalse();
     }
 
     [Test]
@@ -680,7 +773,7 @@ public class CursorImportSourceTests {
         using var postClient = new HttpClient(postHandler);
 
         var outcome = await src.ImportSessionAsync(parentClass, new ImportContext(postClient, "http://localhost", ForcePrivate: false), CancellationToken.None);
-        await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
+        await Assert.That(outcome.Outcome).IsEqualTo(ImportOutcome.Loaded);
 
         // Parent lifecycle + the child's subagent lifecycle are all present.
         await Assert.That(posted).Contains("/hooks/session-start/cursor");
@@ -747,7 +840,7 @@ public class CursorImportSourceTests {
 
         var outcome = await src.ImportSessionAsync(parentClass, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
 
-        await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+        await Assert.That(outcome.Outcome).IsEqualTo(ImportOutcome.Failed);
         // The parent's session-end must NOT be posted after a failed child transcript.
         await Assert.That(posted).DoesNotContain("/hooks/session-end/cursor");
     }
@@ -769,7 +862,7 @@ public class CursorImportSourceTests {
 
         var outcome = await src.ImportSessionAsync(childClass, new ImportContext(postClient, "http://localhost", ForcePrivate: false), CancellationToken.None);
 
-        await Assert.That(outcome).IsEqualTo(ImportOutcome.Skipped);
+        await Assert.That(outcome.Outcome).IsEqualTo(ImportOutcome.Skipped);
         await Assert.That(posted.Count).IsEqualTo(0); // nothing posted — the parent owns this child
     }
 
@@ -846,7 +939,7 @@ public class CursorImportSourceTests {
 
         var outcome = await src.ImportSessionAsync(classification, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
 
-        await Assert.That(outcome).IsEqualTo(ImportOutcome.Resumed);
+        await Assert.That(outcome.Outcome).IsEqualTo(ImportOutcome.Resumed);
 
         var transcriptPost = posted.First(p => p.Path == "/hooks/transcript");
         var node           = JsonNode.Parse(transcriptPost.Body)!;

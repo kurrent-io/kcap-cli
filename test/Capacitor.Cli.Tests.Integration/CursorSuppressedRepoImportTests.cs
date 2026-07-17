@@ -82,7 +82,7 @@ public class CursorSuppressedRepoImportTests : IDisposable {
 
         // Success — never Failed. The suppression-simulating stub above (an already-loaded server)
         // must not surface as an import failure.
-        await Assert.That(outcome).IsNotEqualTo(ImportOutcome.Failed);
+        await Assert.That(outcome.Outcome).IsNotEqualTo(ImportOutcome.Failed);
 
         var startBodies = _server.LogEntries
             .Where(e => e.RequestMessage.Path == "/hooks/session-start/cursor")
