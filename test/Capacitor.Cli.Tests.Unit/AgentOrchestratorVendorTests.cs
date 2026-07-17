@@ -66,7 +66,10 @@ public partial class AgentOrchestratorVendorTests {
             ServerUrl           = "http://127.0.0.1:1",
             ClaudePath          = "claude",
             MaxConcurrentAgents = 5,
-            WorktreeRoot        = Path.Combine(Path.GetTempPath(), "kcap-orch-wt-" + Guid.NewGuid().ToString("N")[..8])
+            WorktreeRoot        = Path.Combine(Path.GetTempPath(), "kcap-orch-wt-" + Guid.NewGuid().ToString("N")[..8]),
+            // AI-1313 Phase B (D4): isolate the PID-record store to a temp dir so tests never touch the
+            // real ~/.config/kcap/daemons.
+            StateDir            = Path.Combine(Path.GetTempPath(), "kcap-orch-state-" + Guid.NewGuid().ToString("N")[..8])
         };
 
         if (allowedRepoPath is not null) {

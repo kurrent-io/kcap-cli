@@ -19,6 +19,20 @@ public class DaemonConfig {
     public TimeSpan ReviewerIdleTimeout { get; set; } = TimeSpan.FromHours(2);
 
     /// <summary>
+    /// AI-1313 Phase B (D4): root directory under which this daemon writes its per-agent PID records
+    /// (<c>{StateDir}/{name}/agents/{agentId}.json</c>). Null → the shared daemon state dir
+    /// (<c>DaemonLockPaths.Directory</c>); tests point it at a temp dir. The per-name subdir keeps a
+    /// daemon's records "its own" so the startup reap only ever touches this daemon's leftovers.
+    /// </summary>
+    public string? StateDir { get; set; }
+
+    /// <summary>AI-1313 Phase B (D4): a fresh per-boot epoch (GUID). Written into each spawned child's
+    /// <c>KCAP_DAEMON_EPOCH</c> env marker; the startup env-marker scan kills same-daemon children
+    /// whose epoch differs from the current one (i.e. survivors of a prior incarnation). Null → the
+    /// orchestrator generates one at construction.</summary>
+    public string? DaemonEpoch { get; set; }
+
+    /// <summary>
     /// Per-process GUID generated at startup, also written to the daemon's
     /// flock-file content. Sent over <c>DaemonConnect</c> so the server
     /// (AI-630) can tell "same daemon reconnecting" from "different daemon

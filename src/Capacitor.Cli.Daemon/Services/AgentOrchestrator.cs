@@ -175,6 +175,12 @@ public class TerminalOutputBuffer {
 
 internal partial class AgentOrchestrator : IAsyncDisposable {
     readonly ConcurrentDictionary<string, AgentInstance>       _agents = new();
+
+    // AI-1313 Phase B (D4): durable PID records + this daemon's logical identity/epoch for
+    // crash-survivor reaping. Initialized in the ctor from config.
+    AgentPidRecordStore? _pidRecords;
+    string               _daemonId    = "";
+    string               _daemonEpoch = "";
     readonly DaemonConfig                                      _config;
     readonly ServerConnection                                  _server;
     readonly WorktreeManager                                   _worktreeManager;
@@ -273,6 +279,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _runtimeFactories  = runtimeFactories;
         _logger            = logger;
 
+        // AI-1313 Phase B (D4): per-daemon PID-record store + this daemon's logical id + boot epoch.
+        // Records live under "{stateDir}/{name}/agents" so they are unambiguously THIS daemon's own
+        // (the startup reap only touches its own leftovers). DaemonId is a stable per-name identity;
+        // DaemonEpoch is fresh per boot so the env-marker scan can tell a prior incarnation's
+        // survivors from the current incarnation's live children.
+        var recordRoot = Path.Combine(
+            config.StateDir ?? DaemonLockPaths.Directory, DaemonLockPaths.Sanitize(config.Name));
+        _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
+        _daemonId    = ComputeDaemonId(config.Name);
+        _daemonEpoch = config.DaemonEpoch ?? Guid.NewGuid().ToString("N");
+
         // Wire up server commands
         _server.OnLaunchAgent            += HandleLaunchAgent;
         _server.OnStopAgent              += HandleStopAgent;
@@ -336,6 +353,59 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>AI-1313 Phase B: the kill-quarantine snapshot for the status report. Empty until D4
     /// Task 8 wires the real <c>AgentKillQuarantine</c>; kept as a seam so BuildStatusReport is stable.</summary>
     internal IReadOnlyList<QuarantinedAgentInfo> QuarantineSnapshot() => [];
+
+    /// <summary>AI-1313 Phase B (D4): this daemon's stable logical id = a hash of its name, written
+    /// into each child's <c>KCAP_DAEMON_ID</c> marker. Per-name so a different daemon under the same
+    /// user is never mistaken for ours by the env-marker scan.</summary>
+    static string ComputeDaemonId(string name) =>
+        Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(name ?? "")))
+        [..16].ToLowerInvariant();
+
+    /// <summary>AI-1313 Phase B (D4 §6.4(2)): write the durable PID record for a just-spawned agent
+    /// (best-effort — a lost record falls to the env-marker scan backstop; D4/Task 8 hardens the
+    /// write-failure path to fail-closed). Captures the EXACT start-identity for the pid.</summary>
+    void WritePidRecordBestEffort(AgentInstance agent, int pid) {
+        if (_pidRecords is null) return;
+
+        var identity = ProcessIdentity.Capture(pid);
+        if (identity is null) return; // unidentifiable pid → skip (env-marker scan backstops it)
+
+        try {
+            _pidRecords.Write(new AgentPidRecord(
+                agent.Id, pid, identity, agent.Kind.ToString(), agent.Vendor,
+                agent.FlowRunId, agent.FlowRole, _daemonId, _daemonEpoch, DateTimeOffset.UtcNow));
+        } catch (Exception ex) {
+            _logger.LogWarning(ex, "Failed to write PID record for agent {AgentId}", agent.Id);
+        }
+    }
+
+    /// <summary>Delete an agent's PID record after its death is confirmed (teardown / confirmed reap).</summary>
+    void DeletePidRecord(string agentId) => _pidRecords?.Delete(agentId);
+
+    /// <summary>Test seams (this daemon's PID-record store) so a unit test can seed/inspect records
+    /// without a real launch. Never used in production.</summary>
+    internal void WritePidRecordForTest(AgentPidRecord record)     => _pidRecords?.Write(record);
+    internal IReadOnlyList<AgentPidRecord> PidRecordsForTest()      => _pidRecords?.ReadAll() ?? [];
+    internal string DaemonIdForTest                                 => _daemonId;
+    internal string DaemonEpochForTest                             => _daemonEpoch;
+
+    /// <summary>AI-1313 Phase B (D4 §6.4(3) StopAgent fallback): the caller had no in-memory agent for
+    /// this id — consult the PID record and, if a live process still matches its EXACT identity (and,
+    /// on Unix, carries the expected <c>KCAP_AGENT_ID</c> env — ambiguity spares), reap it by identity
+    /// and delete the record on confirmed death. This makes the server's registry-independent S2 stop
+    /// effective even against a NEW daemon incarnation that never knew the agent in memory.</summary>
+    async Task<bool> TryStopByPidRecordAsync(string agentId) {
+        if (_pidRecords is null) return false;
+
+        var record = _pidRecords.ReadAll().FirstOrDefault(r => r.AgentId == agentId);
+        if (record.AgentId != agentId) return false; // no record
+
+        var confirmedGone = await ProcessReaper.ReapByRecordAsync(record, _logger, _shutdownCts.Token);
+        if (confirmedGone) _pidRecords.Delete(agentId); // delete ONLY on confirmed death (spec §6.4(2))
+
+        return confirmedGone;
+    }
 
     /// <summary>AI-1313 Phase B (D2): build + send one status report, one-way, swallowing errors (an
     /// old server has no handler; a transient send failure must not touch the agent loops).</summary>
@@ -616,6 +686,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 FlowRole            = cmd.FlowRole
             };
             _agents[agentId] = agent;
+
+            // AI-1313 Phase B (D4 §6.4(2)): write the durable PID record immediately after the process
+            // exists (before registration) so a daemon crash right after this leaves a reapable record.
+            WritePidRecordBestEffort(agent, runtime.Pid);
 
             await RegisterAgentAsync(agent);
 
@@ -1005,8 +1079,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// </summary>
     static readonly TimeSpan GracefulExitWait = TimeSpan.FromSeconds(15);
 
-    async Task HandleStopAgent(string agentId) {
+    internal async Task HandleStopAgent(string agentId) {
         if (!_agents.TryGetValue(agentId, out var agent)) {
+            // AI-1313 Phase B (D4 §6.4(3)): no in-memory agent — this may be a survivor of a PRIOR
+            // daemon incarnation the server is still trying to stop (S2). Fall back to the PID record:
+            // reap by exact identity if a matching live process is still there.
+            await TryStopByPidRecordAsync(agentId);
             return;
         }
 
@@ -1666,6 +1744,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (!_agents.TryRemove(agentId, out var agent)) {
             return;
         }
+
+        // AI-1313 Phase B (D4 §6.4(2)): the agent has been removed from the registry as part of its
+        // termination cleanup — its process is being/has been torn down, so drop the PID record.
+        DeletePidRecord(agentId);
 
         // The reviewer process has exited by the time we get here (this runs off the read-loop's exit
         // path), so revoke its bridge token now — after any final submit_review_result was served.
