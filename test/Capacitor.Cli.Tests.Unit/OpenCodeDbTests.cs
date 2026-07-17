@@ -293,6 +293,41 @@ public class OpenCodeDbTests {
         await Assert.That(ocdb.QueryChildrenCallCount).IsLessThanOrEqualTo(9);
     }
 
+    // AI-1383 D3 review fix #6: a below-cap parent's single QueryChildren call used to
+    // materialize its ENTIRE child row set before CountTruncated could even be detected — a
+    // depth-8 parent with (say) a million depth-9 children would read/allocate all million rows
+    // in one call. The per-parent fetch must instead be capped to (remaining counting capacity +
+    // 1 sentinel), regardless of how many children the parent truly has.
+    [Test]
+    public async Task QueryDescendants_below_cap_parent_never_materializes_more_than_the_counting_cap_in_a_single_fetch() {
+        using var tmp = new TempDir();
+        var db = BuildDb(tmp.Path);
+        InsertSession(db, "ses_root", null, "/w", "Root", 100);
+
+        // Depth 1..8 chain (in-cap), then a below-cap depth-9 fan-out FAR larger than
+        // MaxCountingNodes under the depth-8 node — 5x the cap, to make an unbounded fetch
+        // unmistakably distinguishable from a bounded one.
+        var prev = "ses_root";
+        for (var depth = 1; depth <= 8; depth++) {
+            var id = $"ses_n{depth}";
+            InsertSession(db, id, prev, "/w", $"N{depth}", 100 + depth);
+            prev = id;
+        }
+        const int hugeChildCount = OpenCodeDb.MaxCountingNodes * 5;
+        InsertManyChildren(db, "ses_n8", "ses_deep", hugeChildCount, baseTime: 1000);
+
+        using var ocdb = new OpenCodeDb(db);
+        var (_, omitted, _, truncated) = ocdb.QueryDescendants("ses_root");
+
+        await Assert.That(truncated).IsTrue();
+        await Assert.That(omitted).IsEqualTo(OpenCodeDb.MaxCountingNodes);
+
+        // The crux of the fix: no single QueryChildren/QueryChildrenBounded call ever returned
+        // more than (MaxCountingNodes + 1) rows — proving the below-cap fetch is capped by a SQL
+        // LIMIT rather than materializing the true 50,000-row child set before truncating.
+        await Assert.That(ocdb.QueryChildrenMaxRowsReturned).IsLessThanOrEqualTo(OpenCodeDb.MaxCountingNodes + 1);
+    }
+
     // Bulk-inserts `count` direct children of `parentId` in a single transaction with a reused
     // prepared command — the per-call-connection InsertSession helper above is far too slow for
     // the 10,000+ row scale these MaxCountingNodes tests need.

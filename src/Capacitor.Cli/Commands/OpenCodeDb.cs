@@ -49,18 +49,53 @@ internal sealed class OpenCodeDb : IDisposable {
 
     public IReadOnlyList<OpenCodeSessionRow> QueryChildren(string parentId) {
         QueryChildrenCallCount++;
-        return QuerySessions("parent_id = $parent", parentId);
+        var rows = QuerySessions("parent_id = $parent", parentId);
+        TrackRowsReturned(rows.Count);
+        return rows;
     }
 
     /// <summary>
-    /// Total <see cref="QueryChildren"/> invocations made through this instance —
-    /// internal-only instrumentation (AI-1383 D3 review fix #5) letting a regression test
-    /// prove the below-cap counting walk in <see cref="QueryDescendants"/> stops issuing
-    /// further DB queries the instant <see cref="DescendantDiscoveryResult.CountTruncated"/>
+    /// Cap-aware variant of <see cref="QueryChildren"/> for a parent whose children are
+    /// NECESSARILY beyond <see cref="MaxDescendantDepth"/> (AI-1383 D3 review fix #6 — the
+    /// per-parent below-cap child fetch was still materializing the WHOLE child set before
+    /// truncation could be detected). Adds a SQL <c>LIMIT $limit</c> so at most
+    /// <paramref name="limit"/> rows are ever read/allocated for a single call, instead of the
+    /// full (potentially unbounded) result <see cref="QueryChildren"/> would return. Callers
+    /// pass (remaining counting capacity + 1 sentinel) so <see cref="DescendantDiscoveryResult.CountTruncated"/>
+    /// can still be set correctly the moment the fetched batch itself proves there are more than
+    /// the remaining capacity allows. NEVER used for an in-cap parent — those keep the unbounded
+    /// <see cref="QueryChildren"/> (see <see cref="QueryDescendants"/>), preserving the
+    /// always-complete in-cap discovery contract.
+    /// </summary>
+    internal IReadOnlyList<OpenCodeSessionRow> QueryChildrenBounded(string parentId, int limit) {
+        QueryChildrenCallCount++;
+        var rows = QuerySessions("parent_id = $parent", parentId, limit);
+        TrackRowsReturned(rows.Count);
+        return rows;
+    }
+
+    /// <summary>
+    /// Total <see cref="QueryChildren"/>/<see cref="QueryChildrenBounded"/> invocations made
+    /// through this instance — internal-only instrumentation (AI-1383 D3 review fix #5) letting
+    /// a regression test prove the below-cap counting walk in <see cref="QueryDescendants"/>
+    /// stops issuing further DB queries the instant <see cref="DescendantDiscoveryResult.CountTruncated"/>
     /// is established, instead of draining every already-enqueued below-cap node to
     /// completion.
     /// </summary>
     internal int QueryChildrenCallCount { get; private set; }
+
+    /// <summary>
+    /// The largest number of rows any single <see cref="QueryChildren"/>/<see cref="QueryChildrenBounded"/>
+    /// call has returned so far — internal-only instrumentation (AI-1383 D3 review fix #6) letting
+    /// a regression test prove a single below-cap parent's child fetch never materializes more
+    /// than ~<see cref="MaxCountingNodes"/> rows, even when that parent's true child count is far
+    /// larger.
+    /// </summary>
+    internal int QueryChildrenMaxRowsReturned { get; private set; }
+
+    void TrackRowsReturned(int count) {
+        if (count > QueryChildrenMaxRowsReturned) QueryChildrenMaxRowsReturned = count;
+    }
 
     /// <summary>Import-side recursion depth cap (AI-1383 D3) — a descendant beyond this depth
     /// is neither imported nor promoted; the caller surfaces the count.</summary>
@@ -136,6 +171,19 @@ internal sealed class OpenCodeDb : IDisposable {
     /// true: the returned omitted count/ids were correctly bounded, but the WORK behind them was
     /// not. Now, the moment truncation is established, the below-cap frontier is simply dropped
     /// rather than drained node-by-node.</para>
+    ///
+    /// <para>Because <see cref="MaxDescendantDepth"/> gates the in-cap frontier's own enqueue
+    /// (a child is only ever added to <c>inCapFrontier</c> when its depth is &lt;=
+    /// <see cref="MaxDescendantDepth"/>), every node dequeued from it has depth in
+    /// <c>0..MaxDescendantDepth</c> — so a node at exactly <see cref="MaxDescendantDepth"/> has
+    /// children that are ALL necessarily below the cap. AI-1383 D3 review fix #6: that single
+    /// call is exactly where an unbounded <see cref="QueryChildren"/> could still force reading
+    /// and allocating an entire (potentially enormous) child row set before truncation was even
+    /// detectable — so it (and every below-cap-frontier call after it) now goes through
+    /// <see cref="QueryChildrenBounded"/> instead, capped to (remaining counting capacity + 1
+    /// sentinel row). An in-cap parent (depth &lt; <see cref="MaxDescendantDepth"/>) keeps the
+    /// unbounded <see cref="QueryChildren"/> — its children are always in-cap, so the round-2 P1
+    /// unbounded-in-cap-discovery contract is untouched.</para>
     /// </summary>
     public DescendantDiscoveryResult QueryDescendants(string rootId) {
         var result         = new List<DescendantRow>();
@@ -152,48 +200,54 @@ internal sealed class OpenCodeDb : IDisposable {
         while (inCapFrontier.Count > 0) {
             var (id, depth) = inCapFrontier.Dequeue();
 
-            foreach (var child in QueryChildren(id)) {
-                var childDepth = depth + 1;
-                if (childDepth > MaxDescendantDepth) {
-                    // Below the import cap — handed off to the separate below-cap frontier
-                    // below; MaxCountingNodes bounds ONLY that walk. Once truncated, this
-                    // becomes a cheap no-op (no visited-set growth, no further enqueue) rather
-                    // than continuing to track every additional omitted sibling (AI-1383 D3
-                    // review fix #5).
-                    if (countTruncated) continue;
+            if (depth < MaxDescendantDepth) {
+                // Every child here is necessarily in-cap (childDepth <= MaxDescendantDepth) —
+                // always fully discovered, never bounded by MaxCountingNodes (AI-1383 D3 review
+                // fix #4). Unbounded QueryChildren is safe/required here.
+                foreach (var child in QueryChildren(id)) {
+                    var childDepth = depth + 1;
                     if (!visited.Add(child.Id)) continue; // cycle guard — already reached
-
-                    if (omittedIds.Count >= MaxCountingNodes) {
-                        countTruncated = true;
-                        continue;
-                    }
-                    omittedIds.Add(child.Id);
-                    belowCapFrontier.Enqueue(child.Id);
-                    continue;
+                    result.Add(new DescendantRow(child, childDepth));
+                    inCapFrontier.Enqueue((child.Id, childDepth));
                 }
-
-                // IN-CAP: the import set — always fully discovered, never bounded by
-                // MaxCountingNodes (AI-1383 D3 review fix #4).
-                if (!visited.Add(child.Id)) continue; // cycle guard — already reached
-                result.Add(new DescendantRow(child, childDepth));
-                inCapFrontier.Enqueue((child.Id, childDepth));
+                continue;
             }
-        }
 
-        // Below-cap counting/signature walk — bounded by MaxCountingNodes and, per review fix
-        // #5, stopped IMMEDIATELY once truncated: any already-queued below-cap tail (up to
-        // MaxCountingNodes entries) is abandoned rather than drained node-by-node, so a
-        // pathologically large omitted subtree can't force thousands of further DB queries once
-        // the count is already known to be a lower bound.
-        while (belowCapFrontier.Count > 0 && !countTruncated) {
-            var id = belowCapFrontier.Dequeue();
+            // depth == MaxDescendantDepth: every child is necessarily BELOW the cap
+            // (childDepth = MaxDescendantDepth + 1). Cap-aware fetch (AI-1383 D3 review fix
+            // #6) instead of materializing the whole child row set for this parent.
+            if (countTruncated) continue; // already known to be a lower bound — skip the query entirely
 
-            foreach (var child in QueryChildren(id)) {
+            var remaining = MaxCountingNodes - omittedIds.Count;
+            foreach (var child in QueryChildrenBounded(id, remaining + 1)) {
                 if (!visited.Add(child.Id)) continue; // cycle guard — already reached
 
                 if (omittedIds.Count >= MaxCountingNodes) {
                     countTruncated = true;
-                    break; // stop scanning this node's remaining children too
+                    break; // stop scanning this parent's remaining fetched rows too
+                }
+                omittedIds.Add(child.Id);
+                belowCapFrontier.Enqueue(child.Id);
+            }
+        }
+
+        // Below-cap counting/signature walk — every node here is already below-cap, so every
+        // one of its children is too; bounded by MaxCountingNodes via QueryChildrenBounded
+        // (AI-1383 D3 review fix #6) and, per review fix #5, stopped IMMEDIATELY once truncated:
+        // any already-queued below-cap tail (up to MaxCountingNodes entries) is abandoned rather
+        // than drained node-by-node, so a pathologically large omitted subtree can't force
+        // thousands of further (or unbounded) DB queries once the count is already known to be a
+        // lower bound.
+        while (belowCapFrontier.Count > 0 && !countTruncated) {
+            var id = belowCapFrontier.Dequeue();
+
+            var remaining = MaxCountingNodes - omittedIds.Count;
+            foreach (var child in QueryChildrenBounded(id, remaining + 1)) {
+                if (!visited.Add(child.Id)) continue; // cycle guard — already reached
+
+                if (omittedIds.Count >= MaxCountingNodes) {
+                    countTruncated = true;
+                    break; // stop scanning this node's remaining fetched rows too
                 }
                 omittedIds.Add(child.Id);
                 belowCapFrontier.Enqueue(child.Id);
@@ -204,12 +258,14 @@ internal sealed class OpenCodeDb : IDisposable {
         return new DescendantDiscoveryResult(result, omittedIds.Count, omittedIds, countTruncated);
     }
 
-    IReadOnlyList<OpenCodeSessionRow> QuerySessions(string whereClause, string? parent) {
+    IReadOnlyList<OpenCodeSessionRow> QuerySessions(string whereClause, string? parent, int? limit = null) {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText =
             $"SELECT id, parent_id, directory, title, time_created, time_updated " +
-            $"FROM session WHERE {whereClause} ORDER BY time_created, id";
+            $"FROM session WHERE {whereClause} ORDER BY time_created, id" +
+            (limit is not null ? " LIMIT $limit" : "");
         if (parent is not null) cmd.Parameters.AddWithValue("$parent", parent);
+        if (limit is not null) cmd.Parameters.AddWithValue("$limit", limit.Value);
 
         var rows = new List<OpenCodeSessionRow>();
         using var r = cmd.ExecuteReader();

@@ -124,6 +124,16 @@ public static class GeminiSubagentDiscovery {
     /// true: the returned omitted count/ids were correctly bounded, but the WORK behind them was
     /// not. Now, the moment truncation is established, the below-cap frontier is simply dropped
     /// rather than drained node-by-node.</para>
+    ///
+    /// <para>AI-1383 D3 review fix #6: a below-cap parent's own directory read used to always go
+    /// through the unbounded, full-<c>OrderBy</c> enumerator — so a single parent at exactly
+    /// <see cref="MaxDescendantDepth"/> with an enormous below-cap fan-out could still force
+    /// listing (and sorting) its ENTIRE directory before truncation was even detectable. Since a
+    /// child is only ever enqueued onto the in-cap frontier when its own depth is &lt;=
+    /// <see cref="MaxDescendantDepth"/>, a dequeued node at exactly that depth has children that
+    /// are ALL necessarily below the cap — so that read (and every below-cap-frontier read after
+    /// it) now goes through a bounded enumerator capped to (remaining counting capacity + 1
+    /// sentinel entry) instead.</para>
     /// </summary>
     public static DescendantDiscoveryResult EnumerateDescendantFiles(string rootTranscriptPath) =>
         EnumerateDescendantFiles(rootTranscriptPath, onDequeueBelowCapNode: null);
@@ -134,8 +144,14 @@ public static class GeminiSubagentDiscovery {
     /// dequeued and directory-enumerated, letting a regression test prove the walk stops
     /// expanding the below-cap frontier the instant <see cref="DescendantDiscoveryResult.CountTruncated"/>
     /// is established, instead of draining every already-enqueued below-cap node to completion.
+    /// <paramref name="onBelowCapDirectoryRead"/> (AI-1383 D3 review fix #6) fires once per
+    /// bounded below-cap directory read with the number of raw directory entries actually pulled
+    /// from the OS enumeration to satisfy it, letting a regression test prove a single below-cap
+    /// parent's own directory read never pulls more than (remaining counting capacity + 1)
+    /// entries, no matter how many files that directory truly holds.
     /// </summary>
-    internal static DescendantDiscoveryResult EnumerateDescendantFiles(string rootTranscriptPath, Action? onDequeueBelowCapNode) {
+    internal static DescendantDiscoveryResult EnumerateDescendantFiles(
+        string rootTranscriptPath, Action? onDequeueBelowCapNode, Action<int>? onBelowCapDirectoryRead = null) {
         if (ReadParentSessionId(rootTranscriptPath) is not { } rootDashedId) return new([], 0, [], false);
         if (Path.GetDirectoryName(rootTranscriptPath) is not { } chatsDir) return new([], 0, [], false);
 
@@ -150,6 +166,8 @@ public static class GeminiSubagentDiscovery {
 
         // Reads (and orders) one node's own subagent directory, or null when it doesn't exist
         // or can't be read (a hostile/inaccessible nested dir must not abort the whole walk).
+        // Only for an IN-CAP parent (depth < MaxDescendantDepth) — its children are always
+        // in-cap, so this must stay unbounded/always-complete (AI-1383 D3 review fix #4).
         List<string>? EnumerateChildFiles(string dashedId) {
             var subDir = GeminiPaths.SubagentDir(chatsDir, dashedId);
             if (!Directory.Exists(subDir)) return null;
@@ -160,54 +178,98 @@ public static class GeminiSubagentDiscovery {
             }
         }
 
-        // In-cap walk: always run to completion, regardless of below-cap truncation state —
-        // this is the unbounded, always-complete import set (AI-1383 D3 review fix #4).
-        while (inCapFrontier.Count > 0) {
-            var (transcriptPath, dashedId, depth) = inCapFrontier.Dequeue();
-
-            if (EnumerateChildFiles(dashedId) is not { } children) continue;
-
-            foreach (var file in children) {
-                var subId = Path.GetFileNameWithoutExtension(file);
-                if (!Guid.TryParse(subId, out _)) continue; // only well-formed <subId>.jsonl
-
-                var childDepth = depth + 1;
-                if (childDepth > MaxDescendantDepth) {
-                    // Below the import cap — handed off to the separate below-cap frontier
-                    // below; MaxCountingNodes bounds ONLY that walk. Once truncated, this
-                    // becomes a cheap no-op (no visited-set growth, no further enqueue) rather
-                    // than continuing to track every additional omitted sibling (AI-1383 D3
-                    // review fix #5).
-                    if (countTruncated) continue;
-                    if (!visited.Add(subId)) continue; // cycle guard — already reached
-
-                    if (omittedIds.Count >= MaxCountingNodes) {
-                        countTruncated = true;
-                        continue;
-                    }
-                    omittedIds.Add(subId);
-                    belowCapFrontier.Enqueue((file, subId));
-                    continue;
-                }
-
-                // IN-CAP: the import set — always fully discovered, never bounded by
-                // MaxCountingNodes (AI-1383 D3 review fix #4).
-                if (!visited.Add(subId)) continue; // cycle guard — already reached
-                files.Add(new DescendantFile(file, transcriptPath, subId, childDepth));
-                inCapFrontier.Enqueue((file, subId, childDepth));
+        // Cap-aware variant for a parent whose children are NECESSARILY below
+        // MaxDescendantDepth (AI-1383 D3 review fix #6) — every file under `dashedId` is beyond
+        // the import cap and can never be imported, so take at most `limit` entries via a lazy
+        // Take() instead of enumerating (and OrderBy-sorting) the WHOLE directory. A single
+        // pathologically large below-cap directory can no longer force an unbounded
+        // read/allocation/sort before CountTruncated is even detectable. Trade-off: the
+        // `limit`-sized sample is pulled in the OS's (arbitrary) directory enumeration order and
+        // only sorted AFTER truncating to `limit` entries, so which files land in an over-limit
+        // sample is OS-dependent — acceptable because once CountTruncated is set the omitted-id
+        // set is already documented as a lower bound, never a claimed-complete/exact enumeration.
+        List<string>? EnumerateChildFilesBounded(string dashedId, int limit) {
+            var subDir = GeminiPaths.SubagentDir(chatsDir, dashedId);
+            if (!Directory.Exists(subDir)) return null;
+            try {
+                var touched = 0;
+                // The Select side effect counts exactly how many raw directory entries the OS
+                // enumeration had to yield to satisfy Take(limit) — Take stops pulling from its
+                // source the moment it has `limit` items, so `touched` never exceeds `limit`
+                // regardless of the directory's true size (AI-1383 D3 review fix #6).
+                var taken = Directory.EnumerateFiles(subDir, "*.jsonl")
+                    .Select(f => { touched++; return f; })
+                    .Take(limit)
+                    .OrderBy(f => f, StringComparer.Ordinal)
+                    .ToList();
+                onBelowCapDirectoryRead?.Invoke(touched);
+                return taken;
+            } catch {
+                return null;
             }
         }
 
-        // Below-cap counting walk — bounded by MaxCountingNodes and, per review fix #5, stopped
-        // IMMEDIATELY once truncated: any already-queued below-cap tail (up to MaxCountingNodes
-        // entries) is abandoned rather than drained node-by-node, so a pathologically large
-        // omitted subtree can't force thousands of further directory enumerations once the
-        // count is already known to be a lower bound.
+        // In-cap walk: always run to completion, regardless of below-cap truncation state —
+        // this is the unbounded, always-complete import set (AI-1383 D3 review fix #4). Because
+        // a child is only ever enqueued onto inCapFrontier when its own depth is <=
+        // MaxDescendantDepth, every dequeued depth here is in 0..MaxDescendantDepth — so a node
+        // at exactly MaxDescendantDepth has children that are ALL necessarily below the cap
+        // (review fix #6): that one directory read is handled via the bounded enumerator below
+        // instead of the unbounded one.
+        while (inCapFrontier.Count > 0) {
+            var (transcriptPath, dashedId, depth) = inCapFrontier.Dequeue();
+
+            if (depth < MaxDescendantDepth) {
+                if (EnumerateChildFiles(dashedId) is not { } children) continue;
+
+                foreach (var file in children) {
+                    var subId = Path.GetFileNameWithoutExtension(file);
+                    if (!Guid.TryParse(subId, out _)) continue; // only well-formed <subId>.jsonl
+
+                    // IN-CAP: the import set — always fully discovered, never bounded by
+                    // MaxCountingNodes (AI-1383 D3 review fix #4).
+                    var childDepth = depth + 1;
+                    if (!visited.Add(subId)) continue; // cycle guard — already reached
+                    files.Add(new DescendantFile(file, transcriptPath, subId, childDepth));
+                    inCapFrontier.Enqueue((file, subId, childDepth));
+                }
+                continue;
+            }
+
+            // depth == MaxDescendantDepth: every child is necessarily BELOW the cap
+            // (childDepth = MaxDescendantDepth + 1). Cap-aware fetch (AI-1383 D3 review fix #6)
+            // instead of enumerating this parent's whole directory.
+            if (countTruncated) continue; // already known to be a lower bound — skip the read entirely
+
+            var remaining = MaxCountingNodes - omittedIds.Count;
+            if (EnumerateChildFilesBounded(dashedId, remaining + 1) is not { } belowChildren) continue;
+
+            foreach (var file in belowChildren) {
+                var subId = Path.GetFileNameWithoutExtension(file);
+                if (!Guid.TryParse(subId, out _)) continue;
+                if (!visited.Add(subId)) continue; // cycle guard — already reached
+
+                if (omittedIds.Count >= MaxCountingNodes) {
+                    countTruncated = true;
+                    break; // stop scanning this parent's remaining fetched entries too
+                }
+                omittedIds.Add(subId);
+                belowCapFrontier.Enqueue((file, subId));
+            }
+        }
+
+        // Below-cap counting walk — every node here is already below-cap, so every one of its
+        // children is too; bounded via EnumerateChildFilesBounded (AI-1383 D3 review fix #6) and,
+        // per review fix #5, stopped IMMEDIATELY once truncated: any already-queued below-cap
+        // tail (up to MaxCountingNodes entries) is abandoned rather than drained node-by-node, so
+        // a pathologically large omitted subtree can't force thousands of further (or unbounded)
+        // directory enumerations once the count is already known to be a lower bound.
         while (belowCapFrontier.Count > 0 && !countTruncated) {
             var (_, dashedId) = belowCapFrontier.Dequeue();
             onDequeueBelowCapNode?.Invoke();
 
-            if (EnumerateChildFiles(dashedId) is not { } children) continue;
+            var remaining = MaxCountingNodes - omittedIds.Count;
+            if (EnumerateChildFilesBounded(dashedId, remaining + 1) is not { } children) continue;
 
             foreach (var file in children) {
                 var subId = Path.GetFileNameWithoutExtension(file);
@@ -216,7 +278,7 @@ public static class GeminiSubagentDiscovery {
 
                 if (omittedIds.Count >= MaxCountingNodes) {
                     countTruncated = true;
-                    break; // stop scanning this node's remaining children too
+                    break; // stop scanning this node's remaining fetched entries too
                 }
                 omittedIds.Add(subId);
                 belowCapFrontier.Enqueue((file, subId));

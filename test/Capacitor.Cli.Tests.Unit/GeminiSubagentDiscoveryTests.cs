@@ -402,4 +402,58 @@ public class GeminiSubagentDiscoveryTests {
             Directory.Delete(tmp, recursive: true);
         }
     }
+
+    // AI-1383 D3 review fix #6: a below-cap parent's single directory read used to always
+    // enumerate (and OrderBy-sort) the WHOLE directory before CountTruncated could even be
+    // detected — a depth-8 node with (say) a million depth-9 subagent files would list and sort
+    // all million entries in one call. The per-parent read must instead be capped to (remaining
+    // counting capacity + 1 sentinel), regardless of how many files the directory truly holds.
+    [Test]
+    public async Task EnumerateDescendantFiles_below_cap_parent_never_touches_more_than_the_counting_cap_in_a_single_read() {
+        var tmp = Directory.CreateTempSubdirectory("kcap-gsd-desc").FullName;
+        try {
+            var chats = Path.Combine(tmp, "chats");
+            Directory.CreateDirectory(chats);
+
+            var rootId = "00000000-0000-4000-8000-000000000000";
+            var root   = Path.Combine(chats, "session-root.jsonl");
+            File.WriteAllText(root, $$"""{"sessionId":"{{rootId}}","kind":"main"}""" + "\n");
+
+            // Depth 1..8 chain (in-cap), then a below-cap depth-9 fan-out FAR larger than
+            // MaxCountingNodes under the depth-8 node's own dir — 5x the cap, to make an
+            // unbounded read unmistakably distinguishable from a bounded one.
+            var prevId = rootId;
+            for (var depth = 1; depth <= 8; depth++) {
+                var id  = $"00000000-0000-4000-8000-{depth:D12}";
+                var dir = Path.Combine(chats, prevId);
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, id + ".jsonl"), $$"""{"sessionId":"{{id}}","kind":"subagent"}""" + "\n");
+                prevId = id;
+            }
+
+            var hugeChildCount = GeminiSubagentDiscovery.MaxCountingNodes * 5;
+            var depth8Dir      = Path.Combine(chats, prevId); // prevId is now the depth-8 node's own id
+            Directory.CreateDirectory(depth8Dir);
+            for (var i = 0; i < hugeChildCount; i++) {
+                var id = $"22222222-{i / 100000000:D4}-4000-8000-{i:D12}";
+                File.WriteAllText(Path.Combine(depth8Dir, id + ".jsonl"), $$"""{"sessionId":"{{id}}","kind":"subagent"}""" + "\n");
+            }
+
+            var maxTouched = 0;
+            var result = GeminiSubagentDiscovery.EnumerateDescendantFiles(
+                root, onDequeueBelowCapNode: null,
+                onBelowCapDirectoryRead: touched => maxTouched = Math.Max(maxTouched, touched));
+
+            await Assert.That(result.CountTruncated).IsTrue();
+            await Assert.That(result.DescendantsOmitted).IsEqualTo(GeminiSubagentDiscovery.MaxCountingNodes);
+
+            // The crux of the fix: no single below-cap directory read ever pulled more than
+            // (MaxCountingNodes + 1) raw entries from the OS enumeration — proving the read is
+            // capped by Take() rather than listing/sorting the true 50,000-file directory before
+            // truncating.
+            await Assert.That(maxTouched).IsLessThanOrEqualTo(GeminiSubagentDiscovery.MaxCountingNodes + 1);
+        } finally {
+            Directory.Delete(tmp, recursive: true);
+        }
+    }
 }
