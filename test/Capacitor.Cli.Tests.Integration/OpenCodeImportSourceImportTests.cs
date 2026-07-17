@@ -434,6 +434,48 @@ public class OpenCodeImportSourceImportTests : IDisposable {
         await Assert.That(subStarts[0].RequestMessage.Body!).Contains("\"agent_id\":\"ses_kid1\"");
     }
 
+    [Test]
+    public async Task ImportSession_propagates_cancellation_arriving_during_title_cleanup_and_never_marks_ledger_complete() {
+        // AI-1383 D3 review fix #4: the round-1 fix (above) only recorded a cancellation THROWN
+        // BY ImportDescendantsAsync. A cancellation arriving AFTER descendants finish — while
+        // step 4's PostSetTitleAsync is awaited, which swallows OperationCanceledException
+        // internally — used to be silently lost: session-end always runs with
+        // CancellationToken.None, and nothing downstream re-checked `ct`, so the import reported
+        // success and marked the ledger complete even though the caller's cancellation was never
+        // honored. No descendants here, isolating the bug to the title/cleanup window: cancel
+        // right after the parent transcript lands (before the title POST).
+        _fix.AddSession("ses_root", null, "/work/a", "Root", 100);
+        _fix.AddMessageWithText("ses_root", "msg_p", "root says hi", 110);
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(404));
+        StubOk("/hooks/session-start/opencode", "/hooks/transcript", "/hooks/set-title", "/hooks/session-end/opencode");
+
+        using var cts    = new CancellationTokenSource();
+        using var client = new HttpClient(new CancelAfterPathHandler(cts, "/hooks/transcript"));
+
+        var source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered,
+            new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
+
+        await Assert.That(async () =>
+            await source.ImportSessionAsync(classified[0], new ImportContext(client, _server.Url!, false), cts.Token)
+        ).Throws<OperationCanceledException>();
+
+        // The uncancellable re-close still landed (the round-1 contract is preserved for THIS
+        // later cancellation window too).
+        await Assert.That(_server.LogEntries.Select(e => e.RequestMessage.Path)).Contains("/hooks/session-end/opencode");
+
+        // The ledger must NOT be marked complete — a fresh classify must not report AlreadyLoaded.
+        using var freshClient = new HttpClient();
+        var source2 = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+        var c2 = await source2.ClassifyAsync(
+            await source2.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None),
+            new ClassifyContext(freshClient, _server.Url!, 0, null, null), CancellationToken.None);
+        await Assert.That(c2[0].Status).IsNotEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
+    }
+
     /// <summary>Cancels the shared <see cref="CancellationTokenSource"/> right after a response
     /// whose request path ends with <paramref name="pathSuffix"/> comes back — lets a test
     /// deterministically inject cancellation AFTER a specific hook call has landed, rather than

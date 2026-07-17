@@ -245,10 +245,19 @@ internal sealed class OpenCodeImportSource : IImportSource {
         var endOk = await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/opencode",
             BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), CancellationToken.None);
 
+        // AI-1383 D3 review fix #4: `cancellation` above only catches an OCE THROWN BY step 3.
+        // A cancellation that arrives AFTER descendants finish — most notably while step 4's
+        // PostSetTitleAsync is awaited, which catches OperationCanceledException internally
+        // (see its comment) — would otherwise never be observed: this call to session-end
+        // deliberately uses CancellationToken.None, and nothing downstream re-checked `ct`. Now
+        // that the uncancellable re-close has run (preserving the round-1 contract above), check
+        // `ct` one more time and propagate — preferring the already-captured exception (with its
+        // original throw site) when one exists — BEFORE evaluating endOk or writing
+        // completeness, so a run cancelled at any point never marks the ledger complete.
         if (cancellation is not null) {
-            // Propagate the ORIGINAL cancellation regardless of whether the re-close above
-            // succeeded — the caller must still observe the cancellation it issued.
             ExceptionDispatchInfo.Capture(cancellation).Throw();
+        } else if (ct.IsCancellationRequested) {
+            throw new OperationCanceledException(ct);
         }
 
         if (!endOk) return ImportOutcome.Failed;
