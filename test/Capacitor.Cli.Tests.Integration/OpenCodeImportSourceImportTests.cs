@@ -390,4 +390,61 @@ public class OpenCodeImportSourceImportTests : IDisposable {
                 await Assert.That(n.GetInt32() > 99).IsTrue();
         }
     }
+
+    [Test]
+    public async Task ImportSession_reasserts_session_end_and_still_propagates_cancellation_after_a_descendant_reactivates_root() {
+        // AI-1383 D3 review fix #1: cancellation arriving AFTER a descendant lifecycle already
+        // reactivated the root must NOT skip the finally-style re-close, or the root is left
+        // stuck Active. Two descendants: once the FIRST one's subagent-start/content/stop fully
+        // lands (any of which could reactivate an already-Ended root server-side), cancellation
+        // fires — the SECOND descendant's ct.ThrowIfCancellationRequested() (top of the loop)
+        // then throws before any work starts for it. The re-close must still run, and the
+        // ORIGINAL cancellation must still propagate out of ImportSessionAsync.
+        _fix.AddSession("ses_root", null, "/work/a", "Root", 100);
+        _fix.AddMessageWithText("ses_root", "msg_p", "root says hi", 110);
+        _fix.AddSession("ses_kid1", "ses_root", "/work/a", "Kid1", 120);
+        _fix.AddMessageWithTextAndAgent("ses_kid1", "msg_c1", "kid1 work", 130, agent: "general");
+        _fix.AddSession("ses_kid2", "ses_root", "/work/a", "Kid2", 140);
+        _fix.AddMessageWithTextAndAgent("ses_kid2", "msg_c2", "kid2 work", 150, agent: "general");
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(404));
+        StubOk("/hooks/session-start/opencode", "/hooks/transcript", "/hooks/set-title",
+               "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/opencode");
+
+        using var cts    = new CancellationTokenSource();
+        using var client = new HttpClient(new CancelAfterPathHandler(cts, "/hooks/subagent-stop"));
+
+        var source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered,
+            new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
+
+        await Assert.That(async () =>
+            await source.ImportSessionAsync(classified[0], new ImportContext(client, _server.Url!, false), cts.Token)
+        ).Throws<OperationCanceledException>();
+
+        // The re-close still landed even though cancellation propagated out of the call.
+        await Assert.That(_server.LogEntries.Select(e => e.RequestMessage.Path)).Contains("/hooks/session-end/opencode");
+
+        // Only kid1 got a full lifecycle — kid2's loop iteration never started (caught at the
+        // top's ct.ThrowIfCancellationRequested()).
+        var subStarts = _server.LogEntries.Where(e => e.RequestMessage.Path == "/hooks/subagent-start").ToList();
+        await Assert.That(subStarts.Count).IsEqualTo(1);
+        await Assert.That(subStarts[0].RequestMessage.Body!).Contains("\"agent_id\":\"ses_kid1\"");
+    }
+
+    /// <summary>Cancels the shared <see cref="CancellationTokenSource"/> right after a response
+    /// whose request path ends with <paramref name="pathSuffix"/> comes back — lets a test
+    /// deterministically inject cancellation AFTER a specific hook call has landed, rather than
+    /// racing a timer against real network I/O.</summary>
+    sealed class CancelAfterPathHandler(CancellationTokenSource cts, string pathSuffix) : DelegatingHandler(new HttpClientHandler()) {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
+            var response = await base.SendAsync(request, cancellationToken);
+            if (request.RequestUri!.AbsolutePath.EndsWith(pathSuffix, StringComparison.Ordinal))
+                cts.Cancel();
+            return response;
+        }
+    }
+
 }

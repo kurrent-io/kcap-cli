@@ -1,4 +1,5 @@
 using System.Net;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -203,24 +204,42 @@ internal sealed class OpenCodeImportSource : IImportSource {
         //    contract (AI-1383 D3 item 4), the session-end re-assertion below must run
         //    regardless of whether this step throws. Previously an early `Failed` return here
         //    could leave a reactivated root stuck Active with no re-close ever posted.
-        var descendantsOk = true;
+        //
+        //    Cancellation is handled the SAME way (AI-1383 D3 review fix #1): a cancellation
+        //    that arrives after a descendant lifecycle already reactivated the root (e.g. right
+        //    after a successful subagent-start/content send, observed at the NEXT loop
+        //    iteration's ct.ThrowIfCancellationRequested()) must not skip the re-close below —
+        //    it's recorded here and rethrown only AFTER step 5 runs, never before.
+        var descendantsOk           = true;
+        OperationCanceledException? cancellation = null;
         try {
             await ImportDescendantsAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, ct);
-        } catch (OperationCanceledException) {
-            throw;
+        } catch (OperationCanceledException oce) {
+            cancellation = oce;
         } catch {
             descendantsOk = false;
         }
 
-        // 4. native title (best-effort, like Copilot/Kiro).
-        if (!string.IsNullOrWhiteSpace(title))
+        // 4. native title (best-effort, like Copilot/Kiro). Skipped on cancellation — no new
+        //    outbound work once cancelled — but the terminal re-close in step 5 still runs.
+        if (cancellation is null && !string.IsNullOrWhiteSpace(title))
             await PostSetTitleAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, title!, ct);
 
-        // 5. session-end — posted regardless of step 3's outcome (see the finally contract above).
-        if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/opencode",
-                BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), ct))
-            return ImportOutcome.Failed;
+        // 5. session-end — posted regardless of step 3's outcome, INCLUDING cancellation (see
+        //    the finally contract above). Uses CancellationToken.None deliberately: `ct` may
+        //    already be cancelled, and the whole point of this call is to re-assert the
+        //    terminal state even so — PostHookAsync/PostWithRetryAsync still bound this to a
+        //    fixed wall-clock budget (~30s), so it cannot hang.
+        var endOk = await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/opencode",
+            BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), CancellationToken.None);
 
+        if (cancellation is not null) {
+            // Propagate the ORIGINAL cancellation regardless of whether the re-close above
+            // succeeded — the caller must still observe the cancellation it issued.
+            ExceptionDispatchInfo.Capture(cancellation).Throw();
+        }
+
+        if (!endOk) return ImportOutcome.Failed;
         if (!descendantsOk) return ImportOutcome.Failed;
 
         // 6. Record completeness in the ledger — ONLY now, after a fully successful import.
