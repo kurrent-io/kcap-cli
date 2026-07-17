@@ -295,6 +295,98 @@ public class CursorImportSourceTests {
         await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.ProbeError);
     }
 
+    // AI-1382 review fix #7 — a session already quarantined by the live watcher's runtime rewrite
+    // guard must never be fed back through `kcap import` either.
+    [Test]
+    public async Task classify_skips_a_quarantined_standalone_session() {
+        using var fx = new ProjectsDirFixture();
+
+        // A fresh GUID per test — NOT the well-known "1111...1111" id several OTHER tests in this
+        // file share via SetupParentChildAsync/fixed literals — so quarantining it here can never
+        // leak into (and break) an unrelated test later in the same run (CursorMarkers writes a
+        // real, non-test-scoped marker file that outlives this test).
+        var sessionIdWithDashes = Guid.NewGuid().ToString();
+        var sessionId           = CursorImportSource.NormalizeCursorSessionId(sessionIdWithDashes);
+        fx.AddSession("Users-me-proj", sessionIdWithDashes, "{\"a\":1}\n{\"b\":2}\n");
+        CursorMarkers.Quarantine(sessionId, "transcript rewrite detected");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+        using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
+        using var client  = new HttpClient(handler);
+
+        var classified = await src.ClassifyAsync(
+            await src.DiscoverAsync(Filters(), CancellationToken.None),
+            Ctx(client, minLines: 1),
+            CancellationToken.None
+        );
+
+        await Assert.That(classified.Count).IsEqualTo(1);
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.ProbeError);
+        await Assert.That(classified[0].ProbeErrorReason).Contains("quarantined");
+    }
+
+    // A non-quarantined session must classify normally — the quarantine check must not
+    // false-positive for every session.
+    [Test]
+    public async Task classify_does_not_skip_a_non_quarantined_session() {
+        using var fx = new ProjectsDirFixture();
+        // Fresh GUID, not the shared "1111...1111" fixture id — defensive against any other
+        // test's quarantine marker for that id (see classify_skips_a_quarantined_standalone_session).
+        fx.AddSession("Users-me-proj", Guid.NewGuid().ToString(), "{\"a\":1}\n{\"b\":2}\n");
+
+        var src = new CursorImportSource(fx.ProjectsDir, fx.WorkspaceStorageDir);
+        using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
+        using var client  = new HttpClient(handler);
+
+        var classified = await src.ClassifyAsync(
+            await src.DiscoverAsync(Filters(), CancellationToken.None),
+            Ctx(client, minLines: 1),
+            CancellationToken.None
+        );
+
+        await Assert.That(classified[0].Status).IsEqualTo(ImportCommand.ClassificationStatus.New);
+    }
+
+    // AI-1382 review fix #7 — quarantine is always keyed on the FAMILY (parent) identity, since
+    // CursorRewriteGuard is constructed from the watcher process's own sessionId argument, which
+    // for a spawned child watcher IS the parent id (WatcherManager.BuildSpawnArgs). A correlated
+    // child must therefore be filtered under its PARENT's quarantine marker, not its own — an
+    // import that only checked the child's own id would let the child through even though its
+    // family was quarantined.
+    [Test]
+    public async Task classify_skips_a_correlated_child_when_its_parent_is_quarantined() {
+        using var fx = new ProjectsDirFixture();
+        var (parentId, childId, _, src) = await SetupParentChildAsync(fx);
+
+        // The child's OWN id is never quarantined directly — only the parent's, mirroring how
+        // CursorRewriteGuard is actually keyed for a spawned child watcher. SetupParentChildAsync
+        // hardcodes these ids and is shared by several OTHER tests in this file, so the marker
+        // MUST be cleaned up afterward — CursorMarkers writes a real, non-test-scoped file that
+        // would otherwise leak into (and break) every later test reusing the same parent id.
+        CursorMarkers.Quarantine(parentId, "transcript rewrite detected");
+
+        try {
+            using var handler = new StubHandler(getResponse: _ => new HttpResponseMessage(HttpStatusCode.NotFound));
+            using var client   = new HttpClient(handler);
+
+            var reclassified = await src.ClassifyAsync(
+                await src.DiscoverAsync(Filters(), CancellationToken.None),
+                Ctx(client, minLines: 1),
+                CancellationToken.None
+            );
+
+            var parentClass = reclassified.Single(c => c.SessionId == parentId);
+            var childClass   = reclassified.Single(c => c.SessionId == childId);
+
+            await Assert.That(parentClass.Status).IsEqualTo(ImportCommand.ClassificationStatus.ProbeError);
+            await Assert.That(parentClass.ProbeErrorReason).Contains("quarantined");
+            await Assert.That(childClass.Status).IsEqualTo(ImportCommand.ClassificationStatus.ProbeError);
+            await Assert.That(childClass.ProbeErrorReason).Contains("quarantined");
+        } finally {
+            try { File.Delete(CursorMarkers.QuarantinePath(parentId)); } catch { }
+        }
+    }
+
     [Test]
     public async Task import_session_posts_lifecycle_then_transcript_then_session_end() {
         using var fx = new ProjectsDirFixture();

@@ -255,6 +255,25 @@ internal sealed class CursorImportSource : IImportSource {
                 FirstTimestamp = s.FirstTimestamp,
             };
 
+            // AI-1382 review fix #7 — a session already quarantined by the live watcher's runtime
+            // rewrite guard must never be fed back through `kcap import` either: that's exactly
+            // the corrupted line-number source D0's quarantine exists to shut off. Quarantine is
+            // always keyed on the FAMILY identity — the top-level (parent) session id — since
+            // CursorRewriteGuard is constructed from the watcher process's own `sessionId`
+            // argument, which for a spawned CHILD watcher is the parent id
+            // (WatcherManager.BuildSpawnArgs: sessionIdOverride ?? key). So a correlated child
+            // must be filtered under its PARENT's quarantine marker, not its own — `subagentLinks`
+            // (computed above, across ALL discovered sessions) already resolves that mapping.
+            var quarantineIdentity = subagentLinks.TryGetValue(s.SessionId, out var ownLink)
+                ? ownLink.ParentSessionId
+                : s.SessionId;
+
+            if (CursorMarkers.IsQuarantined(quarantineIdentity)) {
+                results.Add(MakeClassification(s, meta, ImportCommand.ClassificationStatus.ProbeError, totalLines: 0,
+                                               probeErrorReason: "cursor session quarantined (transcript rewrite detected) — not imported"));
+                continue;
+            }
+
             int? lastNonBlankIndex;
             int  nonBlankCount;
             try {
