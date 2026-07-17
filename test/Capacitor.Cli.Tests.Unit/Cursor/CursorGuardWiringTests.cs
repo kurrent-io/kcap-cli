@@ -117,4 +117,61 @@ public class CursorGuardWiringTests {
             await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse();
         } finally { try { Directory.Delete(dir, true); } catch { } }
     }
+
+    // AI-1382 review fix #3 — VerifyFullPrefix's only production call site (the periodic cadence
+    // check) used to seed lazily on its OWN first invocation, which — before this fix — never
+    // happened until poll N (CursorFullPrefixVerifyEveryNPolls). The two OTHER full-prefix tests
+    // above manually pre-seed the guard via a direct guard.VerifyFullPrefix(...) call to isolate
+    // the cadence itself, which is exactly why they do NOT cover this production seeding gap: a
+    // same-length rewrite of an already-checkpointed MIDDLE region landing anywhere in polls
+    // 1..N-1 had no real baseline to be caught against, and poll N would just seed the
+    // ALREADY-rewritten file as if it were the original, valid one. This test drives a REAL
+    // poll 1 (seeding from the file's actual, un-rewritten content via DrainNewLines itself,
+    // never manually pre-seeding the guard), rewrites the file afterward, then fast-forwards to
+    // poll N and confirms the rewrite is still caught.
+    [Test]
+    public async Task DrainNewLines_seeds_the_full_prefix_sample_on_the_real_first_poll_and_catches_a_mid_region_rewrite_at_the_cadence_poll() {
+        var sid = NewSessionId();
+        var dir = Directory.CreateTempSubdirectory("kcap-cursor-guard-startup-seed").FullName;
+        try {
+            var transcriptPath = Path.Combine(dir, "t.jsonl");
+            // Below WatchState.TranscriptThreshold (10) so every poll returns before ever
+            // touching the unconnected hub.
+            await File.WriteAllTextAsync(transcriptPath, "line1\nline2\nline3\n");
+
+            var guard = new CursorRewriteGuard(sid);
+            var state = new WatchState();
+
+            var trippedOnFirstPoll = false;
+            await using var hub = UnconnectedHub();
+
+            // Poll 1 — the REAL production seed (no manual guard.VerifyFullPrefix call anywhere).
+            await WatchCommand.DrainNewLines(
+                hub, sid, transcriptPath, agentId: null, state, vendor: "cursor", CancellationToken.None,
+                cursorGuard: guard, onCursorRewriteDetected: () => trippedOnFirstPoll = true);
+
+            await Assert.That(trippedOnFirstPoll).IsFalse();
+            await Assert.That(state.CursorGuardPollCount).IsEqualTo(1);
+            await Assert.That(CursorMarkers.IsQuarantined(sid)).IsFalse();
+
+            // Rewrite an already-"seen" MIDDLE region — same total length, first line changed —
+            // entirely outside the two-zone tail (nothing has ever been acked/checkpointed here;
+            // the session stays below threshold the whole test, so the periodic full-prefix
+            // re-hash is the ONLY check that can ever see this region).
+            await File.WriteAllTextAsync(transcriptPath, "lineX\nline2\nline3\n");
+
+            // Fast-forward to one poll before the cadence — mirrors the existing cadence tests'
+            // technique of setting CursorGuardPollCount directly rather than looping 58 real polls.
+            state.CursorGuardPollCount = WatchCommand.CursorFullPrefixVerifyEveryNPolls - 1;
+
+            var tripped = false;
+            var result = await WatchCommand.DrainNewLines(
+                hub, sid, transcriptPath, agentId: null, state, vendor: "cursor", CancellationToken.None,
+                cursorGuard: guard, onCursorRewriteDetected: () => tripped = true);
+
+            await Assert.That(tripped).IsTrue();
+            await Assert.That(CursorMarkers.IsQuarantined(sid)).IsTrue();
+            await Assert.That(result).IsEmpty();
+        } finally { try { Directory.Delete(dir, true); } catch { } }
+    }
 }

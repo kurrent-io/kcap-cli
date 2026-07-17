@@ -84,6 +84,38 @@ public sealed class CursorRewriteGuard(string sessionId) {
     }
 
     /// <summary>
+    /// AI-1382 review fix #1 — snapshot-based counterpart to <see cref="HashPriorZone(FileStream)"/>.
+    /// Hashes the trailing <see cref="TrailingBytes"/> bytes ending at the current checkpoint
+    /// offset directly from <paramref name="snapshotFromByteZero"/> — an in-memory buffer that
+    /// starts at absolute file offset 0, captured during the SAME capped read that decoded the
+    /// batch about to be sent. Binding the prior-zone hash to that snapshot (rather than a fresh
+    /// disk reopen taken moments later) closes the exact TOCTOU window review fix #1 found: a
+    /// rewrite landing between the decode read and a later reopen used to produce a hash that was
+    /// then "stable" for the rest of the poll even though it never corresponded to the bytes the
+    /// batch was actually built from.
+    /// </summary>
+    public string HashPriorZone(ReadOnlySpan<byte> snapshotFromByteZero) {
+        if (_checkpoint is not { } cp) return "";
+
+        var start = Math.Max(0, cp.Offset - TrailingBytes);
+        var end   = Math.Min(cp.Offset, snapshotFromByteZero.Length);
+
+        if (end <= start) return CursorAppendOnlyProbe.Sha256Hex(ReadOnlySpan<byte>.Empty);
+
+        return CursorAppendOnlyProbe.Sha256Hex(snapshotFromByteZero[(int)start..(int)end]);
+    }
+
+    /// <summary>
+    /// AI-1382 review fix #2 — resets the guard's checkpoint after a reconnect rewind discovers
+    /// the server's acknowledged frontier is behind the client's own line cursor. The two-zone
+    /// checks resume from a clean slate (no checkpoint to compare against yet) exactly like a
+    /// fresh watcher's very first poll — the alternative of leaving the stale, later checkpoint in
+    /// place started new-range verification past the bytes the replayed line gap actually
+    /// occupies, so a rewrite landing inside that gap could ship unnoticed.
+    /// </summary>
+    public void ResetCheckpoint() => _checkpoint = null;
+
+    /// <summary>
     /// True when <paramref name="currentTrailingSha"/> (from <see cref="HashPriorZone"/>) still
     /// matches the stored checkpoint hash. Always true when no checkpoint has been recorded yet
     /// (nothing to compare against on the very first batch). On a mismatch, writes the structured

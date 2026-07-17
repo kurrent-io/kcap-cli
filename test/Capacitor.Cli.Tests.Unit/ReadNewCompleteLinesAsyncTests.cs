@@ -23,6 +23,13 @@ public class ReadNewCompleteLinesAsyncTests {
         return await WatchCommand.ReadNewCompleteLinesAsync(stream, linesProcessed, policy, default);
     }
 
+    // AI-1382 review fix #1 — the Cursor watcher's captureRawBytes: true path.
+    static async Task<WatchCommand.NewTranscriptLines> ReadViaStreamRaw(
+            string path, int linesProcessed, WatchCommand.IncompleteFinalLinePolicy policy) {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return await WatchCommand.ReadNewCompleteLinesAsync(stream, linesProcessed, policy, default, captureRawBytes: true);
+    }
+
     static async Task AssertParity(string content, int linesProcessed, WatchCommand.IncompleteFinalLinePolicy policy) {
         var expected = WatchCommand.SplitNewCompleteLines(content, linesProcessed, policy);
 
@@ -222,5 +229,65 @@ public class ReadNewCompleteLinesAsyncTests {
 
         await Assert.That(total).IsEqualTo((int)limit);
         await Assert.That(Encoding.UTF8.GetString(buffer, 0, total)).IsEqualTo("hello");
+    }
+
+    // ---- 5. AI-1382 review fix #1: captureRawBytes threads the EXACT decode-read bytes back to
+    // the caller. This is the mechanism the fix relies on to close the TOCTOU the round-2 review
+    // found: the runtime rewrite guard used to decode lines from one read, then reopen the file
+    // SEPARATELY to hash "the new range" — a rewrite landing between those two reads meant the
+    // guard recorded/verified a snapshot the batch never actually came from. Binding the guard's
+    // hash to SnapshotBytes (this same capped read) instead of a later reopen closes that window. ----
+
+    [Test]
+    public async Task CaptureRawBytes_snapshot_bytes_are_exactly_the_bytes_that_decoded_the_returned_lines() {
+        var path = WriteTemp("line1\nline2\nline3\n");
+        try {
+            var r = await ReadViaStreamRaw(path, 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
+
+            await Assert.That(r.SnapshotBytes).IsNotNull();
+            await Assert.That(r.SnapshotBytes!.Length).IsEqualTo((int)r.SnapshotByteLength);
+
+            // Independently decoding the SAME buffer must reproduce exactly the lines the
+            // streaming read already decoded — proving SnapshotBytes really is "the bytes that
+            // produced Lines", not bytes from some other (possibly later, possibly rewritten) read.
+            var reDecoded = WatchCommand.SplitNewCompleteLines(
+                Encoding.UTF8.GetString(r.SnapshotBytes!), 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
+
+            await Assert.That(reDecoded.Lines).IsEquivalentTo(r.Lines);
+            await Assert.That(reDecoded.LineNumbers).IsEquivalentTo(r.LineNumbers);
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task CaptureRawBytes_defaults_to_null_when_the_caller_does_not_opt_in() {
+        // Every non-Cursor vendor keeps the original zero-buffering streaming path.
+        var path = WriteTemp("line1\nline2\n");
+        try {
+            var r = await ReadViaStream(path, 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
+            await Assert.That(r.SnapshotBytes).IsNull();
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    [Test]
+    public async Task CaptureRawBytes_stays_behaviour_equivalent_to_the_non_capturing_path() {
+        const string content = "a\nb\n\nc";
+        var pathA = WriteTemp(content);
+        var pathB = WriteTemp(content);
+        try {
+            var expected = await ReadViaStream(pathA, 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
+            var actual   = await ReadViaStreamRaw(pathB, 0, WatchCommand.IncompleteFinalLinePolicy.Hold);
+
+            await Assert.That(actual.Lines).IsEquivalentTo(expected.Lines);
+            await Assert.That(actual.LineNumbers).IsEquivalentTo(expected.LineNumbers);
+            await Assert.That(actual.NextPosition).IsEqualTo(expected.NextPosition);
+            await Assert.That(actual.HeldIncompleteFinalLine).IsEqualTo(expected.HeldIncompleteFinalLine);
+        } finally {
+            File.Delete(pathA);
+            File.Delete(pathB);
+        }
     }
 }
