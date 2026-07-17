@@ -942,6 +942,9 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalRetrospectiveCompleted))]
 [JsonSerializable(typeof(EvalRetrospectiveFailed))]
 [JsonSerializable(typeof(DaemonConnect))]
+[JsonSerializable(typeof(LiveAgentInfo))]
+[JsonSerializable(typeof(QuarantinedAgentInfo))]
+[JsonSerializable(typeof(DaemonStatusReport))]
 [JsonSerializable(typeof(AgentRegistered))]
 [JsonSerializable(typeof(AgentStatusChanged))]
 [JsonSerializable(typeof(AgentUnregistered))]
@@ -1199,7 +1202,13 @@ public readonly record struct LaunchAgentCommand(
         // absolute path to borrow when Borrowed is true. Appended last, same wire-compat rule as the
         // fields above.
         bool               Borrowed = false,
-        string?            BorrowCwd = null
+        string?            BorrowCwd = null,
+        // AI-1313 Phase B (D2): flow identity for a ReviewFlow launch, so the daemon can store it on
+        // the AgentInstance and report it in LiveAgents / DaemonStatusReport (lets a restarted server
+        // associate a surviving unassigned reviewer with its role). Appended last, same wire-compat
+        // rule as the fields above — old daemons ignore them, old servers never set them.
+        string?            FlowRunId = null,
+        string?            FlowRole  = null
     );
 
 /// <summary>
@@ -1215,6 +1224,44 @@ public enum LaunchKind {
     Review     = 1,
     ReviewFlow = 2
 }
+
+// ── AI-1313 Phase B (D2): daemon self-report DTOs ────────────────────────────────────────────────
+
+/// <summary>AI-1313 Phase B (D2): one live hosted agent in the daemon's self-report. <see cref="Kind"/>
+/// is the <see cref="LaunchKind"/> name; <see cref="FlowRunId"/>/<see cref="FlowRole"/> are set only
+/// for a ReviewFlow launch. Carried additively on <see cref="DaemonConnect.LiveAgents"/> and in
+/// <see cref="DaemonStatusReport"/> so the server can associate a surviving unassigned reviewer with
+/// its role instead of a blind grace period. All-optional trailing fields keep it wire-compatible.</summary>
+public readonly record struct LiveAgentInfo(
+        string         Id,
+        string         Kind,
+        DateTimeOffset CreatedAt,
+        string?        FlowRunId = null,
+        string?        FlowRole  = null
+    );
+
+/// <summary>AI-1313 Phase B (D4 §6.4(2a)): an agent whose death could NOT be confirmed (record-write
+/// or kill failure) and is being retried by the daemon heartbeat. Same shape as
+/// <see cref="LiveAgentInfo"/>; reported separately so the server can see it counts against admission
+/// (<c>EffectiveCount = ActiveCount + Quarantined.Count</c>) without changing <c>ActiveCount</c>'s
+/// meaning.</summary>
+public readonly record struct QuarantinedAgentInfo(
+        string         Id,
+        string         Kind,
+        DateTimeOffset CreatedAt,
+        string?        FlowRunId = null,
+        string?        FlowRole  = null
+    );
+
+/// <summary>AI-1313 Phase B (D2): the periodic (60s) one-way daemon→server self-report. Sent via a
+/// one-way <c>SendAsync</c> (never <c>InvokeAsync</c>) so an old server without the handler produces
+/// only a server-side log line, not a client fault. <see cref="ActiveCount"/> is exactly the daemon's
+/// Starting/Running agent count (its wire meaning never changes).</summary>
+public readonly record struct DaemonStatusReport(
+        int                  ActiveCount,
+        LiveAgentInfo[]      LiveAgents,
+        QuarantinedAgentInfo[] Quarantined
+    );
 
 public readonly record struct ReviewLaunchInfo(
         string Owner,
@@ -1292,7 +1339,10 @@ public readonly record struct DaemonConnect(
         string?   InstanceId       = null,
         string?   Version          = null,
         string[]? SupportedVendors = null,
-        string?   MachineId        = null
+        string?   MachineId        = null,
+        // AI-1313 Phase B (D2): richer live-agent metadata alongside the existing LiveAgentIds
+        // (kept for back-compat). Trailing/optional — old servers ignore it, old daemons never set it.
+        LiveAgentInfo[]? LiveAgents = null
     );
 
 public readonly record struct AgentRegistered(

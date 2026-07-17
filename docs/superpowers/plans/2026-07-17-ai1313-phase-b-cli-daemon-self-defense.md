@@ -61,7 +61,7 @@
 - Produces: `record DaemonStatusReport(int ActiveCount, IReadOnlyList<LiveAgentInfo> LiveAgents, IReadOnlyList<QuarantinedAgentInfo> Quarantined)`.
 - Produces: `DaemonConnect` gains trailing `LiveAgentInfo[]? LiveAgents = null` (the existing `string[] LiveAgentIds` stays for back-compat).
 
-- [ ] **Step 1: Write the failing test** — a DTO round-trips through `CapacitorJsonContext` and old-shape JSON (no new fields) still deserializes.
+- [x] **Step 1: Write the failing test** — a DTO round-trips through `CapacitorJsonContext` and old-shape JSON (no new fields) still deserializes.
 
 ```csharp
 using System.Text.Json;
