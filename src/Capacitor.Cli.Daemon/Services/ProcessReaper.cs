@@ -53,6 +53,16 @@ internal static class ProcessReaper {
         return KillConfirmAsync(pid, agentId, logger, ct);
     }
 
+    /// <summary>Kill-quarantine retry (spec §6.4(2a)): the entry is a KNOWN-ours process whose death
+    /// wasn't confirmed at teardown. Kill it by EXACT identity (no env check needed — we already own
+    /// it, and the identity match handles PID reuse) and report confirmed-gone. Gone / PID-reused →
+    /// true (drain it); still alive after SIGKILL → false (retry next tick).</summary>
+    public static Task<bool> ReapByIdentityAsync(int pid, string expectedIdentity, string agentId, ILogger logger, CancellationToken ct) {
+        if (!ProcessIdentity.IsAlive(pid)) return Task.FromResult(true);
+        if (!ProcessIdentity.Matches(pid, expectedIdentity)) return Task.FromResult(true); // reused → ours is gone
+        return KillConfirmAsync(pid, agentId, logger, ct);
+    }
+
     /// <summary>SIGTERM the process group (Unix; the forkpty child is a session leader so its pgid ==
     /// pid, taking descendants too), wait <see cref="GraceBeforeKill"/>, then SIGKILL; confirm death.
     /// Windows falls back to a best-effort <see cref="System.Diagnostics.Process"/> kill.</summary>

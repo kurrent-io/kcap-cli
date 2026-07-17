@@ -1091,7 +1091,13 @@ public partial class AgentOrchestratorVendorTests {
         /// CleanupAgentAsync, so a useful signal that local cleanup completed.</summary>
         public Action? OnAgentUnregistered { get; init; }
 
+        /// <summary>Every agent id passed to AgentUnregisteredAsync, in call order. AI-1313 Phase B
+        /// (D1): a single-flight teardown must unregister an agent exactly once even under a racing
+        /// launch-catch + read-loop cleanup.</summary>
+        public List<string> AgentUnregisteredCalls { get; } = [];
+
         public override Task AgentUnregisteredAsync(string agentId) {
+            lock (AgentUnregisteredCalls) AgentUnregisteredCalls.Add(agentId);
             OnAgentUnregistered?.Invoke();
 
             return Task.CompletedTask;

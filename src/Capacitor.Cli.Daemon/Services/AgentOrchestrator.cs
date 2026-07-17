@@ -41,6 +41,11 @@ internal record AgentInstance(
     public string?              FlowRunId         { get; init; }
     public string?              FlowRole          { get; init; }
 
+    /// <summary>AI-1313 Phase B (D1): single-flight teardown latch — a plain field (not a property) so
+    /// <see cref="System.Threading.Interlocked.CompareExchange(ref int,int,int)"/> can gate it. Exactly
+    /// one teardown runs even if the launch-catch and the read-loop's finally race.</summary>
+    public int CleanupStarted;
+
     /// <summary>Temp MCP config path written for hosted PR reviews; deleted on cleanup.</summary>
     public string? McpConfigPath { get; set; }
 
@@ -179,6 +184,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // AI-1313 Phase B (D4): durable PID records + this daemon's logical identity/epoch for
     // crash-survivor reaping. Initialized in the ctor from config.
     AgentPidRecordStore? _pidRecords;
+    AgentKillQuarantine? _quarantine;
     string               _daemonId    = "";
     string               _daemonEpoch = "";
     readonly DaemonConfig                                      _config;
@@ -287,6 +293,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var recordRoot = Path.Combine(
             config.StateDir ?? DaemonLockPaths.Directory, DaemonLockPaths.Sanitize(config.Name));
         _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
+        _quarantine  = new AgentKillQuarantine(logger);
         _daemonId    = ComputeDaemonId(config.Name);
         _daemonEpoch = config.DaemonEpoch ?? Guid.NewGuid().ToString("N");
 
@@ -350,9 +357,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal DaemonStatusReport BuildStatusReport() =>
         new(ActiveCount, [.. BuildLiveAgents()], [.. QuarantineSnapshot()]);
 
-    /// <summary>AI-1313 Phase B: the kill-quarantine snapshot for the status report. Empty until D4
-    /// Task 8 wires the real <c>AgentKillQuarantine</c>; kept as a seam so BuildStatusReport is stable.</summary>
-    internal IReadOnlyList<QuarantinedAgentInfo> QuarantineSnapshot() => [];
+    /// <summary>AI-1313 Phase B (D4 §6.4(2a)): the kill-quarantine snapshot for the status report.</summary>
+    internal IReadOnlyList<QuarantinedAgentInfo> QuarantineSnapshot() => _quarantine?.Snapshot() ?? [];
+
+    /// <summary>AI-1313 Phase B (D4 §6.4(2a)): the daemon's admission gate — committed active agents
+    /// PLUS unconfirmed-death quarantined ones, so a persistent kill/record-write failure shrinks
+    /// admission (fails closed) rather than minting processes beyond the budget.</summary>
+    internal int EffectiveCount => ActiveCount + (_quarantine?.Count ?? 0);
 
     /// <summary>AI-1313 Phase B (D4): this daemon's stable logical id = a hash of its name, written
     /// into each child's <c>KCAP_DAEMON_ID</c> marker. Per-name so a different daemon under the same
@@ -437,10 +448,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal AgentInstance SeedAgentForTest(
             string id, LaunchKind kind = LaunchKind.Default, string status = "Running",
             string? flowRunId = null, string? flowRole = null,
-            DateTime? createdAt = null, DateTime? lastOutputAt = null, bool isPrivate = false) {
+            DateTime? createdAt = null, DateTime? lastOutputAt = null, bool isPrivate = false,
+            IPtyProcess? pty = null) {
         var agent = new AgentInstance(
             id, null, "default", null, "/repo", "codex",
-            new PtyHostedAgentRuntime("codex", NoopPtyProcess.Instance),
+            new PtyHostedAgentRuntime("codex", pty ?? NoopPtyProcess.Instance),
             new WorktreeInfo("/repo", "b", "/repo"),
             new CancellationTokenSource()) {
             Kind = kind, FlowRunId = flowRunId, FlowRole = flowRole, IsPrivate = isPrivate,
@@ -497,7 +509,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         string? reviewerToken = null;
 
         try {
-            if (ActiveCount >= _config.MaxConcurrentAgents) {
+            if (EffectiveCount >= _config.MaxConcurrentAgents) {
                 await _server.LaunchFailedAsync(agentId, $"At max capacity ({_config.MaxConcurrentAgents} agents)");
 
                 return;
@@ -739,6 +751,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
         } catch (Exception ex) {
             LogLaunchFailed(ex, agentId);
+
+            // AI-1313 Phase B (D1): if the agent was ALREADY inserted into _agents (a post-insert
+            // failure — e.g. a throwing RegisterAgentAsync at :697), route teardown through the
+            // single-flight CleanupAgentAsync. It owns the full teardown of a live agent: dispose the
+            // runtime (kill the child), remove the owned worktree, confirm-death-or-quarantine, delete
+            // the PID record, revoke the reviewer token, unregister, and drop the registry entry — so
+            // a post-insert throw can never strand an agent whose child process is still alive. Only a
+            // PRE-insert failure (nothing in _agents) falls through to the transient-cleanup path
+            // below, where the reviewer token + owned worktree are not yet owned by any AgentInstance.
+            if (_agents.ContainsKey(agentId)) {
+                await CleanupAgentAsync(agentId);
+                await _server.LaunchFailedAsync(agentId, ex.Message);
+                return;
+            }
 
             // If a reviewer token was minted before the failure and no AgentInstance was created to
             // own it, revoke it here so it can't linger in the bridge's live-token set.
@@ -1653,6 +1679,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // before the per-agent loop so a reaped reviewer isn't also heartbeated this tick. Reason
             // stamped on PendingEndReason so the end attribution is correct even if HandleStopAgent's
             // own end call loses to the read-loop's.
+            // AI-1313 Phase B (D4 §6.4(2a)): retry killing any unconfirmed-death quarantined process,
+            // draining those confirmed gone (frees admission).
+            if (_quarantine is { Count: > 0 }) _ = _quarantine.RetryAllAsync(ct);
+
             foreach (var (id, reason) in FindReviewersToReap()) {
                 if (_agents.TryGetValue(id, out var reviewer)) {
                     _logger.LogInformation(
@@ -1745,9 +1775,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
-        // AI-1313 Phase B (D4 §6.4(2)): the agent has been removed from the registry as part of its
-        // termination cleanup — its process is being/has been torn down, so drop the PID record.
-        DeletePidRecord(agentId);
+        // AI-1313 Phase B (D1): single-flight — belt-and-suspenders on top of the TryRemove above, so a
+        // racing launch-catch + read-loop finally can never double-run the teardown for one agent.
+        if (Interlocked.CompareExchange(ref agent.CleanupStarted, 1, 0) != 0) return;
 
         // The reviewer process has exited by the time we get here (this runs off the read-loop's exit
         // path), so revoke its bridge token now — after any final submit_review_result was served.
@@ -1773,6 +1803,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // This is the spec's top safety invariant.
         if (agent.Work == WorkLocation.OwnedWorktree) {
             try { await WorktreeManager.RemoveAsync(agent.Worktree); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
+        }
+
+        // AI-1313 Phase B (D4 §6.4(2)/(2a)): confirm the process is actually gone before dropping its
+        // PID record. If DisposeAsync didn't kill it (a stuck child), QUARANTINE it — retain the record
+        // and count it against admission (fail closed) so the heartbeat retries the kill to confirmed
+        // death. A confirmed-dead process's record is deleted.
+        var pid          = agent.Runtime.Pid;
+        var stillIdentity = ProcessIdentity.Capture(pid);
+        if (stillIdentity is not null && ProcessIdentity.IsAlive(pid)) {
+            _quarantine?.Add(new AgentKillQuarantine.Entry(
+                agent.Id, pid, stillIdentity, agent.Kind.ToString(), agent.CreatedAt, agent.FlowRunId, agent.FlowRole));
+            _logger.LogWarning(
+                "Agent {AgentId} (pid {Pid}) still alive after teardown — quarantined for heartbeat kill-retry", agent.Id, pid);
+        } else {
+            DeletePidRecord(agentId); // confirmed dead
         }
 
         // Skip server unregister during shutdown — _ct is cancelled and the call

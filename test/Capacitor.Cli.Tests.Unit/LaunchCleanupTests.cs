@@ -1,0 +1,117 @@
+using System.Runtime.CompilerServices;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Daemon.Pty;
+using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Tests.Unit.Daemon;
+
+namespace Capacitor.Cli.Tests.Unit;
+
+/// <summary>
+/// AI-1313 Phase B (D1 + D4 §6.4(2a)): the single-flight teardown and the kill-quarantine.
+/// <list type="bullet">
+/// <item>A post-insert launch failure (e.g. a throwing RegisterAgentAsync) routes through the same
+/// <c>CleanupAgentAsync</c> teardown, so it can never strand an agent whose child is still live.</item>
+/// <item>Concurrent teardowns of one agent run exactly once (TryRemove + CleanupStarted gate).</item>
+/// <item>A child that survives teardown is QUARANTINED — retained, counted against admission via
+/// <c>EffectiveCount</c>, and reported in <c>QuarantineSnapshot()</c> — so a stuck-kill mode fails
+/// closed rather than minting unbounded processes.</item>
+/// </list>
+/// Partial of <see cref="AgentOrchestratorVendorTests"/> to reuse its BuildOrchestrator/CreateGitRepo/
+/// CaptureServerConnection/SpyPtyProcessFactory harness.
+/// </summary>
+public partial class AgentOrchestratorVendorTests {
+    [Test]
+    public async Task Post_insert_launch_failure_tears_down_via_single_flight_and_unregisters() {
+        var (repoPath, cleanup) = CreateGitRepo();
+
+        try {
+            // AgentRegisteredAsync throws on the launch's RegisterAgentAsync call, AFTER the agent was
+            // inserted into _agents — the exact post-insert failure the D1 routing must catch.
+            var server     = new CaptureServerConnection { AgentRegisteredFailTimes = 1 };
+            var ptyFactory = new SpyPtyProcessFactory();
+
+            await using var orch = BuildOrchestrator(server, ptyFactory, Launcher("claude"), allowedRepoPath: repoPath);
+
+            await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+                AgentId: "a1", Prompt: "hi", Model: "opus", Effort: null,
+                RepoPath: repoPath, Tools: null, AttachmentIds: null, Vendor: "claude"));
+
+            // Routed through CleanupAgentAsync: the registry entry is gone, the launch failed on the
+            // server, and — the discriminator vs the pre-insert path — AgentUnregistered was sent.
+            await Assert.That(orch.GetAgentForTest("a1")).IsNull();
+            await Assert.That(server.LaunchFailedCalls.Any(c => c.AgentId == "a1")).IsTrue();
+            await Assert.That(server.AgentUnregisteredCalls).Contains("a1");
+        } finally {
+            cleanup();
+        }
+    }
+
+    [Test]
+    public async Task Concurrent_teardown_of_one_agent_unregisters_exactly_once() {
+        var server = new CaptureServerConnection();
+
+        await using var orch = BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        orch.SeedAgentForTest("s1", LaunchKind.Default, status: "Running");
+
+        // Two racing teardowns (the launch catch and the read-loop finally, in production) must run
+        // the teardown exactly once.
+        await Task.WhenAll(orch.CleanupAgentForTest("s1"), orch.CleanupAgentForTest("s1"));
+
+        await Assert.That(orch.GetAgentForTest("s1")).IsNull();
+        await Assert.That(server.AgentUnregisteredCalls.Count(x => x == "s1")).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Teardown_of_a_child_that_survives_disposal_quarantines_and_counts_it() {
+        var server = new CaptureServerConnection();
+
+        await using var orch = BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        // A real, live child whose runtime Dispose/Terminate are no-ops — so it is STILL ALIVE after
+        // CleanupAgentAsync's disposal step, exactly like a stuck child that ignored SIGTERM.
+        using var dummy = DummyProcess.StartSleep(
+            30, new Dictionary<string, string> { ["KCAP_AGENT_ID"] = "stuck" });
+        orch.SeedAgentForTest("stuck", LaunchKind.ReviewFlow, status: "Running",
+            flowRunId: "flow-1", flowRole: "reviewer", pty: new LiveNoKillPtyProcess(dummy.Pid));
+
+        await orch.CleanupAgentForTest("stuck");
+
+        // Dropped from the live registry but quarantined: it counts against admission (EffectiveCount)
+        // and is surfaced with its flow identity, so the daemon fails closed until the kill confirms.
+        await Assert.That(orch.GetAgentForTest("stuck")).IsNull();
+        await Assert.That(orch.EffectiveCount).IsEqualTo(1);
+
+        var snap = orch.QuarantineSnapshot();
+        await Assert.That(snap.Any(q => q.Id == "stuck" && q.FlowRunId == "flow-1")).IsTrue();
+
+        // dummy is disposed by the using; also drop the quarantine's hold explicitly for hygiene.
+        dummy.Kill();
+    }
+
+    /// <summary>An <see cref="IPtyProcess"/> that reports a real live child's pid but whose disposal
+    /// and termination are deliberately no-ops — models a child that survives teardown, so
+    /// CleanupAgentAsync's confirm-death step must quarantine it.</summary>
+    sealed class LiveNoKillPtyProcess(int pid) : IPtyProcess {
+        public int  Pid       => pid;
+        public bool HasExited => false;
+        public int? ExitCode  => null;
+
+        public ValueTask DisposeAsync() => default;
+        public Task WaitForExitAsync(TimeSpan? _) => Task.CompletedTask;
+        public Task TerminateAsync(TimeSpan?   _) => Task.CompletedTask; // deliberately does NOT kill
+
+#pragma warning disable CS1998
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken _ = default) {
+            yield break;
+        }
+#pragma warning restore CS1998
+
+        public Task WriteAsync(string _) => Task.CompletedTask;
+        public Task WriteAsync(byte[] _) => Task.CompletedTask;
+        public void Resize(ushort     _, ushort __) { }
+        public void SendInterrupt() { }
+    }
+}

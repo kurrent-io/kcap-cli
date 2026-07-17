@@ -16,19 +16,25 @@ namespace Capacitor.Cli.Daemon.Services;
 /// </summary>
 internal static partial class ProcessIdentity {
     /// <summary>The exact start-identity token for <paramref name="pid"/>, or null if the process is
-    /// gone or the value can't be read.</summary>
-    public static string? Capture(int pid) => ProcessStartToken.ForPid(pid);
+    /// gone or the value can't be read. A non-positive pid (0 = a degenerate/Noop runtime; negative =
+    /// never a real child) is not a reapable process → null.</summary>
+    public static string? Capture(int pid) => pid > 0 ? ProcessStartToken.ForPid(pid) : null;
 
     /// <summary>True IFF a live process at <paramref name="pid"/> has EXACTLY
     /// <paramref name="expectedIdentity"/> (AI-839 tri-state == true). A gone pid, a recycled pid
-    /// (different incarnation), or an uncomparable token all return false — ambiguity never kills.</summary>
+    /// (different incarnation), an uncomparable token, or a non-positive pid all return false —
+    /// ambiguity never kills.</summary>
     public static bool Matches(int pid, string expectedIdentity) =>
-        ProcessStartToken.Matches(pid, expectedIdentity) == true;
+        pid > 0 && ProcessStartToken.Matches(pid, expectedIdentity) == true;
 
     /// <summary>Best-effort liveness of <paramref name="pid"/> regardless of identity — only used to
     /// decide whether it's worth probing identity/env. Unix: <c>kill(pid, 0) == 0</c> (ESRCH → dead);
-    /// Windows: <see cref="Process.GetProcessById(int)"/> succeeds.</summary>
+    /// Windows: <see cref="Process.GetProcessById(int)"/> succeeds. A non-positive pid returns false:
+    /// <c>kill(0/-1/-pgid, 0)</c> targets a process GROUP (or all processes), never a single child, so
+    /// it must never be treated as "our agent is alive".</summary>
     public static bool IsAlive(int pid) {
+        if (pid <= 0) return false;
+
         if (OperatingSystem.IsWindows()) {
             try { using var _ = Process.GetProcessById(pid); return true; }
             catch { return false; }
