@@ -50,6 +50,56 @@ internal sealed class OpenCodeDb : IDisposable {
     public IReadOnlyList<OpenCodeSessionRow> QueryChildren(string parentId) =>
         QuerySessions("parent_id = $parent", parentId);
 
+    /// <summary>Import-side recursion depth cap (AI-1383 D3) — a descendant beyond this depth
+    /// is neither imported nor promoted; the caller surfaces the count.</summary>
+    public const int MaxDescendantDepth = 8;
+
+    /// <summary>One recursively-discovered descendant row at its depth below the root (a direct
+    /// child is depth 1, a grandchild depth 2, etc.).</summary>
+    public readonly record struct DescendantRow(OpenCodeSessionRow Row, int Depth);
+
+    /// <summary>Recursive descendant discovery result: every descendant within the depth cap
+    /// (BFS, deterministic — each level ordered like <see cref="QueryChildren"/>), plus a count
+    /// of descendants beyond <see cref="MaxDescendantDepth"/> that were deliberately NOT
+    /// discovered (never silent — the caller surfaces this in the import summary).</summary>
+    public readonly record struct DescendantDiscoveryResult(
+        IReadOnlyList<DescendantRow> Descendants,
+        int                          DescendantsOmitted);
+
+    /// <summary>
+    /// Recursively walks <c>parent_id</c> edges from <paramref name="rootId"/> — per-level
+    /// <see cref="QueryChildren"/>, a visited-id set to guard a reachable cycle (traversal
+    /// simply stops re-descending, terminating the walk), depth capped at
+    /// <see cref="MaxDescendantDepth"/>. Descendants beyond the cap are counted in
+    /// <see cref="DescendantDiscoveryResult.DescendantsOmitted"/> instead of being returned
+    /// (AI-1383 D3 — previously <see cref="QueryChildren"/> was called directly, a single-level
+    /// query that silently dropped grandchildren).
+    /// </summary>
+    public DescendantDiscoveryResult QueryDescendants(string rootId) {
+        var result  = new List<DescendantRow>();
+        var visited = new HashSet<string>(StringComparer.Ordinal) { rootId };
+        var omitted = 0;
+
+        var frontier = new Queue<(string Id, int Depth)>();
+        frontier.Enqueue((rootId, 0));
+
+        while (frontier.Count > 0) {
+            var (id, depth) = frontier.Dequeue();
+
+            foreach (var child in QueryChildren(id)) {
+                if (!visited.Add(child.Id)) continue; // cycle guard — already reached
+
+                var childDepth = depth + 1;
+                if (childDepth > MaxDescendantDepth) { omitted++; continue; }
+
+                result.Add(new DescendantRow(child, childDepth));
+                frontier.Enqueue((child.Id, childDepth));
+            }
+        }
+
+        return new DescendantDiscoveryResult(result, omitted);
+    }
+
     IReadOnlyList<OpenCodeSessionRow> QuerySessions(string whereClause, string? parent) {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText =

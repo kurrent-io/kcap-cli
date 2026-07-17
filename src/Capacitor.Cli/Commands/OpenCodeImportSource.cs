@@ -196,25 +196,34 @@ internal sealed class OpenCodeImportSource : IImportSource {
             try { File.Delete(tmpFile); } catch { }
         }
 
-        // 3. children as subagents — BEFORE session-end so SubagentCompleted precedes SessionEnded.
+        // 3. descendants as subagents — BEFORE session-end so SubagentCompleted precedes
+        //    SessionEnded. A subagent-start posted here may REACTIVATE an already-Ended root
+        //    (Model A always routes SubagentStarted through
+        //    EnsureSessionExists(isReactivation:true)) — so per the finally-style re-close
+        //    contract (AI-1383 D3 item 4), the session-end re-assertion below must run
+        //    regardless of whether this step throws. Previously an early `Failed` return here
+        //    could leave a reactivated root stuck Active with no re-close ever posted.
+        var descendantsOk = true;
         try {
-            await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, ct);
+            await ImportDescendantsAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, ct);
         } catch (OperationCanceledException) {
             throw;
         } catch {
-            return ImportOutcome.Failed;
+            descendantsOk = false;
         }
 
         // 4. native title (best-effort, like Copilot/Kiro).
         if (!string.IsNullOrWhiteSpace(title))
             await PostSetTitleAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, title!, ct);
 
-        // 5. session-end (posted only after parent transcript + all children succeeded).
+        // 5. session-end — posted regardless of step 3's outcome (see the finally contract above).
         if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/opencode",
                 BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), ct))
             return ImportOutcome.Failed;
 
-        // 6. Record completeness in the ledger — ONLY now, after session-end succeeded.
+        if (!descendantsOk) return ImportOutcome.Failed;
+
+        // 6. Record completeness in the ledger — ONLY now, after a fully successful import.
         //    The fingerprint was computed at classify time and carried on SourceMeta.
         if (c.SourceMeta!.TryGetValue("Fingerprint", out var fpObj) && fpObj is string fp) {
             lock (_ledgerLock) {
@@ -226,18 +235,34 @@ internal sealed class OpenCodeImportSource : IImportSource {
         return repair ? ImportOutcome.Resumed : (sent == 0 ? ImportOutcome.Skipped : ImportOutcome.Loaded);
     }
 
-    async Task ImportChildrenAsync(HttpClient client, string baseUrl, string rootId, CancellationToken ct) {
+    /// <summary>
+    /// Imports every TRANSITIVE descendant (recursive <c>parent_id</c> walk, depth-capped —
+    /// AI-1383 D3) as a DIRECT subagent of the top-level root — the existing flatten shape;
+    /// Model A's stream key can't express deeper nesting, and flattening preserves content
+    /// that today is silently dropped beyond the first level. Descendants beyond the depth cap
+    /// are surfaced (never silent) via a stderr diagnostic. Throws on the first descendant
+    /// whose lifecycle can't be posted (caller wraps this in a finally-style re-close).
+    /// </summary>
+    async Task ImportDescendantsAsync(HttpClient client, string baseUrl, string rootId, CancellationToken ct) {
         using var db = new OpenCodeDb(_dbPath);
-        var children = db.QueryChildren(rootId); // ordered (time_created, id)
+        var (descendants, omitted) = db.QueryDescendants(rootId); // BFS, per-level ordered like QueryChildren
 
-        foreach (var child in children) {
+        if (omitted > 0) {
+            Console.Error.WriteLine(
+                $"[kcap] opencode: root {rootId} descendants_omitted={omitted} " +
+                $"(depth cap {OpenCodeDb.MaxDescendantDepth} exceeded)");
+        }
+
+        foreach (var d in descendants) {
             ct.ThrowIfCancellationRequested();
+            var child     = d.Row;
             var agentId   = OpenCodeSubagentDiscovery.CanonicalAgentId(child.Id);
             var agentType = ResolveAgentType(db, child.Id);
 
             // No per-child completeness gate: a complete parent is skipped wholesale via the
-            // ledger, so children are only reached during an incomplete parent's import. Offset
-            // above the child's (rootId, agentId) HWM so a repair replays above ingested content.
+            // ledger, so descendants are only reached during an incomplete parent's import.
+            // Offset above the descendant's (rootId, agentId) HWM so a repair replays above
+            // ingested content.
             var chwm = await FetchServerLastLineAsync(client, baseUrl, rootId, agentId, ct);
             var childOffset = chwm is { } v ? checked(v + 1) : 0;
 
@@ -314,22 +339,39 @@ internal sealed class OpenCodeImportSource : IImportSource {
         SourceMeta       = s.SourceMeta,
     };
 
+    // Fingerprint-schema version (AI-1383 D3). The fingerprint used to cover only the parent
+    // transcript + its DIRECT QueryChildren, so an AlreadyLoaded ledger hit could skip a root
+    // wholesale forever even though its grandchildren were never imported (single-level
+    // discovery silently dropped them). The fingerprint is now recursive over EVERY descendant
+    // (see below), and this version marker is fed into the hash too — bump it whenever the
+    // fingerprint's shape/inputs change, so every pre-upgrade ledger entry is cache-busted and
+    // the first post-upgrade import re-classifies and picks up whatever the old single-level
+    // fingerprint couldn't see.
+    const string FingerprintSchemaVersion = "v2-recursive-descendants";
+
     // Parent total reconstructed lines, importable lines (gates MinLines), and a content
-    // fingerprint over the parent transcript AND its direct children — the ledger key, so a
-    // same-line-count mutation (tool completing, in-place edit, changed/added child) re-imports.
+    // fingerprint over the parent transcript AND every transitive descendant — the ledger key,
+    // so a same-line-count mutation (tool completing, in-place edit, changed/added/removed
+    // descendant at any depth) re-imports.
     static (int Total, int Importable, string Fingerprint) ComputeClassificationInfo(OpenCodeDb db, string sessionId) {
         using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
         void Feed(string s) { hash.AppendData(Encoding.UTF8.GetBytes(s)); hash.AppendData("\n"u8); }
 
+        Feed(" fpv:" + FingerprintSchemaVersion);
+
         int total = 0, importable = 0;
-        foreach (var line in db.SynthesizeLines(sessionId)) {  // parent reader fully drained before children query
+        foreach (var line in db.SynthesizeLines(sessionId)) {  // parent reader fully drained before descendant queries
             total++;
             if (OpenCodeDb.IsImportRelevantLine(line)) importable++;
             Feed(line);
         }
-        foreach (var child in db.QueryChildren(sessionId)) {
-            Feed("\u0000child:" + child.Id);
-            foreach (var line in db.SynthesizeLines(child.Id)) Feed(line);
+        var (descendants, _) = db.QueryDescendants(sessionId);
+        // Fed unconditionally, including an EMPTY descendant set, so the fingerprint always
+        // reflects the descendant edge shape, not merely its presence (AI-1383 D3).
+        Feed(" descendants:" + descendants.Count);
+        foreach (var d in descendants) {
+            Feed(" child:" + d.Row.Id + ":" + d.Depth);
+            foreach (var line in db.SynthesizeLines(d.Row.Id)) Feed(line);
         }
         return (total, importable, Convert.ToHexString(hash.GetHashAndReset()));
     }

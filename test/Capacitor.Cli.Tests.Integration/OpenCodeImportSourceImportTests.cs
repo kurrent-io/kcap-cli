@@ -191,6 +191,158 @@ public class OpenCodeImportSourceImportTests : IDisposable {
     }
 
     [Test]
+    public async Task ImportSession_imports_a_three_level_chain_flattened_as_direct_subagents_of_root() {
+        // AI-1383 D3: a grandchild (parent_id → child → grandchild) must NOT be silently
+        // dropped — both descendants import as DIRECT subagents of the top-level root (the
+        // existing flatten shape; Model A's stream key can't express deeper nesting).
+        _fix.AddSession("ses_root", null, "/work/a", "Root", 100);
+        _fix.AddMessageWithText("ses_root", "msg_p", "root says hi", 110);
+        _fix.AddSession("ses_child", "ses_root", "/work/a", "Child", 120);
+        _fix.AddMessageWithTextAndAgent("ses_child", "msg_c", "child work", 130, agent: "general");
+        _fix.AddSession("ses_grandchild", "ses_child", "/work/a", "Grandchild", 140);
+        _fix.AddMessageWithTextAndAgent("ses_grandchild", "msg_g", "grandchild work", 150, agent: "researcher");
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(404));
+        StubOk("/hooks/session-start/opencode", "/hooks/transcript", "/hooks/set-title",
+               "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/opencode");
+
+        using var client = new HttpClient();
+        var source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered,
+            new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
+
+        var outcome = await source.ImportSessionAsync(classified[0],
+            new ImportContext(client, _server.Url!, false), CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
+
+        var starts = _server.LogEntries.Where(e => e.RequestMessage.Path == "/hooks/subagent-start")
+            .Select(e => e.RequestMessage.Body!).ToList();
+        var stops = _server.LogEntries.Where(e => e.RequestMessage.Path == "/hooks/subagent-stop")
+            .Select(e => e.RequestMessage.Body!).ToList();
+
+        // Both descendants got their own subagent-start/stop, each carrying the ROOT session
+        // id (direct subagent of the top-level root, never nested under the child).
+        await Assert.That(starts.Count).IsEqualTo(2);
+        await Assert.That(stops.Count).IsEqualTo(2);
+        await Assert.That(starts.All(b => b.Contains("\"session_id\":\"ses_root\""))).IsTrue();
+        await Assert.That(starts.Any(b => b.Contains("\"agent_id\":\"ses_child\"") && b.Contains("\"agent_type\":\"general\""))).IsTrue();
+        await Assert.That(starts.Any(b => b.Contains("\"agent_id\":\"ses_grandchild\"") && b.Contains("\"agent_type\":\"researcher\""))).IsTrue();
+
+        // Final session-end lands after both descendants' lifecycles.
+        var paths = _server.LogEntries.OrderBy(e => e.RequestMessage.DateTime).Select(e => e.RequestMessage.Path).ToList();
+        await Assert.That(paths.LastIndexOf("/hooks/subagent-stop")).IsLessThan(paths.IndexOf("/hooks/session-end/opencode"));
+    }
+
+    [Test]
+    public async Task ImportSession_posts_session_end_even_when_a_descendant_subagent_start_fails() {
+        // AI-1383 D3 item 4 (finally-style re-close): a subagent-start posted against this
+        // root may reactivate it if it was already Ended — so the session-end re-assertion
+        // must run regardless of a descendant lifecycle failure. Previously OpenCode's early
+        // `Failed` return here bailed before ever posting session-end.
+        _fix.AddSession("ses_root", null, "/work/a", "Root", 100);
+        _fix.AddMessageWithText("ses_root", "msg_p", "root says hi", 110);
+        _fix.AddSession("ses_child", "ses_root", "/work/a", "Child", 120);
+        _fix.AddMessageWithTextAndAgent("ses_child", "msg_c", "child work", 130, agent: "general");
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(404));
+        StubOk("/hooks/session-start/opencode", "/hooks/transcript", "/hooks/set-title", "/hooks/session-end/opencode");
+        _server.Given(Request.Create().WithPath("/hooks/subagent-start").UsingPost())
+               .RespondWith(Response.Create().WithStatusCode(500));
+
+        using var client = new HttpClient();
+        var source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered,
+            new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
+
+        var outcome = await source.ImportSessionAsync(classified[0],
+            new ImportContext(client, _server.Url!, false), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+        await Assert.That(_server.LogEntries.Select(e => e.RequestMessage.Path)).Contains("/hooks/session-end/opencode");
+    }
+
+    [Test]
+    public async Task ImportSession_posts_session_end_even_when_a_descendant_content_send_fails() {
+        // Same finally-style contract as above, but the descendant's subagent-start succeeds
+        // and the failure happens on its transcript content instead.
+        _fix.AddSession("ses_root", null, "/work/a", "Root", 100);
+        _fix.AddMessageWithText("ses_root", "msg_p", "root says hi", 110);
+        _fix.AddSession("ses_child", "ses_root", "/work/a", "Child", 120);
+        _fix.AddMessageWithTextAndAgent("ses_child", "msg_c", "child work", 130, agent: "general");
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(404));
+        StubOk("/hooks/session-start/opencode", "/hooks/set-title",
+               "/hooks/subagent-start", "/hooks/session-end/opencode");
+        // The parent's own transcript send (step 2) is the FIRST /hooks/transcript POST and
+        // must succeed; only the descendant's later transcript batch (step 3) fails — a
+        // WireMock scenario state machine sequences this without needing a body matcher.
+        _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
+               .InScenario("descendant-content-failure").WillSetStateTo("after-parent")
+               .RespondWith(Response.Create().WithStatusCode(200));
+        _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
+               .InScenario("descendant-content-failure").WhenStateIs("after-parent")
+               .RespondWith(Response.Create().WithStatusCode(500));
+
+        using var client = new HttpClient();
+        var source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered,
+            new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
+
+        var outcome = await source.ImportSessionAsync(classified[0],
+            new ImportContext(client, _server.Url!, false), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+        await Assert.That(_server.LogEntries.Select(e => e.RequestMessage.Path)).Contains("/hooks/session-end/opencode");
+    }
+
+    [Test]
+    public async Task ledger_version_bump_invalidates_a_pre_upgrade_direct_only_fingerprint() {
+        // AI-1383 D3: a ledger entry recorded before recursive descendant discovery shipped
+        // covered only the parent + direct children. Simulate that stale entry directly (any
+        // fingerprint computed under the OLD scheme differs from the new one, which always
+        // carries the version marker) and confirm re-classification picks up the grandchild
+        // that a direct-only fingerprint could never have seen.
+        _fix.AddSession("ses_root", null, "/work/a", "Root", 100);
+        _fix.AddMessageWithText("ses_root", "msg_p", "root says hi", 110);
+        _fix.AddSession("ses_child", "ses_root", "/work/a", "Child", 120);
+        _fix.AddMessageWithTextAndAgent("ses_child", "msg_c", "child work", 130, agent: "general");
+        _fix.AddSession("ses_grandchild", "ses_child", "/work/a", "Grandchild", 140);
+        _fix.AddMessageWithTextAndAgent("ses_grandchild", "msg_g", "grandchild work", 150, agent: "researcher");
+
+        var ledger = OpenCodeImportLedger.Load(_fix.LedgerPath);
+        ledger.MarkComplete(_server.Url!, "ses_root", "pre-upgrade-direct-only-fingerprint");
+        ledger.Save();
+
+        using var client = new HttpClient();
+        var source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered,
+            new ClassifyContext(client, _server.Url!, 0, null, null), CancellationToken.None);
+
+        // NOT AlreadyLoaded — the stale ledger entry is cache-busted by the version bump.
+        await Assert.That(classified[0].Status).IsNotEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(404));
+        StubOk("/hooks/session-start/opencode", "/hooks/transcript", "/hooks/set-title",
+               "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/opencode");
+
+        var outcome = await source.ImportSessionAsync(classified[0],
+            new ImportContext(client, _server.Url!, false), CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
+
+        var starts = _server.LogEntries.Where(e => e.RequestMessage.Path == "/hooks/subagent-start")
+            .Select(e => e.RequestMessage.Body!).ToList();
+        await Assert.That(starts.Any(b => b.Contains("\"agent_id\":\"ses_grandchild\""))).IsTrue();
+    }
+
+    [Test]
     public async Task batch2_failure_then_rerun_repairs_above_hwm() {
         _fix.AddSession("ses_root", null, "/work/a", "T", 100);
         for (var i = 0; i < 150; i++)

@@ -89,6 +89,68 @@ public class OpenCodeDbTests {
         await Assert.That(string.Join(",", kids.Select(k => k.Id))).IsEqualTo("ses_c1,ses_c2");
     }
 
+    // ── QueryDescendants (AI-1383 D3: recursive grandchild discovery) ──────────────────────
+
+    [Test]
+    public async Task QueryDescendants_walks_a_multi_level_parent_chain() {
+        using var tmp = new TempDir();
+        var db = BuildDb(tmp.Path);
+        InsertSession(db, "ses_root", null, "/w", "Root", 100);
+        InsertSession(db, "ses_child", "ses_root", "/w", "Child", 200);
+        InsertSession(db, "ses_grandchild", "ses_child", "/w", "Grandchild", 300);
+
+        using var ocdb = new OpenCodeDb(db);
+        var (descendants, omitted) = ocdb.QueryDescendants("ses_root");
+
+        await Assert.That(omitted).IsEqualTo(0);
+        await Assert.That(descendants.Select(d => (d.Row.Id, d.Depth)))
+            .IsEquivalentTo(new[] { ("ses_child", 1), ("ses_grandchild", 2) });
+    }
+
+    [Test]
+    public async Task QueryDescendants_depth_8_imports_depth_9_is_omitted_with_diagnostic() {
+        using var tmp = new TempDir();
+        var db = BuildDb(tmp.Path);
+        InsertSession(db, "ses_root", null, "/w", "Root", 100);
+
+        // A 9-level chain below the root: n1 (depth 1) ... n9 (depth 9).
+        var prev = "ses_root";
+        for (var depth = 1; depth <= 9; depth++) {
+            var id = $"ses_n{depth}";
+            InsertSession(db, id, prev, "/w", $"N{depth}", 100 + depth);
+            prev = id;
+        }
+
+        using var ocdb = new OpenCodeDb(db);
+        var (descendants, omitted) = ocdb.QueryDescendants("ses_root");
+
+        // Depths 1..8 import; depth 9 is omitted, not imported, not promoted.
+        await Assert.That(descendants.Select(d => d.Row.Id).OrderBy(x => x))
+            .IsEquivalentTo(Enumerable.Range(1, 8).Select(i => $"ses_n{i}"));
+        await Assert.That(descendants.Any(d => d.Row.Id == "ses_n9")).IsFalse();
+        await Assert.That(descendants.Max(d => d.Depth)).IsEqualTo(8);
+        await Assert.That(omitted).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task QueryDescendants_reachable_cycle_terminates_via_visited_set() {
+        using var tmp = new TempDir();
+        var db = BuildDb(tmp.Path);
+        // A mutual-parent cycle: X's parent is Y, and Y's parent is X (corrupt data —
+        // no acyclic parent_id tree would ever be written this way, but the walker must
+        // not spin forever if it's found).
+        InsertSession(db, "ses_x", "ses_y", "/w", "X", 100);
+        InsertSession(db, "ses_y", "ses_x", "/w", "Y", 200);
+
+        using var ocdb = new OpenCodeDb(db);
+        var (descendants, omitted) = ocdb.QueryDescendants("ses_x");
+
+        // Terminates (the awaited assertion below is reachable at all — a hang would time
+        // out the test) and does not re-discover ses_x as its own descendant.
+        await Assert.That(descendants.Select(d => d.Row.Id)).IsEquivalentTo(new[] { "ses_y" });
+        await Assert.That(omitted).IsEqualTo(0);
+    }
+
     [Test]
     public async Task reads_while_a_wal_writer_holds_uncheckpointed_data() {
         using var tmp = new TempDir();
