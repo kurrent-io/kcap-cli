@@ -120,16 +120,15 @@ public static class CursorHookCommand {
             var transcriptPath = TryGetString(node, "transcript_path");
 
             if (sessionId is not null) {
-                // AI-1382 Task 8: every invocation carrying a session id touches the hook
-                // heartbeat — including telemetry-only hooks — so it reflects "Cursor is still
-                // firing hooks" independent of the tailing watcher's own liveness.
+                // Touch the hook heartbeat on every invocation carrying a session id — including
+                // telemetry-only hooks — so it reflects "Cursor is still firing hooks" independent
+                // of the tailing watcher's own liveness.
                 CursorMarkers.TouchHeartbeat(sessionId, DateTimeOffset.UtcNow);
 
-                // AI-1382 Task 8: beforeSubmitPrompt is ordering-sensitive — its server-side
-                // effect (queuing an attachment onto the per-session FIFO) must land before
-                // transcript-line normalization can consume it. Create the barrier BEFORE
-                // anything below attempts to post or spool it; cleared on a 2xx from either
-                // the live POST below or a later spool-drain delivery of this same entry.
+                // beforeSubmitPrompt is ordering-sensitive: its server-side effect (queuing an
+                // attachment onto the per-session FIFO) must land before transcript-line
+                // normalization can consume it. Create the barrier before anything below posts or
+                // spools it; cleared on a 2xx from the live POST or a later spool-drain delivery.
                 if (eventName == "beforeSubmitPrompt") CursorMarkers.CreateBarrier(sessionId, DateTimeOffset.UtcNow);
             }
 

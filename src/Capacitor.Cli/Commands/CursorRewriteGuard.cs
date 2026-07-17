@@ -3,28 +3,27 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// AI-1382 D0 — runtime two-zone rewrite guard for the per-session Cursor tailing watcher
-/// (defence-in-depth regardless of the phase-0 empirical verdict — see
-/// <see cref="CursorVerifyAppendOnlyCommand"/>). Cursor's JSONL transcript is expected to be
+/// Runtime two-zone rewrite guard for the per-session Cursor tailing watcher (defence-in-depth —
+/// see <see cref="CursorVerifyAppendOnlyCommand"/>). Cursor's JSONL transcript is expected to be
 /// append-only, but nothing in the IDE's contract guarantees it, and a silent in-place rewrite
-/// would corrupt the source-acknowledgement frontier (AI-1382 D3, server-side) by re-sending
-/// stale byte ranges under line numbers the server already disposed of.
+/// would corrupt the server's source-acknowledgement frontier by re-sending stale byte ranges
+/// under line numbers it already disposed of.
 ///
 /// Two zones are checked on every poll before a batch is sent:
 /// <list type="bullet">
 /// <item><b>Prior zone</b> — the trailing <see cref="TrailingBytes"/> bytes ending at the last
 /// committed checkpoint offset (<see cref="Checkpoint"/>). <see cref="HashPriorZone"/> +
-/// <see cref="VerifyPriorZone"/> is meant to be called BOTH immediately before and immediately
-/// after the length-capped snapshot read of the new range, so a rewrite racing the read itself
-/// can't slip through a single-snapshot check.</item>
+/// <see cref="VerifyPriorZone"/> must be called both immediately before and immediately after the
+/// length-capped snapshot read of the new range, so a rewrite racing the read itself can't slip
+/// through a single-snapshot check.</item>
 /// <item><b>New range</b> — the bytes just read for the batch about to be sent.
 /// <see cref="RecordNewRangeRead"/> hashes them at read time; <see cref="VerifyNewRange"/>
 /// re-hashes the SAME capped byte range re-read immediately before send and compares.</item>
 /// </list>
 ///
 /// A length shrink or any hash mismatch in either zone is a structured
-/// <c>cursor_transcript_rewrite_detected</c> diagnostic: the caller must discard the unsent
-/// batch and exit (wired by the watcher in a later task); this guard itself writes the per-session
+/// <c>cursor_transcript_rewrite_detected</c> diagnostic: the caller must discard the unsent batch
+/// and exit; this guard itself writes the per-session
 /// <see cref="CursorMarkers.Quarantine">quarantine marker</see> the moment it detects one, so the
 /// decision survives the process exiting. <see cref="VerifyFullPrefix"/> is the coarser-grained
 /// periodic full-prefix re-hash (every N polls, wired by the watcher), reusing
@@ -42,12 +41,11 @@ public sealed class CursorRewriteGuard(string sessionId) {
     public void Checkpoint(long offset, string trailingSha) => _checkpoint = (offset, trailingSha);
 
     /// <summary>
-    /// AI-1382 review fix #2 — a shrink (the file is now SHORTER than <paramref name="checkpointOffset"/>,
-    /// the last committed checkpoint) is unambiguous evidence of a rewrite on its own, independent
-    /// of every other zone check — the runtime guard's original wiring gated the ENTIRE zone check
-    /// behind "did the file grow", so a shrink slipped through completely undetected. True (no
-    /// trip) when the file hasn't shrunk below the checkpoint. On a trip, writes the structured
-    /// diagnostic and quarantines the session, exactly like every other Verify* method here.
+    /// A shrink (the file is now SHORTER than <paramref name="checkpointOffset"/>, the last
+    /// committed checkpoint) is unambiguous evidence of a rewrite on its own, independent of every
+    /// other zone check. True (no trip) when the file hasn't shrunk below the checkpoint. On a
+    /// trip, writes the structured diagnostic and quarantines the session, like every other
+    /// Verify* method here.
     /// </summary>
     public bool VerifyNotShrunk(long newLength, long checkpointOffset) {
         if (newLength >= checkpointOffset) return true;
@@ -84,22 +82,21 @@ public sealed class CursorRewriteGuard(string sessionId) {
     }
 
     /// <summary>
-    /// AI-1382 review fix #1 — snapshot-based counterpart to <see cref="HashPriorZone(FileStream)"/>.
-    /// Hashes the trailing <see cref="TrailingBytes"/> bytes ending at the current checkpoint
-    /// offset directly from <paramref name="snapshot"/> — an in-memory buffer captured during the
-    /// SAME capped read that decoded the batch about to be sent, starting at absolute file offset
-    /// <paramref name="snapshotStartOffset"/> (0 — the default — when the caller captured from the
-    /// true file start). Binding the prior-zone hash to that snapshot (rather than a fresh disk
-    /// reopen taken moments later) closes the exact TOCTOU window review fix #1 found: a rewrite
-    /// landing between the decode read and a later reopen used to produce a hash that was then
-    /// "stable" for the rest of the poll even though it never corresponded to the bytes the batch
-    /// was actually built from.
+    /// Snapshot-based counterpart to <see cref="HashPriorZone(FileStream)"/>. Hashes the trailing
+    /// <see cref="TrailingBytes"/> bytes ending at the current checkpoint offset directly from
+    /// <paramref name="snapshot"/> — an in-memory buffer captured during the SAME capped read that
+    /// decoded the batch about to be sent, starting at absolute file offset
+    /// <paramref name="snapshotStartOffset"/> (0 when the caller captured from the true file
+    /// start). Binding the prior-zone hash to that snapshot, rather than a fresh disk reopen taken
+    /// moments later, closes a TOCTOU window: a rewrite landing between the decode read and a
+    /// later reopen could otherwise produce a hash that stayed "stable" for the rest of the poll
+    /// without ever corresponding to the bytes the batch was actually built from.
     ///
-    /// AI-1382 review fix (r3, finding #3) — <paramref name="snapshotStartOffset"/> lets the caller
-    /// pass a snapshot that starts PARTWAY through the file (a bounded read covering only the
-    /// prior-tail zone + new range, not the whole file) instead of always materializing everything
-    /// from byte 0. The window this method actually needs — [checkpoint - TrailingBytes,
-    /// checkpoint) — is clipped to whatever the snapshot actually covers.
+    /// <paramref name="snapshotStartOffset"/> lets the caller pass a snapshot that starts PARTWAY
+    /// through the file (a bounded read covering only the prior-tail zone + new range, not the
+    /// whole file) instead of always materializing everything from byte 0 — the window this
+    /// method needs, [checkpoint - TrailingBytes, checkpoint), is clipped to whatever the
+    /// snapshot actually covers.
     /// </summary>
     public string HashPriorZone(ReadOnlySpan<byte> snapshot, long snapshotStartOffset = 0) {
         if (_checkpoint is not { } cp) return "";
@@ -118,11 +115,10 @@ public sealed class CursorRewriteGuard(string sessionId) {
     }
 
     /// <summary>
-    /// AI-1382 review fix #2 — resets the guard's checkpoint after a reconnect rewind discovers
-    /// the server's acknowledged frontier is behind the client's own line cursor. The two-zone
-    /// checks resume from a clean slate (no checkpoint to compare against yet) exactly like a
-    /// fresh watcher's very first poll — the alternative of leaving the stale, later checkpoint in
-    /// place started new-range verification past the bytes the replayed line gap actually
+    /// Resets the guard's checkpoint after a reconnect rewind discovers the server's acknowledged
+    /// frontier is behind the client's own line cursor. The two-zone checks resume from a clean
+    /// slate, like a fresh watcher's very first poll — leaving the stale, later checkpoint in
+    /// place would start new-range verification past the bytes the replayed line gap actually
     /// occupies, so a rewrite landing inside that gap could ship unnoticed.
     /// </summary>
     public void ResetCheckpoint() => _checkpoint = null;
