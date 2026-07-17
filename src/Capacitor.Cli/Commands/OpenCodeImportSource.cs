@@ -64,7 +64,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
                 if (normalizedCwd is not null &&
                     (row.Directory is null || !Norm(row.Directory).Equals(normalizedCwd, PathComparison))) continue;
                 // A null TimeCreated ("unknown") is best-effort KEPT — only a KNOWN-older
-                // row is skipped by the since filter (AI-1358).
+                // row is skipped by the since filter.
                 if (sinceMs is { } cutoff && row.TimeCreated is { } tc && tc < cutoff) continue;
 
                 result.Add(new DiscoveredSession(
@@ -122,10 +122,10 @@ internal sealed class OpenCodeImportSource : IImportSource {
             }
 
             if (countTruncated) {
-                // AI-1383 D3 review fix #4: the below-cap counting/signature walk hit
-                // MaxCountingNodes, so the fingerprint can't see the WHOLE omitted subtree — a
-                // ledger AlreadyLoaded hit can no longer be trusted to reflect completeness.
-                // Surface it and fall through past the ledger check below (never silent).
+                // The below-cap counting/signature walk hit MaxCountingNodes, so the fingerprint
+                // can't see the WHOLE omitted subtree — a ledger AlreadyLoaded hit can no longer
+                // be trusted to reflect completeness. Surface it and fall through past the
+                // ledger check below (never silent).
                 Console.Error.WriteLine(
                     $"[kcap] opencode: root {s.SessionId} descendant-count ceiling " +
                     $"({OpenCodeDb.MaxCountingNodes}) hit — omitted-subtree signature is a lower " +
@@ -213,15 +213,15 @@ internal sealed class OpenCodeImportSource : IImportSource {
         //    SessionEnded. A subagent-start posted here may REACTIVATE an already-Ended root
         //    (Model A always routes SubagentStarted through
         //    EnsureSessionExists(isReactivation:true)) — so per the finally-style re-close
-        //    contract (AI-1383 D3 item 4), the session-end re-assertion below must run
-        //    regardless of whether this step throws. Previously an early `Failed` return here
-        //    could leave a reactivated root stuck Active with no re-close ever posted.
+        //    contract, the session-end re-assertion below must run regardless of whether this
+        //    step throws. An early `Failed` return here would otherwise leave a reactivated root
+        //    stuck Active with no re-close ever posted.
         //
-        //    Cancellation is handled the SAME way (AI-1383 D3 review fix #1): a cancellation
-        //    that arrives after a descendant lifecycle already reactivated the root (e.g. right
-        //    after a successful subagent-start/content send, observed at the NEXT loop
-        //    iteration's ct.ThrowIfCancellationRequested()) must not skip the re-close below —
-        //    it's recorded here and rethrown only AFTER step 5 runs, never before.
+        //    Cancellation is handled the SAME way: a cancellation that arrives after a
+        //    descendant lifecycle already reactivated the root (e.g. right after a successful
+        //    subagent-start/content send, observed at the NEXT loop iteration's
+        //    ct.ThrowIfCancellationRequested()) must not skip the re-close below — it's recorded
+        //    here and rethrown only AFTER step 5 runs, never before.
         var descendantsOk           = true;
         OperationCanceledException? cancellation = null;
         try {
@@ -245,15 +245,15 @@ internal sealed class OpenCodeImportSource : IImportSource {
         var endOk = await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/opencode",
             BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), CancellationToken.None);
 
-        // AI-1383 D3 review fix #4: `cancellation` above only catches an OCE THROWN BY step 3.
-        // A cancellation that arrives AFTER descendants finish — most notably while step 4's
-        // PostSetTitleAsync is awaited, which catches OperationCanceledException internally
-        // (see its comment) — would otherwise never be observed: this call to session-end
-        // deliberately uses CancellationToken.None, and nothing downstream re-checked `ct`. Now
-        // that the uncancellable re-close has run (preserving the round-1 contract above), check
-        // `ct` one more time and propagate — preferring the already-captured exception (with its
-        // original throw site) when one exists — BEFORE evaluating endOk or writing
-        // completeness, so a run cancelled at any point never marks the ledger complete.
+        // `cancellation` above only catches an OCE THROWN BY step 3. A cancellation that arrives
+        // AFTER descendants finish — most notably while step 4's PostSetTitleAsync is awaited,
+        // which catches OperationCanceledException internally (see its comment) — would
+        // otherwise never be observed: this call to session-end deliberately uses
+        // CancellationToken.None, and nothing downstream re-checked `ct`. Now that the
+        // uncancellable re-close has run (preserving the contract above), check `ct` one more
+        // time and propagate — preferring the already-captured exception (with its original
+        // throw site) when one exists — BEFORE evaluating endOk or writing completeness, so a
+        // run cancelled at any point never marks the ledger complete.
         if (cancellation is not null) {
             ExceptionDispatchInfo.Capture(cancellation).Throw();
         } else if (ct.IsCancellationRequested) {
@@ -276,20 +276,20 @@ internal sealed class OpenCodeImportSource : IImportSource {
     }
 
     /// <summary>
-    /// Imports every TRANSITIVE descendant (recursive <c>parent_id</c> walk, depth-capped —
-    /// AI-1383 D3) as a DIRECT subagent of the top-level root — the existing flatten shape;
-    /// Model A's stream key can't express deeper nesting, and flattening preserves content
-    /// that today is silently dropped beyond the first level. Descendants beyond the depth cap
-    /// are surfaced (never silent) via a stderr diagnostic. Throws on the first descendant
-    /// whose lifecycle can't be posted (caller wraps this in a finally-style re-close).
+    /// Imports every TRANSITIVE descendant (recursive <c>parent_id</c> walk, depth-capped) as a
+    /// DIRECT subagent of the top-level root — the existing flatten shape; Model A's stream key
+    /// can't express deeper nesting, and flattening preserves content that today is silently
+    /// dropped beyond the first level. Descendants beyond the depth cap are surfaced (never
+    /// silent) via a stderr diagnostic. Throws on the first descendant whose lifecycle can't be
+    /// posted (caller wraps this in a finally-style re-close).
     /// </summary>
     async Task ImportDescendantsAsync(HttpClient client, string baseUrl, string rootId, CancellationToken ct) {
         using var db = new OpenCodeDb(_dbPath);
         var (descendants, omitted, _, countTruncated) = db.QueryDescendants(rootId); // BFS, per-level ordered like QueryChildren
 
         if (omitted > 0) {
-            // AI-1383 D3 review fix #4: once the below-cap counting ceiling is hit, `omitted`
-            // is a LOWER BOUND, not an exact count — say so, rather than implying completeness.
+            // Once the below-cap counting ceiling is hit, `omitted` is a LOWER BOUND, not an
+            // exact count — say so, rather than implying completeness.
             var lowerBoundNote = countTruncated ? " (lower bound — counting ceiling hit)" : "";
             Console.Error.WriteLine(
                 $"[kcap] opencode: root {rootId} descendants_omitted={omitted}{lowerBoundNote} " +
@@ -382,22 +382,22 @@ internal sealed class OpenCodeImportSource : IImportSource {
         SourceMeta       = s.SourceMeta,
     };
 
-    // Fingerprint-schema version (AI-1383 D3, bumped by the D3 review fix #2). The fingerprint
-    // used to cover only the parent transcript + its DIRECT QueryChildren, so an AlreadyLoaded
-    // ledger hit could skip a root wholesale forever even though its grandchildren were never
-    // imported (single-level discovery silently dropped them). The fingerprint is now recursive
-    // over EVERY descendant AND the omitted-subtree signature beyond the import cap (see below),
-    // and this version marker is fed into the hash too — bump it whenever the fingerprint's
-    // shape/inputs change, so every pre-upgrade ledger entry is cache-busted and the first
-    // post-upgrade import re-classifies and picks up whatever the old fingerprint couldn't see.
+    // Fingerprint-schema version. The fingerprint used to cover only the parent transcript +
+    // its DIRECT QueryChildren, so an AlreadyLoaded ledger hit could skip a root wholesale
+    // forever even though its grandchildren were never imported (single-level discovery
+    // silently dropped them). The fingerprint is now recursive over EVERY descendant AND the
+    // omitted-subtree signature beyond the import cap (see below), and this version marker is
+    // fed into the hash too — bump it whenever the fingerprint's shape/inputs change, so every
+    // pre-upgrade ledger entry is cache-busted and the first post-upgrade import re-classifies
+    // and picks up whatever the old fingerprint couldn't see.
     const string FingerprintSchemaVersion = "v3-recursive-descendants-with-omitted-signature";
 
     // Parent total reconstructed lines, importable lines (gates MinLines), a content
     // fingerprint over the parent transcript AND every transitive descendant — the ledger key,
     // so a same-line-count mutation (tool completing, in-place edit, changed/added/removed
     // descendant at any depth) re-imports — and whether the below-cap counting walk was
-    // truncated (AI-1383 D3 review fix #4): when true, the fingerprint's omitted-subtree
-    // signature is a LOWER BOUND, and the caller must not trust a ledger match as complete.
+    // truncated: when true, the fingerprint's omitted-subtree signature is a LOWER BOUND, and
+    // the caller must not trust a ledger match as complete.
     static (int Total, int Importable, string Fingerprint, bool CountTruncated) ComputeClassificationInfo(OpenCodeDb db, string sessionId) {
         using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
         void Feed(string s) { hash.AppendData(Encoding.UTF8.GetBytes(s)); hash.AppendData("\n"u8); }
@@ -412,15 +412,15 @@ internal sealed class OpenCodeImportSource : IImportSource {
         }
         var (descendants, _, omittedIds, countTruncated) = db.QueryDescendants(sessionId);
         // Fed unconditionally, including an EMPTY descendant set, so the fingerprint always
-        // reflects the descendant edge shape, not merely its presence (AI-1383 D3).
+        // reflects the descendant edge shape, not merely its presence.
         Feed(" descendants:" + descendants.Count);
         foreach (var d in descendants) {
             Feed(" child:" + d.Row.Id + ":" + d.Depth);
             foreach (var line in db.SynthesizeLines(d.Row.Id)) Feed(line);
         }
         // Fed too, by id — a descendant BEYOND the import cap is never imported, but its
-        // presence/absence must still invalidate the ledger (AI-1383 D3 review fix #2): the old
-        // fingerprint hashed only the in-cap descendant list, so a newly-reachable capped
+        // presence/absence must still invalidate the ledger: the old fingerprint hashed only
+        // the in-cap descendant list, so a newly-reachable capped
         // descendant left the fingerprint unchanged and an AlreadyLoaded hit skipped the session
         // wholesale forever — silently, since ImportDescendantsAsync (and its
         // descendants_omitted diagnostic) never even ran.
@@ -453,7 +453,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
             ["source"]          = "startup",
         };
         if (cwd is not null) p["cwd"] = cwd;
-        // AI-701 (finding 4): fail-open git-root discovery, mirroring ImportChainsAsync
+        // Fail-open git-root discovery, mirroring ImportChainsAsync
         // so routed imports carry the same workspace_root the file-based path does.
         if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) p["workspace_root"] = workspaceRoot;
         if (startedAt is { } ts) p["started_at"] = ts.ToString("O");

@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Commands;
 /// <summary>
 /// One OpenCode session row (subset used by import). <c>TimeCreated</c>/<c>TimeUpdated</c>
 /// are <c>null</c> when the column is NULL or 0 (both observed in the wild) — "unknown",
-/// never epoch (AI-1358).
+/// never epoch.
 /// </summary>
 internal sealed record OpenCodeSessionRow(
     string  Id,
@@ -56,9 +56,8 @@ internal sealed class OpenCodeDb : IDisposable {
 
     /// <summary>
     /// Cap-aware variant of <see cref="QueryChildren"/> for a parent whose children are
-    /// NECESSARILY beyond <see cref="MaxDescendantDepth"/> (AI-1383 D3 review fix #6 — the
-    /// per-parent below-cap child fetch was still materializing the WHOLE child set before
-    /// truncation could be detected). Adds a SQL <c>LIMIT $limit</c> so at most
+    /// NECESSARILY beyond <see cref="MaxDescendantDepth"/> — avoids materializing the whole
+    /// child set before truncation could be detected. Adds a SQL <c>LIMIT $limit</c> so at most
     /// <paramref name="limit"/> rows are ever read/allocated for a single call, instead of the
     /// full (potentially unbounded) result <see cref="QueryChildren"/> would return. Callers
     /// pass (remaining counting capacity + 1 sentinel) so <see cref="DescendantDiscoveryResult.CountTruncated"/>
@@ -67,13 +66,13 @@ internal sealed class OpenCodeDb : IDisposable {
     /// <see cref="QueryChildren"/> (see <see cref="QueryDescendants"/>), preserving the
     /// always-complete in-cap discovery contract.
     ///
-    /// <para>AI-1383 D3 review fix #7 (P2): the returned <c>HitLimit</c> reflects the number of
-    /// RAW rows the SQL <c>LIMIT</c> actually returned — BEFORE <see cref="QuerySessions"/>'s
-    /// per-row try/catch skips a malformed row — not the count of rows that survived mapping.
-    /// A malformed or already-visited row can otherwise silently consume the sole sentinel slot,
-    /// masking a genuinely-omitted valid descendant just beyond it: the caller must treat
-    /// <c>HitLimit</c>, not the returned row count, as the signal that more rows may exist
-    /// beyond this fetch (see <see cref="QueryDescendants"/>).</para>
+    /// <para>The returned <c>HitLimit</c> reflects the number of RAW rows the SQL <c>LIMIT</c>
+    /// actually returned — BEFORE <see cref="QuerySessions"/>'s per-row try/catch skips a
+    /// malformed row — not the count of rows that survived mapping. A malformed or
+    /// already-visited row can otherwise silently consume the sole sentinel slot, masking a
+    /// genuinely-omitted valid descendant just beyond it: the caller must treat <c>HitLimit</c>,
+    /// not the returned row count, as the signal that more rows may exist beyond this fetch (see
+    /// <see cref="QueryDescendants"/>).</para>
     /// </summary>
     internal (IReadOnlyList<OpenCodeSessionRow> Rows, bool HitLimit) QueryChildrenBounded(string parentId, int limit) {
         QueryChildrenCallCount++;
@@ -84,19 +83,18 @@ internal sealed class OpenCodeDb : IDisposable {
 
     /// <summary>
     /// Total <see cref="QueryChildren"/>/<see cref="QueryChildrenBounded"/> invocations made
-    /// through this instance — internal-only instrumentation (AI-1383 D3 review fix #5) letting
-    /// a regression test prove the below-cap counting walk in <see cref="QueryDescendants"/>
-    /// stops issuing further DB queries the instant <see cref="DescendantDiscoveryResult.CountTruncated"/>
-    /// is established, instead of draining every already-enqueued below-cap node to
-    /// completion.
+    /// through this instance — internal-only instrumentation letting a regression test prove
+    /// the below-cap counting walk in <see cref="QueryDescendants"/> stops issuing further DB
+    /// queries the instant <see cref="DescendantDiscoveryResult.CountTruncated"/> is established,
+    /// instead of draining every already-enqueued below-cap node to completion.
     /// </summary>
     internal int QueryChildrenCallCount { get; private set; }
 
     /// <summary>
     /// The largest number of rows any single <see cref="QueryChildren"/>/<see cref="QueryChildrenBounded"/>
-    /// call has returned so far — internal-only instrumentation (AI-1383 D3 review fix #6) letting
-    /// a regression test prove a single below-cap parent's child fetch never materializes more
-    /// than ~<see cref="MaxCountingNodes"/> rows, even when that parent's true child count is far
+    /// call has returned so far — internal-only instrumentation letting a regression test prove
+    /// a single below-cap parent's child fetch never materializes more than
+    /// ~<see cref="MaxCountingNodes"/> rows, even when that parent's true child count is far
     /// larger.
     /// </summary>
     internal int QueryChildrenMaxRowsReturned { get; private set; }
@@ -105,22 +103,21 @@ internal sealed class OpenCodeDb : IDisposable {
         if (count > QueryChildrenMaxRowsReturned) QueryChildrenMaxRowsReturned = count;
     }
 
-    /// <summary>Import-side recursion depth cap (AI-1383 D3) — a descendant beyond this depth
+    /// <summary>Import-side recursion depth cap — a descendant beyond this depth
     /// is neither imported nor promoted; the caller surfaces the count.</summary>
     public const int MaxDescendantDepth = 8;
 
     /// <summary>
     /// Hard ceiling on the total number of BELOW-CAP (omitted) nodes visited by the counting
-    /// walk (AI-1383 D3 review fix #2/#3, scope-corrected by review fix #4). This bounds ONLY
-    /// the walk into descendants already beyond <see cref="MaxDescendantDepth"/> — it never
-    /// applies to in-cap import discovery, which is always complete (see
-    /// <see cref="QueryDescendants"/>). The visited-id set already prevents an infinite loop on
-    /// a reachable cycle; this ceiling instead bounds the total work a pathologically huge or
-    /// wide UNIMPORTED subtree could otherwise force onto a single classify/import pass. A real
-    /// OpenCode session graph tops out at a few dozen nodes, so this is a generous safety valve,
-    /// not a realistic limit — if it's ever hit, <see cref="DescendantDiscoveryResult.CountTruncated"/>
-    /// is set so the omitted count/ids are treated as a LOWER BOUND rather than silently
-    /// corrupting anything.
+    /// walk. This bounds ONLY the walk into descendants already beyond
+    /// <see cref="MaxDescendantDepth"/> — it never applies to in-cap import discovery, which is
+    /// always complete (see <see cref="QueryDescendants"/>). The visited-id set already prevents
+    /// an infinite loop on a reachable cycle; this ceiling instead bounds the total work a
+    /// pathologically huge or wide UNIMPORTED subtree could otherwise force onto a single
+    /// classify/import pass. A real OpenCode session graph tops out at a few dozen nodes, so
+    /// this is a generous safety valve, not a realistic limit — if it's ever hit,
+    /// <see cref="DescendantDiscoveryResult.CountTruncated"/> is set so the omitted count/ids are
+    /// treated as a LOWER BOUND rather than silently corrupting anything.
     /// </summary>
     public const int MaxCountingNodes = 10_000;
 
@@ -132,19 +129,18 @@ internal sealed class OpenCodeDb : IDisposable {
     /// Recursive descendant discovery result. <see cref="Descendants"/> holds EVERY descendant
     /// WITHIN <see cref="MaxDescendantDepth"/> — the import set (BFS, deterministic, each level
     /// ordered like <see cref="QueryChildren"/>) — and is NEVER truncated by
-    /// <see cref="MaxCountingNodes"/> (AI-1383 D3 review fix #4): in-cap discovery is unbounded.
+    /// <see cref="MaxCountingNodes"/>: in-cap discovery is unbounded.
     /// <see cref="DescendantsOmitted"/> is the count of every descendant BELOW the cap, not
     /// merely the boundary children immediately past it — a chain through depths 9 and 10
-    /// reports 2, not 1 (AI-1383 D3 review fix #3) — UNLESS <see cref="CountTruncated"/> is true,
-    /// in which case it (and <see cref="OmittedDescendantIds"/>) is a LOWER BOUND: the
-    /// below-cap counting walk hit <see cref="MaxCountingNodes"/> before it could finish, so the
-    /// true omitted count/identity set may be larger. <see cref="OmittedDescendantIds"/> carries
-    /// the (possibly partial) omitted ids (sorted, order-independent) so a caller can fold them
-    /// into a completeness fingerprint: a newly-reachable capped descendant then changes the
-    /// fingerprint even though its content is never imported (AI-1383 D3 review fix #2). Never
-    /// silent — the caller surfaces the count (and any truncation) in the import summary, and
-    /// MUST treat <see cref="CountTruncated"/> as blocking a fingerprint-based
-    /// completeness/AlreadyLoaded decision (AI-1383 D3 review fix #4).
+    /// reports 2, not 1 — UNLESS <see cref="CountTruncated"/> is true, in which case it (and
+    /// <see cref="OmittedDescendantIds"/>) is a LOWER BOUND: the below-cap counting walk hit
+    /// <see cref="MaxCountingNodes"/> before it could finish, so the true omitted count/identity
+    /// set may be larger. <see cref="OmittedDescendantIds"/> carries the (possibly partial)
+    /// omitted ids (sorted, order-independent) so a caller can fold them into a completeness
+    /// fingerprint: a newly-reachable capped descendant then changes the fingerprint even though
+    /// its content is never imported. Never silent — the caller surfaces the count (and any
+    /// truncation) in the import summary, and MUST treat <see cref="CountTruncated"/> as blocking
+    /// a fingerprint-based completeness/AlreadyLoaded decision.
     /// </summary>
     public readonly record struct DescendantDiscoveryResult(
         IReadOnlyList<DescendantRow> Descendants,
@@ -156,55 +152,44 @@ internal sealed class OpenCodeDb : IDisposable {
     /// Recursively walks <c>parent_id</c> edges from <paramref name="rootId"/> — per-level
     /// <see cref="QueryChildren"/>, a visited-id set to guard a reachable cycle (traversal
     /// simply stops re-descending, terminating the walk), IMPORT depth capped at
-    /// <see cref="MaxDescendantDepth"/> (AI-1383 D3 — previously <see cref="QueryChildren"/> was
-    /// called directly, a single-level query that silently dropped grandchildren). In-cap
-    /// discovery (depth &lt;= <see cref="MaxDescendantDepth"/>) is ALWAYS complete — never
-    /// bounded by <see cref="MaxCountingNodes"/> (AI-1383 D3 review fix #4: the ceiling used to
-    /// gate the whole unified traversal via the shared visited-set size, so a wide/deep IN-CAP
-    /// subtree could itself get silently truncated once 10,000 total ids had been discovered).
-    /// A descendant beyond the cap is never imported, but the walk still recurses into it (same
-    /// visited-set guard) purely to COUNT the whole omitted subtree accurately and surface its
-    /// identities (AI-1383 D3 review fix #2/#3) — this below-cap-only counting/signature walk is
-    /// what <see cref="MaxCountingNodes"/> bounds; if it's hit,
+    /// <see cref="MaxDescendantDepth"/>. In-cap discovery (depth &lt;=
+    /// <see cref="MaxDescendantDepth"/>) is ALWAYS complete — never bounded by
+    /// <see cref="MaxCountingNodes"/>. A descendant beyond the cap is never imported, but the
+    /// walk still recurses into it (same visited-set guard) purely to COUNT the whole omitted
+    /// subtree accurately and surface its identities — this below-cap-only counting/signature
+    /// walk is what <see cref="MaxCountingNodes"/> bounds; if it's hit,
     /// <see cref="DescendantDiscoveryResult.CountTruncated"/> is set and the omitted count/ids
     /// become a lower bound instead of silently under-reporting as complete.
     ///
-    /// <para>The in-cap and below-cap walks run over two INDEPENDENT frontiers (AI-1383 D3
-    /// review fix #5). A below-cap descendant's own descendants are always below-cap too (depth
-    /// only grows), so the split is safe and lets the below-cap walk be abandoned the instant it
-    /// truncates, without disturbing the in-cap walk's completeness guarantee. Before this fix,
-    /// a single shared queue meant every below-cap node already enqueued before the ceiling was
-    /// hit — up to <see cref="MaxCountingNodes"/> of them — still got individually dequeued and
-    /// queried after <see cref="DescendantDiscoveryResult.CountTruncated"/> was already known
-    /// true: the returned omitted count/ids were correctly bounded, but the WORK behind them was
-    /// not. Now, the moment truncation is established, the below-cap frontier is simply dropped
-    /// rather than drained node-by-node.</para>
+    /// <para>The in-cap and below-cap walks run over two INDEPENDENT frontiers. A below-cap
+    /// descendant's own descendants are always below-cap too (depth only grows), so the split is
+    /// safe and lets the below-cap walk be abandoned the instant it truncates, without disturbing
+    /// the in-cap walk's completeness guarantee: once truncation is established, the below-cap
+    /// frontier is dropped rather than drained node-by-node.</para>
     ///
     /// <para>Because <see cref="MaxDescendantDepth"/> gates the in-cap frontier's own enqueue
     /// (a child is only ever added to <c>inCapFrontier</c> when its depth is &lt;=
     /// <see cref="MaxDescendantDepth"/>), every node dequeued from it has depth in
     /// <c>0..MaxDescendantDepth</c> — so a node at exactly <see cref="MaxDescendantDepth"/> has
-    /// children that are ALL necessarily below the cap. AI-1383 D3 review fix #6: that single
-    /// call is exactly where an unbounded <see cref="QueryChildren"/> could still force reading
-    /// and allocating an entire (potentially enormous) child row set before truncation was even
-    /// detectable — so it (and every below-cap-frontier call after it) now goes through
+    /// children that are ALL necessarily below the cap. That single call — where an unbounded
+    /// <see cref="QueryChildren"/> could still force reading and allocating an entire
+    /// (potentially enormous) child row set before truncation was even detectable — goes through
     /// <see cref="QueryChildrenBounded"/> instead, capped to (remaining counting capacity + 1
     /// sentinel row). An in-cap parent (depth &lt; <see cref="MaxDescendantDepth"/>) keeps the
-    /// unbounded <see cref="QueryChildren"/> — its children are always in-cap, so the round-2 P1
-    /// unbounded-in-cap-discovery contract is untouched.</para>
+    /// unbounded <see cref="QueryChildren"/> — its children are always in-cap.</para>
     ///
-    /// <para>AI-1383 D3 review fix #7 (P2): a bounded fetch's <c>limit</c> caps RAW rows, but
-    /// <see cref="QuerySessions"/> filters malformed rows and this walk dedups already-visited
-    /// ids AFTER the fetch — so a malformed or duplicate row landing inside the bounded window
-    /// could consume the sole sentinel row without itself being counted as an omitted
-    /// descendant, letting a genuinely-omitted valid descendant just past it go undetected and
-    /// the walk falsely conclude <see cref="DescendantDiscoveryResult.CountTruncated"/> is
-    /// <c>false</c>. <see cref="QueryChildrenBounded"/> now also reports whether the RAW <c>LIMIT</c>
-    /// was actually exhausted (<c>HitLimit</c>); if so, truncation is asserted regardless of how
-    /// many rows in the batch turned out valid — the only case that can't prove otherwise is a
-    /// raw count strictly below the limit (definite EOF). This can over-report truncation in the
-    /// rare case where the directory holds exactly <c>limit</c> raw rows and no more (safe: the
-    /// omitted count/ids were already documented as a lower bound once truncated).</para>
+    /// <para>A bounded fetch's <c>limit</c> caps RAW rows, but <see cref="QuerySessions"/>
+    /// filters malformed rows and this walk dedups already-visited ids AFTER the fetch — so a
+    /// malformed or duplicate row landing inside the bounded window could consume the sole
+    /// sentinel row without itself being counted as an omitted descendant, letting a
+    /// genuinely-omitted valid descendant just past it go undetected and the walk falsely
+    /// conclude <see cref="DescendantDiscoveryResult.CountTruncated"/> is <c>false</c>.
+    /// <see cref="QueryChildrenBounded"/> reports whether the RAW <c>LIMIT</c> was actually
+    /// exhausted (<c>HitLimit</c>); if so, truncation is asserted regardless of how many rows in
+    /// the batch turned out valid — the only case that can't prove otherwise is a raw count
+    /// strictly below the limit (definite EOF). This can over-report truncation in the rare case
+    /// where the directory holds exactly <c>limit</c> raw rows and no more (safe: the omitted
+    /// count/ids were already documented as a lower bound once truncated).</para>
     /// </summary>
     public DescendantDiscoveryResult QueryDescendants(string rootId) {
         var result         = new List<DescendantRow>();
@@ -217,14 +202,14 @@ internal sealed class OpenCodeDb : IDisposable {
         inCapFrontier.Enqueue((rootId, 0));
 
         // In-cap walk: always run to completion, regardless of below-cap truncation state —
-        // this is the unbounded, always-complete import set (AI-1383 D3 review fix #4).
+        // this is the unbounded, always-complete import set.
         while (inCapFrontier.Count > 0) {
             var (id, depth) = inCapFrontier.Dequeue();
 
             if (depth < MaxDescendantDepth) {
                 // Every child here is necessarily in-cap (childDepth <= MaxDescendantDepth) —
-                // always fully discovered, never bounded by MaxCountingNodes (AI-1383 D3 review
-                // fix #4). Unbounded QueryChildren is safe/required here.
+                // always fully discovered, never bounded by MaxCountingNodes. Unbounded
+                // QueryChildren is safe/required here.
                 foreach (var child in QueryChildren(id)) {
                     var childDepth = depth + 1;
                     if (!visited.Add(child.Id)) continue; // cycle guard — already reached
@@ -235,8 +220,8 @@ internal sealed class OpenCodeDb : IDisposable {
             }
 
             // depth == MaxDescendantDepth: every child is necessarily BELOW the cap
-            // (childDepth = MaxDescendantDepth + 1). Cap-aware fetch (AI-1383 D3 review fix
-            // #6) instead of materializing the whole child row set for this parent.
+            // (childDepth = MaxDescendantDepth + 1). Cap-aware fetch instead of materializing
+            // the whole child row set for this parent.
             if (countTruncated) continue; // already known to be a lower bound — skip the query entirely
 
             var remaining = MaxCountingNodes - omittedIds.Count;
@@ -251,23 +236,22 @@ internal sealed class OpenCodeDb : IDisposable {
                 omittedIds.Add(child.Id);
                 belowCapFrontier.Enqueue(child.Id);
             }
-            // AI-1383 D3 review fix #7 (P2): a malformed/already-visited row can consume the sole
-            // sentinel slot before it's counted as an omitted descendant, so the valid-count
-            // threshold above can under-report. HitLimit — the raw SQL LIMIT was actually
-            // exhausted — is the only proof we lack; when it's true we cannot rule out further
-            // valid descendants beyond this fetch, so treat it as truncation too (a safe
-            // over-report in the rare exact-boundary+junk case; a raw count strictly below the
-            // limit is definite EOF and needs no such fallback).
+            // A malformed/already-visited row can consume the sole sentinel slot before it's
+            // counted as an omitted descendant, so the valid-count threshold above can
+            // under-report. HitLimit — the raw SQL LIMIT was actually exhausted — is the only
+            // proof we lack; when it's true we cannot rule out further valid descendants beyond
+            // this fetch, so treat it as truncation too (a safe over-report in the rare
+            // exact-boundary+junk case; a raw count strictly below the limit is definite EOF and
+            // needs no such fallback).
             if (hitLimit) countTruncated = true;
         }
 
         // Below-cap counting/signature walk — every node here is already below-cap, so every
-        // one of its children is too; bounded by MaxCountingNodes via QueryChildrenBounded
-        // (AI-1383 D3 review fix #6) and, per review fix #5, stopped IMMEDIATELY once truncated:
-        // any already-queued below-cap tail (up to MaxCountingNodes entries) is abandoned rather
-        // than drained node-by-node, so a pathologically large omitted subtree can't force
-        // thousands of further (or unbounded) DB queries once the count is already known to be a
-        // lower bound.
+        // one of its children is too; bounded by MaxCountingNodes via QueryChildrenBounded and
+        // stopped IMMEDIATELY once truncated: any already-queued below-cap tail (up to
+        // MaxCountingNodes entries) is abandoned rather than drained node-by-node, so a
+        // pathologically large omitted subtree can't force thousands of further (or unbounded)
+        // DB queries once the count is already known to be a lower bound.
         while (belowCapFrontier.Count > 0 && !countTruncated) {
             var id = belowCapFrontier.Dequeue();
 
@@ -283,7 +267,7 @@ internal sealed class OpenCodeDb : IDisposable {
                 omittedIds.Add(child.Id);
                 belowCapFrontier.Enqueue(child.Id);
             }
-            if (hitLimit) countTruncated = true; // AI-1383 D3 review fix #7 (P2) — see above
+            if (hitLimit) countTruncated = true; // see above
         }
 
         omittedIds.Sort(StringComparer.Ordinal);
@@ -291,7 +275,7 @@ internal sealed class OpenCodeDb : IDisposable {
     }
 
     /// <summary>
-    /// <c>RawCount</c> (AI-1383 D3 review fix #7, P2) is every row the reader actually yielded —
+    /// <c>RawCount</c> is every row the reader actually yielded —
     /// INCLUDING one skipped below for being malformed — never just <c>Rows.Count</c>. Only
     /// <c>RawCount</c> can prove whether a <c>LIMIT</c> was truly exhausted: a malformed row
     /// still consumes one of the SQL engine's <c>LIMIT</c> slots even though it never reaches
@@ -330,7 +314,7 @@ internal sealed class OpenCodeDb : IDisposable {
     }
 
     // A 0 epoch is observed alongside NULL for an unset time_created/time_updated
-    // column — both mean "unknown", not the 1970 epoch (AI-1358).
+    // column — both mean "unknown", not the 1970 epoch.
     static long? NonZero(long v) => v == 0 ? null : v;
 
     /// <summary>
